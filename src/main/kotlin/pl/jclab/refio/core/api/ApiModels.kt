@@ -1,0 +1,389 @@
+package pl.jclab.refio.core.api
+
+import pl.jclab.refio.core.db.ApprovalStatus
+import pl.jclab.refio.core.db.TaskMode
+import pl.jclab.refio.core.db.TaskStatus
+import pl.jclab.refio.core.db.ExecutionMode
+import pl.jclab.refio.core.llm.ModelConfig
+import pl.jclab.refio.core.models.context.CurrentTaskDTO
+import pl.jclab.refio.core.models.context.SubtaskDTO
+import pl.jclab.refio.core.models.context.ExecutedStepDTO
+import pl.jclab.refio.core.models.context.CodeFragmentDTO
+import pl.jclab.refio.core.models.context.ConversationMessageDTO
+
+/**
+ * API Models for CoreApiRouter and domain routers.
+ *
+ * These models define request/response DTOs for the API layer.
+ */
+
+// ========== Constants ==========
+
+const val LEGACY_PROJECT_ID = "legacy_unknown"
+const val LEGACY_PROJECT_PATH = "unknown"
+
+// ========== Tasks API ==========
+
+data class CreateTaskRequest(
+    val name: String,
+    val mode: TaskMode,
+    val projectId: String = LEGACY_PROJECT_ID,
+    val projectPath: String = LEGACY_PROJECT_PATH,
+    val readOnly: Boolean? = null,
+    val requiresPlanApproval: Boolean? = null
+)
+
+data class UpdateTaskRequest(
+    val name: String? = null,
+    val mode: TaskMode? = null,
+    val status: TaskStatus? = null,
+    val readOnly: Boolean? = null,
+    val pinned: Boolean? = null,
+    val executionMode: ExecutionMode? = null,
+    val requiresPlanApproval: Boolean? = null,
+    val planApproved: Boolean? = null,
+    val uiState: String? = null,
+    val rate: Int? = null  // User rating: 1 (positive) or -1 (negative), null if not rated
+)
+
+// ========== Messages API ==========
+
+data class MessageResponse(
+    val id: String,
+    val taskId: String,
+    val role: String,
+    val content: String,
+    val metadata: String?,
+    val tokensIn: Int?,
+    val tokensOut: Int?,
+    val cost: Double?,
+    val createdAt: Long
+)
+
+data class GetMessagesResponse(
+    val messages: List<MessageResponse>,
+    val count: Int
+)
+
+// ========== Configuration API ==========
+
+data class GetModelsResponse(
+    val models: List<ModelConfig>,
+    val count: Int
+)
+
+data class GetDefaultModelResponse(
+    val operation: String,
+    val modelId: String,
+    val provider: String
+)
+
+data class SetDefaultModelRequest(
+    val operation: ModelOperation,
+    val modelId: String,
+    val provider: String
+)
+
+data class SetDefaultModelResponse(
+    val operation: String,
+    val modelId: String,
+    val provider: String,
+    val scope: String
+)
+
+data class SetDefaultModelAllModesRequest(
+    val modelId: String,
+    val provider: String
+)
+
+data class SetDefaultModelAllModesResponse(
+    val modelId: String,
+    val provider: String,
+    val scope: String,
+    val modes: List<String>
+)
+
+data class ModelInfo(
+    val id: String,
+    val provider: String,
+    val name: String,
+    val contextSize: Int,
+    val capabilities: List<String>,
+    val pricing: ModelPricing?,
+    val showInDropdown: Boolean = true
+)
+
+data class ModelPricing(
+    val inputPer1MTokens: Double,
+    val outputPer1MTokens: Double
+)
+
+// ========== Step Planning & Execution API ==========
+
+data class PlanStepResponse(
+    val tools: List<ToolCallResponse>,
+    val description: String,
+    val estimatedDurationMs: Int,
+    val dependencies: List<String>
+)
+
+data class ToolCallResponse(
+    val name: String,
+    val params: Map<String, Any>,
+    val expectedOutput: String?
+)
+
+data class ExecuteStepResponse(
+    val status: String,
+    val summary: String,
+    val durationMs: Int,
+    val error: String?
+)
+
+data class AutoExecutionResponse(
+    val totalSteps: Int,
+    val completedSteps: Int,
+    val failedSteps: Int,
+    val durationMs: Int,
+    val success: Boolean,
+    val error: String? = null
+)
+
+data class PlanSummaryResponse(
+    val taskId: String,
+    val totalSteps: Int,
+    val readOnlySteps: Int,
+    val writeSteps: Int,
+    val requiresApproval: Boolean,
+    val isApproved: Boolean,
+    val steps: List<PlanStepSummaryResponse>
+)
+
+data class PlanStepSummaryResponse(
+    val id: String,
+    val description: String,
+    val tool: String,
+    val status: String,
+    val isWrite: Boolean
+)
+
+data class OrchestrationExecutionResponse(
+    val success: Boolean,
+    val stepsExecuted: Int,
+    val stepsFailed: Int,
+    val reflectionsCount: Int,
+    val planModificationsCount: Int,
+    val userQuestionsCount: Int,
+    val durationMs: Int,
+    val error: String? = null
+)
+
+// ========== RAG API ==========
+
+data class RagSearchResultDto(
+    val chunkId: Int,
+    val fileId: Int,
+    val filePath: String,
+    val content: String,
+    val startLine: Int?,
+    val endLine: Int?,
+    val similarity: Float,
+    val contentType: String
+)
+
+// ========== Tasks API (extended) ==========
+
+data class TaskResponse(
+    val id: String,
+    val name: String,
+    val mode: String,
+    val status: String,
+    val readOnly: Boolean,
+    val pinned: Boolean,
+    val executionMode: String,
+    val requiresPlanApproval: Boolean = false,
+    val planApproved: Boolean = false,
+    val uiState: String?,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val tokensIn: Int = 0,
+    val tokensOut: Int = 0,
+    val costUsd: Double = 0.0,
+    val rate: Int? = null,  // User rating: 1 (positive) or -1 (negative), null if not rated
+    val projectId: String = LEGACY_PROJECT_ID,
+    val projectPath: String = LEGACY_PROJECT_PATH
+)
+
+data class ListTasksResponse(
+    val tasks: List<TaskResponse>,
+    val count: Int
+)
+
+data class HealthResponse(
+    val status: String,
+    val version: String,
+    val timestamp: Long,
+    val message: String
+)
+
+// ========== Subtasks API (extended) ==========
+
+data class GetSubtasksResponse(
+    val subtasks: List<SubtaskResponse>,
+    val count: Int
+)
+
+data class UpdateSubtaskRequest(
+    val status: pl.jclab.refio.core.db.TaskStatus? = null,
+    val approvalStatus: pl.jclab.refio.core.db.ApprovalStatus? = null
+)
+
+data class DeleteSubtasksResponse(
+    val deletedCount: Int,
+    val message: String
+)
+
+// ========== Step Execution API (extended) ==========
+
+/**
+ * Response for single step execution with orchestration (INTERACTIVE mode)
+ */
+data class SingleStepOrchestrationResponse(
+    val status: String,
+    val summary: String,
+    val durationMs: Int,
+    val error: String?,
+    val reflectionDecision: String?,           // CONTINUE, MODIFY_PLAN, ASK_USER, ABORT
+    val reflectionConfidence: String?,         // HIGH, MEDIUM, LOW
+    val reflectionReasoning: String?,
+    val userQuestion: String?,
+    val planModified: Boolean
+)
+
+// ========== Snapshot API ==========
+
+data class SnapshotResponse(
+    val snapshotId: String,
+    val files: Map<String, String>  // file path -> content
+)
+
+data class SnapshotSummary(
+    val snapshotId: String,
+    val taskId: String,
+    val subtaskName: String,
+    val filesCount: Int,
+    val createdAt: Long
+)
+
+// ========== Configuration Management API ==========
+
+data class UpdateConfigResponse(
+    val section: String,
+    val scope: String,
+    val updatedKeys: List<String>,
+    val success: Boolean
+)
+
+data class ResetConfigResponse(
+    val success: Boolean,
+    val message: String,
+    val affectedSections: List<String>
+)
+
+data class GetConfigResponse(
+    val section: String,
+    val scope: String,
+    val settings: Map<String, Any>
+)
+
+// ========== Provider Testing API ==========
+
+data class TestConnectionResult(
+    val success: Boolean,
+    val latencyMs: Int,
+    val message: String,
+    val details: Map<String, Any>?
+)
+
+// ========== Project Context API ==========
+
+data class ProjectContextResponse(
+    val projectPath: String,
+    val projectType: String,
+    val technologies: List<String>,
+    val technologyVersions: Map<String, String?> = emptyMap(),
+    val infrastructure: List<String> = emptyList(),  // Infrastructure tools (Docker, K8s, CI/CD) - ADR 0040
+    val primaryLanguage: String = "Unknown",  // Primary programming language detected - ADR 0040
+    val mainLanguage: String,
+    val complexity: String,
+    val totalFiles: Int,
+    val fileTypes: Map<String, Int>,
+    val keyComponents: List<String>,
+    val dependencies: Map<String, Any>,
+    val codeAnalysis: Map<String, Any>,
+    val currentTask: CurrentTaskDTO?,
+    val subtasks: List<SubtaskDTO>,
+    val executedSteps: List<ExecutedStepDTO> = emptyList(),
+    val completedFiles: List<String>,
+    val llmContextPrompt: String?,
+    val analyzedAt: Long,
+    val contextBuiltAt: Long,
+    // User requirements extracted from task description
+    val userRequirements: Map<String, Any> = emptyMap(),
+    // RAG (Retrieval-Augmented Generation) fragments
+    val ragFragments: List<CodeFragmentDTO> = emptyList(),
+    val mcpResources: List<MCPResourceResponse> = emptyList(),
+    // User context references from @mentions (files, selections, providers)
+    val userContextRefs: List<UserContextRefDTO> = emptyList(),
+    // Conversation history
+    val conversationHistory: List<ConversationMessageDTO> = emptyList(),
+    // Previous subtask summaries
+    val previousSubtasks: List<String> = emptyList(),
+    // Domain analysis scores
+    val domainAnalysis: Map<String, Any> = emptyMap(),
+    // Project structure details
+    val directoryCount: Int = 0,
+    val maxDepth: Int = 0,
+    // Token usage per context section (for visualization)
+    val contextSectionTokens: Map<String, ContextSectionTokenInfo> = emptyMap(),
+    // Total estimated tokens
+    val totalEstimatedTokens: Int = 0,
+    val semanticSummary: String? = null
+)
+
+/**
+ * Token usage info for a single context section
+ */
+data class ContextSectionTokenInfo(
+    val name: String,
+    val tokens: Int,
+    val chars: Int,
+    val percentage: Double  // Percentage of total context
+)
+
+/**
+ * User context reference from @mentions
+ */
+data class UserContextRefDTO(
+    val type: String,           // PROVIDER, FILE, FOLDER, SELECTION, etc.
+    val providerId: String?,    // Provider ID (e.g., "file", "grep", "open")
+    val path: String?,          // File path or query
+    val displayName: String,    // Human-readable name
+    val content: String,        // Resolved content (truncated for display)
+    val sizeBytes: Long = 0,
+    val estimatedTokens: Int = 0
+)
+
+data class MCPResourceResponse(
+    val serverId: String,
+    val uri: String,
+    val name: String,
+    val description: String? = null,
+    val mimeType: String? = null
+)
+
+// ========== Documentation Indexing API ========== (types in DocumentationIndexingService.kt)
+
+// ========== Subtasks API (legacy marker) ========== (types in PlanningModels.kt)
+
+// ========== Step Execution Streaming API ========== (types in StreamingModels.kt)

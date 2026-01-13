@@ -1,0 +1,640 @@
+package pl.jclab.refio.ui.settings
+
+import com.intellij.icons.AllIcons
+import com.intellij.openapi.project.Project
+import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBPanel
+import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.components.JBTextArea
+import com.intellij.ui.components.JBTextField
+import kotlinx.coroutines.*
+import pl.jclab.refio.core.context.ContextProviderRegistry
+import pl.jclab.refio.core.context.ProviderType
+import pl.jclab.refio.core.services.ConfigKeys
+import pl.jclab.refio.core.services.ConfigService
+import pl.jclab.refio.services.core.CoreConnectionManager
+import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.ui.theme.LCATheme
+import java.awt.BorderLayout
+import java.awt.Dimension
+import java.awt.Font
+import java.awt.FlowLayout
+import javax.swing.*
+
+/**
+ * Unified Context Settings Panel
+ *
+ * Combines:
+ * - Built-in Context Providers (view only)
+ * - Index Settings (RAG indexing configuration)
+ *
+ * This panel replaces:
+ * - ContextProvidersSettingsPanel
+ * - IndexSettingsPanel
+ */
+class ContextSettingsPanel(
+    private val project: Project,
+    private val onSettingChanged: (section: String, key: String, value: Any) -> Unit
+) : JBPanel<ContextSettingsPanel>(BorderLayout()) {
+
+    private val logger = dualLogger("ContextSettingsPanel")
+    private val cs = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val coreManager = CoreConnectionManager.getInstance()
+    private val ragProgressService = pl.jclab.refio.services.rag.RagProgressService.getInstance(project)
+
+    // Index components
+    private lateinit var ignorePathsTextArea: JBTextArea
+    private lateinit var ignorePathsSourceLabel: JBLabel
+    private lateinit var maxFileSizeField: JBTextField
+    private lateinit var chunkSizeField: JBTextField
+    private lateinit var indexProgressBar: JProgressBar
+    private lateinit var indexStatusLabel: JLabel
+    private lateinit var reindexButton: JButton
+    private lateinit var generateEmbeddingsButton: JButton
+    private lateinit var clearIndexButton: JButton
+    private lateinit var embeddingProgressBar: JProgressBar
+    private lateinit var embeddingStatusLabel: JLabel
+    private lateinit var ragSearchThresholdField: JBTextField
+    private lateinit var ragSearchTopKField: JBTextField
+    private lateinit var ragSearchSemanticWeightField: JBTextField
+    private lateinit var ragSearchHybridEnabledCheckbox: JCheckBox
+    private lateinit var ragSearchIncludeContextChunksCheckbox: JCheckBox
+    private lateinit var saveSearchSettingsButton: JButton
+    private val defaultIgnorePathsText = ConfigService.DEFAULT_RAG_IGNORED_DIRECTORIES.joinToString("\n")
+
+    init {
+        border = LCATheme.paddedBorder(LCATheme.margin)
+
+        val contentPanel = JBPanel<JBPanel<*>>().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+
+            // Section 1: Index Settings
+            add(createSectionPanel("Index Settings", createIndexSettingsPanel()))
+            add(Box.createVerticalStrut(LCATheme.spacingLg))
+
+            // Section 2: Built-in Providers
+            add(createSectionPanel("Built-in Providers", createBuiltInProvidersPanel()))
+        }
+
+        val scrollPane = JBScrollPane(contentPanel).apply {
+            border = LCATheme.emptyBorder()
+            verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
+            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
+        }
+
+        add(scrollPane, BorderLayout.CENTER)
+
+        // Subscribe to RAG progress updates
+        cs.launch {
+            ragProgressService.indexingProgress.collect { progress ->
+                SwingUtilities.invokeLater {
+                    updateIndexProgress(progress.percent, progress.status)
+                }
+            }
+        }
+
+        cs.launch {
+            ragProgressService.embeddingProgress.collect { progress ->
+                SwingUtilities.invokeLater {
+                    updateEmbeddingProgress(progress.percent, progress.status)
+                }
+            }
+        }
+
+        loadRagSearchSettings()
+    }
+
+    // ==================== BUILT-IN PROVIDERS ====================
+
+    private fun createBuiltInProvidersPanel(): JPanel {
+        return JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            border = LCATheme.paddedBorder(LCATheme.padding)
+
+            // Description
+            val description = JBLabel(
+                "<html>These providers are always available for use with the @ syntax in prompts.<br>" +
+                        "Example: @file, @open, @clipboard, @diff, etc.</html>"
+            ).apply {
+                foreground = LCATheme.descriptionForeground
+                border = LCATheme.paddedBorder(0, 0, 8, 0)
+                isEnabled = false
+            }
+            add(description, BorderLayout.NORTH)
+
+            // Providers list
+            val providersListPanel = JBPanel<JBPanel<*>>().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+
+                val providers = ContextProviderRegistry.getAllProviders()
+                    .sortedBy { it.description.title }
+
+                providers.forEach { provider ->
+                    val desc = provider.description
+                    val typeIcon = when (desc.type) {
+                        ProviderType.NORMAL -> AllIcons.Nodes.DataTables
+                        ProviderType.QUERY -> AllIcons.Actions.Search
+                        ProviderType.SUBMENU -> AllIcons.Nodes.Folder
+                    }
+
+                    add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
+                        add(JLabel(typeIcon))
+                        add(JLabel("@${desc.title}").apply {
+                            font = font.deriveFont(Font.BOLD)
+                            isEnabled = false
+                        })
+                        add(JLabel(desc.displayTitle))
+                        add(JLabel("- ${desc.description}").apply {
+                            foreground = LCATheme.descriptionForeground
+                            isEnabled = false
+                        })
+                    })
+                }
+                isEnabled = false
+            }
+            add(providersListPanel, BorderLayout.CENTER)
+
+            isEnabled = false
+        }
+    }
+
+    // ==================== INDEX SETTINGS ====================
+
+    private fun createIndexSettingsPanel(): JPanel {
+        return JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            border = LCATheme.paddedBorder(LCATheme.padding)
+
+            val contentPanel = JBPanel<JBPanel<*>>().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+
+                // Indexing Status
+                add(createIndexStatusSection())
+                add(Box.createVerticalStrut(16))
+
+                // Ignore Paths
+                add(createIgnorePathsSection())
+                add(Box.createVerticalStrut(16))
+
+                // Index Settings
+                add(createIndexConfigSection())
+                add(Box.createVerticalStrut(16))
+
+                // Search Settings
+                add(createSearchSettingsSection())
+                add(Box.createVerticalStrut(16))
+
+                // Embeddings Management
+                add(createEmbeddingsSection())
+            }
+
+            add(contentPanel, BorderLayout.CENTER)
+        }
+    }
+
+    private fun createIndexStatusSection(): JPanel {
+        indexProgressBar = JProgressBar(0, 100).apply {
+            isStringPainted = true
+            string = "Ready"
+        }
+        indexStatusLabel = JLabel("Idle")
+        reindexButton = JButton("Reindex Project").apply {
+            toolTipText = "Scan project files and build search index"
+            addActionListener { onReindex() }
+        }
+
+        return JBPanel<JBPanel<*>>().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+
+            add(JBLabel("Indexing Status:").apply {
+                font = LCATheme.boldFont
+            })
+            add(Box.createVerticalStrut(8))
+
+            add(JBPanel<JBPanel<*>>(BorderLayout()).apply {
+                add(indexStatusLabel, BorderLayout.WEST)
+                add(indexProgressBar, BorderLayout.CENTER)
+            })
+            add(Box.createVerticalStrut(8))
+            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
+                add(reindexButton)
+            })
+        }
+    }
+
+    private fun createIgnorePathsSection(): JPanel {
+        ignorePathsTextArea = JBTextArea().apply {
+            lineWrap = true
+            wrapStyleWord = true
+            text = defaultIgnorePathsText
+        }
+        ignorePathsSourceLabel = JBLabel("Source: Settings UI").apply {
+            foreground = LCATheme.descriptionForeground
+        }
+
+        return JBPanel<JBPanel<*>>().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+
+            add(JBLabel("Ignore Paths:").apply {
+                font = LCATheme.boldFont
+            })
+            add(JBLabel("Enter patterns for files and directories to exclude (one per line)").apply {
+                foreground = LCATheme.descriptionForeground
+            })
+            add(Box.createVerticalStrut(4))
+            add(ignorePathsSourceLabel)
+            add(Box.createVerticalStrut(4))
+
+            add(JBScrollPane(ignorePathsTextArea).apply {
+                preferredSize = Dimension(500, 120)
+                border = LCATheme.customLineBorder(LCATheme.borderColor, 1)
+            })
+        }
+    }
+
+    private fun createIndexConfigSection(): JPanel {
+        maxFileSizeField = JBTextField("2", 5)
+        chunkSizeField = JBTextField("1024", 8)
+
+        return JBPanel<JBPanel<*>>().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+
+            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
+                add(JBLabel("Max File Size:"))
+                add(maxFileSizeField)
+                add(JBLabel("MB"))
+                add(JBLabel("(files larger than this will be excluded)").apply {
+                    foreground = LCATheme.descriptionForeground
+                })
+            })
+
+            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
+                add(JBLabel("Chunk Size:"))
+                add(chunkSizeField)
+                add(JBLabel("tokens"))
+                add(JBLabel("(size of text chunks for RAG)").apply {
+                    foreground = LCATheme.descriptionForeground
+                })
+            })
+        }
+    }
+
+    private fun createSearchSettingsSection(): JPanel {
+        ragSearchThresholdField = JBTextField("0.5", 6)
+        ragSearchTopKField = JBTextField("5", 4)
+        ragSearchSemanticWeightField = JBTextField("0.7", 4)
+        ragSearchHybridEnabledCheckbox = JCheckBox("Enable hybrid search", false)
+        ragSearchIncludeContextChunksCheckbox = JCheckBox("Include context chunks", false)
+        saveSearchSettingsButton = JButton("Save Search Settings").apply {
+            addActionListener { onSaveSearchSettings() }
+        }
+
+        return JBPanel<JBPanel<*>>().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+
+            add(JBLabel("Search Settings:").apply {
+                font = LCATheme.boldFont
+            })
+            add(JBLabel("Configure default RAG similarity and ranking behavior").apply {
+                foreground = LCATheme.descriptionForeground
+            })
+            add(Box.createVerticalStrut(8))
+
+            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
+                add(JBLabel("Similarity Threshold:"))
+                add(ragSearchThresholdField)
+                add(JBLabel("(0.0 - 1.0)"))
+            })
+
+            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
+                add(JBLabel("Default TopK:"))
+                add(ragSearchTopKField)
+            })
+
+            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
+                add(JBLabel("Semantic Weight:"))
+                add(ragSearchSemanticWeightField)
+                add(JBLabel("(0.0 - 1.0)"))
+            })
+
+            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
+                add(ragSearchHybridEnabledCheckbox)
+                add(ragSearchIncludeContextChunksCheckbox)
+            })
+
+            add(Box.createVerticalStrut(8))
+            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
+                add(saveSearchSettingsButton)
+            })
+        }
+    }
+
+    private fun createEmbeddingsSection(): JPanel {
+        embeddingProgressBar = JProgressBar(0, 100).apply {
+            isStringPainted = true
+            string = "Ready"
+        }
+        embeddingStatusLabel = JLabel("Ready")
+
+        generateEmbeddingsButton = JButton("Generate Embeddings").apply {
+            icon = AllIcons.Actions.Lightning
+            toolTipText = "Generate vector embeddings for semantic search"
+            addActionListener { onGenerateEmbeddings() }
+        }
+
+        clearIndexButton = JButton("Clear Index").apply {
+            icon = AllIcons.General.Remove
+            toolTipText = "Delete all indexed data for this project"
+            addActionListener { onClearIndex() }
+        }
+
+        return JBPanel<JBPanel<*>>().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+
+            add(JBLabel("Embeddings Management:").apply {
+                font = LCATheme.boldFont
+            })
+            add(JBLabel("Generate embeddings for RAG search or clear the entire index").apply {
+                foreground = LCATheme.descriptionForeground
+            })
+            add(Box.createVerticalStrut(8))
+
+            add(JBPanel<JBPanel<*>>(BorderLayout()).apply {
+                add(embeddingStatusLabel, BorderLayout.WEST)
+                add(embeddingProgressBar, BorderLayout.CENTER)
+            })
+            add(Box.createVerticalStrut(8))
+
+            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
+                add(generateEmbeddingsButton)
+                add(clearIndexButton)
+            })
+        }
+    }
+
+    // ==================== INDEX ACTIONS ====================
+
+    private fun onReindex() {
+        val projectPath = project.basePath
+        if (projectPath == null) {
+            JOptionPane.showMessageDialog(this, "Project path not found", "Error", JOptionPane.ERROR_MESSAGE)
+            return
+        }
+
+        reindexButton.isEnabled = false
+        updateIndexProgress(0, "Starting indexing...")
+
+        cs.launch {
+            try {
+                val projectRoot = java.nio.file.Paths.get(projectPath)
+                val router = coreManager.getOrCreateProjectRouter(projectRoot)
+                val ignorePatterns = getIgnorePaths().toSet()
+
+                router.indexProjectForRag(ignorePatterns = ignorePatterns) { progress ->
+                    // Publish to service for centralized progress tracking
+                    ragProgressService.updateIndexingProgress(progress.progressPercent, progress.statusMessage)
+                }
+
+                SwingUtilities.invokeLater {
+                    updateIndexProgress(100, "Completed")
+                    reindexButton.isEnabled = true
+                }
+            } catch (e: Exception) {
+                logger.error(e) { "Indexing failed" }
+                SwingUtilities.invokeLater {
+                    updateIndexProgress(0, "Failed: ${e.message}")
+                    reindexButton.isEnabled = true
+                    JOptionPane.showMessageDialog(
+                        this@ContextSettingsPanel,
+                        "Indexing failed: ${e.message}",
+                        "Error",
+                        JOptionPane.ERROR_MESSAGE
+                    )
+                }
+            }
+        }
+    }
+
+    private fun onGenerateEmbeddings() {
+        val projectPath = project.basePath ?: return
+
+        generateEmbeddingsButton.isEnabled = false
+        updateEmbeddingProgress(0, "Generating...")
+
+        cs.launch {
+            try {
+                val projectRoot = java.nio.file.Paths.get(projectPath)
+                val router = coreManager.getOrCreateProjectRouter(projectRoot)
+
+                val embeddingModel = router.getConfigService().get(
+                    "models.embedding_model",
+                    pl.jclab.refio.core.db.ConfigScope.APP,
+                    null
+                ) ?: "ollama/nomic-embed-text"
+
+                router.generateEmbeddings(model = embeddingModel) { progress ->
+                    // Publish to service for centralized progress tracking
+                    ragProgressService.updateEmbeddingProgress(progress.progressPercent, progress.statusMessage)
+                }
+
+                SwingUtilities.invokeLater {
+                    updateEmbeddingProgress(100, "Completed")
+                    generateEmbeddingsButton.isEnabled = true
+                }
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to generate embeddings" }
+                SwingUtilities.invokeLater {
+                    updateEmbeddingProgress(0, "Failed")
+                    generateEmbeddingsButton.isEnabled = true
+                    JOptionPane.showMessageDialog(
+                        this@ContextSettingsPanel,
+                        "Failed: ${e.message}",
+                        "Error",
+                        JOptionPane.ERROR_MESSAGE
+                    )
+                }
+            }
+        }
+    }
+
+    private fun onClearIndex() {
+        val projectPath = project.basePath ?: return
+
+        cs.launch {
+            try {
+                val projectRoot = java.nio.file.Paths.get(projectPath)
+                val router = coreManager.getOrCreateProjectRouter(projectRoot)
+                router.clearRagIndex()
+
+                SwingUtilities.invokeLater {
+                    updateEmbeddingProgress(0, "Index cleared")
+                }
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to clear RAG index" }
+                SwingUtilities.invokeLater {
+                    JOptionPane.showMessageDialog(
+                        this@ContextSettingsPanel,
+                        "Failed: ${e.message}",
+                        "Error",
+                        JOptionPane.ERROR_MESSAGE
+                    )
+                }
+            }
+        }
+    }
+
+    private fun updateIndexProgress(progress: Int, status: String) {
+        indexProgressBar.value = progress
+        indexProgressBar.string = "$progress%"
+        indexStatusLabel.text = status
+    }
+
+    private fun updateEmbeddingProgress(progress: Int, status: String) {
+        embeddingProgressBar.value = progress
+        embeddingProgressBar.string = "$progress%"
+        embeddingStatusLabel.text = status
+    }
+
+    private fun onSaveSearchSettings() {
+        val threshold = ragSearchThresholdField.text.trim().toFloatOrNull()
+        if (threshold == null || threshold < 0.0f || threshold > 1.0f) {
+            JOptionPane.showMessageDialog(
+                this,
+                "Similarity threshold must be a number between 0.0 and 1.0",
+                "Invalid Value",
+                JOptionPane.ERROR_MESSAGE
+            )
+            return
+        }
+
+        val topK = ragSearchTopKField.text.trim().toIntOrNull()
+        if (topK == null || topK <= 0) {
+            JOptionPane.showMessageDialog(
+                this,
+                "TopK must be a positive integer",
+                "Invalid Value",
+                JOptionPane.ERROR_MESSAGE
+            )
+            return
+        }
+
+        val semanticWeight = ragSearchSemanticWeightField.text.trim().toFloatOrNull()
+        if (semanticWeight == null || semanticWeight < 0.0f || semanticWeight > 1.0f) {
+            JOptionPane.showMessageDialog(
+                this,
+                "Semantic weight must be a number between 0.0 and 1.0",
+                "Invalid Value",
+                JOptionPane.ERROR_MESSAGE
+            )
+            return
+        }
+
+        val (thresholdSection, thresholdKey) = ConfigKeys.split(
+            ConfigService.KEY_RAG_SEARCH_SIMILARITY_THRESHOLD
+        )
+        onSettingChanged(thresholdSection, thresholdKey, threshold)
+
+        val (topKSection, topKKey) = ConfigKeys.split(ConfigService.KEY_RAG_SEARCH_TOP_K)
+        onSettingChanged(topKSection, topKKey, topK)
+
+        val (hybridSection, hybridKey) = ConfigKeys.split(ConfigService.KEY_RAG_SEARCH_HYBRID_ENABLED)
+        onSettingChanged(hybridSection, hybridKey, ragSearchHybridEnabledCheckbox.isSelected)
+
+        val (weightSection, weightKey) = ConfigKeys.split(ConfigService.KEY_RAG_SEARCH_SEMANTIC_WEIGHT)
+        onSettingChanged(weightSection, weightKey, semanticWeight)
+
+        val (contextSection, contextKey) = ConfigKeys.split(
+            ConfigService.KEY_RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS
+        )
+        onSettingChanged(contextSection, contextKey, ragSearchIncludeContextChunksCheckbox.isSelected)
+
+        JOptionPane.showMessageDialog(
+            this,
+            "RAG search settings saved.",
+            "Saved",
+            JOptionPane.INFORMATION_MESSAGE
+        )
+    }
+
+    private fun getIgnorePaths(): List<String> {
+        return ignorePathsTextArea.text
+            .lines()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+    }
+
+    // ==================== RELOAD / CLEANUP ====================
+
+    fun reload() {
+        loadIgnorePaths()
+        loadIgnorePaths()
+        loadRagSearchSettings()
+    }
+
+    fun dispose() {
+        cs.cancel()
+    }
+
+    // ==================== HELPERS ====================
+
+    private fun createSectionPanel(title: String, content: JPanel): JPanel {
+        return JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            border = BorderFactory.createCompoundBorder(
+                BorderFactory.createTitledBorder(
+                    LCATheme.customLineBorder(LCATheme.borderColor, 1),
+                    title
+                ),
+                LCATheme.paddedBorder(LCATheme.padding)
+            )
+            add(content, BorderLayout.CENTER)
+        }
+    }
+
+    private fun loadRagSearchSettings() {
+        val projectPath = project.basePath ?: return
+
+        cs.launch {
+            try {
+                val router = coreManager.getOrCreateProjectRouter(java.nio.file.Paths.get(projectPath))
+                val configService = router.getConfigService()
+
+                val threshold = configService.getRagSearchSimilarityThreshold()
+                val topK = configService.getRagSearchTopK()
+                val hybridEnabled = configService.getRagSearchHybridEnabled()
+                val semanticWeight = configService.getRagSearchSemanticWeight()
+                val includeContextChunks = configService.getRagSearchIncludeContextChunks()
+
+                SwingUtilities.invokeLater {
+                    ragSearchThresholdField.text = threshold.toString()
+                    ragSearchTopKField.text = topK.toString()
+                    ragSearchSemanticWeightField.text = semanticWeight.toString()
+                    ragSearchHybridEnabledCheckbox.isSelected = hybridEnabled
+                    ragSearchIncludeContextChunksCheckbox.isSelected = includeContextChunks
+                }
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to load RAG search settings" }
+            }
+        }
+    }
+
+    private fun loadIgnorePaths() {
+        val projectPath = project.basePath ?: return
+        val ignoreFile = java.nio.file.Paths.get(projectPath).resolve(pl.jclab.refio.core.utils.AiIgnoreMatcher.FILE_NAME)
+
+        if (java.nio.file.Files.exists(ignoreFile)) {
+            try {
+                val lines = java.nio.file.Files.readAllLines(ignoreFile)
+                ignorePathsTextArea.text = lines.joinToString("\n")
+                ignorePathsTextArea.isEditable = false
+                ignorePathsSourceLabel.text = "Source: .aiignore (read-only)"
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to read ${ignoreFile.fileName}" }
+                ignorePathsTextArea.text = defaultIgnorePathsText
+                ignorePathsTextArea.isEditable = true
+                ignorePathsSourceLabel.text = "Source: Settings UI (failed to read .aiignore)"
+            }
+        } else {
+            ignorePathsTextArea.text = defaultIgnorePathsText
+            ignorePathsTextArea.isEditable = true
+            ignorePathsSourceLabel.text = "Source: Settings UI"
+        }
+    }
+}

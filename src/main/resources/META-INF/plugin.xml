@@ -1,0 +1,103 @@
+<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+  <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
+  <id>pl.jclab.refio</id>
+
+  <!-- Public plugin name should be written in Title Case.
+       Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-name -->
+  <name>Refio</name>
+
+  <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
+  <vendor email="refio@shad.net.pl" url="https://github.com/shadoq/refio">jclab team</vendor>
+
+  <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
+       Simple HTML elements (text formatting, paragraphs, and lists) can be added inside of <![CDATA[ ]]> tag.
+       Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
+  <description><![CDATA[
+    Refio - Local-first AI coding assistant for IntelliJ.<br>
+    <br>
+    Features:<br>
+    <ul>
+      <li>Chat mode: Conversational AI with code suggestions</li>
+      <li>Plan mode: Step-by-step planning with read-only tools</li>
+      <li>Agent mode: Full autonomous coding with file system access</li>
+      <li>Multi-provider support: Ollama (local), OpenAI, Anthropic, OpenRouter, LM Studio, Google Gemini</li>
+      <li>Cost tracking: Monitor LLM API usage in real-time</li>
+      <li>Privacy-first: Local-only data storage, optional no-egress mode</li>
+    </ul>
+  ]]></description>
+
+  <!-- Product and plugin compatibility requirements.
+       Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
+  <depends>com.intellij.modules.platform</depends>
+
+  <!-- Extension points defined by the plugin.
+       Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
+  <extensions defaultExtensionNs="com.intellij">
+    <!-- Tool Window -->
+    <toolWindow
+        id="Refio"
+        anchor="right"
+        factoryClass="pl.jclab.refio.ui.toolwindow.RefioToolWindowFactory"
+        icon="/icons/pluginIcon.svg"/>
+
+    <!-- Services -->
+    <applicationService
+        serviceImplementation="pl.jclab.refio.services.core.CoreConnectionManager"/>
+    <applicationService
+        serviceImplementation="pl.jclab.refio.services.logging.PluginLogger"/>
+    <applicationService
+        serviceImplementation="pl.jclab.refio.services.api.ApiClientService"/>
+    <projectService
+        serviceImplementation="pl.jclab.refio.services.session.SessionManager"/>
+    <projectService
+        serviceImplementation="pl.jclab.refio.services.execution.StepExecutionService"/>
+
+    <!-- Startup Activities -->
+    <postStartupActivity
+        implementation="pl.jclab.refio.core.services.ProjectStartupActivity"/>
+    <postStartupActivity
+        implementation="pl.jclab.refio.startup.RagIndexingStartup"/>
+
+    <!-- Notification Group -->
+    <notificationGroup
+        id="Refio.Notifications"
+        displayType="BALLOON"
+        key="notification.group.refio"/>
+
+    <completion.contributor
+        language="TEXT"
+        implementationClass="pl.jclab.refio.ui.completion.RefioCompletionContributor"/>
+  </extensions>
+
+  <actions>
+    <action id="refio.ReindexRag"
+            class="pl.jclab.refio.actions.ReindexRagAction"
+            text="Reindex RAG Database"
+            description="Rebuild the RAG index for the current project">
+      <add-to-group group-id="ToolsMenu" anchor="last"/>
+    </action>
+
+    <!-- Add code to current Refio session (Ctrl+Shift+J / Cmd+Shift+J) -->
+    <action id="refio.AddCodeToCurrentSession"
+            class="pl.jclab.refio.actions.AddCodeToCurrentSessionAction"
+            text="Add to Refio"
+            description="Add selected code to current Refio session">
+      <keyboard-shortcut first-keystroke="control shift J" keymap="$default"/>
+      <keyboard-shortcut first-keystroke="meta shift J" keymap="Mac OS X"/>
+      <keyboard-shortcut first-keystroke="meta shift J" keymap="Mac OS X 10.5+"/>
+      <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+    </action>
+
+    <!-- Add code to new Refio session (Ctrl+J / Cmd+J) -->
+    <action id="refio.AddCodeToNewSession"
+            class="pl.jclab.refio.actions.AddCodeToNewSessionAction"
+            text="Add to Refio (New Session)"
+            description="Add selected code to a new Refio session">
+      <keyboard-shortcut first-keystroke="control J" keymap="$default"/>
+      <keyboard-shortcut first-keystroke="meta J" keymap="Mac OS X"/>
+      <keyboard-shortcut first-keystroke="meta J" keymap="Mac OS X 10.5+"/>
+      <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+    </action>
+  </actions>
+</idea-plugin>
