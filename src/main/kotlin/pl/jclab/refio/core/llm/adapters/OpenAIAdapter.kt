@@ -474,6 +474,7 @@ class OpenAIAdapter(
 
         try {
             // Make HTTP request
+            logger.info { "[OPENAI] Request start: endpoint=$DEFAULT_BASE_URL$endpoint, body=${SecureLogger.redact(requestJson)}" }
             val httpResponse = client.post("$DEFAULT_BASE_URL$endpoint") {
                 contentType(ContentType.Application.Json)
                 header("Authorization", "Bearer $apiKey")
@@ -495,6 +496,10 @@ class OpenAIAdapter(
 
             val responseJson = gson.toJson(response)
             logger.debug { "[OPENAI] Response: ${SecureLogger.redact(responseJson)}" }
+            logger.info {
+                "[OPENAI] Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
+                    "bodySize=${responseJson.length}"
+            }
 
             // Check for error response
             if (httpStatus !in 200..299) {
@@ -647,6 +652,7 @@ class OpenAIAdapter(
 
         try {
             // Make streaming HTTP request
+            logger.info { "[OPENAI] Request start: endpoint=$DEFAULT_BASE_URL$endpoint, body=${SecureLogger.redact(requestJson)}" }
             client.preparePost("$DEFAULT_BASE_URL$endpoint") {
                 contentType(ContentType.Application.Json)
                 header("Authorization", "Bearer $apiKey")
@@ -798,6 +804,10 @@ class OpenAIAdapter(
                 "model" to model
             )
             val responseJson = gson.toJson(syntheticResponse)
+            logger.info {
+                "[OPENAI] Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
+                    "bodySize=${responseJson.length}"
+            }
 
             // Log successful stream completion to API logs
             logger.apiResponse(
@@ -863,6 +873,7 @@ class OpenAIAdapter(
         val endpoint = getEndpoint(definition)
 
         try {
+            logger.info { "[OPENAI] Request start: endpoint=$DEFAULT_BASE_URL$endpoint, body=${SecureLogger.redact(requestJson)}" }
             client.preparePost("$DEFAULT_BASE_URL$endpoint") {
                 contentType(ContentType.Application.Json)
                 header("Authorization", "Bearer $apiKey")
@@ -983,6 +994,11 @@ class OpenAIAdapter(
 
             val responseJson = gson.toJson(rawResponse)
             val cost = estimateCost(usage)
+
+            logger.info {
+                "[OPENAI] Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
+                    "bodySize=${responseJson.length}"
+            }
 
             onStreamChunk(
                 StreamChunk(

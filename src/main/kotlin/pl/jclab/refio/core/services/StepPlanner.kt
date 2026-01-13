@@ -148,8 +148,8 @@ class StepPlanner(
             }
 
             // 3. Build system prompt
-            val toolDescriptions = toolDescriptionBuilder.getToolDescriptions(task.mode, task.id)
-            val validToolNames = toolDescriptionBuilder.getValidToolNames(task.mode, task.id)
+            val toolDescriptions = toolDescriptionBuilder.getToolDescriptionsForTools(task.mode, allowedTools)
+            val validToolNames = toolDescriptionBuilder.getValidToolNamesForTools(allowedTools)
 
             val systemPrompt = promptsService.getSystemPrompt(
                 type = PromptType.SYSTEM_STEP_PLANNER,

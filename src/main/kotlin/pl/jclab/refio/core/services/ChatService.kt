@@ -125,8 +125,8 @@ class ChatService(
             Pair(request.params.model, request.params.provider)
         } else {
             val operation = ModelOperation.fromTaskMode(request.mode)
-            val (m, p) = configService.getDefaultModel(operation = operation, taskId = task.id)
-            logger.info { "[CHAT_SERVICE] Using default model from config: $m (provider=$p)" }
+            val (m, p) = configService.getModel(operation = operation, taskId = task.id)
+            logger.info { "[CHAT_SERVICE] Using model from config: $m (provider=$p)" }
             Pair(m, p)
         }
 

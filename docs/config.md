@@ -400,6 +400,9 @@ mcp:
 
 ---
 
+Note: `ui.selected_model` stores the model chosen in the chat UI. It does not overwrite
+`models.defaults.*`. When the UI is set to Auto, the per-operation defaults are used.
+
 ## Examples
 
 ### Minimal User Config

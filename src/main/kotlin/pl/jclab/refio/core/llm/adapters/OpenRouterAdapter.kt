@@ -160,6 +160,7 @@ class OpenRouterAdapter(
 
         try {
             // Make HTTP request
+            logger.info { "[OPENROUTER] Request start: endpoint=$DEFAULT_BASE_URL$CHAT_ENDPOINT, body=${SecureLogger.redact(requestJson)}" }
             val httpResponse = client.post("$DEFAULT_BASE_URL$CHAT_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 header("Authorization", "Bearer $apiKeyToUse")
@@ -174,6 +175,10 @@ class OpenRouterAdapter(
 
             val responseJson = gson.toJson(response)
             logger.debug { "[OPENROUTER] Response: ${SecureLogger.redact(responseJson)}" }
+            logger.info {
+                "[OPENROUTER] Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
+                    "bodySize=${responseJson.length}"
+            }
 
 
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
@@ -353,6 +358,7 @@ class OpenRouterAdapter(
 
         try {
             // Make streaming HTTP request
+            logger.info { "[OPENROUTER] Request start: endpoint=$DEFAULT_BASE_URL$CHAT_ENDPOINT, body=${SecureLogger.redact(requestJson)}" }
             client.preparePost("$DEFAULT_BASE_URL$CHAT_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 header("Authorization", "Bearer $apiKeyToUse")
@@ -559,6 +565,10 @@ class OpenRouterAdapter(
                 "model" to model
             )
             val responseJson = gson.toJson(syntheticResponse)
+            logger.info {
+                "[OPENROUTER] Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
+                    "bodySize=${responseJson.length}"
+            }
 
             // Log successful stream completion to API logs
             logger.apiResponse(

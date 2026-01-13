@@ -341,12 +341,7 @@ class PromptInputPanel(
                             "${selectedItem.provider}/${selectedItem.modelId}"
                         )
 
-                        sessionManager.setDefaultModelAllModes(
-                            modelId = selectedItem.modelId,
-                            provider = selectedItem.provider
-                        )
-
-                        logger.info { "✓ Successfully set default model for all modes: ${selectedItem.provider}/${selectedItem.modelId}" }
+                        logger.info { "Selected model saved: ${selectedItem.provider}/${selectedItem.modelId}" }
                     } catch (e: Exception) {
                         logger.error(e) { "Failed to persist model selection: ${selectedItem.modelId}" }
                     }
@@ -970,21 +965,25 @@ class PromptInputPanel(
     }
 
     /**
-     * Load default model from embedded core config and select it in dropdown
+     * Load selected model from embedded core config and select it in dropdown
      */
     private fun loadDefaultModelFromCore() {
         cs.launch {
             try {
-                logger.info { "Loading default model from embedded core config..." }
+                logger.info { "Loading selected model from embedded core config..." }
 
-                // Get default model from SessionManager (uses embedded core)
-                val defaultModelString = sessionManager.getDefaultModelForMode()
+                val selectedModelString = sessionManager.selectedModel.value
+                val resolvedModelString = if (selectedModelString.isNullOrBlank() || selectedModelString == "auto") {
+                    sessionManager.getDefaultModelForMode()
+                } else {
+                    selectedModelString
+                }
 
-                logger.info { "Core default model: $defaultModelString" }
+                logger.info { "Core selected model: $resolvedModelString" }
 
                 // Parse model string: "Ollama/qwen2.5:7b"
-                val parts = defaultModelString.split("/", limit = 2)
-                val defaultModelId = if (parts.size == 2) parts[1] else defaultModelString
+                val parts = resolvedModelString.split("/", limit = 2)
+                val defaultModelId = if (parts.size == 2) parts[1] else resolvedModelString
 
                 SwingUtilities.invokeLater {
                     var foundIndex = -1
@@ -998,10 +997,10 @@ class PromptInputPanel(
 
                     if (foundIndex >= 0) {
                         modelSelector.selectedIndex = foundIndex
-                        logger.info { "✓ Selected model from core: $defaultModelId" }
+                        logger.info { "Selected model from core: $defaultModelId" }
                     } else {
                         logger.warn { "Model $defaultModelId from core not found in dropdown, adding manually" }
-                        val displayName = defaultModelString.replace("/", " / ")
+                        val displayName = resolvedModelString.replace("/", " / ")
                         val provider = if (parts.size == 2) parts[0].lowercase() else "ollama"
                         modelSelector.addItem(
                             ModelItem(
@@ -1012,7 +1011,7 @@ class PromptInputPanel(
                     }
                 }
             } catch (e: Exception) {
-                logger.warn { "Failed to load default model from core, using first model" }
+                logger.warn { "Failed to load selected model from core, using first model" }
                 SwingUtilities.invokeLater {
                     if (modelSelector.itemCount > 0) {
                         modelSelector.selectedIndex = 0

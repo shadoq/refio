@@ -185,6 +185,7 @@ class OllamaAdapter(
 
         try {
             // Make HTTP request
+            logger.info { "[OLLAMA] Request start: endpoint=$baseUrl$CHAT_ENDPOINT, body=${SecureLogger.redact(requestJson)}" }
             val httpResponse = client.post("$baseUrl$CHAT_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 setBody(requestBody)
@@ -195,6 +196,10 @@ class OllamaAdapter(
 
             val responseJson = gson.toJson(response)
             logger.debug { "[OLLAMA] Response: ${SecureLogger.redact(responseJson)}" }
+            logger.info {
+                "[OLLAMA] Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
+                    "bodySize=${responseJson.length}"
+            }
 
             // Check for error response
             if (httpStatus !in 200..299) {
@@ -305,6 +310,7 @@ class OllamaAdapter(
 
         try {
             // Make streaming HTTP request
+            logger.info { "[OLLAMA] Request start: endpoint=$baseUrl$CHAT_ENDPOINT, body=${SecureLogger.redact(requestJson)}" }
             client.preparePost("$baseUrl$CHAT_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 setBody(requestBody)
@@ -410,6 +416,10 @@ class OllamaAdapter(
                 "model" to model
             )
             val responseJson = gson.toJson(syntheticResponse)
+            logger.info {
+                "[OLLAMA] Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
+                    "bodySize=${responseJson.length}"
+            }
 
             // Log successful stream completion to API logs
             logger.apiResponse(

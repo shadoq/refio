@@ -2,6 +2,7 @@ package pl.jclab.refio.core.prompts
 
 import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.services.ToolPermissionsService
+import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.utils.GsonInstance.prettyGson
 
@@ -30,19 +31,7 @@ class ToolDescriptionBuilder(
      * @return Tool descriptions string with parameter schemas
      */
     fun getToolDescriptions(mode: TaskMode, taskId: String? = null): String {
-        val tools = getToolsForMode(mode, taskId)
-
-        val descriptions = tools.mapIndexed { index, tool ->
-            val schema = tool.getParameterSchema()
-            buildToolDescription(index + 1, tool.name, tool.description, schema)
-        }.joinToString("\n\n")
-
-        val modeNote = when (mode) {
-            TaskMode.CHAT, TaskMode.PLAN -> "READ-ONLY TOOLS (you can use these in ${mode.name} mode):"
-            TaskMode.AGENT -> "AVAILABLE TOOLS (read-only and write operations):"
-        }
-
-        return "$modeNote\n\n$descriptions"
+        return getToolDescriptionsForTools(mode, getToolsForMode(mode, taskId))
     }
 
     /**
@@ -81,7 +70,32 @@ class ToolDescriptionBuilder(
      * @return Comma-separated list of tool names
      */
     fun getValidToolNames(mode: TaskMode, taskId: String? = null): String {
-        return getToolsForMode(mode, taskId).joinToString(", ") { it.name }
+        return getValidToolNamesForTools(getToolsForMode(mode, taskId))
+    }
+
+    /**
+     * Get tool descriptions for a pre-filtered tool list.
+     * Keeps prompts consistent with task-specific constraints (e.g., read-only).
+     */
+    fun getToolDescriptionsForTools(mode: TaskMode, tools: List<Tool>): String {
+        val descriptions = tools.mapIndexed { index, tool ->
+            val schema = tool.getParameterSchema()
+            buildToolDescription(index + 1, tool.name, tool.description, schema)
+        }.joinToString("\n\n")
+
+        val modeNote = when (mode) {
+            TaskMode.CHAT, TaskMode.PLAN -> "READ-ONLY TOOLS (you can use these in ${mode.name} mode):"
+            TaskMode.AGENT -> "AVAILABLE TOOLS (read-only and write operations):"
+        }
+
+        return "$modeNote\n\n$descriptions"
+    }
+
+    /**
+     * Get valid tool names for a pre-filtered tool list.
+     */
+    fun getValidToolNamesForTools(tools: List<Tool>): String {
+        return tools.joinToString(", ") { it.name }
     }
 
     /**

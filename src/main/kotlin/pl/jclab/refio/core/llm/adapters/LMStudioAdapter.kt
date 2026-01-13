@@ -176,6 +176,7 @@ class LMStudioAdapter(
         var httpStatus: Int? = null
 
         try {
+            logger.info { "[LMStudio] Request start: endpoint=$baseUrl$CHAT_ENDPOINT, body=${SecureLogger.redact(requestJson)}" }
             val response = client.post("$baseUrl$CHAT_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 apiKey?.let { header("Authorization", "Bearer $it") }
@@ -224,6 +225,10 @@ class LMStudioAdapter(
 
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
             val responseJson = gson.toJson(rawResponse)
+            logger.info {
+                "[LMStudio] Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
+                    "bodySize=${responseJson.length}"
+            }
 
             logger.apiResponse(
                 provider = provider,
@@ -281,6 +286,7 @@ class LMStudioAdapter(
         var finalFinishReason: String? = null
 
         try {
+            logger.info { "[LMStudio] Request start: endpoint=$baseUrl$CHAT_ENDPOINT, body=${SecureLogger.redact(requestJson)}" }
             client.preparePost("$baseUrl$CHAT_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 apiKey?.let { header("Authorization", "Bearer $it") }
@@ -371,13 +377,18 @@ class LMStudioAdapter(
                 ),
                 "model" to model
             )
+            val responseJson = gson.toJson(syntheticResponse)
+            logger.info {
+                "[LMStudio] Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
+                    "bodySize=${responseJson.length}"
+            }
 
             logger.apiResponse(
                 provider = provider,
                 model = model,
                 endpoint = "$baseUrl$CHAT_ENDPOINT",
                 requestJson = requestJson,
-                responseJson = gson.toJson(syntheticResponse),
+                responseJson = responseJson,
                 httpStatus = httpStatus ?: 200,
                 inputTokens = usage.inputTokens,
                 outputTokens = usage.outputTokens,

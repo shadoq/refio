@@ -224,6 +224,7 @@ class AnthropicAdapter(
 
         try {
             // Make HTTP request
+            logger.info { "[ANTHROPIC] Request start: endpoint=$DEFAULT_BASE_URL$MESSAGES_ENDPOINT, body=${SecureLogger.redact(requestJson)}" }
             val httpResponse = client.post("$DEFAULT_BASE_URL$MESSAGES_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 header("x-api-key", apiKey)
@@ -236,6 +237,10 @@ class AnthropicAdapter(
 
             val responseJson = gson.toJson(response)
             logger.debug { "[ANTHROPIC] Response: ${SecureLogger.redact(responseJson)}" }
+            logger.info {
+                "[ANTHROPIC] Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
+                    "bodySize=${responseJson.length}"
+            }
 
             // Check for error response
             if (httpStatus !in 200..299) {
@@ -370,6 +375,7 @@ class AnthropicAdapter(
 
         try {
             // Make streaming HTTP request
+            logger.info { "[ANTHROPIC] Request start: endpoint=$DEFAULT_BASE_URL$MESSAGES_ENDPOINT, body=${SecureLogger.redact(requestJson)}" }
             client.preparePost("$DEFAULT_BASE_URL$MESSAGES_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 header("x-api-key", apiKey)
@@ -539,6 +545,10 @@ class AnthropicAdapter(
                 "model" to model
             )
             val responseJson = gson.toJson(syntheticResponse)
+            logger.info {
+                "[ANTHROPIC] Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
+                    "bodySize=${responseJson.length}"
+            }
 
             // Log successful stream completion to API logs
             logger.apiResponse(

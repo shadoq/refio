@@ -357,11 +357,12 @@ class SessionLifecycleService(
         }
 
         try {
-            val response = coreApiClient.getDefaultModel(pl.jclab.refio.core.api.ModelOperation.DEFAULT, taskId = null)
-            val modelString = "${response.provider}/${response.modelId}"
+            val selectedModel = coreApiClient.getConfigValue("ui", "selected_model")
+                ?.takeIf { it.isNotBlank() }
+                ?: "auto"
 
-            stateManager.setSelectedModel(modelString)
-            logger.info { "Refreshed selected model from DB: $modelString (mode=${session.mode})" }
+            stateManager.setSelectedModel(selectedModel)
+            logger.info { "Refreshed selected model from DB: $selectedModel (mode=${session.mode})" }
 
         } catch (e: Exception) {
             logger.error(e) { "Failed to refresh selected model from DB" }

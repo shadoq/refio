@@ -198,6 +198,7 @@ class GeminiAdapter(
         var httpStatus: Int? = null
         val url = "$BASE_URL${GENERATE_PATH.format(model)}"
         try {
+            logger.info { "[GEMINI] Request start: endpoint=$url, body=${SecureLogger.redact(requestJson)}" }
             val httpResponse = client.post(url) {
                 contentType(ContentType.Application.Json)
                 header("x-goog-api-key", apiKey)
@@ -208,6 +209,10 @@ class GeminiAdapter(
             val rawResponse: Map<String, Any?> = httpResponse.body()
             val responseJson = gson.toJson(rawResponse)
             logger.debug { "[GEMINI] Response: ${SecureLogger.redact(responseJson)}" }
+            logger.info {
+                "[GEMINI] Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
+                    "bodySize=${responseJson.length}"
+            }
 
             if (httpStatus !in 200..299) {
                 val latencyMs = (System.currentTimeMillis() - startTime).toInt()
@@ -289,6 +294,7 @@ class GeminiAdapter(
         var finalUsage: LLMUsage? = null
 
         try {
+            logger.info { "[GEMINI] Request start: endpoint=$url, body=${SecureLogger.redact(requestJson)}" }
             client.preparePost(url) {
                 contentType(ContentType.Application.Json)
                 header("x-goog-api-key", apiKey)
@@ -349,6 +355,21 @@ class GeminiAdapter(
             val usage = finalUsage ?: LLMUsage(0, 0, 0)
             val cost = estimateCost(usage)
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
+            val responseJson = gson.toJson(
+                mapOf(
+                    "content" to contentBuilder.toString(),
+                    "finishReason" to finalFinishReason,
+                    "usage" to mapOf(
+                        "inputTokens" to usage.inputTokens,
+                        "outputTokens" to usage.outputTokens,
+                        "totalTokens" to usage.totalTokens
+                    )
+                )
+            )
+            logger.info {
+                "[GEMINI] Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
+                    "bodySize=${responseJson.length}"
+            }
 
             onStreamChunk(
                 StreamChunk(

@@ -118,8 +118,8 @@ class PlanningService(
             Pair(request.model, request.provider)
         } else {
             val operation = ModelOperation.fromTaskMode(task.mode)
-            val (m, p) = configService.getDefaultModel(operation = operation, taskId = task.id)
-            logger.info { "[PLANNING] Using default model from config: $m (provider=$p)" }
+            val (m, p) = configService.getModel(operation = operation, taskId = task.id)
+            logger.info { "[PLANNING] Using model from config: $m (provider=$p)" }
             Pair(m, p)
         }
 

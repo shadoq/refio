@@ -72,8 +72,16 @@ class IntentClassificationService(
         )
 
         // Resolve model and provider
-        val resolvedModel = model ?: configService.get("default_model.chat") ?: "gpt-4o-mini"
-        val resolvedProvider = provider ?: llmClient.inferProvider(resolvedModel)
+        val (defaultModel, defaultProvider) = configService.getModel(
+            operation = pl.jclab.refio.core.api.ModelOperation.DEFAULT,
+            taskId = taskId
+        )
+        val resolvedModel = model ?: defaultModel
+        val resolvedProvider = provider ?: if (model != null) {
+            llmClient.inferProvider(model)
+        } else {
+            defaultProvider
+        }
 
         logger.debug { "[INTENT_CLASSIFIER] Using model: $resolvedProvider/$resolvedModel" }
 
