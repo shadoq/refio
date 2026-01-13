@@ -244,12 +244,12 @@ class PromptInputPanel(
         add(addContextButton, gbc)
 
         // Mode dropdown
-        modeSelector = JComboBox(arrayOf("Chat", "Plan", "Agent")).apply {
+        modeSelector = JComboBox(arrayOf("💬 Chat", "📝 Plan", "🤖 Agent")).apply {
             selectedIndex = 0
             toolTipText = "Switch mode (Alt+M)"
-            minimumSize = Dimension(80, 28)
-            preferredSize = Dimension(80, 28)
-            maximumSize = Dimension(80, 28)
+            minimumSize = Dimension(100, 28)
+            preferredSize = Dimension(100, 28)
+            maximumSize = Dimension(110, 28)
 
             addActionListener {
                 // Skip if UI is being updated programmatically
@@ -362,7 +362,6 @@ class PromptInputPanel(
             preferredSize = Dimension(200, 28)
             minimumSize = Dimension(200, 28)
             maximumSize = Dimension(200, 28)
-            isSelected = true // Default: INTERACTIVE
 
             addActionListener {
                 if (isUpdatingToggleProgrammatically) {
@@ -460,7 +459,7 @@ class PromptInputPanel(
             }
         }
 
-        intentClassificationToggle = JToggleButton("Intent classification").apply {
+        intentClassificationToggle = JToggleButton("🎯 Intent classification").apply {
             toolTipText = "Intent classification disabled"
             preferredSize = Dimension(200, 28)
             minimumSize = Dimension(200, 28)
@@ -469,10 +468,10 @@ class PromptInputPanel(
             addActionListener {
                 if (!isUpdatingToggleProgrammatically) {
                     if (isSelected) {
-                        text = "Intent classification enabled"
+                        text = "🎯 Intent classification enabled"
                         toolTipText = "Intent classification enabled"
                     } else {
-                        text = "Intent classification disabled"
+                        text = "🎯 Intent classification disabled"
                         toolTipText = "Intent classification disabled"
                     }
 
@@ -510,11 +509,11 @@ class PromptInputPanel(
 
         // Send/Stop button (right side of row 1)
         // Transforms: Send → Stop during operation, Stop → Send when idle
-        sendButton = JButton("Send").apply {
+        sendButton = JButton("🚀 Send").apply {
             toolTipText = "Send prompt (Enter)"
-            minimumSize = Dimension(70, 28)
-            preferredSize = Dimension(70, 28)
-            maximumSize = Dimension(70, 28)
+            minimumSize = Dimension(90, 28)
+            preferredSize = Dimension(90, 28)
+            maximumSize = Dimension(90, 28)
             addActionListener {
                 if (isOperationRunning) {
                     handleStopOperation()
@@ -532,6 +531,7 @@ class PromptInputPanel(
         loadAvailableModels()
 
         loadNoEgressDefault()
+        loadExecutionModeDefault()
 
         // Listen to session changes
         cs.launch {
@@ -567,10 +567,10 @@ class PromptInputPanel(
                     // Update icon and tooltip based on state
                     SwingUtilities.invokeLater {
                         if (enabled) {
-                            thinkingToggle.text = "🧠"
+                            thinkingToggle.text = "🧠 Thinking mode enabled"
                             thinkingToggle.toolTipText = "Thinking mode enabled"
                         } else {
-                            thinkingToggle.text = "💭"
+                            thinkingToggle.text = "💭 Thinking mode disabled"
                             thinkingToggle.toolTipText = "Thinking mode disabled"
                         }
                     }
@@ -591,10 +591,10 @@ class PromptInputPanel(
                     // Update icon and tooltip based on state
                     SwingUtilities.invokeLater {
                         if (enabled) {
-                            noEgressToggle.text = "🔒"
+                            noEgressToggle.text = "🔒 No-egress enabled"
                             noEgressToggle.toolTipText = "No-egress mode enabled (local only)"
                         } else {
-                            noEgressToggle.text = "🌐"
+                            noEgressToggle.text = "🌐 No-egress disabled"
                             noEgressToggle.toolTipText = "No-egress mode disabled (network enabled)"
                         }
                     }
@@ -614,10 +614,10 @@ class PromptInputPanel(
 
                     SwingUtilities.invokeLater {
                         if (enabled) {
-                            intentClassificationToggle.text = "Intent classification enabled"
+                            intentClassificationToggle.text = "🎯 Intent classification enabled"
                             intentClassificationToggle.toolTipText = "Intent classification enabled"
                         } else {
-                            intentClassificationToggle.text = "Intent classification disabled"
+                            intentClassificationToggle.text = "🎯 Intent classification disabled"
                             intentClassificationToggle.toolTipText = "Intent classification disabled"
                         }
                     }
@@ -638,10 +638,10 @@ class PromptInputPanel(
                     // Update icon and tooltip based on state
                     SwingUtilities.invokeLater {
                         if (enabled) {
-                            orchestrationToggle.text = "🔄"
+                            orchestrationToggle.text = "🔄 Orchestration enabled"
                             orchestrationToggle.toolTipText = "Orchestration enabled (intelligent plan adaptation)"
                         } else {
-                            orchestrationToggle.text = "📋"
+                            orchestrationToggle.text = "📋 Orchestration disabled"
                             orchestrationToggle.toolTipText = "Orchestration disabled (simple execution)"
                         }
                     }
@@ -1028,13 +1028,12 @@ class PromptInputPanel(
     private fun onExecutionModeChanged(mode: ExecutionMode) {
         logger.info { "Execution mode changed to: $mode" }
 
-        cs.launch {
+        cs.launch(Dispatchers.IO) {
             val currentSession = sessionManager.activeSession.value
             if (currentSession != null) {
                 try {
-                    // Update session locally (embedded core, no HTTP)
-                    val updatedSession = currentSession.copy(executionMode = mode)
-                    sessionManager.updateSession(updatedSession)
+                    // Update session and persist to config
+                    sessionManager.setExecutionMode(mode)
 
                     StepExecutionService.getInstance(project)
                         .switchExecutionMode(currentSession.id, mode)
@@ -1082,10 +1081,10 @@ class PromptInputPanel(
             executionModeToggle.isSelected = isInteractiveMode
 
             if (isInteractiveMode) {
-                executionModeToggle.text = "🤚"
+                executionModeToggle.text = "🤚 Interactive mode"
                 executionModeToggle.toolTipText = "Interactive mode"
             } else {
-                executionModeToggle.text = "⚡"
+                executionModeToggle.text = "⚡ Auto mode"
                 executionModeToggle.toolTipText = "Auto mode"
             }
 
@@ -1990,7 +1989,7 @@ class PromptInputPanel(
 
         if (isRunning) {
             // Operation started → Send becomes Stop
-            sendButton.text = "Stop"
+            sendButton.text = "🛑 Stop"
             sendButton.toolTipText = "Stop current operation"
 
             // Disable prompt input
@@ -2009,7 +2008,7 @@ class PromptInputPanel(
             logger.info { "Operation started - Send → Stop, all controls disabled" }
         } else {
             // Operation finished → Stop becomes Send
-            sendButton.text = "Send"
+            sendButton.text = "🚀 Send"
             sendButton.toolTipText = "Send prompt (Enter)"
 
             // Re-enable prompt input
@@ -2303,7 +2302,7 @@ class PromptInputPanel(
             if (orchestrationToggle.isSelected) "🔄 Orchestration enabled" else "📋 Orchestration disabled"
         thinkingToggle.text = if (thinkingToggle.isSelected) "🧠 Thinking mode enabled" else "💭 Thinking mode disabled"
         noEgressToggle.text = if (noEgressToggle.isSelected) "🔒 No-egress enabled" else "🌐 No-egress disabled"
-        intentClassificationToggle.text = if (intentClassificationToggle.isSelected) "Intent classification enabled" else "Intent classification disabled"
+        intentClassificationToggle.text = if (intentClassificationToggle.isSelected) "🎯 Intent classification enabled" else "🎯 Intent classification disabled"
 
         buttonPanel.add(executionModeToggle)
         buttonPanel.add(Box.createVerticalStrut(3))
@@ -2340,6 +2339,40 @@ class PromptInputPanel(
             }
 
             popup.show(button, 0, yOffset)
+        }
+    }
+
+    private fun loadExecutionModeDefault() {
+        cs.launch {
+            try {
+                val client = coreApiClient ?: CoreApiClient(sessionManager.apiRouter)
+                val executionModeStr = client.getConfigValue("ui", "execution_mode")
+
+                // Default to INTERACTIVE if not specified in config
+                val isInteractive = if (executionModeStr != null) {
+                    ExecutionMode.valueOf(executionModeStr.uppercase()) == ExecutionMode.INTERACTIVE
+                } else {
+                    true
+                }
+
+                SwingUtilities.invokeLater {
+                    if (executionModeToggle.isSelected != isInteractive) {
+                        isUpdatingToggleProgrammatically = true
+                        executionModeToggle.isSelected = isInteractive
+                        if (isInteractive) {
+                            executionModeToggle.text = "🤚 Interactive mode"
+                            executionModeToggle.toolTipText = "Interactive mode"
+                        } else {
+                            executionModeToggle.text = "⚡ Auto mode"
+                            executionModeToggle.toolTipText = "Auto mode"
+                        }
+                        isUpdatingToggleProgrammatically = false
+                        updateBadge()
+                    }
+                }
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to load executionMode default setting" }
+            }
         }
     }
 

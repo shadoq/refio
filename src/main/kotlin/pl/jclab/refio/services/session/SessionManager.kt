@@ -370,6 +370,14 @@ class SessionManager(private val project: Project) {
     }
 
     /**
+     * Set execution mode (INTERACTIVE/AUTO).
+     * Auto-saves UI state to database.
+     */
+    fun setExecutionMode(mode: ExecutionMode) {
+        lifecycleService.setExecutionMode(mode)
+    }
+
+    /**
      * Set thinking enabled/disabled (US-010).
      * Auto-saves UI state to database.
      */

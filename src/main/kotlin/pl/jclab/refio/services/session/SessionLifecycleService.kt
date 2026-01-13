@@ -383,11 +383,23 @@ class SessionLifecycleService(
         logger.info { "Selected model config set to: $model" }
     }
 
+    fun setExecutionMode(mode: ExecutionMode) {
+        logger.info { "Execution mode set to: $mode" }
+        stateManager.getActiveSession()?.let { session ->
+            stateManager.setActiveSession(session.copy(executionMode = mode))
+        }
+        saveCurrentSessionState()
+    }
+
     fun setThinkingEnabled(enabled: Boolean) {
         stateManager.setThinkingEnabled(enabled)
         logger.info { "Thinking mode set to: $enabled" }
-        stateManager.getActiveSession()?.let { session ->
+        val activeSession = stateManager.getActiveSession()
+        if (activeSession != null) {
+            val session = activeSession
             stateManager.setActiveSession(session.copy(thinkingEnabled = enabled))
+        } else {
+            setUiSettingDefaults(ConfigService.KEY_UI_THINKING_ENABLED, enabled.toString())
         }
         saveCurrentSessionState()
     }
@@ -395,8 +407,12 @@ class SessionLifecycleService(
     fun setNoEgressEnabled(enabled: Boolean) {
         stateManager.setNoEgressEnabled(enabled)
         logger.info { "No-egress mode set to: $enabled" }
-        stateManager.getActiveSession()?.let { session ->
+        val activeSession = stateManager.getActiveSession()
+        if (activeSession != null) {
+            val session = activeSession
             stateManager.setActiveSession(session.copy(noEgressEnabled = enabled))
+        } else {
+            setUiSettingDefaults(ConfigService.KEY_UI_NO_EGRESS_ENABLED, enabled.toString())
         }
         saveCurrentSessionState()
     }
@@ -404,8 +420,12 @@ class SessionLifecycleService(
     fun setOrchestrationEnabled(enabled: Boolean) {
         stateManager.setOrchestrationEnabled(enabled)
         logger.info { "Orchestration mode set to: $enabled" }
-        stateManager.getActiveSession()?.let { session ->
+        val activeSession = stateManager.getActiveSession()
+        if (activeSession != null) {
+            val session = activeSession
             stateManager.setActiveSession(session.copy(orchestrationEnabled = enabled))
+        } else {
+            setUiSettingDefaults(ConfigService.KEY_UI_ORCHESTRATION_ENABLED, enabled.toString())
         }
 
         saveCurrentSessionState()
@@ -414,8 +434,12 @@ class SessionLifecycleService(
     fun setIntentClassificationEnabled(enabled: Boolean) {
         stateManager.setIntentClassificationEnabled(enabled)
         logger.info { "Intent classification set to: $enabled" }
-        stateManager.getActiveSession()?.let { session ->
+        val activeSession = stateManager.getActiveSession()
+        if (activeSession != null) {
+            val session = activeSession
             stateManager.setActiveSession(session.copy(intentClassificationEnabled = enabled))
+        } else {
+            setUiSettingDefaults(ConfigService.KEY_UI_INTENT_CLASSIFICATION_ENABLED, enabled.toString())
         }
 
         saveCurrentSessionState()
@@ -511,9 +535,6 @@ class SessionLifecycleService(
         val appDefaults = settingsFromScope(ConfigScope.APP)
         appDefaults?.let { applySettingsToState(it) }
 
-        val projectDefaults = settingsFromScope(ConfigScope.PROJECT, projectId = projectId)
-        projectDefaults?.let { applySettingsToState(it) }
-
         logger.info {
             "Loaded UI state from config: model=${stateManager.getSelectedModel()}, " +
                 "thinking=${stateManager.getThinkingEnabled()}, noEgress=${stateManager.getNoEgressEnabled()}, " +
@@ -529,14 +550,6 @@ class SessionLifecycleService(
         val lastSettings = lastSession?.uiState?.let { parseSessionSettings(it) }
         if (lastSettings != null) {
             return lastSettings
-        }
-
-        val projectDefaults = settingsFromScope(
-            ConfigScope.PROJECT,
-            projectId = projectId
-        )
-        if (projectDefaults != null) {
-            return projectDefaults
         }
 
         return settingsFromScope(ConfigScope.APP) ?: SessionSettings.default()
@@ -636,41 +649,29 @@ class SessionLifecycleService(
         try {
             logger.debug { "Persisting session settings: taskId=$taskId" }
             runBlocking(Dispatchers.IO) {
-                setSettingAcrossScopes(
+                setUiSettingDefaults(
                     ConfigService.KEY_UI_SELECTED_MODEL,
                     settings.selectedModel ?: "auto",
-                    taskId
                 )
-                setSettingAcrossScopes(
+                setUiSettingDefaults(
                     ConfigService.KEY_UI_THINKING_ENABLED,
                     settings.thinkingEnabled.toString(),
-                    taskId
                 )
-                setSettingAcrossScopes(
+                setUiSettingDefaults(
                     ConfigService.KEY_UI_NO_EGRESS_ENABLED,
                     settings.noEgressEnabled.toString(),
-                    taskId
                 )
-                setSettingAcrossScopes(
+                setUiSettingDefaults(
                     ConfigService.KEY_UI_EXECUTION_MODE,
                     settings.executionMode.name,
-                    taskId
                 )
-                setSettingAcrossScopes(
+                setUiSettingDefaults(
                     ConfigService.KEY_UI_ORCHESTRATION_ENABLED,
                     settings.orchestrationEnabled.toString(),
-                    taskId
                 )
-                setSettingAcrossScopes(
+                setUiSettingDefaults(
                     ConfigService.KEY_UI_INTENT_CLASSIFICATION_ENABLED,
                     settings.intentClassificationEnabled.toString(),
-                    taskId
-                )
-                configService.set(
-                    ConfigService.KEY_UI_SELECTED_MODE,
-                    selectedMode.name,
-                    ConfigScope.PROJECT,
-                    projectId = projectId
                 )
                 configService.set(
                     ConfigService.KEY_UI_SELECTED_MODE,
@@ -690,9 +691,7 @@ class SessionLifecycleService(
         }
     }
 
-    private fun setSettingAcrossScopes(key: String, value: String, taskId: String) {
-        configService.set(key, value, ConfigScope.TASK, taskId = taskId)
-        configService.set(key, value, ConfigScope.PROJECT, projectId = projectId)
+    private fun setUiSettingDefaults(key: String, value: String) {
         configService.set(key, value, ConfigScope.APP)
     }
 

@@ -656,9 +656,9 @@ class ConfigService(
             KEY_UI_NO_EGRESS_ENABLED -> yamlLoader.getUiNoEgressEnabled()?.toString()
             KEY_UI_ORCHESTRATION_ENABLED -> yamlLoader.getUiOrchestrationEnabled()?.toString()
             KEY_UI_INTENT_CLASSIFICATION_ENABLED -> yamlLoader.getUiIntentClassificationEnabled()?.toString()
-            KEY_UI_EXECUTION_MODE -> yamlLoader.getUiExecutionMode()
-            KEY_UI_SELECTED_MODE -> yamlLoader.getUiSelectedMode()
-            KEY_UI_SELECTED_MODEL -> yamlLoader.getUiSelectedModel()
+            KEY_UI_EXECUTION_MODE -> yamlLoader.getUiExecutionMode()?.trim()?.uppercase()
+            KEY_UI_SELECTED_MODE -> yamlLoader.getUiSelectedMode()?.trim()?.uppercase()
+            KEY_UI_SELECTED_MODEL -> yamlLoader.getUiSelectedModel()?.trim()?.lowercase()
 
             // Provider endpoints
             KEY_PROVIDER_OLLAMA_ENDPOINT -> yamlLoader.getOllamaEndpoint()
