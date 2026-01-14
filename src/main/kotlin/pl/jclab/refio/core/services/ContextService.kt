@@ -1959,7 +1959,7 @@ class ContextService(
                 when (ref.type) {
                     ContextType.PROVIDER -> {
                         // Modern flow: direct provider reference
-                        resolveProviderReference(ref, projectRoot, project, pathSandbox)
+                        resolveProviderReference(ref, projectRoot, project, pathSandbox, currentQuery)
                     }
                     // Legacy types: map to providers for backwards compatibility
                     ContextType.FILE -> {
@@ -2006,7 +2006,8 @@ class ContextService(
         ref: ContextReference,
         projectRoot: Path,
         project: Project?,
-        pathSandbox: PathSandbox
+        pathSandbox: PathSandbox,
+        currentQuery: String?
     ): ContextReference {
         val providerId = ref.metadata["providerId"] as? String
         if (providerId == null) {
@@ -2028,9 +2029,15 @@ class ContextService(
 
         logger.debug { "[CONTEXT] Calling provider: $providerId with query: ${ref.path}" }
 
+        val fullInput = if (providerId == "docs") {
+            currentQuery ?: ref.path
+        } else {
+            ref.path
+        }
+
         val extras = ContextProviderExtras(
             project = project,
-            fullInput = ref.path,
+            fullInput = fullInput,
             workspacePath = projectRoot.toString()
         )
 
@@ -2614,7 +2621,12 @@ class ContextService(
                         )
                     }
 
-                    refWithoutAt == "open" || refWithoutAt.startsWith("open:") -> {
+                    refWithoutAt == "open" ||
+                        refWithoutAt == "open_file" ||
+                        refWithoutAt == "open_files" ||
+                        refWithoutAt.startsWith("open:") ||
+                        refWithoutAt.startsWith("open_file:") ||
+                        refWithoutAt.startsWith("open_files:") -> {
                         ContextReference.openFiles()
                     }
 

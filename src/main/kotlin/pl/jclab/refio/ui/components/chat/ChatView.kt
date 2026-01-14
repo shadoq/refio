@@ -179,6 +179,7 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
                 if (newWidth > 0 && newWidth != availableWidth) {
                     availableWidth = newWidth
                     // Clear cache on resize - panels need new width
+                    disposeMessagePanels(messagePanelCache.values.map { it.panel })
                     messagePanelCache.clear()
                     lastRenderedMessageIds = emptyList()
                     // Recreate messages with new width
@@ -297,6 +298,7 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
             messagesPanel.layout = GridBagLayout()
 
             if (uniqueMessages.isEmpty()) {
+                disposeMessagePanels(messagePanelCache.values.map { it.panel })
                 messagePanelCache.clear()
                 lastRenderedMessageIds = emptyList()
                 showEmptyState()
@@ -337,6 +339,13 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
 
             // Clean up cache - remove entries for deleted messages
             val currentIds = uniqueMessages.map { it.id }.toSet()
+            val removedPanels = messagePanelCache
+                .filterKeys { it !in currentIds }
+                .values
+                .map { it.panel }
+            if (removedPanels.isNotEmpty()) {
+                disposeMessagePanels(removedPanels)
+            }
             messagePanelCache.keys.removeAll { it !in currentIds }
             lastRenderedMessageIds = currentMessageIds
 
@@ -2265,7 +2274,22 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     }
 
     fun dispose() {
+        disposeMessagePanels(messagePanelCache.values.map { it.panel })
+        messagePanelCache.clear()
         cs.cancel()
+    }
+
+    private fun disposeMessagePanels(panels: List<JPanel>) {
+        panels.forEach { panel ->
+            disposeCodeBlockPanels(panel)
+        }
+    }
+
+    private fun disposeCodeBlockPanels(component: Component) {
+        when (component) {
+            is CodeBlockPanel -> component.disposeEditor()
+            is Container -> component.components.forEach { child -> disposeCodeBlockPanels(child) }
+        }
     }
 
     private fun extractUserContextMetadata(message: Message): UserContextMetadata? {

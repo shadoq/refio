@@ -1,6 +1,6 @@
 # Refio - Technical Architecture Overview
 
-> **Last Updated:** 2026-01-11
+> **Last Updated:** 2026-01-14
 > **Version:** 0.0.1
 > **Status:** Active Development
 
@@ -573,7 +573,64 @@ FileContextProvider.getContextItems("src/App.kt", extras)
 | `@problems` | NORMAL | IDE compilation errors |
 | `@clipboard` | NORMAL | Clipboard content |
 
-### 6.2 Context Building
+### 6.2 Provider Behavior Details
+
+ClipboardContextProvider (`@clipboard`) zwraca aktualny tekst ze schowka. Ignoruje query, czyta dane z systemowego clipboardu i oddaje pojedynczy ContextItem, gdy treść nie jest pusta; w przeciwnym wypadku zwraca pustą listę. Błędy czytania są zwracane jawnie w treści. Example: `@clipboard`.
+
+CodebaseContextProvider (`@codebase:query`) wykonuje semantyczne wyszukiwanie w kodzie na bazie indeksu RAG i embeddingów. Wymaga poprawnego project root, sprawdza dostępność indeksu i zwraca listę wyników (topK=5) lub element błędu, gdy brakuje indeksu lub konfiguracji embeddingów. Example: `@codebase:authentication middleware`.
+
+CurrentFileContextProvider (`@current`) zwraca aktualnie aktywny plik edytora. Waliduje ścieżkę w PathSandbox, czyta zawartość i zwraca pojedynczy ContextItem; jeśli brak aktywnego pliku albo ścieżka jest poza sandboxem, zwraca pustą listę. Example: `@current`.
+
+DocsContextProvider (`@docs` oraz `@docs <query>`) obsługuje submenu źródeł dokumentacji oraz semantyczne wyszukiwanie po chunkach. Dla wybranego źródła potrafi złączyć wszystkie chunki, gdy mieszczą się w limicie, a w przeciwnym razie uruchamia RAG ograniczony do tego źródła i zwraca najlepsze fragmenty. Brak projektu, brak indeksu lub brak providerów embeddingów skutkuje jawnym elementem błędu. Example: `@docs OAuth refresh token`.
+
+FileContextProvider (`@file` lub `@file:pattern`) dostarcza submenu z wyszukiwaniem plików przez indeksy IntelliJ. Po wyborze pliku waliduje ścieżkę w PathSandbox, czyta plik i zwraca pojedynczy ContextItem z treścią w bloku kodu. Example: `@file:AuthService.kt`.
+
+FolderContextProvider (`@folder` lub `@folder:pattern`) zwraca submenu folderów i po wyborze generuje drzewo katalogu (głębokość 3) wraz z rozmiarami plików. Filtruje ignorowane katalogi i waliduje ścieżki przez PathSandbox, zwracając pojedynczy ContextItem z drzewem. Example: `@folder:core/context`.
+
+GitCommitContextProvider (`@commit:<hash>`) uruchamia polecenia git w celu pobrania informacji o konkretnym commicie, w tym metadanych autora, treści i statystyk zmian plików. Zwraca pojedynczy ContextItem lub jawny błąd, gdy repozytorium lub commit są niedostępne. Example: `@commit:1a2b3c4`.
+
+GitDiffContextProvider (`@diff`) zwraca podsumowanie niezatwierdzonych zmian na podstawie ChangeListManager. Zwraca jeden ContextItem z listą zmienionych plików (limit 20), bez pełnego diffu. Example: `@diff`.
+
+GrepSearchContextProvider (`@grep:<pattern>`) wyszukuje wystąpienia tekstu w projekcie przy użyciu PSI search. Zwraca do 50 wyników i filtruje je przez reguły ignorowania; gdy nic nie zostaje, zwraca pojedynczy ContextItem z komunikatem o braku dopasowań. Example: `@grep:TODO`.
+
+OpenFilesContextProvider (`@open_files`) zbiera wszystkie otwarte karty edytora, waliduje je przez PathSandbox, czyta treści i zwraca nagłówek plus jeden ContextItem na plik. Brak otwartych plików lub kontekstu projektu skutkuje pustą listą. Example: `@open_files`.
+
+ProblemsContextProvider (`@problems`) pobiera z IDE listę plików z problemami i zwraca podsumowanie. Ponieważ API nie podaje szczegółów linii, treść dla każdego pliku zawiera komunikat ogólny. Example: `@problems`.
+
+RecentFilesContextProvider (`@recent`) udostępnia submenu ostatnio edytowanych plików i potrafi zwrócić treść wybranego pliku. Korzysta z historii edytora, waliduje ścieżki przez PathSandbox i zwraca ContextItem z treścią pliku. Example: `@recent`.
+
+TerminalContextProvider (`@terminal`) zwraca obecnie placeholder, ponieważ dostęp do bufora terminala jest ograniczony. Zwraca pojedynczy ContextItem z instrukcją użycia schowka. Example: `@terminal`.
+
+UrlContextProvider (`@url:https://...`) pobiera treść z sieci przez Ktor, waliduje format URL i zwraca pojedynczy ContextItem z metadanymi i treścią. Duże odpowiedzi są ucinane do 100 KB, a błędy HTTP lub sieciowe zwracane jawnie. Example: `@url:https://example.com/docs`.
+
+### 6.3 Context Flow From UI
+
+The context flow starts in the Swing UI, passes through the session and workflow layers, and ends in the ContextService, which resolves @mentions via ContextProviderRegistry. Each provider returns one or more ContextItem objects with a description, content payload, and a ContextUri. The intent resolution happens before context building, so the same context pipeline can serve Chat, Plan, and Agent modes consistently.
+
+```mermaid
+sequenceDiagram
+    participant UI as UI (Swing)
+    participant SM as SessionManager
+    participant MD as MessageDispatcher
+    participant WO as WorkflowOrchestrator
+    participant IR as IntentRouter
+    participant CS as ContextService
+    participant CPR as ContextProviderRegistry
+    participant CP as ContextProvider
+
+    UI->>SM: user input + mode
+    SM->>MD: dispatch(mode, input)
+    MD->>WO: WorkflowRequest
+    WO->>IR: determine intent
+    IR-->>WO: WorkflowIntent
+    WO->>CS: build context
+    CS->>CPR: resolve providers
+    CPR->>CP: getContextItems/loadSubmenuItems
+    CP-->>CS: ContextItem list
+    CS-->>WO: ProjectContextDTO
+```
+
+### 6.4 Context Building
 
 ```kotlin
 suspend fun buildProjectContext(
@@ -1103,6 +1160,102 @@ For each file:
 └── Store in SQLite
     ↓
 IndexingProgress emitted via Flow
+```
+
+### 13.4 Mode Execution Flows (Intent + Orchestration)
+
+The intent router runs before execution and can override the requested mode (for fast paths like subagents or pending AUTO steps). When orchestration is enabled in Agent mode, UnifiedStepExecutor uses OrchestrationStrategy to reflect on results and optionally modify the plan between steps.
+
+```mermaid
+sequenceDiagram
+    participant UI as UI (Swing)
+    participant SM as SessionManager
+    participant MD as MessageDispatcher
+    participant WO as WorkflowOrchestrator
+    participant IR as IntentRouter
+    participant CS as ContextService
+    participant CE as ChatExecutor
+    participant CAR as CoreApiRouter
+    participant CR as ChatRouter
+
+    UI->>SM: input + mode=CHAT
+    SM->>MD: dispatch
+    MD->>WO: WorkflowRequest
+    WO->>IR: determine intent
+    IR-->>WO: WorkflowIntent.Chat
+    WO->>CS: build context
+    CS-->>WO: ProjectContextDTO
+    WO->>CE: execute chat
+    CE->>CAR: chat()
+    CAR->>CR: chat()
+    CR-->>CAR: response
+    CAR-->>CE: response
+    CE-->>WO: IntentResult.Chat
+    WO-->>SM: response
+    SM-->>UI: render
+```
+
+```mermaid
+sequenceDiagram
+    participant UI as UI (Swing)
+    participant SM as SessionManager
+    participant MD as MessageDispatcher
+    participant WO as WorkflowOrchestrator
+    participant IR as IntentRouter
+    participant CS as ContextService
+    participant PE as PlanExecutor
+    participant CAR as CoreApiRouter
+    participant PR as PlanningRouter
+
+    UI->>SM: input + mode=PLAN
+    SM->>MD: dispatch
+    MD->>WO: WorkflowRequest
+    WO->>IR: determine intent
+    IR-->>WO: WorkflowIntent.Plan
+    WO->>CS: build context
+    CS-->>WO: ProjectContextDTO
+    WO->>PE: execute plan
+    PE->>CAR: plan()
+    CAR->>PR: plan()
+    PR-->>CAR: plan result
+    CAR-->>PE: plan result
+    PE-->>WO: IntentResult.Plan
+    WO-->>SM: plan + steps
+    SM-->>UI: render plan
+```
+
+```mermaid
+sequenceDiagram
+    participant UI as UI (Swing)
+    participant SM as SessionManager
+    participant MD as MessageDispatcher
+    participant WO as WorkflowOrchestrator
+    participant IR as IntentRouter
+    participant CS as ContextService
+    participant SE as StepExecutor
+    participant USE as UnifiedStepExecutor
+    participant OS as OrchestrationStrategy
+    participant TE as ToolExecutor
+
+    UI->>SM: input + mode=AGENT
+    SM->>MD: dispatch
+    MD->>WO: WorkflowRequest
+    WO->>IR: determine intent
+    IR-->>WO: WorkflowIntent.ExecuteStep
+    WO->>CS: build context
+    CS-->>WO: ProjectContextDTO
+    WO->>SE: execute step
+    SE->>USE: execute(strategy=OrchestrationStrategy)
+    loop each step
+        USE->>OS: prepare/reflect/modify
+        OS-->>USE: StepPlan/Decision
+        USE->>TE: execute tools
+        TE-->>USE: tool results
+    end
+    USE-->>SE: ExecutionStats
+    SE-->>WO: IntentResult.ExecuteStep
+    WO-->>SM: steps + results
+    SM-->>UI: render steps
 ```
 
 ---

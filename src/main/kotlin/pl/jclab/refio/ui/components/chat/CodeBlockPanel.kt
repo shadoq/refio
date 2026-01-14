@@ -302,12 +302,11 @@ class CodeBlockPanel(
         repaint()
     }
 
-    override fun removeNotify() {
+    fun disposeEditor() {
         try {
             editor?.let { EditorFactory.getInstance().releaseEditor(it) }
         } finally {
             editor = null
-            super.removeNotify()
         }
     }
 

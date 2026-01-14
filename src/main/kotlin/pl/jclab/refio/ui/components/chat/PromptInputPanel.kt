@@ -707,7 +707,8 @@ class PromptInputPanel(
 
         // Convert code snippets to context references
         val snippetRefs = snippetsContainer.getSnippets().map { it.toContextReference() }
-        val contextToSend = contextReferences.toList() + snippetRefs
+        val inlineOpenRefs = extractInlineOpenContextRefs(processedText)
+        val contextToSend = mergeContextRefs(contextReferences + snippetRefs, inlineOpenRefs)
         if (contextToSend.size > CONTEXT_LIMIT) {
             showContextLimitError(contextToSend.size)
             return
@@ -1367,6 +1368,7 @@ class PromptInputPanel(
 
     private fun onPromptInputChanged() {
         sessionManager.updatePendingUserInput(promptEditor.text)
+        sessionManager.updatePendingContextRefs(mergeContextRefs(contextReferences, extractInlineOpenContextRefs(promptEditor.text)))
         checkAutocomplete()
     }
 
@@ -2380,6 +2382,29 @@ class PromptInputPanel(
         autocompleteTimer.stop()
         Disposer.dispose(editorShortcutsDisposable)
         cs.cancel()
+    }
+
+    private fun extractInlineOpenContextRefs(text: String): List<ContextReference> {
+        val pattern = Regex("""(?<!\w)@open(?:_files?)?(?=\s|$)""", RegexOption.IGNORE_CASE)
+        if (!pattern.containsMatchIn(text)) return emptyList()
+        return listOf(ContextReference.openFiles())
+    }
+
+    private fun mergeContextRefs(
+        base: List<ContextReference>,
+        extras: List<ContextReference>
+    ): List<ContextReference> {
+        if (extras.isEmpty()) return base.toList()
+        val seen = mutableSetOf<String>()
+        val merged = mutableListOf<ContextReference>()
+        (base + extras).forEach { ref ->
+            val providerId = ref.metadata["providerId"]?.toString() ?: ""
+            val key = "${ref.type}:${ref.path}:$providerId"
+            if (seen.add(key)) {
+                merged.add(ref)
+            }
+        }
+        return merged
     }
 }
 
