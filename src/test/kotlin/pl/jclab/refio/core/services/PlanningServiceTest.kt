@@ -174,6 +174,7 @@ class PlanningServiceTest {
             every { subtaskRepository.create(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } returns createMockSubtask()
             every { subtaskRepository.getMaxOrderIndex(taskId) } returns null
             every { configService.getDefaultModel(any(), any()) } returns Pair("gpt-4", "openai")
+            every { configService.getModel(any(), any(), any()) } returns Pair("gpt-4", "openai")
             every { configService.getMaxOutputTokens(any()) } returns 4096
             every { configService.get(any()) } returns null
             every { promptsService.getSystemPrompt(any(), any()) } returns "System prompt"
@@ -261,6 +262,7 @@ class PlanningServiceTest {
             every { chatMessageRepository.create(any(), any(), any(), any(), any(), any(), any()) } returns createMockChatMessage()
             every { subtaskRepository.getMaxOrderIndex(taskId) } returns null
             every { configService.getDefaultModel(any(), any()) } returns Pair("gpt-4", "openai")
+            every { configService.getModel(any(), any(), any()) } returns Pair("gpt-4", "openai")
             every { configService.getMaxOutputTokens(any()) } returns 4096
             every { configService.get(any()) } returns null
             every { promptsService.getSystemPrompt(any(), any()) } returns "System prompt"
@@ -356,6 +358,7 @@ class PlanningServiceTest {
             every { chatMessageRepository.create(any(), any(), any(), any(), any(), any(), any()) } returns createMockChatMessage()
             every { subtaskRepository.getMaxOrderIndex(taskId) } returns null
             every { configService.getDefaultModel(any(), any()) } returns Pair("gpt-4", "openai")
+            every { configService.getModel(any(), any(), any()) } returns Pair("gpt-4", "openai")
             every { configService.getMaxOutputTokens(any()) } returns 4096
             every { configService.get(any()) } returns null
             every { promptsService.getSystemPrompt(any(), any()) } returns "System prompt"
@@ -438,6 +441,7 @@ class PlanningServiceTest {
             }
             every { subtaskRepository.getMaxOrderIndex(taskId) } returns null
             every { configService.getDefaultModel(any(), any()) } returns Pair("gpt-4", "openai")
+            every { configService.getModel(any(), any(), any()) } returns Pair("gpt-4", "openai")
             every { configService.getMaxOutputTokens(any()) } returns 4096
             every { configService.get(any()) } returns null
             every { promptsService.getSystemPrompt(any(), any()) } returns "System prompt"
@@ -509,6 +513,7 @@ class PlanningServiceTest {
             }
             every { subtaskRepository.getMaxOrderIndex(taskId) } returns null
             every { configService.getDefaultModel(any(), any()) } returns Pair("gpt-4", "openai")
+            every { configService.getModel(any(), any(), any()) } returns Pair("gpt-4", "openai")
             every { configService.getMaxOutputTokens(any()) } returns 4096
             every { configService.get(any()) } returns null
             every { promptsService.getSystemPrompt(any(), any()) } returns "System prompt"

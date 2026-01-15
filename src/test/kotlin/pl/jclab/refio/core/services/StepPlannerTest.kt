@@ -60,6 +60,8 @@ class StepPlannerTest {
         )
 
         every { subtaskRepository.countByTaskId(any()) } returns 1L
+        every { toolDescriptionBuilder.getToolDescriptionsForTools(any(), any()) } returns "Tool descriptions"
+        every { toolDescriptionBuilder.getValidToolNamesForTools(any()) } returns "read_file"
     }
 
     private fun createMockTask(
@@ -173,7 +175,7 @@ class StepPlannerTest {
             every { toolRegistry.getAllTools() } returns listOf(readFileTool)
             every { toolRegistry.getReadOnlyTools() } returns listOf(readFileTool)
             every { toolRegistry.getAvailableTools(any(), any(), any()) } returns listOf(readFileTool)
-            every { configService.getModel(any(), any()) } returns Pair("gpt-4", "openai")
+            every { configService.getModel(any(), any(), any()) } returns Pair("gpt-4", "openai")
             every { configService.getMaxOutputTokens(any()) } returns 4096
             every { configService.get(any()) } returns null
             every { promptsService.getSystemPrompt(any(), any()) } returns "System prompt"
@@ -299,7 +301,7 @@ class StepPlannerTest {
             every { toolRegistry.getTool("code_editing") } returns codeEditingTool
             every { toolRegistry.getAllTools() } returns listOf(readFileTool, codeEditingTool)
             every { toolRegistry.getAvailableTools(any(), any(), any()) } returns listOf(readFileTool, codeEditingTool)
-            every { configService.getModel(any(), any()) } returns Pair("gpt-4", "openai")
+            every { configService.getModel(any(), any(), any()) } returns Pair("gpt-4", "openai")
             every { configService.getMaxOutputTokens(any()) } returns 4096
             every { configService.get(any()) } returns null
             every { promptsService.getSystemPrompt(any(), any()) } returns "System prompt"
@@ -368,7 +370,7 @@ class StepPlannerTest {
             every { toolRegistry.getTool("run_terminal_command") } returns terminalTool
             every { toolRegistry.getAllTools() } returns listOf(readFileTool, terminalTool)
             every { toolRegistry.getAvailableTools(any(), any(), any()) } returns listOf(readFileTool, terminalTool)
-            every { configService.getModel(any(), any()) } returns Pair("gpt-4", "openai")
+            every { configService.getModel(any(), any(), any()) } returns Pair("gpt-4", "openai")
             every { configService.getMaxOutputTokens(any()) } returns 4096
             every { configService.get(any()) } returns null
             every { promptsService.getSystemPrompt(any(), any()) } returns "System prompt"
@@ -441,7 +443,7 @@ class StepPlannerTest {
             every { toolRegistry.getAllTools() } returns listOf(readFileTool)
             every { toolRegistry.getReadOnlyTools() } returns listOf(readFileTool)
             every { toolRegistry.getAvailableTools(any(), any(), any()) } returns listOf(readFileTool)
-            every { configService.getModel(any(), any()) } returns Pair("gpt-4", "openai")
+            every { configService.getModel(any(), any(), any()) } returns Pair("gpt-4", "openai")
             every { configService.getMaxOutputTokens(any()) } returns 4096
             every { configService.get(any()) } returns null
             every { promptsService.getSystemPrompt(any(), any()) } returns "System prompt"
@@ -513,7 +515,7 @@ class StepPlannerTest {
             every { toolRegistry.getTool("read_file") } returns readFileTool
             every { toolRegistry.getAllTools() } returns listOf(codeEditingTool, readFileTool)
             every { toolRegistry.getAvailableTools(any(), any(), any()) } returns listOf(codeEditingTool, readFileTool)
-            every { configService.getModel(any(), any()) } returns Pair("gpt-4", "openai")
+            every { configService.getModel(any(), any(), any()) } returns Pair("gpt-4", "openai")
             every { configService.getMaxOutputTokens(any()) } returns 4096
             every { configService.get(any()) } returns null
             every { promptsService.getSystemPrompt(any(), any()) } returns "System prompt"
@@ -590,7 +592,7 @@ class StepPlannerTest {
             every { toolRegistry.getTool("grep_search") } returns grepSearchTool
             every { toolRegistry.getAllTools() } returns listOf(fileSearchTool, grepSearchTool)
             every { toolRegistry.getAvailableTools(any(), any(), any()) } returns listOf(fileSearchTool, grepSearchTool)
-            every { configService.getModel(any(), any()) } returns Pair("gpt-4", "openai")
+            every { configService.getModel(any(), any(), any()) } returns Pair("gpt-4", "openai")
             every { configService.getMaxOutputTokens(any()) } returns 4096
             every { configService.get(any()) } returns null
             every { promptsService.getSystemPrompt(any(), any()) } returns "System prompt"
