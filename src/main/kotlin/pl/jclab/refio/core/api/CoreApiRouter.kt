@@ -118,6 +118,10 @@ class CoreApiRouter(
         return toolRegistry ?: throw IllegalStateException("ToolRegistry not available for this router")
     }
 
+    fun hasIdeProject(): Boolean {
+        return ideProject != null
+    }
+
     private val routerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val embeddingsMutex = Mutex()
     private val languageAnalyzers = listOf(
@@ -487,6 +491,7 @@ class CoreApiRouter(
         } else {
             logger.warn { "CoreApiRouter: ContextService NOT available (projectRoot not provided)" }
         }
+        logger.info { "CoreApiRouter: ideProject available=${ideProject != null}" }
         if (toolRegistry != null) {
             logger.info { "CoreApiRouter: Agent execution services initialized" }
         } else {

@@ -154,6 +154,14 @@ class CoreConnectionManager {
         // Return cached router if exists
         projectRouters[absolutePath]?.let { cachedRouter ->
             logger.debug { "Using cached router for project: $absolutePath" }
+            if (ideProject != null && !cachedRouter.hasIdeProject()) {
+                logger.info { "Recreating cached router with IDE project for: $absolutePath" }
+                val refreshedRouter = createProjectRouterInternal(projectRoot, ideProject)
+                projectRouters[absolutePath] = refreshedRouter
+                val projectId = ProjectIdGenerator.generate(projectRoot)
+                MCPManager.setToolRegistry(projectId, refreshedRouter.getToolRegistry())
+                return refreshedRouter
+            }
             // Ensure MCPManager has ToolRegistry even for cached router
             // (in case it was initialized without ToolRegistry from UI)
             val projectId = ProjectIdGenerator.generate(projectRoot)
