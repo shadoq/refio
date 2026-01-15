@@ -12,6 +12,10 @@ import java.sql.DriverManager
  * Provides isolated database instances for each test.
  */
 object TestDatabase {
+    data class SharedInMemoryDb(
+        val database: Database,
+        val keepAlive: java.sql.Connection
+    )
 
     /**
      * Create a temporary file-based database for testing.
@@ -52,6 +56,35 @@ object TestDatabase {
         }
 
         return database
+    }
+
+    /**
+     * Create a shared in-memory SQLite database.
+     * Keeps one connection open to preserve schema across transactions.
+     */
+    fun createSharedInMemory(): SharedInMemoryDb {
+        val dbName = "refio-test-${System.nanoTime()}"
+        val jdbcUrl = "jdbc:sqlite:file:$dbName?mode=memory&cache=shared"
+
+        // Register driver
+        try {
+            val driver = org.sqlite.JDBC()
+            DriverManager.registerDriver(driver)
+        } catch (_: Exception) {
+            // Driver may already be registered
+        }
+
+        val keepAlive = DriverManager.getConnection(jdbcUrl)
+        val database = Database.connect(
+            url = jdbcUrl,
+            driver = "org.sqlite.JDBC"
+        )
+
+        transaction(database) {
+            createTables()
+        }
+
+        return SharedInMemoryDb(database, keepAlive)
     }
 
     /**

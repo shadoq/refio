@@ -77,7 +77,8 @@ private val logger = dualLogger("CoreApiRouter")
 class CoreApiRouter(
     private val toolRegistry: ToolRegistry? = null,
     private val projectRoot: java.nio.file.Path? = null,
-    private val ideProject: com.intellij.openapi.project.Project? = null
+    private val ideProject: com.intellij.openapi.project.Project? = null,
+    private val llmClientOverride: LLMClient? = null
 ) {
     private val routerProjectId: String? = projectRoot?.let { ProjectIdGenerator.generate(it) }
     private val routerProjectPath: String? = projectRoot?.toAbsolutePath()?.normalize()?.toString()
@@ -103,7 +104,7 @@ class CoreApiRouter(
     )
     internal val promptsService = PromptsService(promptsRepository)
     internal val toolPermissionsService = ToolPermissionsService(configRepository)
-    internal val llmClient = LLMClient(configService)
+    internal val llmClient = llmClientOverride ?: LLMClient(configService)
 
     // User interaction service (public for UI to detect waiting state)
     val userInteraction = pl.jclab.refio.core.services.orchestration.UserInteraction(
