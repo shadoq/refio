@@ -20,6 +20,8 @@ import java.awt.Dimension
 import java.awt.Font
 import java.awt.FlowLayout
 import javax.swing.*
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
 
 /**
  * Unified Context Settings Panel
@@ -50,7 +52,9 @@ class ContextSettingsPanel(
     private lateinit var indexProgressBar: JProgressBar
     private lateinit var indexStatusLabel: JLabel
     private lateinit var reindexButton: JButton
+    private lateinit var stopIndexingButton: JButton
     private lateinit var generateEmbeddingsButton: JButton
+    private lateinit var stopEmbeddingsButton: JButton
     private lateinit var clearIndexButton: JButton
     private lateinit var embeddingProgressBar: JProgressBar
     private lateinit var embeddingStatusLabel: JLabel
@@ -59,8 +63,12 @@ class ContextSettingsPanel(
     private lateinit var ragSearchSemanticWeightField: JBTextField
     private lateinit var ragSearchHybridEnabledCheckbox: JCheckBox
     private lateinit var ragSearchIncludeContextChunksCheckbox: JCheckBox
-    private lateinit var saveSearchSettingsButton: JButton
     private val defaultIgnorePathsText = ConfigService.DEFAULT_RAG_IGNORED_DIRECTORIES.joinToString("\n")
+    private var indexJob: Job? = null
+    private var embeddingJob: Job? = null
+    private var searchSettingsSaveJob: Job? = null
+    private var isLoadingSearchSettings = false
+    private val searchSettingsSaveDebounceMs = 300L
 
     init {
         border = LCATheme.paddedBorder(LCATheme.margin)
@@ -68,12 +76,20 @@ class ContextSettingsPanel(
         val contentPanel = JBPanel<JBPanel<*>>().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
 
-            // Section 1: Index Settings
-            add(createSectionPanel("Index Settings", createIndexSettingsPanel()))
+            // Section 1: Index Status
+            add(createSectionPanel("Index Status", createIndexStatusPanel()))
             add(Box.createVerticalStrut(LCATheme.spacingLg))
 
-            // Section 2: Built-in Providers
-            add(createSectionPanel("Built-in Providers", createBuiltInProvidersPanel()))
+            // Section 2: Embedding Management
+            add(createSectionPanel("Embedding Management", createEmbeddingsSection()))
+            add(Box.createVerticalStrut(LCATheme.spacingLg))
+
+            // Section 3: Search Settings
+            add(createSectionPanel("Search Settings", createSearchSettingsSection()))
+            add(Box.createVerticalStrut(LCATheme.spacingLg))
+
+            // Section 4: Providers
+            add(createSectionPanel("Providers", createBuiltInProvidersPanel()))
         }
 
         val scrollPane = JBScrollPane(contentPanel).apply {
@@ -159,10 +175,8 @@ class ContextSettingsPanel(
 
     // ==================== INDEX SETTINGS ====================
 
-    private fun createIndexSettingsPanel(): JPanel {
+    private fun createIndexStatusPanel(): JPanel {
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = LCATheme.paddedBorder(LCATheme.padding)
-
             val contentPanel = JBPanel<JBPanel<*>>().apply {
                 layout = BoxLayout(this, BoxLayout.Y_AXIS)
 
@@ -176,14 +190,6 @@ class ContextSettingsPanel(
 
                 // Index Settings
                 add(createIndexConfigSection())
-                add(Box.createVerticalStrut(16))
-
-                // Search Settings
-                add(createSearchSettingsSection())
-                add(Box.createVerticalStrut(16))
-
-                // Embeddings Management
-                add(createEmbeddingsSection())
             }
 
             add(contentPanel, BorderLayout.CENTER)
@@ -199,6 +205,16 @@ class ContextSettingsPanel(
         reindexButton = JButton("Reindex Project").apply {
             toolTipText = "Scan project files and build search index"
             addActionListener { onReindex() }
+        }
+        stopIndexingButton = JButton("Stop Indexing").apply {
+            toolTipText = "Cancel ongoing indexing"
+            isEnabled = false
+            addActionListener { onStopIndexing() }
+        }
+        clearIndexButton = JButton("Clear Index").apply {
+            icon = AllIcons.General.Remove
+            toolTipText = "Delete all indexed data for this project (including embeddings)"
+            addActionListener { onClearIndex() }
         }
 
         return JBPanel<JBPanel<*>>().apply {
@@ -216,6 +232,8 @@ class ContextSettingsPanel(
             add(Box.createVerticalStrut(8))
             add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
                 add(reindexButton)
+                add(stopIndexingButton)
+                add(clearIndexButton)
             })
         }
     }
@@ -283,9 +301,7 @@ class ContextSettingsPanel(
         ragSearchSemanticWeightField = JBTextField("0.7", 4)
         ragSearchHybridEnabledCheckbox = JCheckBox("Enable hybrid search", false)
         ragSearchIncludeContextChunksCheckbox = JCheckBox("Include context chunks", false)
-        saveSearchSettingsButton = JButton("Save Search Settings").apply {
-            addActionListener { onSaveSearchSettings() }
-        }
+        setupSearchSettingsAutoSave()
 
         return JBPanel<JBPanel<*>>().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
@@ -319,11 +335,6 @@ class ContextSettingsPanel(
                 add(ragSearchHybridEnabledCheckbox)
                 add(ragSearchIncludeContextChunksCheckbox)
             })
-
-            add(Box.createVerticalStrut(8))
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
-                add(saveSearchSettingsButton)
-            })
         }
     }
 
@@ -340,10 +351,10 @@ class ContextSettingsPanel(
             addActionListener { onGenerateEmbeddings() }
         }
 
-        clearIndexButton = JButton("Clear Index").apply {
-            icon = AllIcons.General.Remove
-            toolTipText = "Delete all indexed data for this project"
-            addActionListener { onClearIndex() }
+        stopEmbeddingsButton = JButton("Stop Embeddings").apply {
+            toolTipText = "Cancel ongoing embedding generation"
+            isEnabled = false
+            addActionListener { onStopEmbeddings() }
         }
 
         return JBPanel<JBPanel<*>>().apply {
@@ -352,7 +363,7 @@ class ContextSettingsPanel(
             add(JBLabel("Embeddings Management:").apply {
                 font = LCATheme.boldFont
             })
-            add(JBLabel("Generate embeddings for RAG search or clear the entire index").apply {
+            add(JBLabel("Generate embeddings for RAG search").apply {
                 foreground = LCATheme.descriptionForeground
             })
             add(Box.createVerticalStrut(8))
@@ -365,7 +376,7 @@ class ContextSettingsPanel(
 
             add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
                 add(generateEmbeddingsButton)
-                add(clearIndexButton)
+                add(stopEmbeddingsButton)
             })
         }
     }
@@ -380,9 +391,11 @@ class ContextSettingsPanel(
         }
 
         reindexButton.isEnabled = false
+        stopIndexingButton.isEnabled = true
+        clearIndexButton.isEnabled = false
         updateIndexProgress(0, "Starting indexing...")
 
-        cs.launch {
+        indexJob = cs.launch {
             try {
                 val projectRoot = java.nio.file.Paths.get(projectPath)
                 val router = coreManager.getOrCreateProjectRouter(projectRoot)
@@ -395,13 +408,16 @@ class ContextSettingsPanel(
 
                 SwingUtilities.invokeLater {
                     updateIndexProgress(100, "Completed")
-                    reindexButton.isEnabled = true
+                }
+            } catch (e: CancellationException) {
+                logger.info { "Indexing cancelled by user" }
+                SwingUtilities.invokeLater {
+                    updateIndexProgress(0, "Cancelled")
                 }
             } catch (e: Exception) {
                 logger.error(e) { "Indexing failed" }
                 SwingUtilities.invokeLater {
                     updateIndexProgress(0, "Failed: ${e.message}")
-                    reindexButton.isEnabled = true
                     JOptionPane.showMessageDialog(
                         this@ContextSettingsPanel,
                         "Indexing failed: ${e.message}",
@@ -409,6 +425,13 @@ class ContextSettingsPanel(
                         JOptionPane.ERROR_MESSAGE
                     )
                 }
+            } finally {
+                SwingUtilities.invokeLater {
+                    reindexButton.isEnabled = true
+                    stopIndexingButton.isEnabled = false
+                    clearIndexButton.isEnabled = true
+                }
+                indexJob = null
             }
         }
     }
@@ -417,9 +440,10 @@ class ContextSettingsPanel(
         val projectPath = project.basePath ?: return
 
         generateEmbeddingsButton.isEnabled = false
+        stopEmbeddingsButton.isEnabled = true
         updateEmbeddingProgress(0, "Generating...")
 
-        cs.launch {
+        embeddingJob = cs.launch {
             try {
                 val projectRoot = java.nio.file.Paths.get(projectPath)
                 val router = coreManager.getOrCreateProjectRouter(projectRoot)
@@ -437,13 +461,16 @@ class ContextSettingsPanel(
 
                 SwingUtilities.invokeLater {
                     updateEmbeddingProgress(100, "Completed")
-                    generateEmbeddingsButton.isEnabled = true
+                }
+            } catch (e: CancellationException) {
+                logger.info { "Embedding generation cancelled by user" }
+                SwingUtilities.invokeLater {
+                    updateEmbeddingProgress(0, "Cancelled")
                 }
             } catch (e: Exception) {
                 logger.error(e) { "Failed to generate embeddings" }
                 SwingUtilities.invokeLater {
                     updateEmbeddingProgress(0, "Failed")
-                    generateEmbeddingsButton.isEnabled = true
                     JOptionPane.showMessageDialog(
                         this@ContextSettingsPanel,
                         "Failed: ${e.message}",
@@ -451,6 +478,12 @@ class ContextSettingsPanel(
                         JOptionPane.ERROR_MESSAGE
                     )
                 }
+            } finally {
+                SwingUtilities.invokeLater {
+                    generateEmbeddingsButton.isEnabled = true
+                    stopEmbeddingsButton.isEnabled = false
+                }
+                embeddingJob = null
             }
         }
     }
@@ -460,12 +493,16 @@ class ContextSettingsPanel(
 
         cs.launch {
             try {
+                indexJob?.cancel()
+                embeddingJob?.cancel()
                 val projectRoot = java.nio.file.Paths.get(projectPath)
                 val router = coreManager.getOrCreateProjectRouter(projectRoot)
                 router.clearRagIndex()
 
                 SwingUtilities.invokeLater {
-                    updateEmbeddingProgress(0, "Index cleared")
+                    ragProgressService.reset()
+                    updateIndexProgress(0, "Index cleared")
+                    updateEmbeddingProgress(0, "Embeddings cleared")
                 }
             } catch (e: Exception) {
                 logger.error(e) { "Failed to clear RAG index" }
@@ -481,6 +518,14 @@ class ContextSettingsPanel(
         }
     }
 
+    private fun onStopIndexing() {
+        indexJob?.cancel()
+    }
+
+    private fun onStopEmbeddings() {
+        embeddingJob?.cancel()
+    }
+
     private fun updateIndexProgress(progress: Int, status: String) {
         indexProgressBar.value = progress
         indexProgressBar.string = "$progress%"
@@ -493,65 +538,81 @@ class ContextSettingsPanel(
         embeddingStatusLabel.text = status
     }
 
-    private fun onSaveSearchSettings() {
+    private fun setupSearchSettingsAutoSave() {
+        val changeListener = object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent?) = onSearchSettingsChanged()
+            override fun removeUpdate(e: DocumentEvent?) = onSearchSettingsChanged()
+            override fun changedUpdate(e: DocumentEvent?) = onSearchSettingsChanged()
+        }
+
+        ragSearchThresholdField.document.addDocumentListener(changeListener)
+        ragSearchTopKField.document.addDocumentListener(changeListener)
+        ragSearchSemanticWeightField.document.addDocumentListener(changeListener)
+        ragSearchHybridEnabledCheckbox.addActionListener { onSearchSettingsChanged() }
+        ragSearchIncludeContextChunksCheckbox.addActionListener { onSearchSettingsChanged() }
+    }
+
+    private fun onSearchSettingsChanged() {
+        if (isLoadingSearchSettings) return
+
+        searchSettingsSaveJob?.cancel()
+        searchSettingsSaveJob = cs.launch {
+            delay(searchSettingsSaveDebounceMs)
+            saveSearchSettings(showSuccessDialog = false)
+        }
+    }
+
+    private fun saveSearchSettings(showSuccessDialog: Boolean) {
         val threshold = ragSearchThresholdField.text.trim().toFloatOrNull()
         if (threshold == null || threshold < 0.0f || threshold > 1.0f) {
-            JOptionPane.showMessageDialog(
-                this,
-                "Similarity threshold must be a number between 0.0 and 1.0",
-                "Invalid Value",
-                JOptionPane.ERROR_MESSAGE
-            )
+            logger.warn { "Invalid similarity threshold value: ${ragSearchThresholdField.text}" }
             return
         }
 
         val topK = ragSearchTopKField.text.trim().toIntOrNull()
         if (topK == null || topK <= 0) {
-            JOptionPane.showMessageDialog(
-                this,
-                "TopK must be a positive integer",
-                "Invalid Value",
-                JOptionPane.ERROR_MESSAGE
-            )
+            logger.warn { "Invalid topK value: ${ragSearchTopKField.text}" }
             return
         }
 
         val semanticWeight = ragSearchSemanticWeightField.text.trim().toFloatOrNull()
         if (semanticWeight == null || semanticWeight < 0.0f || semanticWeight > 1.0f) {
-            JOptionPane.showMessageDialog(
-                this,
-                "Semantic weight must be a number between 0.0 and 1.0",
-                "Invalid Value",
-                JOptionPane.ERROR_MESSAGE
-            )
+            logger.warn { "Invalid semantic weight value: ${ragSearchSemanticWeightField.text}" }
             return
         }
 
-        val (thresholdSection, thresholdKey) = ConfigKeys.split(
-            ConfigService.KEY_RAG_SEARCH_SIMILARITY_THRESHOLD
-        )
-        onSettingChanged(thresholdSection, thresholdKey, threshold)
+        val hybridEnabled = ragSearchHybridEnabledCheckbox.isSelected
+        val includeContextChunks = ragSearchIncludeContextChunksCheckbox.isSelected
 
-        val (topKSection, topKKey) = ConfigKeys.split(ConfigService.KEY_RAG_SEARCH_TOP_K)
-        onSettingChanged(topKSection, topKKey, topK)
+        SwingUtilities.invokeLater {
+            val (thresholdSection, thresholdKey) = ConfigKeys.split(
+                ConfigService.KEY_RAG_SEARCH_SIMILARITY_THRESHOLD
+            )
+            onSettingChanged(thresholdSection, thresholdKey, threshold)
 
-        val (hybridSection, hybridKey) = ConfigKeys.split(ConfigService.KEY_RAG_SEARCH_HYBRID_ENABLED)
-        onSettingChanged(hybridSection, hybridKey, ragSearchHybridEnabledCheckbox.isSelected)
+            val (topKSection, topKKey) = ConfigKeys.split(ConfigService.KEY_RAG_SEARCH_TOP_K)
+            onSettingChanged(topKSection, topKKey, topK)
 
-        val (weightSection, weightKey) = ConfigKeys.split(ConfigService.KEY_RAG_SEARCH_SEMANTIC_WEIGHT)
-        onSettingChanged(weightSection, weightKey, semanticWeight)
+            val (hybridSection, hybridKey) = ConfigKeys.split(ConfigService.KEY_RAG_SEARCH_HYBRID_ENABLED)
+            onSettingChanged(hybridSection, hybridKey, hybridEnabled)
 
-        val (contextSection, contextKey) = ConfigKeys.split(
-            ConfigService.KEY_RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS
-        )
-        onSettingChanged(contextSection, contextKey, ragSearchIncludeContextChunksCheckbox.isSelected)
+            val (weightSection, weightKey) = ConfigKeys.split(ConfigService.KEY_RAG_SEARCH_SEMANTIC_WEIGHT)
+            onSettingChanged(weightSection, weightKey, semanticWeight)
 
-        JOptionPane.showMessageDialog(
-            this,
-            "RAG search settings saved.",
-            "Saved",
-            JOptionPane.INFORMATION_MESSAGE
-        )
+            val (contextSection, contextKey) = ConfigKeys.split(
+                ConfigService.KEY_RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS
+            )
+            onSettingChanged(contextSection, contextKey, includeContextChunks)
+        }
+
+        if (showSuccessDialog) {
+            JOptionPane.showMessageDialog(
+                this,
+                "RAG search settings saved.",
+                "Saved",
+                JOptionPane.INFORMATION_MESSAGE
+            )
+        }
     }
 
     private fun getIgnorePaths(): List<String> {
@@ -582,7 +643,7 @@ class ContextSettingsPanel(
                     LCATheme.customLineBorder(LCATheme.borderColor, 1),
                     title
                 ),
-                LCATheme.paddedBorder(LCATheme.padding)
+                LCATheme.paddedBorder(LCATheme.spacingLg)
             )
             add(content, BorderLayout.CENTER)
         }
@@ -603,11 +664,13 @@ class ContextSettingsPanel(
                 val includeContextChunks = configService.getRagSearchIncludeContextChunks()
 
                 SwingUtilities.invokeLater {
+                    isLoadingSearchSettings = true
                     ragSearchThresholdField.text = threshold.toString()
                     ragSearchTopKField.text = topK.toString()
                     ragSearchSemanticWeightField.text = semanticWeight.toString()
                     ragSearchHybridEnabledCheckbox.isSelected = hybridEnabled
                     ragSearchIncludeContextChunksCheckbox.isSelected = includeContextChunks
+                    isLoadingSearchSettings = false
                 }
             } catch (e: Exception) {
                 logger.warn(e) { "Failed to load RAG search settings" }

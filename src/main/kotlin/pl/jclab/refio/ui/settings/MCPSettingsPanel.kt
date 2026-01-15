@@ -438,8 +438,11 @@ private class MCPServerConfigDialog(
     private fun createSection(title: String, content: JPanel): JPanel {
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
             border = BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder(title),
-                EmptyBorder(8, 8, 8, 8)
+                BorderFactory.createTitledBorder(
+                    LCATheme.customLineBorder(LCATheme.borderColor, 1),
+                    title
+                ),
+                LCATheme.paddedBorder(8)
             )
             add(content, BorderLayout.CENTER)
         }

@@ -45,15 +45,13 @@ class ProvidersSettingsPanel(
         null
 
     init {
-        border = LCATheme.paddedBorder(LCATheme.margin)
-
-        // Header
-        val headerPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
-            add(JLabel("Providers").apply {
-                font = font.deriveFont(14f).deriveFont(Font.BOLD)
-            })
-        }
-        add(headerPanel, BorderLayout.NORTH)
+        border = BorderFactory.createCompoundBorder(
+            BorderFactory.createTitledBorder(
+                LCATheme.customLineBorder(LCATheme.borderColor, 1),
+                "Providers"
+            ),
+            LCATheme.paddedBorder(LCATheme.margin)
+        )
 
         // Providers cards
         providersPanel = JPanel().apply {

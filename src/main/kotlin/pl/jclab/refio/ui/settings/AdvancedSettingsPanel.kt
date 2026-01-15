@@ -50,15 +50,13 @@ class AdvancedSettingsPanel(
     private var isUpdatingProgrammatically = false
 
     init {
-        border = LCATheme.paddedBorder(LCATheme.margin)
-
-        // Header
-        val headerPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
-            add(JLabel("Advanced Settings").apply {
-                font = font.deriveFont(14f).deriveFont(java.awt.Font.BOLD)
-            })
-        }
-        add(headerPanel, BorderLayout.NORTH)
+        border = BorderFactory.createCompoundBorder(
+            BorderFactory.createTitledBorder(
+                LCATheme.customLineBorder(LCATheme.borderColor, 1),
+                "Advanced Settings"
+            ),
+            LCATheme.paddedBorder(LCATheme.margin)
+        )
 
         // Main content with visual sections
         val contentPanel = JBPanel<JBPanel<*>>().apply {

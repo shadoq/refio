@@ -49,15 +49,13 @@ class ToolsSettingsPanel(
     )
 
     init {
-        border = LCATheme.paddedBorder(16)
-
-        // Header
-        val headerPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
-            add(JLabel("Tools").apply {
-                font = font.deriveFont(14f).deriveFont(Font.BOLD)
-            })
-        }
-        add(headerPanel, BorderLayout.NORTH)
+        border = BorderFactory.createCompoundBorder(
+            BorderFactory.createTitledBorder(
+                LCATheme.customLineBorder(LCATheme.borderColor, 1),
+                "Tools"
+            ),
+            LCATheme.paddedBorder(16)
+        )
 
         // Main content
         val contentPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {

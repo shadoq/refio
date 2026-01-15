@@ -303,7 +303,10 @@ class ModelsSettingsPanel(
         val tablePanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
 
             border = BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder("Models"),
+                BorderFactory.createTitledBorder(
+                    LCATheme.customLineBorder(LCATheme.borderColor, 1),
+                    "Models"
+                ),
                 LCATheme.paddedBorder(LCATheme.padding)
             )
 
@@ -344,7 +347,10 @@ class ModelsSettingsPanel(
     private fun createPresetsPanel(): JPanel {
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
             border = BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder("Quick Presets"),
+                BorderFactory.createTitledBorder(
+                    LCATheme.customLineBorder(LCATheme.borderColor, 1),
+                    "Quick Presets"
+                ),
                 LCATheme.paddedBorder(LCATheme.padding)
             )
 
@@ -547,7 +553,10 @@ class ModelsSettingsPanel(
     private fun createModelSelectionPanel(): JPanel {
         return JBPanel<JBPanel<*>>(GridBagLayout()).apply {
             border = BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder("Model Selection per Mode"),
+                BorderFactory.createTitledBorder(
+                    LCATheme.customLineBorder(LCATheme.borderColor, 1),
+                    "Model Selection per Mode"
+                ),
                 LCATheme.paddedBorder(LCATheme.padding)
             )
 

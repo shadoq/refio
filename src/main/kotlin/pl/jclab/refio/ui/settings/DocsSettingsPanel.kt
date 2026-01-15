@@ -48,21 +48,19 @@ class DocsSettingsPanel(
     private val embeddingProgress = mutableMapOf<Int, Int>()
 
     init {
-        border = LCATheme.paddedBorder(16)
+        border = BorderFactory.createCompoundBorder(
+            BorderFactory.createTitledBorder(
+                LCATheme.customLineBorder(LCATheme.borderColor, 1),
+                "Documentation"
+            ),
+            LCATheme.paddedBorder(16)
+        )
 
         // Initialize buttons
         addButton = JButton("Add Documentation")
         addFileButton = JButton("Add Local File")
         reindexButton = JButton("Reindex Selected")
         deleteButton = JButton("Delete")
-
-        // Header
-        val headerPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
-            add(JLabel("Documentation").apply {
-                font = font.deriveFont(14f).deriveFont(Font.BOLD)
-            })
-        }
-        add(headerPanel, BorderLayout.NORTH)
 
         // Main content
         val contentPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
