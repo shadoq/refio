@@ -3,12 +3,16 @@ package pl.jclab.refio.core.tools.implementations
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import pl.jclab.refio.core.api.ModelOperation
+import pl.jclab.refio.core.api.StreamCallback
+import pl.jclab.refio.core.api.StreamChunk
 import pl.jclab.refio.core.db.PromptType
+import pl.jclab.refio.core.db.Subtask
 import pl.jclab.refio.core.db.repositories.TaskRepository
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.PromptsService
+import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
@@ -88,7 +92,51 @@ class MultiLineEditorTool(
         val taskId = params["taskId"] as? String
 
         return try {
-            executeEdit(pathStr, editDescription, taskId, startTime)
+            executeEdit(pathStr, editDescription, taskId, startTime, stream = false, onChunk = null)
+        } catch (e: SecurityException) {
+            logger.warn { "Security violation in multi_line_editor: ${e.message}" }
+            ToolResult.error("Security error: ${e.message}")
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to edit file: $pathStr" }
+            ToolResult.error("Failed to edit file: ${e.message}")
+        }
+    }
+
+    /**
+     * Execute with ExecutionEventListener for streaming integration.
+     */
+    suspend fun executeWithListener(
+        params: Map<String, Any>,
+        subtask: Subtask?,
+        listener: ExecutionEventListener?
+    ): ToolResult {
+        val startTime = System.currentTimeMillis()
+        val pathStr = params["path"] as? String ?: "unknown"
+        val editDescription = params["edit_description"] as? String ?: ""
+        val taskId = params["taskId"] as? String
+
+        logger.info {
+            "[MLE_STREAM] executeWithListener called: path=$pathStr, hasListener=${listener != null}, hasSubtask=${subtask != null}"
+        }
+
+        val onChunk: StreamCallback? = if (listener != null && subtask != null) { chunk ->
+            logger.debug {
+                "[MLE_STREAM] onChunk invoked: accumulated=${chunk.accumulated.length} chars, isComplete=${chunk.isComplete}"
+            }
+            listener.onToolCodeGenerationStream(
+                step = subtask,
+                toolName = name,
+                filePath = pathStr,
+                streamContent = chunk.accumulated,
+                isComplete = chunk.isComplete
+            )
+        } else {
+            logger.warn { "[MLE_STREAM] No callback created - listener=${listener != null}, subtask=${subtask != null}" }
+            null
+        }
+
+        return try {
+            executeEdit(pathStr, editDescription, taskId, startTime, stream = listener != null, onChunk = onChunk)
         } catch (e: SecurityException) {
             logger.warn { "Security violation in multi_line_editor: ${e.message}" }
             ToolResult.error("Security error: ${e.message}")
@@ -105,7 +153,9 @@ class MultiLineEditorTool(
         pathStr: String,
         editDescription: String,
         taskId: String?,
-        startTime: Long
+        startTime: Long,
+        stream: Boolean,
+        onChunk: StreamCallback?
     ): ToolResult {
         // 1. Read file and validate
         val path = sandbox.resolve(pathStr)
@@ -170,7 +220,17 @@ class MultiLineEditorTool(
             taskId = taskId
         )
 
-        logger.info { "Using model for multi-line edit: $model ($provider), file has ${lines.size} lines" }
+        logger.info {
+            "Using model for multi-line edit: $model ($provider), file has ${lines.size} lines, stream=$stream, hasOnChunk=${onChunk != null}"
+        }
+
+        var didStream = false
+        val streamingCallback: StreamCallback? = if (stream && onChunk != null) { chunk ->
+            didStream = true
+            onChunk(chunk)
+        } else {
+            null
+        }
 
         val response = try {
             llmClient.complete(
@@ -180,7 +240,8 @@ class MultiLineEditorTool(
                 systemPrompt = systemPrompt,
                 temperature = 0.1, // Low temp for precision
                 maxTokens = configService.getMaxOutputTokens(),
-                stream = false, // No streaming for JSON response
+                stream = stream,
+                onChunk = streamingCallback,
                 taskId = null,
                 subtaskId = null,
                 source = "MultiLineEditor"
@@ -193,6 +254,19 @@ class MultiLineEditorTool(
         val responseContent = response.content
         val usage = response.usage
         val cost = response.cost
+
+        if (stream && onChunk != null && !didStream) {
+            onChunk(
+                StreamChunk(
+                    delta = responseContent,
+                    accumulated = responseContent,
+                    isComplete = true,
+                    source = "MultiLineEditor",
+                    usage = usage,
+                    cost = cost
+                )
+            )
+        }
 
         // 6. Parse JSON response
         val edits = try {

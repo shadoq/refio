@@ -10,6 +10,7 @@ import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.tools.base.ToolResult
 import pl.jclab.refio.core.tools.implementations.AdvanceCodeEditingTool
+import pl.jclab.refio.core.tools.implementations.MultiLineEditorTool
 import pl.jclab.refio.services.logging.dualLogger
 import pl.jclab.refio.api.models.ExecutionMode
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
@@ -150,7 +151,7 @@ class ToolExecutor(
     /**
      * Execute list of tool calls with streaming support for code generation tools.
      *
-     * For advance_code_editing tool, streams LLM code generation to UI.
+     * For advance_code_editing and multi_line_editor tools, streams LLM output to UI.
      * Stops at first error.
      *
      * @param toolCalls List of tool call specifications
@@ -197,6 +198,13 @@ class ToolExecutor(
                     // Execute tool with streaming for advance_code_editing
                     if (tool is AdvanceCodeEditingTool && listener != null) {
                         executeAdvanceCodeEditingWithStreaming(
+                            tool = tool,
+                            toolCall = toolCall,
+                            subtask = subtask,
+                            listener = listener
+                        )
+                    } else if (tool is MultiLineEditorTool && listener != null) {
+                        executeMultiLineEditorWithStreaming(
                             tool = tool,
                             toolCall = toolCall,
                             subtask = subtask,
@@ -282,6 +290,25 @@ class ToolExecutor(
         logger.info { "[STREAM] Starting code generation stream for: $filePath" }
 
         // Use tool's direct listener integration
+        return tool.executeWithListener(
+            params = toolCall.params,
+            subtask = subtask,
+            listener = listener
+        )
+    }
+
+    /**
+     * Execute MultiLineEditorTool with streaming to UI.
+     */
+    private suspend fun executeMultiLineEditorWithStreaming(
+        tool: MultiLineEditorTool,
+        toolCall: ToolCall,
+        subtask: Subtask,
+        listener: ExecutionEventListener
+    ): ToolResult {
+        val filePath = toolCall.params["path"] as? String ?: "unknown"
+        logger.info { "[STREAM] Starting multi-line edit stream for: $filePath" }
+
         return tool.executeWithListener(
             params = toolCall.params,
             subtask = subtask,

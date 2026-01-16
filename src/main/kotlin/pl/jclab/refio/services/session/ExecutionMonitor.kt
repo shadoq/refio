@@ -565,6 +565,16 @@ class ExecutionMonitor(
 
         override fun onStepPreparing(step: pl.jclab.refio.core.db.Subtask) {
             logger.debug { "[UI_LISTENER] Step preparing: ${step.id}" }
+            if (streamingMessageId == null) {
+                val state = createStreamingMessage(
+                    taskId,
+                    "Planning...\n```json\n```\n",
+                    "system"
+                ) { accumulated ->
+                    "Planning...\n```json\n$accumulated\n```"
+                }
+                streamingMessageId = state.messageId
+            }
             scheduleReload(includeMessages = false, includeSubtasks = true)
         }
 
@@ -625,15 +635,17 @@ class ExecutionMonitor(
             streamContent: String,
             isComplete: Boolean
         ) {
+            val language = detectLanguageFromPath(filePath)
+            val fenced = formatCodeBlock(language, streamContent)
             if (codeGenMessageId == null) {
                 logger.info { "[UI_LISTENER] Creating streaming message for code generation: $filePath" }
                 val header = "Generating code for `$filePath`... ($toolName)\n\n"
                 val state = createStreamingMessage(
                     taskId,
-                    header + streamContent + "\n",
+                    header + fenced + "\n",
                     "system"
                 ) { accumulated ->
-                    header + accumulated + "\n"
+                    header + formatCodeBlock(language, accumulated) + "\n"
                 }
                 codeGenMessageId = state.messageId
             } else {
@@ -643,7 +655,7 @@ class ExecutionMonitor(
                         messages.map { msg ->
                             if (msg.id == msgId) {
                                 msg.copy(
-                                    content = "Generating code for `$filePath`... ($toolName)\n\n$streamContent\n"
+                                    content = "Generating code for `$filePath`... ($toolName)\n\n$fenced\n"
                                 )
                             } else {
                                 msg
@@ -656,7 +668,21 @@ class ExecutionMonitor(
             if (isComplete) {
                 val msgId = codeGenMessageId
                 if (msgId != null) {
-                    scope.launchSafe { removeStreamingMessage(msgId) }
+                    scope.launchSafe {
+                        stateManager.updateMessages { messages ->
+                            messages.map { msg ->
+                                if (msg.id == msgId) {
+                                    msg.copy(
+                                        content = msg.content + "\n**Tool completed.**\n",
+                                        isStreaming = false,
+                                        lastChunkAt = System.currentTimeMillis()
+                                    )
+                                } else {
+                                    msg
+                                }
+                            }
+                        }
+                    }
                     codeGenMessageId = null
                     logger.debug { "[UI_LISTENER] Removed code generation stream for: $filePath" }
                 }
@@ -738,11 +764,58 @@ class ExecutionMonitor(
             addSystemMessage(message)
             logger.debug { "[UI_LISTENER] Showed step executing message for: ${step.id}" }
 
+            val pendingPlanMessageId = streamingMessageId
+            if (pendingPlanMessageId != null) {
+                scope.launchSafe {
+                    stateManager.updateMessages { messages ->
+                        messages.map { msg ->
+                            if (msg.id == pendingPlanMessageId) {
+                                msg.copy(content = "**Step Planning Complete**\n```json\n```\n")
+                            } else {
+                                msg
+                            }
+                        }
+                    }
+                }
+                streamingMessageId = null
+            }
+
+            if (codeGenMessageId == null && plan.tools.isNotEmpty()) {
+                val toolName = plan.tools.first().name
+                val state = createStreamingMessage(
+                    taskId,
+                    "Starting tool `$toolName`...\n",
+                    "system"
+                ) { accumulated ->
+                    "Starting tool `$toolName`...\n$accumulated"
+                }
+                codeGenMessageId = state.messageId
+            }
+
             scheduleReload(includeMessages = false, includeSubtasks = true)
         }
 
         override fun onStepCompleted(step: pl.jclab.refio.core.db.Subtask, result: StepResult) {
             logger.debug { "[UI_LISTENER] Step completed: ${step.id}, status: ${result.status}" }
+            val msgId = codeGenMessageId
+            if (msgId != null) {
+                scope.launchSafe {
+                    stateManager.updateMessages { messages ->
+                        messages.map { msg ->
+                            if (msg.id == msgId) {
+                                msg.copy(
+                                    content = msg.content + "\n**Tool completed.**\n",
+                                    isStreaming = false,
+                                    lastChunkAt = System.currentTimeMillis()
+                                )
+                            } else {
+                                msg
+                            }
+                        }
+                    }
+                }
+                codeGenMessageId = null
+            }
             val currentSubtasks = stateManager.getSubtasks()
             val completedCount = currentSubtasks.count {
                 it.status in listOf("SUCCESS", "FAILED", "SKIPPED", "CANCELED")
@@ -756,6 +829,25 @@ class ExecutionMonitor(
 
         override fun onStepFailed(step: pl.jclab.refio.core.db.Subtask, error: Throwable) {
             logger.error(error) { "[UI_LISTENER] Step failed: ${step.id}" }
+            val msgId = codeGenMessageId
+            if (msgId != null) {
+                scope.launchSafe {
+                    stateManager.updateMessages { messages ->
+                        messages.map { msg ->
+                            if (msg.id == msgId) {
+                                msg.copy(
+                                    content = msg.content + "\n**Tool failed.**\n",
+                                    isStreaming = false,
+                                    lastChunkAt = System.currentTimeMillis()
+                                )
+                            } else {
+                                msg
+                            }
+                        }
+                    }
+                }
+                codeGenMessageId = null
+            }
             val currentSubtasks = stateManager.getSubtasks()
             val completedCount = currentSubtasks.count {
                 it.status in listOf("SUCCESS", "FAILED", "SKIPPED", "CANCELED")
@@ -824,6 +916,39 @@ class ExecutionMonitor(
 
     companion object {
         private const val UI_UPDATE_INTERVAL_MS = 500L
+    }
+
+    private fun detectLanguageFromPath(path: String): String {
+        val extension = path.substringAfterLast('.', "")
+        return when (extension.lowercase()) {
+            "kt" -> "kotlin"
+            "java" -> "java"
+            "py" -> "python"
+            "js", "jsx" -> "javascript"
+            "ts", "tsx" -> "typescript"
+            "go" -> "go"
+            "rs" -> "rust"
+            "cpp", "cc", "cxx" -> "cpp"
+            "c" -> "c"
+            "cs" -> "csharp"
+            "rb" -> "ruby"
+            "php" -> "php"
+            "swift" -> "swift"
+            "md" -> "markdown"
+            "json" -> "json"
+            "yaml", "yml" -> "yaml"
+            "xml" -> "xml"
+            "html" -> "html"
+            "css" -> "css"
+            "sql" -> "sql"
+            "sh", "bash" -> "bash"
+            else -> ""
+        }
+    }
+
+    private fun formatCodeBlock(language: String, content: String): String {
+        val langSuffix = if (language.isNotBlank()) language else ""
+        return "```$langSuffix\n$content\n```"
     }
 }
 

@@ -2,6 +2,7 @@ package pl.jclab.refio.core.tools.implementations
 
 import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.api.StreamCallback
+import pl.jclab.refio.core.api.StreamChunk
 import pl.jclab.refio.core.db.Subtask
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
@@ -250,6 +251,14 @@ class AdvanceCodeEditingTool(
         logger.info { "Using agent model for edit (${originalContent.lines().size} lines): $model ($provider), stream=$stream, hasOnChunk=${onChunk != null}" }
 
         // RFC 0032: Use unified complete() with stream flag
+        var didStream = false
+        val streamingCallback: StreamCallback? = if (stream && onChunk != null) { chunk ->
+            didStream = true
+            onChunk(chunk)
+        } else {
+            null
+        }
+
         val response = try {
             llmClient.complete(
                 provider = provider,
@@ -259,7 +268,7 @@ class AdvanceCodeEditingTool(
                 temperature = 0.2, // Low temperature for deterministic output
                 maxTokens = configService.getMaxOutputTokens() * 2, // From limits settings
                 stream = stream,
-                onChunk = if (stream) onChunk else null,
+                onChunk = streamingCallback,
                 taskId = null,  // Tool-level call, no task context
                 subtaskId = null,  // Tool-level call, no subtask context
                 source = "AdvCodeEditor"  // Request source for tracking
@@ -272,6 +281,19 @@ class AdvanceCodeEditingTool(
         val responseContent = response.content
         val usage = response.usage
         val cost = response.cost
+
+        if (stream && onChunk != null && !didStream) {
+            onChunk(
+                StreamChunk(
+                    delta = responseContent,
+                    accumulated = responseContent,
+                    isComplete = true,
+                    source = "AdvCodeEditor",
+                    usage = usage,
+                    cost = cost
+                )
+            )
+        }
 
         // 5. Extract code from response
         val newContent = extractCodeBlock(responseContent, language)
