@@ -32,7 +32,6 @@ import java.util.UUID
 class OpenRouterAdapter(
     model: String = "anthropic/claude-3.5-sonnet",
     private val configService: pl.jclab.refio.core.services.ConfigService? = null,
-    private val timeout: Long = 120000L, // 120 seconds
     private val taskId: String? = null,
     private val subtaskId: String? = null,
     private val source: String? = null,
@@ -47,6 +46,10 @@ class OpenRouterAdapter(
         const val CHAT_ENDPOINT = "/chat/completions"
         const val MODELS_ENDPOINT = "/models"
     }
+
+    private val timeoutMs: Long
+        get() = configService?.getApiCallTimeoutMs(taskId)
+            ?: pl.jclab.refio.core.services.ConfigService.DEFAULT_API_CALL_TIMEOUT * 1000L
 
     private val client = HttpClient(CIO) {
         install(ContentNegotiation) {
@@ -69,9 +72,9 @@ class OpenRouterAdapter(
             }
         }
         install(HttpTimeout) {
-            requestTimeoutMillis = timeout
+            requestTimeoutMillis = timeoutMs
             connectTimeoutMillis = 30000
-            socketTimeoutMillis = timeout
+            socketTimeoutMillis = timeoutMs
         }
     }
 
