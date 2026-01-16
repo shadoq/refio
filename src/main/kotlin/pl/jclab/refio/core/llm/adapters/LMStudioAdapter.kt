@@ -29,6 +29,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.serialization.gson.gson
+import java.util.UUID
 
 /**
  * Adapter for LM Studio (local) using OpenAI-compatible API.
@@ -155,14 +156,16 @@ class LMStudioAdapter(
         }
 
         val requestJson = gson.toJson(requestBody)
-        logger.debug { "[LMStudio] Request: ${SecureLogger.redact(requestJson)}" }
+        val requestId = UUID.randomUUID().toString()
+        val logPrefix = "[LMStudio][$requestId]"
+        logger.debug { "$logPrefix Request: ${SecureLogger.redactAndTruncate(requestJson)}" }
 
         val startTime = System.currentTimeMillis()
 
         return if (streaming && onStreamChunk != null) {
-            executeStreaming(resolvedBaseUrl, apiKey, requestBody, requestJson, startTime, onStreamChunk)
+            executeStreaming(resolvedBaseUrl, apiKey, requestBody, requestJson, startTime, onStreamChunk, logPrefix)
         } else {
-            executeStandard(resolvedBaseUrl, apiKey, requestBody, requestJson, startTime)
+            executeStandard(resolvedBaseUrl, apiKey, requestBody, requestJson, startTime, logPrefix)
         }
     }
 
@@ -171,12 +174,13 @@ class LMStudioAdapter(
         apiKey: String?,
         requestBody: Map<String, Any>,
         requestJson: String,
-        startTime: Long
+        startTime: Long,
+        logPrefix: String
     ): LLMResponse {
         var httpStatus: Int? = null
 
         try {
-            logger.info { "[LMStudio] Request start: endpoint=$baseUrl$CHAT_ENDPOINT, body=${SecureLogger.redact(requestJson)}" }
+            logger.info { "$logPrefix Request start: endpoint=$baseUrl$CHAT_ENDPOINT, body=${SecureLogger.redactAndTruncate(requestJson)}" }
             val response = client.post("$baseUrl$CHAT_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 apiKey?.let { header("Authorization", "Bearer $it") }
@@ -226,7 +230,7 @@ class LMStudioAdapter(
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
             val responseJson = gson.toJson(rawResponse)
             logger.info {
-                "[LMStudio] Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
+                "$logPrefix Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
                     "bodySize=${responseJson.length}"
             }
 
@@ -279,14 +283,15 @@ class LMStudioAdapter(
         requestBody: Map<String, Any>,
         requestJson: String,
         startTime: Long,
-        onStreamChunk: (StreamChunk) -> Unit
+        onStreamChunk: (StreamChunk) -> Unit,
+        logPrefix: String
     ): LLMResponse {
         val contentBuilder = StringBuilder()
         var httpStatus: Int? = null
         var finalFinishReason: String? = null
 
         try {
-            logger.info { "[LMStudio] Request start: endpoint=$baseUrl$CHAT_ENDPOINT, body=${SecureLogger.redact(requestJson)}" }
+            logger.info { "$logPrefix Request start: endpoint=$baseUrl$CHAT_ENDPOINT, body=${SecureLogger.redactAndTruncate(requestJson)}" }
             client.preparePost("$baseUrl$CHAT_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 apiKey?.let { header("Authorization", "Bearer $it") }
@@ -379,7 +384,7 @@ class LMStudioAdapter(
             )
             val responseJson = gson.toJson(syntheticResponse)
             logger.info {
-                "[LMStudio] Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
+                "$logPrefix Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
                     "bodySize=${responseJson.length}"
             }
 

@@ -449,16 +449,18 @@ class OpenAIAdapter(
         logger.debug { "[OPENAI] Parameters after normalization: ${requestBody.keys}" }
 
         val requestJson = gson.toJson(requestBody)
-        logger.debug { "[OPENAI] Request: ${SecureLogger.redact(requestJson)}" }
+        val requestId = UUID.randomUUID().toString()
+        val logPrefix = "[OPENAI][$requestId]"
+        logger.debug { "$logPrefix Request: ${SecureLogger.redactAndTruncate(requestJson)}" }
 
         val startTime = System.currentTimeMillis()
 
         return if (streaming && onStreamChunk != null) {
             // Streaming mode
-            executeStreaming(apiKeyToUse, requestBody, requestJson, startTime, onStreamChunk, definition)
+            executeStreaming(apiKeyToUse, requestBody, requestJson, startTime, onStreamChunk, definition, logPrefix)
         } else {
             // Standard mode
-            executeStandard(apiKeyToUse, requestBody, requestJson, startTime, definition)
+            executeStandard(apiKeyToUse, requestBody, requestJson, startTime, definition, logPrefix)
         }
     }
 
@@ -467,14 +469,15 @@ class OpenAIAdapter(
         requestBody: Map<String, Any>,
         requestJson: String,
         startTime: Long,
-        definition: pl.jclab.refio.core.llm.ModelDefinition?
+        definition: pl.jclab.refio.core.llm.ModelDefinition?,
+        logPrefix: String
     ): LLMResponse {
         var httpStatus: Int? = null
         val endpoint = getEndpoint(definition)
 
         try {
             // Make HTTP request
-            logger.info { "[OPENAI] Request start: endpoint=$DEFAULT_BASE_URL$endpoint, body=${SecureLogger.redact(requestJson)}" }
+            logger.info { "$logPrefix Request start: endpoint=$DEFAULT_BASE_URL$endpoint, body=${SecureLogger.redactAndTruncate(requestJson)}" }
             val httpResponse = client.post("$DEFAULT_BASE_URL$endpoint") {
                 contentType(ContentType.Application.Json)
                 header("Authorization", "Bearer $apiKey")
@@ -495,9 +498,9 @@ class OpenAIAdapter(
             }
 
             val responseJson = gson.toJson(response)
-            logger.debug { "[OPENAI] Response: ${SecureLogger.redact(responseJson)}" }
+            logger.debug { "$logPrefix Response: ${SecureLogger.redactAndTruncate(responseJson)}" }
             logger.info {
-                "[OPENAI] Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
+                "$logPrefix Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
                     "bodySize=${responseJson.length}"
             }
 
@@ -518,7 +521,7 @@ class OpenAIAdapter(
                     if (errorCode != null) append(" [code: $errorCode]")
                 }
 
-                logger.error { "[OPENAI] $fullErrorMessage" }
+                logger.error { "$logPrefix $fullErrorMessage" }
 
                 // Log error to API logs
                 logger.apiError(
@@ -586,7 +589,7 @@ class OpenAIAdapter(
             val finishReason = choice["finish_reason"] as? String
 
             logger.info {
-                "[OPENAI] Response processed: model=$responseModel, " +
+                "$logPrefix Response processed: model=$responseModel, " +
                         "tokens_in=${usage.inputTokens}, tokens_out=${usage.outputTokens}, " +
                         "cost=${"%.4f".format(cost)}, finish_reason=$finishReason"
             }
@@ -627,12 +630,13 @@ class OpenAIAdapter(
         requestJson: String,
         startTime: Long,
         onStreamChunk: (StreamChunk) -> Unit,
-        definition: pl.jclab.refio.core.llm.ModelDefinition?
+        definition: pl.jclab.refio.core.llm.ModelDefinition?,
+        logPrefix: String
     ): LLMResponse {
         return if (definition?.apiFormat == pl.jclab.refio.core.llm.ApiFormat.RESPONSES) {
-            executeResponsesStreaming(apiKey, requestBody, requestJson, startTime, onStreamChunk, definition)
+            executeResponsesStreaming(apiKey, requestBody, requestJson, startTime, onStreamChunk, definition, logPrefix)
         } else {
-            executeChatStreaming(apiKey, requestBody, requestJson, startTime, onStreamChunk, definition)
+            executeChatStreaming(apiKey, requestBody, requestJson, startTime, onStreamChunk, definition, logPrefix)
         }
     }
 
@@ -642,7 +646,8 @@ class OpenAIAdapter(
         requestJson: String,
         startTime: Long,
         onStreamChunk: (StreamChunk) -> Unit,
-        definition: pl.jclab.refio.core.llm.ModelDefinition?
+        definition: pl.jclab.refio.core.llm.ModelDefinition?,
+        logPrefix: String
     ): LLMResponse {
         val contentBuilder = StringBuilder()
         var totalTokensEstimate = 0
@@ -652,7 +657,7 @@ class OpenAIAdapter(
 
         try {
             // Make streaming HTTP request
-            logger.info { "[OPENAI] Request start: endpoint=$DEFAULT_BASE_URL$endpoint, body=${SecureLogger.redact(requestJson)}" }
+            logger.info { "$logPrefix Request start: endpoint=$DEFAULT_BASE_URL$endpoint, body=${SecureLogger.redactAndTruncate(requestJson)}" }
             client.preparePost("$DEFAULT_BASE_URL$endpoint") {
                 contentType(ContentType.Application.Json)
                 header("Authorization", "Bearer $apiKey")
@@ -683,7 +688,7 @@ class OpenAIAdapter(
                         "OpenAI API error (HTTP $httpStatus): $errorBody"
                     }
 
-                    logger.error { "[OPENAI] $errorMessage" }
+                    logger.error { "$logPrefix $errorMessage" }
 
                     logger.apiError(
                         provider = provider,
@@ -707,7 +712,7 @@ class OpenAIAdapter(
                 while (!channel.isClosedForRead) {
                     // Check cancellation - break to return partial response
                     if (pl.jclab.refio.core.services.monitoring.GlobalMetrics.isCancelled()) {
-                        logger.info { "[OPENAI] Streaming cancelled by user - returning partial response" }
+                        logger.info { "$logPrefix Streaming cancelled by user - returning partial response" }
                         finalFinishReason = "cancelled"
                         break
                     }
@@ -722,7 +727,7 @@ class OpenAIAdapter(
 
                     // Check for stream end
                     if (data == "[DONE]") {
-                        logger.debug { "[OPENAI] Stream complete" }
+                        logger.debug { "$logPrefix Stream complete" }
                         break
                     }
 
@@ -760,7 +765,7 @@ class OpenAIAdapter(
                             finalFinishReason = finishReason
                         }
                     } catch (e: Exception) {
-                        logger.warn { "[OPENAI] Failed to parse chunk: $data - ${e.message}" }
+                        logger.warn { "$logPrefix Failed to parse chunk: $data - ${e.message}" }
                         continue
                     }
                 }
@@ -805,7 +810,7 @@ class OpenAIAdapter(
             )
             val responseJson = gson.toJson(syntheticResponse)
             logger.info {
-                "[OPENAI] Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
+                "$logPrefix Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
                     "bodySize=${responseJson.length}"
             }
 
@@ -826,7 +831,7 @@ class OpenAIAdapter(
                 source = source
             )
 
-            logger.info { "[OPENAI] Streaming completed in ${latencyMs}ms, logged to API logs" }
+            logger.info { "$logPrefix Streaming completed in ${latencyMs}ms, logged to API logs" }
 
             return LLMResponse(
                 content = contentBuilder.toString(),
@@ -862,7 +867,8 @@ class OpenAIAdapter(
         requestJson: String,
         startTime: Long,
         onStreamChunk: (StreamChunk) -> Unit,
-        definition: pl.jclab.refio.core.llm.ModelDefinition?
+        definition: pl.jclab.refio.core.llm.ModelDefinition?,
+        logPrefix: String
     ): LLMResponse {
         val contentBuilder = StringBuilder()
         var totalTokensEstimate = 0
@@ -873,7 +879,7 @@ class OpenAIAdapter(
         val endpoint = getEndpoint(definition)
 
         try {
-            logger.info { "[OPENAI] Request start: endpoint=$DEFAULT_BASE_URL$endpoint, body=${SecureLogger.redact(requestJson)}" }
+            logger.info { "$logPrefix Request start: endpoint=$DEFAULT_BASE_URL$endpoint, body=${SecureLogger.redactAndTruncate(requestJson)}" }
             client.preparePost("$DEFAULT_BASE_URL$endpoint") {
                 contentType(ContentType.Application.Json)
                 header("Authorization", "Bearer $apiKey")
@@ -885,7 +891,7 @@ class OpenAIAdapter(
                     val errorBody = httpResponse.body<String>()
                     val latencyMs = (System.currentTimeMillis() - startTime).toInt()
                     val errorMessage = parseStreamingErrorMessage(errorBody, httpStatus)
-                    logger.error { "[OPENAI] $errorMessage" }
+                    logger.error { "$logPrefix $errorMessage" }
                     logger.apiError(
                         provider = provider,
                         model = model,
@@ -906,7 +912,7 @@ class OpenAIAdapter(
 
                 while (!channel.isClosedForRead) {
                     if (pl.jclab.refio.core.services.monitoring.GlobalMetrics.isCancelled()) {
-                        logger.info { "[OPENAI] Streaming cancelled by user - returning partial Responses payload" }
+                        logger.info { "$logPrefix Streaming cancelled by user - returning partial Responses payload" }
                         finalFinishReason = "cancelled"
                         break
                     }
@@ -924,7 +930,7 @@ class OpenAIAdapter(
                     val payload = line.removePrefix("data:").trim()
                     if (payload.isBlank()) continue
                     if (payload == "[DONE]") {
-                        logger.debug { "[OPENAI] Responses stream complete" }
+                        logger.debug { "$logPrefix Responses stream complete" }
                         break
                     }
 
@@ -969,7 +975,7 @@ class OpenAIAdapter(
                             finalUsage = mapUsage(eventData["usage"])
                         }
                     } catch (e: Exception) {
-                        logger.warn { "[OPENAI] Failed to parse Responses chunk: $payload - ${e.message}" }
+                        logger.warn { "$logPrefix Failed to parse Responses chunk: $payload - ${e.message}" }
                         continue
                     }
                 }
@@ -996,7 +1002,7 @@ class OpenAIAdapter(
             val cost = estimateCost(usage)
 
             logger.info {
-                "[OPENAI] Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
+                "$logPrefix Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
                     "bodySize=${responseJson.length}"
             }
 

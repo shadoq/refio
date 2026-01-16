@@ -188,6 +188,7 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
     private val contextPercentLabel: JBLabel
     private val sessionTokensLabel: JBLabel
     private val sessionCostLabel: JBLabel
+    private val busyIndicator: JProgressBar
 
     // Row 2: Execution Status, Progress, System Resources
     private val executionStatusLabel: JBLabel
@@ -214,6 +215,13 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
                 foreground = LCATheme.errorColor
                 toolTipText = "Core initialization failed - check logs"
             }
+            busyIndicator = JProgressBar().apply {
+                isIndeterminate = true
+                isStringPainted = false
+                preferredSize = Dimension(60, 8)
+                isVisible = false
+                toolTipText = "Operation in progress"
+            }
             contextFillBar = ContextUsageBar()
             contextPercentLabel = JBLabel("0% (0/0)").apply {
                 foreground = LCATheme.neutralColor
@@ -226,6 +234,7 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
             }
 
             add(coreHealthLabel)
+            add(busyIndicator)
             add(createSeparator())
             add(contextFillBar)
             add(contextPercentLabel)
@@ -451,6 +460,8 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
      * Single source of truth for execution state display.
      */
     private fun updateCurrentOperation(operation: OperationInfo) {
+        busyIndicator.isVisible = operation !is OperationInfo.Idle
+
         // Update label text based on operation
         executionStatusLabel.text = when (operation) {
             is OperationInfo.Idle -> "Idle"
@@ -501,60 +512,64 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
         }
 
         // Update progress bar based on operation type
+        fun setDeterminateProgress(percentage: Int) {
+            executionProgressBar.isIndeterminate = false
+            executionProgressBar.value = percentage
+            executionProgressBar.isVisible = true
+        }
+
         when (operation) {
             is OperationInfo.ExecutingStep -> {
                 val percentage = if (operation.totalSteps > 0) {
                     (operation.stepNumber * 100 / operation.totalSteps)
                 } else 0
-                executionProgressBar.value = percentage
-                executionProgressBar.isVisible = true
+                setDeterminateProgress(percentage)
             }
             is OperationInfo.PlanningStep -> {
                 val percentage = if (operation.totalSteps > 0) {
                     (operation.stepNumber * 100 / operation.totalSteps)
                 } else 0
-                executionProgressBar.value = percentage
-                executionProgressBar.isVisible = true
+                setDeterminateProgress(percentage)
             }
             is OperationInfo.StepPlanning -> {
                 val percentage = if (operation.totalSteps > 0) {
                     (operation.stepNumber * 100 / operation.totalSteps)
                 } else 0
-                executionProgressBar.value = percentage
-                executionProgressBar.isVisible = true
+                setDeterminateProgress(percentage)
             }
             is OperationInfo.StepExecuting -> {
                 val percentage = if (operation.totalSteps > 0) {
                     (operation.stepNumber * 100 / operation.totalSteps)
                 } else 0
-                executionProgressBar.value = percentage
-                executionProgressBar.isVisible = true
+                setDeterminateProgress(percentage)
             }
             is OperationInfo.StepSummarizing -> {
                 val percentage = if (operation.totalSteps > 0) {
                     (operation.stepNumber * 100 / operation.totalSteps)
                 } else 0
-                executionProgressBar.value = percentage
-                executionProgressBar.isVisible = true
+                setDeterminateProgress(percentage)
             }
             is OperationInfo.StepReasoning -> {
                 val percentage = if (operation.totalSteps > 0) {
                     (operation.stepNumber * 100 / operation.totalSteps)
                 } else 0
-                executionProgressBar.value = percentage
-                executionProgressBar.isVisible = true
+                setDeterminateProgress(percentage)
             }
             is OperationInfo.Idle -> {
+                executionProgressBar.isIndeterminate = false
                 executionProgressBar.value = 0
                 executionProgressBar.isVisible = false
             }
             else -> {
-                // Keep current state for other operations
+                executionProgressBar.isIndeterminate = true
+                executionProgressBar.value = 0
+                executionProgressBar.isVisible = true
             }
         }
 
         executionStatusLabel.repaint()
         executionProgressBar.repaint()
+        busyIndicator.repaint()
     }
 
 

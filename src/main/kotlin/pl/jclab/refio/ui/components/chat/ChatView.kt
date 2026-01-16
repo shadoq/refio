@@ -23,12 +23,15 @@ import pl.jclab.refio.api.models.UserContextMetadata
 import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.api.models.Message
 import pl.jclab.refio.api.models.TaskMode
+import pl.jclab.refio.core.services.monitoring.GlobalMetrics
+import pl.jclab.refio.core.services.monitoring.OperationInfo
 import pl.jclab.refio.services.execution.StepExecutionService
 import pl.jclab.refio.services.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.ui.components.chat.MetricsView
 import pl.jclab.refio.ui.components.common.PromptDialog
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.combine
 import org.commonmark.parser.Parser
 import org.commonmark.renderer.html.HtmlRenderer
 import java.awt.*
@@ -108,6 +111,8 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     // Use EDT dispatcher for UI updates in IntelliJ
     private val cs = CoroutineScope(SupervisorJob())
     private val sessionManager = SessionManager.getInstance(project)
+    private val stepExecutionService = StepExecutionService.getInstance(project)
+    private val globalMetrics = GlobalMetrics
     private val logger = dualLogger("ChatView")
     private val coreManager = pl.jclab.refio.services.core.CoreConnectionManager.getInstance()
 
@@ -126,6 +131,12 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
 
     // Width for bubble calculations (updated on resize)
     private var availableWidth: Int = 400
+
+    private val busyIndicatorPanel: JPanel
+    private val busyIndicatorLabel: JLabel
+    private val busyIndicatorFrames = arrayOf("|", " ")
+    private var busyIndicatorFrame = 0
+    private var busyIndicatorTimer: Timer? = null
 
     // Cache for rendered message panels to avoid recreating on every StateFlow update
     // Key: messageId, Value: CachedMessagePanel with contentHash and rendered panel
@@ -158,11 +169,42 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
 
         add(messagesPanel, BorderLayout.CENTER)
 
+        busyIndicatorLabel = JLabel("Working ${busyIndicatorFrames[0]}").apply {
+            font = font.deriveFont(Font.ITALIC, 11f)
+            foreground = LCATheme.descriptionForeground
+        }
+        busyIndicatorPanel = JBPanel<JBPanel<*>>().apply {
+            layout = FlowLayout(FlowLayout.LEFT, 8, 2)
+            border = LCATheme.paddedBorder(4, 8)
+            isOpaque = false
+            isVisible = false
+            add(busyIndicatorLabel)
+        }
+        add(busyIndicatorPanel, BorderLayout.SOUTH)
+
         // Observe active session for mode changes
         cs.launch {
             sessionManager.activeSession.collect { session ->
                 logger.info { "Received session update: mode=${session?.mode}" }
                 updateModeBadge(session?.mode, session?.executionMode)
+            }
+        }
+
+        cs.launch {
+            combine(
+                globalMetrics.currentOperation,
+                stepExecutionService.isExecuting,
+                sessionManager.userInteraction.isWaitingForResponse
+            ) { operation, isStepExecuting, isWaitingForInput ->
+                if (isWaitingForInput) {
+                    false
+                } else {
+                    (operation !is OperationInfo.Idle) || isStepExecuting
+                }
+            }.collect { isRunning ->
+                SwingUtilities.invokeLater {
+                    updateBusyIndicator(isRunning)
+                }
             }
         }
 
@@ -262,6 +304,32 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
         // This allows PromptInputPanel to stay at top in ReverseChatPanel
         messagesPanel.revalidate()
         messagesPanel.repaint()
+    }
+
+    private fun updateBusyIndicator(isRunning: Boolean) {
+        if (isRunning) {
+            if (!busyIndicatorPanel.isVisible) {
+                busyIndicatorPanel.isVisible = true
+            }
+            if (busyIndicatorTimer == null) {
+                busyIndicatorTimer = Timer(450) {
+                    busyIndicatorFrame = (busyIndicatorFrame + 1) % busyIndicatorFrames.size
+                    busyIndicatorLabel.text = "Working ${busyIndicatorFrames[busyIndicatorFrame]}"
+                }.apply {
+                    isRepeats = true
+                    start()
+                }
+            }
+        } else {
+            busyIndicatorTimer?.stop()
+            busyIndicatorTimer = null
+            busyIndicatorFrame = 0
+            busyIndicatorLabel.text = "Working ${busyIndicatorFrames[0]}"
+            busyIndicatorPanel.isVisible = false
+        }
+
+        busyIndicatorPanel.revalidate()
+        busyIndicatorPanel.repaint()
     }
 
     /**

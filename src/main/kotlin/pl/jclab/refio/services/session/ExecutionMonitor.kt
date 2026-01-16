@@ -422,7 +422,7 @@ class ExecutionMonitor(
         scope.launchSafe {
             stateManager.updateMessages { messages -> messages + message }
         }
-        logger.info { "Added system message: ${message.content}" }
+        logger.info { "Added system message: ${message.content.length}" }
     }
 
     private fun updateOrAddSystemMessage(message: Message) {

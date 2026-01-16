@@ -24,6 +24,7 @@ import io.ktor.client.request.get
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import io.ktor.utils.io.ByteReadChannel
+import java.util.UUID
 
 /**
  * Adapter for Google Gemini models (generateContent API).
@@ -95,13 +96,15 @@ class GeminiAdapter(
 
         val requestBody = buildRequestBody(messages, systemMessages, maxTokens, temperature, kwargs)
         val requestJson = gson.toJson(requestBody)
-        logger.debug { "[GEMINI] Request: ${SecureLogger.redact(requestJson)}" }
+        val requestId = UUID.randomUUID().toString()
+        val logPrefix = "[GEMINI][$requestId]"
+        logger.debug { "$logPrefix Request: ${SecureLogger.redactAndTruncate(requestJson)}" }
 
         val startTime = System.currentTimeMillis()
         return if (streaming && onStreamChunk != null) {
-            executeStreaming(apiKey, requestBody, requestJson, startTime, onStreamChunk)
+            executeStreaming(apiKey, requestBody, requestJson, startTime, onStreamChunk, logPrefix)
         } else {
-            executeStandard(apiKey, requestBody, requestJson, startTime)
+            executeStandard(apiKey, requestBody, requestJson, startTime, logPrefix)
         }
     }
 
@@ -193,12 +196,13 @@ class GeminiAdapter(
         apiKey: String,
         requestBody: Map<String, Any>,
         requestJson: String,
-        startTime: Long
+        startTime: Long,
+        logPrefix: String
     ): LLMResponse {
         var httpStatus: Int? = null
         val url = "$BASE_URL${GENERATE_PATH.format(model)}"
         try {
-            logger.info { "[GEMINI] Request start: endpoint=$url, body=${SecureLogger.redact(requestJson)}" }
+            logger.info { "$logPrefix Request start: endpoint=$url, body=${SecureLogger.redactAndTruncate(requestJson)}" }
             val httpResponse = client.post(url) {
                 contentType(ContentType.Application.Json)
                 header("x-goog-api-key", apiKey)
@@ -208,9 +212,9 @@ class GeminiAdapter(
 
             val rawResponse: Map<String, Any?> = httpResponse.body()
             val responseJson = gson.toJson(rawResponse)
-            logger.debug { "[GEMINI] Response: ${SecureLogger.redact(responseJson)}" }
+            logger.debug { "$logPrefix Response: ${SecureLogger.redactAndTruncate(responseJson)}" }
             logger.info {
-                "[GEMINI] Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
+                "$logPrefix Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
                     "bodySize=${responseJson.length}"
             }
 
@@ -285,7 +289,8 @@ class GeminiAdapter(
         requestBody: Map<String, Any>,
         requestJson: String,
         startTime: Long,
-        onStreamChunk: (StreamChunk) -> Unit
+        onStreamChunk: (StreamChunk) -> Unit,
+        logPrefix: String
     ): LLMResponse {
         val url = "$BASE_URL${STREAM_PATH.format(model)}"
         val contentBuilder = StringBuilder()
@@ -294,7 +299,7 @@ class GeminiAdapter(
         var finalUsage: LLMUsage? = null
 
         try {
-            logger.info { "[GEMINI] Request start: endpoint=$url, body=${SecureLogger.redact(requestJson)}" }
+            logger.info { "$logPrefix Request start: endpoint=$url, body=${SecureLogger.redactAndTruncate(requestJson)}" }
             client.preparePost(url) {
                 contentType(ContentType.Application.Json)
                 header("x-goog-api-key", apiKey)
@@ -367,7 +372,7 @@ class GeminiAdapter(
                 )
             )
             logger.info {
-                "[GEMINI] Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
+                "$logPrefix Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
                     "bodySize=${responseJson.length}"
             }
 

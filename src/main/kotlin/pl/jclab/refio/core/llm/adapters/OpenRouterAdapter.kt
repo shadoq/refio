@@ -19,6 +19,7 @@ import io.ktor.http.*
 import io.ktor.serialization.gson.*
 import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.services.logging.dualLogger
+import java.util.UUID
 
 /**
  * Adapter for OpenRouter - unified API for multiple LLM providers.
@@ -153,14 +154,16 @@ class OpenRouterAdapter(
         }
 
         val requestJson = gson.toJson(requestBody)
-        logger.debug { "[OPENROUTER] Request: ${SecureLogger.redact(requestJson)}" }
+        val requestId = UUID.randomUUID().toString()
+        val logPrefix = "[OPENROUTER][$requestId]"
+        logger.debug { "$logPrefix Request: ${SecureLogger.redactAndTruncate(requestJson)}" }
 
         val startTime = System.currentTimeMillis()
         var httpStatus: Int? = null
 
         try {
             // Make HTTP request
-            logger.info { "[OPENROUTER] Request start: endpoint=$DEFAULT_BASE_URL$CHAT_ENDPOINT, body=${SecureLogger.redact(requestJson)}" }
+            logger.info { "$logPrefix Request start: endpoint=$DEFAULT_BASE_URL$CHAT_ENDPOINT, body=${SecureLogger.redactAndTruncate(requestJson)}" }
             val httpResponse = client.post("$DEFAULT_BASE_URL$CHAT_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 header("Authorization", "Bearer $apiKeyToUse")
@@ -174,9 +177,9 @@ class OpenRouterAdapter(
             val response: Map<String, Any?> = httpResponse.body()
 
             val responseJson = gson.toJson(response)
-            logger.debug { "[OPENROUTER] Response: ${SecureLogger.redact(responseJson)}" }
+            logger.debug { "$logPrefix Response: ${SecureLogger.redactAndTruncate(responseJson)}" }
             logger.info {
-                "[OPENROUTER] Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
+                "$logPrefix Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
                     "bodySize=${responseJson.length}"
             }
 
@@ -222,7 +225,7 @@ class OpenRouterAdapter(
                 @Suppress("UNCHECKED_CAST")
                 val metadata = errorObj["metadata"] as? Map<String, Any?>
                 val providerName = metadata?.get("provider_name") as? String ?: "OpenRouter"
-                logger.error { "[OPENROUTER] API error from $providerName (code $errorCode): $errorMessage" }
+                logger.error { "$logPrefix API error from $providerName (code $errorCode): $errorMessage" }
                 throw IllegalStateException("OpenRouter error from $providerName: $errorMessage")
             }
 
@@ -239,7 +242,7 @@ class OpenRouterAdapter(
             val content = message["content"] as? String ?: ""
             val finishReason = choice["finish_reason"] as? String
 
-            logger.info { "[OPENROUTER] Response processed: model=$responseModel, " +
+            logger.info { "$logPrefix Response processed: model=$responseModel, " +
                     "tokens_in=${usage.inputTokens}, tokens_out=${usage.outputTokens}, " +
                     "cost=$${"%.4f".format(cost)}, finish_reason=$finishReason" }
 
@@ -348,7 +351,9 @@ class OpenRouterAdapter(
         }
 
         val requestJson = gson.toJson(requestBody)
-        logger.debug { "[OPENROUTER] Streaming request: ${SecureLogger.redact(requestJson)}" }
+        val requestId = UUID.randomUUID().toString()
+        val logPrefix = "[OPENROUTER][$requestId]"
+        logger.debug { "$logPrefix Streaming request: ${SecureLogger.redactAndTruncate(requestJson)}" }
 
         val startTime = System.currentTimeMillis()
         var totalTokensEstimate = 0
@@ -358,7 +363,7 @@ class OpenRouterAdapter(
 
         try {
             // Make streaming HTTP request
-            logger.info { "[OPENROUTER] Request start: endpoint=$DEFAULT_BASE_URL$CHAT_ENDPOINT, body=${SecureLogger.redact(requestJson)}" }
+            logger.info { "$logPrefix Request start: endpoint=$DEFAULT_BASE_URL$CHAT_ENDPOINT, body=${SecureLogger.redactAndTruncate(requestJson)}" }
             client.preparePost("$DEFAULT_BASE_URL$CHAT_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 header("Authorization", "Bearer $apiKeyToUse")
@@ -377,7 +382,7 @@ class OpenRouterAdapter(
 
                     // Debug: log first few lines to see what format we're getting
                     if (lineCount <= 5) {
-                        logger.info { "[OPENROUTER] SSE line $lineCount: ${line.take(200)}" }
+                        logger.info { "$logPrefix SSE line $lineCount: ${line.take(200)}" }
                     }
 
                     // SSE format: "data: {...}" or "data: [DONE]"
@@ -400,7 +405,7 @@ class OpenRouterAdapter(
                                     @Suppress("UNCHECKED_CAST")
                                     val metadata = errorObj["metadata"] as? Map<String, Any?>
                                     val providerName = metadata?.get("provider_name") as? String ?: "provider"
-                                    logger.error { "[OPENROUTER] Error from $providerName: $errorMessage" }
+                                    logger.error { "$logPrefix Error from $providerName: $errorMessage" }
                                     contentBuilder.append("\n\n**Error from $providerName:** $errorMessage")
                                     onStreamChunk(pl.jclab.refio.core.llm.StreamChunk(
                                         delta = "\n\n**Error from $providerName:** $errorMessage",
@@ -418,7 +423,7 @@ class OpenRouterAdapter(
                                     val message = choice["message"] as? Map<String, Any?>
                                     val content = message?.get("content") as? String
                                     if (content != null && content.isNotEmpty()) {
-                                        logger.info { "[OPENROUTER] Found non-streaming response with content length: ${content.length}" }
+                                        logger.info { "$logPrefix Found non-streaming response with content length: ${content.length}" }
                                         contentBuilder.append(content)
                                         totalTokensEstimate = content.split(" ").size
                                         onStreamChunk(pl.jclab.refio.core.llm.StreamChunk(
@@ -440,7 +445,7 @@ class OpenRouterAdapter(
 
                     // Check for stream end
                     if (data == "[DONE]") {
-                        logger.info { "[OPENROUTER] Stream complete" }
+                        logger.info { "$logPrefix Stream complete" }
                         break
                     }
 
@@ -462,7 +467,7 @@ class OpenRouterAdapter(
                             val metadata = errorObj["metadata"] as? Map<String, Any?>
                             val providerName = metadata?.get("provider_name") as? String ?: "OpenRouter"
 
-                            logger.error { "[OPENROUTER] Error from $providerName (code $errorCode): $errorMessage" }
+                            logger.error { "$logPrefix Error from $providerName (code $errorCode): $errorMessage" }
 
                             // Throw exception instead of returning error in content
                             // This prevents PlanningService from trying to parse error message as JSON
@@ -531,13 +536,13 @@ class OpenRouterAdapter(
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
 
             // Debug: log final content length
-            logger.info { "[OPENROUTER] Stream finished: totalLines=$lineCount, dataLines=$dataLineCount, " +
+            logger.info { "$logPrefix Stream finished: totalLines=$lineCount, dataLines=$dataLineCount, " +
                     "contentLength=${contentBuilder.length}, estimatedOutputTokens=$totalTokensEstimate, " +
                     "finishReason=$finalFinishReason" }
 
             // If no content was received but stream completed, log warning
             if (contentBuilder.isEmpty()) {
-                logger.warn { "[OPENROUTER] Stream completed but no content received! Model: $model" }
+                logger.warn { "$logPrefix Stream completed but no content received! Model: $model" }
             }
 
             // Estimate final usage for logging
@@ -566,7 +571,7 @@ class OpenRouterAdapter(
             )
             val responseJson = gson.toJson(syntheticResponse)
             logger.info {
-                "[OPENROUTER] Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
+                "$logPrefix Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
                     "bodySize=${responseJson.length}"
             }
 
@@ -587,7 +592,7 @@ class OpenRouterAdapter(
                 source = source
             )
 
-            logger.info { "[OPENROUTER] Streaming completed in ${latencyMs}ms, logged to API logs" }
+            logger.info { "$logPrefix Streaming completed in ${latencyMs}ms, logged to API logs" }
 
             // Return complete LLMResponse
             return LLMResponse(

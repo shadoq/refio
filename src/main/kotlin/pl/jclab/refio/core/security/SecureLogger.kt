@@ -44,6 +44,16 @@ object SecureLogger {
         return result
     }
 
+    fun redactAndTruncate(input: String, head: Int = 30, tail: Int = 30): String {
+        val redacted = redact(input)
+        if (redacted.length <= head + tail + 3) {
+            return redacted
+        }
+        val start = redacted.take(head)
+        val end = redacted.takeLast(tail)
+        return "$start...$end"
+    }
+
     fun redactMap(map: Map<String, Any?>): Map<String, Any?> {
         return map.mapValues { (key, value) ->
             if (isSensitiveKey(key)) {

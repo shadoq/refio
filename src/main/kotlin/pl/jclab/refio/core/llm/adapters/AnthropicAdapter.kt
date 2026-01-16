@@ -20,6 +20,7 @@ import io.ktor.http.*
 import io.ktor.serialization.gson.*
 import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.services.logging.dualLogger
+import java.util.UUID
 
 /**
  * Adapter for Anthropic Claude models.
@@ -201,16 +202,18 @@ class AnthropicAdapter(
         }
 
         val requestJson = gson.toJson(requestBody)
-        logger.debug { "[ANTHROPIC] Request: ${SecureLogger.redact(requestJson)}" }
+        val requestId = UUID.randomUUID().toString()
+        val logPrefix = "[ANTHROPIC][$requestId]"
+        logger.debug { "$logPrefix Request: ${SecureLogger.redactAndTruncate(requestJson)}" }
 
         val startTime = System.currentTimeMillis()
 
         return if (streaming && onStreamChunk != null) {
             // Streaming mode
-            executeStreaming(apiKeyToUse, requestBody, requestJson, startTime, onStreamChunk)
+            executeStreaming(apiKeyToUse, requestBody, requestJson, startTime, onStreamChunk, logPrefix)
         } else {
             // Standard mode
-            executeStandard(apiKeyToUse, requestBody, requestJson, startTime)
+            executeStandard(apiKeyToUse, requestBody, requestJson, startTime, logPrefix)
         }
     }
 
@@ -218,13 +221,14 @@ class AnthropicAdapter(
         apiKey: String,
         requestBody: Map<String, Any>,
         requestJson: String,
-        startTime: Long
+        startTime: Long,
+        logPrefix: String
     ): LLMResponse {
         var httpStatus: Int? = null
 
         try {
             // Make HTTP request
-            logger.info { "[ANTHROPIC] Request start: endpoint=$DEFAULT_BASE_URL$MESSAGES_ENDPOINT, body=${SecureLogger.redact(requestJson)}" }
+            logger.info { "$logPrefix Request start: endpoint=$DEFAULT_BASE_URL$MESSAGES_ENDPOINT, body=${SecureLogger.redactAndTruncate(requestJson)}" }
             val httpResponse = client.post("$DEFAULT_BASE_URL$MESSAGES_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 header("x-api-key", apiKey)
@@ -236,9 +240,9 @@ class AnthropicAdapter(
             val response: Map<String, Any?> = httpResponse.body()
 
             val responseJson = gson.toJson(response)
-            logger.debug { "[ANTHROPIC] Response: ${SecureLogger.redact(responseJson)}" }
+            logger.debug { "$logPrefix Response: ${SecureLogger.redactAndTruncate(responseJson)}" }
             logger.info {
-                "[ANTHROPIC] Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
+                "$logPrefix Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
                     "bodySize=${responseJson.length}"
             }
 
@@ -257,7 +261,7 @@ class AnthropicAdapter(
                     if (errorType != null) append(" [type: $errorType]")
                 }
 
-                logger.error { "[ANTHROPIC] $fullErrorMessage" }
+                logger.error { "$logPrefix $fullErrorMessage" }
 
                 // Log error to API logs
                 logger.apiError(
@@ -326,7 +330,7 @@ class AnthropicAdapter(
             val responseModel = response["model"] as? String ?: model
             val stopReason = response["stop_reason"] as? String
 
-            logger.info { "[ANTHROPIC] Response processed: model=$responseModel, " +
+            logger.info { "$logPrefix Response processed: model=$responseModel, " +
                     "tokens_in=${usage.inputTokens}, tokens_out=${usage.outputTokens}, " +
                     "cost=${"%.4f".format(cost)}, stop_reason=$stopReason" }
 
@@ -365,7 +369,8 @@ class AnthropicAdapter(
         requestBody: Map<String, Any>,
         requestJson: String,
         startTime: Long,
-        onStreamChunk: (StreamChunk) -> Unit
+        onStreamChunk: (StreamChunk) -> Unit,
+        logPrefix: String
     ): LLMResponse {
         val contentBuilder = StringBuilder()
         var inputTokens = 0
@@ -375,7 +380,7 @@ class AnthropicAdapter(
 
         try {
             // Make streaming HTTP request
-            logger.info { "[ANTHROPIC] Request start: endpoint=$DEFAULT_BASE_URL$MESSAGES_ENDPOINT, body=${SecureLogger.redact(requestJson)}" }
+            logger.info { "$logPrefix Request start: endpoint=$DEFAULT_BASE_URL$MESSAGES_ENDPOINT, body=${SecureLogger.redactAndTruncate(requestJson)}" }
             client.preparePost("$DEFAULT_BASE_URL$MESSAGES_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 header("x-api-key", apiKey)
@@ -405,7 +410,7 @@ class AnthropicAdapter(
                         "Anthropic API error (HTTP $httpStatus): $errorBody"
                     }
 
-                    logger.error { "[ANTHROPIC] $errorMessage" }
+                    logger.error { "$logPrefix $errorMessage" }
 
                     logger.apiError(
                         provider = provider,
@@ -431,7 +436,7 @@ class AnthropicAdapter(
                 while (!channel.isClosedForRead) {
                     // Check cancellation - break to return partial response
                     if (pl.jclab.refio.core.services.monitoring.GlobalMetrics.isCancelled()) {
-                        logger.info { "[ANTHROPIC] Streaming cancelled by user - returning partial response" }
+                        logger.info { "$logPrefix Streaming cancelled by user - returning partial response" }
                         finalStopReason = "cancelled"
                         break
                     }
@@ -502,12 +507,12 @@ class AnthropicAdapter(
                                     }
 
                                     "message_stop" -> {
-                                        logger.debug { "[ANTHROPIC] Stream complete" }
+                                        logger.debug { "$logPrefix Stream complete" }
                                         break
                                     }
                                 }
                             } catch (e: Exception) {
-                                logger.warn { "[ANTHROPIC] Failed to parse chunk: $data - ${e.message}" }
+                                logger.warn { "$logPrefix Failed to parse chunk: $data - ${e.message}" }
                                 continue
                             }
                         }
@@ -546,7 +551,7 @@ class AnthropicAdapter(
             )
             val responseJson = gson.toJson(syntheticResponse)
             logger.info {
-                "[ANTHROPIC] Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
+                "$logPrefix Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
                     "bodySize=${responseJson.length}"
             }
 
@@ -567,7 +572,7 @@ class AnthropicAdapter(
                 source = source
             )
 
-            logger.info { "[ANTHROPIC] Streaming completed in ${latencyMs}ms, tokens=$inputTokens/$outputTokens, logged to API logs" }
+            logger.info { "$logPrefix Streaming completed in ${latencyMs}ms, tokens=$inputTokens/$outputTokens, logged to API logs" }
 
             return LLMResponse(
                 content = contentBuilder.toString(),

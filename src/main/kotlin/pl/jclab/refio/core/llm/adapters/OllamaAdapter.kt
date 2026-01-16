@@ -21,6 +21,7 @@ import io.ktor.http.*
 import io.ktor.serialization.gson.*
 import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.services.logging.dualLogger
+import java.util.UUID
 
 /**
  * Adapter for Ollama local models.
@@ -163,29 +164,32 @@ class OllamaAdapter(
         }
 
         val requestJson = gson.toJson(requestBody)
-        logger.debug { "[OLLAMA] Request: ${SecureLogger.redact(requestJson)}" }
+        val requestId = UUID.randomUUID().toString()
+        val logPrefix = "[OLLAMA][$requestId]"
+        logger.debug { "$logPrefix Request: ${SecureLogger.redactAndTruncate(requestJson)}" }
 
         val startTime = System.currentTimeMillis()
 
         return if (streaming && onStreamChunk != null) {
             // Streaming mode
-            executeStreaming(requestBody, requestJson, startTime, onStreamChunk)
+            executeStreaming(requestBody, requestJson, startTime, onStreamChunk, logPrefix)
         } else {
             // Standard mode
-            executeStandard(requestBody, requestJson, startTime)
+            executeStandard(requestBody, requestJson, startTime, logPrefix)
         }
     }
 
     private suspend fun executeStandard(
         requestBody: Map<String, Any>,
         requestJson: String,
-        startTime: Long
+        startTime: Long,
+        logPrefix: String
     ): LLMResponse {
         var httpStatus: Int? = null
 
         try {
             // Make HTTP request
-            logger.info { "[OLLAMA] Request start: endpoint=$baseUrl$CHAT_ENDPOINT, body=${SecureLogger.redact(requestJson)}" }
+            logger.info { "$logPrefix Request start: endpoint=$baseUrl$CHAT_ENDPOINT, body=${SecureLogger.redactAndTruncate(requestJson)}" }
             val httpResponse = client.post("$baseUrl$CHAT_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 setBody(requestBody)
@@ -195,9 +199,9 @@ class OllamaAdapter(
             val response: Map<String, Any?> = httpResponse.body()
 
             val responseJson = gson.toJson(response)
-            logger.debug { "[OLLAMA] Response: ${SecureLogger.redact(responseJson)}" }
+            logger.debug { "$logPrefix Response: ${SecureLogger.redactAndTruncate(responseJson)}" }
             logger.info {
-                "[OLLAMA] Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
+                "$logPrefix Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
                     "bodySize=${responseJson.length}"
             }
 
@@ -209,7 +213,7 @@ class OllamaAdapter(
                 val errorMessage = response["error"] as? String ?: "Unknown error"
                 val fullErrorMessage = "Ollama API error (HTTP $httpStatus): $errorMessage"
 
-                logger.error { "[OLLAMA] $fullErrorMessage" }
+                logger.error { "$logPrefix $fullErrorMessage" }
 
                 // Log error to API logs
                 logger.apiError(
@@ -263,7 +267,7 @@ class OllamaAdapter(
 
             val doneReason = response["done_reason"] as? String
 
-            logger.info { "[OLLAMA] Response processed: tokens_in=${usage.inputTokens}, " +
+            logger.info { "$logPrefix Response processed: tokens_in=${usage.inputTokens}, " +
                     "tokens_out=${usage.outputTokens}, done_reason=$doneReason" }
 
             return LLMResponse(
@@ -300,7 +304,8 @@ class OllamaAdapter(
         requestBody: Map<String, Any>,
         requestJson: String,
         startTime: Long,
-        onStreamChunk: (StreamChunk) -> Unit
+        onStreamChunk: (StreamChunk) -> Unit,
+        logPrefix: String
     ): LLMResponse {
         val contentBuilder = StringBuilder()
         var inputTokens = 0
@@ -310,7 +315,7 @@ class OllamaAdapter(
 
         try {
             // Make streaming HTTP request
-            logger.info { "[OLLAMA] Request start: endpoint=$baseUrl$CHAT_ENDPOINT, body=${SecureLogger.redact(requestJson)}" }
+            logger.info { "$logPrefix Request start: endpoint=$baseUrl$CHAT_ENDPOINT, body=${SecureLogger.redactAndTruncate(requestJson)}" }
             client.preparePost("$baseUrl$CHAT_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 setBody(requestBody)
@@ -323,7 +328,7 @@ class OllamaAdapter(
                     val latencyMs = (System.currentTimeMillis() - startTime).toInt()
 
                     val errorMessage = "Ollama API error (HTTP $httpStatus): $errorBody"
-                    logger.error { "[OLLAMA] $errorMessage" }
+                    logger.error { "$logPrefix $errorMessage" }
 
                     logger.apiError(
                         provider = provider,
@@ -347,7 +352,7 @@ class OllamaAdapter(
                 while (!channel.isClosedForRead) {
                     // Check cancellation - break to return partial response
                     if (pl.jclab.refio.core.services.monitoring.GlobalMetrics.isCancelled()) {
-                        logger.info { "[OLLAMA] Streaming cancelled by user - returning partial response" }
+                        logger.info { "$logPrefix Streaming cancelled by user - returning partial response" }
                         finalDoneReason = "cancelled"
                         break
                     }
@@ -381,11 +386,11 @@ class OllamaAdapter(
                             outputTokens = (chunk["eval_count"] as? Number)?.toInt() ?: 0
                             finalDoneReason = chunk["done_reason"] as? String
 
-                            logger.debug { "[OLLAMA] Stream complete: input=$inputTokens, output=$outputTokens" }
+                            logger.debug { "$logPrefix Stream complete: input=$inputTokens, output=$outputTokens" }
                             break
                         }
                     } catch (e: Exception) {
-                        logger.warn { "[OLLAMA] Failed to parse chunk: $line - ${e.message}" }
+                        logger.warn { "$logPrefix Failed to parse chunk: $line - ${e.message}" }
                         continue
                     }
                 }
@@ -417,7 +422,7 @@ class OllamaAdapter(
             )
             val responseJson = gson.toJson(syntheticResponse)
             logger.info {
-                "[OLLAMA] Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
+                "$logPrefix Response received: status=${httpStatus ?: 200}, durationMs=${System.currentTimeMillis() - startTime}, " +
                     "bodySize=${responseJson.length}"
             }
 
@@ -438,7 +443,7 @@ class OllamaAdapter(
                 source = source
             )
 
-            logger.info { "[OLLAMA] Streaming completed in ${latencyMs}ms, tokens=$inputTokens/$outputTokens" }
+            logger.info { "$logPrefix Streaming completed in ${latencyMs}ms, tokens=$inputTokens/$outputTokens" }
 
             return LLMResponse(
                 content = contentBuilder.toString(),
