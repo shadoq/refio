@@ -1,0 +1,171 @@
+<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+  <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
+  <id>pl.jclab.refio</id>
+
+  <!-- Public plugin name should be written in Title Case.
+       Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-name -->
+  <name>Refio</name>
+
+  <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
+  <vendor email="refio@shad.net.pl" url="https://github.com/shadoq/refio">jclab team</vendor>
+
+  <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
+       Simple HTML elements (text formatting, paragraphs, and lists) can be added inside of <![CDATA[ ]]> tag.
+       Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
+  <description><![CDATA[
+    <h2>Refio - Local-First AI Coding Assistant</h2>
+
+    <p><b>The only AI coding assistant that combines native IntelliJ integration
+    with 100% local data control and 50-70% lower API costs.</b></p>
+
+    <h3>Why Refio?</h3>
+    <ul>
+      <li><b>50-70% Lower API Costs</b> - Intelligent RAG system minimizes tokens sent to LLM</li>
+      <li><b>100% Local Option</b> - Full offline support with Ollama (free!)</li>
+      <li><b>Native Integration</b> - Pure Swing UI, no WebView, instant response</li>
+      <li><b>Open Source</b> - MIT licensed, fork and customize freely</li>
+    </ul>
+
+    <h3>Three Powerful Modes</h3>
+    <ul>
+      <li><b>Chat Mode</b> - Conversational AI with intelligent code context</li>
+      <li><b>Plan Mode</b> - Step-by-step planning with approval workflow</li>
+      <li><b>Agent Mode</b> - Autonomous coding with snapshot/rollback safety</li>
+    </ul>
+
+    <h3>Smart Context with @Mentions</h3>
+    <p>14 context providers: @file, @codebase, @diff, @problems, @docs, @terminal, and more.</p>
+
+    <h3>Multiple LLM Providers</h3>
+    <ul>
+      <li><b>Local (Free):</b> Ollama, LM Studio</li>
+      <li><b>Cloud:</b> OpenAI, Anthropic Claude, Google Gemini, OpenRouter</li>
+    </ul>
+
+    <h3>16 MCP Integrations</h3>
+    <p>GitHub, GitLab, PostgreSQL, SQLite, Slack, Google Drive, AWS, Brave Search, and more.</p>
+
+    <h3>Built for Privacy</h3>
+    <ul>
+      <li>All data stored locally in SQLite</li>
+      <li>No telemetry, no tracking</li>
+      <li>Optional no-egress mode blocks all cloud calls</li>
+      <li>Secret redaction in logs</li>
+    </ul>
+
+    <h3>Getting Started</h3>
+    <ol>
+      <li>Install plugin from JetBrains Marketplace</li>
+      <li>Configure your LLM provider in Settings → Tools → Refio</li>
+      <li>Open Refio tool window (right sidebar)</li>
+      <li>Start with <code>@codebase how does authentication work?</code></li>
+    </ol>
+
+    <p><a href="https://github.com/shadoq/refio">GitHub</a> |
+       <a href="https://github.com/shadoq/refio/wiki">Documentation</a> |
+       <a href="https://github.com/shadoq/refio/issues">Report Issues</a></p>
+
+    <p><b>MIT License</b> | Built with Kotlin | Made for developers who value privacy</p>
+  ]]></description>
+
+  <!-- Product and plugin compatibility requirements.
+       Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
+  <depends>com.intellij.modules.platform</depends>
+  <depends optional="true">com.intellij.modules.terminal</depends>
+
+  <!-- Extension points defined by the plugin.
+       Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
+  <extensions defaultExtensionNs="com.intellij">
+    <!-- Tool Window -->
+    <toolWindow
+        id="Refio"
+        anchor="right"
+        factoryClass="pl.jclab.refio.ui.toolwindow.RefioToolWindowFactory"
+        icon="/icons/pluginIcon.svg"/>
+
+    <!-- Services -->
+    <applicationService
+        serviceImplementation="pl.jclab.refio.services.core.CoreConnectionManager"/>
+    <applicationService
+        serviceImplementation="pl.jclab.refio.services.logging.PluginLogger"/>
+    <applicationService
+        serviceImplementation="pl.jclab.refio.services.api.ApiClientService"/>
+    <projectService
+        serviceImplementation="pl.jclab.refio.services.session.SessionManager"/>
+    <projectService
+        serviceImplementation="pl.jclab.refio.services.execution.StepExecutionService"/>
+
+    <!-- Startup Activities -->
+    <postStartupActivity
+        implementation="pl.jclab.refio.core.services.ProjectStartupActivity"/>
+    <postStartupActivity
+        implementation="pl.jclab.refio.startup.RagIndexingStartup"/>
+
+    <!-- Notification Group -->
+    <notificationGroup
+        id="Refio.Notifications"
+        displayType="BALLOON"
+        key="notification.group.refio"/>
+
+    <completion.contributor
+        language="TEXT"
+        implementationClass="pl.jclab.refio.ui.completion.RefioCompletionContributor"/>
+  </extensions>
+
+  <actions>
+    <action id="refio.ReindexRag"
+            class="pl.jclab.refio.actions.ReindexRagAction"
+            text="Reindex RAG Database"
+            description="Rebuild the RAG index for the current project">
+      <add-to-group group-id="ToolsMenu" anchor="last"/>
+    </action>
+
+    <!-- Add code to current Refio session (Ctrl+Shift+J / Cmd+Shift+J) -->
+    <action id="refio.AddCodeToCurrentSession"
+            class="pl.jclab.refio.actions.AddCodeToCurrentSessionAction"
+            text="Add to Refio"
+            description="Add selected code to current Refio session">
+      <keyboard-shortcut first-keystroke="control I" keymap="$default"/>
+      <keyboard-shortcut first-keystroke="meta I" keymap="Mac OS X"/>
+      <keyboard-shortcut first-keystroke="meta I" keymap="Mac OS X 10.5+"/>
+      <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+    </action>
+
+    <!-- Add code to new Refio session (Ctrl+J / Cmd+J) -->
+    <action id="refio.AddCodeToNewSession"
+            class="pl.jclab.refio.actions.AddCodeToNewSessionAction"
+            text="Add to Refio (New Session)"
+            description="Add selected code to a new Refio session">
+      <keyboard-shortcut first-keystroke="control shift I" keymap="$default"/>
+      <keyboard-shortcut first-keystroke="meta shift I" keymap="Mac OS X"/>
+      <keyboard-shortcut first-keystroke="meta shift I" keymap="Mac OS X 10.5+"/>
+      <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+    </action>
+
+    <!-- Refio Tool Window Actions - These appear in the tool window title bar -->
+    <action id="refio.ToolWindow.NewSession"
+            class="pl.jclab.refio.actions.NewSessionToolWindowAction"
+            text="New Session"
+            description="Create a new Refio session"
+            icon="AllIcons.General.Add"/>
+
+    <action id="refio.ToolWindow.ShowHistory"
+            class="pl.jclab.refio.actions.ShowHistoryToolWindowAction"
+            text="History"
+            description="Show Refio session history"
+            icon="AllIcons.Vcs.History"/>
+
+    <action id="refio.ToolWindow.ShowSettings"
+            class="pl.jclab.refio.actions.ShowSettingsToolWindowAction"
+            text="Settings"
+            description="Show Refio settings"
+            icon="AllIcons.General.Settings"/>
+
+    <action id="refio.ToolWindow.ShowHelp"
+            class="pl.jclab.refio.actions.ShowHelpToolWindowAction"
+            text="Help"
+            description="Show Refio help"
+            icon="AllIcons.Actions.Help"/>
+  </actions>
+</idea-plugin>

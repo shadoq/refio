@@ -1,0 +1,539 @@
+package pl.jclab.refio.core.services.turn
+
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import pl.jclab.refio.core.api.TurnProfileOverrides
+import pl.jclab.refio.core.db.ExecutionMode
+import pl.jclab.refio.core.db.Subtask
+import pl.jclab.refio.core.services.TurnLoopConfig
+import pl.jclab.refio.core.db.TaskMode
+import pl.jclab.refio.core.db.TaskStatus
+import pl.jclab.refio.core.db.ToolCallData
+import pl.jclab.refio.core.db.repositories.SubtaskRepository
+import pl.jclab.refio.core.services.SnapshotService
+import pl.jclab.refio.core.services.ToolResultData
+import pl.jclab.refio.core.services.ToolResultSummary
+import pl.jclab.refio.core.services.ToolExecutor
+import pl.jclab.refio.core.services.ToolResultSummarizer
+import pl.jclab.refio.core.services.WorkingMemoryIntegration
+import pl.jclab.refio.core.services.ToolCall as CoreToolCall
+import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
+import pl.jclab.refio.core.services.monitoring.GlobalMetrics
+import pl.jclab.refio.core.services.monitoring.OperationInfo
+import pl.jclab.refio.core.tools.base.Tool
+import pl.jclab.refio.core.tools.base.ToolMode
+import pl.jclab.refio.core.tools.base.ToolRegistry
+import pl.jclab.refio.core.tools.base.ToolResult
+import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.utils.GsonInstance.gson
+
+private val logger = dualLogger("TurnToolExecutor")
+
+/**
+ * Executes tool calls with parallel/sequential strategy.
+ * Handles subtask creation, result summarization, and snapshot management.
+ */
+class TurnToolExecutor(
+    private val toolExecutor: ToolExecutor,
+    private val toolRegistry: ToolRegistry,
+    private val subtaskRepository: SubtaskRepository,
+    private val toolResultSummarizer: ToolResultSummarizer,
+    private val snapshotService: SnapshotService? = null,
+    private val workingMemoryIntegration: WorkingMemoryIntegration? = null
+) {
+    private val streamingToolNames = setOf("advance_code_editing", "multi_line_editor")
+
+    /**
+     * Execute list of tool calls with parallel support for READ_ONLY tools.
+     */
+    suspend fun executeToolCalls(
+        taskId: String,
+        toolCalls: List<ToolCallData>,
+        mode: TaskMode,
+        executionMode: ExecutionMode,
+        listener: TurnEventListener?,
+        iteration: Int,
+        config: TurnLoopConfig,
+        profileOverrides: TurnProfileOverrides? = null,
+        runId: String,
+        depth: Int
+    ): List<Pair<ToolCallData, ToolResultData>> = coroutineScope {
+        val maxOrderIndex = subtaskRepository.getMaxOrderIndex(taskId) ?: -1
+
+        // Create subtasks for all tool calls (PENDING status)
+        val subtaskIds = mutableMapOf<String, String>()
+        toolCalls.forEachIndexed { index, toolCall ->
+            val kind = toolRegistry.toSubtaskKind(toolCall.name)
+            val description = buildToolDescription(toolCall)
+
+            val subtask = subtaskRepository.create(
+                taskId = taskId,
+                orderIndex = maxOrderIndex + index + 1,
+                kind = kind,
+                description = description,
+                paramsJson = toolCall.arguments,
+                status = TaskStatus.PENDING
+            )
+            subtaskIds[toolCall.id] = subtask.id
+
+            logger.debug { "[SUBTASK_CREATED] toolCall=${toolCall.name}, subtaskId=${subtask.id}, status=PENDING" }
+        }
+
+        val indexedCalls = toolCalls.mapIndexed { index, call -> index to call }
+        val (allowedIndexed, blockedIndexed) = indexedCalls.partition { (_, toolCall) ->
+            isToolAllowedByProfile(toolCall.name, profileOverrides)
+        }
+
+        val blockedResults = blockedIndexed.map { (index, toolCall) ->
+            val subtaskId = subtaskIds[toolCall.id]!!
+            val errorText = "Error: Tool '${toolCall.name}' is not allowed for current run profile"
+            subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
+            subtaskRepository.updateResult(subtaskId, result = null, errorMessage = errorText)
+            listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
+            logger.warn {
+                "[TOOL_BLOCKED] runId=$runId, depth=$depth, tool=${toolCall.name}, " +
+                    "subagent=${profileOverrides?.subagentName ?: "-"}"
+            }
+            index to (
+                toolCall to ToolResultData(
+                    toolCallId = toolCall.id,
+                    content = errorText,
+                    isSummarized = false,
+                    rawOutput = null,
+                    metadata = null
+                )
+            )
+        }
+
+        if (allowedIndexed.isEmpty()) {
+            return@coroutineScope blockedResults
+                .sortedBy { it.first }
+                .map { it.second }
+        }
+
+        val containsInvokeSubagent = allowedIndexed.any { (_, toolCall) ->
+            toolCall.name.equals("invoke_subagent", ignoreCase = true)
+        }
+        val isSubagentRun = !profileOverrides?.subagentName.isNullOrBlank()
+        val shouldDisableParallel = containsInvokeSubagent || isSubagentRun
+
+        // Parallel execution for READ_ONLY tools
+        if (config.parallelReadTools && allowedIndexed.size > 1 && !shouldDisableParallel) {
+            val (readOnlyIndexed, writeIndexed) = allowedIndexed.partition { (_, tc) ->
+                toolRegistry.getTool(tc.name)?.mode == ToolMode.READ_ONLY
+            }
+
+            if (readOnlyIndexed.isNotEmpty() && writeIndexed.isEmpty()) {
+                logger.info {
+                    "[PARALLEL] Executing ${readOnlyIndexed.size} READ_ONLY in parallel (no WRITE tools in batch)"
+                }
+
+                val readOnlyResults = readOnlyIndexed.map { (originalIndex, toolCall) ->
+                    async {
+                        val subtaskId = subtaskIds[toolCall.id]!!
+                        val result = executeSingleTool(
+                            taskId = taskId,
+                            toolCall = toolCall,
+                            subtaskId = subtaskId,
+                            listener = listener,
+                            iteration = iteration,
+                            config = config,
+                            mode = mode,
+                            executionMode = executionMode,
+                            runId = runId,
+                            depth = depth,
+                            profileOverrides = profileOverrides,
+                            subtaskIds = subtaskIds
+                        )
+                        originalIndex to (toolCall to result)
+                    }
+                }.awaitAll()
+
+                val writeResults = writeIndexed.map { (originalIndex, toolCall) ->
+                    if (GlobalMetrics.isCancelled()) {
+                        throw kotlinx.coroutines.CancellationException("Operation cancelled by user")
+                    }
+                    val subtaskId = subtaskIds[toolCall.id]!!
+
+                    if (config.enableSnapshots && snapshotService != null) {
+                        try {
+                            val params = TurnJsonUtils.parseJsonToMap(toolCall.arguments)
+                            val path = params["path"]?.toString()
+                            if (path != null) {
+                                snapshotService.createSnapshot(taskId, subtaskId, listOf(path))
+                            }
+                        } catch (e: Exception) {
+                            logger.warn(e) { "[SNAPSHOT] Failed to create snapshot for ${toolCall.name}" }
+                        }
+                    }
+
+                    val result = executeSingleTool(
+                        taskId = taskId,
+                        toolCall = toolCall,
+                        subtaskId = subtaskId,
+                        listener = listener,
+                        iteration = iteration,
+                        config = config,
+                        mode = mode,
+                        executionMode = executionMode,
+                        runId = runId,
+                        depth = depth,
+                        profileOverrides = profileOverrides,
+                        subtaskIds = subtaskIds
+                    )
+                    originalIndex to (toolCall to result)
+                }
+
+                val allResults = (blockedResults + readOnlyResults + writeResults)
+                    .sortedBy { it.first }
+                    .map { it.second }
+
+                return@coroutineScope allResults
+            }
+        }
+
+        if (config.parallelReadTools && shouldDisableParallel) {
+            logger.info {
+                "[PARALLEL] Disabled for this batch: invoke_subagent=$containsInvokeSubagent, " +
+                    "subagentRun=$isSubagentRun"
+            }
+        }
+
+        // Sequential execution
+        val sequentialResults = mutableListOf<Pair<Int, Pair<ToolCallData, ToolResultData>>>()
+        for ((index, toolCall) in allowedIndexed) {
+            if (GlobalMetrics.isCancelled()) {
+                throw kotlinx.coroutines.CancellationException("Operation cancelled by user")
+            }
+            val subtaskId = subtaskIds[toolCall.id]!!
+            val resultData = executeSingleTool(
+                taskId = taskId,
+                toolCall = toolCall,
+                subtaskId = subtaskId,
+                listener = listener,
+                iteration = iteration,
+                config = config,
+                mode = mode,
+                executionMode = executionMode,
+                runId = runId,
+                depth = depth,
+                profileOverrides = profileOverrides,
+                subtaskIds = subtaskIds
+            )
+            sequentialResults.add(index to (toolCall to resultData))
+        }
+
+        (blockedResults + sequentialResults)
+            .sortedBy { it.first }
+            .map { it.second }
+    }
+
+    /**
+     * Execute a single tool call.
+     */
+    suspend fun executeSingleTool(
+        taskId: String,
+        toolCall: ToolCallData,
+        subtaskId: String,
+        listener: TurnEventListener?,
+        iteration: Int,
+        config: TurnLoopConfig,
+        mode: TaskMode,
+        executionMode: ExecutionMode,
+        runId: String,
+        depth: Int,
+        profileOverrides: TurnProfileOverrides?,
+        subtaskIds: Map<String, String>
+    ): ToolResultData {
+        if (toolCall.error != null) {
+            val errorText = "Error: ${toolCall.error}"
+            listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
+            subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
+            subtaskRepository.updateResult(subtaskId, result = null, errorMessage = errorText)
+            logger.debug { "[SUBTASK_FAILED] subtaskId=$subtaskId, tool=${toolCall.name}, error=$errorText" }
+            return ToolResultData(
+                toolCallId = toolCall.id,
+                content = errorText,
+                isSummarized = false,
+                rawOutput = null,
+                metadata = null
+            )
+        }
+
+        val toolToken = GlobalMetrics.beginOperation(
+            OperationInfo.TurnToolExecution(toolCall.name, iteration)
+        )
+
+        try {
+            subtaskRepository.updateStatus(subtaskId, TaskStatus.RUNNING)
+            logger.debug { "[SUBTASK_RUNNING] subtaskId=$subtaskId, tool=${toolCall.name}" }
+
+            listener?.onToolExecutionStarted(taskId, toolCall)
+
+            val argumentsMap = TurnJsonUtils.parseJsonToMap(toolCall.arguments).toMutableMap()
+            injectNestedSubagentMetadata(
+                args = argumentsMap,
+                toolCall = toolCall,
+                taskId = taskId,
+                mode = mode,
+                executionMode = executionMode,
+                runId = runId,
+                depth = depth,
+                profileOverrides = profileOverrides
+            )
+
+            val toolCallRequest = CoreToolCall(
+                name = toolCall.name,
+                params = argumentsMap
+            )
+
+            val toolResult = if (listener != null && toolCall.name in streamingToolNames) {
+                val subtask = subtaskRepository.findById(subtaskId)
+                    ?: throw IllegalStateException("Subtask not found for tool call: $subtaskId")
+
+                val executionListener = object : ExecutionEventListener {
+                    override fun onToolCodeGenerationStream(
+                        step: Subtask,
+                        toolName: String,
+                        filePath: String,
+                        streamContent: String,
+                        isComplete: Boolean
+                    ) {
+                        if (step.id == subtaskId) {
+                            listener.onToolStreamChunk(taskId, toolCall.id, "", streamContent)
+                        }
+                    }
+                }
+
+                val executionResult = toolExecutor.executeToolsWithStreaming(
+                    toolCalls = listOf(toolCallRequest),
+                    subtask = subtask,
+                    listener = executionListener
+                )
+
+                val output = executionResult.outputs.firstOrNull()?.result
+                    ?: throw IllegalStateException("Missing tool output for ${toolCall.name}")
+
+                ToolResult(
+                    success = output.success,
+                    output = output.output,
+                    error = output.error,
+                    metadata = output.metadata,
+                    filesChanged = output.affectedFiles
+                )
+            } else {
+                toolExecutor.executeTool(toolCallRequest, taskId)
+            }
+
+            if (toolResult.success) {
+                val rawOutput = toolResult.output ?: "Success (no output)"
+                val isInvokeSubagent = toolCall.name.equals("invoke_subagent", ignoreCase = true)
+                val subagentName = argumentsMap["subagent_name"]?.toString()?.trim().orEmpty()
+                val displayOutput = if (isInvokeSubagent) {
+                    val header = if (subagentName.isNotBlank()) {
+                        "Subagent [$subagentName] result:"
+                    } else {
+                        "Subagent result:"
+                    }
+                    "$header\n\n$rawOutput"
+                } else {
+                    rawOutput
+                }
+
+                val summaryToken = GlobalMetrics.beginOperation(
+                    OperationInfo.TurnToolSummarization(toolCall.name, iteration)
+                )
+                val summaryResult = try {
+                    if (isInvokeSubagent) {
+                        ToolResultSummary(displayOutput, wasSummarized = false, 0, 0, 0.0)
+                    } else if (rawOutput.isNotBlank()) {
+                        toolResultSummarizer.summarizeToolResult(toolCall.name, rawOutput, taskId)
+                    } else {
+                        ToolResultSummary(rawOutput, wasSummarized = false, 0, 0, 0.0)
+                    }
+                } finally {
+                    GlobalMetrics.endOperation(summaryToken)
+                }
+
+                listener?.onToolExecutionCompleted(taskId, toolCall, summaryResult.summary, true)
+
+                subtaskRepository.updateStatus(subtaskId, TaskStatus.SUCCESS)
+                subtaskRepository.updateResult(subtaskId, result = rawOutput, summary = summaryResult.summary)
+                logger.debug { "[SUBTASK_SUCCESS] subtaskId=$subtaskId, tool=${toolCall.name}" }
+
+                workingMemoryIntegration?.recordToolKnowledge(
+                    taskId = taskId,
+                    toolName = toolCall.name,
+                    params = argumentsMap,
+                    result = rawOutput,
+                    iteration = iteration
+                )
+
+                logger.info {
+                    "[TOOL_EXECUTED] name=${toolCall.name}, " +
+                    "summarized=${summaryResult.wasSummarized}, " +
+                    "chars=${rawOutput.length}->${summaryResult.summary.length}"
+                }
+
+                val metadataMap = buildToolResultMetadata(toolCall.name, argumentsMap, toolResult.metadata)
+                val metadataJson = metadataMap.takeIf { it.isNotEmpty() }?.let { gson.toJson(it) }
+
+                return ToolResultData(
+                    toolCallId = toolCall.id,
+                    content = summaryResult.summary,
+                    isSummarized = summaryResult.wasSummarized,
+                    rawOutput = rawOutput,
+                    metadata = metadataJson
+                )
+            } else {
+                val errorText = "Error: ${toolResult.error ?: "Unknown error"}"
+                listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
+
+                subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
+                subtaskRepository.updateResult(subtaskId, result = null, errorMessage = errorText)
+                logger.debug { "[SUBTASK_FAILED] subtaskId=$subtaskId, tool=${toolCall.name}, error=$errorText" }
+
+                logger.info { "[TOOL_EXECUTED] name=${toolCall.name}, success=false" }
+
+                return ToolResultData(
+                    toolCallId = toolCall.id,
+                    content = errorText,
+                    isSummarized = false,
+                    rawOutput = null,
+                    metadata = null
+                )
+            }
+        } catch (e: Exception) {
+            logger.error(e) { "[TOOL_ERROR] Failed to execute ${toolCall.name}: ${e.message}" }
+            val errorText = "Error: ${e.message}"
+            listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
+
+            subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
+            subtaskRepository.updateResult(
+                subtaskId,
+                result = null,
+                errorMessage = errorText,
+                errorStacktrace = e.stackTraceToString()
+            )
+            logger.debug { "[SUBTASK_FAILED] subtaskId=$subtaskId, tool=${toolCall.name}, exception=${e.message}" }
+
+            return ToolResultData(
+                toolCallId = toolCall.id,
+                content = errorText,
+                isSummarized = false,
+                rawOutput = null,
+                metadata = null
+            )
+        } finally {
+            GlobalMetrics.endOperation(toolToken)
+        }
+    }
+
+    /**
+     * Build human-readable description for tool call subtask.
+     */
+    fun buildToolDescription(toolCall: ToolCallData): String {
+        if (toolCall.error != null) {
+            return "${toolCall.name}: invalid arguments"
+        }
+        val params = TurnJsonUtils.parseJsonToMap(toolCall.arguments)
+
+        val keyInfo = when (toolCall.name) {
+            "read_file" -> params["path"]?.toString() ?: ""
+            "read_directory" -> params["path"]?.toString() ?: ""
+            "file_search" -> "pattern: ${params["pattern"]}"
+            "grep_search" -> "pattern: ${params["pattern"]}"
+            "code_editing" -> params["path"]?.toString() ?: ""
+            "create_new_file" -> params["path"]?.toString() ?: ""
+            "multi_edit" -> "${(params["edits"] as? List<*>)?.size ?: 0} files"
+            "multi_line_editor" -> params["path"]?.toString() ?: ""
+            "advance_code_editing" -> params["path"]?.toString() ?: ""
+            else -> ""
+        }
+
+        return if (keyInfo.isNotBlank()) {
+            "${toolCall.name}: $keyInfo"
+        } else {
+            toolCall.name
+        }
+    }
+
+    /**
+     * Check if tool is allowed by profile.
+     */
+    fun isToolAllowedByProfile(toolName: String, profileOverrides: TurnProfileOverrides?): Boolean {
+        if (profileOverrides == null) return true
+
+        val normalizedName = toolName.lowercase()
+        val allowed = profileOverrides.allowedTools?.map { it.lowercase() }?.toSet()
+        val disallowed = profileOverrides.disallowedTools?.map { it.lowercase() }?.toSet()
+
+        if (allowed != null) {
+            return normalizedName in allowed
+        }
+        if (disallowed != null) {
+            return normalizedName !in disallowed
+        }
+        return true
+    }
+
+    /**
+     * Count write tool calls in list.
+     */
+    fun countWriteToolCalls(toolCalls: List<ToolCallData>): Int {
+        return toolCalls.count { isWriteTool(it.name) }
+    }
+
+    /**
+     * Check if tool is WRITE type.
+     */
+    fun isWriteTool(toolName: String): Boolean {
+        return toolRegistry.getTool(toolName)?.mode == ToolMode.WRITE
+    }
+
+    private fun injectNestedSubagentMetadata(
+        args: MutableMap<String, Any>,
+        toolCall: ToolCallData,
+        taskId: String,
+        mode: TaskMode,
+        executionMode: ExecutionMode,
+        runId: String,
+        depth: Int,
+        profileOverrides: TurnProfileOverrides?
+    ) {
+        if (toolCall.name != "invoke_subagent") return
+
+        val chain = (profileOverrides?.subagentChain.orEmpty() + listOfNotNull(profileOverrides?.subagentName))
+            .distinct()
+
+        args.putIfAbsent("_task_id", taskId)
+        args.putIfAbsent("_mode", mode.name)
+        args.putIfAbsent("_execution_mode", executionMode.name)
+        args.putIfAbsent("_parent_run_id", runId)
+        args.putIfAbsent("_parent_depth", depth)
+        args.putIfAbsent("_subagent_chain", chain)
+    }
+
+    private fun buildToolResultMetadata(
+        toolName: String,
+        argumentsMap: Map<String, Any>,
+        toolMetadata: Map<String, Any>?
+    ): Map<String, Any> {
+        val merged = mutableMapOf<String, Any>()
+        if (toolMetadata != null) {
+            merged.putAll(toolMetadata)
+        }
+
+        merged.putIfAbsent("tool_name", toolName)
+
+        if (toolName.equals("invoke_subagent", ignoreCase = true)) {
+            val subagentName = argumentsMap["subagent_name"]?.toString()?.trim().orEmpty()
+            if (subagentName.isNotBlank()) {
+                merged.putIfAbsent("subagent_name", subagentName)
+            }
+        }
+
+        return merged
+    }
+}

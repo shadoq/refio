@@ -1,0 +1,151 @@
+package pl.jclab.refio.core.llm.adapters
+
+import pl.jclab.refio.core.utils.GsonInstance.gson
+
+internal object ToolCallContentNormalizer {
+    data class NamedCall(
+        val name: String,
+        val arguments: Any?
+    )
+
+    internal class OpenAiStreamingToolCallAccumulator {
+        private data class CallBuffer(
+            var name: String? = null,
+            val argumentsBuilder: StringBuilder = StringBuilder()
+        )
+
+        private val callsByIndex = linkedMapOf<Int, CallBuffer>()
+
+        fun consumeDelta(delta: Map<String, Any?>?) {
+            if (delta == null) return
+            consumeToolCalls(delta["tool_calls"])
+        }
+
+        fun consumeToolCalls(rawToolCalls: Any?) {
+            @Suppress("UNCHECKED_CAST")
+            val toolCalls = rawToolCalls as? List<Map<String, Any?>> ?: return
+
+            for ((fallbackIndex, toolCall) in toolCalls.withIndex()) {
+                val index = (toolCall["index"] as? Number)?.toInt() ?: fallbackIndex
+                val buffer = callsByIndex.getOrPut(index) { CallBuffer() }
+
+                @Suppress("UNCHECKED_CAST")
+                val function = toolCall["function"] as? Map<String, Any?> ?: continue
+                val name = function["name"] as? String
+                if (!name.isNullOrBlank()) {
+                    buffer.name = normalizeToolName(name)
+                }
+
+                val args = function["arguments"]
+                when (args) {
+                    is String -> buffer.argumentsBuilder.append(args)
+                    is Map<*, *> -> {
+                        if (buffer.argumentsBuilder.isEmpty()) {
+                            buffer.argumentsBuilder.append(gson.toJson(args))
+                        }
+                    }
+                }
+            }
+        }
+
+        fun toCanonicalJson(): String? {
+            val namedCalls = callsByIndex
+                .toSortedMap()
+                .values
+                .mapNotNull { buffer ->
+                    val name = buffer.name ?: return@mapNotNull null
+                    NamedCall(name = name, arguments = parseArguments(buffer.argumentsBuilder.toString()))
+                }
+
+            return toCanonicalJson(namedCalls)
+        }
+    }
+
+    fun fromOpenAiToolCalls(rawToolCalls: Any?): String? {
+        @Suppress("UNCHECKED_CAST")
+        val toolCalls = rawToolCalls as? List<Map<String, Any?>> ?: return null
+
+        val namedCalls = toolCalls.mapNotNull { toolCall ->
+            @Suppress("UNCHECKED_CAST")
+            val function = toolCall["function"] as? Map<String, Any?> ?: return@mapNotNull null
+            val rawName = function["name"] as? String ?: return@mapNotNull null
+            NamedCall(
+                name = normalizeToolName(rawName),
+                arguments = parseArguments(function["arguments"])
+            )
+        }
+        return toCanonicalJson(namedCalls)
+    }
+
+    fun fromAnthropicContentBlocks(contentBlocks: List<Map<String, Any?>>): String? {
+        val namedCalls = contentBlocks.mapNotNull { block ->
+            if (block["type"] != "tool_use") return@mapNotNull null
+            val name = block["name"] as? String ?: return@mapNotNull null
+            NamedCall(
+                name = normalizeToolName(name),
+                arguments = parseArguments(block["input"])
+            )
+        }
+        return toCanonicalJson(namedCalls)
+    }
+
+    fun fromGeminiParts(parts: List<Map<String, Any?>>): String? {
+        val namedCalls = parts.mapNotNull { part ->
+            @Suppress("UNCHECKED_CAST")
+            val functionCall = part["functionCall"] as? Map<String, Any?> ?: return@mapNotNull null
+            val name = functionCall["name"] as? String ?: return@mapNotNull null
+            NamedCall(
+                name = normalizeToolName(name),
+                arguments = parseArguments(functionCall["args"])
+            )
+        }
+        return toCanonicalJson(namedCalls)
+    }
+
+    fun normalizeToolName(rawName: String): String {
+        return rawName.substringAfterLast('.').substringAfterLast('/')
+    }
+
+    private fun toCanonicalJson(namedCalls: List<NamedCall>): String? {
+        if (namedCalls.isEmpty()) return null
+        val actions = namedCalls.map {
+            mapOf(
+                "tool" to it.name,
+                "arguments" to normalizeArgumentsObject(it.arguments)
+            )
+        }
+        return gson.toJson(
+            mapOf(
+                "actions" to actions,
+                "response" to ""
+            )
+        )
+    }
+
+    private fun parseArguments(raw: Any?): Any? {
+        return when (raw) {
+            null -> emptyMap<String, Any?>()
+            is Map<*, *> -> raw.entries.associate { (k, v) -> k.toString() to v }
+            is String -> {
+                val trimmed = raw.trim()
+                if (trimmed.isEmpty()) return emptyMap<String, Any?>()
+                try {
+                    @Suppress("UNCHECKED_CAST")
+                    gson.fromJson(trimmed, Map::class.java) as? Map<String, Any?> ?: mapOf("raw" to raw)
+                } catch (_: Exception) {
+                    mapOf("raw" to raw)
+                }
+            }
+            else -> mapOf("value" to raw.toString())
+        }
+    }
+
+    private fun normalizeArgumentsObject(args: Any?): Any {
+        return when (args) {
+            is Map<*, *> -> args.entries.associate { (k, v) -> k.toString() to v }
+            null -> emptyMap<String, Any?>()
+            else -> mapOf("value" to args.toString())
+        }
+    }
+}
+
