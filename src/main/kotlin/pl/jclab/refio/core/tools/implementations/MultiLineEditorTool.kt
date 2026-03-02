@@ -274,7 +274,10 @@ class MultiLineEditorTool(
         val edits = try {
             parseEdits(responseContent, lines.size)
         } catch (e: Exception) {
-            logger.error(e) { "Failed to parse LLM response as JSON" }
+            logger.warn {
+                "Failed to parse LLM response as JSON: ${e.message}. " +
+                    "Response preview: ${responseContent.take(200)}"
+            }
             return ToolResult.error(
                 "Failed to parse LLM response. Response was: ${responseContent.take(200)}... " +
                 "Try rephrasing the edit description or use advance_code_editing."
@@ -374,7 +377,6 @@ class MultiLineEditorTool(
             return response.changes.sortedBy { it.line_start }
 
         } catch (e: JsonSyntaxException) {
-            logger.error(e) { "Invalid JSON syntax in LLM response" }
             throw IllegalArgumentException("Invalid JSON syntax: ${e.message}")
         }
     }
