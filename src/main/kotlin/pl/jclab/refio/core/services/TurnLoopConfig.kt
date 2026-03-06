@@ -24,6 +24,7 @@ import java.time.Duration
  * @property enablePromptCaching Enable prompt caching for static parts
  * @property cacheablePrefix Whether system prompt can be cached
  * @property maxRetries Maximum retry attempts for LLM calls
+ * @property maxFormatRetries Maximum retry attempts for invalid structured responses
  * @property retryBackoffMs Base delay for retry backoff (ms)
  * @property errorRateThreshold Error rate threshold for aborting
  * @property errorWindowSize Sliding window size for error rate calculation
@@ -54,6 +55,7 @@ data class TurnLoopConfig(
 
     // Error handling
     val maxRetries: Int,
+    val maxFormatRetries: Int,
     val retryBackoffMs: Long,
     val errorRateThreshold: Double,
     val errorWindowSize: Int,
@@ -76,7 +78,7 @@ data class TurnLoopConfig(
          * PLAN mode is read-only, focused on analysis and planning.
          */
         fun plan() = TurnLoopConfig(
-            maxIterations = 15,
+            maxIterations = 25,
             warningThreshold = 10,
             parallelReadTools = true,
             enableSnapshots = false,
@@ -87,6 +89,7 @@ data class TurnLoopConfig(
             enablePromptCaching = true,
             cacheablePrefix = true,
             maxRetries = 3,
+            maxFormatRetries = 3,
             retryBackoffMs = 1000,
             errorRateThreshold = 0.7,
             errorWindowSize = 10,
@@ -103,7 +106,7 @@ data class TurnLoopConfig(
          * AGENT mode has full read-write access and can execute all tools.
          */
         fun agent() = TurnLoopConfig(
-            maxIterations = 25,
+            maxIterations = 50,
             warningThreshold = 18,
             parallelReadTools = true,
             enableSnapshots = true,
@@ -114,6 +117,7 @@ data class TurnLoopConfig(
             enablePromptCaching = true,
             cacheablePrefix = true,
             maxRetries = 3,
+            maxFormatRetries = 3,
             retryBackoffMs = 1000,
             errorRateThreshold = 0.7,
             errorWindowSize = 10,
@@ -121,7 +125,7 @@ data class TurnLoopConfig(
             workingMemoryMaxEntries = 50,
             enableVerification = true,
             verificationIterationThreshold = 10,
-            maxConsecutiveReadOnlyIterations = 3 // After 3 read-only iterations, nudge agent to write
+            maxConsecutiveReadOnlyIterations = 15 // Allow deeper analysis before nudging agent to write
         )
 
         /**

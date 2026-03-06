@@ -628,6 +628,71 @@ data class SlashCommand(
                 isBuiltin = true
             ),
             SlashCommand(
+                id = "implementation-analysis",
+                name = "implementation-analysis",
+                description = "Prepare a practical implementation analysis document",
+                template = """Conduct a system analysis for implementing the provided topic.
+                    |
+                    |The goal is to prepare a practical document that:
+                    |- analyzes the current state of the system,
+                    |- identifies what needs to be changed or added,
+                    |- explains how to implement it,
+                    |- is understandable for a junior developer or a simple AI assistant,
+                    |- includes a checklist to track implementation progress.
+                    |
+                    |## Rules
+                    |- First analyze the system, then recommend changes.
+                    |- Clearly separate: FACTS, ASSUMPTIONS, RECOMMENDATIONS.
+                    |- Do not guess without evidence.
+                    |- Refer to concrete system elements when they are available.
+                    |- Explain not only what to change, but also why and how.
+                    |- Break large changes into small steps.
+                    |- Include impact on backend, frontend, database, API, integrations, security, performance, and tests when the topic requires it.
+                    |
+                    |## Prepare the result using this structure
+                    |1. Goal of the change
+                    |2. Topic interpretation
+                    |3. Current system state
+                    |4. Areas affected by the change
+                    |5. Implementation analysis
+                    |6. Solution variants
+                    |7. Recommended implementation approach step by step
+                    |8. Implementation instructions for a junior developer / small AI agent
+                    |9. Impact on data and interfaces
+                    |10. Risks and pitfalls
+                    |11. Tests
+                    |12. Open questions and assumptions
+                    |13. Proposed work breakdown
+                    |14. Implementation checklist in markdown checkbox format
+                    |15. Short delivery plan
+                    |
+                    |## Checklist requirements
+                    |The checklist must be divided into sections and use this format:
+                    |- [ ] task
+                    |
+                    |Include at least:
+                    |- Analysis and preparation
+                    |- Backend
+                    |- Frontend
+                    |- Database
+                    |- Integrations
+                    |- Tests
+                    |- Documentation and deployment
+                    |
+                    |## Response style
+                    |Write clearly, concretely, and practically.
+                    |Create a document that a junior developer or a simple AI agent can use to start implementation.
+                    |
+                    |## Result
+                    |Save the result as a text file in markdown format.
+                    |
+                    |TOPIC TO ANALYZE:
+                    |{selection}""".trimMargin(),
+                variables = listOf("selection"),
+                category = "analysis",
+                isBuiltin = true
+            ),
+            SlashCommand(
                 id = "code-review",
                 name = "code-review",
                 description = "Full code review (as on a PR)",

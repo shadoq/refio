@@ -363,6 +363,7 @@ class AgentTurnLoop(
             provider = provider,
             profileOverrides = profileOverrides
         )
+        val responseFormat = turnLLMCaller.resolveResponseFormat(mode, effectiveProvider)
 
         try {
             while (iteration < maxIterations) {
@@ -424,7 +425,7 @@ class AgentTurnLoop(
                             source = "AgentTurnLoop",
                             maxRetries = config.maxRetries,
                             baseDelayMs = config.retryBackoffMs,
-                            responseFormat = if (mode != TaskMode.CHAT) mapOf("type" to "json_object") else null,
+                            responseFormat = responseFormat,
                             stream = streamCallback != null,
                             onChunk = streamCallback
                         )
@@ -449,13 +450,31 @@ class AgentTurnLoop(
                     totalCost += llmResponse.cost
 
                     if (mode != TaskMode.CHAT && llmResponse.content.isBlank()) {
+                        if (formatRetryCount < config.maxFormatRetries) {
+                            formatRetryCount++
+                            logger.warn {
+                                "[TURN_EMPTY_CONTENT] taskId=$taskId, iteration=$iteration, " +
+                                    "retry=$formatRetryCount/${config.maxFormatRetries}, " +
+                                    "finishReason=${llmResponse.finishReason}, " +
+                                    "thinkingLength=${llmResponse.thinking?.length ?: 0}"
+                            }
+                            chatMessageRepository.create(
+                                taskId = taskId,
+                                role = MessageRole.SYSTEM,
+                                content = TurnGuardrails.buildInvalidFormatMessage(mode),
+                                toolCalls = null
+                            )
+                            continue
+                        }
+
                         logger.error {
                             "[TURN_FAILED] Empty content from model in JSON mode " +
                                 "(mode=$mode, finishReason=${llmResponse.finishReason}, thinkingLength=${llmResponse.thinking?.length ?: 0})"
                         }
                         val result = TurnResult(
                             success = false,
-                            response = "Model returned empty content in JSON mode. No tool actions or final response could be parsed.",
+                            response = "Model repeatedly returned empty content in structured mode. " +
+                                "No tool actions or final response could be parsed.",
                             iterations = iteration,
                             tokensIn = totalTokensIn,
                             tokensOut = totalTokensOut,
@@ -495,7 +514,11 @@ class AgentTurnLoop(
                     }
 
                     // Format retry logic
-                    if (toolCalls.isEmpty() && toolCallParser.shouldRequestRetry(contentForExtraction, mode) && formatRetryCount < 1) {
+                    if (
+                        toolCalls.isEmpty() &&
+                        toolCallParser.shouldRequestRetry(contentForExtraction, mode) &&
+                        formatRetryCount < config.maxFormatRetries
+                    ) {
                         formatRetryCount++
                         chatMessageRepository.create(
                             taskId = taskId,
@@ -618,6 +641,7 @@ class AgentTurnLoop(
                                 content = TurnNudgeBuilder.buildReadingBudgetExceededMessage(),
                                 toolCalls = null
                             )
+                            consecutiveReadOnlyIterations = 0
                         }
 
                         if (errorTracker.shouldAbort()) {
@@ -635,6 +659,47 @@ class AgentTurnLoop(
                         // Continue loop - model will see the results
                     } else {
                         // No tool calls - model responded with text
+
+                        if (mode != TaskMode.CHAT && toolCallParser.isMeaninglessJson(contentForExtraction)) {
+                            if (formatRetryCount < config.maxFormatRetries) {
+                                formatRetryCount++
+                                logger.warn {
+                                    "[MEANINGLESS_JSON] taskId=$taskId, iteration=$iteration, " +
+                                        "retry=$formatRetryCount/${config.maxFormatRetries}, " +
+                                        "content='${contentForExtraction.take(100)}'"
+                                }
+                                chatMessageRepository.create(
+                                    taskId = taskId,
+                                    role = MessageRole.SYSTEM,
+                                    content = TurnGuardrails.buildInvalidFormatMessage(mode),
+                                    toolCalls = null
+                                )
+                                continue
+                            }
+
+                            logger.error {
+                                "[MEANINGLESS_JSON_ABORT] taskId=$taskId, retries=$formatRetryCount, " +
+                                    "content='${contentForExtraction.take(100)}'"
+                            }
+                            val result = TurnResult(
+                                success = false,
+                                response = "Model repeatedly returned empty or meaningless JSON. " +
+                                    "This usually means the selected model does not support the required structured output.",
+                                iterations = iteration,
+                                tokensIn = totalTokensIn,
+                                tokensOut = totalTokensOut,
+                                cost = totalCost
+                            )
+                            return turnFinalizer.completeTurn(
+                                taskId,
+                                result,
+                                listener,
+                                runId,
+                                parentRunId,
+                                depth,
+                                persistAssistantMessage = true
+                            )
+                        }
 
                         // Check error rate abort
                         if (errorTracker.shouldAbort()) {

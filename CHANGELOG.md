@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- New built-in slash command `/implementation-analysis` for generating practical markdown implementation-analysis documents from a topic prompt.
+
+### Fixed
+
+- Agent turn loop now allows longer AGENT and PLAN runs, including deeper read-only analysis before nudging toward writes.
+- Empty, blank, or meaningless structured responses such as `{}` or `""` now trigger structured-format retries instead of ending the turn prematurely.
+- Local providers such as Ollama and LM Studio no longer receive forced `json_object` response format in turn execution.
+- Tool-result summarization now falls back to deterministic compression when the weak model returns an empty summary.
+- AGENT prompt now allows more autonomous analysis, makes `thinking` optional, and trims redundant examples while keeping the JSON contract explicit.
+
+## [0.0.1.1] - 2025-03-03
+
+### Fixed
+
+- Terminal warning at InteliJ check
+
+
 ## [0.0.1] - 2025-03-02
 
 ### Initial Release

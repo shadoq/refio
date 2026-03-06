@@ -57,11 +57,7 @@ class TurnLLMCaller(
 
         logger.info { "[CALL_LLM] Final model selection: $providerName/$modelId" }
 
-        val responseFormat = if (mode == TaskMode.CHAT) {
-            null
-        } else {
-            mapOf("type" to "json_object")
-        }
+        val responseFormat = resolveResponseFormat(mode, providerName)
 
         return withContext(Dispatchers.IO) {
             llmClient.complete(
@@ -113,6 +109,17 @@ class TurnLLMCaller(
         val configModel = configService.getModel(operation, taskId)
         logger.info { "[MODEL_RESOLVE] Using config model: ${configModel.second}/${configModel.first}" }
         return ModelSelection(configModel.first, configModel.second)
+    }
+
+    fun resolveResponseFormat(mode: TaskMode, provider: String?): Map<String, String>? {
+        val isLocalProvider = provider.equals("ollama", ignoreCase = true) ||
+            provider.equals("lmstudio", ignoreCase = true)
+
+        return when {
+            mode == TaskMode.CHAT -> null
+            isLocalProvider -> null
+            else -> mapOf("type" to "json_object")
+        }
     }
 
     /**

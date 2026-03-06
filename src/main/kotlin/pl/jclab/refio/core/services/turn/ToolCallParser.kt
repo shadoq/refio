@@ -181,6 +181,33 @@ class ToolCallParser(
     }
 
     /**
+     * Check if content is a minimal JSON object with no meaningful payload.
+     */
+    fun isMeaninglessJson(content: String): Boolean {
+        return try {
+            val jsonString = extractJsonFromContent(content) ?: return false
+            val element = json.parseToJsonElement(jsonString)
+            val obj = element as? JsonObject ?: return false
+            val meaningfulKeys = setOf(
+                "actions",
+                "tool_calls",
+                "steps",
+                "subtasks",
+                "response",
+                "content",
+                "plan",
+                "intent",
+                "thinking",
+                "error"
+            )
+
+            obj.isEmpty() || obj.keys.none { it in meaningfulKeys }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
      * Extract assistant intent (IMPLEMENTATION/ANALYSIS/UNKNOWN).
      */
     fun extractAssistantIntent(content: String): TurnGuardrails.AssistantIntent {

@@ -12,10 +12,9 @@ object TurnNudgeBuilder {
      * Triggered by read-only budget guard (ADR-0044).
      */
     fun buildReadingBudgetExceededMessage(): String {
-        return "You have spent 3+ iterations reading files without executing any WRITE tool. " +
-            "For implementation tasks, you MUST now proceed to file creation/modification. " +
-            "Use the information you've already gathered to execute write actions NOW. " +
-            "Do NOT read more files unless absolutely critical."
+        return "You have spent many iterations reading files without executing any WRITE tool. " +
+            "If this is an implementation task, move from analysis to file creation/modification now. " +
+            "Use the information you've already gathered and avoid further reading unless it is clearly necessary."
     }
 
     /**
@@ -25,7 +24,8 @@ object TurnNudgeBuilder {
     fun buildMissingIntentNudgeMessage(): String {
         return "Your JSON response is missing required field 'intent'. " +
             "For AGENT mode return intent as one of: implementation | analysis. " +
-            "Use format: {\"actions\":[...],\"response\":\"...\",\"thinking\":\"...\",\"intent\":\"implementation|analysis\"}. " +
+            "Use format: {\"actions\":[...],\"response\":\"...\",\"intent\":\"implementation|analysis\"} " +
+            "and include \"thinking\" only if you have useful short reasoning to add. " +
             "IMPORTANT: If the user reports a problem or asks for a fix, you MUST use tools to read and fix the file. " +
             "You cannot finish without action when the user explicitly asks for changes."
     }
@@ -40,8 +40,9 @@ object TurnNudgeBuilder {
                 "for the final plan. Use exact tool names/params from <available_tools>."
         } else {
             "Invalid tool call format. Respond ONLY with JSON: " +
-                "{\"actions\":[...],\"response\":\"your status or final answer\",\"thinking\":\"short reasoning\",\"intent\":\"implementation|analysis\"}. " +
-                "'response', 'thinking' and 'intent' fields are REQUIRED and must be non-empty. " +
+                "{\"actions\":[...],\"response\":\"your status or final answer\",\"intent\":\"implementation|analysis\"}. " +
+                "'response' and 'intent' are REQUIRED and must be non-empty. " +
+                "Include 'thinking' only when it adds short useful reasoning. " +
                 "Use exact tool names and parameters from <available_tools>."
         }
     }

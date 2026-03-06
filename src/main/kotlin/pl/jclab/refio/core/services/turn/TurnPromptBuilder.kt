@@ -266,11 +266,12 @@ $iterationInfo
             appendLine()
             appendLine("<tool_call_contract>")
             appendLine("When using tools, respond ONLY with JSON object:")
-            appendLine("""{"actions":[{"tool":"exact_tool_name","arguments":{"param":"value"}}],"response":"","thinking":"","intent":"implementation|analysis"}""")
+            appendLine("""{"actions":[{"tool":"exact_tool_name","arguments":{"param":"value"}}],"response":"","intent":"implementation|analysis"}""")
             appendLine("Use only tool names from <available_tools> and exact parameter names from schemas.")
+            appendLine("""Optional field: "thinking":"short reasoning" when it adds value.""")
             appendLine("""Never wrap calls in helper tools like {"tool":"run", ...}.""")
             appendLine("""Never nest tool payloads like {"tool":"some_tool","arguments":{"tool":"other","arguments":{...}}}.""")
-            appendLine("""If no tools are needed, respond with {"actions":[],"response":"final answer","thinking":"short reasoning","intent":"analysis"}.""")
+            appendLine("""If no tools are needed, respond with {"actions":[],"response":"final answer","intent":"analysis"}.""")
             appendLine("</tool_call_contract>")
             if (iterationInfo.isNotBlank()) {
                 appendLine()
@@ -320,15 +321,10 @@ $iterationInfo
     }
 
     /**
-     * Build iteration info "Iteration 3/25" with warnings.
-     * Shows early write nudge when iteration >= 3 and no write tools executed yet (ADR-0044).
+     * Build iteration info with warnings about remaining loop budget.
      */
     fun buildIterationInfo(current: Int, max: Int, writeToolsExecutedInTurn: Int = 0): String {
         val remaining = max - current
-
-        val writeNudge = if (current >= 3 && writeToolsExecutedInTurn == 0) {
-            "\n⚠️ You have not executed any WRITE tools yet. If this is an implementation task, proceed to writing NOW."
-        } else ""
 
         val warning = when {
             remaining <= 3 -> "⚠️ CRITICAL: Only $remaining iterations left! Prioritize essential actions and prepare to conclude."
@@ -337,11 +333,11 @@ $iterationInfo
             else -> ""
         }
 
-        return if (warning.isNotEmpty() || writeNudge.isNotEmpty()) {
+        return if (warning.isNotEmpty()) {
             """
 <iteration_status>
 Current iteration: $current / $max
-${warning}${writeNudge}
+${warning}
 </iteration_status>
             """.trimIndent()
         } else {

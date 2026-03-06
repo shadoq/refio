@@ -132,7 +132,13 @@ class ToolResultSummarizer(
             subtaskId = null
         )
 
-        val summary = response.content.trim()
+        val summary = response.content.trim().ifBlank {
+            logger.warn {
+                "[SUMMARIZER_EMPTY] Empty summary from $provider/$model for tool=$toolName, " +
+                    "finishReason=${response.finishReason}. Using deterministic compression."
+            }
+            compressToolResult(rawOutput, null, CompressionLevel.SUMMARY)
+        }
 
         logger.info {
             "[SUMMARIZER] Summary generated: ${rawOutput.length} -> ${summary.length} chars, " +

@@ -20,6 +20,7 @@ import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.tools.base.ToolResult
 import pl.jclab.refio.core.services.turn.TurnFinalizer
+import pl.jclab.refio.core.services.turn.TurnGuardrails
 import pl.jclab.refio.core.services.turn.TurnLLMCaller
 import pl.jclab.refio.core.services.turn.TurnPromptBuilder
 import pl.jclab.refio.core.services.turn.TurnResponseProcessor
@@ -453,8 +454,7 @@ class AgentTurnLoopTest {
     inner class ErrorHandlingTests {
 
         @Test
-        fun `should handle empty content from model in JSON mode`() = runTest {
-            // Given
+        fun `should retry empty content from model in JSON mode`() = runTest {
             coEvery {
                 llmClient.complete(
                     provider = any(),
@@ -473,25 +473,128 @@ class AgentTurnLoopTest {
                     source = any(),
                     kwargs = any()
                 )
-            } returns LLMResponse(
-                content = "",  // Empty content
-                usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
-                model = "gpt-4",
-                provider = "openai",
-                cost = 0.0,
-                finishReason = "stop"
+            } returnsMany listOf(
+                LLMResponse(
+                    content = "",
+                    usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
+                    model = "gpt-4",
+                    provider = "openai",
+                    cost = 0.0,
+                    finishReason = "stop"
+                ),
+                createLLMResponse("""{"response":"Recovered after retry"}""")
             )
 
-            // When
             val result = agentTurnLoop.runTurn(
                 taskId = testTaskId,
                 userInput = "Test",
-                mode = TaskMode.PLAN  // JSON mode
+                mode = TaskMode.PLAN
             )
 
-            // Then
+            assertTrue(result.success)
+            assertEquals(2, result.iterations)
+            verify {
+                chatMessageRepository.create(
+                    testTaskId,
+                    MessageRole.SYSTEM,
+                    TurnGuardrails.buildInvalidFormatMessage(TaskMode.PLAN),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any()
+                )
+            }
+        }
+
+        @Test
+        fun `should fail after repeated empty content in JSON mode`() = runTest {
+            coEvery {
+                llmClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    maxTokens = any(),
+                    temperature = any(),
+                    responseFormat = any(),
+                    thinking = any(),
+                    noEgressEnabled = any(),
+                    stream = any(),
+                    onChunk = any(),
+                    taskId = any(),
+                    subtaskId = any(),
+                    source = any(),
+                    kwargs = any()
+                )
+            } returnsMany List(4) {
+                LLMResponse(
+                    content = "",
+                    usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
+                    model = "gpt-4",
+                    provider = "openai",
+                    cost = 0.0,
+                    finishReason = "stop"
+                )
+            }
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Test",
+                mode = TaskMode.PLAN
+            )
+
             assertFalse(result.success)
-            assertTrue(result.response.contains("empty", ignoreCase = true))
+            assertTrue(result.response.contains("repeatedly returned empty content", ignoreCase = true))
+        }
+
+        @Test
+        fun `should retry when model returns meaningless json`() = runTest {
+            coEvery {
+                llmClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    maxTokens = any(),
+                    temperature = any(),
+                    responseFormat = any(),
+                    thinking = any(),
+                    noEgressEnabled = any(),
+                    stream = any(),
+                    onChunk = any(),
+                    taskId = any(),
+                    subtaskId = any(),
+                    source = any(),
+                    kwargs = any()
+                )
+            } returnsMany listOf(
+                createLLMResponse("""{}"""),
+                createLLMResponse("""{"response":"Recovered"}""")
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Test",
+                mode = TaskMode.PLAN
+            )
+
+            assertTrue(result.success)
+            assertEquals(2, result.iterations)
+            verify {
+                chatMessageRepository.create(
+                    testTaskId,
+                    MessageRole.SYSTEM,
+                    TurnGuardrails.buildInvalidFormatMessage(TaskMode.PLAN),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any()
+                )
+            }
         }
 
         @Test
