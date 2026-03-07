@@ -279,7 +279,7 @@ class ToolCallParser(
                 logger.warn { "[TOOL_CALL_JSON_PARSE_FAILED] JsonExtractor also failed: ${e2.message}" }
 
                 // Last resort: Try repair and retry
-                val repairedJson = TurnJsonUtils.repairInvalidJsonEscapes(jsonString)
+                val repairedJson = TurnJsonUtils.repairMalformedJson(jsonString)
                 try {
                     json.parseToJsonElement(repairedJson)
                 } catch (e3: Exception) {
@@ -521,6 +521,16 @@ class ToolCallParser(
                     }
                 }
             }
+        }
+
+        // Strategy 5: Try repairing malformed strings/escapes in the whole envelope
+        try {
+            val repaired = TurnJsonUtils.repairMalformedJson(trimmed)
+            json.parseToJsonElement(repaired)
+            logger.info { "[EXTRACT_JSON] Strategy 5: Repaired malformed JSON envelope" }
+            return repaired
+        } catch (e: Exception) {
+            logger.debug { "[EXTRACT_JSON] Strategy 5 (repair) failed: ${e.message}" }
         }
 
         logger.warn { "[EXTRACT_JSON] All strategies failed, content preview: ${trimmed.take(200)}..." }

@@ -110,7 +110,10 @@ class AgentTurnLoopTest {
         every { toolPermissionsService.getPermission(any(), any(), any()) } returns PermissionLevel.ON
         every { configService.getJsonThinkingXmlTags(any()) } returns emptyList()
 
-        // Create turn/ package components
+        agentTurnLoop = buildAgentTurnLoop(NoopTaskVerifier())
+    }
+
+    private fun buildAgentTurnLoop(taskVerifier: TaskVerifier): AgentTurnLoop {
         val tokenEstimator = pl.jclab.refio.core.services.TokenEstimator()
 
         val turnPromptBuilder = TurnPromptBuilder(
@@ -158,7 +161,7 @@ class AgentTurnLoopTest {
             maxSubagentDepth = 3
         )
 
-        agentTurnLoop = AgentTurnLoop(
+        return AgentTurnLoop(
             llmClient = llmClient,
             chatMessageRepository = chatMessageRepository,
             taskRepository = taskRepository,
@@ -166,7 +169,7 @@ class AgentTurnLoopTest {
             configService = configService,
             toolRegistry = toolRegistry,
             toolDescriptionBuilder = toolDescriptionBuilder,
-            taskVerifier = NoopTaskVerifier(),
+            taskVerifier = taskVerifier,
             turnPromptBuilder = turnPromptBuilder,
             toolCallParser = toolCallParser,
             turnToolExecutor = turnToolExecutor,
@@ -227,6 +230,45 @@ class AgentTurnLoopTest {
         tokensOut = null,
         cost = null,
         createdAt = System.currentTimeMillis()
+    )
+
+    private fun createMockSubtask(
+        id: String,
+        orderIndex: Int,
+        kind: SubtaskKind,
+        status: TaskStatus,
+        description: String,
+        paramsJson: String? = null,
+        result: String? = null,
+        summary: String? = null,
+        errorMessage: String? = null
+    ) = Subtask(
+        id = id,
+        taskId = testTaskId,
+        orderIndex = orderIndex,
+        kind = kind,
+        status = status,
+        description = description,
+        paramsJson = paramsJson,
+        stepPlanJson = null,
+        summary = summary,
+        requiresApproval = false,
+        approvalStatus = ApprovalStatus.NOT_REQUIRED,
+        approvedAt = null,
+        result = result,
+        errorMessage = errorMessage,
+        errorStacktrace = null,
+        llmModel = null,
+        llmProvider = null,
+        inputTokens = 0,
+        outputTokens = 0,
+        costUsd = 0.0,
+        latencyMs = 0,
+        snapshotIdBeforeWrite = null,
+        createdAt = System.currentTimeMillis(),
+        updatedAt = System.currentTimeMillis(),
+        startedAt = null,
+        completedAt = null
     )
 
     private fun createLLMResponse(
@@ -628,6 +670,302 @@ class AgentTurnLoopTest {
                     mode = TaskMode.AGENT
                 )
             }
+        }
+    }
+
+    @Nested
+    inner class TaskVerificationIntegrationTests {
+
+        @Test
+        fun `should continue after false completion claim when write tool already ran`() = runTest {
+            val messages = mutableListOf<ChatMessage>()
+            val subtasks = linkedMapOf<String, Subtask>()
+            var messageCounter = 0
+            var subtaskCounter = 0
+
+            val advanceTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "advance_code_editing"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.WRITE
+            }
+            val readFileTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "read_file"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.READ_ONLY
+            }
+            val fileSearchTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "file_search"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.READ_ONLY
+            }
+
+            every { toolRegistry.getTool("advance_code_editing") } returns advanceTool
+            every { toolRegistry.getTool("read_file") } returns readFileTool
+            every { toolRegistry.getTool("file_search") } returns fileSearchTool
+            every { toolRegistry.toSubtaskKind(any()) } answers {
+                SubtaskKind.valueOf(firstArg<String>().uppercase())
+            }
+
+            every { subtaskRepository.getMaxOrderIndex(testTaskId) } answers {
+                subtasks.values.maxOfOrNull { it.orderIndex } ?: -1
+            }
+            every {
+                subtaskRepository.create(
+                    taskId = any(),
+                    orderIndex = any(),
+                    kind = any(),
+                    description = any(),
+                    paramsJson = any(),
+                    stepPlanJson = any(),
+                    requiresApproval = any(),
+                    status = any(),
+                    llmModel = any(),
+                    llmProvider = any()
+                )
+            } answers {
+                val subtask = createMockSubtask(
+                    id = "subtask-${++subtaskCounter}",
+                    orderIndex = secondArg(),
+                    kind = thirdArg(),
+                    status = arg(7),
+                    description = arg(3),
+                    paramsJson = arg(4)
+                )
+                subtasks[subtask.id] = subtask
+                subtask
+            }
+            every { subtaskRepository.findById(any()) } answers { subtasks[firstArg()] }
+            every { subtaskRepository.updateStatus(any(), any()) } answers {
+                val id = firstArg<String>()
+                val status = secondArg<TaskStatus>()
+                val current = subtasks.getValue(id)
+                val updated = current.copy(status = status)
+                subtasks[id] = updated
+                updated
+            }
+            every {
+                subtaskRepository.updateResult(
+                    id = any(),
+                    result = any(),
+                    summary = any(),
+                    errorMessage = any(),
+                    errorStacktrace = any()
+                )
+            } answers {
+                val id = firstArg<String>()
+                val updated = subtasks.getValue(id).copy(
+                    result = secondArg(),
+                    summary = thirdArg(),
+                    errorMessage = arg(3),
+                    errorStacktrace = arg(4)
+                )
+                subtasks[id] = updated
+                updated
+            }
+
+            every { chatMessageRepository.findByTaskId(testTaskId) } answers { messages.toList() }
+            every {
+                chatMessageRepository.create(
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any()
+                )
+            } answers {
+                val message = ChatMessage(
+                    id = "msg-${++messageCounter}",
+                    taskId = firstArg(),
+                    role = secondArg(),
+                    content = thirdArg(),
+                    thinking = arg(3),
+                    metadata = arg(4),
+                    toolCalls = arg(5),
+                    toolCallId = arg(6),
+                    isSummarized = arg(7),
+                    rawOutput = arg(8),
+                    tokensIn = null,
+                    tokensOut = null,
+                    cost = null,
+                    createdAt = System.currentTimeMillis()
+                )
+                messages += message
+                message
+            }
+            every {
+                chatMessageRepository.create(
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any(),
+                    any()
+                )
+            } answers {
+                val message = ChatMessage(
+                    id = "msg-${++messageCounter}",
+                    taskId = firstArg(),
+                    role = secondArg(),
+                    content = thirdArg(),
+                    thinking = arg(3),
+                    metadata = arg(4),
+                    toolCalls = arg(5),
+                    toolCallId = arg(6),
+                    isSummarized = arg(7),
+                    rawOutput = arg(8),
+                    tokensIn = arg(9),
+                    tokensOut = arg(10),
+                    cost = arg(11),
+                    createdAt = System.currentTimeMillis()
+                )
+                messages += message
+                message
+            }
+            every {
+                chatMessageRepository.createToolResult(
+                    taskId = any(),
+                    toolCallId = any(),
+                    result = any(),
+                    isSummarized = any(),
+                    rawOutput = any(),
+                    metadata = any()
+                )
+            } answers {
+                val message = ChatMessage(
+                    id = "msg-${++messageCounter}",
+                    taskId = firstArg(),
+                    role = MessageRole.TOOL,
+                    content = thirdArg(),
+                    thinking = null,
+                    metadata = arg(5),
+                    toolCalls = null,
+                    toolCallId = secondArg(),
+                    isSummarized = arg(3),
+                    rawOutput = arg(4),
+                    tokensIn = null,
+                    tokensOut = null,
+                    cost = null,
+                    createdAt = System.currentTimeMillis()
+                )
+                messages += message
+                message
+            }
+
+            every { configService.shouldVerifyTask(testTaskId, any(), any()) } answers {
+                thirdArg<Int>() > 0 || secondArg<Int>() >= 5
+            }
+
+            coEvery { toolResultSummarizer.summarizeToolResult(any(), any(), any()) } answers {
+                ToolResultSummary(
+                    summary = secondArg(),
+                    wasSummarized = false,
+                    tokensIn = 0,
+                    tokensOut = 0,
+                    cost = 0.0
+                )
+            }
+
+            coEvery { toolExecutor.executeTool(any(), any()) } answers {
+                val toolCall = firstArg<pl.jclab.refio.core.services.ToolCall>()
+                when (toolCall.name) {
+                    "advance_code_editing" -> ToolResult(success = true, output = "index.html updated", filesChanged = listOf("index.html"))
+                    "read_file" -> ToolResult(success = true, output = "<html>broken links still present</html>")
+                    "file_search" -> ToolResult(success = true, output = "snake_ollama_qwen3-coder-next_q4_K_M_01.html\npong_ollama_qwen3-coder-next_q4_K_M_01.html")
+                    else -> error("Unexpected tool: ${toolCall.name}")
+                }
+            }
+
+            val verifier = LlmTaskVerifier(
+                llmClient = llmClient,
+                configService = configService,
+                chatMessageRepository = chatMessageRepository
+            )
+            val verifiedTurnLoop = buildAgentTurnLoop(verifier)
+
+            coEvery {
+                llmClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    maxTokens = any(),
+                    temperature = any(),
+                    responseFormat = any(),
+                    thinking = any(),
+                    noEgressEnabled = any(),
+                    stream = any(),
+                    onChunk = any(),
+                    taskId = any(),
+                    subtaskId = any(),
+                    source = eq("TaskVerifier"),
+                    kwargs = any()
+                )
+            } returnsMany listOf(
+                createLLMResponse("""{"is_complete":false,"reason":"The assistant summary is contradicted by recent tool evidence.","suggested_actions":["Fix the index.html links using the real filenames."]}"""),
+                createLLMResponse("""{"is_complete":true,"reason":"The follow-up response is acceptable.","suggested_actions":[]}""")
+            )
+
+            coEvery {
+                llmClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    maxTokens = any(),
+                    temperature = any(),
+                    responseFormat = any(),
+                    thinking = any(),
+                    noEgressEnabled = any(),
+                    stream = any(),
+                    onChunk = any(),
+                    taskId = any(),
+                    subtaskId = any(),
+                    source = eq("AgentTurnLoop"),
+                    kwargs = any()
+                )
+            } returnsMany listOf(
+                createLLMResponse(
+                    """{"actions":[{"tool":"advance_code_editing","arguments":{"path":"index.html","edit_description":"Replace placeholders with real files."}}],"response":"Updating index.html.","intent":"implementation"}"""
+                ),
+                createLLMResponse(
+                    """{"actions":[{"tool":"read_file","arguments":{"path":"index.html"}},{"tool":"file_search","arguments":{"pattern":"*.html","limit":200}}],"response":"Checking current file and available HTML files.","intent":"implementation"}"""
+                ),
+                createLLMResponse(
+                    """{"actions":[],"response":"Finished. All links were fixed.","intent":"analysis"}"""
+                ),
+                createLLMResponse(
+                    """{"actions":[{"tool":"advance_code_editing","arguments":{"path":"index.html","edit_description":"Fix remaining broken links based on actual files."}}],"response":"Applying the missing link fixes.","intent":"implementation"}"""
+                ),
+                createLLMResponse(
+                    """{"actions":[],"response":"Final update applied.","intent":"analysis"}"""
+                )
+            )
+
+            val result = verifiedTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Uzupełnij mi plik o rzeczywiste nazwy plików bo opisane prowadzą do błęd 404. 2. Dodaj nowe pozycje",
+                mode = TaskMode.AGENT
+            )
+
+            assertTrue(result.success)
+            assertEquals(5, result.iterations)
+            coVerify(atLeast = 2) {
+                toolExecutor.executeTool(
+                    match { it.name == "advance_code_editing" },
+                    testTaskId
+                )
+            }
+            verify {
+                configService.shouldVerifyTask(testTaskId, 3, 1)
+            }
+            assertTrue(messages.any { it.role == MessageRole.SYSTEM && it.content.contains("Task verification failed:") })
         }
     }
 

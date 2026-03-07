@@ -3,6 +3,8 @@ package pl.jclab.refio.core.services
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import pl.jclab.refio.core.db.MessageRole
+import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
@@ -25,11 +27,13 @@ class NoopTaskVerifier : TaskVerifier {
 
 class LlmTaskVerifier(
     private val llmClient: LLMClient,
-    private val configService: ConfigService
+    private val configService: ConfigService,
+    private val chatMessageRepository: ChatMessageRepository
 ) : TaskVerifier {
     private val json = Json { ignoreUnknownKeys = true }
 
     override suspend fun verifyCompletion(taskId: String, userRequest: String, response: String): VerificationResult {
+        val recentEvidence = buildRecentEvidence(taskId)
         val (modelId, providerName) = configService.getModel(ModelOperation.WEAK, taskId)
         val llmResponse = llmClient.complete(
             provider = providerName,
@@ -43,6 +47,9 @@ $userRequest
 
 Assistant response:
 $response
+
+Recent execution evidence:
+$recentEvidence
                     """.trimIndent()
                 )
             ),
@@ -70,10 +77,42 @@ $response
         )
     }
 
+    private fun buildRecentEvidence(taskId: String): String {
+        val messages = chatMessageRepository.findByTaskId(taskId)
+            .takeLast(8)
+
+        if (messages.isEmpty()) {
+            return "(no recent evidence)"
+        }
+
+        return buildString {
+            messages.forEach { message ->
+                val line = when (message.role) {
+                    MessageRole.USER -> "USER: ${message.content}"
+                    MessageRole.ASSISTANT -> {
+                        val toolInfo = message.toolCalls
+                            ?.joinToString(", ") { it.name }
+                            ?.takeIf { it.isNotBlank() }
+                        if (toolInfo != null) {
+                            "ASSISTANT: ${message.content}\nTOOLS: $toolInfo"
+                        } else {
+                            "ASSISTANT: ${message.content}"
+                        }
+                    }
+                    MessageRole.TOOL -> "TOOL_RESULT: ${message.rawOutput ?: message.content}"
+                    MessageRole.SYSTEM -> "SYSTEM: ${message.content}"
+                }
+                appendLine(line.take(1200))
+                appendLine()
+            }
+        }.trim().ifBlank { "(no recent evidence)" }
+    }
+
     companion object {
         private const val TASK_VERIFICATION_SYSTEM_PROMPT = """
 You are a task completion verifier for a coding assistant.
 Decide if the assistant response indicates the user's request is fully completed.
+Use the recent execution evidence to verify the claim.
 
 Return JSON only, no extra text:
 {
@@ -84,7 +123,9 @@ Return JSON only, no extra text:
 
 Rules:
 - Be strict. If completion is uncertain, return false.
-- Do not assume changes were made unless explicitly stated.
+- Do not assume changes were made unless the evidence supports that claim.
+- If the assistant claims files were fixed, updated, or verified, the evidence must support it.
+- If recent evidence shows reads/searches that still suggest unresolved issues, return false.
 - Suggested actions should be concrete next steps for the assistant.
 """
     }

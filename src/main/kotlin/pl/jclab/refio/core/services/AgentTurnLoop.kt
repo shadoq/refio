@@ -749,7 +749,7 @@ class AgentTurnLoop(
                         // NO_CHANGES_NEEDED reconfirmation: let LLM reconsider once
                         // Task verification
                         val userMessageForVerification = userMessageStrategy.getUserMessage(taskId)
-                        if (!verifyTaskCompletionIfNeeded(taskId, iteration, userMessageForVerification, llmResponse.content)) {
+                        if (!verifyTaskCompletionIfNeeded(taskId, iteration, userMessageForVerification, llmResponse.content, writeToolsExecutedInTurn)) {
                             continue
                         }
 
@@ -859,9 +859,10 @@ class AgentTurnLoop(
         taskId: String,
         iteration: Int,
         userRequestFallback: String?,
-        llmContent: String
+        llmContent: String,
+        writeToolsExecutedInTurn: Int
     ): Boolean {
-        if (!configService.shouldVerifyTask(taskId, iteration)) {
+        if (!configService.shouldVerifyTask(taskId, iteration, writeToolsExecutedInTurn)) {
             return true
         }
 

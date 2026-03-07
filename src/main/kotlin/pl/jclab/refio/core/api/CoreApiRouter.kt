@@ -271,7 +271,8 @@ class CoreApiRouter(
         )
         val taskVerifier = LlmTaskVerifier(
             llmClient = llmClient,
-            configService = configService
+            configService = configService,
+            chatMessageRepository = chatMessageRepository
         )
         val tokenEstimator = TokenEstimator()
 

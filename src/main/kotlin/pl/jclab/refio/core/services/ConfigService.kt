@@ -2415,11 +2415,14 @@ class ConfigService(
      * @param iterationCount Current iteration count in turn
      * @return true if verification should run
      */
-    fun shouldVerifyTask(taskId: String? = null, iterationCount: Int = 0): Boolean {
+    fun shouldVerifyTask(taskId: String? = null, iterationCount: Int = 0, writeToolsExecutedInTurn: Int = 0): Boolean {
         val explicitSetting = getConfigWithPrecedence(KEY_TASK_VERIFICATION_ENABLED, taskId)
         if (explicitSetting != null) {
             // User explicitly configured it - respect that
             return explicitSetting.value.toBoolean()
+        }
+        if (writeToolsExecutedInTurn > 0) {
+            return true
         }
         // Auto-enable for longer turns (>5 iterations) where hallucinations are more likely
         return iterationCount >= 5

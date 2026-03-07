@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.1.2] - 2025-03-07
+
 ### Added
 
 - New built-in slash command `/implementation-analysis` for generating practical markdown implementation-analysis documents from a topic prompt.
@@ -20,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Local providers such as Ollama and LM Studio no longer receive forced `json_object` response format in turn execution.
 - Tool-result summarization now falls back to deterministic compression when the weak model returns an empty summary.
 - AGENT prompt now allows more autonomous analysis, makes `thinking` optional, and trims redundant examples while keeping the JSON contract explicit.
+- Improved built-in slash command prompts
 
 ## [0.0.1.1] - 2025-03-03
 
