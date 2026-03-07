@@ -46,7 +46,7 @@ class MultiEditTool(
             throw IllegalArgumentException("Parameter 'edits' is required (array of edit operations)")
         }
         if (edits.isEmpty()) {
-            throw IllegalArgumentException("At least one edit operation is required")
+            throw IllegalArgumentException("Parameter 'edits' must contain at least one edit operation")
         }
     }
 
@@ -54,6 +54,8 @@ class MultiEditTool(
         val startTime = System.currentTimeMillis()
 
         try {
+            validateParams(params)
+
             // Extract parameters (already validated)
             @Suppress("UNCHECKED_CAST")
             val edits = params["edits"] as List<Map<String, Any>>
@@ -96,6 +98,10 @@ class MultiEditTool(
         } catch (e: EditException) {
             logger.warn { "Multi-edit failed: ${e.message}" }
             return ToolResult.error("Edit failed: ${e.message}")
+
+        } catch (e: IllegalArgumentException) {
+            logger.warn { "Multi-edit validation failed: ${e.message}" }
+            return ToolResult.error(e.message ?: "Invalid multi-edit parameters")
 
         } catch (e: SecurityException) {
             logger.warn { "Security violation in multi_edit: ${e.message}" }
