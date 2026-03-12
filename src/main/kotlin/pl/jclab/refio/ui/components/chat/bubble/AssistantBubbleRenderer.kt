@@ -165,9 +165,9 @@ internal class AssistantBubbleRenderer(
     private fun createToolCallBubble(message: Message, info: pl.jclab.refio.api.models.ToolCallDisplayInfo): JPanel {
         return when (info.displayType) {
             ToolDisplayType.LLM_EDIT -> createLlmEditToolBubble(message, info)
-            ToolDisplayType.CODE_EDIT -> createDetailedToolBubble(info, LCATheme.toolBubbleBackground)
-            ToolDisplayType.SIMPLE -> createSimpleToolBubble(info)
-            ToolDisplayType.TERMINAL -> createDetailedToolBubble(info, LCATheme.toolBubbleBackground)
+            ToolDisplayType.CODE_EDIT -> createDetailedToolBubble(message, info, LCATheme.toolBubbleBackground)
+            ToolDisplayType.SIMPLE -> createSimpleToolBubble(message, info)
+            ToolDisplayType.TERMINAL -> createDetailedToolBubble(message, info, LCATheme.toolBubbleBackground)
         }
     }
 
@@ -200,12 +200,17 @@ internal class AssistantBubbleRenderer(
         return addToOuter(outerPanel, messageBlock)
     }
 
-    private fun createDetailedToolBubble(info: pl.jclab.refio.api.models.ToolCallDisplayInfo, background: java.awt.Color): JPanel {
+    private fun createDetailedToolBubble(
+        message: Message,
+        info: pl.jclab.refio.api.models.ToolCallDisplayInfo,
+        background: java.awt.Color
+    ): JPanel {
         val outerPanel = createOuterPanel()
         val messageBlock = context.bubbleContentContext.createMessageBlock(background).apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
         }
         messageBlock.add(factory.createToolHeaderPanel(info))
+        addToolCallNarrative(messageBlock, message, background)
         val primaryPath = factory.getPrimaryPath(info)
         if (!primaryPath.isNullOrBlank()) {
             messageBlock.add(Box.createVerticalStrut(context.bubbleCompactGap))
@@ -221,13 +226,17 @@ internal class AssistantBubbleRenderer(
         return addToOuter(outerPanel, messageBlock)
     }
 
-    private fun createSimpleToolBubble(info: pl.jclab.refio.api.models.ToolCallDisplayInfo): JPanel {
+    private fun createSimpleToolBubble(message: Message, info: pl.jclab.refio.api.models.ToolCallDisplayInfo): JPanel {
         val outerPanel = createOuterPanel()
-        val messageBlock = context.bubbleContentContext.createMessageBlock(LCATheme.toolInlineBackground).apply {
-            layout = FlowLayout(FlowLayout.LEFT, 4, 0)
+        val background = LCATheme.toolInlineBackground
+        val messageBlock = context.bubbleContentContext.createMessageBlock(background).apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
         }
-        messageBlock.add(JLabel("\uD83D\uDD27").apply { font = LCATheme.bodyFont })
-        messageBlock.add(JLabel(info.toolName).apply {
+        val headerRow = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+            isOpaque = false
+        }
+        headerRow.add(JLabel("\uD83D\uDD27").apply { font = LCATheme.bodyFont })
+        headerRow.add(JLabel(info.toolName).apply {
             font = LCATheme.boldFont
             foreground = LCATheme.toolNameForeground
         })
@@ -238,7 +247,7 @@ internal class AssistantBubbleRenderer(
             ?: info.parameters.values.firstOrNull()
         if (!mainParam.isNullOrBlank()) {
             val shortValue = if (mainParam.length > 100) "${mainParam.take(100)}..." else mainParam
-            messageBlock.add(JLabel(shortValue).apply {
+            headerRow.add(JLabel(shortValue).apply {
                 foreground = LCATheme.monoTextColor
                 font = java.awt.Font(LCATheme.monoFont.family, java.awt.Font.PLAIN, LCATheme.bodyFont.size)
             })
@@ -248,8 +257,25 @@ internal class AssistantBubbleRenderer(
             ToolCallStatus.COMPLETED -> "✓"
             ToolCallStatus.FAILED -> "✗"
         }
-        messageBlock.add(JLabel(statusIcon).apply { font = LCATheme.bodyFont })
+        headerRow.add(JLabel(statusIcon).apply { font = LCATheme.bodyFont })
+        messageBlock.add(headerRow)
+        addToolCallNarrative(messageBlock, message, background)
         return addToOuter(outerPanel, messageBlock)
+    }
+
+    private fun addToolCallNarrative(messageBlock: JPanel, message: Message, backgroundColor: java.awt.Color) {
+        val content = buildAssistantContent(message).trim()
+        if (content.isBlank()) return
+
+        messageBlock.add(Box.createVerticalStrut(context.bubbleCompactGap))
+        messageBlock.add(
+            factory.createBubbleContentPanel(
+                content = content,
+                backgroundColor = backgroundColor,
+                foregroundColor = LCATheme.assistantBubbleForeground,
+                isUser = false
+            )
+        )
     }
 
     private fun createQuestionBubble(message: Message, questionData: QuestionData): JPanel {

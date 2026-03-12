@@ -115,7 +115,9 @@ object TokenEstimator {
             return definition.maxContext
         }
 
-        val modelConfig = getModelConfig(modelId, configService)
+        // Do not trigger provider model discovery from the request hot path.
+        // At this stage we only trust static definitions or an already-warmed cache.
+        val modelConfig = getModelConfigFromCache(modelId)
         if (modelConfig != null) {
             return modelConfig.maxContext
         }

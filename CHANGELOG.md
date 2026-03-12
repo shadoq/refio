@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `PRIVACY.md` describing local storage, cloud-provider behavior, no-egress mode, and secret handling.
+- New `security.allow_symlinks` configuration option, documented in `docs/config.md`, for explicit unsafe opt-in to symlink access in `PathSandbox`.
+
+### Changed
+
+- Public documentation, landing copy, Marketplace copy, and QUICKSTART are aligned with the current codebase counts: 12 tools, 14 context providers, 16 MCP presets, 21 built-in subagents, and 6 LLM providers.
+- Model discovery now uses single-flight caching, and token context estimation no longer triggers provider model-list fetches from the request hot path.
+- Project analysis caching is now keyed by `includeContent` and protected against duplicate concurrent analyses for the same project state.
+- Assistant tool-call bubbles now preserve the assistant narrative alongside tool metadata, and simple tool bubbles use the same stacked layout.
+
+### Fixed
+
+- PLAN and AGENT turn execution now forward `thinking` and `noEgressEnabled` to `LLMClient.complete()`.
+- Chat bubble caching no longer invalidates on `isStreaming` state changes alone, reducing end-of-stream UI flicker.
+- Streaming assistant messages are now flushed in batches and always clear `isGenerating`, reducing chat UI churn and stuck generation state after failures.
+- Context panel auto-refresh is now deferred while streaming/generation is active and resumes once the turn finishes, avoiding redundant refreshes and prompt churn.
+- `RefioMainPanel` now unregisters property listeners during disposal to avoid listener leaks on panel recreation.
+- `PathSandbox` now rejects symbolic links by default, including symlinked parent directories, with opt-in override via `security.allow_symlinks`.
+- `advance_code_editing` now enforces excluded file-extension checks before invoking the LLM.
+
 ## [0.0.1.2] - 2025-03-07
 
 ### Added

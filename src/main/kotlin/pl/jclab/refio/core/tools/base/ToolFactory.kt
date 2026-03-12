@@ -37,7 +37,7 @@ class ToolFactory(
         logger.info { "ToolFactory initializing with projectRoot=$projectRoot (absolute=${projectRoot.toAbsolutePath()})" }
     }
 
-    private val sandbox = PathSandbox(projectRoot)
+    private val sandbox = PathSandbox.withConfig(projectRoot, configService)
     private val registry = toolRegistry
 
     /**

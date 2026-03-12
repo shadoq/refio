@@ -53,6 +53,7 @@ import javax.swing.JViewport
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
 import javax.swing.Timer
+import java.util.Objects
 
 /**
  * Custom JLabel with rounded corners for mode badge
@@ -437,11 +438,13 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     }
 
     private fun calculateMessageHash(message: Message): Int {
-        return (message.content.hashCode() * 31 +
-                message.isStreaming.hashCode() * 17 +
-                (message.lastChunkAt ?: 0L).hashCode() * 13 +
-                (message.metadata?.hashCode() ?: 0) +
-                (message.toolCallInfo?.hashCode() ?: 0) * 19)
+        return Objects.hash(
+            message.content,
+            message.isStreaming,
+            message.lastChunkAt,
+            message.metadata,
+            message.toolCallInfo
+        )
     }
 
     private fun updateMessages(messages: List<Message>) {

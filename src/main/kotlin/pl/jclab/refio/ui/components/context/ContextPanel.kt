@@ -11,6 +11,8 @@ import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.services.core.CoreConnectionManager
 import pl.jclab.refio.services.logging.dualLogger
 import pl.jclab.refio.services.notification.NotificationService
+import pl.jclab.refio.core.services.monitoring.GlobalMetrics
+import pl.jclab.refio.core.services.monitoring.OperationInfo
 import pl.jclab.refio.ui.dialogs.LLMPromptViewerDialog
 import pl.jclab.refio.ui.theme.ContextSectionColorPalette
 import pl.jclab.refio.ui.theme.LCATheme
@@ -124,7 +126,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private val refreshButton = JButton("Refresh").apply {
         margin = Insets(2, 6, 2, 6)
         addActionListener {
-            refreshContext()
+            refreshContext(manual = true)
         }
     }
 
@@ -132,6 +134,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private var currentLLMPrompt: String? = null
     private var lastStreamingActive = false
     private var streamingSuppressStartMs: Long? = null
+    private var pendingAutoRefreshAfterStreaming = false
 
     private val sectionEntries = listOf(
         SectionEntry("project_overview", 1, projectOverviewSection) { context, _ ->
@@ -221,8 +224,14 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
             refreshTrigger
                 .debounce(1500) // 1.5 second debounce window
                 .collectLatest {
+                    if (isAutoRefreshBlocked()) {
+                        pendingAutoRefreshAfterStreaming = true
+                        logger.debug { "Debounce window expired during streaming/generation, deferring auto-refresh" }
+                        return@collectLatest
+                    }
+
                     logger.debug { "Debounce window expired, triggering refresh..." }
-                    refreshContext()
+                    refreshContext(manual = false)
                 }
         }
 
@@ -230,8 +239,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         cs.launch {
             sessionManager.activeSession.collectLatest { session ->
                 session?.let {
-                    logger.debug { "Active session changed: ${it.id}, mode=${it.mode}, emitting refresh trigger..." }
-                    refreshTrigger.tryEmit(Unit)
+                    requestAutoRefresh("Active session changed: ${it.id}, mode=${it.mode}")
                 }
             }
         }
@@ -244,6 +252,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                     if (streamingActive) {
                         if (!lastStreamingActive) {
                             streamingSuppressStartMs = System.currentTimeMillis()
+                            pendingAutoRefreshAfterStreaming = true
                             logger.debug {
                                 "Messages changed for session: ${session.id}, streaming active - suppressing refresh"
                             }
@@ -259,14 +268,16 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                         } ?: 0L
                         streamingSuppressStartMs = null
                         logger.debug {
-                            "Streaming completed for session: ${session.id}, suppressedMs=${suppressedMs}, emitting refresh trigger..."
+                            "Streaming completed for session: ${session.id}, suppressedMs=${suppressedMs}, pendingAutoRefresh=$pendingAutoRefreshAfterStreaming"
                         }
-                        refreshTrigger.tryEmit(Unit)
+                        if (pendingAutoRefreshAfterStreaming) {
+                            pendingAutoRefreshAfterStreaming = false
+                            refreshTrigger.tryEmit(Unit)
+                        }
                         return@collectLatest
                     }
 
-                    logger.debug { "Messages changed for session: ${session.id}, emitting refresh trigger..." }
-                    refreshTrigger.tryEmit(Unit)
+                    requestAutoRefresh("Messages changed for session: ${session.id}")
                 }
             }
         }
@@ -275,8 +286,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         cs.launch {
             sessionManager.subtasks.collectLatest {
                 sessionManager.activeSession.value?.let { session ->
-                    logger.debug { "Subtasks changed for session: ${session.id}, emitting refresh trigger..." }
-                    refreshTrigger.tryEmit(Unit)
+                    requestAutoRefresh("Subtasks changed for session: ${session.id}")
                 }
             }
         }
@@ -285,8 +295,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         cs.launch {
             sessionManager.selectedModel.collectLatest {
                 sessionManager.activeSession.value?.let { session ->
-                    logger.debug { "Model changed for session: ${session.id}, emitting refresh trigger..." }
-                    refreshTrigger.tryEmit(Unit)
+                    requestAutoRefresh("Model changed for session: ${session.id}")
                 }
             }
         }
@@ -296,8 +305,9 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         cs.launch {
             sessionManager.pendingContextRefs.collectLatest { pendingRefs ->
                 sessionManager.activeSession.value?.let { session ->
-                    logger.debug { "Pending context refs changed for session: ${session.id}, refs count=${pendingRefs.size}, emitting refresh trigger..." }
-                    refreshTrigger.tryEmit(Unit)
+                    requestAutoRefresh(
+                        "Pending context refs changed for session: ${session.id}, refs count=${pendingRefs.size}"
+                    )
                 }
             }
         }
@@ -317,10 +327,16 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         }
     }
 
-    private fun refreshContext() {
+    private fun refreshContext(manual: Boolean = false) {
         val session = sessionManager.activeSession.value
         if (session == null) {
             showMessage("No active session")
+            return
+        }
+
+        if (!manual && isAutoRefreshBlocked()) {
+            pendingAutoRefreshAfterStreaming = true
+            logger.debug { "Skipping auto-refresh while streaming/generation is active" }
             return
         }
 
@@ -413,6 +429,24 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                 }
             }
         }
+    }
+
+    private fun requestAutoRefresh(reason: String) {
+        if (isAutoRefreshBlocked()) {
+            pendingAutoRefreshAfterStreaming = true
+            logger.debug { "$reason, but auto-refresh is blocked during streaming/generation" }
+            return
+        }
+
+        logger.debug { "$reason, emitting refresh trigger..." }
+        refreshTrigger.tryEmit(Unit)
+    }
+
+    private fun isAutoRefreshBlocked(): Boolean {
+        return lastStreamingActive ||
+            sessionManager.isGenerating.value ||
+            sessionManager.messages.value.any { it.isStreaming } ||
+            GlobalMetrics.currentOperation.value !is OperationInfo.Idle
     }
 
     private fun updateProjectOverviewSection(context: pl.jclab.refio.core.api.ProjectContextResponse) {

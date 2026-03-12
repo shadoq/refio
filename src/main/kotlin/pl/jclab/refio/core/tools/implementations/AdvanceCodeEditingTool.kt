@@ -15,6 +15,7 @@ import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
+import pl.jclab.refio.core.tools.normalizePath
 import pl.jclab.refio.core.tools.security.FileLimits
 import pl.jclab.refio.services.logging.dualLogger
 import java.nio.file.Files
@@ -177,8 +178,13 @@ class AdvanceCodeEditingTool(
         onChunk: StreamCallback? = null
     ): ToolResult {
         // 1. Read file or prepare for creation
-        val path = sandbox.resolve(pathStr)
+        val normalizedPathStr = normalizePath(pathStr)
+        val path = sandbox.resolve(normalizedPathStr)
         val fileExists = path.exists()
+
+        if (limits.shouldExcludeFile(path.fileName.toString())) {
+            return ToolResult.error("File extension not allowed: ${path.fileName}")
+        }
 
         val originalContent: String
         val fileSize: Long

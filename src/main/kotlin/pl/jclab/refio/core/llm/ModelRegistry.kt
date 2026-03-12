@@ -3,6 +3,8 @@ package pl.jclab.refio.core.llm
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import pl.jclab.refio.core.llm.adapters.AnthropicAdapter
 import pl.jclab.refio.core.llm.adapters.GeminiAdapter
 import pl.jclab.refio.core.llm.adapters.LMStudioAdapter
@@ -122,6 +124,13 @@ fun ModelDefinition.toModelConfig(): ModelConfig {
 private var modelsCache: Map<String, List<ModelConfig>>? = null
 private var cacheTimestamp: Long = 0L
 private const val CACHE_TTL_MS = 300_000L // 5 minutes
+private val modelsCacheMutex = Mutex()
+
+private fun getCachedModelsIfFresh(now: Long = System.currentTimeMillis()): List<ModelConfig>? {
+    val cached = modelsCache ?: return null
+    if ((now - cacheTimestamp) >= CACHE_TTL_MS) return null
+    return cached.values.flatten()
+}
 
 /**
  * Infers provider from model name using common patterns.
@@ -171,52 +180,49 @@ fun inferProvider(model: String, default: String = "ollama"): String {
 suspend fun getAllModels(
     configService: pl.jclab.refio.core.services.ConfigService? = null
 ): List<ModelConfig> {
-    // Check cache
-    val now = System.currentTimeMillis()
-    if (modelsCache != null && (now - cacheTimestamp) < CACHE_TTL_MS) {
-        return modelsCache!!.values.flatten()
-    }
+    getCachedModelsIfFresh()?.let { return it }
 
-    logger.info { "[ModelRegistry] Fetching models from all providers (parallel)" }
+    return modelsCacheMutex.withLock {
+        getCachedModelsIfFresh()?.let { return@withLock it }
 
-    // Fetch from all providers in parallel (failures are logged but don't block others)
-    data class ProviderFetch(val name: String, val models: List<ModelConfig>)
+        val now = System.currentTimeMillis()
+        logger.info { "[ModelRegistry] Fetching models from all providers (single-flight, parallel providers)" }
 
-    val providerNames = listOf("ollama", "openai", "anthropic", "openrouter", "gemini", "lmstudio")
+        data class ProviderFetch(val name: String, val models: List<ModelConfig>)
 
-    val results = coroutineScope {
-        providerNames.map { name ->
-            async {
-                try {
-                    val models = when (name) {
-                        "ollama" -> OllamaAdapter(configService = configService).listModels()
-                        "openai" -> OpenAIAdapter(configService = configService).listModels()
-                        "anthropic" -> AnthropicAdapter(configService = configService).listModels()
-                        "openrouter" -> OpenRouterAdapter(configService = configService).listModels()
-                        "gemini" -> GeminiAdapter(configService = configService).listModels()
-                        "lmstudio" -> LMStudioAdapter(configService = configService).listModels()
-                        else -> emptyList()
+        val providerNames = listOf("ollama", "openai", "anthropic", "openrouter", "gemini", "lmstudio")
+
+        val results = coroutineScope {
+            providerNames.map { name ->
+                async {
+                    try {
+                        val models = when (name) {
+                            "ollama" -> OllamaAdapter(configService = configService).listModels()
+                            "openai" -> OpenAIAdapter(configService = configService).listModels()
+                            "anthropic" -> AnthropicAdapter(configService = configService).listModels()
+                            "openrouter" -> OpenRouterAdapter(configService = configService).listModels()
+                            "gemini" -> GeminiAdapter(configService = configService).listModels()
+                            "lmstudio" -> LMStudioAdapter(configService = configService).listModels()
+                            else -> emptyList()
+                        }
+                        logger.info { "[ModelRegistry] Fetched ${models.size} models from $name" }
+                        ProviderFetch(name, models)
+                    } catch (e: Exception) {
+                        logger.warn { "[ModelRegistry] Failed to fetch $name models: ${e.message}" }
+                        ProviderFetch(name, emptyList())
                     }
-                    logger.info { "[ModelRegistry] Fetched ${models.size} models from $name" }
-                    ProviderFetch(name, models)
-                } catch (e: Exception) {
-                    logger.warn { "[ModelRegistry] Failed to fetch $name models: ${e.message}" }
-                    ProviderFetch(name, emptyList())
                 }
-            }
-        }.awaitAll()
+            }.awaitAll()
+        }
+
+        val allModels = results.associate { it.name to it.models }
+        modelsCache = allModels
+        cacheTimestamp = now
+
+        val totalModels = allModels.values.flatten()
+        logger.info { "[ModelRegistry] Total ${totalModels.size} models available" }
+        totalModels
     }
-
-    val allModels = results.associate { it.name to it.models }
-
-    // Update cache
-    modelsCache = allModels
-    cacheTimestamp = now
-
-    val totalModels = allModels.values.flatten()
-    logger.info { "[ModelRegistry] Total ${totalModels.size} models available" }
-
-    return totalModels
 }
 
 /**

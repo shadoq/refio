@@ -134,6 +134,10 @@ See [docs/config.md](docs/config.md) for full configuration reference.
 
 ---
 
+## Privacy
+
+See [PRIVACY.md](PRIVACY.md) for details about local storage, cloud-provider behavior, no-egress mode, and secret handling.
+
 ## Contributing
 
 ```bash

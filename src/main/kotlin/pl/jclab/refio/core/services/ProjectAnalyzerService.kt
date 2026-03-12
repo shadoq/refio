@@ -1,5 +1,7 @@
 package pl.jclab.refio.core.services
 
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import pl.jclab.refio.services.logging.dualLogger
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.analysis.project.ProjectAnalysisReport
@@ -7,6 +9,7 @@ import pl.jclab.refio.core.services.analysis.project.RichProjectAnalysisEngine
 import pl.jclab.refio.core.utils.AiIgnoreMatcher
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.*
 
 private val logger = dualLogger("ProjectAnalyzerService")
@@ -22,7 +25,8 @@ class ProjectAnalyzerService(
     private val richAnalysisEngine: RichProjectAnalysisEngine? = null
 ) {
 
-    private val cache = mutableMapOf<String, Triple<ProjectAnalysis, Long, Long>>() // analysis, cacheTime, lastModified
+    private val cache = ConcurrentHashMap<String, Triple<ProjectAnalysis, Long, Long>>() // analysis, cacheTime, lastModified
+    private val analysisMutexes = ConcurrentHashMap<String, Mutex>()
     private val cacheTTL = 600_000L // 10 minutes (reduced from 1 hour for fresher data)
 
     /**
@@ -32,64 +36,84 @@ class ProjectAnalyzerService(
         projectRoot: Path,
         includeContent: Boolean = false
     ): ProjectAnalysis {
-        val cacheKey = projectRoot.toString()
+        val cacheKey = buildCacheKey(projectRoot, includeContent)
         val now = System.currentTimeMillis()
         val ignoreMatcher = resolveIgnoreMatcher(projectRoot)
         val lastModified = getProjectLastModified(projectRoot, ignoreMatcher)
 
         // Check cache - invalidate if TTL expired OR files have been modified
+        getCachedAnalysis(cacheKey, now, lastModified)?.let { return it }
+
+        val mutex = analysisMutexes.computeIfAbsent(cacheKey) { Mutex() }
+        return mutex.withLock {
+            val lockedNow = System.currentTimeMillis()
+            val lockedLastModified = getProjectLastModified(projectRoot, ignoreMatcher)
+            getCachedAnalysis(cacheKey, lockedNow, lockedLastModified)?.let { return@withLock it }
+
+            logger.info { "Starting project analysis: $projectRoot (single-flight)" }
+
+            val fileTree = buildFileTree(projectRoot, ignoreMatcher)
+            val structure = analyzeStructure(fileTree)
+            val (technologies, infrastructure) = detectTechnologies(fileTree)
+            val technologyVersions = detectTechnologyVersions(projectRoot, fileTree)
+            val dependencies = analyzeDependencies(projectRoot, fileTree)
+            val codeAnalysis = analyzeCodeStructure(projectRoot, fileTree, includeContent)
+            val keyComponents = identifyKeyComponents(fileTree)
+            val domainAnalysis = analyzeProjectDomain(fileTree, structure)
+
+            // ADR 0017: Detect architectural patterns
+            val architectureInfo = detectArchitecturalPatterns(fileTree)
+
+            // Detect primary programming language
+            val (primaryLanguage, _) = detectPrimaryLanguage(structure.fileTypes)
+
+            val analysis = ProjectAnalysis(
+                projectPath = projectRoot.toString(),
+                structure = structure,
+                technologies = technologies,
+                infrastructure = infrastructure,
+                technologyVersions = technologyVersions,
+                dependencies = dependencies,
+                codeAnalysis = codeAnalysis,
+                keyComponents = keyComponents,
+                projectType = domainAnalysis.primaryDomain,
+                primaryLanguage = primaryLanguage,
+                summary = generateSummary(structure, technologies, codeAnalysis, primaryLanguage),
+                domainAnalysis = domainAnalysis,
+                analyzedAt = System.currentTimeMillis(),
+                architectureInfo = architectureInfo
+            )
+
+            val enrichedAnalysis = enrichWithRichReport(analysis, projectRoot)
+            cache[cacheKey] = Triple(enrichedAnalysis, lockedNow, lockedLastModified)
+
+            logger.info {
+                "Project analysis completed: ${enrichedAnalysis.structure.totalFiles} files, ${technologies.size} technologies"
+            }
+            enrichedAnalysis
+        }
+    }
+
+    private fun buildCacheKey(projectRoot: Path, includeContent: Boolean): String {
+        return "${projectRoot.normalize()}|includeContent=$includeContent"
+    }
+
+    private fun getCachedAnalysis(
+        cacheKey: String,
+        now: Long,
+        lastModified: Long
+    ): ProjectAnalysis? {
         cache[cacheKey]?.let { (analysis, cacheTime, cachedLastModified) ->
             val isCacheValid = (now - cacheTime < cacheTTL) && (lastModified <= cachedLastModified)
             if (isCacheValid) {
                 logger.debug { "Using cached project analysis for $cacheKey (age=${(now - cacheTime) / 1000}s)" }
                 return analysis
-            } else {
-                val reason = if (now - cacheTime >= cacheTTL) "TTL expired" else "files modified"
-                logger.debug { "Cache invalid for $cacheKey: $reason" }
             }
+
+            val reason = if (now - cacheTime >= cacheTTL) "TTL expired" else "files modified"
+            logger.debug { "Cache invalid for $cacheKey: $reason" }
         }
-
-        logger.info { "Starting project analysis: $projectRoot" }
-
-        val fileTree = buildFileTree(projectRoot, ignoreMatcher)
-        val structure = analyzeStructure(fileTree)
-        val (technologies, infrastructure) = detectTechnologies(fileTree)
-        val technologyVersions = detectTechnologyVersions(projectRoot, fileTree)
-        val dependencies = analyzeDependencies(projectRoot, fileTree)
-        val codeAnalysis = analyzeCodeStructure(projectRoot, fileTree, includeContent)
-        val keyComponents = identifyKeyComponents(fileTree)
-        val domainAnalysis = analyzeProjectDomain(fileTree, structure)
-
-        // ADR 0017: Detect architectural patterns
-        val architectureInfo = detectArchitecturalPatterns(fileTree)
-
-        // Detect primary programming language
-        val (primaryLanguage, _) = detectPrimaryLanguage(structure.fileTypes)
-
-        val analysis = ProjectAnalysis(
-            projectPath = projectRoot.toString(),
-            structure = structure,
-            technologies = technologies,
-            infrastructure = infrastructure,
-            technologyVersions = technologyVersions,
-            dependencies = dependencies,
-            codeAnalysis = codeAnalysis,
-            keyComponents = keyComponents,
-            projectType = domainAnalysis.primaryDomain,
-            primaryLanguage = primaryLanguage,
-            summary = generateSummary(structure, technologies, codeAnalysis, primaryLanguage),
-            domainAnalysis = domainAnalysis,
-            analyzedAt = System.currentTimeMillis(),
-            architectureInfo = architectureInfo
-        )
-
-        val enrichedAnalysis = enrichWithRichReport(analysis, projectRoot)
-
-        // Store in cache with modification time
-        cache[cacheKey] = Triple(enrichedAnalysis, now, lastModified)
-
-        logger.info { "Project analysis completed: ${enrichedAnalysis.structure.totalFiles} files, ${technologies.size} technologies" }
-        return enrichedAnalysis
+        return null
     }
 
     /**
@@ -128,9 +152,9 @@ class ProjectAnalyzerService(
      * Invalidate cache for project
      */
     fun invalidateCache(projectRoot: Path) {
-        val cacheKey = projectRoot.toString()
-        cache.remove(cacheKey)
-        logger.info { "Invalidated cache for $cacheKey" }
+        val normalizedRoot = projectRoot.normalize().toString()
+        cache.keys.removeIf { it.startsWith("$normalizedRoot|") }
+        logger.info { "Invalidated cache for $normalizedRoot" }
     }
 
     /**

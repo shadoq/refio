@@ -32,6 +32,7 @@ import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Component
 import java.awt.Dimension
+import java.beans.PropertyChangeListener
 import javax.swing.JPanel
 import javax.swing.JTabbedPane
 import javax.swing.SwingUtilities
@@ -75,6 +76,29 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
 
     // Cache SettingsView to avoid creating new instance each time
     private var settingsView: SettingsView? = null
+    private val chatMessagesUpdatedListener = PropertyChangeListener {
+        scrollChatToBottom()
+    }
+    private val stopExecutionListener = PropertyChangeListener { evt ->
+        if (evt.newValue == true) {
+            stepExecutionService.stopExecution()
+        }
+    }
+    private val historySessionLoadedListener = PropertyChangeListener { evt ->
+        if (evt.newValue == true) {
+            showChatView()
+        }
+    }
+    private val historyBackToChatListener = PropertyChangeListener { evt ->
+        if (evt.newValue == true) {
+            showChatView()
+        }
+    }
+    private val advancedViewChangedListener = PropertyChangeListener { evt ->
+        if (evt.newValue is Boolean) {
+            setAdvancedViewEnabled(evt.newValue as Boolean)
+        }
+    }
 
     init {
 
@@ -105,9 +129,7 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
         }
 
         // Listen for messages update to scroll to bottom
-        chatView.addPropertyChangeListener("messagesUpdated") {
-            scrollChatToBottom()
-        }
+        chatView.addPropertyChangeListener("messagesUpdated", chatMessagesUpdatedListener)
 
         // Chat panel: scroll(messages) + promptInput (sticky bottom)
         val chatPanel = JPanel(BorderLayout()).apply {
@@ -173,11 +195,7 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
         sessionManager.setStatusBar(statusBar)
 
         // Listen to status bar stop execution event
-        statusBar.addPropertyChangeListener("stopExecution") { evt ->
-            if (evt.newValue == true) {
-                stepExecutionService.stopExecution()
-            }
-        }
+        statusBar.addPropertyChangeListener("stopExecution", stopExecutionListener)
 
 //        // Listen to toolbar property changes for history toggle
 //        toolbar.addPropertyChangeListener("showHistory") { evt ->
@@ -194,18 +212,10 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
 //        }
 
         // Listen to historyPanel session loaded event to return to Chat view
-        historyPanel.addPropertyChangeListener("sessionLoaded") { evt ->
-            if (evt.newValue == true) {
-                showChatView()
-            }
-        }
+        historyPanel.addPropertyChangeListener("sessionLoaded", historySessionLoadedListener)
 
         // Listen to historyPanel back to chat event
-        historyPanel.addPropertyChangeListener("backToChat") { evt ->
-            if (evt.newValue == true) {
-                showChatView()
-            }
-        }
+        historyPanel.addPropertyChangeListener("backToChat", historyBackToChatListener)
 
         // Listen to mode changes to show/hide steps queue
         cs.launch {
@@ -313,11 +323,7 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
             }
 
             // Listen to advanced view changes
-            settingsView!!.addPropertyChangeListener("advancedViewChanged") { evt ->
-                if (evt.newValue is Boolean) {
-                    setAdvancedViewEnabled(evt.newValue as Boolean)
-                }
-            }
+            settingsView!!.addPropertyChangeListener("advancedViewChanged", advancedViewChangedListener)
 
             // Add settings to CardLayout (only first time)
             middlePanel.add(settingsView, "SETTINGS")
@@ -448,6 +454,11 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
      */
     fun dispose() {
         cs.cancel()
+        chatView.removePropertyChangeListener("messagesUpdated", chatMessagesUpdatedListener)
+        statusBar.removePropertyChangeListener("stopExecution", stopExecutionListener)
+        historyPanel.removePropertyChangeListener("sessionLoaded", historySessionLoadedListener)
+        historyPanel.removePropertyChangeListener("backToChat", historyBackToChatListener)
+        settingsView?.removePropertyChangeListener("advancedViewChanged", advancedViewChangedListener)
         chatView.dispose()
         stepsQueueView.dispose()
         contextPanel.dispose()

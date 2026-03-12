@@ -58,6 +58,8 @@ class TurnLLMCaller(
         logger.info { "[CALL_LLM] Final model selection: $providerName/$modelId" }
 
         val responseFormat = resolveResponseFormat(mode, providerName)
+        val thinkingEnabled = configService.isThinkingEnabled(taskId)
+        val noEgressEnabled = configService.isNoEgressEnabled(taskId)
 
         return withContext(Dispatchers.IO) {
             llmClient.complete(
@@ -68,6 +70,8 @@ class TurnLLMCaller(
                 taskId = taskId,
                 source = "AgentTurnLoop",
                 responseFormat = responseFormat,
+                thinking = thinkingEnabled,
+                noEgressEnabled = noEgressEnabled,
                 stream = streamCallback != null,
                 onChunk = streamCallback
             )

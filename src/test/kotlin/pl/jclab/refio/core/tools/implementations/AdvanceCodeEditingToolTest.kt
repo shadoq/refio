@@ -467,6 +467,17 @@ class AdvanceCodeEditingToolTest {
             assertFalse(result.success)
             assertTrue(result.error!!.contains("not a regular file", ignoreCase = true))
         }
+
+        @Test
+        fun `should return error when extension is excluded`() = runBlocking {
+            val result = tool.execute(mapOf(
+                "path" to "binary.exe",
+                "edit_description" to "Edit"
+            ))
+
+            assertFalse(result.success)
+            assertTrue(result.error!!.contains("extension not allowed", ignoreCase = true))
+        }
     }
 
     @Nested

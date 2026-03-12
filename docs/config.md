@@ -186,6 +186,9 @@ advanced:
   noEgressDefault: false         # Block external network calls by default
   readOnlyMode: false            # Prevent all file write operations
   autoOptimizePercentage: 85     # Auto-optimize context at this % of limit
+
+security:
+  allowSymlinks: false           # Unsafe opt-in: allow symbolic links in PathSandbox
 ```
 
 ### Tool Permissions
@@ -385,6 +388,7 @@ mcp:
 | `limits.maxFileSize` | `limits.max_file_size` | `10` |
 | `advanced.noEgressDefault` | `advanced.no_egress_default` | `false` |
 | `advanced.readOnlyMode` | `advanced.read_only_mode` | `false` |
+| `security.allowSymlinks` | `security.allow_symlinks` | `false` |
 | `rag.enabled` | `rag.enabled` | `true` |
 | `rag.indexOnStartup` | `rag.index_on_startup` | `true` |
 | `rag.searchSimilarityThreshold` | `rag.search_similarity_threshold` | `0.5` |

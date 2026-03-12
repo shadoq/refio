@@ -23,6 +23,7 @@ import pl.jclab.refio.core.db.MessageRole
 import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicReference
 import java.util.UUID
 import kotlin.reflect.typeOf
 
@@ -613,6 +614,7 @@ class SessionManager(private val project: Project) {
         model: String?,
         provider: String?
     ): Message {
+        stateManager.setIsGenerating(true)
         return try {
             val stream = isStreamingEnabled()
             val executionMode = session.executionMode
@@ -652,6 +654,8 @@ class SessionManager(private val project: Project) {
             )
             stateManager.appendMessage(errorMessage)
             throw e
+        } finally {
+            stateManager.setIsGenerating(false)
         }
     }
 
@@ -681,6 +685,9 @@ class SessionManager(private val project: Project) {
             // Create streaming message for UI updates
             var streamingMessageId: String? = null
             val streamingClosed = AtomicBoolean(false)
+            val pendingStreamContent = AtomicReference<String?>(null)
+            val pendingStreamComplete = AtomicBoolean(false)
+            var streamUiFlushJob: Job? = null
 
             // Create stream callback for UI updates
             // Filter TOOL_CALL blocks from streaming content for cleaner display
@@ -690,40 +697,63 @@ class SessionManager(private val project: Project) {
 
                     val filteredContent = filterToolCallBlocks(chunk.accumulated)
                     if (filteredContent.isNotBlank()) {
-                        if (streamingMessageId == null) {
-                            streamingMessageId = UUID.randomUUID().toString()
-                            val message = Message(
-                                id = streamingMessageId!!,
-                                taskId = session.id,
-                                role = "assistant",
-                                content = filteredContent,
-                                isStreaming = true,
-                                createdAt = System.currentTimeMillis()
-                            )
-                            stateManager.appendMessage(message)
-                        } else {
-                            stateManager.updateMessages { messages ->
-                                messages.map { msg ->
-                                    if (msg.id == streamingMessageId) {
-                                        msg.copy(
-                                            content = filteredContent,
-                                            lastChunkAt = System.currentTimeMillis(),
-                                            isStreaming = !chunk.isComplete
-                                        )
-                                    } else msg
-                                }
-                            }
-                        }
+                        pendingStreamContent.set(filteredContent)
+                    }
+                    if (chunk.isComplete) {
+                        pendingStreamComplete.set(true)
                     }
 
-                    if (chunk.isComplete && streamingMessageId != null) {
-                        val completedId = streamingMessageId
-                        streamingMessageId = null
-                        stateManager.updateMessages { messages ->
-                            messages.map { msg ->
-                                if (msg.id == completedId) {
-                                    msg.copy(isStreaming = false, lastChunkAt = System.currentTimeMillis())
-                                } else msg
+                    if (streamUiFlushJob?.isActive != true) {
+                        streamUiFlushJob = cs.launch {
+                            while (!streamingClosed.get()) {
+                                val contentToFlush = pendingStreamContent.getAndSet(null)
+                                val isComplete = pendingStreamComplete.get()
+
+                                if (!contentToFlush.isNullOrBlank()) {
+                                    if (streamingMessageId == null) {
+                                        streamingMessageId = UUID.randomUUID().toString()
+                                        val message = Message(
+                                            id = streamingMessageId!!,
+                                            taskId = session.id,
+                                            role = "assistant",
+                                            content = contentToFlush,
+                                            isStreaming = !isComplete,
+                                            createdAt = System.currentTimeMillis()
+                                        )
+                                        stateManager.appendMessage(message)
+                                    } else {
+                                        val activeMessageId = streamingMessageId
+                                        stateManager.updateMessages { messages ->
+                                            messages.map { msg ->
+                                                if (msg.id == activeMessageId) {
+                                                    msg.copy(
+                                                        content = contentToFlush,
+                                                        lastChunkAt = System.currentTimeMillis(),
+                                                        isStreaming = !isComplete
+                                                    )
+                                                } else msg
+                                            }
+                                        }
+                                    }
+                                } else if (isComplete && streamingMessageId != null) {
+                                    val completedId = streamingMessageId
+                                    stateManager.updateMessages { messages ->
+                                        messages.map { msg ->
+                                            if (msg.id == completedId) {
+                                                msg.copy(
+                                                    isStreaming = false,
+                                                    lastChunkAt = System.currentTimeMillis()
+                                                )
+                                            } else msg
+                                        }
+                                    }
+                                }
+
+                                if (isComplete) {
+                                    break
+                                }
+
+                                delay(500)
                             }
                         }
                     }
@@ -973,6 +1003,7 @@ class SessionManager(private val project: Project) {
             }
 
             streamingClosed.set(true)
+            streamUiFlushJob?.cancel()
             val completedStreamingMessageId = streamingMessageId
             streamingMessageId = null
             if (completedStreamingMessageId != null) {

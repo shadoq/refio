@@ -1,6 +1,8 @@
 package pl.jclab.refio.core.tools
 
+import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.services.logging.dualLogger
+import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import kotlin.io.path.*
@@ -11,7 +13,10 @@ private val logger = dualLogger("PathSandbox")
  * Security sandbox for file operations
  * Restricts all file operations to project working directory
  */
-class PathSandbox(private val projectRoot: Path) {
+class PathSandbox(
+    private val projectRoot: Path,
+    private val allowSymlinksProvider: () -> Boolean = { false }
+) {
     private val normalizedRoot: Path = projectRoot.normalize().toAbsolutePath()
 
     init {
@@ -27,11 +32,16 @@ class PathSandbox(private val projectRoot: Path) {
      */
     fun validatePath(path: Path, followSymlinks: Boolean = true): Path {
         val normalizedPath = path.normalize().toAbsolutePath()
+        val allowSymlinks = allowSymlinksProvider()
 
         if (!normalizedPath.startsWith(normalizedRoot)) {
             throw SecurityException(
                 "Path outside sandbox: $normalizedPath (sandbox: $normalizedRoot)"
             )
+        }
+
+        if (!allowSymlinks) {
+            rejectSymlinks(normalizedPath)
         }
 
         val realPath = resolveRealPathIfNeeded(normalizedPath, followSymlinks)
@@ -90,6 +100,23 @@ class PathSandbox(private val projectRoot: Path) {
         return validatePath(path, followSymlinks)
     }
 
+    private fun rejectSymlinks(path: Path) {
+        if (Files.exists(path) && Files.isSymbolicLink(path)) {
+            throw SecurityException("Symbolic links are not allowed for security reasons: $path")
+        }
+
+        var current = path.parent
+        while (current != null && current.startsWith(normalizedRoot)) {
+            if (Files.exists(current) && Files.isSymbolicLink(current)) {
+                throw SecurityException("Path contains symbolic link in parent directory: $current")
+            }
+            if (current == normalizedRoot) {
+                break
+            }
+            current = current.parent
+        }
+    }
+
     private fun resolveRealPathIfNeeded(path: Path, followSymlinks: Boolean): Path {
         if (!followSymlinks || !path.exists()) {
             return path
@@ -104,6 +131,12 @@ class PathSandbox(private val projectRoot: Path) {
     }
 
     companion object {
+        fun withConfig(projectRoot: Path, configService: ConfigService): PathSandbox {
+            return PathSandbox(projectRoot) {
+                configService.isSymlinkAccessAllowed()
+            }
+        }
+
         /**
          * Creates a sandbox for the current working directory
          */

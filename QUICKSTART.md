@@ -24,7 +24,6 @@
    ```
 3. **Launch sandbox IDE**:
    ```bash
-   cd agent/plugin
    ./gradlew runIde          # Linux/macOS  
    .\gradlew.bat runIde      # Windows
    ```
@@ -90,7 +89,8 @@ Write a snake game in javascript, css, html in one file. Build a classic Snake g
 
 - **Full Documentation**: See [README.md](README.md) for complete architecture overview
 - **Build Plugin ZIP**: Run `./gradlew buildPlugin` (output in `build/distributions/`)
-- **Install from ZIP**: `File > Settings > Plugins > Install Plugin from Disk`
+- **Install from ZIP**: `Settings > Plugins > Install Plugin from Disk`
+- **Privacy Details**: See [PRIVACY.md](PRIVACY.md)
 - **Advanced Features**: Enable Advanced View for RAG monitoring and debugging
 
 ---

@@ -12,6 +12,7 @@ import java.nio.file.Path
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createFile
 import kotlin.io.path.deleteIfExists
+import kotlin.io.path.writeText
 
 class PathSandboxTest {
     @TempDir
@@ -46,7 +47,7 @@ class PathSandboxTest {
     }
 
     @Test
-    fun `should allow symlink pointing inside sandbox`() {
+    fun `should reject symlink pointing inside sandbox by default`() {
         Assumptions.assumeTrue(isSymlinkSupported(), "Symlinks not supported")
 
         val insideFile = tempDir.resolve("safe.txt").createFile()
@@ -55,7 +56,48 @@ class PathSandboxTest {
         try {
             Files.createSymbolicLink(symlinkInSandbox, insideFile)
 
-            val result = sandbox.validatePath(symlinkInSandbox)
+            assertThrows(SecurityException::class.java) {
+                sandbox.validatePath(symlinkInSandbox)
+            }
+        } finally {
+            symlinkInSandbox.deleteIfExists()
+            insideFile.deleteIfExists()
+        }
+    }
+
+    @Test
+    fun `should reject path containing symlink parent directory`() {
+        Assumptions.assumeTrue(isSymlinkSupported(), "Symlinks not supported")
+
+        val realDir = tempDir.resolve("real-dir").createDirectories()
+        val nestedFile = realDir.resolve("file.txt").apply { writeText("ok") }
+        val linkedParent = tempDir.resolve("linked-parent")
+
+        try {
+            Files.createSymbolicLink(linkedParent, realDir)
+
+            assertThrows(SecurityException::class.java) {
+                sandbox.validatePath(linkedParent.resolve("file.txt"))
+            }
+        } finally {
+            linkedParent.deleteIfExists()
+            nestedFile.deleteIfExists()
+            realDir.deleteIfExists()
+        }
+    }
+
+    @Test
+    fun `should allow symlink when explicitly enabled`() {
+        Assumptions.assumeTrue(isSymlinkSupported(), "Symlinks not supported")
+
+        val permissiveSandbox = PathSandbox(tempDir) { true }
+        val insideFile = tempDir.resolve("safe.txt").createFile()
+        val symlinkInSandbox = tempDir.resolve("safe-link")
+
+        try {
+            Files.createSymbolicLink(symlinkInSandbox, insideFile)
+
+            val result = permissiveSandbox.validatePath(symlinkInSandbox)
 
             assertTrue(result.startsWith(tempDir))
         } finally {

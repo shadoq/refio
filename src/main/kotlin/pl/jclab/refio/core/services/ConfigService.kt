@@ -121,6 +121,7 @@ class ConfigService(
         // Tool result summarization configuration keys
         const val KEY_TOOL_SUMMARY_ENABLED = "tool_summary.enabled"
         const val KEY_TOOL_SUMMARY_MIN_LENGTH = "tool_summary.min_length"
+        const val KEY_SECURITY_ALLOW_SYMLINKS = "security.allow_symlinks"
 
         // Context configuration keys (ADR 0017)
         const val KEY_RECENT_WORK_FULL_DATA_LIMIT = "context.recent_work.full_data_limit"
@@ -889,6 +890,10 @@ class ConfigService(
             taskId = taskId,
             description = "Block external network calls"
         )
+    }
+
+    fun isSymlinkAccessAllowed(): Boolean {
+        return getConfigWithPrecedence(KEY_SECURITY_ALLOW_SYMLINKS)?.value?.toBoolean() ?: false
     }
 
     /**
@@ -2082,6 +2087,7 @@ class ConfigService(
             Triple(KEY_ADVANCED_VIEW, "false", "Show advanced UI options"),
             Triple(KEY_TOOL_SUMMARY_ENABLED, "true", "Enable tool result summarization"),
             Triple(KEY_TOOL_SUMMARY_MIN_LENGTH, "500", "Minimum tool output length for summarization"),
+            Triple(KEY_SECURITY_ALLOW_SYMLINKS, "false", "Allow symbolic links in PathSandbox (unsafe, opt-in)"),
             Triple(KEY_TASK_VERIFICATION_ENABLED, "false", "Enable task completion verification for AGENT mode"),
             Triple(KEY_MAX_CONSECUTIVE_TOOL_ERRORS, "3", "Max consecutive tool errors before failing the turn"),
             Triple(KEY_JSON_THINKING_XML_TAGS, DEFAULT_JSON_THINKING_XML_TAGS, "Comma-separated XML tags stripped before JSON extraction (e.g., thinking,think)")
