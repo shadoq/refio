@@ -340,16 +340,50 @@ class RagRepository {
             query
         }
 
-        filtered.map { row ->
-            Embedding(
-                id = row[EmbeddingsTable.id].value,
-                chunkId = row[EmbeddingsTable.chunkId],
-                model = row[EmbeddingsTable.model],
-                vector = row[EmbeddingsTable.vector].bytes,
-                dimensions = row[EmbeddingsTable.dimensions],
-                createdAt = row[EmbeddingsTable.createdAt]
-            )
+        filtered.map(::mapEmbedding)
+    }
+
+    fun countEmbeddings(
+        projectRoot: String,
+        model: String,
+        contentType: RagContentType? = null
+    ): Int = transaction {
+        val query = EmbeddingsTable
+            .innerJoin(IndexChunksTable, { chunkId }, { IndexChunksTable.id })
+            .innerJoin(IndexFilesTable, { IndexChunksTable.fileId }, { IndexFilesTable.id })
+            .selectAll().where { (IndexFilesTable.projectRoot eq projectRoot) and (EmbeddingsTable.model eq model) }
+
+        val filtered = if (contentType != null) {
+            query.andWhere { IndexFilesTable.contentType eq contentType }
+        } else {
+            query
         }
+
+        filtered.count().toInt()
+    }
+
+    fun getEmbeddingsBatch(
+        projectRoot: String,
+        model: String,
+        contentType: RagContentType? = null,
+        offset: Long,
+        limit: Int
+    ): List<Embedding> = transaction {
+        val query = EmbeddingsTable
+            .innerJoin(IndexChunksTable, { chunkId }, { IndexChunksTable.id })
+            .innerJoin(IndexFilesTable, { IndexChunksTable.fileId }, { IndexFilesTable.id })
+            .selectAll().where { (IndexFilesTable.projectRoot eq projectRoot) and (EmbeddingsTable.model eq model) }
+
+        val filtered = if (contentType != null) {
+            query.andWhere { IndexFilesTable.contentType eq contentType }
+        } else {
+            query
+        }
+
+        filtered
+            .orderBy(EmbeddingsTable.id to SortOrder.ASC)
+            .limit(limit, offset)
+            .map(::mapEmbedding)
     }
 
     /**

@@ -26,7 +26,9 @@ class TokenEstimator {
             "ollama" to 1.0,
             "gemini" to 1.05,
             "openrouter" to 1.0,
-            "lmstudio" to 1.0
+            "lmstudio" to 1.0,
+            "custom_openai" to 1.0,
+            "zai" to 1.0
         )
     }
 
@@ -125,7 +127,8 @@ class TokenEstimator {
             "anthropic" -> 200000
             "openai" -> 128000
             "gemini" -> 1000000
-            "ollama", "lmstudio", "openrouter" -> 32768
+            "zai" -> 128000
+            "ollama", "lmstudio", "openrouter", "custom_openai" -> 32768
             else -> 128000
         }
     }

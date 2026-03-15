@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.concurrent.ConcurrentHashMap
 
 private val logger = dualLogger("CodebaseContextProvider")
 
@@ -29,6 +30,21 @@ private val logger = dualLogger("CodebaseContextProvider")
  */
 class CodebaseContextProvider : BaseContextProvider() {
     private val configService = ConfigService(ConfigRepository())
+
+    companion object {
+        private val cache = ConcurrentHashMap<CacheKey, CacheEntry>()
+
+        fun invalidateCache(projectRoot: String? = null) {
+            if (projectRoot == null) {
+                cache.clear()
+                return
+            }
+
+            cache.keys
+                .filter { it.projectRoot == projectRoot }
+                .forEach { cache.remove(it) }
+        }
+    }
 
     override val description = ContextProviderDescription(
         title = "codebase",
@@ -118,6 +134,13 @@ class CodebaseContextProvider : BaseContextProvider() {
             logger.info { "Searching codebase with ${stats.embeddingsCount} embeddings" }
 
             val config = RagSearchConfig.forCodeSearch().copy(topK = 5)
+            val cacheKey = CacheKey(projectRoot, searchQuery, embeddingModel, config.topK)
+            val ttlMs = configService.getRagSearchCacheTtlMs()
+            val cached = cache[cacheKey]
+            if (cached != null && System.currentTimeMillis() - cached.createdAt <= ttlMs) {
+                return@withContext cached.items
+            }
+
             val results = ragSearchService.search(
                 projectRoot = projectRoot,
                 query = searchQuery,
@@ -144,7 +167,7 @@ class CodebaseContextProvider : BaseContextProvider() {
 
             logger.info { "Found ${filteredResults.size} results" }
 
-            return@withContext filteredResults.map { result ->
+            val items = filteredResults.map { result ->
                 ContextItem(
                     description = "${result.filePath} (similarity: ${String.format("%.2f", result.similarity)})",
                     content = buildString {
@@ -163,6 +186,8 @@ class CodebaseContextProvider : BaseContextProvider() {
                     )
                 )
             }
+            cache[cacheKey] = CacheEntry(items = items, createdAt = System.currentTimeMillis())
+            return@withContext items
         } catch (e: CircuitBreakerOpenException) {
             logger.warn(e) { "Embedding provider unavailable" }
             return@withContext listOf(
@@ -266,8 +291,24 @@ class CodebaseContextProvider : BaseContextProvider() {
             return delegate.generateEmbedding(text, model.substringAfter("/"))
         }
 
+        override suspend fun generateBatch(texts: List<String>, model: String): List<FloatArray> {
+            return delegate.generateBatch(texts, model.substringAfter("/"))
+        }
+
         override fun getEmbeddingDimensions(model: String): Int {
             return delegate.getEmbeddingDimensions(model.substringAfter("/"))
         }
     }
+
+    private data class CacheKey(
+        val projectRoot: String,
+        val query: String,
+        val model: String,
+        val topK: Int
+    )
+
+    private data class CacheEntry(
+        val items: List<ContextItem>,
+        val createdAt: Long
+    )
 }

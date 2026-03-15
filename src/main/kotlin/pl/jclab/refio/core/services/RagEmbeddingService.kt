@@ -34,10 +34,11 @@ private val logger = dualLogger("RagEmbeddingService")
  */
 class RagEmbeddingService(
     private val ragRepository: RagRepository,
-    private val embeddingProvider: EmbeddingProvider
+    private val embeddingProvider: EmbeddingProvider,
+    private val configService: ConfigService? = null
 ) {
     companion object {
-        private const val BATCH_SIZE = 1
+        private const val BATCH_SIZE = ConfigService.DEFAULT_RAG_EMBEDDING_BATCH_SIZE
         private const val PER_CHUNK_THROTTLE_MS = 200L
         private const val MIN_COOLDOWN_DELAY_MS = 1_000L
     }
@@ -83,9 +84,76 @@ class RagEmbeddingService(
         var successCount = 0
         var errorCount = 0
 
-        // Process in batches
-        chunks.chunked(BATCH_SIZE).forEach { batch ->
-            for (chunk in batch) {
+        val batchSize = configService?.getRagEmbeddingBatchSize() ?: BATCH_SIZE
+
+        chunks.chunked(batchSize).forEach { batch ->
+            val preparedBatch = batch.map { chunk ->
+                chunk to clampContent(chunk, maxInputChars)
+            }
+
+            val batchProgress = if (totalChunks > 0) (processedChunks * 100) / totalChunks else 0
+            emit(EmbeddingProgress(
+                batchProgress,
+                "Embedding batch starting at chunk ${batch.first().id} (${processedChunks + 1}/$totalChunks)...",
+                processedChunks,
+                successCount
+            ))
+
+            try {
+                val vectors = embeddingProvider.generateBatch(
+                    preparedBatch.map { it.second },
+                    model
+                )
+
+                if (vectors.size != preparedBatch.size) {
+                    throw IllegalStateException("Embedding batch returned ${vectors.size} vectors for ${preparedBatch.size} chunks")
+                }
+
+                preparedBatch.zip(vectors).forEach { (chunkWithContent, vector) ->
+                    val (chunk, _) = chunkWithContent
+                    val expectedDimensions = embeddingProvider.getEmbeddingDimensions(model)
+                    if (vector.size != expectedDimensions) {
+                        logger.warn {
+                            "Embedding dimension mismatch: expected=$expectedDimensions, got=${vector.size} for chunk ${chunk.id}"
+                        }
+                    }
+
+                    ragRepository.createEmbedding(
+                        chunkId = chunk.id,
+                        model = model,
+                        vector = serializeVector(vector),
+                        dimensions = vector.size
+                    )
+                    successCount++
+                    processedChunks++
+                }
+
+                if (PER_CHUNK_THROTTLE_MS > 0) {
+                    delay(PER_CHUNK_THROTTLE_MS)
+                }
+                return@forEach
+            } catch (e: CircuitBreakerOpenException) {
+                if (failFastOnUnavailable) {
+                    logger.warn { "Embedding provider unavailable (${e.providerKey}); aborting background embedding run." }
+                    emit(EmbeddingProgress(
+                        batchProgress,
+                        "Provider unavailable, skipping embeddings (background).",
+                        processedChunks,
+                        successCount
+                    ))
+                    emit(EmbeddingProgress(
+                        100,
+                        "Completed with warning: embedding provider unavailable",
+                        processedChunks,
+                        successCount
+                    ))
+                    return@flow
+                }
+            } catch (e: Exception) {
+                logger.warn(e) { "Batch embedding failed for ${batch.size} chunks, falling back to sequential processing" }
+            }
+
+            for ((chunk, contentForEmbedding) in preparedBatch) {
                 var shouldEmitStart = true
 
                 while (true) {
@@ -101,7 +169,6 @@ class RagEmbeddingService(
                     }
 
                     try {
-                        val contentForEmbedding = clampContent(chunk, maxInputChars)
                         val vector = embeddingProvider.generateEmbedding(contentForEmbedding, model)
 
                         val expectedDimensions = embeddingProvider.getEmbeddingDimensions(model)

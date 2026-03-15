@@ -20,6 +20,34 @@ data class ContextBudget(
         )
     }
 
+    fun redistributeUnused(actualUsage: Map<ContextSection, Int>): ContextBudget {
+        val unused = sectionBudgets.entries.sumOf { (section, budget) ->
+            max(0, budget - (actualUsage[section] ?: 0))
+        }
+
+        if (unused <= 0) return this
+
+        val priorities = listOf(
+            ContextSection.CONVERSATION,
+            ContextSection.USER_CONTEXT,
+            ContextSection.RAG_FRAGMENTS,
+            ContextSection.WORKING_MEMORY
+        )
+
+        val redistributed = sectionBudgets.toMutableMap()
+        var remaining = unused
+
+        for (section in priorities) {
+            val currentBudget = redistributed[section] ?: continue
+            if (remaining <= 0) break
+            val bonus = minOf(remaining, max(1, currentBudget / 2))
+            redistributed[section] = currentBudget + bonus
+            remaining -= bonus
+        }
+
+        return ContextBudget(totalTokens = totalTokens, sectionBudgets = redistributed)
+    }
+
     companion object {
         private val defaultBudgets = mapOf(
             ContextSection.SYSTEM_PROMPT to 3000,

@@ -10,12 +10,11 @@ import kotlin.text.Charsets
 
 class EmbeddingsService(
     private val configService: ConfigService,
-    private val providerFactory: (String) -> EmbeddingProvider,
-    private val cacheSize: Int = DEFAULT_CACHE_SIZE
+    private val providerFactory: (String) -> EmbeddingProvider
 ) {
 
     companion object {
-        private const val DEFAULT_CACHE_SIZE = 10_000
+        private const val DEFAULT_CACHE_SIZE = ConfigService.DEFAULT_RAG_EMBEDDING_CACHE_SIZE
     }
 
     private val logger = dualLogger("EmbeddingsService")
@@ -23,7 +22,7 @@ class EmbeddingsService(
     private val digest = MessageDigest.getInstance("SHA-256")
     private val cache = object : LinkedHashMap<String, FloatArray>(32, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, FloatArray>?): Boolean {
-            return size > cacheSize
+            return size > configService.getRagEmbeddingCacheSize()
         }
     }
 

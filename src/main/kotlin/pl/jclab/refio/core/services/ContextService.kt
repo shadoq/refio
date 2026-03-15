@@ -871,6 +871,7 @@ class ContextService(
         val budget = resolveContextBudget(context, modelOperation = null)
         val parts = mutableListOf<String>()
         val usage = mutableListOf<String>()
+        val actualUsage = mutableMapOf<ContextSection, Int>()
         var remainingTokens = budget.totalTokens
         // Soft headroom for small-context setups (e.g., ~8k providers) so context is not over-truncated.
         // Kept disabled for large budgets to avoid hitting model limits.
@@ -908,6 +909,7 @@ class ContextService(
             if (tokens <= 0 || sectionContent.isBlank()) return
 
             parts.add(sectionContent)
+            actualUsage[section] = (actualUsage[section] ?: 0) + tokens
             if (tokens <= remainingTokens) {
                 remainingTokens = (remainingTokens - tokens).coerceAtLeast(0)
             } else {
@@ -957,15 +959,16 @@ class ContextService(
             userContextParts.add(buildMcpResourcesSection(context))
         }
         addSection(ContextSection.USER_CONTEXT, userContextParts.joinToString("\n\n"))
+        val redistributedBudget = budget.redistributeUnused(actualUsage)
 
         // TIER 3: SUPPLEMENTARY CONTEXT
         if (context.ragFragments.isNotEmpty()) {
-            val ragBudget = minOf(budget.budgetFor(ContextSection.RAG_FRAGMENTS), remainingTokens)
+            val ragBudget = minOf(redistributedBudget.budgetFor(ContextSection.RAG_FRAGMENTS), remainingTokens)
             addSection(ContextSection.RAG_FRAGMENTS, buildRagFragmentsSection(context), ragBudget)
         }
 
         if (context.conversationHistory.isNotEmpty()) {
-            val conversationBudget = minOf(budget.budgetFor(ContextSection.CONVERSATION), remainingTokens)
+            val conversationBudget = minOf(redistributedBudget.budgetFor(ContextSection.CONVERSATION), remainingTokens)
             addSection(
                 ContextSection.CONVERSATION,
                 buildCompressedConversationSection(context, conversationBudget),

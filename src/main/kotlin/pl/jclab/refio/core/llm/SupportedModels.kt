@@ -151,6 +151,16 @@ object SupportedModels {
         Regex("^.*")
     )
 
+    private val CUSTOM_OPENAI_SUPPORTED = setOf(
+        Regex("^.*")
+    )
+
+    private val ZAI_SUPPORTED = setOf(
+        Regex("^.*glm.*"),
+        Regex("^.*z-ai.*"),
+        Regex("^.*")
+    )
+
     /**
      * Ollama supported models.
      */
@@ -211,6 +221,22 @@ object SupportedModels {
                 val supported = LM_STUDIO_SUPPORTED.any { it.matches(modelId) }
                 if (!supported) {
                     logger.debug { "[WHITELIST] LM Studio model not supported: $modelId" }
+                }
+                supported
+            }
+
+            "custom_openai" -> {
+                val supported = CUSTOM_OPENAI_SUPPORTED.any { it.matches(modelId) }
+                if (!supported) {
+                    logger.debug { "[WHITELIST] Custom OpenAI model not supported: $modelId" }
+                }
+                supported
+            }
+
+            "zai" -> {
+                val supported = ZAI_SUPPORTED.any { it.matches(modelId) }
+                if (!supported) {
+                    logger.debug { "[WHITELIST] Z.AI model not supported: $modelId" }
                 }
                 supported
             }

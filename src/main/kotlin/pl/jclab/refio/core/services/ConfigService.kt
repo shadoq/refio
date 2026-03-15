@@ -91,9 +91,12 @@ class ConfigService(
         const val KEY_RAG_MAX_CHUNKS_PER_FILE = "rag.max_chunks_per_file"
         const val KEY_RAG_INDEX_BATCH_SIZE = "rag.index_batch_size"
         const val KEY_RAG_EMBEDDINGS_BATCH_SIZE = "rag.embeddings_batch_size"
+        const val KEY_RAG_EMBEDDING_CACHE_SIZE = "rag.embedding_cache_size"
         const val KEY_RAG_IGNORED_DIRECTORIES = "rag.ignored_directories"
+        const val KEY_RAG_CHUNKING_MODE = "rag.chunking_mode"
         const val KEY_RAG_SEARCH_SIMILARITY_THRESHOLD = "rag.search_similarity_threshold"
         const val KEY_RAG_SEARCH_TOP_K = "rag.search_top_k"
+        const val KEY_RAG_SEARCH_CACHE_TTL_SECONDS = "rag.search.cache_ttl_seconds"
         const val KEY_RAG_SEARCH_HYBRID_ENABLED = "rag.search_hybrid_enabled"
         const val KEY_RAG_SEARCH_SEMANTIC_WEIGHT = "rag.search_semantic_weight"
         const val KEY_RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS = "rag.search_include_context_chunks"
@@ -129,6 +132,7 @@ class ConfigService(
         const val KEY_CONTEXT_BUDGET_TOTAL_TOKENS = "context.budget.total_tokens"
         const val KEY_CONTEXT_BUDGET_INPUT_RATIO = "context.budget.input_ratio"
         const val KEY_CONTEXT_BUDGET_SECTION_PREFIX = "context.budget.section."
+        const val KEY_WORKING_MEMORY_MAX_FACTS = "working_memory.max_facts"
 
         // Subagents configuration keys
         const val KEY_SUBAGENTS_BUILTIN_ENABLED = "subagents.builtin_enabled"
@@ -145,6 +149,11 @@ class ConfigService(
         const val KEY_PROVIDER_LM_STUDIO_API_KEY = "providers.lmstudio.lmstudio_api_key"
         const val KEY_PROVIDER_LM_STUDIO_BASE_URL = "providers.lmstudio.lmstudio_base_url"
         const val KEY_PROVIDER_LM_STUDIO_CONTEXT_SIZE = "providers.lmstudio.lmstudio_context_size"
+        const val KEY_PROVIDER_CUSTOM_OPENAI_API_KEY = "providers.custom_openai.custom_openai_api_key"
+        const val KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL = "providers.custom_openai.custom_openai_base_url"
+        const val KEY_PROVIDER_CUSTOM_OPENAI_MODEL = "providers.custom_openai.custom_openai_model"
+        const val KEY_PROVIDER_ZAI_API_KEY = "providers.zai.zai_api_key"
+        const val KEY_PROVIDER_ZAI_BASE_URL = "providers.zai.zai_base_url"
 
         // Fallback defaults (used when no config exists)
         const val FALLBACK_MODEL = "qwen2.5:7b"
@@ -153,6 +162,7 @@ class ConfigService(
         const val FALLBACK_WEAK_PROVIDER = "ollama"
         const val FALLBACK_EMBEDDING_MODEL = "nomic-embed-text"
         const val FALLBACK_EMBEDDING_PROVIDER = "ollama"
+        const val DEFAULT_ZAI_BASE_URL = "https://api.z.ai/v1"
 
         // Limit defaults
         const val DEFAULT_API_CALL_TIMEOUT = 360 // seconds
@@ -168,11 +178,14 @@ class ConfigService(
         const val DEFAULT_RAG_INDEX_ON_STARTUP = true
         const val DEFAULT_RAG_INDEX_BATCH_SIZE = 10
         const val DEFAULT_RAG_EMBEDDING_BATCH_SIZE = 50
+        const val DEFAULT_RAG_EMBEDDING_CACHE_SIZE = 2_000
         const val DEFAULT_RAG_CACHE_TTL_MS = 300_000L
         const val DEFAULT_RAG_MAX_CONCURRENT_JOBS = 4
         const val DEFAULT_RAG_MAX_CHUNKS_PER_FILE = 100
+        const val DEFAULT_RAG_CHUNKING_MODE = "semantic"
         const val DEFAULT_RAG_SEARCH_SIMILARITY_THRESHOLD = 0.5f
         const val DEFAULT_RAG_SEARCH_TOP_K = 5
+        const val DEFAULT_RAG_SEARCH_CACHE_TTL_SECONDS = 60L
         const val DEFAULT_RAG_SEARCH_HYBRID_ENABLED = false
         const val DEFAULT_RAG_SEARCH_SEMANTIC_WEIGHT = 0.7f
         const val DEFAULT_RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS = false
@@ -216,6 +229,7 @@ class ConfigService(
         const val DEFAULT_RECENT_WORK_FULL_DATA_LIMIT = 5
         const val DEFAULT_RECENT_WORK_SUMMARY_MAX_LENGTH = 1000
         const val DEFAULT_CONTEXT_BUDGET_INPUT_RATIO = 0.85
+        const val DEFAULT_WORKING_MEMORY_MAX_FACTS = 20
 
         // Agent flow defaults (ADR 0019)
         const val DEFAULT_TASK_VERIFICATION_ENABLED = false
@@ -286,6 +300,7 @@ class ConfigService(
         // Infer provider from model name patterns
         val provider = when {
             modelString.startsWith("gpt-") -> "openai"
+            modelString.startsWith("glm-") -> "zai"
             modelString.startsWith("claude-") -> "anthropic"
             else -> FALLBACK_PROVIDER // Default to ollama for unknown models
         }
@@ -1103,6 +1118,26 @@ class ConfigService(
         )
     }
 
+    fun getCustomOpenAIBaseUrl(): String? {
+        return get(KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL)?.takeIf { it.isNotBlank() }
+    }
+
+    fun getCustomOpenAIApiKey(): String? {
+        return get(KEY_PROVIDER_CUSTOM_OPENAI_API_KEY)?.takeIf { it.isNotBlank() }
+    }
+
+    fun getCustomOpenAIModel(): String? {
+        return get(KEY_PROVIDER_CUSTOM_OPENAI_MODEL)?.takeIf { it.isNotBlank() }
+    }
+
+    fun getZAIBaseUrl(): String {
+        return get(KEY_PROVIDER_ZAI_BASE_URL)?.takeIf { it.isNotBlank() } ?: DEFAULT_ZAI_BASE_URL
+    }
+
+    fun getZAIApiKey(): String? {
+        return get(KEY_PROVIDER_ZAI_API_KEY)?.takeIf { it.isNotBlank() }
+    }
+
     private fun buildGeneralConfig(): pl.jclab.refio.core.config.GeneralConfig {
         return pl.jclab.refio.core.config.GeneralConfig(
             formatMarkdown = isFormatMarkdownEnabled(),
@@ -1340,6 +1375,11 @@ class ConfigService(
         return config?.value?.toIntOrNull()?.coerceAtLeast(1) ?: DEFAULT_RAG_EMBEDDING_BATCH_SIZE
     }
 
+    fun getRagEmbeddingCacheSize(): Int {
+        val config = configRepository.get(KEY_RAG_EMBEDDING_CACHE_SIZE, ConfigScope.APP)
+        return config?.value?.toIntOrNull()?.coerceAtLeast(100) ?: DEFAULT_RAG_EMBEDDING_CACHE_SIZE
+    }
+
     fun getRagIgnoredDirectories(): Set<String> {
         val config = configRepository.get(KEY_RAG_IGNORED_DIRECTORIES, ConfigScope.APP)
         val raw = config?.value ?: DEFAULT_RAG_IGNORED_DIRECTORIES.joinToString(",")
@@ -1347,6 +1387,12 @@ class ConfigService(
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .toSet()
+    }
+
+    fun getRagChunkingMode(): String {
+        return get(KEY_RAG_CHUNKING_MODE)?.trim()?.lowercase()
+            ?.takeIf { it.isNotBlank() }
+            ?: DEFAULT_RAG_CHUNKING_MODE
     }
 
     fun getRagSearchSimilarityThreshold(): Float {
@@ -1357,6 +1403,12 @@ class ConfigService(
 
     fun getRagSearchTopK(): Int {
         return get(KEY_RAG_SEARCH_TOP_K)?.toIntOrNull()?.coerceAtLeast(1) ?: DEFAULT_RAG_SEARCH_TOP_K
+    }
+
+    fun getRagSearchCacheTtlMs(): Long {
+        val seconds = get(KEY_RAG_SEARCH_CACHE_TTL_SECONDS)?.toLongOrNull()
+            ?: DEFAULT_RAG_SEARCH_CACHE_TTL_SECONDS
+        return seconds.coerceAtLeast(0) * 1000L
     }
 
     fun getRagSearchHybridEnabled(): Boolean {
@@ -1372,6 +1424,12 @@ class ConfigService(
     fun getRagSearchIncludeContextChunks(): Boolean {
         return get(KEY_RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS)?.toBoolean()
             ?: DEFAULT_RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS
+    }
+
+    fun getWorkingMemoryMaxFacts(): Int {
+        val value = get(KEY_WORKING_MEMORY_MAX_FACTS)?.toIntOrNull()
+            ?: DEFAULT_WORKING_MEMORY_MAX_FACTS
+        return value.coerceAtLeast(1)
     }
 
     fun getProjectAnalysisMaxFiles(): Int {
@@ -2088,6 +2146,11 @@ class ConfigService(
             Triple(KEY_TOOL_SUMMARY_ENABLED, "true", "Enable tool result summarization"),
             Triple(KEY_TOOL_SUMMARY_MIN_LENGTH, "500", "Minimum tool output length for summarization"),
             Triple(KEY_SECURITY_ALLOW_SYMLINKS, "false", "Allow symbolic links in PathSandbox (unsafe, opt-in)"),
+            Triple(KEY_PROVIDER_ZAI_BASE_URL, DEFAULT_ZAI_BASE_URL, "Base URL for Z.AI provider"),
+            Triple(KEY_RAG_EMBEDDING_CACHE_SIZE, DEFAULT_RAG_EMBEDDING_CACHE_SIZE.toString(), "Maximum embedding cache entries"),
+            Triple(KEY_RAG_CHUNKING_MODE, DEFAULT_RAG_CHUNKING_MODE, "RAG chunking mode (semantic or line_based)"),
+            Triple(KEY_RAG_SEARCH_CACHE_TTL_SECONDS, DEFAULT_RAG_SEARCH_CACHE_TTL_SECONDS.toString(), "TTL for cached @codebase search results in seconds"),
+            Triple(KEY_WORKING_MEMORY_MAX_FACTS, DEFAULT_WORKING_MEMORY_MAX_FACTS.toString(), "Maximum working memory facts stored per task"),
             Triple(KEY_TASK_VERIFICATION_ENABLED, "false", "Enable task completion verification for AGENT mode"),
             Triple(KEY_MAX_CONSECUTIVE_TOOL_ERRORS, "3", "Max consecutive tool errors before failing the turn"),
             Triple(KEY_JSON_THINKING_XML_TAGS, DEFAULT_JSON_THINKING_XML_TAGS, "Comma-separated XML tags stripped before JSON extraction (e.g., thinking,think)")

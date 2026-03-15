@@ -6,6 +6,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import pl.jclab.refio.core.llm.adapters.AnthropicAdapter
+import pl.jclab.refio.core.llm.adapters.CustomOpenAIAdapter
 import pl.jclab.refio.core.llm.adapters.GeminiAdapter
 import pl.jclab.refio.core.llm.adapters.LMStudioAdapter
 import pl.jclab.refio.core.llm.adapters.OllamaAdapter
@@ -153,6 +154,9 @@ fun inferProvider(model: String, default: String = "ollama"): String {
         // OpenAI models
         model.startsWith("gpt-") || model.startsWith("o1") -> "openai"
 
+        // Z.AI models
+        model.startsWith("glm-") -> "zai"
+
         // Anthropic models
         model.startsWith("claude-") -> "anthropic"
 
@@ -190,7 +194,7 @@ suspend fun getAllModels(
 
         data class ProviderFetch(val name: String, val models: List<ModelConfig>)
 
-        val providerNames = listOf("ollama", "openai", "anthropic", "openrouter", "gemini", "lmstudio")
+        val providerNames = listOf("ollama", "openai", "anthropic", "openrouter", "gemini", "lmstudio", "custom_openai", "zai")
 
         val results = coroutineScope {
             providerNames.map { name ->
@@ -203,6 +207,18 @@ suspend fun getAllModels(
                             "openrouter" -> OpenRouterAdapter(configService = configService).listModels()
                             "gemini" -> GeminiAdapter(configService = configService).listModels()
                             "lmstudio" -> LMStudioAdapter(configService = configService).listModels()
+                            "custom_openai" -> CustomOpenAIAdapter(
+                                model = configService?.getCustomOpenAIModel() ?: "custom-openai",
+                                providerName = "custom_openai",
+                                configService = configService
+                            ).listModels()
+                            "zai" -> CustomOpenAIAdapter(
+                                model = "glm-4.5",
+                                providerName = "zai",
+                                configService = configService,
+                                requireApiKey = true,
+                                defaultBaseUrl = configService?.getZAIBaseUrl()
+                            ).listModels()
                             else -> emptyList()
                         }
                         logger.info { "[ModelRegistry] Fetched ${models.size} models from $name" }
@@ -270,6 +286,24 @@ suspend fun getModelsByProvider(
             }
             "lmstudio" -> {
                 val adapter = LMStudioAdapter(configService = configService)
+                adapter.listModels()
+            }
+            "custom_openai" -> {
+                val adapter = CustomOpenAIAdapter(
+                    model = configService?.getCustomOpenAIModel() ?: "custom-openai",
+                    providerName = "custom_openai",
+                    configService = configService
+                )
+                adapter.listModels()
+            }
+            "zai" -> {
+                val adapter = CustomOpenAIAdapter(
+                    model = "glm-4.5",
+                    providerName = "zai",
+                    configService = configService,
+                    requireApiKey = true,
+                    defaultBaseUrl = configService?.getZAIBaseUrl()
+                )
                 adapter.listModels()
             }
             else -> {

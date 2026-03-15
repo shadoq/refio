@@ -31,6 +31,10 @@ interface EmbeddingProvider {
      */
     suspend fun generateEmbedding(text: String, model: String): FloatArray
 
+    suspend fun generateBatch(texts: List<String>, model: String): List<FloatArray> {
+        return texts.map { text -> generateEmbedding(text, model) }
+    }
+
     /**
      * Get dimensions of embeddings produced by this model
      */
@@ -144,6 +148,59 @@ class OpenAIEmbeddingProvider : EmbeddingProvider {
         }
     }
 
+    override suspend fun generateBatch(texts: List<String>, model: String): List<FloatArray> {
+        if (texts.isEmpty()) return emptyList()
+
+        val apiKey = System.getProperty("OPENAI_API_KEY")
+            ?: throw IllegalStateException("OPENAI_API_KEY not set in system properties")
+
+        val providerKey = "openai:$OPENAI_API_URL"
+        if (!EmbeddingCircuitBreaker.allowCall(providerKey)) {
+            throw CircuitBreakerOpenException(providerKey, computeRetryDelay(providerKey))
+        }
+
+        try {
+            val requestBody = OpenAIEmbeddingBatchRequest(
+                input = texts,
+                model = model
+            )
+
+            val response = client.post(OPENAI_API_URL) {
+                header("Authorization", "Bearer $apiKey")
+                contentType(ContentType.Application.Json)
+                setBody(requestBody)
+            }
+
+            if (!response.status.isSuccess()) {
+                val errorBody = response.bodyAsText()
+                logger.error { "OpenAI embedding batch API error: ${response.status} - $errorBody" }
+                EmbeddingCircuitBreaker.recordFailure(providerKey)
+                throw Exception("OpenAI API error: ${response.status}")
+            }
+
+            val responseBody = gson.fromJson(response.bodyAsText(), OpenAIEmbeddingResponse::class.java)
+            val embeddingsByIndex = responseBody.data.associateBy { it.index }
+            val embeddings = texts.indices.map { index ->
+                embeddingsByIndex[index]?.embedding?.map { it.toFloat() }?.toFloatArray()
+                    ?: throw Exception("Missing embedding at index $index from OpenAI API")
+            }
+
+            EmbeddingCircuitBreaker.recordSuccess(providerKey)
+            return embeddings
+        } catch (e: CircuitBreakerOpenException) {
+            throw e
+        } catch (e: Exception) {
+            val shouldNotify = EmbeddingCircuitBreaker.recordFailure(providerKey)
+            if (shouldNotify) {
+                logger.warn { "OpenAI embedding service is unavailable. Batch embeddings disabled. Error: ${e.message}" }
+            }
+            if (EmbeddingCircuitBreaker.getState(providerKey) == "OPEN") {
+                throw CircuitBreakerOpenException(providerKey, computeRetryDelay(providerKey), e)
+            }
+            throw e
+        }
+    }
+
     override fun getEmbeddingDimensions(model: String): Int {
         return MODEL_DIMENSIONS[model]
             ?: throw IllegalArgumentException("Unknown OpenAI embedding model: $model")
@@ -247,6 +304,57 @@ class OllamaEmbeddingProvider(
         }
     }
 
+    override suspend fun generateBatch(texts: List<String>, model: String): List<FloatArray> {
+        if (texts.isEmpty()) return emptyList()
+
+        val providerKey = "ollama:$endpoint"
+        if (!EmbeddingCircuitBreaker.allowCall(providerKey)) {
+            throw CircuitBreakerOpenException(providerKey, computeRetryDelay(providerKey))
+        }
+
+        try {
+            val requestBody = OllamaEmbeddingBatchRequest(
+                model = model,
+                input = texts
+            )
+
+            val response = client.post("$endpoint/api/embed") {
+                contentType(ContentType.Application.Json)
+                setBody(requestBody)
+            }
+
+            if (!response.status.isSuccess()) {
+                val errorBody = response.bodyAsText()
+                logger.error { "Ollama embedding batch API error: ${response.status} - $errorBody" }
+                EmbeddingCircuitBreaker.recordFailure(providerKey)
+                throw Exception("Ollama API error: ${response.status}")
+            }
+
+            val responseBody = gson.fromJson(response.bodyAsText(), OllamaEmbeddingResponse::class.java)
+            val embeddings = responseBody.embeddings.map { vector ->
+                vector.map { it.toFloat() }.toFloatArray()
+            }
+
+            if (embeddings.size != texts.size) {
+                throw Exception("Expected ${texts.size} embeddings from Ollama, got ${embeddings.size}")
+            }
+
+            EmbeddingCircuitBreaker.recordSuccess(providerKey)
+            return embeddings
+        } catch (e: CircuitBreakerOpenException) {
+            throw e
+        } catch (e: Exception) {
+            val shouldNotify = EmbeddingCircuitBreaker.recordFailure(providerKey)
+            if (shouldNotify) {
+                logger.warn { "Ollama service at $endpoint is unavailable. Batch embeddings disabled. Error: ${e.message}" }
+            }
+            if (EmbeddingCircuitBreaker.getState(providerKey) == "OPEN") {
+                throw CircuitBreakerOpenException(providerKey, computeRetryDelay(providerKey), e)
+            }
+            throw e
+        }
+    }
+
     override fun getEmbeddingDimensions(model: String): Int {
         return MODEL_DIMENSIONS[model]
             ?: 768  // Default to common dimension size
@@ -258,6 +366,11 @@ class OllamaEmbeddingProvider(
 // OpenAI DTOs
 private data class OpenAIEmbeddingRequest(
     val input: String,
+    val model: String
+)
+
+private data class OpenAIEmbeddingBatchRequest(
+    val input: List<String>,
     val model: String
 )
 
@@ -281,6 +394,11 @@ private data class OpenAIUsage(
 private data class OllamaEmbeddingRequest(
     val model: String,
     val input: String
+)
+
+private data class OllamaEmbeddingBatchRequest(
+    val model: String,
+    val input: List<String>
 )
 
 private data class OllamaEmbeddingResponse(

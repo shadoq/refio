@@ -93,7 +93,7 @@ class CoreApiRouter(
     internal val promptsService = PromptsService(promptsRepository)
     internal val toolPermissionsService = ToolPermissionsService(configRepository)
     internal val llmClient = llmClientOverride ?: LLMClient(configService)
-    private val workingMemoryService = WorkingMemoryService()
+    private val workingMemoryService = WorkingMemoryService(configService.getWorkingMemoryMaxFacts())
     private val conversationSummaryService = ConversationSummaryService(
         llmClient = llmClient,
         promptsService = promptsService,
@@ -135,11 +135,16 @@ class CoreApiRouter(
         )
     } else null
 
+    private val ragChunkingStrategy: ChunkingStrategy = when (ChunkingMode.fromConfig(configService.getRagChunkingMode())) {
+        ChunkingMode.LINE_BASED -> DefaultChunkingStrategy()
+        ChunkingMode.SEMANTIC -> SemanticChunkingStrategy()
+    }
+
     private val fileAnalyzerService: FileAnalyzerService? = if (projectRoot != null && embeddingsService != null) {
         FileAnalyzerService(
             configService = configService,
             ragRepository = ragRepository,
-            chunkingStrategy = SemanticChunkingStrategy(),
+            chunkingStrategy = ragChunkingStrategy,
             embeddingsService = embeddingsService,
             analyzers = languageAnalyzers,
             scope = routerScope

@@ -3,6 +3,14 @@ package pl.jclab.refio.core.services
 import pl.jclab.refio.core.db.RagContentType
 import pl.jclab.refio.core.db.repositories.IndexingProgressRepository
 import pl.jclab.refio.core.db.repositories.RagRepository
+import pl.jclab.refio.core.services.analysis.CodeElements
+import pl.jclab.refio.core.services.analysis.HtmlLanguageAnalyzer
+import pl.jclab.refio.core.services.analysis.JavaLanguageAnalyzer
+import pl.jclab.refio.core.services.analysis.KotlinLanguageAnalyzer
+import pl.jclab.refio.core.services.analysis.LanguageAnalyzer
+import pl.jclab.refio.core.services.analysis.PythonLanguageAnalyzer
+import pl.jclab.refio.core.services.analysis.TypeScriptLanguageAnalyzer
+import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.core.utils.AiIgnoreMatcher
 import pl.jclab.refio.services.logging.dualLogger
 import kotlinx.coroutines.CancellationException
@@ -29,7 +37,14 @@ class RagIndexingService(
     private val ragRepository: RagRepository,
     private val configService: ConfigService,
     private val chunkingStrategy: ChunkingStrategy = DefaultChunkingStrategy(),
-    private val progressRepository: IndexingProgressRepository = IndexingProgressRepository()
+    private val progressRepository: IndexingProgressRepository = IndexingProgressRepository(),
+    private val analyzers: List<LanguageAnalyzer> = listOf(
+        KotlinLanguageAnalyzer(),
+        JavaLanguageAnalyzer(),
+        PythonLanguageAnalyzer(),
+        TypeScriptLanguageAnalyzer(),
+        HtmlLanguageAnalyzer()
+    )
 ) {
 
     companion object {
@@ -321,7 +336,19 @@ class RagIndexingService(
         }
 
         val content = readFileContent(projectFile.absolutePath)
-        val chunks = chunkingStrategy.chunkText(content, CHUNK_SIZE_TOKENS, CHUNK_OVERLAP_TOKENS)
+        val chunkMode = ChunkingMode.fromConfig(configService.getRagChunkingMode())
+        val language = projectFile.absolutePath.extension.lowercase().ifBlank { null }
+        val codeElements = if (chunkMode == ChunkingMode.SEMANTIC) {
+            analyzeContent(projectFile.absolutePath, content)
+        } else {
+            CodeElements()
+        }
+        val chunks = chunkingStrategy.createChunks(
+            content = content,
+            codeElements = codeElements,
+            language = language,
+            maxChunkChars = CHUNK_SIZE_TOKENS
+        )
         val maxChunks = configService.getRagMaxChunksPerFile()
         val mimeType = try {
             Files.probeContentType(projectFile.absolutePath)
@@ -359,11 +386,21 @@ class RagIndexingService(
                 content = chunk.content,
                 startLine = chunk.startLine,
                 endLine = chunk.endLine,
-                startChar = chunk.startChar,
-                endChar = chunk.endChar,
-                metadata = null
+                startChar = null,
+                endChar = null,
+                metadata = chunk.metadata
+                    .takeIf { it != ChunkMetadata() }
+                    ?.let { metadata -> gson.toJson(metadata) }
             )
         }
+    }
+
+    private fun analyzeContent(path: Path, content: String): CodeElements {
+        val analyzer = analyzers.firstOrNull { analyzer -> analyzer.matches(path) } ?: return CodeElements()
+
+        return runCatching { analyzer.analyze(path, content) }
+            .onFailure { error -> logger.warn(error) { "Semantic chunk analysis failed for path=$path" } }
+            .getOrElse { CodeElements() }
     }
 
     private fun isTextFile(path: Path): Boolean {

@@ -7,6 +7,7 @@ import pl.jclab.refio.core.services.rag.RagSearchConfig
 import pl.jclab.refio.services.logging.dualLogger
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.PriorityQueue
 import kotlin.math.sqrt
 
 private val logger = dualLogger("RagSearchService")
@@ -42,6 +43,7 @@ class RagSearchService(
 ) {
     companion object {
         private const val MIN_SIMILARITY_THRESHOLD = 0.3f
+        private const val SEARCH_BATCH_SIZE = 500
     }
 
     /**
@@ -137,61 +139,77 @@ class RagSearchService(
             throw Exception("Failed to generate query embedding: ${e.message}", e)
         }
 
-        // 2. Get all embeddings for project
-        val embeddings = ragRepository.getEmbeddings(projectRoot, model, config.contentType)
+        val totalEmbeddings = ragRepository.countEmbeddings(projectRoot, model, config.contentType)
+        logger.debug { "Found $totalEmbeddings embeddings to search" }
 
-        logger.debug { "Found ${embeddings.size} embeddings to search" }
-
-        if (embeddings.isEmpty()) {
+        if (totalEmbeddings == 0) {
             logger.warn { "No embeddings found for project=$projectRoot, model=$model" }
             return emptyList()
         }
 
-        // 3. Calculate similarities and collect embeddings above threshold
-        val allSimilarities = mutableListOf<Pair<Int, Float>>()  // (embeddingId, similarity)
-        val embeddingsAboveThreshold = mutableListOf<Pair<pl.jclab.refio.core.db.Embedding, Float>>()
+        val allSimilarities = mutableListOf<Pair<Int, Float>>()
+        val chunkIdsAboveThreshold = linkedSetOf<Int>()
         val similarityByChunkId = mutableMapOf<Int, Float>()
+        val topHeap = PriorityQueue<Pair<Float, Int>>(compareBy { it.first })
 
-        embeddings.forEach { embedding ->
-            try {
-                val chunkVector = deserializeVector(embedding.vector)
-                val similarity = cosineSimilarity(queryVector, chunkVector)
-
-                // Track all similarities for debugging
-                allSimilarities.add(embedding.id to similarity)
-                similarityByChunkId[embedding.chunkId] = similarity
-
-                // Collect embeddings above threshold
-                if (similarity >= config.similarityThreshold) {
-                    embeddingsAboveThreshold.add(embedding to similarity)
-                }
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to process embedding ${embedding.id}" }
+        var offset = 0L
+        while (offset < totalEmbeddings) {
+            val batch = ragRepository.getEmbeddingsBatch(
+                projectRoot = projectRoot,
+                model = model,
+                contentType = config.contentType,
+                offset = offset,
+                limit = SEARCH_BATCH_SIZE
+            )
+            if (batch.isEmpty()) {
+                break
             }
+
+            batch.forEach { embedding ->
+                try {
+                    val chunkVector = deserializeVector(embedding.vector)
+                    val similarity = cosineSimilarity(queryVector, chunkVector)
+
+                    allSimilarities.add(embedding.id to similarity)
+                    similarityByChunkId[embedding.chunkId] = similarity
+
+                    if (similarity >= config.similarityThreshold) {
+                        chunkIdsAboveThreshold.add(embedding.chunkId)
+                    }
+
+                    if (topHeap.size < config.topK) {
+                        topHeap.offer(similarity to embedding.chunkId)
+                    } else if (similarity > (topHeap.peek()?.first ?: Float.NEGATIVE_INFINITY)) {
+                        topHeap.poll()
+                        topHeap.offer(similarity to embedding.chunkId)
+                    }
+                } catch (e: Exception) {
+                    logger.error(e) { "Failed to process embedding ${embedding.id}" }
+                }
+            }
+
+            offset += batch.size
         }
 
-        logger.debug { "Embeddings above threshold: ${embeddingsAboveThreshold.size}/${embeddings.size}" }
+        logger.debug { "Embeddings above threshold: ${chunkIdsAboveThreshold.size}/$totalEmbeddings" }
 
-        if (embeddingsAboveThreshold.isEmpty()) {
+        if (chunkIdsAboveThreshold.isEmpty()) {
             logger.info { "No embeddings above threshold ${config.similarityThreshold}" }
             return emptyList()
         }
 
-        // 4. Prefetch chunks and files in batch (OPTIMIZATION: 2 queries instead of N+2)
-        val chunkIds = embeddingsAboveThreshold.map { it.first.chunkId }.distinct()
+        val chunkIds = (chunkIdsAboveThreshold + topHeap.map { it.second }).distinct()
         val chunksMap = ragRepository.getChunksBatch(chunkIds).associateBy { it.id }
-
         val fileIds = chunksMap.values.map { it.fileId }.distinct()
         val filesMap = ragRepository.getFilesBatch(fileIds).associateBy { it.id }
 
         logger.debug { "Prefetched ${chunksMap.size} chunks and ${filesMap.size} files" }
 
-        // 5. Build results using prefetched data
-        val results = embeddingsAboveThreshold.mapNotNull { (embedding, similarity) ->
+        val results = chunkIdsAboveThreshold.mapNotNull { chunkId ->
             try {
-                val chunk = chunksMap[embedding.chunkId]
+                val chunk = chunksMap[chunkId]
                 if (chunk == null) {
-                    logger.warn { "Chunk ${embedding.chunkId} not found for embedding ${embedding.id}" }
+                    logger.warn { "Chunk $chunkId not found for semantic search result" }
                     return@mapNotNull null
                 }
 
@@ -200,6 +218,8 @@ class RagSearchService(
                     logger.warn { "File ${chunk.fileId} not found for chunk ${chunk.id}" }
                     return@mapNotNull null
                 }
+
+                val similarity = similarityByChunkId[chunkId] ?: return@mapNotNull null
 
                 RagSearchResult(
                     chunkId = chunk.id,
@@ -212,7 +232,7 @@ class RagSearchService(
                     contentType = file.contentType
                 )
             } catch (e: Exception) {
-                logger.error(e) { "Failed to build result for embedding ${embedding.id}" }
+                logger.error(e) { "Failed to build result for chunk $chunkId" }
                 null
             }
         }
@@ -236,10 +256,9 @@ class RagSearchService(
         logger.debug { "Top 5 similarities: ${top5Similarities.map { String.format("%.3f", it.second) }}" }
         logger.debug {
             "Threshold: ${config.similarityThreshold}, " +
-                "Results above threshold: ${results.size}/${embeddings.size}"
+                "Results above threshold: ${results.size}/$totalEmbeddings"
         }
 
-        // 4. Sort by similarity (descending) and take top K
         val topResults = finalResults
             .sortedByDescending { it.similarity }
             .take(config.topK)

@@ -2,6 +2,20 @@ package pl.jclab.refio.core.services
 
 import pl.jclab.refio.core.services.analysis.CodeElements
 
+enum class ChunkingMode {
+    LINE_BASED,
+    SEMANTIC;
+
+    companion object {
+        fun fromConfig(value: String): ChunkingMode {
+            return when (value.lowercase()) {
+                "line_based", "line-based", "line" -> LINE_BASED
+                else -> SEMANTIC
+            }
+        }
+    }
+}
+
 /**
  * Strategy for chunking text/code for RAG indexing.
  *

@@ -137,6 +137,7 @@ object MCPManager {
         }
         state.connections.clear()
         unregisterTools(state, null)
+        projectStates.remove(mapKey(projectId))
     }
 
     private fun disconnectServer(projectId: String?, serverId: String) {

@@ -239,6 +239,9 @@ class ConfigRouter(
                 if (provider.equals("lmstudio", ignoreCase = true) && resolvedBaseUrl.isNullOrEmpty()) {
                     resolvedBaseUrl = "http://localhost:1234/v1"
                 }
+                if (provider.equals("zai", ignoreCase = true) && resolvedBaseUrl.isNullOrEmpty()) {
+                    resolvedBaseUrl = ConfigService.DEFAULT_ZAI_BASE_URL
+                }
 
                 when (provider.lowercase()) {
                     "ollama" -> {
@@ -251,7 +254,7 @@ class ConfigRouter(
                             )
                         }
                     }
-                    "anthropic", "openai", "openrouter", "gemini" -> {
+                    "anthropic", "openai", "openrouter", "gemini", "zai" -> {
                         if (apiKey.isNullOrEmpty()) {
                             return@withTimeout TestConnectionResult(
                                 success = false,
@@ -264,6 +267,16 @@ class ConfigRouter(
                     "lmstudio" -> {
                         resolvedBaseUrl = resolvedBaseUrl ?: "http://localhost:1234/v1"
                     }
+                    "custom_openai" -> {
+                        if (resolvedBaseUrl.isNullOrEmpty()) {
+                            return@withTimeout TestConnectionResult(
+                                success = false,
+                                latencyMs = 0,
+                                message = "Base URL is required for $provider",
+                                details = null
+                            )
+                        }
+                    }
                 }
 
                 val tempConfigKey = when (provider.lowercase()) {
@@ -273,6 +286,8 @@ class ConfigRouter(
                     "openrouter" -> ConfigService.KEY_PROVIDER_OPENROUTER_API_KEY to (apiKey ?: "")
                     "gemini" -> ConfigService.KEY_PROVIDER_GEMINI_API_KEY to (apiKey ?: "")
                     "lmstudio" -> ConfigService.KEY_PROVIDER_LM_STUDIO_API_KEY to (apiKey ?: "")
+                    "custom_openai" -> ConfigService.KEY_PROVIDER_CUSTOM_OPENAI_API_KEY to (apiKey ?: "")
+                    "zai" -> ConfigService.KEY_PROVIDER_ZAI_API_KEY to (apiKey ?: "")
                     else -> null
                 }
 
@@ -291,12 +306,16 @@ class ConfigRouter(
                         "openai" -> System.setProperty("OPENAI_API_KEY", apiKey)
                         "openrouter" -> System.setProperty("OPENROUTER_API_KEY", apiKey)
                         "lmstudio" -> System.setProperty("LM_STUDIO_API_KEY", apiKey)
+                        "custom_openai" -> System.setProperty("CUSTOM_OPENAI_API_KEY", apiKey)
+                        "zai" -> System.setProperty("ZAI_API_KEY", apiKey)
                     }
                 }
 
                 when (provider.lowercase()) {
                     "ollama" -> resolvedBaseUrl?.let { System.setProperty("OLLAMA_BASE_URL", it) }
                     "lmstudio" -> resolvedBaseUrl?.let { System.setProperty("LM_STUDIO_BASE_URL", it) }
+                    "custom_openai" -> resolvedBaseUrl?.let { System.setProperty("CUSTOM_OPENAI_BASE_URL", it) }
+                    "zai" -> resolvedBaseUrl?.let { System.setProperty("ZAI_BASE_URL", it) }
                 }
 
                 try {
@@ -435,7 +454,7 @@ class ConfigRouter(
     suspend fun refreshAllModels(): List<ModelInfo> {
         logger.info { "[ConfigRouter] Refreshing models for all providers" }
 
-        val allProviders = listOf("ollama", "anthropic", "openai", "openrouter", "gemini", "lmstudio")
+        val allProviders = listOf("ollama", "anthropic", "openai", "openrouter", "gemini", "lmstudio", "custom_openai", "zai")
         val allModels = mutableListOf<ModelInfo>()
 
         for (provider in allProviders) {
@@ -708,6 +727,26 @@ class ConfigRouter(
                     providerName == "lmstudio" && settingType == "lmstudio_base_url" -> {
                         System.setProperty("LM_STUDIO_BASE_URL", config.value)
                         logger.debug { "Set LM_STUDIO_BASE_URL from database" }
+                    }
+
+                    providerName == "custom_openai" && settingType == "custom_openai_api_key" -> {
+                        System.setProperty("CUSTOM_OPENAI_API_KEY", config.value)
+                        logger.debug { "Set CUSTOM_OPENAI_API_KEY from database" }
+                    }
+
+                    providerName == "custom_openai" && settingType == "custom_openai_base_url" -> {
+                        System.setProperty("CUSTOM_OPENAI_BASE_URL", config.value)
+                        logger.debug { "Set CUSTOM_OPENAI_BASE_URL from database" }
+                    }
+
+                    providerName == "zai" && settingType == "zai_api_key" -> {
+                        System.setProperty("ZAI_API_KEY", config.value)
+                        logger.debug { "Set ZAI_API_KEY from database" }
+                    }
+
+                    providerName == "zai" && settingType == "zai_base_url" -> {
+                        System.setProperty("ZAI_BASE_URL", config.value)
+                        logger.debug { "Set ZAI_BASE_URL from database" }
                     }
 
                     else -> {

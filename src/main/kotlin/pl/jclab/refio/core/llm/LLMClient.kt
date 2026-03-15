@@ -2,7 +2,9 @@ package pl.jclab.refio.core.llm
 
 import pl.jclab.refio.core.api.StreamCallback
 import pl.jclab.refio.core.api.StreamChunk
+import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.llm.adapters.AnthropicAdapter
+import pl.jclab.refio.core.llm.adapters.CustomOpenAIAdapter
 import pl.jclab.refio.core.llm.adapters.GeminiAdapter
 import pl.jclab.refio.core.llm.adapters.LMStudioAdapter
 import pl.jclab.refio.core.llm.adapters.OllamaAdapter
@@ -163,7 +165,7 @@ class LLMClient(
 
         // US-006: No-egress enforcement
         if (noEgressEnabled) {
-            val cloudProviders = listOf("openai", "anthropic", "openrouter", "gemini")
+            val cloudProviders = listOf("openai", "anthropic", "openrouter", "gemini", "zai")
             if (provider.lowercase() in cloudProviders) {
                 logger.warn {
                     "[LLM_CLIENT] No-egress violation blocked: attempted to use cloud provider '$provider' " +
@@ -263,6 +265,24 @@ class LLMClient(
                 subtaskId = subtaskId,
                 source = source
             )
+            "custom_openai" -> CustomOpenAIAdapter(
+                model = model,
+                providerName = "custom_openai",
+                configService = configService,
+                taskId = taskId,
+                subtaskId = subtaskId,
+                source = source
+            )
+            "zai" -> CustomOpenAIAdapter(
+                model = model,
+                providerName = "zai",
+                configService = configService,
+                taskId = taskId,
+                subtaskId = subtaskId,
+                source = source,
+                requireApiKey = true,
+                defaultBaseUrl = configService?.getZAIBaseUrl()
+            )
             "openrouter" -> OpenRouterAdapter(
                 model = model,
                 configService = configService,
@@ -272,7 +292,7 @@ class LLMClient(
             )
             else -> {
                 logger.error { "[LLM_CLIENT] Unknown provider: $provider" }
-                throw IllegalArgumentException("Unknown provider: $provider. Supported: ollama, openai, anthropic, openrouter")
+                throw RefioError.ProviderNotConfigured(provider, "provider")
             }
         }
 
@@ -414,7 +434,7 @@ class LLMClient(
      * Get list of supported providers.
      */
     fun getSupportedProviders(): List<String> {
-        return listOf("ollama", "openai", "anthropic", "gemini", "openrouter", "lmstudio")
+        return listOf("ollama", "openai", "anthropic", "gemini", "openrouter", "lmstudio", "custom_openai", "zai")
     }
 
     /**

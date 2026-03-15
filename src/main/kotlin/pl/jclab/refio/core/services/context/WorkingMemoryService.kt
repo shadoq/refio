@@ -1,8 +1,8 @@
 package pl.jclab.refio.core.services.context
 
+import pl.jclab.refio.core.services.ConfigService
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.math.max
 
 /**
  * Working memory keeps compact, high-value facts across turns.
@@ -12,12 +12,14 @@ data class WorkingMemoryEntry(
     val key: String,
     val value: String,
     val importance: Int = 5,
-    val timestamp: Instant = Instant.now()
+    val timestamp: Instant = Instant.now(),
+    val lastAccessedAt: Instant = Instant.now()
 )
 
-class WorkingMemoryService {
+class WorkingMemoryService(
+    private val maxEntriesPerTask: Int = ConfigService.DEFAULT_WORKING_MEMORY_MAX_FACTS
+) {
     private val entriesByTask = ConcurrentHashMap<String, ConcurrentHashMap<String, WorkingMemoryEntry>>()
-    private val maxEntriesPerTask = 200
 
     fun recordEntries(taskId: String, entries: List<WorkingMemoryEntry>) {
         if (entries.isEmpty()) return
@@ -25,7 +27,7 @@ class WorkingMemoryService {
 
         entries.forEach { entry ->
             val id = buildEntryId(entry)
-            taskEntries[id] = entry
+            taskEntries[id] = entry.copy(lastAccessedAt = Instant.now())
         }
 
         trimEntries(taskEntries)
@@ -64,7 +66,7 @@ class WorkingMemoryService {
 
         for (key in sortedKeys) {
             val entries = grouped[key].orEmpty().sortedWith(
-                compareByDescending<WorkingMemoryEntry> { it.importance }.thenByDescending { it.timestamp }
+                compareByDescending<WorkingMemoryEntry> { it.importance }.thenByDescending { it.lastAccessedAt }
             )
 
             val header = "## $key"
@@ -81,6 +83,7 @@ class WorkingMemoryService {
                 }
                 sb.append(line).append('\n')
                 tokensUsed += lineTokens
+                taskEntries[buildEntryId(entry)] = entry.copy(lastAccessedAt = Instant.now())
             }
 
             sb.append('\n')
@@ -181,7 +184,7 @@ class WorkingMemoryService {
     private fun trimEntries(taskEntries: ConcurrentHashMap<String, WorkingMemoryEntry>) {
         if (taskEntries.size <= maxEntriesPerTask) return
         val sorted = taskEntries.values.sortedWith(
-            compareByDescending<WorkingMemoryEntry> { it.importance }.thenByDescending { it.timestamp }
+            compareByDescending<WorkingMemoryEntry> { it.importance }.thenByDescending { it.lastAccessedAt }
         )
         val toKeep = sorted.take(maxEntriesPerTask)
         val keepIds = toKeep.map { buildEntryId(it) }.toSet()

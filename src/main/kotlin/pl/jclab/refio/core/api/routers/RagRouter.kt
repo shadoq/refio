@@ -17,12 +17,15 @@ import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.RagSearchService
 import pl.jclab.refio.core.services.analysis.EmbeddingsService
 import pl.jclab.refio.core.services.analysis.FileAnalyzerService
+import pl.jclab.refio.core.context.providers.CodebaseContextProvider
+import pl.jclab.refio.core.services.ChunkingMode
 import pl.jclab.refio.core.services.DefaultChunkingStrategy
 import pl.jclab.refio.core.services.RagIndexingService
 import pl.jclab.refio.core.services.RagEmbeddingService
 import pl.jclab.refio.core.services.EmbeddingProvider
 import pl.jclab.refio.core.services.IndexingProgress
 import pl.jclab.refio.core.services.EmbeddingProgress
+import pl.jclab.refio.core.services.SemanticChunkingStrategy
 import pl.jclab.refio.core.services.rag.RagSearchConfig
 import pl.jclab.refio.services.logging.dualLogger
 
@@ -270,6 +273,7 @@ class RagRouter(
             ragRepository.deleteIndexedFilesForProject(projectRoot.toString())
             ragRepository.deleteChunksForProject(projectRoot.toString())
             ragRepository.deleteEmbeddingsForProject(projectRoot.toString())
+            CodebaseContextProvider.invalidateCache(projectRoot.toString())
 
             logger.info { "[RagRouter] RAG index cleared for project=$projectRoot" }
         } catch (e: Exception) {
@@ -299,7 +303,10 @@ class RagRouter(
             val indexingService = RagIndexingService(
                 ragRepository = ragRepository,
                 configService = configService,
-                chunkingStrategy = DefaultChunkingStrategy()
+                chunkingStrategy = when (ChunkingMode.fromConfig(configService.getRagChunkingMode())) {
+                    ChunkingMode.LINE_BASED -> DefaultChunkingStrategy()
+                    ChunkingMode.SEMANTIC -> SemanticChunkingStrategy()
+                }
             )
 
             indexingService.indexProject(
@@ -311,6 +318,7 @@ class RagRouter(
                 logger.debug { "[RagRouter] Indexing progress: ${progress.percentage}% - ${progress.message}" }
             }
 
+            CodebaseContextProvider.invalidateCache(projectRoot.toString())
             logger.info { "[RagRouter] Project indexing completed for project=$projectRoot" }
         } catch (e: Exception) {
             logger.error(e) { "[RagRouter] Project indexing failed" }
@@ -344,7 +352,7 @@ class RagRouter(
 
             try {
                 val embeddingProvider = embeddingProviderFactory(model)
-                val embeddingService = RagEmbeddingService(ragRepository, embeddingProvider)
+                val embeddingService = RagEmbeddingService(ragRepository, embeddingProvider, configService)
 
                 // Extract modelId from "provider/modelId" format
                 val modelId = if (model.contains("/")) model.split("/", limit = 2)[1] else model
@@ -358,6 +366,7 @@ class RagRouter(
                     logger.debug { "[RagRouter] Embedding progress: ${progress.progressPercent}% - ${progress.statusMessage}" }
                 }
 
+                CodebaseContextProvider.invalidateCache(projectRoot.toString())
                 logger.info { "[RagRouter] Embeddings generated for project=$projectRoot" }
             } catch (e: Exception) {
                 logger.error(e) { "[RagRouter] Embedding generation failed" }

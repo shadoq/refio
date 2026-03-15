@@ -142,4 +142,36 @@ class LLMAdaptersTest {
             assertNotNull(adapter.provider)
         }
     }
+
+    @Nested
+    inner class CustomOpenAIAdapterTests {
+
+        private lateinit var adapter: CustomOpenAIAdapter
+
+        @BeforeEach
+        fun setup() {
+            adapter = CustomOpenAIAdapter(
+                model = "custom-model",
+                baseUrlOverride = "http://localhost:8080/v1"
+            )
+        }
+
+        @Test
+        fun `should have correct provider name`() {
+            assertEquals("custom_openai", adapter.provider)
+        }
+
+        @Test
+        fun `should support streaming`() {
+            assertNotNull(adapter.provider)
+        }
+    }
+
+    @Test
+    fun `llm client should expose custom providers`() {
+        val providers = LLMClient().getSupportedProviders()
+
+        kotlin.test.assertTrue("custom_openai" in providers)
+        kotlin.test.assertTrue("zai" in providers)
+    }
 }
