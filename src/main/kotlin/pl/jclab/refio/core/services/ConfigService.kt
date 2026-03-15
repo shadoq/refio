@@ -735,6 +735,11 @@ class ConfigService(
             KEY_PROVIDER_LM_STUDIO_API_KEY -> yamlLoader.getLMStudioApiKey()
             KEY_PROVIDER_LM_STUDIO_BASE_URL -> yamlLoader.getLMStudioBaseUrl()
             KEY_PROVIDER_LM_STUDIO_CONTEXT_SIZE -> yamlLoader.getLMStudioContextSize()?.toString()
+            KEY_PROVIDER_CUSTOM_OPENAI_API_KEY -> yamlLoader.getCustomOpenAIApiKey()
+            KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL -> yamlLoader.getCustomOpenAIBaseUrl()
+            KEY_PROVIDER_CUSTOM_OPENAI_MODEL -> yamlLoader.getCustomOpenAIModel()
+            KEY_PROVIDER_ZAI_API_KEY -> yamlLoader.getZAIApiKey()
+            KEY_PROVIDER_ZAI_BASE_URL -> yamlLoader.getZAIBaseUrl()
 
             // Models (visibility is handled separately)
             KEY_EMBEDDING_MODEL -> yamlLoader.getDefaultEmbeddingModel()
@@ -1149,6 +1154,7 @@ class ConfigService(
     private fun buildProvidersConfig(includeApiKeys: Boolean): pl.jclab.refio.core.config.ProvidersConfig {
         val ollamaEndpoint = get(KEY_PROVIDER_OLLAMA_ENDPOINT)
         val lmstudioBaseUrl = get(KEY_PROVIDER_LM_STUDIO_BASE_URL)
+        val customOpenAIBaseUrl = get(KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL)
 
         return pl.jclab.refio.core.config.ProvidersConfig(
             ollama = pl.jclab.refio.core.config.OllamaConfig(
@@ -1180,6 +1186,15 @@ class ConfigService(
                 apiKey = if (includeApiKeys) get(KEY_PROVIDER_LM_STUDIO_API_KEY) else null,
                 baseUrl = lmstudioBaseUrl,
                 contextSize = getLMStudioContextSize()
+            ),
+            customOpenai = pl.jclab.refio.core.config.CustomOpenAIConfig(
+                apiKey = if (includeApiKeys) get(KEY_PROVIDER_CUSTOM_OPENAI_API_KEY) else null,
+                baseUrl = customOpenAIBaseUrl,
+                model = get(KEY_PROVIDER_CUSTOM_OPENAI_MODEL)
+            ),
+            zai = pl.jclab.refio.core.config.ZAIConfig(
+                apiKey = if (includeApiKeys) get(KEY_PROVIDER_ZAI_API_KEY) else null,
+                baseUrl = get(KEY_PROVIDER_ZAI_BASE_URL) ?: DEFAULT_ZAI_BASE_URL
             )
         )
     }
@@ -2048,6 +2063,36 @@ class ConfigService(
                     logger.info { "Loaded LM Studio base URL from YAML: $baseUrl" }
                 }
             }
+            providers.customOpenai?.apiKey?.let { apiKey ->
+                if (configRepository.get(KEY_PROVIDER_CUSTOM_OPENAI_API_KEY, ConfigScope.APP) == null) {
+                    set(KEY_PROVIDER_CUSTOM_OPENAI_API_KEY, apiKey)
+                    logger.info { "Loaded Custom OpenAI API key from YAML" }
+                }
+            }
+            providers.customOpenai?.baseUrl?.let { baseUrl ->
+                if (configRepository.get(KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL, ConfigScope.APP) == null) {
+                    set(KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL, baseUrl)
+                    logger.info { "Loaded Custom OpenAI base URL from YAML: $baseUrl" }
+                }
+            }
+            providers.customOpenai?.model?.let { model ->
+                if (configRepository.get(KEY_PROVIDER_CUSTOM_OPENAI_MODEL, ConfigScope.APP) == null) {
+                    set(KEY_PROVIDER_CUSTOM_OPENAI_MODEL, model)
+                    logger.info { "Loaded Custom OpenAI model from YAML: $model" }
+                }
+            }
+            providers.zai?.apiKey?.let { apiKey ->
+                if (configRepository.get(KEY_PROVIDER_ZAI_API_KEY, ConfigScope.APP) == null) {
+                    set(KEY_PROVIDER_ZAI_API_KEY, apiKey)
+                    logger.info { "Loaded Z.AI API key from YAML" }
+                }
+            }
+            providers.zai?.baseUrl?.let { baseUrl ->
+                if (configRepository.get(KEY_PROVIDER_ZAI_BASE_URL, ConfigScope.APP) == null) {
+                    set(KEY_PROVIDER_ZAI_BASE_URL, baseUrl)
+                    logger.info { "Loaded Z.AI base URL from YAML: $baseUrl" }
+                }
+            }
         }
 
         // Load limits (only if not set)
@@ -2341,6 +2386,36 @@ class ConfigService(
                 set(KEY_PROVIDER_LM_STUDIO_BASE_URL, baseUrl)
                 updatedCount++
                 logger.info { "Reloaded LM Studio base URL from YAML: $baseUrl" }
+            }
+
+            providers.customOpenai?.apiKey?.let { apiKey ->
+                set(KEY_PROVIDER_CUSTOM_OPENAI_API_KEY, apiKey)
+                updatedCount++
+                logger.info { "Reloaded Custom OpenAI API key from YAML" }
+            }
+
+            providers.customOpenai?.baseUrl?.let { baseUrl ->
+                set(KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL, baseUrl)
+                updatedCount++
+                logger.info { "Reloaded Custom OpenAI base URL from YAML: $baseUrl" }
+            }
+
+            providers.customOpenai?.model?.let { model ->
+                set(KEY_PROVIDER_CUSTOM_OPENAI_MODEL, model)
+                updatedCount++
+                logger.info { "Reloaded Custom OpenAI model from YAML: $model" }
+            }
+
+            providers.zai?.apiKey?.let { apiKey ->
+                set(KEY_PROVIDER_ZAI_API_KEY, apiKey)
+                updatedCount++
+                logger.info { "Reloaded Z.AI API key from YAML" }
+            }
+
+            providers.zai?.baseUrl?.let { baseUrl ->
+                set(KEY_PROVIDER_ZAI_BASE_URL, baseUrl)
+                updatedCount++
+                logger.info { "Reloaded Z.AI base URL from YAML: $baseUrl" }
             }
         }
 

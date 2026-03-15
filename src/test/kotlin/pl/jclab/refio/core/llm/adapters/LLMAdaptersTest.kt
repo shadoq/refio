@@ -167,6 +167,22 @@ class LLMAdaptersTest {
         }
     }
 
+    @Nested
+    inner class ZAIAdapterTests {
+
+        private lateinit var adapter: ZAIAdapter
+
+        @BeforeEach
+        fun setup() {
+            adapter = ZAIAdapter()
+        }
+
+        @Test
+        fun `should have correct provider name`() {
+            assertEquals("zai", adapter.provider)
+        }
+    }
+
     @Test
     fun `llm client should expose custom providers`() {
         val providers = LLMClient().getSupportedProviders()

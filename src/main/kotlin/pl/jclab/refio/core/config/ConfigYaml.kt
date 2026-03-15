@@ -351,7 +351,9 @@ data class ConfigYaml(
                 openai = override.openai ?: base.openai,
                 openrouter = override.openrouter ?: base.openrouter,
                 gemini = override.gemini ?: base.gemini,
-                lmstudio = override.lmstudio ?: base.lmstudio
+                lmstudio = override.lmstudio ?: base.lmstudio,
+                customOpenai = override.customOpenai ?: base.customOpenai,
+                zai = override.zai ?: base.zai
             )
         }
 
@@ -1103,7 +1105,10 @@ data class ProvidersConfig(
     val openai: OpenAIConfig? = null,
     val openrouter: OpenRouterConfig? = null,
     val gemini: GeminiConfig? = null,
-    val lmstudio: LMStudioConfig? = null
+    val lmstudio: LMStudioConfig? = null,
+    @SerialName("custom_openai")
+    val customOpenai: CustomOpenAIConfig? = null,
+    val zai: ZAIConfig? = null
 )
 
 @Serializable
@@ -1138,6 +1143,19 @@ data class LMStudioConfig(
     val apiKey: String? = null,
     val baseUrl: String? = null,
     val contextSize: Int? = null
+)
+
+@Serializable
+data class CustomOpenAIConfig(
+    val apiKey: String? = null,
+    val baseUrl: String? = null,
+    val model: String? = null
+)
+
+@Serializable
+data class ZAIConfig(
+    val apiKey: String? = null,
+    val baseUrl: String? = null
 )
 
 /**

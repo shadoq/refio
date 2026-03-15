@@ -36,7 +36,7 @@ import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.services.logging.dualLogger
 import java.util.UUID
 
-class CustomOpenAIAdapter(
+open class CustomOpenAIAdapter(
     model: String,
     private val providerName: String = "custom_openai",
     private val configService: ConfigService? = null,
@@ -346,7 +346,7 @@ class CustomOpenAIAdapter(
         }
     }
 
-    suspend fun listModels(): List<ModelConfig> = withContext(Dispatchers.IO) {
+    open suspend fun listModels(): List<ModelConfig> = withContext(Dispatchers.IO) {
         val baseUrl = resolveBaseUrl()
         val apiKey = resolveApiKey()
 

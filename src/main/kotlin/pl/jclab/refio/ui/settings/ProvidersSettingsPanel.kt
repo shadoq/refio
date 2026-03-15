@@ -212,6 +212,20 @@ class ProvidersSettingsPanel(
                 description = "Local LM Studio server (OpenAI-compatible API, zero cost). Select context size from dropdown."
             )
         )
+
+        providersPanel.add(Box.createVerticalStrut(12))
+
+        providersPanel.add(
+            createProviderCard(
+                providerName = "ZAI",
+                fields = listOf(
+                    ProviderField("API Key", FieldType.PASSWORD, "zai_api_key"),
+                    ProviderField("Base URL", FieldType.TEXT, "zai_base_url", "https://api.z.ai/v1")
+                ),
+                initialStatus = ProviderStatus.NEEDS_CONFIG,
+                description = "Z.AI provider with dedicated configuration and model refresh."
+            )
+        )
     }
 
     /**
@@ -506,6 +520,11 @@ class ProvidersSettingsPanel(
                 "api_key" to "",
                 "base_url" to getFieldValue(fields["lmstudio_base_url"]).ifEmpty { "http://localhost:1234/v1" },
                 "context_size" to getFieldValue(fields["lmstudio_context_size"]).ifEmpty { DEFAULT_CONTEXT_SIZE.toString() }
+            )
+
+            "zai" -> mapOf(
+                "api_key" to getFieldValue(fields["zai_api_key"]),
+                "base_url" to getFieldValue(fields["zai_base_url"]).ifEmpty { "https://api.z.ai/v1" }
             )
 
             else -> emptyMap()

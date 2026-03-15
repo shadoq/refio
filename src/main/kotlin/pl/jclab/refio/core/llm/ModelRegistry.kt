@@ -12,6 +12,7 @@ import pl.jclab.refio.core.llm.adapters.LMStudioAdapter
 import pl.jclab.refio.core.llm.adapters.OllamaAdapter
 import pl.jclab.refio.core.llm.adapters.OpenAIAdapter
 import pl.jclab.refio.core.llm.adapters.OpenRouterAdapter
+import pl.jclab.refio.core.llm.adapters.ZAIAdapter
 import pl.jclab.refio.services.logging.dualLogger
 
 private val logger = dualLogger("ModelRegistry")
@@ -212,12 +213,9 @@ suspend fun getAllModels(
                                 providerName = "custom_openai",
                                 configService = configService
                             ).listModels()
-                            "zai" -> CustomOpenAIAdapter(
+                            "zai" -> ZAIAdapter(
                                 model = "glm-4.5",
-                                providerName = "zai",
-                                configService = configService,
-                                requireApiKey = true,
-                                defaultBaseUrl = configService?.getZAIBaseUrl()
+                                configService = configService
                             ).listModels()
                             else -> emptyList()
                         }
@@ -297,12 +295,9 @@ suspend fun getModelsByProvider(
                 adapter.listModels()
             }
             "zai" -> {
-                val adapter = CustomOpenAIAdapter(
+                val adapter = ZAIAdapter(
                     model = "glm-4.5",
-                    providerName = "zai",
-                    configService = configService,
-                    requireApiKey = true,
-                    defaultBaseUrl = configService?.getZAIBaseUrl()
+                    configService = configService
                 )
                 adapter.listModels()
             }

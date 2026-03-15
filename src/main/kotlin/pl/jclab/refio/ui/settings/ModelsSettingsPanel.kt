@@ -891,6 +891,12 @@ class ModelsSettingsPanel(
 
             "lmstudio" -> true  // Local, free
 
+            "zai" -> when {
+                model.id.contains("glm-4.5-air", ignoreCase = true) -> true
+                model.id.contains("glm-4.5", ignoreCase = true) -> true
+                else -> false
+            }
+
             else -> false  // Unknown providers hidden by default
         }
     }

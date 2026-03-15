@@ -239,6 +239,9 @@ class ConfigRouter(
                 if (provider.equals("lmstudio", ignoreCase = true) && resolvedBaseUrl.isNullOrEmpty()) {
                     resolvedBaseUrl = "http://localhost:1234/v1"
                 }
+                if (provider.equals("custom_openai", ignoreCase = true) && resolvedBaseUrl.isNullOrEmpty()) {
+                    resolvedBaseUrl = configService.getCustomOpenAIBaseUrl()
+                }
                 if (provider.equals("zai", ignoreCase = true) && resolvedBaseUrl.isNullOrEmpty()) {
                     resolvedBaseUrl = ConfigService.DEFAULT_ZAI_BASE_URL
                 }
@@ -289,6 +292,18 @@ class ConfigRouter(
                     "custom_openai" -> ConfigService.KEY_PROVIDER_CUSTOM_OPENAI_API_KEY to (apiKey ?: "")
                     "zai" -> ConfigService.KEY_PROVIDER_ZAI_API_KEY to (apiKey ?: "")
                     else -> null
+                }
+
+                when (provider.lowercase()) {
+                    "custom_openai" -> {
+                        resolvedBaseUrl?.let { configService.set(ConfigService.KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL, it, ConfigScope.APP) }
+                        config["model"]?.takeIf { it.isNotBlank() }?.let {
+                            configService.set(ConfigService.KEY_PROVIDER_CUSTOM_OPENAI_MODEL, it, ConfigScope.APP)
+                        }
+                    }
+                    "zai" -> {
+                        resolvedBaseUrl?.let { configService.set(ConfigService.KEY_PROVIDER_ZAI_BASE_URL, it, ConfigScope.APP) }
+                    }
                 }
 
                 val originalValue = tempConfigKey?.let { (key, value) ->

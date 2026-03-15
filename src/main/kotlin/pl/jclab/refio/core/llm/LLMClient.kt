@@ -10,6 +10,7 @@ import pl.jclab.refio.core.llm.adapters.LMStudioAdapter
 import pl.jclab.refio.core.llm.adapters.OllamaAdapter
 import pl.jclab.refio.core.llm.adapters.OpenAIAdapter
 import pl.jclab.refio.core.llm.adapters.OpenRouterAdapter
+import pl.jclab.refio.core.llm.adapters.ZAIAdapter
 import pl.jclab.refio.core.services.logging.coreLogger
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 
@@ -273,15 +274,12 @@ class LLMClient(
                 subtaskId = subtaskId,
                 source = source
             )
-            "zai" -> CustomOpenAIAdapter(
+            "zai" -> ZAIAdapter(
                 model = model,
-                providerName = "zai",
                 configService = configService,
                 taskId = taskId,
                 subtaskId = subtaskId,
-                source = source,
-                requireApiKey = true,
-                defaultBaseUrl = configService?.getZAIBaseUrl()
+                source = source
             )
             "openrouter" -> OpenRouterAdapter(
                 model = model,
