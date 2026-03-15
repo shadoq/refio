@@ -10,8 +10,7 @@
 2. **Download required models**:
    ```bash
    ollama pull nomic-embed-text:latest
-   ollama pull qwen2.5-coder:14b
-   ollama pull gpt-oss:20b
+   ollama pull qwen2.5-coder:7b
    ```
 3. **Set Ollama context** to minimum 32k tokens (preferably 64k)
 
@@ -27,7 +26,12 @@
    ./gradlew runIde          # Linux/macOS  
    .\gradlew.bat runIde      # Windows
    ```
-4. **Optional**: Configure providers via Settings or `~/.refio/config.yaml`
+4. **Build plugin ZIP**:
+   ```bash
+   ./gradlew buildPlugin     # Linux/macOS
+   .\gradlew.bat buildPlugin # Windows
+   ```
+5. **Optional**: Configure providers via Settings or `~/.refio/config.yaml`
 
 ## 🎯 First Steps
 
@@ -82,7 +86,7 @@ Write a snake game in javascript, css, html in one file. Build a classic Snake g
 - Default endpoint: `http://localhost:11434`
 
 **Out of context errors?**
-- Increase Ollama context: `ollama run qwen2.5-coder:14b` then `/set parameter num_ctx 65536`
+- Increase Ollama context: `ollama run qwen2.5-coder:7b` then `/set parameter num_ctx 65536`
 - Use more specific `@file` instead of `@codebase`
 
 ## 📚 Next Steps

@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Public documentation, landing copy, Marketplace copy, and QUICKSTART are aligned with the current codebase counts: 12 tools, 14 context providers, 16 MCP presets, 21 built-in subagents, and 6 LLM providers.
+- Public documentation, landing copy, Marketplace copy, and QUICKSTART are aligned with the current codebase counts: 12 tools, 14 context providers, 18 MCP presets, 21 built-in subagents, and 6 LLM providers.
 - Model discovery now uses single-flight caching, and token context estimation no longer triggers provider model-list fetches from the request hot path.
 - Project analysis caching is now keyed by `includeContent` and protected against duplicate concurrent analyses for the same project state.
 - Assistant tool-call bubbles now preserve the assistant narrative alongside tool metadata, and simple tool bubbles use the same stacked layout.

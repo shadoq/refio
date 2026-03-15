@@ -439,11 +439,16 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
 
     private fun calculateMessageHash(message: Message): Int {
         return Objects.hash(
+            message.id,
+            message.role,
             message.content,
-            message.isStreaming,
-            message.lastChunkAt,
+            message.thinking,
             message.metadata,
-            message.toolCallInfo
+            message.toolCallInfo,
+            message.toolStreamContent,
+            message.isToolStreaming,
+            message.pendingApprovalSubtaskId,
+            message.metrics
         )
     }
 
@@ -466,9 +471,6 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
                 return@invokeLater
             }
 
-            messagesPanel.removeAll()
-            messagesPanel.layout = GridBagLayout()
-
             if (uniqueMessages.isEmpty()) {
                 disposeMessagePanels(messagePanelCache.values.map { it.panel })
                 messagePanelCache.clear()
@@ -478,32 +480,10 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
                 return@invokeLater
             }
 
-            val gbc = GridBagConstraints().apply {
-                gridx = 0
-                weightx = 1.0
-                fill = GridBagConstraints.HORIZONTAL
-                anchor = GridBagConstraints.NORTH
-                insets = Insets(0, 0, 0, 0)
-            }
-
-            uniqueMessages.forEachIndexed { index, message ->
-                gbc.gridy = index
-                gbc.weighty = 0.0
-                val isLastMessage = index == uniqueMessages.lastIndex
-                gbc.insets = Insets(0, 0, if (isLastMessage) 0 else MESSAGE_VERTICAL_GAP, 0)
-
-                val contentHash = calculateMessageHash(message)
-                val cached = messagePanelCache[message.id]
-
-                val bubble = if (cached != null && cached.contentHash == contentHash) {
-                    cached.panel
-                } else {
-                    val newPanel = messageBubbleRouter.render(message)
-                    messagePanelCache[message.id] = CachedMessagePanel(contentHash, newPanel)
-                    newPanel
-                }
-
-                messagesPanel.add(bubble, gbc)
+            if (hasStructuralChange) {
+                rebuildMessagesPanel(uniqueMessages)
+            } else {
+                updateMessagesInPlace(uniqueMessages)
             }
 
             val currentIds = uniqueMessages.map { it.id }.toSet()
@@ -517,22 +497,93 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
             messagePanelCache.keys.removeAll { it !in currentIds }
             lastRenderedMessageIds = currentMessageIds
 
-            gbc.gridy = uniqueMessages.size
-            gbc.weighty = 0.0
-            gbc.fill = GridBagConstraints.HORIZONTAL
-            gbc.insets = Insets(TOOLBAR_TOP_GAP, 0, 0, 0)
-            messagesPanel.add(toolbarFactory.createConversationToolbar(), gbc)
-
-            gbc.gridy = uniqueMessages.size + 1
-            gbc.weighty = 1.0
-            gbc.fill = GridBagConstraints.BOTH
-            gbc.insets = Insets(0, 0, 0, 0)
-            messagesPanel.add(Box.createVerticalGlue(), gbc)
-
             messagesPanel.revalidate()
             messagesPanel.repaint()
 
             firePropertyChange("messagesUpdated", false, true)
+        }
+    }
+
+    private fun rebuildMessagesPanel(messages: List<Message>) {
+        messagesPanel.removeAll()
+        messagesPanel.layout = GridBagLayout()
+
+        messages.forEachIndexed { index, message ->
+            val bubble = resolveBubble(message)
+            messagesPanel.add(bubble, createMessageConstraints(index, messages.lastIndex))
+        }
+
+        val toolbarRow = messages.size
+        messagesPanel.add(
+            toolbarFactory.createConversationToolbar(),
+            GridBagConstraints().apply {
+                gridx = 0
+                gridy = toolbarRow
+                weightx = 1.0
+                weighty = 0.0
+                fill = GridBagConstraints.HORIZONTAL
+                anchor = GridBagConstraints.NORTH
+                insets = Insets(TOOLBAR_TOP_GAP, 0, 0, 0)
+            }
+        )
+        messagesPanel.add(
+            Box.createVerticalGlue(),
+            GridBagConstraints().apply {
+                gridx = 0
+                gridy = toolbarRow + 1
+                weightx = 1.0
+                weighty = 1.0
+                fill = GridBagConstraints.BOTH
+                anchor = GridBagConstraints.NORTH
+                insets = Insets(0, 0, 0, 0)
+            }
+        )
+    }
+
+    private fun updateMessagesInPlace(messages: List<Message>) {
+        if (messages.any { messagePanelCache[it.id] == null }) {
+            rebuildMessagesPanel(messages)
+            return
+        }
+
+        messages.forEachIndexed { index, message ->
+            val contentHash = calculateMessageHash(message)
+            val cached = messagePanelCache[message.id] ?: return@forEachIndexed
+            if (cached.contentHash == contentHash) {
+                return@forEachIndexed
+            }
+
+            val newBubble = messageBubbleRouter.render(message)
+            messagePanelCache[message.id] = CachedMessagePanel(contentHash, newBubble)
+            val componentIndex = index.coerceAtMost(messagesPanel.componentCount - 1)
+            messagesPanel.remove(componentIndex)
+            messagesPanel.add(newBubble, createMessageConstraints(index, messages.lastIndex), componentIndex)
+            disposeMessagePanels(listOf(cached.panel))
+        }
+    }
+
+    private fun resolveBubble(message: Message): JPanel {
+        val contentHash = calculateMessageHash(message)
+        val cached = messagePanelCache[message.id]
+        if (cached != null && cached.contentHash == contentHash) {
+            return cached.panel
+        }
+
+        val newPanel = messageBubbleRouter.render(message)
+        messagePanelCache[message.id] = CachedMessagePanel(contentHash, newPanel)
+        return newPanel
+    }
+
+    private fun createMessageConstraints(index: Int, lastIndex: Int): GridBagConstraints {
+        val isLastMessage = index == lastIndex
+        return GridBagConstraints().apply {
+            gridx = 0
+            gridy = index
+            weightx = 1.0
+            weighty = 0.0
+            fill = GridBagConstraints.HORIZONTAL
+            anchor = GridBagConstraints.NORTH
+            insets = Insets(0, 0, if (isLastMessage) 0 else MESSAGE_VERTICAL_GAP, 0)
         }
     }
 

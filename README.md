@@ -50,7 +50,7 @@ Plus **21 built-in subagents** for specialized tasks: code review, security audi
 ```bash
 # 1. Install Ollama + models
 ollama pull nomic-embed-text    # Required for RAG embeddings
-ollama pull qwen2.5-coder:14b   # Recommended coding model
+ollama pull qwen2.5-coder:7b    # Recommended coding model
 
 # 2. Build & install plugin
 git clone https://github.com/shadoq/refio.git && cd refio
@@ -82,7 +82,7 @@ Then open the **Refio** tool window (View -> Tool Windows -> Refio), select a mo
 - **RAG-powered semantic search** — automatic project indexing with 5 language analyzers
 - **12 tools** — 5 read-only + 6 write + invoke_subagent, with per-mode permissions
 - **6 LLM providers** — Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio
-- **MCP protocol support** — 16 built-in server presets (GitHub, PostgreSQL, Brave Search, etc.)
+- **MCP protocol support** — 18 built-in server presets (GitHub, PostgreSQL, Brave Search, etc.)
 - **21 built-in subagents** — specialized agents invocable with `!agent-name` prefix
 - **Custom subagents** — define your own in `.refio/agents/*.md`
 - **Token budgeting** — per-section context limits (~28K tokens default)
