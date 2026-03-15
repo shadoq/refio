@@ -687,6 +687,7 @@ class SessionManager(private val project: Project) {
             val streamingClosed = AtomicBoolean(false)
             val pendingStreamContent = AtomicReference<String?>(null)
             val pendingStreamComplete = AtomicBoolean(false)
+            val streamStateMutex = Mutex()
             var streamUiFlushJob: Job? = null
 
             // Create stream callback for UI updates
@@ -695,65 +696,78 @@ class SessionManager(private val project: Project) {
                 cs.launch {
                     if (streamingClosed.get()) return@launch
 
-                    val filteredContent = filterToolCallBlocks(chunk.accumulated)
-                    if (filteredContent.isNotBlank()) {
-                        pendingStreamContent.set(filteredContent)
-                    }
-                    if (chunk.isComplete) {
-                        pendingStreamComplete.set(true)
-                    }
+                    streamStateMutex.withLock {
+                        val filteredContent = filterToolCallBlocks(chunk.accumulated)
+                        if (filteredContent.isNotBlank()) {
+                            if (streamingMessageId == null) {
+                                streamingMessageId = UUID.randomUUID().toString()
+                                stateManager.appendMessage(
+                                    Message(
+                                        id = streamingMessageId!!,
+                                        taskId = session.id,
+                                        role = "assistant",
+                                        content = "",
+                                        isStreaming = true,
+                                        streamStartedAt = System.currentTimeMillis(),
+                                        createdAt = System.currentTimeMillis()
+                                    )
+                                )
+                            }
+                            pendingStreamContent.set(filteredContent)
+                        }
+                        if (chunk.isComplete) {
+                            pendingStreamComplete.set(true)
+                        }
 
-                    if (streamUiFlushJob?.isActive != true) {
-                        streamUiFlushJob = cs.launch {
-                            while (!streamingClosed.get()) {
-                                val contentToFlush = pendingStreamContent.getAndSet(null)
-                                val isComplete = pendingStreamComplete.get()
+                        if (streamUiFlushJob?.isActive != true) {
+                            streamUiFlushJob = cs.launch {
+                                while (!streamingClosed.get()) {
+                                    var shouldStop = false
+                                    streamStateMutex.withLock {
+                                        val contentToFlush = pendingStreamContent.getAndSet(null)
+                                        val isComplete = pendingStreamComplete.get()
 
-                                if (!contentToFlush.isNullOrBlank()) {
-                                    if (streamingMessageId == null) {
-                                        streamingMessageId = UUID.randomUUID().toString()
-                                        val message = Message(
-                                            id = streamingMessageId!!,
-                                            taskId = session.id,
-                                            role = "assistant",
-                                            content = contentToFlush,
-                                            isStreaming = !isComplete,
-                                            createdAt = System.currentTimeMillis()
-                                        )
-                                        stateManager.appendMessage(message)
-                                    } else {
-                                        val activeMessageId = streamingMessageId
-                                        stateManager.updateMessages { messages ->
-                                            messages.map { msg ->
-                                                if (msg.id == activeMessageId) {
-                                                    msg.copy(
-                                                        content = contentToFlush,
-                                                        lastChunkAt = System.currentTimeMillis(),
-                                                        isStreaming = !isComplete
-                                                    )
-                                                } else msg
+                                        if (!contentToFlush.isNullOrBlank()) {
+                                            val activeMessageId = streamingMessageId
+                                            if (activeMessageId != null) {
+                                                stateManager.updateMessages { messages ->
+                                                    messages.map { msg ->
+                                                        if (msg.id == activeMessageId) {
+                                                            msg.copy(
+                                                                content = contentToFlush,
+                                                                lastChunkAt = System.currentTimeMillis(),
+                                                                isStreaming = !isComplete
+                                                            )
+                                                        } else msg
+                                                    }
+                                                }
                                             }
+                                        } else if (isComplete && streamingMessageId != null) {
+                                            val completedId = streamingMessageId
+                                            stateManager.updateMessages { messages ->
+                                                messages.map { msg ->
+                                                    if (msg.id == completedId) {
+                                                        msg.copy(
+                                                            isStreaming = false,
+                                                            lastChunkAt = System.currentTimeMillis()
+                                                        )
+                                                    } else msg
+                                                }
+                                            }
+                                            streamingMessageId = null
+                                        }
+
+                                        if (isComplete) {
+                                            shouldStop = true
                                         }
                                     }
-                                } else if (isComplete && streamingMessageId != null) {
-                                    val completedId = streamingMessageId
-                                    stateManager.updateMessages { messages ->
-                                        messages.map { msg ->
-                                            if (msg.id == completedId) {
-                                                msg.copy(
-                                                    isStreaming = false,
-                                                    lastChunkAt = System.currentTimeMillis()
-                                                )
-                                            } else msg
-                                        }
+
+                                    if (shouldStop) {
+                                        break
                                     }
-                                }
 
-                                if (isComplete) {
-                                    break
+                                    delay(500)
                                 }
-
-                                delay(500)
                             }
                         }
                     }
@@ -1244,39 +1258,91 @@ class SessionManager(private val project: Project) {
 
     private fun extractAssistantJsonTextPayload(content: String): String? {
         val trimmed = content.trim()
-        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null
+        if (!trimmed.startsWith("{")) return null
 
-        return try {
-            val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-            val root = json.parseToJsonElement(trimmed) as? kotlinx.serialization.json.JsonObject ?: return null
+        try {
+            if (trimmed.endsWith("}")) {
+                val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                val root = json.parseToJsonElement(trimmed) as? kotlinx.serialization.json.JsonObject ?: return null
 
-            // Preserve full plan JSON for dedicated plan rendering.
-            if (root.containsKey("plan") || root.containsKey("subtasks")) {
-                return content
-            }
+                // Preserve full plan JSON for dedicated plan rendering.
+                if (root.containsKey("plan") || root.containsKey("subtasks")) {
+                    return content
+                }
 
-            val contentField = (root["content"] as? kotlinx.serialization.json.JsonPrimitive)
-                ?.takeIf { it.isString }
-                ?.content
-            if (!contentField.isNullOrBlank()) {
-                return contentField
-            }
+                val contentField = (root["content"] as? kotlinx.serialization.json.JsonPrimitive)
+                    ?.takeIf { it.isString }
+                    ?.content
+                if (!contentField.isNullOrBlank()) {
+                    return contentField
+                }
 
-            val responseField = (root["response"] as? kotlinx.serialization.json.JsonPrimitive)
-                ?.takeIf { it.isString }
-                ?.content
-            if (!responseField.isNullOrBlank()) {
-                return responseField
-            }
+                val responseField = (root["response"] as? kotlinx.serialization.json.JsonPrimitive)
+                    ?.takeIf { it.isString }
+                    ?.content
+                if (!responseField.isNullOrBlank()) {
+                    return responseField
+                }
 
-            if (root["actions"] is kotlinx.serialization.json.JsonArray) {
-                null
-            } else {
-                null
+                if (root["actions"] is kotlinx.serialization.json.JsonArray) {
+                    return ""
+                }
             }
         } catch (_: Exception) {
-            null
+            // Fall through to partial JSON field extraction for streaming chunks.
         }
+
+        extractPartialJsonStringField(trimmed, "content")?.let { return it }
+        extractPartialJsonStringField(trimmed, "response")?.let { return it }
+
+        return if (trimmed.contains("\"actions\"")) "" else null
+    }
+
+    private fun extractPartialJsonStringField(content: String, fieldName: String): String? {
+        val fieldIndex = content.indexOf("\"$fieldName\"")
+        if (fieldIndex < 0) return null
+
+        val colonIndex = content.indexOf(':', fieldIndex + fieldName.length + 2)
+        if (colonIndex < 0) return null
+
+        var valueStart = colonIndex + 1
+        while (valueStart < content.length && content[valueStart].isWhitespace()) {
+            valueStart++
+        }
+        if (valueStart >= content.length || content[valueStart] != '"') return null
+
+        val decoded = StringBuilder()
+        var i = valueStart + 1
+        while (i < content.length) {
+            val ch = content[i]
+            if (ch == '\\') {
+                if (i + 1 >= content.length) break
+                when (val escaped = content[i + 1]) {
+                    '"', '\\', '/' -> decoded.append(escaped)
+                    'b' -> decoded.append('\b')
+                    'f' -> decoded.append('\u000C')
+                    'n' -> decoded.append('\n')
+                    'r' -> decoded.append('\r')
+                    't' -> decoded.append('\t')
+                    'u' -> {
+                        if (i + 5 >= content.length) break
+                        val hex = content.substring(i + 2, i + 6)
+                        hex.toIntOrNull(16)?.let(decoded::appendCodePoint)
+                        i += 4
+                    }
+                    else -> decoded.append(escaped)
+                }
+                i += 2
+                continue
+            }
+            if (ch == '"') {
+                return decoded.toString()
+            }
+            decoded.append(ch)
+            i++
+        }
+
+        return decoded.toString().ifBlank { null }
     }
 
     private fun resolveToolDisplayType(toolName: String): ToolDisplayType {

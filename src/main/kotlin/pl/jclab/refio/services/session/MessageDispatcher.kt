@@ -34,7 +34,7 @@ class MessageDispatcher(
                 }
                 .toMap()
 
-            val dbMessages = response.messages.mapNotNull { coreMsg ->
+            val dbMessages = response.messages.flatMap { coreMsg ->
                 val assistantEnvelope = if (coreMsg.role == "assistant") {
                     parseAssistantJsonEnvelope(coreMsg.content)
                 } else {
@@ -73,38 +73,32 @@ class MessageDispatcher(
                 if (coreMsg.role == "assistant" && finalContent.isBlank()) {
                     // Has toolCallsJson - create tool call display message
                     if (!coreMsg.toolCallsJson.isNullOrBlank() && toolCallInfo != null) {
-                        return@mapNotNull Message(
-                            id = coreMsg.id,
-                            taskId = coreMsg.taskId,
-                            role = coreMsg.role,
-                            content = "",
-                            toolCallInfo = toolCallInfo,
-                            createdAt = coreMsg.createdAt,
-                            metadata = ToolCallDisplayInfo.toMetadataJson(toolCallInfo)
+                        return@flatMap listOf(
+                            createToolCallDisplayMessage(coreMsg.id, coreMsg.taskId, coreMsg.createdAt, toolCallInfo)
                         )
                     }
 
                     // Has TOOL_CALL: in content (legacy format)
                     if (coreMsg.content.contains("TOOL_CALL:") && coreMsg.metadata.isNullOrBlank()) {
-                        return@mapNotNull null
+                        return@flatMap emptyList()
                     }
 
                     // Has metadata with tool_call type - render as tool call bubble
                     if (toolCallInfo != null) {
-                        return@mapNotNull Message(
-                            id = coreMsg.id,
-                            taskId = coreMsg.taskId,
-                            role = coreMsg.role,
-                            content = "",
-                            toolCallInfo = toolCallInfo,
-                            createdAt = coreMsg.createdAt,
-                            metadata = coreMsg.metadata
+                        return@flatMap listOf(
+                            createToolCallDisplayMessage(
+                                id = coreMsg.id,
+                                taskId = coreMsg.taskId,
+                                createdAt = coreMsg.createdAt,
+                                toolCallInfo = toolCallInfo,
+                                metadata = coreMsg.metadata
+                            )
                         )
                     }
 
                     // Completely empty - filter out
                     if (coreMsg.metadata.isNullOrBlank()) {
-                        return@mapNotNull null
+                        return@flatMap emptyList()
                     }
                 }
 
@@ -118,7 +112,7 @@ class MessageDispatcher(
                     finalContent
                 }
 
-                Message(
+                val displayMessage = Message(
                     id = coreMsg.id,
                     taskId = coreMsg.taskId,
                     role = coreMsg.role,
@@ -142,11 +136,31 @@ class MessageDispatcher(
                         null
                     }
                 )
+
+                if (coreMsg.role == "assistant" && toolCallInfo != null && displayContent.isNotBlank()) {
+                    listOf(
+                        displayMessage.copy(
+                            metadata = null,
+                            toolCallInfo = null
+                        ),
+                        createToolCallDisplayMessage(
+                            id = "${coreMsg.id}:toolcall",
+                            taskId = coreMsg.taskId,
+                            createdAt = coreMsg.createdAt,
+                            toolCallInfo = toolCallInfo
+                        )
+                    )
+                } else {
+                    listOf(displayMessage)
+                }
             }
 
             val dbMessageIds = dbMessages.map { it.id }.toSet()
             val inMemoryOnlySystemMessages = existingSystemMessages.filterNot { it.id in dbMessageIds }
-            val allMessages = (dbMessages + inMemoryOnlySystemMessages).sortedBy { it.createdAt }
+            // DB already returns messages ordered by createdAt ASC, id ASC.
+            // Preserve that order and keep UI-only system messages appended in their current order
+            // so reloads do not reshuffle bubbles after streaming finishes.
+            val allMessages = dbMessages + inMemoryOnlySystemMessages
 
             val currentMessages = stateManager.messages.value
             if (!areMessagesEqual(currentMessages, allMessages)) {
@@ -257,6 +271,24 @@ class MessageDispatcher(
 
     companion object {
         private val PATH_KEYS = listOf("path", "file", "file_path", "filepath", "target_path", "target_file")
+    }
+
+    private fun createToolCallDisplayMessage(
+        id: String,
+        taskId: String,
+        createdAt: Long,
+        toolCallInfo: ToolCallDisplayInfo,
+        metadata: String? = ToolCallDisplayInfo.toMetadataJson(toolCallInfo)
+    ): Message {
+        return Message(
+            id = id,
+            taskId = taskId,
+            role = "assistant",
+            content = "",
+            toolCallInfo = toolCallInfo,
+            createdAt = createdAt,
+            metadata = metadata
+        )
     }
 
     private data class AssistantJsonEnvelope(

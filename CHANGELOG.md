@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Model discovery now uses single-flight caching, and token context estimation no longer triggers provider model-list fetches from the request hot path.
 - Project analysis caching is now keyed by `includeContent` and protected against duplicate concurrent analyses for the same project state.
 - Assistant tool-call bubbles now preserve the assistant narrative alongside tool metadata, and simple tool bubbles use the same stacked layout.
+- Agent turn loop message reload now keeps assistant narration in a separate bubble from tool-call bubbles, so the chat layout stays stable after streaming completes.
 
 ### Fixed
 
@@ -30,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `RefioMainPanel` now unregisters property listeners during disposal to avoid listener leaks on panel recreation.
 - `PathSandbox` now rejects symbolic links by default, including symlinked parent directories, with opt-in override via `security.allow_symlinks`.
 - `advance_code_editing` now enforces excluded file-extension checks before invoking the LLM.
+- Streaming assistant placeholders now suppress raw `{"actions":...}` JSON and show only extracted partial `response` / `content` text while the turn is still in progress.
 
 ## [0.0.1.2] - 2025-03-07
 
