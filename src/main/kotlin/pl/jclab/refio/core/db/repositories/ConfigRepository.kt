@@ -5,6 +5,7 @@ import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.isNull
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.like
+import org.jetbrains.exposed.exceptions.ExposedSQLException
 import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
@@ -68,8 +69,8 @@ class ConfigRepository {
                     .map { rowToConfig(it) }
                     .singleOrNull()
             }
-        } catch (e: IllegalStateException) {
-            if (e.message?.contains("Please call Database.connect() before using this code") == true) {
+        } catch (e: Exception) {
+            if (isDatabaseNotReady(e)) {
                 logger.debug { "Skipping config lookup before database init: key=$key, scope=$scope" }
                 null
             } else {
@@ -103,8 +104,8 @@ class ConfigRepository {
                 logger.debug { "[ORCHESTRATION-DEBUG] App config result: key=$key, value=${appConfig?.value}, found=${appConfig != null}" }
                 appConfig
             }
-        } catch (e: IllegalStateException) {
-            if (e.message?.contains("Please call Database.connect() before using this code") == true) {
+        } catch (e: Exception) {
+            if (isDatabaseNotReady(e)) {
                 logger.debug { "Skipping precedence config lookup before database init: key=$key" }
                 null
             } else {
@@ -122,8 +123,8 @@ class ConfigRepository {
                     .where { scopeCriteria(null, scope, projectId, taskId) }
                     .map { rowToConfig(it) }
             }
-        } catch (e: IllegalStateException) {
-            if (e.message?.contains("Please call Database.connect() before using this code") == true) {
+        } catch (e: Exception) {
+            if (isDatabaseNotReady(e)) {
                 logger.debug { "Skipping config scope lookup before database init: scope=$scope" }
                 emptyList()
             } else {
@@ -155,8 +156,8 @@ class ConfigRepository {
                     .where { predicate }
                     .map { rowToConfig(it) }
             }
-        } catch (e: IllegalStateException) {
-            if (e.message?.contains("Please call Database.connect() before using this code") == true) {
+        } catch (e: Exception) {
+            if (isDatabaseNotReady(e)) {
                 logger.debug { "Skipping config search before database init: pattern=$keyPattern" }
                 emptyList()
             } else {
@@ -204,8 +205,8 @@ class ConfigRepository {
                 }
                 query.count()
             }
-        } catch (e: IllegalStateException) {
-            if (e.message?.contains("Please call Database.connect() before using this code") == true) {
+        } catch (e: Exception) {
+            if (isDatabaseNotReady(e)) {
                 logger.debug { "Skipping config count before database init" }
                 0
             } else {
@@ -272,6 +273,22 @@ class ConfigRepository {
                 require(taskId == null) { "PROJECT scope cannot reference taskId" }
             }
             ConfigScope.TASK -> require(!taskId.isNullOrBlank()) { "TASK scope requires taskId" }
+        }
+    }
+
+    private fun isDatabaseNotReady(error: Throwable): Boolean {
+        return generateSequence(error) { it.cause }.any { cause ->
+            when (cause) {
+                is IllegalStateException -> {
+                    cause.message?.contains("Please call Database.connect() before using this code") == true
+                }
+                is ExposedSQLException -> {
+                    cause.message?.contains("no such table: config", ignoreCase = true) == true
+                }
+                else -> {
+                    cause.message?.contains("no such table: config", ignoreCase = true) == true
+                }
+            }
         }
     }
 }

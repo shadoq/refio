@@ -648,7 +648,21 @@ class AdvanceCodeEditingToolTest {
             ))
 
             // Then - verify LLM was called
-            coVerify { mockLLMClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }
+            coVerify {
+                mockLLMClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    temperature = any(),
+                    maxTokens = any(),
+                    stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null,
+                    subtaskId = null,
+                    source = any()
+                )
+            }
         }
     }
 

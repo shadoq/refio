@@ -3,6 +3,7 @@ package pl.jclab.refio.core.workflow
 import io.mockk.every
 import io.mockk.mockk
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
@@ -43,8 +44,7 @@ class IntentRouterTest {
 
         val intent = router.determineIntent(uiState)
 
-        assertTrue(intent is WorkflowIntent.Subagent)
-        intent as WorkflowIntent.Subagent
+        assertIs<WorkflowIntent.Subagent>(intent)
         assertEquals("task-1", intent.taskId)
         assertEquals("security-reviewer", intent.name)
         assertEquals("check", intent.prompt)
@@ -66,8 +66,7 @@ class IntentRouterTest {
 
         val intent = router.determineIntent(uiState)
 
-        assertTrue(intent is WorkflowIntent.Chat)
-        intent as WorkflowIntent.Chat
+        assertIs<WorkflowIntent.Chat>(intent)
         assertEquals("task-1", intent.taskId)
         assertEquals("hello", intent.input)
     }
@@ -92,8 +91,7 @@ class IntentRouterTest {
 
         val intent = router.determineIntent(uiState)
 
-        assertTrue(intent is WorkflowIntent.ExecuteStep)
-        intent as WorkflowIntent.ExecuteStep
+        assertIs<WorkflowIntent.ExecuteStep>(intent)
         assertEquals("task-1", intent.taskId)
         assertEquals("subtask-2", intent.subtaskId)
     }
@@ -115,8 +113,7 @@ class IntentRouterTest {
 
         val intent = router.determineIntent(uiState)
 
-        assertTrue(intent is WorkflowIntent.Plan)
-        intent as WorkflowIntent.Plan
+        assertIs<WorkflowIntent.Plan>(intent)
         assertEquals("task-1", intent.taskId)
         assertEquals(true, intent.interactive)
     }

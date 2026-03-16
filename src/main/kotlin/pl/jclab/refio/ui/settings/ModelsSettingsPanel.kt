@@ -184,24 +184,17 @@ class ModelsSettingsPanel(
 
     private lateinit var modelsTable: JBTable
     private lateinit var refreshStatusLabel: JLabel
-    private lateinit var defaultModelCombo: JComboBox<String>
-    private lateinit var planModelCombo: JComboBox<String>
-    private lateinit var codingModelCombo: JComboBox<String>
-    private lateinit var weakModelCombo: JComboBox<String>
-    private lateinit var embeddingModelCombo: JComboBox<String>
+    private val defaultModelCombo = JComboBox<String>()
+    private val planModelCombo = JComboBox<String>()
+    private val codingModelCombo = JComboBox<String>()
+    private val weakModelCombo = JComboBox<String>()
+    private val embeddingModelCombo = JComboBox<String>()
 
     // Flag to prevent saving when dropdowns are updated programmatically
     private var isUpdatingDropdowns = false
 
     init {
         border = LCATheme.paddedBorder(LCATheme.margin)
-
-        // Initialize combo boxes first
-        defaultModelCombo = JComboBox()
-        planModelCombo = JComboBox()
-        codingModelCombo = JComboBox()
-        weakModelCombo = JComboBox()
-        embeddingModelCombo = JComboBox()
 
         // Main content
         val contentPanel = JBPanel<JBPanel<*>>(GridBagLayout()).apply {
@@ -380,9 +373,9 @@ class ModelsSettingsPanel(
                                 append("<html>")
                                 append("<b>${value.description}</b><br><br>")
                                 append("Default: ${value.defaultModel}<br>")
-                                append("Plan: ${value.planModel ?: value.defaultModel}<br>")
-                                append("Coding: ${value.codingModel ?: value.defaultModel}<br>")
-                                append("Weak: ${value.weakModel ?: value.defaultModel}")
+                                append("Plan: ${value.planModel}<br>")
+                                append("Coding: ${value.codingModel}<br>")
+                                append("Weak: ${value.weakModel}")
                                 append("</html>")
                             }
                         }
@@ -469,7 +462,7 @@ class ModelsSettingsPanel(
                 }
 
                 // Plan model (fallback to default if not specified)
-                val planModel = preset.planModel ?: preset.defaultModel
+                val planModel = preset.planModel
                 val planParts = planModel.split("/", limit = 2)
                 if (planParts.size == 2) {
                     coreApiClient?.setDefaultModel(
@@ -483,7 +476,7 @@ class ModelsSettingsPanel(
                 }
 
                 // Coding model (fallback to default if not specified)
-                val codingModel = preset.codingModel ?: preset.defaultModel
+                val codingModel = preset.codingModel
                 val codingParts = codingModel.split("/", limit = 2)
                 if (codingParts.size == 2) {
                     coreApiClient?.setDefaultModel(
@@ -497,7 +490,7 @@ class ModelsSettingsPanel(
                 }
 
                 // Weak model (fallback to default if not specified)
-                val weakModel = preset.weakModel ?: preset.defaultModel
+                val weakModel = preset.weakModel
                 val weakParts = weakModel.split("/", limit = 2)
                 if (weakParts.size == 2) {
                     coreApiClient?.setDefaultModel(
@@ -525,9 +518,9 @@ class ModelsSettingsPanel(
                     val notificationContent = buildString {
                         append("Visible models: $visibleCount\n")
                         append("Default: ${preset.defaultModel}\n")
-                        append("Plan: ${preset.planModel ?: preset.defaultModel}\n")
-                        append("Coding: ${preset.codingModel ?: preset.defaultModel}\n")
-                        append("Weak: ${preset.weakModel ?: preset.defaultModel}")
+                        append("Plan: ${preset.planModel}\n")
+                        append("Coding: ${preset.codingModel}\n")
+                        append("Weak: ${preset.weakModel}")
                     }
                     NotificationService.showInfo(
                         project = null,

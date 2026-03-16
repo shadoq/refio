@@ -254,7 +254,6 @@ class ReadDirectoryToolTest {
 
             // Then
             assertTrue(result.success)
-            val output = result.output!!
             // Should only show top-level items
         }
 

@@ -10,10 +10,10 @@ import kotlinx.serialization.json.JsonPrimitive
 internal object ToolCallContentSanitizer {
     private val gson = Gson()
     private val toolCallPatterns = listOf(
-        Regex("""TOOL_CALL:\s*\w+\s*(?:\n|\r\n)?ARGUMENTS:\s*\{[\s\S]*?\}""", RegexOption.MULTILINE),
-        Regex("""Tool calls:\s*(?:\n|\r\n)?TOOL_CALL:[\s\S]*?(?=\n\n|\z)""", RegexOption.MULTILINE),
-        Regex("""<tool_call>[\s\S]*?</tool_call>"""),
-        Regex("""```\s*(?:tool|tool_call)[\s\S]*?```""")
+        Regex("""(?:\r?\n)?TOOL_CALL:\s*\w+\s*(?:\r?\n)?ARGUMENTS:\s*\{[\s\S]*?\}(?:\r?\n)?""", RegexOption.MULTILINE),
+        Regex("""(?:\r?\n)?Tool calls:\s*(?:\r?\n)?TOOL_CALL:[\s\S]*?(?:\r?\n){2,}|(?:\r?\n)?Tool calls:\s*(?:\r?\n)?TOOL_CALL:[\s\S]*$""", RegexOption.MULTILINE),
+        Regex("""(?:\r?\n)?<tool_call>[\s\S]*?</tool_call>(?:\r?\n)?"""),
+        Regex("""(?:\r?\n)?```\s*(?:tool|tool_call)[\s\S]*?```(?:\r?\n)?""")
     )
 
     fun sanitize(content: String): String {
@@ -22,9 +22,11 @@ internal object ToolCallContentSanitizer {
 
         var result = content
         toolCallPatterns.forEach { pattern ->
-            result = result.replace(pattern, "")
+            result = result.replace(pattern, "\n")
         }
-        return result.trim()
+        return result
+            .replace(Regex("""(?:\r?\n){2,}"""), "\n")
+            .trim()
     }
 
     fun isToolProtocolBoundary(candidate: String): Boolean {
