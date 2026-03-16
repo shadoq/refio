@@ -10,6 +10,11 @@ import java.sql.DriverManager
 private val logger = dualLogger("DatabaseFactory")
 
 object DatabaseFactory {
+    @Volatile
+    private var initialized = false
+
+    fun isInitialized(): Boolean = initialized
+
     fun init(dbPath: String = "refio_poc.db") {
         logger.info { "Initializing database at: $dbPath" }
 
@@ -45,6 +50,7 @@ object DatabaseFactory {
             url = jdbcUrl,
             driver = "org.sqlite.JDBC"
         )
+        initialized = true
 
         // Configure transaction retry behavior
         org.jetbrains.exposed.sql.transactions.TransactionManager.manager.defaultRepetitionAttempts = 5

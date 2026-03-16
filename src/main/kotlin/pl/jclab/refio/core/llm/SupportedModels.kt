@@ -29,6 +29,13 @@ object SupportedModels {
      * - O1 series (reasoning models)
      */
     private val OPENAI_SUPPORTED = setOf<String>(
+        // GPT-5.4
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "gpt-5.4-codex-max",
+        "gpt-5.4-codex",
+        "gpt-5.4-codex-mini",
         // GPT-5.3
         "gpt-5.3",
         "gpt-5.3-mini",

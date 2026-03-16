@@ -161,6 +161,8 @@ internal abstract class BaseBubbleRenderer {
         subtitle: String? = null,
         content: String,
         messageId: String? = null,
+        isStreaming: Boolean = false,
+        preferPlainTextMarkdown: Boolean = false,
         backgroundColor: Color,
         foregroundColor: Color,
         context: BubbleContentContext,
@@ -176,11 +178,19 @@ internal abstract class BaseBubbleRenderer {
         messageBlock.add(context.componentFactory.createBubbleHeader(icon, title, subtitle, foregroundColor))
 
         val maxWidth = (context.availableWidth - context.scrollBarAndPadding).coerceAtLeast(200)
-        val segments = ContentSegmentParser.parse(content, isStreaming = false)
+        val segments = ContentSegmentParser.parse(content, isStreaming = isStreaming)
 
         if (segments.isEmpty() && content.isNotBlank()) {
             val normalized = context.markdownService.normalizeMarkdownTablesForRendering(content)
-            messageBlock.add(context.markdownService.createMarkdownEditorPane(normalized, backgroundColor, foregroundColor, maxWidth))
+            messageBlock.add(
+                context.markdownService.createMarkdownEditorPane(
+                    normalized,
+                    backgroundColor,
+                    foregroundColor,
+                    maxWidth,
+                    preferPlainText = preferPlainTextMarkdown
+                )
+            )
         } else {
             for (segment in segments) {
                 when (segment) {
@@ -214,7 +224,8 @@ internal abstract class BaseBubbleRenderer {
                                     markdown = normalized,
                                     backgroundColor = backgroundColor,
                                     foregroundColor = foregroundColor,
-                                    maxBubbleWidth = maxWidth
+                                    maxBubbleWidth = maxWidth,
+                                    preferPlainText = preferPlainTextMarkdown
                                 )
                             )
                         }

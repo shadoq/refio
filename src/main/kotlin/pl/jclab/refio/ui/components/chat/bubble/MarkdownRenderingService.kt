@@ -26,6 +26,7 @@ internal class MarkdownRenderingService(
     companion object {
         private const val BUBBLE_INNER_HORIZONTAL_PADDING = 16
         private const val MARKDOWN_RIGHT_GUTTER = 12
+        private const val LARGE_MARKDOWN_THRESHOLD_CHARS = 8_000
     }
 
     private val markdownExtensions = listOf(TablesExtension.create())
@@ -116,11 +117,17 @@ internal class MarkdownRenderingService(
     }
 
     fun createMarkdownEditorPane(
-        markdown: String, backgroundColor: Color, foregroundColor: Color, maxBubbleWidth: Int
+        markdown: String,
+        backgroundColor: Color,
+        foregroundColor: Color,
+        maxBubbleWidth: Int,
+        preferPlainText: Boolean = false
     ): JEditorPane {
         val safeMarkdown = normalizeMarkdownTablesForRendering(markdown)
         val editorWidth = resolveMarkdownEditorWidth(maxBubbleWidth)
-        val htmlContent = if (formatMarkdownEnabledProvider()) {
+        val renderPlainText = !formatMarkdownEnabledProvider() ||
+            (preferPlainText && safeMarkdown.length >= LARGE_MARKDOWN_THRESHOLD_CHARS)
+        val htmlContent = if (!renderPlainText) {
             markdownToHtml(safeMarkdown)
         } else {
             safeMarkdown

@@ -72,6 +72,41 @@ object ModelDefinitions {
     val OPENAI_MODELS = mapOf(
 
         //
+        // GPT 5.4
+        //
+        "gpt-5.4" to ModelDefinition(
+            id = "gpt-5.4",
+            name = "GPT-5.4",
+            provider = "openai",
+            description = "Best intelligence at scale for agentic, coding, and professional workflows",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 2.50,
+            costPer1MOutput = 15.00,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            paramMappings = mapOf(
+                "max_tokens" to "max_completion_tokens"
+            ),
+            removeParams = listOf(
+                "temperature"
+            ),
+            active = true
+        ),
+
+        //
         // GPT 5.2
         //
         "gpt-5.2" to ModelDefinition(
@@ -107,7 +142,45 @@ object ModelDefinitions {
         ),
 
         //
-        // GPT 5.1 codex
+        // GPT 5.3 codex
+        //
+        "gpt-5.3-codex" to ModelDefinition(
+            id = "gpt-5.3-codex",
+            name = "GPT-5.3 Codex",
+            provider = "openai",
+            description = "The most capable agentic coding model to date",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 400_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 1.75,
+            costPer1MOutput = 14.00,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+
+        //
+        // GPT 5.2 codex
         //
         "gpt-5.2-codex" to ModelDefinition(
             id = "gpt-5.2-codex",
@@ -1745,6 +1818,327 @@ object ModelDefinitions {
     val LM_STUDIO_MODELS = emptyMap<String, ModelDefinition>()
 
     /**
+     * Z.AI Models Registry
+     *
+     * Sources:
+     * - https://docs.z.ai/guides/overview/pricing
+     * - https://docs.z.ai/guides/overview/concept-param
+     * - https://docs.z.ai/guides/overview/overview
+     */
+    val ZAI_MODELS = mapOf(
+        "glm-5" to ModelDefinition(
+            id = "glm-5",
+            name = "GLM-5",
+            provider = "zai",
+            description = "New-generation flagship foundation model for agentic engineering, complex system work, and long-horizon coding tasks.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 200_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 1.0,
+            costPer1MOutput = 3.2,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-5-turbo" to ModelDefinition(
+            id = "glm-5-turbo",
+            name = "GLM-5 Turbo",
+            provider = "zai",
+            description = "OpenClaw-optimized model for tool invocation, command following, persistent tasks, and long-chain execution.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 200_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 1.2,
+            costPer1MOutput = 4.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-4.7" to ModelDefinition(
+            id = "glm-4.7",
+            name = "GLM-4.7",
+            provider = "zai",
+            description = "Enhanced programming and more stable multi-step reasoning and execution with strong agent task performance.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 200_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 0.6,
+            costPer1MOutput = 2.2,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-4.7-flash" to ModelDefinition(
+            id = "glm-4.7-flash",
+            name = "GLM-4.7 Flash",
+            provider = "zai",
+            description = "Completely free lightweight GLM-4.7 variant for fast chat, coding, and agent usage.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 200_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-4.7-flashx" to ModelDefinition(
+            id = "glm-4.7-flashx",
+            name = "GLM-4.7 FlashX",
+            provider = "zai",
+            description = "Lightweight, high-speed, affordable GLM-4.7 family model for efficient agentic workloads.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 200_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 0.07,
+            costPer1MOutput = 0.4,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-4.6" to ModelDefinition(
+            id = "glm-4.6",
+            name = "GLM-4.6",
+            provider = "zai",
+            description = "Broad upgrade across coding, long-context processing, reasoning, search, writing, and agentic applications.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 200_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 0.6,
+            costPer1MOutput = 2.2,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-4.5" to ModelDefinition(
+            id = "glm-4.5",
+            name = "GLM-4.5",
+            provider = "zai",
+            description = "Most powerful reasoning model in the GLM-4.5 family, optimized for tool invocation, browsing, software engineering, and front-end development.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = 96_000,
+            costPer1MInput = 0.6,
+            costPer1MOutput = 2.2,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-4.5-air" to ModelDefinition(
+            id = "glm-4.5-air",
+            name = "GLM-4.5 Air",
+            provider = "zai",
+            description = "Cost-effective lightweight GLM-4.5 model with strong performance for coding, reasoning, and agents.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = 96_000,
+            costPer1MInput = 0.2,
+            costPer1MOutput = 1.1,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-4.5-flash" to ModelDefinition(
+            id = "glm-4.5-flash",
+            name = "GLM-4.5 Flash",
+            provider = "zai",
+            description = "Free GLM-4.5 family model focused on reasoning, coding, and agents.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = 96_000,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-4.5-x" to ModelDefinition(
+            id = "glm-4.5-x",
+            name = "GLM-4.5 X",
+            provider = "zai",
+            description = "High-performance GLM-4.5 variant with strong reasoning and ultra-fast response.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = 96_000,
+            costPer1MInput = 2.2,
+            costPer1MOutput = 8.9,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-4.5-airx" to ModelDefinition(
+            id = "glm-4.5-airx",
+            name = "GLM-4.5 AirX",
+            provider = "zai",
+            description = "Lightweight GLM-4.5 variant with strong performance and ultra-fast response.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = 96_000,
+            costPer1MInput = 1.1,
+            costPer1MOutput = 4.5,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-4-32b-0414-128k" to ModelDefinition(
+            id = "glm-4-32b-0414-128k",
+            name = "GLM-4 32B 128K",
+            provider = "zai",
+            description = "Highly cost-effective foundation language model with strong tool use, online search, and code-task support.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = 16_000,
+            costPer1MInput = 0.1,
+            costPer1MOutput = 0.1,
+            supportsVision = false,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = false,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        )
+    )
+
+    /**
      * Ollama Models Registry (local models)
      *
      * Updated: 2025-11-19
@@ -3374,6 +3768,7 @@ object ModelDefinitions {
             "ollama" -> OLLAMA_MODELS[modelId]
             "gemini" -> GEMINI_MODELS[modelId]
             "lmstudio" -> LM_STUDIO_MODELS[modelId]
+            "zai" -> ZAI_MODELS[modelId]
             "openrouter" -> null  // OpenRouter uses dynamic models
             else -> null
         }
@@ -3392,6 +3787,7 @@ object ModelDefinitions {
             "ollama" -> OLLAMA_MODELS
             "gemini" -> GEMINI_MODELS
             "lmstudio" -> LM_STUDIO_MODELS
+            "zai" -> ZAI_MODELS
             else -> emptyMap()
         }
     }

@@ -24,6 +24,7 @@ import io.ktor.client.request.get
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import io.ktor.utils.io.ByteReadChannel
+import pl.jclab.refio.core.errors.LLMErrorMapper
 import java.util.UUID
 
 /**
@@ -45,6 +46,10 @@ class GeminiAdapter(
         private const val STREAM_PATH = "/models/%s:streamGenerateContent?alt=sse"
         private const val MODELS_PATH = "/models"
     }
+
+    private val timeoutMs: Long
+        get() = configService?.getApiCallTimeoutMs(taskId)
+            ?: pl.jclab.refio.core.services.ConfigService.DEFAULT_API_CALL_TIMEOUT * 1000L
 
     private val client = HttpClient(CIO) {
         install(ContentNegotiation) {
@@ -90,7 +95,7 @@ class GeminiAdapter(
         )
             ?: System.getProperty("GEMINI_API_KEY")
             ?: System.getenv("GEMINI_API_KEY")
-            ?: throw IllegalStateException("Gemini API key not provided")
+            ?: throw LLMErrorMapper.missingConfig(provider, "api_key")
 
         logger.info { "[GEMINI] Sending ${if (streaming) "streaming" else "standard"} chat request: model=$model, messages=${messages.size}, systemMessages=${systemMessages.size}" }
 
@@ -101,10 +106,14 @@ class GeminiAdapter(
         logger.debug { "$logPrefix Request: ${SecureLogger.redactAndTruncate(requestJson)}" }
 
         val startTime = System.currentTimeMillis()
-        return if (streaming && onStreamChunk != null) {
-            executeStreaming(apiKey, requestBody, requestJson, startTime, onStreamChunk, logPrefix)
-        } else {
-            executeStandard(apiKey, requestBody, requestJson, startTime, logPrefix)
+        return try {
+            if (streaming && onStreamChunk != null) {
+                executeStreaming(apiKey, requestBody, requestJson, startTime, onStreamChunk, logPrefix)
+            } else {
+                executeStandard(apiKey, requestBody, requestJson, startTime, logPrefix)
+            }
+        } catch (e: Exception) {
+            throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
         }
     }
 
@@ -232,7 +241,7 @@ class GeminiAdapter(
                     subtaskId = subtaskId,
                     source = source
                 )
-                throw IllegalStateException("Gemini API error (HTTP $httpStatus)")
+                throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, "Gemini API error (HTTP $httpStatus)")
             }
 
             val usage = extractUsage(rawResponse)
@@ -289,7 +298,7 @@ class GeminiAdapter(
                 subtaskId = subtaskId,
                 source = source
             )
-            throw e
+            throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
         }
     }
 
@@ -332,7 +341,12 @@ class GeminiAdapter(
                         subtaskId = subtaskId,
                         source = source
                     )
-                    throw IllegalStateException("Gemini streaming error (HTTP $httpStatus)")
+                    throw LLMErrorMapper.fromHttpStatus(
+                        provider,
+                        model,
+                        httpStatus ?: 500,
+                        "Gemini streaming error (HTTP $httpStatus)"
+                    )
                 }
 
                 val channel: ByteReadChannel = response.body()
@@ -444,7 +458,7 @@ class GeminiAdapter(
                 subtaskId = subtaskId,
                 source = source
             )
-            throw e
+            throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
         }
     }
 
@@ -522,7 +536,7 @@ class GeminiAdapter(
             }
         } catch (e: Exception) {
             logger.error(e) { "[GEMINI] Failed to fetch models: ${e.message}" }
-            emptyList()
+            throw LLMErrorMapper.listModelsFailure(provider, e)
         }
     }
 

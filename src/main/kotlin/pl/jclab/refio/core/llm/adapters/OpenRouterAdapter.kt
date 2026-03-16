@@ -19,6 +19,8 @@ import io.ktor.client.plugins.logging.Logger as KtorLogger
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.gson.*
+import pl.jclab.refio.core.errors.LLMErrorMapper
+import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.services.logging.dualLogger
 import java.util.UUID
@@ -91,13 +93,15 @@ class OpenRouterAdapter(
     ): LLMResponse {
         logger.info { "[OPENROUTER] Sending ${if (streaming) "streaming" else "standard"} chat request: model=$model, messages=${messages.size}, systemMessages=${systemMessages.size}" }
 
-        // If streaming requested, use streaming logic
-        if (streaming && onStreamChunk != null) {
-            return chatStreamingInternal(messages, systemMessages, maxTokens, temperature, kwargs, onStreamChunk)
-        }
+        try {
+            if (streaming && onStreamChunk != null) {
+                return chatStreamingInternal(messages, systemMessages, maxTokens, temperature, kwargs, onStreamChunk)
+            }
 
-        // Otherwise use standard chat logic
-        return chatStandard(messages, systemMessages, maxTokens, temperature, kwargs)
+            return chatStandard(messages, systemMessages, maxTokens, temperature, kwargs)
+        } catch (e: Exception) {
+            throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
+        }
     }
 
     private suspend fun chatStandard(
@@ -116,7 +120,7 @@ class OpenRouterAdapter(
         )
             ?: System.getProperty("OPENROUTER_API_KEY")
             ?: System.getenv("OPENROUTER_API_KEY")
-            ?: throw IllegalStateException("OpenRouter API key not provided")
+            ?: throw LLMErrorMapper.missingConfig(provider, "api_key")
 
         // Prepare messages
         val openrouterMessages = mutableListOf<Map<String, String>>()
@@ -241,14 +245,14 @@ class OpenRouterAdapter(
                 val metadata = errorObj["metadata"] as? Map<String, Any?>
                 val providerName = metadata?.get("provider_name") as? String ?: "OpenRouter"
                 logger.error { "$logPrefix API error from $providerName (code $errorCode): $errorMessage" }
-                throw IllegalStateException("OpenRouter error from $providerName: $errorMessage")
+                throw LLMErrorMapper.fromHttpStatus(provider, model, errorCode, "OpenRouter error from $providerName: $errorMessage")
             }
 
             // Parse response
             @Suppress("UNCHECKED_CAST")
             val choices = response["choices"] as? List<Map<String, Any?>> ?: emptyList()
             if (choices.isEmpty()) {
-                throw IllegalStateException("OpenRouter returned empty choices")
+                throw RefioError.LLMError(provider, model, IllegalStateException("OpenRouter returned empty choices"))
             }
 
             val choice = choices[0]
@@ -297,7 +301,7 @@ class OpenRouterAdapter(
                 source = source
             )
 
-            throw e
+            throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
         }
     }
 
@@ -332,7 +336,7 @@ class OpenRouterAdapter(
         )
             ?: System.getProperty("OPENROUTER_API_KEY")
             ?: System.getenv("OPENROUTER_API_KEY")
-            ?: throw IllegalStateException("OpenRouter API key not provided")
+            ?: throw LLMErrorMapper.missingConfig(provider, "api_key")
 
         // Prepare messages
         val openrouterMessages = mutableListOf<Map<String, String>>()
@@ -773,7 +777,7 @@ class OpenRouterAdapter(
 
         } catch (e: Exception) {
             logger.error(e) { "[OPENROUTER] Failed to fetch models: ${e.message}" }
-            throw Exception("Failed to fetch OpenRouter models: ${e.message}", e)
+            throw LLMErrorMapper.listModelsFailure(provider, e)
         }
     }
 

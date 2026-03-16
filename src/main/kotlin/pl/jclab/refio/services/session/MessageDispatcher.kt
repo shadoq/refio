@@ -102,15 +102,13 @@ class MessageDispatcher(
                     }
                 }
 
-                // For TOOL messages with summarized content and rawOutput available,
-                // use rawOutput for display (shows full generated code instead of summary)
-                val displayContent = if (coreMsg.role == "tool" &&
-                    coreMsg.isSummarized &&
-                    !coreMsg.rawOutput.isNullOrBlank()) {
-                    coreMsg.rawOutput
-                } else {
-                    finalContent
-                }
+                val toolDisplay = ToolMessageDisplayResolver.resolve(
+                    role = coreMsg.role,
+                    content = finalContent,
+                    isSummarized = coreMsg.isSummarized,
+                    rawOutput = coreMsg.rawOutput
+                )
+                val displayContent = toolDisplay.content
 
                 val displayMessage = Message(
                     id = coreMsg.id,
@@ -129,12 +127,7 @@ class MessageDispatcher(
                     },
                     toolCallId = coreMsg.toolCallId, // For TOOL messages - link to tool call
                     toolCallInfo = toolCallInfo,
-                    // Store rawOutput in toolStreamContent for UI to access original full output
-                    toolStreamContent = if (coreMsg.role == "tool" && coreMsg.isSummarized) {
-                        coreMsg.rawOutput
-                    } else {
-                        null
-                    }
+                    toolStreamContent = toolDisplay.toolStreamContent
                 )
 
                 if (coreMsg.role == "assistant" && toolCallInfo != null && displayContent.isNotBlank()) {
@@ -354,7 +347,7 @@ class MessageDispatcher(
             return ""
         }
 
-        return filterToolCallBlocks(rawContent)
+        return ToolCallContentSanitizer.sanitize(rawContent)
     }
 
     /**
@@ -423,55 +416,6 @@ class MessageDispatcher(
      * IMPORTANT: Does NOT filter plan JSON (which has "plan" or "subtasks" fields).
      * Plan JSON should be preserved for ChatView specialized bubble rendering.
      */
-    private fun filterToolCallBlocks(content: String): String {
-        // Check if content is a plan JSON (has "plan" or "subtasks")
-        // Plans should not be filtered - they need to be displayed in ChatView
-        val isPlan = isPlanJson(content)
-        if (content.contains("\"actions\"")) {
-            logger.info {
-                "[FILTER_DEBUG] filterToolCallBlocks: isPlan=$isPlan, " +
-                    "contentPreview=${content.take(100)}"
-            }
-        }
-        if (isPlan) {
-            return content
-        }
-
-        val patterns = listOf(
-            Regex("""TOOL_CALL:\s*\w+\s*(?:\n|\r\n)?ARGUMENTS:\s*\{[\s\S]*?\}""", RegexOption.MULTILINE),
-            Regex("""Tool calls:\s*(?:\n|\r\n)?TOOL_CALL:[\s\S]*?(?=\n\n|\z)""", RegexOption.MULTILINE),
-            Regex("""<tool_call>[\s\S]*?</tool_call>"""),
-            Regex("""```\s*(?:tool|tool_call)[\s\S]*?```""")
-        )
-
-        var result = content
-        patterns.forEach { pattern ->
-            result = result.replace(pattern, "")
-        }
-        return result.trim()
-    }
-
-    /**
-     * Detect if content is a plan JSON structure.
-     * Plan JSON has:
-     * - "plan" field with description
-     * - "subtasks" array
-     */
-    private fun isPlanJson(content: String): Boolean {
-        if (!content.trim().startsWith("{")) return false
-        return try {
-            val json = com.google.gson.Gson().fromJson(
-                content,
-                com.google.gson.reflect.TypeToken.get(Map::class.java).type
-            ) as? Map<*, *> ?: return false
-
-            json.containsKey("plan") ||
-            json.containsKey("subtasks")
-        } catch (e: Exception) {
-            false
-        }
-    }
-
     private fun areMessagesEqual(current: List<Message>, new: List<Message>): Boolean {
         if (current.size != new.size) return false
         return current.zip(new).all { (a, b) ->

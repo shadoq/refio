@@ -1,6 +1,5 @@
 package pl.jclab.refio.core.llm.adapters
 
-import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.services.ConfigService
 
 class ZAIAdapter(
@@ -19,5 +18,5 @@ class ZAIAdapter(
     requireApiKey = true,
     defaultBaseUrl = configService?.getZAIBaseUrl() ?: ConfigService.DEFAULT_ZAI_BASE_URL
 ) {
-    override suspend fun listModels(): List<ModelConfig> = super.listModels()
+    override suspend fun listModels() = super.listModels()
 }

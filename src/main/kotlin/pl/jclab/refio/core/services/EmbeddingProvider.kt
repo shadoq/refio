@@ -267,9 +267,11 @@ class OllamaEmbeddingProvider(
                 input = text
             )
 
-            val response = client.post("$endpoint/api/embed") {
-                contentType(ContentType.Application.Json)
-                setBody(requestBody)
+            val response = OllamaRequestGate.withPermit(endpoint) {
+                client.post("$endpoint/api/embed") {
+                    contentType(ContentType.Application.Json)
+                    setBody(requestBody)
+                }
             }
 
             if (!response.status.isSuccess()) {
@@ -318,9 +320,11 @@ class OllamaEmbeddingProvider(
                 input = texts
             )
 
-            val response = client.post("$endpoint/api/embed") {
-                contentType(ContentType.Application.Json)
-                setBody(requestBody)
+            val response = OllamaRequestGate.withPermit(endpoint) {
+                client.post("$endpoint/api/embed") {
+                    contentType(ContentType.Application.Json)
+                    setBody(requestBody)
+                }
             }
 
             if (!response.status.isSuccess()) {

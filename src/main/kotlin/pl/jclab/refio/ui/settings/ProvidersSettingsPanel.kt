@@ -220,7 +220,7 @@ class ProvidersSettingsPanel(
                 providerName = "ZAI",
                 fields = listOf(
                     ProviderField("API Key", FieldType.PASSWORD, "zai_api_key"),
-                    ProviderField("Base URL", FieldType.TEXT, "zai_base_url", "https://api.z.ai/v1")
+                    ProviderField("Base URL", FieldType.TEXT, "zai_base_url", "https://api.z.ai/api/coding/paas/v4")
                 ),
                 initialStatus = ProviderStatus.NEEDS_CONFIG,
                 description = "Z.AI provider with dedicated configuration and model refresh."
@@ -524,7 +524,7 @@ class ProvidersSettingsPanel(
 
             "zai" -> mapOf(
                 "api_key" to getFieldValue(fields["zai_api_key"]),
-                "base_url" to getFieldValue(fields["zai_base_url"]).ifEmpty { "https://api.z.ai/v1" }
+                "base_url" to getFieldValue(fields["zai_base_url"]).ifEmpty { "https://api.z.ai/api/coding/paas/v4" }
             )
 
             else -> emptyMap()
@@ -654,9 +654,19 @@ class ProvidersSettingsPanel(
 
                 logger.debug { "Looking for key: $configKey, found: ${value != null}" }
 
-                if (value != null && value.isNotEmpty()) {
-                    logger.info { "Setting $configKey to [REDACTED] (length=${value.length})" }
-                    setFieldValue(textField, value)
+                val effectiveValue = if (configKey == "zai.zai_base_url") {
+                    when (value?.trimEnd('/')) {
+                        "https://api.z.ai/v1" -> "https://api.z.ai/api/coding/paas/v4"
+                        "https://api.z.ai/api/paas/v4" -> "https://api.z.ai/api/coding/paas/v4"
+                        else -> value
+                    }
+                } else {
+                    value
+                }
+
+                if (effectiveValue != null && effectiveValue.isNotEmpty()) {
+                    logger.info { "Setting $configKey to [REDACTED] (length=${effectiveValue.length})" }
+                    setFieldValue(textField, effectiveValue)
                     updateProviderStatus(providerName, ProviderStatus.CONFIGURED)
                 } else {
                     logger.debug { "No value for $configKey" }

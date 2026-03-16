@@ -5,6 +5,7 @@ import kotlinx.coroutines.withTimeout
 import pl.jclab.refio.core.api.*
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.db.repositories.ConfigRepository
+import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.llm.clearModelsCache
@@ -242,8 +243,8 @@ class ConfigRouter(
                 if (provider.equals("custom_openai", ignoreCase = true) && resolvedBaseUrl.isNullOrEmpty()) {
                     resolvedBaseUrl = configService.getCustomOpenAIBaseUrl()
                 }
-                if (provider.equals("zai", ignoreCase = true) && resolvedBaseUrl.isNullOrEmpty()) {
-                    resolvedBaseUrl = ConfigService.DEFAULT_ZAI_BASE_URL
+                if (provider.equals("zai", ignoreCase = true)) {
+                    resolvedBaseUrl = configService.normalizeZAIBaseUrl(resolvedBaseUrl)
                 }
 
                 when (provider.lowercase()) {
@@ -330,7 +331,7 @@ class ConfigRouter(
                     "ollama" -> resolvedBaseUrl?.let { System.setProperty("OLLAMA_BASE_URL", it) }
                     "lmstudio" -> resolvedBaseUrl?.let { System.setProperty("LM_STUDIO_BASE_URL", it) }
                     "custom_openai" -> resolvedBaseUrl?.let { System.setProperty("CUSTOM_OPENAI_BASE_URL", it) }
-                    "zai" -> resolvedBaseUrl?.let { System.setProperty("ZAI_BASE_URL", it) }
+                    "zai" -> resolvedBaseUrl?.let { System.setProperty("ZAI_BASE_URL", configService.normalizeZAIBaseUrl(it)) }
                 }
 
                 try {
@@ -363,16 +364,29 @@ class ConfigRouter(
 
                     val testModel = chatModels.first().id
 
-                    val response = llmClient.complete(
-                        provider = provider.lowercase(),
-                        model = testModel,
-                        messages = listOf(LLMMessage(role = "user", content = "test")),
-                        maxTokens = 10,
-                        temperature = 0.0,
-                        source = "TestConnection"
-                    )
-
                     val latency = (System.currentTimeMillis() - startTime).toInt()
+                    val probeResult = runCatching {
+                        llmClient.complete(
+                            provider = provider.lowercase(),
+                            model = testModel,
+                            messages = listOf(LLMMessage(role = "user", content = "test")),
+                            maxTokens = 10,
+                            temperature = 0.0,
+                            source = "TestConnection"
+                        )
+                    }
+
+                    probeResult.exceptionOrNull()?.let { error ->
+                        if (error is RefioError.LLMRateLimit) {
+                            logger.warn {
+                                "Connection test for $provider hit rate limit after successful model fetch; treating provider as configured"
+                            }
+                            return@withTimeout buildRateLimitedConnectionResult(provider, models, testModel, latency)
+                        }
+                        throw error
+                    }
+
+                    val response = probeResult.getOrThrow()
 
                     logger.info { "Connection test successful for $provider: latency=${latency}ms, models=${models.size}" }
 
@@ -418,6 +432,24 @@ class ConfigRouter(
                 details = mapOf("error_type" to (e::class.simpleName ?: "Unknown"))
             )
         }
+    }
+
+    internal fun buildRateLimitedConnectionResult(
+        provider: String,
+        models: List<ModelConfig>,
+        testModel: String,
+        latency: Int
+    ): TestConnectionResult {
+        return TestConnectionResult(
+            success = true,
+            latencyMs = latency,
+            message = "Connected successfully, but the probe request was rate limited",
+            details = mapOf(
+                "models_available" to models.map { it.id },
+                "test_model" to testModel,
+                "warning" to "rate_limited"
+            )
+        )
     }
 
     /**
@@ -760,7 +792,7 @@ class ConfigRouter(
                     }
 
                     providerName == "zai" && settingType == "zai_base_url" -> {
-                        System.setProperty("ZAI_BASE_URL", config.value)
+                        System.setProperty("ZAI_BASE_URL", configService.normalizeZAIBaseUrl(config.value))
                         logger.debug { "Set ZAI_BASE_URL from database" }
                     }
 

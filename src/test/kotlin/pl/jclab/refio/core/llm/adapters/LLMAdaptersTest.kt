@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test
 import pl.jclab.refio.core.llm.*
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /**
  * Testy podstawowe dla adapterów LLM.
@@ -165,6 +166,32 @@ class LLMAdaptersTest {
         fun `should support streaming`() {
             assertNotNull(adapter.provider)
         }
+
+        @Test
+        fun `should parse provider error payload`() {
+            val payload = adapter.parseProviderError("""{"error":{"code":"1305","message":"Too many requests"}}""")
+
+            assertEquals("1305", payload.code)
+            assertEquals("Too many requests", payload.message)
+        }
+
+        @Test
+        fun `should build detailed zai rate limit message`() {
+            val zaiAdapter = CustomOpenAIAdapter(
+                model = "glm-4.5",
+                providerName = "zai",
+                baseUrlOverride = "https://api.z.ai/api/paas/v4"
+            )
+
+            val message = zaiAdapter.buildZAIErrorMessage(
+                httpStatus = 429,
+                businessCode = "1305",
+                message = "Too many requests"
+            )
+
+            assertTrue(message.contains("1305"))
+            assertTrue(message.contains("API rate limit triggered"))
+        }
     }
 
     @Nested
@@ -180,6 +207,31 @@ class LLMAdaptersTest {
         @Test
         fun `should have correct provider name`() {
             assertEquals("zai", adapter.provider)
+        }
+
+        @Test
+        fun `should parse openai style models payload`() = runTest {
+            val models = adapter.parseModelsPayload(
+                """
+                {"data":[{"id":"glm-4.5","context_length":128000},{"id":"glm-4.6","context_length":256000}]}
+                """.trimIndent()
+            )
+
+            assertTrue(models.isNotEmpty())
+            assertTrue(models.any { it.id == "glm-4.5" })
+            assertTrue(models.all { it.provider == "zai" })
+        }
+
+        @Test
+        fun `should parse array style models payload`() = runTest {
+            val models = adapter.parseModelsPayload(
+                """
+                [{"id":"glm-4.5","context_length":128000},{"id":"glm-4.7-flash","context_length":128000}]
+                """.trimIndent()
+            )
+
+            assertEquals(2, models.size)
+            assertTrue(models.any { it.id == "glm-4.7-flash" })
         }
     }
 

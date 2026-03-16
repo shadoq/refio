@@ -19,7 +19,9 @@ import io.ktor.client.plugins.logging.Logger as KtorLogger
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.gson.*
+import pl.jclab.refio.core.errors.LLMErrorMapper
 import pl.jclab.refio.core.security.SecureLogger
+import pl.jclab.refio.core.services.OllamaRequestGate
 import pl.jclab.refio.services.logging.dualLogger
 import java.util.UUID
 import kotlinx.coroutines.delay
@@ -101,7 +103,11 @@ class OllamaAdapter(
     ): LLMResponse {
         logger.info { "[OLLAMA] Sending ${if (streaming) "streaming" else "standard"} chat request: model=$model, messages=${messages.size}, systemMessages=${systemMessages.size}" }
 
-        return chatInternal(messages, systemMessages, maxTokens, temperature, streaming, onStreamChunk, kwargs)
+        return try {
+            chatInternal(messages, systemMessages, maxTokens, temperature, streaming, onStreamChunk, kwargs)
+        } catch (e: Exception) {
+            throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
+        }
     }
 
     private suspend fun chatInternal(
@@ -249,9 +255,11 @@ class OllamaAdapter(
                     )
                 }"
             }
-            val httpResponse = client.post("$baseUrl$CHAT_ENDPOINT") {
-                contentType(ContentType.Application.Json)
-                setBody(requestBody)
+            val httpResponse = OllamaRequestGate.withPermit(baseUrl) {
+                client.post("$baseUrl$CHAT_ENDPOINT") {
+                    contentType(ContentType.Application.Json)
+                    setBody(requestBody)
+                }
             }
 
             httpStatus = httpResponse.status.value
@@ -288,7 +296,7 @@ class OllamaAdapter(
                     source = source
                 )
 
-                throw IllegalStateException(fullErrorMessage)
+                throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, fullErrorMessage)
             }
 
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
@@ -385,7 +393,7 @@ class OllamaAdapter(
                 source = source
             )
 
-            throw e
+            throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
         }
     }
 
@@ -420,10 +428,11 @@ class OllamaAdapter(
                     )
                 }"
             }
-            client.preparePost("$baseUrl$CHAT_ENDPOINT") {
-                contentType(ContentType.Application.Json)
-                setBody(requestBody)
-            }.execute { httpResponse ->
+            OllamaRequestGate.withPermit(baseUrl) {
+                client.preparePost("$baseUrl$CHAT_ENDPOINT") {
+                    contentType(ContentType.Application.Json)
+                    setBody(requestBody)
+                }.execute { httpResponse ->
                 httpStatus = httpResponse.status.value
 
                 // Check for error response before reading stream
@@ -447,7 +456,7 @@ class OllamaAdapter(
                         source = source
                     )
 
-                    throw IllegalStateException(errorMessage)
+                    throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus ?: 500, errorMessage)
                 }
 
                 val channel: io.ktor.utils.io.ByteReadChannel = httpResponse.body()
@@ -554,10 +563,16 @@ class OllamaAdapter(
                         continue
                     }
                 }
+                }
             }
 
             if (!receivedDoneChunk && finalDoneReason != "cancelled") {
-                throw IllegalStateException("Ollama stream ended before done=true final chunk")
+                throw LLMErrorMapper.fromThrowable(
+                    provider,
+                    model,
+                    timeout,
+                    IllegalStateException("Ollama stream ended before done=true final chunk")
+                )
             }
 
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
@@ -661,7 +676,7 @@ class OllamaAdapter(
                 subtaskId = subtaskId,
                 source = source
             )
-            throw e
+            throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
         }
     }
 
@@ -680,7 +695,9 @@ class OllamaAdapter(
         logger.info { "[OLLAMA] Fetching available models from $baseUrl$TAGS_ENDPOINT" }
 
         try {
-            val httpResponse = client.get("$baseUrl$TAGS_ENDPOINT")
+            val httpResponse = OllamaRequestGate.withPermit(baseUrl) {
+                client.get("$baseUrl$TAGS_ENDPOINT")
+            }
             val response: Map<String, Any?> = httpResponse.body()
 
             @Suppress("UNCHECKED_CAST")
@@ -723,7 +740,7 @@ class OllamaAdapter(
 
         } catch (e: Exception) {
             logger.error(e) { "[OLLAMA] Failed to fetch models: ${e.message}" }
-            throw Exception("Failed to fetch Ollama models. Is Ollama running at $baseUrl?", e)
+            throw LLMErrorMapper.listModelsFailure(provider, e)
         }
     }
 

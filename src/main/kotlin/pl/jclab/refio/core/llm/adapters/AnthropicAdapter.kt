@@ -20,6 +20,7 @@ import io.ktor.client.plugins.logging.Logger as KtorLogger
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.gson.*
+import pl.jclab.refio.core.errors.LLMErrorMapper
 import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.services.logging.dualLogger
 import java.util.UUID
@@ -93,7 +94,11 @@ class AnthropicAdapter(
     ): LLMResponse {
         logger.info { "[ANTHROPIC] Sending ${if (streaming) "streaming" else "standard"} chat request: model=$model, messages=${messages.size}, systemMessages=${systemMessages.size}" }
 
-        return chatInternal(messages, systemMessages, maxTokens, temperature, streaming, onStreamChunk, kwargs)
+        return try {
+            chatInternal(messages, systemMessages, maxTokens, temperature, streaming, onStreamChunk, kwargs)
+        } catch (e: Exception) {
+            throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
+        }
     }
 
     private suspend fun chatInternal(
@@ -112,7 +117,7 @@ class AnthropicAdapter(
         )
             ?: System.getProperty("ANTHROPIC_API_KEY")
             ?: System.getenv("ANTHROPIC_API_KEY")
-            ?: throw IllegalStateException("Anthropic API key not provided")
+            ?: throw LLMErrorMapper.missingConfig(provider, "api_key")
 
         // Anthropic API requires system messages as top-level "system" parameter, not in messages array
         // Filter out any system messages from conversation messages (they should be in systemMessages parameter)
@@ -279,7 +284,7 @@ class AnthropicAdapter(
                     source = source
                 )
 
-                throw IllegalStateException(fullErrorMessage)
+                throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, fullErrorMessage)
             }
 
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
@@ -374,7 +379,7 @@ class AnthropicAdapter(
                 source = source
             )
 
-            throw e
+            throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
         }
     }
 
@@ -442,7 +447,7 @@ class AnthropicAdapter(
                         source = source
                     )
 
-                    throw IllegalStateException(errorMessage)
+                    throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus ?: 500, errorMessage)
                 }
 
                 val channel: io.ktor.utils.io.ByteReadChannel = httpResponse.body()
@@ -680,7 +685,7 @@ class AnthropicAdapter(
                 subtaskId = subtaskId,
                 source = source
             )
-            throw e
+            throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
         }
     }
 
@@ -755,7 +760,7 @@ class AnthropicAdapter(
 
         } catch (e: Exception) {
             logger.error(e) { "[ANTHROPIC] Failed to fetch models: ${e.message}" }
-            throw Exception("Failed to fetch Anthropic models: ${e.message}", e)
+            throw LLMErrorMapper.listModelsFailure(provider, e)
         }
     }
 

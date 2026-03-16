@@ -689,6 +689,7 @@ class SessionManager(private val project: Project) {
             val pendingStreamComplete = AtomicBoolean(false)
             val streamStateMutex = Mutex()
             var streamUiFlushJob: Job? = null
+            val streamFilter = IncrementalToolCallStreamFilter()
 
             // Create stream callback for UI updates
             // Filter TOOL_CALL blocks from streaming content for cleaner display
@@ -697,7 +698,11 @@ class SessionManager(private val project: Project) {
                     if (streamingClosed.get()) return@launch
 
                     streamStateMutex.withLock {
-                        val filteredContent = filterToolCallBlocks(chunk.accumulated)
+                        val filteredContent = streamFilter.filter(
+                            delta = chunk.delta,
+                            accumulated = chunk.accumulated,
+                            isComplete = chunk.isComplete
+                        )
                         if (filteredContent.isNotBlank()) {
                             if (streamingMessageId == null) {
                                 streamingMessageId = UUID.randomUUID().toString()
@@ -1231,120 +1236,6 @@ class SessionManager(private val project: Project) {
 
         return truncated.ifBlank { "Chat" }
     }
-
-    /**
-     * Filter out TOOL_CALL blocks from assistant message content.
-     * These are internal protocol markers that shouldn't be shown to users.
-     * The "Executing:" system messages provide user-friendly tool execution display.
-     */
-    private fun filterToolCallBlocks(content: String): String {
-        extractAssistantJsonTextPayload(content)?.let { return it }
-
-        // Pattern matches: TOOL_CALL: tool_name\nARGUMENTS: {json}
-        // Also handles multi-line JSON and optional "Tool calls:" header
-        val patterns = listOf(
-            Regex(
-                """(?:\n*Tool calls:\n)?TOOL_CALL:\s*\w+\s*\nARGUMENTS:\s*\{[\s\S]*?\}(?=\n(?:TOOL_CALL:|$)|$)""",
-                RegexOption.MULTILINE
-            )
-        )
-
-        var result = content
-        patterns.forEach { pattern ->
-            result = result.replace(pattern, "")
-        }
-        return result.trim()
-    }
-
-    private fun extractAssistantJsonTextPayload(content: String): String? {
-        val trimmed = content.trim()
-        if (!trimmed.startsWith("{")) return null
-
-        try {
-            if (trimmed.endsWith("}")) {
-                val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-                val root = json.parseToJsonElement(trimmed) as? kotlinx.serialization.json.JsonObject ?: return null
-
-                // Preserve full plan JSON for dedicated plan rendering.
-                if (root.containsKey("plan") || root.containsKey("subtasks")) {
-                    return content
-                }
-
-                val contentField = (root["content"] as? kotlinx.serialization.json.JsonPrimitive)
-                    ?.takeIf { it.isString }
-                    ?.content
-                if (!contentField.isNullOrBlank()) {
-                    return contentField
-                }
-
-                val responseField = (root["response"] as? kotlinx.serialization.json.JsonPrimitive)
-                    ?.takeIf { it.isString }
-                    ?.content
-                if (!responseField.isNullOrBlank()) {
-                    return responseField
-                }
-
-                if (root["actions"] is kotlinx.serialization.json.JsonArray) {
-                    return ""
-                }
-            }
-        } catch (_: Exception) {
-            // Fall through to partial JSON field extraction for streaming chunks.
-        }
-
-        extractPartialJsonStringField(trimmed, "content")?.let { return it }
-        extractPartialJsonStringField(trimmed, "response")?.let { return it }
-
-        return if (trimmed.contains("\"actions\"")) "" else null
-    }
-
-    private fun extractPartialJsonStringField(content: String, fieldName: String): String? {
-        val fieldIndex = content.indexOf("\"$fieldName\"")
-        if (fieldIndex < 0) return null
-
-        val colonIndex = content.indexOf(':', fieldIndex + fieldName.length + 2)
-        if (colonIndex < 0) return null
-
-        var valueStart = colonIndex + 1
-        while (valueStart < content.length && content[valueStart].isWhitespace()) {
-            valueStart++
-        }
-        if (valueStart >= content.length || content[valueStart] != '"') return null
-
-        val decoded = StringBuilder()
-        var i = valueStart + 1
-        while (i < content.length) {
-            val ch = content[i]
-            if (ch == '\\') {
-                if (i + 1 >= content.length) break
-                when (val escaped = content[i + 1]) {
-                    '"', '\\', '/' -> decoded.append(escaped)
-                    'b' -> decoded.append('\b')
-                    'f' -> decoded.append('\u000C')
-                    'n' -> decoded.append('\n')
-                    'r' -> decoded.append('\r')
-                    't' -> decoded.append('\t')
-                    'u' -> {
-                        if (i + 5 >= content.length) break
-                        val hex = content.substring(i + 2, i + 6)
-                        hex.toIntOrNull(16)?.let(decoded::appendCodePoint)
-                        i += 4
-                    }
-                    else -> decoded.append(escaped)
-                }
-                i += 2
-                continue
-            }
-            if (ch == '"') {
-                return decoded.toString()
-            }
-            decoded.append(ch)
-            i++
-        }
-
-        return decoded.toString().ifBlank { null }
-    }
-
     private fun resolveToolDisplayType(toolName: String): ToolDisplayType {
         return when (toolName) {
             "advance_code_editing", "multi_line_editor" -> ToolDisplayType.LLM_EDIT

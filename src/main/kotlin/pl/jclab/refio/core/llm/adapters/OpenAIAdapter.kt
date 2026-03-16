@@ -21,6 +21,8 @@ import io.ktor.client.plugins.logging.Logger as KtorLogger
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.gson.*
+import pl.jclab.refio.core.errors.LLMErrorMapper
+import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.services.logging.dualLogger
 import java.util.UUID
@@ -54,6 +56,10 @@ class OpenAIAdapter(
         const val CHAT_ENDPOINT = "/chat/completions"
         const val MODELS_ENDPOINT = "/models"
     }
+
+    private val timeoutMs: Long
+        get() = configService?.getApiCallTimeoutMs(taskId)
+            ?: pl.jclab.refio.core.services.ConfigService.DEFAULT_API_CALL_TIMEOUT * 1000L
 
     /**
      * Get API endpoint path based on model definition.
@@ -384,17 +390,18 @@ class OpenAIAdapter(
         definition: pl.jclab.refio.core.llm.ModelDefinition?,
         isReasoningModel: Boolean
     ): LLMResponse {
-        // Get API key from ConfigService (single source of truth)
-        val apiKeyToUse = configService?.get(
-            key = pl.jclab.refio.core.services.ConfigService.KEY_PROVIDER_OPENAI_API_KEY,
-            scope = pl.jclab.refio.core.db.ConfigScope.APP
-        )
-            ?: System.getProperty("OPENAI_API_KEY")
-            ?: System.getenv("OPENAI_API_KEY")
-            ?: throw IllegalStateException("OpenAI API key not provided")
+        try {
+            // Get API key from ConfigService (single source of truth)
+            val apiKeyToUse = configService?.get(
+                key = pl.jclab.refio.core.services.ConfigService.KEY_PROVIDER_OPENAI_API_KEY,
+                scope = pl.jclab.refio.core.db.ConfigScope.APP
+            )
+                ?: System.getProperty("OPENAI_API_KEY")
+                ?: System.getenv("OPENAI_API_KEY")
+                ?: throw LLMErrorMapper.missingConfig(provider, "api_key")
 
-        // Prepare messages
-        val openaiMessages = mutableListOf<Map<String, String>>()
+            // Prepare messages
+            val openaiMessages = mutableListOf<Map<String, String>>()
 
         // Add system messages from systemMessages parameter
         // For reasoning models: system prompts must be converted to user messages
@@ -502,12 +509,13 @@ class OpenAIAdapter(
 
         val startTime = System.currentTimeMillis()
 
-        return if (streaming && onStreamChunk != null) {
-            // Streaming mode
-            executeStreaming(apiKeyToUse, requestBody, requestJson, startTime, onStreamChunk, definition, logPrefix)
-        } else {
-            // Standard mode
-            executeStandard(apiKeyToUse, requestBody, requestJson, startTime, definition, logPrefix)
+            return if (streaming && onStreamChunk != null) {
+                executeStreaming(apiKeyToUse, requestBody, requestJson, startTime, onStreamChunk, definition, logPrefix)
+            } else {
+                executeStandard(apiKeyToUse, requestBody, requestJson, startTime, definition, logPrefix)
+            }
+        } catch (e: Exception) {
+            throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
         }
     }
 
@@ -584,7 +592,7 @@ class OpenAIAdapter(
                     source = source
                 )
 
-                throw IllegalStateException(fullErrorMessage)
+                throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, fullErrorMessage)
             }
 
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
@@ -625,7 +633,7 @@ class OpenAIAdapter(
             @Suppress("UNCHECKED_CAST")
             val choices = response["choices"] as? List<Map<String, Any?>> ?: emptyList()
             if (choices.isEmpty()) {
-                throw IllegalStateException("OpenAI returned empty choices")
+                throw RefioError.LLMError(provider, model, IllegalStateException("OpenAI returned empty choices"))
             }
 
             val choice = choices[0]
@@ -676,7 +684,7 @@ class OpenAIAdapter(
                 source = source
             )
 
-            throw e
+            throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
         }
     }
 
@@ -1353,7 +1361,7 @@ class OpenAIAdapter(
 
         } catch (e: Exception) {
             logger.error(e) { "[OPENAI] Failed to fetch models: ${e.message}" }
-            throw Exception("Failed to fetch OpenAI models: ${e.message}", e)
+            throw LLMErrorMapper.listModelsFailure(provider, e)
         }
     }
 

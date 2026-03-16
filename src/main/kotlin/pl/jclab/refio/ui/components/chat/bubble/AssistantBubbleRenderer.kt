@@ -124,6 +124,8 @@ internal class AssistantBubbleRenderer(
             title = "Assistant",
             content = content,
             messageId = message.id,
+            isStreaming = message.isStreaming,
+            preferPlainTextMarkdown = message.isStreaming,
             backgroundColor = LCATheme.assistantBubbleBackground,
             foregroundColor = LCATheme.assistantBubbleForeground,
             context = context.bubbleContentContext

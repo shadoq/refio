@@ -14,6 +14,7 @@ import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.errors.LLMErrorMapper
 import pl.jclab.refio.core.security.SecureLogger
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -171,10 +172,14 @@ class LMStudioAdapter(
 
         val startTime = System.currentTimeMillis()
 
-        return if (streaming && onStreamChunk != null) {
-            executeStreaming(resolvedBaseUrl, apiKey, requestBody, requestJson, startTime, onStreamChunk, logPrefix)
-        } else {
-            executeStandard(resolvedBaseUrl, apiKey, requestBody, requestJson, startTime, logPrefix)
+        return try {
+            if (streaming && onStreamChunk != null) {
+                executeStreaming(resolvedBaseUrl, apiKey, requestBody, requestJson, startTime, onStreamChunk, logPrefix)
+            } else {
+                executeStandard(resolvedBaseUrl, apiKey, requestBody, requestJson, startTime, logPrefix)
+            }
+        } catch (e: Exception) {
+            throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
         }
     }
 
@@ -216,7 +221,7 @@ class LMStudioAdapter(
                     subtaskId = subtaskId,
                     source = source
                 )
-                throw IllegalStateException(errorMessage)
+                throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, errorMessage)
             }
 
             val usageMap = rawResponse["usage"] as? Map<String, Any?> ?: emptyMap()
@@ -291,7 +296,7 @@ class LMStudioAdapter(
                 subtaskId = subtaskId,
                 source = source
             )
-            throw e
+            throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
         }
     }
 
@@ -335,7 +340,7 @@ class LMStudioAdapter(
                         subtaskId = subtaskId,
                         source = source
                     )
-                    throw IllegalStateException(errorMessage)
+                    throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus ?: 500, errorMessage)
                 }
 
                 val channel: io.ktor.utils.io.ByteReadChannel = httpResponse.body()
@@ -455,7 +460,7 @@ class LMStudioAdapter(
                 subtaskId = subtaskId,
                 source = source
             )
-            throw e
+            throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
         }
     }
 
@@ -501,7 +506,7 @@ class LMStudioAdapter(
             }
         } catch (e: Exception) {
             logger.error(e) { "[LMStudio] Failed to fetch models: ${e.message}" }
-            throw Exception("Failed to fetch LM Studio models. Is the server running at $resolvedBaseUrl?", e)
+            throw LLMErrorMapper.listModelsFailure(provider, e)
         }
     }
 

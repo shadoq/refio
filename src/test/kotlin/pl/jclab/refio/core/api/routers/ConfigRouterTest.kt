@@ -128,4 +128,29 @@ class ConfigRouterTest {
             assertTrue(model.contextSize > 0)
         }
     }
+
+    @Test
+    fun `buildRateLimitedConnectionResult returns success with warning details`() {
+        val result = configRouter.buildRateLimitedConnectionResult(
+            provider = "zai",
+            models = listOf(
+                ModelConfig(
+                    id = "glm-4.5",
+                    name = "GLM-4.5",
+                    provider = "zai",
+                    capabilities = listOf("CHAT_COMPLETION"),
+                    maxContext = 128000,
+                    costPer1mInput = 0.0,
+                    costPer1mOutput = 0.0
+                )
+            ),
+            testModel = "glm-4.5",
+            latency = 1234
+        )
+
+        assertTrue(result.success)
+        assertEquals(1234, result.latencyMs)
+        assertEquals("Connected successfully, but the probe request was rate limited", result.message)
+        assertEquals("rate_limited", result.details?.get("warning"))
+    }
 }

@@ -58,45 +58,78 @@ class ConfigRepository {
         }
     }
 
-    fun get(key: String, scope: ConfigScope, projectId: String? = null, taskId: String? = null): Config? = transaction {
-        validateScope(scope, projectId, taskId)
+    fun get(key: String, scope: ConfigScope, projectId: String? = null, taskId: String? = null): Config? {
+        return try {
+            transaction {
+                validateScope(scope, projectId, taskId)
 
-        ConfigTable.selectAll()
-            .where { scopeCriteria(key, scope, projectId, taskId) }
-            .map { rowToConfig(it) }
-            .singleOrNull()
-    }
-
-    fun getWithPrecedence(key: String, taskId: String? = null, projectId: String? = null): Config? = transaction {
-        logger.debug { "[ORCHESTRATION-DEBUG] getWithPrecedence: key=$key, taskId=$taskId, projectId=$projectId" }
-
-        if (taskId != null) {
-            val taskConfig = get(key, ConfigScope.TASK, taskId = taskId)
-            if (taskConfig != null) {
-                logger.debug { "[ORCHESTRATION-DEBUG] Found task config: key=$key, value=${taskConfig.value}" }
-                return@transaction taskConfig
+                ConfigTable.selectAll()
+                    .where { scopeCriteria(key, scope, projectId, taskId) }
+                    .map { rowToConfig(it) }
+                    .singleOrNull()
+            }
+        } catch (e: IllegalStateException) {
+            if (e.message?.contains("Please call Database.connect() before using this code") == true) {
+                logger.debug { "Skipping config lookup before database init: key=$key, scope=$scope" }
+                null
+            } else {
+                throw e
             }
         }
-
-        if (projectId != null) {
-            val projectConfig = get(key, ConfigScope.PROJECT, projectId = projectId)
-            if (projectConfig != null) {
-                logger.debug { "[ORCHESTRATION-DEBUG] Found project config: key=$key, value=${projectConfig.value}" }
-                return@transaction projectConfig
-            }
-        }
-
-        val appConfig = get(key, ConfigScope.APP)
-        logger.debug { "[ORCHESTRATION-DEBUG] App config result: key=$key, value=${appConfig?.value}, found=${appConfig != null}" }
-        appConfig
     }
 
-    fun findByScope(scope: ConfigScope, projectId: String? = null, taskId: String? = null): List<Config> = transaction {
-        validateScope(scope, projectId, taskId)
+    fun getWithPrecedence(key: String, taskId: String? = null, projectId: String? = null): Config? {
+        return try {
+            transaction {
+                logger.debug { "[ORCHESTRATION-DEBUG] getWithPrecedence: key=$key, taskId=$taskId, projectId=$projectId" }
 
-        ConfigTable.selectAll()
-            .where { scopeCriteria(null, scope, projectId, taskId) }
-            .map { rowToConfig(it) }
+                if (taskId != null) {
+                    val taskConfig = get(key, ConfigScope.TASK, taskId = taskId)
+                    if (taskConfig != null) {
+                        logger.debug { "[ORCHESTRATION-DEBUG] Found task config: key=$key, value=${taskConfig.value}" }
+                        return@transaction taskConfig
+                    }
+                }
+
+                if (projectId != null) {
+                    val projectConfig = get(key, ConfigScope.PROJECT, projectId = projectId)
+                    if (projectConfig != null) {
+                        logger.debug { "[ORCHESTRATION-DEBUG] Found project config: key=$key, value=${projectConfig.value}" }
+                        return@transaction projectConfig
+                    }
+                }
+
+                val appConfig = get(key, ConfigScope.APP)
+                logger.debug { "[ORCHESTRATION-DEBUG] App config result: key=$key, value=${appConfig?.value}, found=${appConfig != null}" }
+                appConfig
+            }
+        } catch (e: IllegalStateException) {
+            if (e.message?.contains("Please call Database.connect() before using this code") == true) {
+                logger.debug { "Skipping precedence config lookup before database init: key=$key" }
+                null
+            } else {
+                throw e
+            }
+        }
+    }
+
+    fun findByScope(scope: ConfigScope, projectId: String? = null, taskId: String? = null): List<Config> {
+        return try {
+            transaction {
+                validateScope(scope, projectId, taskId)
+
+                ConfigTable.selectAll()
+                    .where { scopeCriteria(null, scope, projectId, taskId) }
+                    .map { rowToConfig(it) }
+            }
+        } catch (e: IllegalStateException) {
+            if (e.message?.contains("Please call Database.connect() before using this code") == true) {
+                logger.debug { "Skipping config scope lookup before database init: scope=$scope" }
+                emptyList()
+            } else {
+                throw e
+            }
+        }
     }
 
     fun findByTaskId(taskId: String): List<Config> = findByScope(ConfigScope.TASK, taskId = taskId)
@@ -108,17 +141,28 @@ class ConfigRepository {
         scope: ConfigScope? = null,
         projectId: String? = null,
         taskId: String? = null
-    ): List<Config> = transaction {
-        val conditions = mutableListOf<Op<Boolean>>(ConfigTable.key like keyPattern)
-        scope?.let {
-            validateScope(it, projectId, taskId)
-            conditions.add(scopeCriteria(null, it, projectId, taskId))
-        }
+    ): List<Config> {
+        return try {
+            transaction {
+                val conditions = mutableListOf<Op<Boolean>>(ConfigTable.key like keyPattern)
+                scope?.let {
+                    validateScope(it, projectId, taskId)
+                    conditions.add(scopeCriteria(null, it, projectId, taskId))
+                }
 
-        val predicate = conditions.reduce { acc, op -> acc and op }
-        ConfigTable.selectAll()
-            .where { predicate }
-            .map { rowToConfig(it) }
+                val predicate = conditions.reduce { acc, op -> acc and op }
+                ConfigTable.selectAll()
+                    .where { predicate }
+                    .map { rowToConfig(it) }
+            }
+        } catch (e: IllegalStateException) {
+            if (e.message?.contains("Please call Database.connect() before using this code") == true) {
+                logger.debug { "Skipping config search before database init: pattern=$keyPattern" }
+                emptyList()
+            } else {
+                throw e
+            }
+        }
     }
 
     fun delete(key: String, scope: ConfigScope, projectId: String? = null, taskId: String? = null): Boolean = transaction {
@@ -141,22 +185,33 @@ class ConfigRepository {
         deleted
     }
 
-    fun count(scope: ConfigScope? = null, projectId: String? = null, taskId: String? = null): Long = transaction {
-        val conditions = mutableListOf<Op<Boolean>>()
+    fun count(scope: ConfigScope? = null, projectId: String? = null, taskId: String? = null): Long {
+        return try {
+            transaction {
+                val conditions = mutableListOf<Op<Boolean>>()
 
-        scope?.let {
-            validateScope(it, projectId, taskId)
-            conditions.add(ConfigTable.scope eq it)
-        }
-        projectId?.let { conditions.add(ConfigTable.projectId eq it) }
-        taskId?.let { conditions.add(ConfigTable.taskId eq it) }
+                scope?.let {
+                    validateScope(it, projectId, taskId)
+                    conditions.add(ConfigTable.scope eq it)
+                }
+                projectId?.let { conditions.add(ConfigTable.projectId eq it) }
+                taskId?.let { conditions.add(ConfigTable.taskId eq it) }
 
-        var query = ConfigTable.selectAll()
-        if (conditions.isNotEmpty()) {
-            val predicate = conditions.reduce { acc, op -> acc and op }
-            query = query.where { predicate }
+                var query = ConfigTable.selectAll()
+                if (conditions.isNotEmpty()) {
+                    val predicate = conditions.reduce { acc, op -> acc and op }
+                    query = query.where { predicate }
+                }
+                query.count()
+            }
+        } catch (e: IllegalStateException) {
+            if (e.message?.contains("Please call Database.connect() before using this code") == true) {
+                logger.debug { "Skipping config count before database init" }
+                0
+            } else {
+                throw e
+            }
         }
-        query.count()
     }
 
     private fun rowToConfig(row: ResultRow): Config = Config(

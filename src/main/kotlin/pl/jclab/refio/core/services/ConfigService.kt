@@ -162,7 +162,9 @@ class ConfigService(
         const val FALLBACK_WEAK_PROVIDER = "ollama"
         const val FALLBACK_EMBEDDING_MODEL = "nomic-embed-text"
         const val FALLBACK_EMBEDDING_PROVIDER = "ollama"
-        const val DEFAULT_ZAI_BASE_URL = "https://api.z.ai/v1"
+        const val DEFAULT_ZAI_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
+        const val LEGACY_ZAI_BASE_URL = "https://api.z.ai/v1"
+        const val GENERAL_ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
 
         // Limit defaults
         const val DEFAULT_API_CALL_TIMEOUT = 360 // seconds
@@ -1136,11 +1138,21 @@ class ConfigService(
     }
 
     fun getZAIBaseUrl(): String {
-        return get(KEY_PROVIDER_ZAI_BASE_URL)?.takeIf { it.isNotBlank() } ?: DEFAULT_ZAI_BASE_URL
+        return normalizeZAIBaseUrl(get(KEY_PROVIDER_ZAI_BASE_URL))
     }
 
     fun getZAIApiKey(): String? {
         return get(KEY_PROVIDER_ZAI_API_KEY)?.takeIf { it.isNotBlank() }
+    }
+
+    fun normalizeZAIBaseUrl(baseUrl: String?): String {
+        val normalized = baseUrl?.trim()?.trimEnd('/')
+        return when {
+            normalized.isNullOrEmpty() -> DEFAULT_ZAI_BASE_URL
+            normalized.equals(LEGACY_ZAI_BASE_URL, ignoreCase = true) -> DEFAULT_ZAI_BASE_URL
+            normalized.equals(GENERAL_ZAI_BASE_URL, ignoreCase = true) -> DEFAULT_ZAI_BASE_URL
+            else -> normalized
+        }
     }
 
     private fun buildGeneralConfig(): pl.jclab.refio.core.config.GeneralConfig {

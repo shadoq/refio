@@ -93,7 +93,7 @@ class CoreApiRouter(
     internal val promptsService = PromptsService(promptsRepository)
     internal val toolPermissionsService = ToolPermissionsService(configRepository)
     internal val llmClient = llmClientOverride ?: LLMClient(configService)
-    private val workingMemoryService = WorkingMemoryService(configService.getWorkingMemoryMaxFacts())
+    private val workingMemoryService = WorkingMemoryService()
     private val conversationSummaryService = ConversationSummaryService(
         llmClient = llmClient,
         promptsService = promptsService,

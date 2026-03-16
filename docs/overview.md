@@ -1101,7 +1101,7 @@ refio_poc.db                  # SQLite database (project root)
 
 | Class | Location | Purpose |
 |-------|----------|---------|
-| SessionManager | services/session/ | Session orchestration facade |
+| SessionManager | services/session/ | Session coordination facade |
 | AgentTurnLoop | core/services/ | Turn-based execution loop |
 | ToolResultSummarizer | core/services/ | Context reduction |
 | ContextService | core/services/ | Context building |

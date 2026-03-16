@@ -19,7 +19,10 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.serialization.gson.gson
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.llm.BaseLLMAdapter
 import pl.jclab.refio.core.llm.LLMMessage
@@ -52,6 +55,10 @@ open class CustomOpenAIAdapter(
     companion object {
         private const val CHAT_ENDPOINT = "/chat/completions"
         private const val MODELS_ENDPOINT = "/models"
+        private const val ZAI_COOLDOWN_MS = 5_000L
+        private const val ZAI_RATE_LIMIT_RETRY_DELAY_MS = 15_000L
+        private val zaiRequestMutex = Mutex()
+        private var zaiNextAllowedAtMs: Long = 0L
     }
 
     private val logger = dualLogger("CustomOpenAIAdapter")
@@ -136,7 +143,9 @@ open class CustomOpenAIAdapter(
             maxTokens != null && maxTokens > 0 -> minOf(maxTokens, maxOutputLimit)
             else -> maxOutputLimit
         }
+        val requestId = UUID.randomUUID().toString()
         val requestBody = buildMap<String, Any> {
+            put("request_id", requestId)
             put("model", model)
             put("messages", requestMessages)
             put("temperature", temperature)
@@ -149,7 +158,6 @@ open class CustomOpenAIAdapter(
             kwargs["response_format"]?.let { put("response_format", it) }
         }
         val requestJson = gson.toJson(requestBody)
-        val requestId = UUID.randomUUID().toString()
         val startTime = System.currentTimeMillis()
         val logPrefix = "[${providerName.uppercase()}][$requestId]"
 
@@ -175,10 +183,15 @@ open class CustomOpenAIAdapter(
         var httpStatus: Int? = null
 
         try {
-            val response = client.post("$baseUrl$CHAT_ENDPOINT") {
-                contentType(ContentType.Application.Json)
-                apiKey?.let { header(HttpHeaders.Authorization, "Bearer $it") }
-                setBody(requestBody)
+            logger.info { "$logPrefix Request start: endpoint=$baseUrl$CHAT_ENDPOINT, body=${SecureLogger.redactAndTruncate(requestJson)}" }
+            val response = executeWithZaiRateLimitRetry("$baseUrl$CHAT_ENDPOINT") {
+                withProviderRateLimit("$baseUrl$CHAT_ENDPOINT") {
+                    client.post("$baseUrl$CHAT_ENDPOINT") {
+                        contentType(ContentType.Application.Json)
+                        apiKey?.let { header(HttpHeaders.Authorization, "Bearer $it") }
+                        setBody(requestBody)
+                    }
+                }
             }
 
             httpStatus = response.status.value
@@ -222,6 +235,18 @@ open class CustomOpenAIAdapter(
                 rawResponse = rawResponse
             )
         } catch (e: RefioError) {
+            logger.apiError(
+                provider = provider,
+                model = model,
+                endpoint = "$baseUrl$CHAT_ENDPOINT",
+                requestJson = requestJson,
+                httpStatus = httpStatus,
+                error = e,
+                latencyMs = (System.currentTimeMillis() - startTime).toInt(),
+                taskId = taskId,
+                subtaskId = subtaskId,
+                source = source
+            )
             throw e
         } catch (e: Exception) {
             logger.apiError(
@@ -255,38 +280,43 @@ open class CustomOpenAIAdapter(
         var finalFinishReason: String? = null
 
         try {
-            client.preparePost("$baseUrl$CHAT_ENDPOINT") {
-                contentType(ContentType.Application.Json)
-                apiKey?.let { header(HttpHeaders.Authorization, "Bearer $it") }
-                setBody(requestBody)
-            }.execute { httpResponse ->
-                httpStatus = httpResponse.status.value
-                if (httpStatus !in 200..299) {
-                    val errorBody = httpResponse.body<String>()
-                    throw mapHttpError(httpStatus ?: 500, errorBody)
-                }
-
-                val channel: io.ktor.utils.io.ByteReadChannel = httpResponse.body()
-                while (!channel.isClosedForRead) {
-                    val line = channel.readUTF8Line(limit = Int.MAX_VALUE) ?: continue
-                    if (line.isBlank() || !line.startsWith("data: ")) continue
-
-                    val data = line.removePrefix("data: ").trim()
-                    if (data == "[DONE]") break
-
-                    runCatching {
-                        @Suppress("UNCHECKED_CAST")
-                        val chunk = gson.fromJson(data, Map::class.java) as Map<String, Any?>
-                        val choices = chunk["choices"] as? List<Map<String, Any?>> ?: emptyList()
-                        val first = choices.firstOrNull() ?: emptyMap()
-                        val delta = first["delta"] as? Map<String, Any?>
-                        toolCallAccumulator.consumeDelta(delta)
-                        val content = delta?.get("content") as? String
-                        if (!content.isNullOrEmpty()) {
-                            contentBuilder.append(content)
-                            onStreamChunk(StreamChunk(delta = content))
+            logger.info { "$logPrefix Request start: endpoint=$baseUrl$CHAT_ENDPOINT, body=${SecureLogger.redactAndTruncate(requestJson)}" }
+            executeWithZaiRateLimitRetry("$baseUrl$CHAT_ENDPOINT") {
+                withProviderRateLimit("$baseUrl$CHAT_ENDPOINT") {
+                    client.preparePost("$baseUrl$CHAT_ENDPOINT") {
+                        contentType(ContentType.Application.Json)
+                        apiKey?.let { header(HttpHeaders.Authorization, "Bearer $it") }
+                        setBody(requestBody)
+                    }.execute { httpResponse ->
+                        httpStatus = httpResponse.status.value
+                        if (httpStatus !in 200..299) {
+                            val errorBody = httpResponse.body<String>()
+                            throw mapHttpError(httpStatus ?: 500, errorBody)
                         }
-                        finalFinishReason = first["finish_reason"] as? String ?: finalFinishReason
+
+                        val channel: io.ktor.utils.io.ByteReadChannel = httpResponse.body()
+                        while (!channel.isClosedForRead) {
+                            val line = channel.readUTF8Line(limit = Int.MAX_VALUE) ?: continue
+                            if (line.isBlank() || !line.startsWith("data: ")) continue
+
+                            val data = line.removePrefix("data: ").trim()
+                            if (data == "[DONE]") break
+
+                            runCatching {
+                                @Suppress("UNCHECKED_CAST")
+                                val chunk = gson.fromJson(data, Map::class.java) as Map<String, Any?>
+                                val choices = chunk["choices"] as? List<Map<String, Any?>> ?: emptyList()
+                                val first = choices.firstOrNull() ?: emptyMap()
+                                val delta = first["delta"] as? Map<String, Any?>
+                                toolCallAccumulator.consumeDelta(delta)
+                                val content = delta?.get("content") as? String
+                                if (!content.isNullOrEmpty()) {
+                                    contentBuilder.append(content)
+                                    onStreamChunk(StreamChunk(delta = content))
+                                }
+                                finalFinishReason = first["finish_reason"] as? String ?: finalFinishReason
+                            }
+                        }
                     }
                 }
             }
@@ -328,6 +358,18 @@ open class CustomOpenAIAdapter(
                 rawResponse = mapOf("content" to contentBuilder.toString())
             )
         } catch (e: RefioError) {
+            logger.apiError(
+                provider = provider,
+                model = model,
+                endpoint = "$baseUrl$CHAT_ENDPOINT",
+                requestJson = requestJson,
+                httpStatus = httpStatus,
+                error = e,
+                latencyMs = (System.currentTimeMillis() - startTime).toInt(),
+                taskId = taskId,
+                subtaskId = subtaskId,
+                source = source
+            )
             throw e
         } catch (e: Exception) {
             logger.apiError(
@@ -349,25 +391,68 @@ open class CustomOpenAIAdapter(
     open suspend fun listModels(): List<ModelConfig> = withContext(Dispatchers.IO) {
         val baseUrl = resolveBaseUrl()
         val apiKey = resolveApiKey()
+        val startTime = System.currentTimeMillis()
 
         try {
-            val response = client.get("$baseUrl$MODELS_ENDPOINT") {
-                apiKey?.let { header(HttpHeaders.Authorization, "Bearer $it") }
+            logger.info { "[${providerName.uppercase()}] Request start: endpoint=$baseUrl$MODELS_ENDPOINT" }
+            val response = withProviderRateLimit("$baseUrl$MODELS_ENDPOINT") {
+                client.get("$baseUrl$MODELS_ENDPOINT") {
+                    apiKey?.let { header(HttpHeaders.Authorization, "Bearer $it") }
+                }
             }
-            val body: Map<String, Any?> = response.body()
-            val modelsData = body["data"] as? List<Map<String, Any?>> ?: emptyList()
+            val rawBody = response.body<String>()
 
-            modelsData.mapNotNull { modelData ->
-                val modelId = modelData["id"] as? String ?: return@mapNotNull null
-                val contextLength = (modelData["context_length"] as? Number)?.toInt() ?: DEFAULT_CONTEXT_SIZE
-                val definition = ModelDefinitions.getDefinition(providerName, modelId)
-                    ?: ModelDefinitions.createFallback(providerName, modelId, contextLength)
-                definition.toModelConfig()
+            if (response.status.value !in 200..299) {
+                throw mapHttpError(response.status.value, rawBody)
             }
+
+            parseModelsPayload(rawBody)
         } catch (e: RefioError) {
+            logger.apiError(
+                provider = provider,
+                model = "models",
+                endpoint = "$baseUrl$MODELS_ENDPOINT",
+                requestJson = "",
+                httpStatus = null,
+                error = e,
+                latencyMs = (System.currentTimeMillis() - startTime).toInt(),
+                taskId = taskId,
+                subtaskId = subtaskId,
+                source = source
+            )
             throw e
         } catch (e: Exception) {
+            logger.apiError(
+                provider = provider,
+                model = "models",
+                endpoint = "$baseUrl$MODELS_ENDPOINT",
+                requestJson = "",
+                httpStatus = null,
+                error = e,
+                latencyMs = (System.currentTimeMillis() - startTime).toInt(),
+                taskId = taskId,
+                subtaskId = subtaskId,
+                source = source
+            )
             throw RefioError.LLMError(providerName, model, e)
+        }
+    }
+
+    internal fun parseModelsPayload(rawBody: String): List<ModelConfig> {
+        val parsed = gson.fromJson(rawBody, Any::class.java)
+        val modelsData: List<*> = when (parsed) {
+            is Map<*, *> -> parsed["data"] as? List<*> ?: emptyList<Any?>()
+            is List<*> -> parsed
+            else -> emptyList<Any?>()
+        }
+
+        return modelsData.mapNotNull { item ->
+            val modelData = item as? Map<*, *> ?: return@mapNotNull null
+            val modelId = modelData["id"] as? String ?: return@mapNotNull null
+            val contextLength = (modelData["context_length"] as? Number)?.toInt() ?: DEFAULT_CONTEXT_SIZE
+            val definition = ModelDefinitions.getDefinition(providerName, modelId)
+                ?: ModelDefinitions.createFallback(providerName, modelId, contextLength)
+            definition.toModelConfig()
         }
     }
 
@@ -390,14 +475,143 @@ open class CustomOpenAIAdapter(
 
         val message = (rawResponse["error"] as? Map<*, *>)?.get("message") as? String
             ?: "OpenAI-compatible API error (HTTP $httpStatus)"
-        throw mapHttpError(httpStatus, message)
+        val code = (rawResponse["error"] as? Map<*, *>)?.get("code")?.toString()
+        throw mapHttpError(httpStatus, message, code)
     }
 
     private fun mapHttpError(httpStatus: Int, message: String): RefioError {
+        val parsed = parseProviderError(message)
+        return mapHttpError(
+            httpStatus = httpStatus,
+            message = parsed.message ?: message,
+            businessCode = parsed.code
+        )
+    }
+
+    private fun mapHttpError(httpStatus: Int, message: String, businessCode: String?): RefioError {
+        val zaiMessage = if (providerName == "zai") {
+            buildZAIErrorMessage(httpStatus, businessCode, message)
+        } else {
+            message
+        }
+
         return when (httpStatus) {
-            401, 403 -> RefioError.LLMAuthentication(providerName, model)
-            429 -> RefioError.LLMRateLimit(providerName, null)
-            else -> RefioError.LLMError(providerName, model, IllegalStateException(message))
+            401, 403 -> RefioError.LLMAuthentication(providerName, model, IllegalStateException(zaiMessage))
+            429 -> RefioError.LLMRateLimit(providerName, null, IllegalStateException(zaiMessage))
+            434 -> RefioError.LLMAuthentication(providerName, model, IllegalStateException(zaiMessage))
+            else -> RefioError.LLMError(providerName, model, IllegalStateException(zaiMessage))
+        }
+    }
+
+    internal data class ProviderErrorPayload(
+        val code: String? = null,
+        val message: String? = null
+    )
+
+    internal fun parseProviderError(rawBody: String): ProviderErrorPayload {
+        return runCatching {
+            val parsed = gson.fromJson(rawBody, Map::class.java) as? Map<*, *>
+            val error = parsed?.get("error") as? Map<*, *>
+            ProviderErrorPayload(
+                code = error?.get("code")?.toString(),
+                message = error?.get("message")?.toString()
+            )
+        }.getOrDefault(ProviderErrorPayload(message = rawBody))
+    }
+
+    internal fun buildZAIErrorMessage(httpStatus: Int, businessCode: String?, message: String): String {
+        val normalized = businessCode?.trim()
+        val detail = when (normalized) {
+            "1000", "1001", "1002", "1003", "1004" -> "Authentication failed or token expired"
+            "1110" -> "Account is inactive"
+            "1111" -> "Account does not exist"
+            "1112", "1121" -> "Account has been locked"
+            "1113" -> "Account balance exhausted"
+            "1120" -> "Unable to access account temporarily"
+            "1210", "1213", "1214", "1215" -> "Invalid request parameters"
+            "1211" -> "Model does not exist"
+            "1212" -> "Model does not support this API method"
+            "1220" -> "No permission to access this API"
+            "1221" -> "API has been taken offline"
+            "1222" -> "API does not exist"
+            "1230" -> "API call process error"
+            "1231" -> "An identical request is already in progress"
+            "1234" -> "Network error on provider side"
+            "1301" -> "Request blocked by safety policy"
+            "1302" -> "API concurrency limit exceeded"
+            "1303" -> "API frequency limit exceeded"
+            "1304" -> "Daily API call limit reached"
+            "1305" -> "API rate limit triggered"
+            "1308" -> "Usage limit reached"
+            "1309" -> "GLM Coding Plan expired"
+            "1310" -> "Weekly or monthly limit exhausted"
+            else -> when (httpStatus) {
+                401, 403 -> "Authentication failure or token timeout"
+                429 -> "Rate limit or account quota restriction"
+                434 -> "No API permission"
+                else -> null
+            }
+        }
+
+        return buildString {
+            if (!normalized.isNullOrBlank()) {
+                append("Z.AI error ")
+                append(normalized)
+                append(": ")
+            }
+            if (!detail.isNullOrBlank()) {
+                append(detail)
+                if (message.isNotBlank() && !message.contains(detail, ignoreCase = true)) {
+                    append(". ")
+                }
+            }
+            if (message.isNotBlank()) {
+                append(message)
+            } else if (detail.isNullOrBlank()) {
+                append("HTTP ")
+                append(httpStatus)
+            }
+        }
+    }
+
+    private suspend fun <T> withProviderRateLimit(endpoint: String, block: suspend () -> T): T {
+        if (providerName != "zai") {
+            return block()
+        }
+
+        return zaiRequestMutex.withLock {
+            val now = System.currentTimeMillis()
+            val waitMs = (zaiNextAllowedAtMs - now).coerceAtLeast(0L)
+            if (waitMs > 0) {
+                logger.info { "[ZAI] Waiting ${waitMs}ms before next request: $endpoint" }
+                delay(waitMs)
+            }
+
+            try {
+                block()
+            } finally {
+                zaiNextAllowedAtMs = System.currentTimeMillis() + ZAI_COOLDOWN_MS
+            }
+        }
+    }
+
+    private suspend fun <T> executeWithZaiRateLimitRetry(endpoint: String, block: suspend () -> T): T {
+        if (providerName != "zai") {
+            return block()
+        }
+
+        return try {
+            block()
+        } catch (e: RefioError.LLMRateLimit) {
+            logger.warn {
+                "[ZAI] Rate limit hit for $endpoint. Waiting ${ZAI_RATE_LIMIT_RETRY_DELAY_MS}ms before retry"
+            }
+            zaiNextAllowedAtMs = maxOf(
+                zaiNextAllowedAtMs,
+                System.currentTimeMillis() + ZAI_RATE_LIMIT_RETRY_DELAY_MS
+            )
+            delay(ZAI_RATE_LIMIT_RETRY_DELAY_MS)
+            block()
         }
     }
 }

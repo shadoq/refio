@@ -30,7 +30,7 @@ Unlike tools that send entire codebases to LLMs, Refio uses **selective context 
 | **12 Registered Tools** | 6 read-only + 6 write tools (AGENT enables full toolset by default)                |
 | **6 LLM Adapters** | Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio                             |
 | **MCP Protocol** | Full Model Context Protocol with 16 built-in presets                                 |
-| **21 Built-in Subagents** | Specialized agents for code review, security, architecture, docs, business analysis, orchestration |
+| **21 Built-in Subagents** | Specialized agents for code review, security, architecture, docs, business analysis, and coordination |
 | **Performance Optimizations** | Token estimation, retry logic, working memory integration                            |
 | **No-Egress Mode** | Block cloud providers, use only local models                                         |
 | **Native UI** | IntelliJ Swing components, no webview                                                |
