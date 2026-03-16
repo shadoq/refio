@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "pl.jclab.refio"
-version = "0.0.1.2"
+version = "0.0.1.3"
 
 repositories {
   mavenCentral()

@@ -11,8 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+## [0.0.1.3] - 2025-03-16
+
+### Added
+
 - `PRIVACY.md` describing local storage, cloud-provider behavior, no-egress mode, and secret handling.
 - New `security.allow_symlinks` configuration option, documented in `docs/config.md`, for explicit unsafe opt-in to symlink access in `PathSandbox`.
+- Support for OpenAI-compatible providers via dedicated `providers.custom_openai` configuration, including API key, base URL, and default model selection.
+- Dedicated Z.AI provider integration with separate adapter, config keys, and Settings UI card instead of sharing generic provider settings.
+- Expanded project/user YAML support for `rag` settings and default embedding model selection.
 
 ### Changed
 
@@ -21,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project analysis caching is now keyed by `includeContent` and protected against duplicate concurrent analyses for the same project state.
 - Assistant tool-call bubbles now preserve the assistant narrative alongside tool metadata, and simple tool bubbles use the same stacked layout.
 - Agent turn loop message reload now keeps assistant narration in a separate bubble from tool-call bubbles, so the chat layout stays stable after streaming completes.
+- RAG indexing and retrieval now support configurable memory controls, semantic chunking, paginated embedding scans, result caching for `@codebase`, dynamic context-budget redistribution, and working-memory eviction tuning.
+- Embedding generation now supports batched requests for OpenAI and Ollama providers, reducing per-chunk overhead during RAG indexing.
+- Provider/model metadata was consolidated to improve compatibility for OpenAI-compatible backends and dedicated Z.AI model discovery.
 
 ### Fixed
 
@@ -32,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `PathSandbox` now rejects symbolic links by default, including symlinked parent directories, with opt-in override via `security.allow_symlinks`.
 - `advance_code_editing` now enforces excluded file-extension checks before invoking the LLM.
 - Streaming assistant placeholders now suppress raw `{"actions":...}` JSON and show only extracted partial `response` / `content` text while the turn is still in progress.
+- Config reads during startup no longer fail before `Database.connect()` completes; repository lookups now safely skip pre-init access.
+- Provider failures are now normalized into typed Refio LLM errors for timeout, authentication, rate-limit, and generic upstream failures.
+- Ollama requests are gated per endpoint to reduce contention between concurrent chat, model-discovery, and embedding operations.
 
 ## [0.0.1.2] - 2025-03-07
 
