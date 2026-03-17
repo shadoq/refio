@@ -217,6 +217,21 @@ class ProvidersSettingsPanel(
 
         providersPanel.add(
             createProviderCard(
+                providerName = "custom_openai",
+                fields = listOf(
+                    ProviderField("API Key", FieldType.PASSWORD, "custom_openai_api_key"),
+                    ProviderField("Base URL", FieldType.TEXT, "custom_openai_base_url"),
+                    ProviderField("Model", FieldType.TEXT, "custom_openai_model")
+                ),
+                initialStatus = ProviderStatus.NEEDS_CONFIG,
+                description = "OpenAI-compatible provider with custom base URL and optional default model."
+            )
+        )
+
+        providersPanel.add(Box.createVerticalStrut(12))
+
+        providersPanel.add(
+            createProviderCard(
                 providerName = "ZAI",
                 fields = listOf(
                     ProviderField("API Key", FieldType.PASSWORD, "zai_api_key"),
@@ -357,7 +372,7 @@ class ProvidersSettingsPanel(
      */
     private fun onFieldChanged(providerName: String, fieldKey: String, value: String) {
         // Use lowercase provider name for config keys to match ConfigService expectations
-        val jobKey = "${providerName.lowercase()}.$fieldKey"
+        val jobKey = "${toProviderKey(providerName)}.$fieldKey"
         saveJobs[jobKey]?.cancel()
 
         saveJobs[jobKey] = coroutineScope.launch {
@@ -425,7 +440,7 @@ class ProvidersSettingsPanel(
 
                 // Call backend API
                 val result = coreApiClient?.testProviderConnection(
-                    provider = providerName.lowercase(),
+                    provider = toProviderKey(providerName),
                     config = config
                 ) ?: throw Exception("CoreApiClient not available")
 
@@ -493,7 +508,7 @@ class ProvidersSettingsPanel(
      * Build provider configuration from fields
      */
     private fun buildProviderConfig(providerName: String, fields: Map<String, JComponent>): Map<String, String> {
-        return when (providerName.lowercase()) {
+        return when (toProviderKey(providerName)) {
             "ollama" -> mapOf(
                 "base_url" to getFieldValue(fields["ollama_endpoint"]).ifEmpty { "http://localhost:11434" },
                 "context_size" to getFieldValue(fields["ollama_context_size"]).ifEmpty { DEFAULT_CONTEXT_SIZE.toString() },
@@ -520,6 +535,12 @@ class ProvidersSettingsPanel(
                 "api_key" to "",
                 "base_url" to getFieldValue(fields["lmstudio_base_url"]).ifEmpty { "http://localhost:1234/v1" },
                 "context_size" to getFieldValue(fields["lmstudio_context_size"]).ifEmpty { DEFAULT_CONTEXT_SIZE.toString() }
+            )
+
+            "custom_openai" -> mapOf(
+                "api_key" to getFieldValue(fields["custom_openai_api_key"]),
+                "base_url" to getFieldValue(fields["custom_openai_base_url"]),
+                "model" to getFieldValue(fields["custom_openai_model"])
             )
 
             "zai" -> mapOf(
@@ -583,7 +604,7 @@ class ProvidersSettingsPanel(
                 logger.info { "Refreshing models list for $providerName" }
 
                 val models = coreApiClient?.refreshProviderModels(
-                    provider = providerName.lowercase()
+                    provider = toProviderKey(providerName)
                 ) ?: emptyList()
 
                 logger.info { "Fetched ${models.size} models from $providerName" }
@@ -649,7 +670,7 @@ class ProvidersSettingsPanel(
         providerStates.forEach { (providerName, state) ->
             state.fields.forEach { (fieldKey, textField) ->
                 // Use lowercase provider name to match saved keys
-                val configKey = "${providerName.lowercase()}.$fieldKey"
+                val configKey = "${toProviderKey(providerName)}.$fieldKey"
                 val value = settings[configKey] as? String
 
                 logger.debug { "Looking for key: $configKey, found: ${value != null}" }
@@ -672,6 +693,20 @@ class ProvidersSettingsPanel(
                     logger.debug { "No value for $configKey" }
                 }
             }
+        }
+    }
+
+    private fun toProviderKey(providerName: String): String {
+        return when (providerName) {
+            "Ollama" -> "ollama"
+            "Anthropic" -> "anthropic"
+            "OpenAI" -> "openai"
+            "OpenRouter" -> "openrouter"
+            "Gemini" -> "gemini"
+            "LMStudio" -> "lmstudio"
+            "ZAI" -> "zai"
+            "custom_openai" -> "custom_openai"
+            else -> providerName.lowercase()
         }
     }
 

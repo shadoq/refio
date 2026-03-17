@@ -5,8 +5,10 @@ import com.google.gson.reflect.TypeToken
 import pl.jclab.refio.api.models.Message
 import pl.jclab.refio.ui.theme.LCATheme
 import java.awt.Component
-import javax.swing.Box
-import javax.swing.BoxLayout
+import java.awt.GridBagConstraints
+import java.awt.GridBagLayout
+import java.awt.Insets
+import javax.swing.JComponent
 import javax.swing.JPanel
 
 internal class ToolBubbleRenderer(
@@ -65,14 +67,47 @@ internal class ToolBubbleRenderer(
             status = status
         )
 
-        return createUniversalBubble(
-            icon = "\uD83D\uDD27",
-            title = title,
-            content = content,
-            backgroundColor = LCATheme.toolResultBackground,
-            foregroundColor = LCATheme.toolResultForeground,
-            context = context.bubbleContentContext
+        return createRegularToolResultBubble(title, content)
+    }
+
+    private fun createRegularToolResultBubble(title: String, content: String): JPanel {
+        val outerPanel = createOuterPanel()
+        val messageBlock = context.bubbleContentContext.createMessageBlock(LCATheme.toolResultBackground).apply {
+            layout = GridBagLayout()
+        }
+        var row = 0
+
+        fun addRow(component: JComponent, topInset: Int = 0) {
+            messageBlock.add(
+                component,
+                GridBagConstraints().apply {
+                    gridx = 0
+                    gridy = row++
+                    weightx = 1.0
+                    fill = GridBagConstraints.HORIZONTAL
+                    anchor = GridBagConstraints.WEST
+                    insets = Insets(topInset, 0, 0, 0)
+                }
+            )
+        }
+
+        addRow(
+            factory.createBubbleHeader(
+                icon = "\uD83D\uDD27",
+                title = title,
+                foregroundColor = LCATheme.toolResultForeground
+            )
         )
+        addRow(
+            factory.createBubbleContentPanel(
+                content = content,
+                backgroundColor = LCATheme.toolResultBackground,
+                foregroundColor = LCATheme.toolResultForeground,
+                isUser = false
+            )
+        )
+
+        return addToOuter(outerPanel, messageBlock)
     }
 
     private fun createCodeResultBubble(
@@ -84,11 +119,25 @@ internal class ToolBubbleRenderer(
     ): JPanel {
         val outerPanel = createOuterPanel()
         val messageBlock = context.bubbleContentContext.createMessageBlock(LCATheme.toolResultBackground).apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            alignmentX = Component.LEFT_ALIGNMENT
+            layout = GridBagLayout()
+        }
+        var row = 0
+
+        fun addRow(component: JComponent, topInset: Int = 0) {
+            messageBlock.add(
+                component,
+                GridBagConstraints().apply {
+                    gridx = 0
+                    gridy = row++
+                    weightx = 1.0
+                    fill = GridBagConstraints.HORIZONTAL
+                    anchor = GridBagConstraints.WEST
+                    insets = Insets(topInset, 0, 0, 0)
+                }
+            )
         }
 
-        messageBlock.add(
+        addRow(
             factory.createBubbleHeader(
                 icon = "\uD83D\uDD27",
                 title = title,
@@ -98,8 +147,7 @@ internal class ToolBubbleRenderer(
 
         val filePath = extractPath(metadata, relatedToolCallInfo)
 
-        messageBlock.add(Box.createVerticalStrut(context.bubbleContentContext.bubbleCompactGap))
-        messageBlock.add(
+        addRow(
             createCollapsibleCodePanel(
                 content = content,
                 context = context.bubbleContentContext,
@@ -107,7 +155,8 @@ internal class ToolBubbleRenderer(
                 filePath = filePath
             ).apply {
                 alignmentX = Component.LEFT_ALIGNMENT
-            }
+            },
+            topInset = context.bubbleContentContext.bubbleCompactGap
         )
 
         return addToOuter(outerPanel, messageBlock)

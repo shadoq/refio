@@ -72,6 +72,8 @@ internal class BubbleComponentFactory(
         private const val BUBBLE_WIDTH_SAFETY_MARGIN = 12
         private const val DEFAULT_PARAM_PREVIEW_LIMIT = 100
         private const val LARGE_PARAM_PREVIEW_LIMIT = 60
+        private const val LARGE_BUBBLE_THRESHOLD_CHARS = 4096
+        private const val COLLAPSED_BUBBLE_PREVIEW_CHARS = 2048
         private val PATH_PARAM_KEYS = setOf("path", "file", "file_path", "filepath", "target_path", "target_file")
         private val LARGE_PARAM_KEYS = setOf(
             "content",
@@ -490,30 +492,139 @@ internal class BubbleComponentFactory(
     fun createMarkdownPanel(
         content: String, backgroundColor: Color, foregroundColor: Color, maxBubbleWidth: Int
     ): JPanel {
+        if (content.length > LARGE_BUBBLE_THRESHOLD_CHARS) {
+            return createExpandableMarkdownPanel(content, backgroundColor, foregroundColor, maxBubbleWidth)
+        }
+
+        return createMarkdownPanelInternal(
+            content = content,
+            backgroundColor = backgroundColor,
+            foregroundColor = foregroundColor,
+            maxBubbleWidth = maxBubbleWidth
+        )
+    }
+
+    private fun createMarkdownPanelInternal(
+        content: String,
+        backgroundColor: Color,
+        foregroundColor: Color,
+        maxBubbleWidth: Int,
+        preferPlainText: Boolean = false
+    ): JPanel {
         val panel = FlatMessageBlock(backgroundColor).apply {
             layout = BorderLayout()
             alignmentX = Component.LEFT_ALIGNMENT
             maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
         }
 
-        val editorPane = deps.markdownService.createMarkdownEditorPane(content, backgroundColor, foregroundColor, maxBubbleWidth)
+        val editorPane = deps.markdownService.createMarkdownEditorPane(
+            content,
+            backgroundColor,
+            foregroundColor,
+            maxBubbleWidth,
+            preferPlainText = preferPlainText
+        )
         panel.add(editorPane, BorderLayout.CENTER)
         deps.markdownService.installResponsiveEditorSizing(panel, editorPane, maxBubbleWidth)
 
         return panel
     }
 
+    private fun createExpandableMarkdownPanel(
+        content: String,
+        backgroundColor: Color,
+        foregroundColor: Color,
+        maxBubbleWidth: Int
+    ): JPanel {
+        val preview = buildCollapsedBubblePreview(content)
+        val hiddenChars = (content.length - preview.length).coerceAtLeast(0)
+
+        val container = FlatMessageBlock(backgroundColor).apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            alignmentX = Component.LEFT_ALIGNMENT
+            maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
+        }
+
+        val previewPanel = createMarkdownPanelInternal(
+            content = preview,
+            backgroundColor = backgroundColor,
+            foregroundColor = foregroundColor,
+            maxBubbleWidth = maxBubbleWidth,
+            preferPlainText = true
+        ).apply {
+            alignmentX = Component.LEFT_ALIGNMENT
+        }
+
+        val infoLabel = JLabel("+$hiddenChars more chars").apply {
+            foreground = LCATheme.mutedForeground
+            font = LCATheme.smallFont.deriveFont(Font.ITALIC)
+            alignmentX = Component.LEFT_ALIGNMENT
+        }
+
+        val toggleButton = JButton("Expand").apply {
+            isOpaque = false
+            isBorderPainted = false
+            isContentAreaFilled = false
+            isFocusPainted = false
+            foreground = LCATheme.accentColor
+            font = LCATheme.smallBoldFont
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            alignmentX = Component.LEFT_ALIGNMENT
+            margin = Insets(0, 0, 0, 0)
+            border = BorderFactory.createEmptyBorder()
+        }
+
+        val actionRow = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+            isOpaque = false
+            alignmentX = Component.LEFT_ALIGNMENT
+            add(infoLabel)
+            add(toggleButton)
+        }
+
+        var expandedPanel: JPanel? = null
+        var expanded = false
+
+        toggleButton.addActionListener {
+            expanded = !expanded
+            if (expanded) {
+                if (expandedPanel == null) {
+                    expandedPanel = createMarkdownPanelInternal(
+                        content = content,
+                        backgroundColor = backgroundColor,
+                        foregroundColor = foregroundColor,
+                        maxBubbleWidth = maxBubbleWidth
+                    ).apply {
+                        alignmentX = Component.LEFT_ALIGNMENT
+                    }
+                }
+                container.remove(previewPanel)
+                container.add(expandedPanel, 0)
+                infoLabel.text = "Large bubble expanded"
+                toggleButton.text = "Collapse"
+            } else {
+                expandedPanel?.let(container::remove)
+                container.add(previewPanel, 0)
+                infoLabel.text = "+$hiddenChars more chars"
+                toggleButton.text = "Expand"
+            }
+            container.revalidate()
+            container.repaint()
+        }
+
+        container.add(previewPanel)
+        container.add(Box.createVerticalStrut(BUBBLE_COMPACT_GAP))
+        container.add(actionRow)
+        return container
+    }
+
     fun createMixedTextSegmentPanel(
         content: String, backgroundColor: Color, foregroundColor: Color, maxBubbleWidth: Int
     ): JPanel {
         val normalizedContent = deps.markdownService.normalizeMarkdownTablesForRendering(content)
-        val editorPane = deps.markdownService.createMarkdownEditorPane(normalizedContent, backgroundColor, foregroundColor, maxBubbleWidth)
-        return JBPanel<JBPanel<*>>(BorderLayout()).apply {
+        return createMarkdownPanel(normalizedContent, backgroundColor, foregroundColor, maxBubbleWidth).apply {
             isOpaque = false
             alignmentX = Component.LEFT_ALIGNMENT
-            add(editorPane, BorderLayout.CENTER)
             maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
-            deps.markdownService.installResponsiveEditorSizing(this, editorPane, maxBubbleWidth)
         }
     }
 
@@ -987,6 +1098,19 @@ internal class BubbleComponentFactory(
             .replace(Regex("\\s+"), " ")
             .trim()
         return if (normalized.length > limit) "${normalized.take(limit)}... (${normalized.length} chars)" else normalized
+    }
+
+    private fun buildCollapsedBubblePreview(content: String): String {
+        val normalized = content
+            .replace("\r\n", "\n")
+            .replace('\r', '\n')
+            .trim()
+
+        return if (normalized.length <= COLLAPSED_BUBBLE_PREVIEW_CHARS) {
+            normalized
+        } else {
+            normalized.take(COLLAPSED_BUBBLE_PREVIEW_CHARS).trimEnd() + "\n\n[...]"
+        }
     }
 
     private fun getContextIcon(ref: ContextReference): String = when (ref.type) {

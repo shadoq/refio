@@ -552,6 +552,19 @@ data class ConfigYaml(
                     lmstudio.contextSize?.let { sb.appendLine("    contextSize: $it") }
                 }
 
+                providers.customOpenai?.let { customOpenai ->
+                    sb.appendLine("  custom_openai:")
+                    customOpenai.apiKey?.let { sb.appendLine("    apiKey: \"$it\"") }
+                    customOpenai.baseUrl?.let { sb.appendLine("    baseUrl: \"$it\"") }
+                    customOpenai.model?.let { sb.appendLine("    model: \"$it\"") }
+                }
+
+                providers.zai?.let { zai ->
+                    sb.appendLine("  zai:")
+                    zai.apiKey?.let { sb.appendLine("    apiKey: \"$it\"") }
+                    zai.baseUrl?.let { sb.appendLine("    baseUrl: \"$it\"") }
+                }
+
                 sb.appendLine()
             }
 

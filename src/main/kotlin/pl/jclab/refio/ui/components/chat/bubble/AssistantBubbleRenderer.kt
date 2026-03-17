@@ -11,6 +11,9 @@ import java.awt.Component
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.GridBagConstraints
+import java.awt.GridBagLayout
+import java.awt.Insets
 import javax.swing.Box
 import javax.swing.BoxLayout
 import javax.swing.JButton
@@ -119,37 +122,68 @@ internal class AssistantBubbleRenderer(
 
     private fun createRegularAssistantBubble(message: Message): JPanel {
         val content = buildAssistantContent(message)
-        return createUniversalBubble(
-            icon = "\uD83E\uDD16",
-            title = "Assistant",
-            content = content,
-            messageId = message.id,
-            isStreaming = message.isStreaming,
-            preferPlainTextMarkdown = message.isStreaming,
-            backgroundColor = LCATheme.assistantBubbleBackground,
-            foregroundColor = LCATheme.assistantBubbleForeground,
-            context = context.bubbleContentContext
-        ) {
-            if (message.isStreaming) {
-                add(JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+        val outerPanel = createOuterPanel()
+        val messageBlock = context.bubbleContentContext.createMessageBlock(LCATheme.assistantBubbleBackground).apply {
+            layout = GridBagLayout()
+        }
+        var row = 0
+
+        fun addRow(component: JComponent, topInset: Int = 0) {
+            messageBlock.add(
+                component,
+                GridBagConstraints().apply {
+                    gridx = 0
+                    gridy = row++
+                    weightx = 1.0
+                    fill = GridBagConstraints.HORIZONTAL
+                    anchor = GridBagConstraints.WEST
+                    insets = Insets(topInset, 0, 0, 0)
+                }
+            )
+        }
+
+        addRow(
+            factory.createBubbleHeader(
+                icon = "\uD83E\uDD16",
+                title = "Assistant",
+                foregroundColor = LCATheme.assistantBubbleForeground
+            )
+        )
+        addRow(
+            factory.createBubbleContentPanel(
+                content = content,
+                backgroundColor = LCATheme.assistantBubbleBackground,
+                foregroundColor = LCATheme.assistantBubbleForeground,
+                isUser = false
+            )
+        )
+
+        if (message.isStreaming) {
+            addRow(
+                JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
                     isOpaque = false
                     add(JLabel("Generating...").apply {
                         font = LCATheme.smallFont.deriveFont(Font.ITALIC)
                         foreground = LCATheme.mutedForeground
                     })
-                })
-            }
-            val codeChanges = MessageMetadataExtractor.extractCodeChanges(message)
-            if (codeChanges != null) {
-                add(Box.createVerticalStrut(context.bubbleCompactGap))
-                add(factory.createChangesBadge(codeChanges))
-            }
-            if (message.metrics != null) {
-                add(Box.createVerticalStrut(context.bubbleCompactGap))
-                add(MetricsView(message.metrics))
-            }
-            add(factory.wrapRightAligned(factory.createMessageActionsPanel(message = message)))
+                },
+                topInset = context.bubbleCompactGap
+            )
         }
+
+        val codeChanges = MessageMetadataExtractor.extractCodeChanges(message)
+        if (codeChanges != null) {
+            addRow(factory.createChangesBadge(codeChanges), topInset = context.bubbleCompactGap)
+        }
+        if (message.metrics != null) {
+            addRow(MetricsView(message.metrics), topInset = context.bubbleCompactGap)
+        }
+        addRow(
+            factory.wrapRightAligned(factory.createMessageActionsPanel(message = message)),
+            topInset = context.bubbleCompactGap
+        )
+
+        return addToOuter(outerPanel, messageBlock)
     }
 
     private fun buildAssistantContent(message: Message): String {
@@ -176,29 +210,41 @@ internal class AssistantBubbleRenderer(
     private fun createLlmEditToolBubble(message: Message, info: pl.jclab.refio.api.models.ToolCallDisplayInfo): JPanel {
         val outerPanel = createOuterPanel()
         val messageBlock = context.bubbleContentContext.createMessageBlock(LCATheme.toolBubbleBackground).apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            layout = GridBagLayout()
         }
-        messageBlock.add(factory.createToolHeaderPanel(info))
+        var row = 0
+
+        fun addRow(component: JComponent, topInset: Int = 0) {
+            messageBlock.add(
+                component,
+                GridBagConstraints().apply {
+                    gridx = 0
+                    gridy = row++
+                    weightx = 1.0
+                    fill = GridBagConstraints.HORIZONTAL
+                    anchor = GridBagConstraints.WEST
+                    insets = Insets(topInset, 0, 0, 0)
+                }
+            )
+        }
+
+        addRow(factory.createToolHeaderPanel(info))
         val primaryPath = factory.getPrimaryPath(info)
         if (!primaryPath.isNullOrBlank()) {
-            messageBlock.add(Box.createVerticalStrut(context.bubbleCompactGap))
-            messageBlock.add(factory.createFileReferencePanel(primaryPath))
+            addRow(factory.createFileReferencePanel(primaryPath), topInset = context.bubbleCompactGap)
         }
         val secondaryParams = factory.getSecondaryToolParams(info)
         if (secondaryParams.isNotEmpty()) {
-            messageBlock.add(Box.createVerticalStrut(context.bubbleCompactGap))
-            messageBlock.add(factory.createToolParamsPanel(secondaryParams))
+            addRow(factory.createToolParamsPanel(secondaryParams), topInset = context.bubbleCompactGap)
         }
 
         message.content.takeIf { it.isNotBlank() }?.let {
-            messageBlock.add(factory.createLLMEditPreviewPanel(it, info.parameters))
+            addRow(factory.createLLMEditPreviewPanel(it, info.parameters), topInset = context.bubbleCompactGap)
         }
         info.result?.summary?.let {
-            messageBlock.add(Box.createVerticalStrut(context.bubbleCompactGap))
-            messageBlock.add(factory.createToolResultPanel(it))
+            addRow(factory.createToolResultPanel(it), topInset = context.bubbleCompactGap)
         }
-        messageBlock.add(Box.createVerticalStrut(context.bubbleCompactGap))
-        messageBlock.add(factory.createToolStatusPanel(info.status))
+        addRow(factory.createToolStatusPanel(info.status), topInset = context.bubbleCompactGap)
         return addToOuter(outerPanel, messageBlock)
     }
 
@@ -209,22 +255,35 @@ internal class AssistantBubbleRenderer(
     ): JPanel {
         val outerPanel = createOuterPanel()
         val messageBlock = context.bubbleContentContext.createMessageBlock(background).apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            layout = GridBagLayout()
         }
-        messageBlock.add(factory.createToolHeaderPanel(info))
-        addToolCallNarrative(messageBlock, message, background)
+        var row = 0
+
+        fun addRow(component: JComponent, topInset: Int = 0) {
+            messageBlock.add(
+                component,
+                GridBagConstraints().apply {
+                    gridx = 0
+                    gridy = row++
+                    weightx = 1.0
+                    fill = GridBagConstraints.HORIZONTAL
+                    anchor = GridBagConstraints.WEST
+                    insets = Insets(topInset, 0, 0, 0)
+                }
+            )
+        }
+
+        addRow(factory.createToolHeaderPanel(info))
+        addToolCallNarrative(::addRow, message, background)
         val primaryPath = factory.getPrimaryPath(info)
         if (!primaryPath.isNullOrBlank()) {
-            messageBlock.add(Box.createVerticalStrut(context.bubbleCompactGap))
-            messageBlock.add(factory.createFileReferencePanel(primaryPath))
+            addRow(factory.createFileReferencePanel(primaryPath), topInset = context.bubbleCompactGap)
         }
         val secondaryParams = factory.getSecondaryToolParams(info)
         if (secondaryParams.isNotEmpty()) {
-            messageBlock.add(Box.createVerticalStrut(context.bubbleCompactGap))
-            messageBlock.add(factory.createToolParamsPanel(secondaryParams))
+            addRow(factory.createToolParamsPanel(secondaryParams), topInset = context.bubbleCompactGap)
         }
-        messageBlock.add(Box.createVerticalStrut(context.bubbleCompactGap))
-        messageBlock.add(factory.createToolStatusPanel(info.status))
+        addRow(factory.createToolStatusPanel(info.status), topInset = context.bubbleCompactGap)
         return addToOuter(outerPanel, messageBlock)
     }
 
@@ -232,7 +291,22 @@ internal class AssistantBubbleRenderer(
         val outerPanel = createOuterPanel()
         val background = LCATheme.toolInlineBackground
         val messageBlock = context.bubbleContentContext.createMessageBlock(background).apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            layout = GridBagLayout()
+        }
+        var row = 0
+
+        fun addRow(component: JComponent, topInset: Int = 0) {
+            messageBlock.add(
+                component,
+                GridBagConstraints().apply {
+                    gridx = 0
+                    gridy = row++
+                    weightx = 1.0
+                    fill = GridBagConstraints.HORIZONTAL
+                    anchor = GridBagConstraints.WEST
+                    insets = Insets(topInset, 0, 0, 0)
+                }
+            )
         }
         val headerRow = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
             isOpaque = false
@@ -260,23 +334,27 @@ internal class AssistantBubbleRenderer(
             ToolCallStatus.FAILED -> "✗"
         }
         headerRow.add(JLabel(statusIcon).apply { font = LCATheme.bodyFont })
-        messageBlock.add(headerRow)
-        addToolCallNarrative(messageBlock, message, background)
+        addRow(headerRow)
+        addToolCallNarrative(::addRow, message, background)
         return addToOuter(outerPanel, messageBlock)
     }
 
-    private fun addToolCallNarrative(messageBlock: JPanel, message: Message, backgroundColor: java.awt.Color) {
+    private fun addToolCallNarrative(
+        addRow: (JComponent, Int) -> Unit,
+        message: Message,
+        backgroundColor: java.awt.Color
+    ) {
         val content = buildAssistantContent(message).trim()
         if (content.isBlank()) return
 
-        messageBlock.add(Box.createVerticalStrut(context.bubbleCompactGap))
-        messageBlock.add(
+        addRow(
             factory.createBubbleContentPanel(
                 content = content,
                 backgroundColor = backgroundColor,
                 foregroundColor = LCATheme.assistantBubbleForeground,
                 isUser = false
-            )
+            ),
+            context.bubbleCompactGap
         )
     }
 

@@ -182,15 +182,7 @@ internal abstract class BaseBubbleRenderer {
 
         if (segments.isEmpty() && content.isNotBlank()) {
             val normalized = context.markdownService.normalizeMarkdownTablesForRendering(content)
-            messageBlock.add(
-                context.markdownService.createMarkdownEditorPane(
-                    normalized,
-                    backgroundColor,
-                    foregroundColor,
-                    maxWidth,
-                    preferPlainText = preferPlainTextMarkdown
-                )
-            )
+            messageBlock.add(context.componentFactory.createMarkdownPanel(normalized, backgroundColor, foregroundColor, maxWidth))
         } else {
             for (segment in segments) {
                 when (segment) {
@@ -220,12 +212,11 @@ internal abstract class BaseBubbleRenderer {
                         if (segment.content.isNotBlank()) {
                             val normalized = context.markdownService.normalizeMarkdownTablesForRendering(segment.content)
                             messageBlock.add(
-                                context.markdownService.createMarkdownEditorPane(
-                                    markdown = normalized,
-                                    backgroundColor = backgroundColor,
-                                    foregroundColor = foregroundColor,
-                                    maxBubbleWidth = maxWidth,
-                                    preferPlainText = preferPlainTextMarkdown
+                                context.componentFactory.createMarkdownPanel(
+                                    normalized,
+                                    backgroundColor,
+                                    foregroundColor,
+                                    maxWidth
                                 )
                             )
                         }

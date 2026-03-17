@@ -11,10 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-## [0.0.1.3] - 2025-03-16
+### Fixed
+
+## [0.0.1.3] - 2025-03-18
 
 ### Added
 
+- Provider settings export/import now correctly includes `providers.custom_openai` and `providers.zai` in YAML, and the Providers settings UI now exposes `CustomOpenAI` configuration fields alongside the existing Z.AI card.
 - `PRIVACY.md` describing local storage, cloud-provider behavior, no-egress mode, and secret handling.
 - New `security.allow_symlinks` configuration option, documented in `docs/config.md`, for explicit unsafe opt-in to symlink access in `PathSandbox`.
 - Support for OpenAI-compatible providers via dedicated `providers.custom_openai` configuration, including API key, base URL, and default model selection.
@@ -34,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Chat bubbles now use an explicit row-based layout for regular responses, fixing incorrect horizontal positioning and narrow/offset content rendering in `ChatView`.
 - PLAN and AGENT turn execution now forward `thinking` and `noEgressEnabled` to `LLMClient.complete()`.
 - Chat bubble caching no longer invalidates on `isStreaming` state changes alone, reducing end-of-stream UI flicker.
 - Streaming assistant messages are now flushed in batches and always clear `isGenerating`, reducing chat UI churn and stuck generation state after failures.

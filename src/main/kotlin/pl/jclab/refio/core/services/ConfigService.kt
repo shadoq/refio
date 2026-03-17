@@ -2261,13 +2261,23 @@ class ConfigService(
             "providers.Gemini.gemini_api_key" to KEY_PROVIDER_GEMINI_API_KEY,
             "providers.LMStudio.lmstudio_api_key" to KEY_PROVIDER_LM_STUDIO_API_KEY,
             "providers.LMStudio.lmstudio_base_url" to KEY_PROVIDER_LM_STUDIO_BASE_URL,
+            "providers.CustomOpenAI.custom_openai_api_key" to KEY_PROVIDER_CUSTOM_OPENAI_API_KEY,
+            "providers.CustomOpenAI.custom_openai_base_url" to KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL,
+            "providers.CustomOpenAI.custom_openai_model" to KEY_PROVIDER_CUSTOM_OPENAI_MODEL,
+            "providers.ZAI.zai_api_key" to KEY_PROVIDER_ZAI_API_KEY,
+            "providers.ZAI.zai_base_url" to KEY_PROVIDER_ZAI_BASE_URL,
             "ollama_endpoint" to KEY_PROVIDER_OLLAMA_ENDPOINT,
             "anthropic_api_key" to KEY_PROVIDER_ANTHROPIC_API_KEY,
             "openai_api_key" to KEY_PROVIDER_OPENAI_API_KEY,
             "openrouter_api_key" to KEY_PROVIDER_OPENROUTER_API_KEY,
             "gemini_api_key" to KEY_PROVIDER_GEMINI_API_KEY,
             "lmstudio_api_key" to KEY_PROVIDER_LM_STUDIO_API_KEY,
-            "lmstudio_base_url" to KEY_PROVIDER_LM_STUDIO_BASE_URL
+            "lmstudio_base_url" to KEY_PROVIDER_LM_STUDIO_BASE_URL,
+            "custom_openai_api_key" to KEY_PROVIDER_CUSTOM_OPENAI_API_KEY,
+            "custom_openai_base_url" to KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL,
+            "custom_openai_model" to KEY_PROVIDER_CUSTOM_OPENAI_MODEL,
+            "zai_api_key" to KEY_PROVIDER_ZAI_API_KEY,
+            "zai_base_url" to KEY_PROVIDER_ZAI_BASE_URL
         )
 
         legacyToCanonical.forEach { (legacyKey, canonicalKey) ->
