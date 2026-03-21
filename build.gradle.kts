@@ -60,6 +60,8 @@ dependencies {
   implementation("org.htmlunit:htmlunit:4.20.0")
   implementation("org.apache.pdfbox:pdfbox:2.0.30")
 
+  // Caching
+  implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
 
   // Logging (kotlin-logging + logback)
   implementation("io.github.microutils:kotlin-logging-jvm:3.0.5")
@@ -167,7 +169,7 @@ tasks {
     violationRules {
       rule {
         limit {
-          minimum = "0.20".toBigDecimal()  // Start with 20%, increase over time
+          minimum = "0.40".toBigDecimal()  // Raised from 20% to 40%
         }
       }
     }

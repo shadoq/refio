@@ -327,17 +327,28 @@ data class ConfigYaml(
             if (override == null) return base
 
             return ConfigYaml(
-                general = override.general ?: base.general,
+                general = mergeGeneral(base.general, override.general),
                 providers = mergeProviders(base.providers, override.providers),
                 models = mergeModels(base.models, override.models),
-                limits = override.limits ?: base.limits,
-                advanced = override.advanced ?: base.advanced,
+                limits = mergeLimits(base.limits, override.limits),
+                advanced = mergeAdvanced(base.advanced, override.advanced),
                 tools = mergeTools(base.tools, override.tools),
                 terminal = mergeTerminal(base.terminal, override.terminal),
-                rag = override.rag ?: base.rag,
-                ui = override.ui ?: base.ui,
+                rag = mergeRag(base.rag, override.rag),
+                ui = mergeUi(base.ui, override.ui),
                 prompts = mergePrompts(base.prompts, override.prompts),
                 mcp = mergeMcp(base.mcp, override.mcp)
+            )
+        }
+
+        private fun mergeGeneral(base: GeneralConfig?, override: GeneralConfig?): GeneralConfig? {
+            if (base == null) return override
+            if (override == null) return base
+
+            return GeneralConfig(
+                formatMarkdown = override.formatMarkdown ?: base.formatMarkdown,
+                streamingEnabled = override.streamingEnabled ?: base.streamingEnabled,
+                advancedView = override.advancedView ?: base.advancedView
             )
         }
 
@@ -373,6 +384,69 @@ data class ConfigYaml(
             if (base == null) return override
             if (override == null) return base
             return base + override  // override wins on conflicts
+        }
+
+        private fun mergeLimits(base: LimitsConfig?, override: LimitsConfig?): LimitsConfig? {
+            if (base == null) return override
+            if (override == null) return base
+
+            return LimitsConfig(
+                apiCallTimeout = override.apiCallTimeout ?: base.apiCallTimeout,
+                toolExecutionTimeout = override.toolExecutionTimeout ?: base.toolExecutionTimeout,
+                streamingReadTimeout = override.streamingReadTimeout ?: base.streamingReadTimeout,
+                streamingRequestTimeout = override.streamingRequestTimeout ?: base.streamingRequestTimeout,
+                maxContextSize = override.maxContextSize ?: base.maxContextSize,
+                maxOutputSize = override.maxOutputSize ?: base.maxOutputSize,
+                maxFileSize = override.maxFileSize ?: base.maxFileSize
+            )
+        }
+
+        private fun mergeAdvanced(base: AdvancedConfig?, override: AdvancedConfig?): AdvancedConfig? {
+            if (base == null) return override
+            if (override == null) return base
+
+            return AdvancedConfig(
+                noEgressDefault = override.noEgressDefault ?: base.noEgressDefault,
+                readOnlyMode = override.readOnlyMode ?: base.readOnlyMode,
+                autoOptimizePercentage = override.autoOptimizePercentage ?: base.autoOptimizePercentage,
+                orchestrationEnabled = override.orchestrationEnabled ?: base.orchestrationEnabled
+            )
+        }
+
+        private fun mergeRag(base: RagConfig?, override: RagConfig?): RagConfig? {
+            if (base == null) return override
+            if (override == null) return base
+
+            return RagConfig(
+                enabled = override.enabled ?: base.enabled,
+                indexOnStartup = override.indexOnStartup ?: base.indexOnStartup,
+                autoIndexOnContextBuild = override.autoIndexOnContextBuild ?: base.autoIndexOnContextBuild,
+                maxFileSizeMB = override.maxFileSizeMB ?: base.maxFileSizeMB,
+                maxChunksPerFile = override.maxChunksPerFile ?: base.maxChunksPerFile,
+                indexBatchSize = override.indexBatchSize ?: base.indexBatchSize,
+                embeddingsBatchSize = override.embeddingsBatchSize ?: base.embeddingsBatchSize,
+                cacheTtlMs = override.cacheTtlMs ?: base.cacheTtlMs,
+                maxConcurrentJobs = override.maxConcurrentJobs ?: base.maxConcurrentJobs,
+                ignoredDirectories = mergeList(base.ignoredDirectories, override.ignoredDirectories),
+                searchSimilarityThreshold = override.searchSimilarityThreshold ?: base.searchSimilarityThreshold,
+                searchTopK = override.searchTopK ?: base.searchTopK,
+                searchHybridEnabled = override.searchHybridEnabled ?: base.searchHybridEnabled,
+                searchSemanticWeight = override.searchSemanticWeight ?: base.searchSemanticWeight,
+                searchIncludeContextChunks = override.searchIncludeContextChunks ?: base.searchIncludeContextChunks
+            )
+        }
+
+        private fun mergeUi(base: UiConfig?, override: UiConfig?): UiConfig? {
+            if (base == null) return override
+            if (override == null) return base
+
+            return UiConfig(
+                thinkingEnabled = override.thinkingEnabled ?: base.thinkingEnabled,
+                noEgressEnabled = override.noEgressEnabled ?: base.noEgressEnabled,
+                executionMode = override.executionMode ?: base.executionMode,
+                selectedMode = override.selectedMode ?: base.selectedMode,
+                selectedModel = override.selectedModel ?: base.selectedModel
+            )
         }
 
         private fun mergeTools(base: ToolsConfig?, override: ToolsConfig?): ToolsConfig? {

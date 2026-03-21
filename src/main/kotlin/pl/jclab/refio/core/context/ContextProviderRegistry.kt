@@ -17,19 +17,24 @@ object ContextProviderRegistry {
 
     private val providers = mutableMapOf<String, BaseContextProvider>()
     private var initialized = false
+    private var ideEnvironment = true
 
     /**
      * Register all built-in providers.
      * Called automatically on first access or manually during plugin startup.
+     *
+     * @param isIdeEnvironment When true (default), all providers are registered.
+     *   When false, providers marked as [ContextProviderEnvironment.IDE_ONLY] are skipped.
      */
     @Synchronized
-    fun initialize() {
+    fun initialize(isIdeEnvironment: Boolean = true) {
         if (initialized) {
             logger.debug { "Context providers already initialized" }
             return
         }
 
-        logger.info { "Initializing context providers..." }
+        this.ideEnvironment = isIdeEnvironment
+        logger.info { "Initializing context providers (IDE environment: $isIdeEnvironment)..." }
 
         // Phase 1: MVP - Basic file providers
         register(OpenFilesContextProvider())
@@ -42,7 +47,7 @@ object ContextProviderRegistry {
         register(ClipboardContextProvider())
 
         // Phase 3: IDE integration
-        if (isTerminalPluginAvailable()) {
+        if (isIdeEnvironment && isTerminalPluginAvailable()) {
             register(TerminalContextProvider())
         }
         register(ProblemsContextProvider())
@@ -62,9 +67,16 @@ object ContextProviderRegistry {
     /**
      * Register a provider.
      * Public for extensions and MCP providers.
+     *
+     * Providers marked as [ContextProviderEnvironment.IDE_ONLY] are skipped
+     * when running in a non-IDE environment.
      */
     fun register(provider: BaseContextProvider) {
         val title = provider.description.title
+        if (!ideEnvironment && provider.environment == ContextProviderEnvironment.IDE_ONLY) {
+            logger.debug { "Skipping IDE-only provider: $title (non-IDE environment)" }
+            return
+        }
         if (providers.containsKey(title)) {
             logger.warn { "Provider '$title' already registered, replacing..." }
         }
@@ -135,6 +147,7 @@ object ContextProviderRegistry {
     fun clear() {
         providers.clear()
         initialized = false
+        ideEnvironment = true
         logger.info { "Cleared all context providers" }
     }
 }

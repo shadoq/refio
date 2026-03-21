@@ -104,7 +104,7 @@ data class SubagentDefinition(
      */
     fun resolveModel(configService: ConfigService, parentModel: String? = null): Pair<String, String> {
         return when (model.lowercase()) {
-            // Claude Code model aliases
+
             "inherit" -> {
                 if (parentModel != null) {
                     parseModelString(parentModel)
@@ -112,9 +112,6 @@ data class SubagentDefinition(
                     configService.getModel(ModelOperation.DEFAULT)
                 }
             }
-            "sonnet" -> Pair("claude-3-5-sonnet-20241022", "anthropic")
-            "opus" -> Pair("claude-3-opus-20240229", "anthropic")
-            "haiku" -> Pair("claude-3-haiku-20240307", "anthropic")
 
             "default" -> configService.getModel(ModelOperation.DEFAULT)
             "plan" -> configService.getModel(ModelOperation.PLAN)

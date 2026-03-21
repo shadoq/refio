@@ -8,7 +8,6 @@ import pl.jclab.refio.core.workflow.WorkflowEventListener
 import pl.jclab.refio.services.session.SessionStateManager
 import pl.jclab.refio.services.logging.dualLogger
 import java.util.UUID
-import javax.swing.SwingUtilities
 
 private val logger = dualLogger("SwingWorkflowListener")
 
@@ -47,15 +46,13 @@ class SwingWorkflowListener(
         lastUiUpdate = now
 
         val format = formatter ?: { it }
-        SwingUtilities.invokeLater {
-            scope.launch(Dispatchers.IO) {
-                stateManager.updateMessages { messages ->
-                    messages.map { msg ->
-                        if (msg.id == currentId) {
-                            msg.copy(content = format(chunk), lastChunkAt = now)
-                        } else {
-                            msg
-                        }
+        scope.launch(Dispatchers.IO) {
+            stateManager.updateMessages { messages ->
+                messages.map { msg ->
+                    if (msg.id == currentId) {
+                        msg.copy(content = format(chunk), lastChunkAt = now)
+                    } else {
+                        msg
                     }
                 }
             }
@@ -65,19 +62,17 @@ class SwingWorkflowListener(
     override fun onStreamComplete(content: String) {
         val currentId = messageId ?: return
         val format = formatter ?: { it }
-        SwingUtilities.invokeLater {
-            scope.launch(Dispatchers.IO) {
-                stateManager.updateMessages { messages ->
-                    messages.map { msg ->
-                        if (msg.id == currentId) {
-                            msg.copy(
-                                content = format(content),
-                                isStreaming = false,
-                                lastChunkAt = System.currentTimeMillis()
-                            )
-                        } else {
-                            msg
-                        }
+        scope.launch(Dispatchers.IO) {
+            stateManager.updateMessages { messages ->
+                messages.map { msg ->
+                    if (msg.id == currentId) {
+                        msg.copy(
+                            content = format(content),
+                            isStreaming = false,
+                            lastChunkAt = System.currentTimeMillis()
+                        )
+                    } else {
+                        msg
                     }
                 }
             }
@@ -103,10 +98,8 @@ class SwingWorkflowListener(
             createdAt = System.currentTimeMillis()
         )
 
-        SwingUtilities.invokeLater {
-            scope.launch(Dispatchers.IO) {
-                stateManager.appendMessage(message)
-            }
+        scope.launch(Dispatchers.IO) {
+            stateManager.appendMessage(message)
         }
     }
 }

@@ -3,6 +3,7 @@ package pl.jclab.refio.core.services
 import kotlinx.coroutines.withTimeout
 import pl.jclab.refio.core.db.RagContentType
 import pl.jclab.refio.core.db.repositories.RagRepository
+import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.rag.RagSearchConfig
 import pl.jclab.refio.services.logging.dualLogger
 import java.nio.ByteBuffer
@@ -62,6 +63,7 @@ class RagSearchService(
         model: String = "ollama/nomic-embed-text",
         config: RagSearchConfig = defaultConfig
     ): List<RagSearchResult> = withTimeout(config.timeoutMs) {
+        val startTime = System.currentTimeMillis()
         logger.info {
             "Searching RAG: project=$projectRoot, query='${query.take(50)}...', " +
                 "topK=${config.topK}, hybrid=${config.hybridSearch}"
@@ -72,22 +74,26 @@ class RagSearchService(
             return@withTimeout emptyList()
         }
 
-        if (config.hybridSearch) {
-            return@withTimeout hybridSearchInternal(
+        try {
+            if (config.hybridSearch) {
+                return@withTimeout hybridSearchInternal(
+                    projectRoot = projectRoot,
+                    query = query,
+                    keywords = config.keywords,
+                    model = model,
+                    config = config
+                )
+            }
+
+            return@withTimeout semanticSearchInternal(
                 projectRoot = projectRoot,
                 query = query,
-                keywords = config.keywords,
                 model = model,
                 config = config
             )
+        } finally {
+            GlobalMetrics.recordOperationTime("rag_search", System.currentTimeMillis() - startTime)
         }
-
-        return@withTimeout semanticSearchInternal(
-            projectRoot = projectRoot,
-            query = query,
-            model = model,
-            config = config
-        )
     }
 
     /**
@@ -147,10 +153,9 @@ class RagSearchService(
             return emptyList()
         }
 
-        val allSimilarities = mutableListOf<Pair<Int, Float>>()
         val chunkIdsAboveThreshold = linkedSetOf<Int>()
         val similarityByChunkId = mutableMapOf<Int, Float>()
-        val topHeap = PriorityQueue<Pair<Float, Int>>(compareBy { it.first })
+        val topHeap = PriorityQueue<Pair<Float, Int>>(config.topK + 1, compareBy { it.first })
 
         var offset = 0L
         while (offset < totalEmbeddings) {
@@ -170,7 +175,6 @@ class RagSearchService(
                     val chunkVector = deserializeVector(embedding.vector)
                     val similarity = cosineSimilarity(queryVector, chunkVector)
 
-                    allSimilarities.add(embedding.id to similarity)
                     similarityByChunkId[embedding.chunkId] = similarity
 
                     if (similarity >= config.similarityThreshold) {
@@ -249,11 +253,9 @@ class RagSearchService(
             results
         }
 
-        // Log similarity distribution for debugging
-        val top5Similarities = allSimilarities
-            .sortedByDescending { it.second }
-            .take(5)
-        logger.debug { "Top 5 similarities: ${top5Similarities.map { String.format("%.3f", it.second) }}" }
+        // Log similarity distribution for debugging (use heap results, already top-K)
+        val topSimilarities = topHeap.sortedByDescending { it.first }.take(5)
+        logger.debug { "Top ${topSimilarities.size} similarities: ${topSimilarities.map { String.format("%.3f", it.first) }}" }
         logger.debug {
             "Threshold: ${config.similarityThreshold}, " +
                 "Results above threshold: ${results.size}/$totalEmbeddings"

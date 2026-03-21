@@ -4,6 +4,7 @@ import pl.jclab.refio.core.services.logging.coreLogger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -31,6 +32,12 @@ object GlobalMetrics {
 
     // Cost tracking
     private val _totalCostUsd = AtomicLong(0) // Store as cents (x100)
+
+    // Cache metrics
+    val cacheMetrics = ConcurrentHashMap<String, CacheStats>()
+
+    // Operation time tracking
+    val operationMetrics = ConcurrentHashMap<String, OperationMetrics>()
 
     // Current operation tracking
     private val _currentOperation = MutableStateFlow<OperationInfo>(OperationInfo.Idle)
@@ -147,6 +154,76 @@ object GlobalMetrics {
     fun isCancelled(): Boolean = _isCancelled.get()
 
     /**
+     * Record a cache access (hit or miss) for the named cache.
+     */
+    fun recordCacheAccess(cacheName: String, hit: Boolean) {
+        val stats = cacheMetrics.getOrPut(cacheName) { CacheStats() }
+        if (hit) stats.hitCount.incrementAndGet()
+        else stats.missCount.incrementAndGet()
+    }
+
+    /**
+     * Update the current size of a named cache.
+     */
+    fun recordCacheSize(cacheName: String, size: Int) {
+        val stats = cacheMetrics.getOrPut(cacheName) { CacheStats() }
+        stats.size.set(size)
+    }
+
+    /**
+     * Record the duration of a named operation.
+     */
+    fun recordOperationTime(operation: String, durationMs: Long) {
+        val metrics = operationMetrics.getOrPut(operation) { OperationMetrics() }
+        metrics.count.incrementAndGet()
+        metrics.totalTimeMs.addAndGet(durationMs)
+        metrics.maxTimeMs.updateAndGet { maxOf(it, durationMs) }
+    }
+
+    /**
+     * Return a formatted summary of all performance metrics.
+     */
+    fun getPerformanceSummary(): String {
+        val sb = StringBuilder()
+        sb.appendLine("=== Performance Summary ===")
+        sb.appendLine()
+
+        // Request metrics
+        sb.appendLine("Requests: ${_totalRequests.get()} total, " +
+            "${_successfulRequests.get()} success, ${_failedRequests.get()} failed")
+        sb.appendLine("Tokens: ${_totalTokensIn.get()} in, ${_totalTokensOut.get()} out")
+        sb.appendLine("Cost: $${_totalCostUsd.get() / 100.0}")
+        sb.appendLine()
+
+        // Cache metrics
+        if (cacheMetrics.isNotEmpty()) {
+            sb.appendLine("--- Cache Metrics ---")
+            for ((name, stats) in cacheMetrics.entries.sortedBy { it.key }) {
+                val hits = stats.hitCount.get()
+                val misses = stats.missCount.get()
+                val total = hits + misses
+                val hitRate = if (total > 0) "%.1f%%".format(hits * 100.0 / total) else "N/A"
+                sb.appendLine("  $name: size=${stats.size.get()}, hits=$hits, misses=$misses, hitRate=$hitRate")
+            }
+            sb.appendLine()
+        }
+
+        // Operation metrics
+        if (operationMetrics.isNotEmpty()) {
+            sb.appendLine("--- Operation Metrics ---")
+            for ((name, metrics) in operationMetrics.entries.sortedBy { it.key }) {
+                val count = metrics.count.get()
+                val avgMs = if (count > 0) metrics.totalTimeMs.get() / count else 0
+                sb.appendLine("  $name: count=$count, totalMs=${metrics.totalTimeMs.get()}, " +
+                    "avgMs=$avgMs, maxMs=${metrics.maxTimeMs.get()}")
+            }
+            sb.appendLine()
+        }
+
+        return sb.toString().trimEnd()
+    }
+
+    /**
      * Reset all metrics (for testing or user request)
      */
     fun reset() {
@@ -156,6 +233,8 @@ object GlobalMetrics {
         _totalTokensIn.set(0)
         _totalTokensOut.set(0)
         _totalCostUsd.set(0)
+        cacheMetrics.clear()
+        operationMetrics.clear()
 
         updateMetricsSnapshot()
 
@@ -273,3 +352,21 @@ sealed class OperationInfo {
         override fun toString() = "Loop: $iteration ($mode)"
     }
 }
+
+/**
+ * Cache statistics for a named cache.
+ */
+data class CacheStats(
+    val size: AtomicInteger = AtomicInteger(0),
+    val hitCount: AtomicLong = AtomicLong(0),
+    val missCount: AtomicLong = AtomicLong(0)
+)
+
+/**
+ * Timing metrics for a named operation.
+ */
+data class OperationMetrics(
+    val count: AtomicLong = AtomicLong(0),
+    val totalTimeMs: AtomicLong = AtomicLong(0),
+    val maxTimeMs: AtomicLong = AtomicLong(0)
+)

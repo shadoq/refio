@@ -1,5 +1,6 @@
 package pl.jclab.refio.ui.settings
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBPanel
@@ -13,6 +14,7 @@ import pl.jclab.refio.ui.theme.LCATheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.awt.*
 import javax.swing.*
@@ -29,7 +31,7 @@ private val logger = dualLogger("SubagentSettingsPanel")
 class SubagentSettingsPanel(
     private val onSettingChanged: (section: String, key: String, value: Any) -> Unit,
     private val coreApiClient: CoreApiClient?
-) : JBPanel<SubagentSettingsPanel>(BorderLayout()) {
+) : JBPanel<SubagentSettingsPanel>(BorderLayout()), Disposable {
 
     private lateinit var subagentsTable: JBTable
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -469,6 +471,10 @@ class SubagentSettingsPanel(
                 logger.error(e) { "Failed to refresh subagents" }
             }
         }
+    }
+
+    override fun dispose() {
+        coroutineScope.cancel()
     }
 
     /**

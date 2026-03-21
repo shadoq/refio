@@ -16,7 +16,9 @@ import com.intellij.patterns.PlatformPatterns
 import com.intellij.psi.search.FilenameIndex
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.util.ProcessingContext
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import pl.jclab.refio.api.models.ContextReference
 import pl.jclab.refio.api.models.SlashCommand
 import pl.jclab.refio.core.db.PromptType
@@ -50,6 +52,10 @@ class RefioCompletionContributor : CompletionContributor() {
         @Volatile
         private var lastSubagentsLoadAt: Long = 0
         private const val SUBAGENTS_CACHE_MS = 5_000L
+
+        private val submenuItemsCache = java.util.concurrent.ConcurrentHashMap<String, List<pl.jclab.refio.core.context.ContextSubmenuItem>>()
+        private val submenuLoadingKeys = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+        private val submenuBackgroundScope = CoroutineScope(Dispatchers.IO)
 
         private fun extractVariablesFromTemplate(template: String): List<String> {
             return Regex("""\{(\w+)\}""").findAll(template).map { it.groupValues[1] }.toList()
@@ -151,9 +157,22 @@ class RefioCompletionContributor : CompletionContributor() {
                                 val addContextRef = editor.getUserData(ADD_CONTEXT_REFERENCE_KEY)
                                 val replacePrefix = editor.getUserData(REPLACE_CONTEXT_PREFIX_KEY)
 
-                                // Load submenu items synchronously (completion is called on background thread)
-                                val submenuItems = runBlocking {
-                                    provider.loadSubmenuItems(LoadSubmenuItemsArgs(query = query, project = project))
+                                // Load submenu items from cache; trigger async refresh in background
+                                val cacheKey = "$providerName:$query"
+                                val submenuItems = submenuItemsCache.getOrDefault(cacheKey, emptyList())
+                                if (submenuLoadingKeys.putIfAbsent(cacheKey, true) == null) {
+                                    submenuBackgroundScope.launch {
+                                        try {
+                                            val items = provider.loadSubmenuItems(
+                                                LoadSubmenuItemsArgs(query = query, project = project)
+                                            )
+                                            submenuItemsCache[cacheKey] = items
+                                        } catch (e: Exception) {
+                                            log.warn("Failed to load submenu items for $providerName", e)
+                                        } finally {
+                                            submenuLoadingKeys.remove(cacheKey)
+                                        }
+                                    }
                                 }
 
                                 val prefixMatcher = result.withPrefixMatcher("@$providerName $query")

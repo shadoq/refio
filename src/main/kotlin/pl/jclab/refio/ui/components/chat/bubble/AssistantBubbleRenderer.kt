@@ -142,10 +142,12 @@ internal class AssistantBubbleRenderer(
             )
         }
 
+        val subagentName = extractSubagentName(message.metadata)
+        val headerTitle = if (subagentName != null) "Subagent \u2022 $subagentName" else "Assistant"
         addRow(
             factory.createBubbleHeader(
                 icon = "\uD83E\uDD16",
-                title = "Assistant",
+                title = headerTitle,
                 foregroundColor = LCATheme.assistantBubbleForeground
             )
         )
@@ -184,6 +186,16 @@ internal class AssistantBubbleRenderer(
         )
 
         return addToOuter(outerPanel, messageBlock)
+    }
+
+    private fun extractSubagentName(metadata: String?): String? {
+        if (metadata.isNullOrBlank()) return null
+        return try {
+            val json = com.google.gson.JsonParser.parseString(metadata).asJsonObject
+            json.get("subagent_name")?.takeIf { it.isJsonPrimitive }?.asString
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun buildAssistantContent(message: Message): String {

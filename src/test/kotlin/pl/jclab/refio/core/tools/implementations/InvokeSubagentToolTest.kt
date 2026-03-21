@@ -5,9 +5,10 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
-import pl.jclab.refio.core.services.AgentTurnLoop
+import pl.jclab.refio.core.api.StreamCallback
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.TurnResult
+import pl.jclab.refio.core.services.turn.TurnEventListener
 import pl.jclab.refio.core.subagents.SubagentRouter
 import pl.jclab.refio.core.subagents.models.SubagentDefinition
 import pl.jclab.refio.core.tools.base.ToolMode
@@ -24,7 +25,7 @@ class InvokeSubagentToolTest {
 
     private lateinit var mockSubagentRouterProvider: () -> SubagentRouter?
     private lateinit var mockSubagentRouter: SubagentRouter
-    private lateinit var mockRunTurnCallback: suspend (Any, AgentTurnLoop.TurnEventListener?) -> TurnResult
+    private lateinit var mockRunTurnCallback: suspend (Any, TurnEventListener?, StreamCallback?) -> TurnResult
     private lateinit var mockConfigServiceProvider: () -> ConfigService
     private lateinit var mockConfigService: ConfigService
     private lateinit var tool: InvokeSubagentTool
@@ -78,7 +79,7 @@ class InvokeSubagentToolTest {
         runTurnCallCount = 0
         lastRunTurnRequest = null
 
-        mockRunTurnCallback = { request, _ ->
+        mockRunTurnCallback = { request, _, _ ->
             runTurnCallCount++
             lastRunTurnRequest = request
             TurnResult(
@@ -168,7 +169,7 @@ class InvokeSubagentToolTest {
 
             // Then
             assertNotNull(result.metadata)
-            assertEquals("test-agent", result.metadata!!["subagent"])
+            assertEquals("test-agent", result.metadata!!["subagent_name"])
             assertEquals(1, result.metadata!!["depth"])
             assertEquals(1, result.metadata!!["iterations"])
             assertEquals(100, result.metadata!!["tokens_in"])
@@ -358,7 +359,7 @@ class InvokeSubagentToolTest {
         @Test
         fun `should return error when subagent execution fails`() = runBlocking {
             // Given
-            val failingCallback: suspend (Any, AgentTurnLoop.TurnEventListener?) -> TurnResult = { _, _ ->
+            val failingCallback: suspend (Any, TurnEventListener?, StreamCallback?) -> TurnResult = { _, _, _ ->
                 TurnResult(
                     success = false,
                     response = "Execution failed",

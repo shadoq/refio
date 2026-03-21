@@ -43,6 +43,12 @@ abstract class BaseContextProvider {
      * Optional: Deprecation message if provider is being phased out.
      */
     open val deprecationMessage: String? = null
+
+    /**
+     * Environment required by this provider.
+     * Providers marked IDE_ONLY will be skipped in non-IDE environments (e.g., CLI).
+     */
+    open val environment: ContextProviderEnvironment = ContextProviderEnvironment.ANY
 }
 
 /**
@@ -56,6 +62,14 @@ data class ContextProviderDescription(
     val icon: String? = null,       // Icon name (optional)
     val enabled: Boolean = true     // Whether this provider is enabled by default
 )
+
+/**
+ * Environment in which a context provider can operate.
+ */
+enum class ContextProviderEnvironment {
+    ANY,        // Works in any environment (CLI, IDE, etc.)
+    IDE_ONLY    // Requires IntelliJ IDE (e.g., terminal, problems panel)
+}
 
 /**
  * Provider type determines UI interaction pattern.

@@ -1,6 +1,8 @@
 package pl.jclab.refio.core.services
 
 import pl.jclab.refio.core.api.ModelOperation
+import pl.jclab.refio.core.config.ConfigKey
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.config.ConfigYaml
 import pl.jclab.refio.core.config.HierarchicalConfigLoader
 import pl.jclab.refio.core.config.TerminalCommandConfig
@@ -8,7 +10,7 @@ import pl.jclab.refio.core.config.TerminalConfig
 import pl.jclab.refio.core.config.TerminalWhitelistConfig
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.db.repositories.ConfigRepository
-import pl.jclab.refio.core.llm.getModelConfig
+import pl.jclab.refio.core.llm.getModelConfigFromCache
 import pl.jclab.refio.core.services.context.ContextBudget
 import pl.jclab.refio.core.services.context.ContextSection
 import pl.jclab.refio.core.tools.security.AllowedCommand
@@ -17,7 +19,6 @@ import pl.jclab.refio.core.tools.security.CommandWhitelistDefaults
 import pl.jclab.refio.core.tools.security.WhitelistMode
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.services.logging.dualLogger
-import kotlinx.coroutines.runBlocking
 import java.nio.file.Path
 
 /**
@@ -44,6 +45,56 @@ class ConfigService(
      */
     private val yamlLoader: HierarchicalConfigLoader by lazy {
         HierarchicalConfigLoader.getInstance(projectRoot)
+    }
+
+    /**
+     * Get a typed configuration value using a [ConfigKey] descriptor.
+     *
+     * Lookup order (highest priority first):
+     * 1. Database value (task-scoped, then project-scoped, then app-scoped)
+     * 2. YAML config value via the key's yamlAccessor
+     * 3. The key's built-in default
+     *
+     * @param configKey Typed key descriptor containing key, parser, default, and yaml accessor
+     * @param taskId Optional task ID for task-level override
+     * @return Parsed value of type T, or the key's default if not found / unparseable
+     */
+    fun <T> getTyped(configKey: ConfigKey<T>, taskId: String? = null): T {
+        // 1. Check database
+        val dbConfig = getConfigWithPrecedence(key = configKey.key, taskId = taskId)
+        if (dbConfig?.value != null) {
+            val parsed = configKey.parser(dbConfig.value)
+            if (parsed != null) return parsed
+        }
+
+        // 2. Check YAML via accessor
+        val yamlValue = configKey.yamlAccessor?.invoke(yamlLoader)
+        if (yamlValue != null) {
+            val parsed = configKey.parser(yamlValue.toString())
+            if (parsed != null) return parsed
+        }
+
+        // 3. Return default
+        return configKey.default
+    }
+
+    /**
+     * Set a typed configuration value using a [ConfigKey] descriptor.
+     *
+     * @param configKey Typed key descriptor containing key and serializer
+     * @param value The value to store
+     * @param scope Configuration scope (default: APP)
+     * @param taskId Optional task ID for TASK scope
+     */
+    fun <T> setTyped(configKey: ConfigKey<T>, value: T, scope: ConfigScope = ConfigScope.APP, taskId: String? = null) {
+        val serialized = configKey.serializer(value)
+        configRepository.set(
+            key = configKey.key,
+            value = serialized,
+            scope = scope,
+            taskId = taskId,
+            description = null
+        )
     }
 
     companion object {
@@ -462,12 +513,10 @@ class ConfigService(
         taskId: String? = null,
         userId: String? = null
     ) {
-        // Validate model exists by fetching from providers
+        // Validate model exists using cached model registry (no suspend/runBlocking needed)
         if (operation != ModelOperation.EMBEDDING) {
-            val modelConfig = runBlocking {
-                getModelConfig(modelId, this@ConfigService)
-            }
-            if (modelConfig==null || modelConfig.provider != provider) {
+            val modelConfig = getModelConfigFromCache(modelId)
+            if (modelConfig != null && modelConfig.provider != provider) {
                 return
             }
         }
@@ -516,11 +565,9 @@ class ConfigService(
         taskId: String? = null,
         userId: String? = null
     ) {
-        // Validate once by fetching from providers
-        val modelConfig = runBlocking {
-            getModelConfig(modelId, this@ConfigService)
-        }
-        if (modelConfig==null || modelConfig.provider != provider) {
+        // Validate once using cached model registry (no suspend/runBlocking needed)
+        val modelConfig = getModelConfigFromCache(modelId)
+        if (modelConfig != null && modelConfig.provider != provider) {
             return
         }
 
@@ -673,81 +720,15 @@ class ConfigService(
      * Get configuration value from YAML files only.
      * Useful when you want to explicitly read from file-based config.
      *
+     * Uses [ConfigKeys.byKey] to find the registered [ConfigKey] and its yamlAccessor.
+     *
      * @param key Configuration key in dot notation (e.g., "general.format_markdown")
      * @return Value from YAML config or null if not found
      */
     fun getFromYaml(key: String): String? {
-        return when (key) {
-            // General settings
-            KEY_FORMAT_MARKDOWN -> yamlLoader.getFormatMarkdown()?.toString()
-            KEY_STREAMING_ENABLED -> yamlLoader.getStreamingEnabled()?.toString()
-            KEY_ADVANCED_VIEW -> yamlLoader.getAdvancedView()?.toString()
-
-            // Limits
-            KEY_API_CALL_TIMEOUT -> yamlLoader.getApiCallTimeout()?.toString()
-            KEY_TOOL_EXECUTION_TIMEOUT -> yamlLoader.getToolExecutionTimeout()?.toString()
-            KEY_STREAMING_READ_TIMEOUT -> yamlLoader.getStreamingReadTimeout()?.toString()
-            KEY_STREAMING_REQUEST_TIMEOUT -> yamlLoader.getStreamingRequestTimeout()?.toString()
-            KEY_MAX_CONTEXT_SIZE -> yamlLoader.getMaxContextSize()?.toString()
-            KEY_MAX_OUTPUT_SIZE -> yamlLoader.getMaxOutputSize()?.toString()
-            KEY_MAX_FILE_SIZE -> yamlLoader.getMaxFileSize()?.toString()
-
-            // Advanced
-            KEY_NO_EGRESS_DEFAULT -> yamlLoader.getNoEgressDefault()?.toString()
-            KEY_READ_ONLY_MODE -> yamlLoader.getReadOnlyMode()?.toString()
-            KEY_AUTO_OPTIMIZE_PERCENTAGE -> yamlLoader.getAutoOptimizePercentage()?.toString()
-
-            // Terminal whitelist
-            KEY_TERMINAL_WHITELIST_ENABLED -> yamlLoader.getTerminalWhitelistEnabled()?.toString()
-            KEY_TERMINAL_WHITELIST_MODE -> yamlLoader.getTerminalWhitelistMode()?.trim()?.uppercase()
-            KEY_TERMINAL_WHITELIST -> yamlLoader.getTerminalWhitelist()?.let { gson.toJson(it) }
-
-            // RAG
-            KEY_RAG_ENABLED -> yamlLoader.getRagEnabled()?.toString()
-            KEY_RAG_INDEX_ON_STARTUP -> yamlLoader.getRagIndexOnStartup()?.toString()
-            KEY_RAG_AUTO_INDEX_ON_CONTEXT -> yamlLoader.getRagAutoIndexOnContextBuild()?.toString()
-            KEY_RAG_MAX_FILE_SIZE_MB -> yamlLoader.getRagMaxFileSizeMB()?.toString()
-            KEY_RAG_MAX_CHUNKS_PER_FILE -> yamlLoader.getRagMaxChunksPerFile()?.toString()
-            KEY_RAG_INDEX_BATCH_SIZE -> yamlLoader.getRagIndexBatchSize()?.toString()
-            KEY_RAG_EMBEDDINGS_BATCH_SIZE -> yamlLoader.getRagEmbeddingsBatchSize()?.toString()
-            KEY_RAG_CACHE_TTL_MS -> yamlLoader.getRagCacheTtlMs()?.toString()
-            KEY_RAG_MAX_CONCURRENT_JOBS -> yamlLoader.getRagMaxConcurrentJobs()?.toString()
-            KEY_RAG_IGNORED_DIRECTORIES -> yamlLoader.getRagIgnoredDirectories()?.joinToString(",")
-            KEY_RAG_SEARCH_SIMILARITY_THRESHOLD -> yamlLoader.getRagSearchSimilarityThreshold()?.toString()
-            KEY_RAG_SEARCH_TOP_K -> yamlLoader.getRagSearchTopK()?.toString()
-            KEY_RAG_SEARCH_HYBRID_ENABLED -> yamlLoader.getRagSearchHybridEnabled()?.toString()
-            KEY_RAG_SEARCH_SEMANTIC_WEIGHT -> yamlLoader.getRagSearchSemanticWeight()?.toString()
-            KEY_RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS -> yamlLoader.getRagSearchIncludeContextChunks()?.toString()
-
-            // UI
-            KEY_UI_THINKING_ENABLED -> yamlLoader.getUiThinkingEnabled()?.toString()
-            KEY_UI_NO_EGRESS_ENABLED -> yamlLoader.getUiNoEgressEnabled()?.toString()
-            KEY_UI_EXECUTION_MODE -> yamlLoader.getUiExecutionMode()?.trim()?.uppercase()
-            KEY_UI_SELECTED_MODE -> yamlLoader.getUiSelectedMode()?.trim()?.uppercase()
-            KEY_UI_SELECTED_MODEL -> yamlLoader.getUiSelectedModel()?.trim()?.lowercase()
-
-            // Provider endpoints
-            KEY_PROVIDER_OLLAMA_ENDPOINT -> yamlLoader.getOllamaEndpoint()
-            KEY_PROVIDER_OLLAMA_CONTEXT_SIZE -> yamlLoader.getOllamaContextSize()?.toString()
-            KEY_PROVIDER_OLLAMA_KEEP_ALIVE -> yamlLoader.getOllamaKeepAlive()?.toString()
-            KEY_PROVIDER_ANTHROPIC_API_KEY -> yamlLoader.getAnthropicApiKey()
-            KEY_PROVIDER_OPENAI_API_KEY -> yamlLoader.getOpenAIApiKey()
-            KEY_PROVIDER_OPENROUTER_API_KEY -> yamlLoader.getOpenRouterApiKey()
-            KEY_PROVIDER_GEMINI_API_KEY -> yamlLoader.getGeminiApiKey()
-            KEY_PROVIDER_LM_STUDIO_API_KEY -> yamlLoader.getLMStudioApiKey()
-            KEY_PROVIDER_LM_STUDIO_BASE_URL -> yamlLoader.getLMStudioBaseUrl()
-            KEY_PROVIDER_LM_STUDIO_CONTEXT_SIZE -> yamlLoader.getLMStudioContextSize()?.toString()
-            KEY_PROVIDER_CUSTOM_OPENAI_API_KEY -> yamlLoader.getCustomOpenAIApiKey()
-            KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL -> yamlLoader.getCustomOpenAIBaseUrl()
-            KEY_PROVIDER_CUSTOM_OPENAI_MODEL -> yamlLoader.getCustomOpenAIModel()
-            KEY_PROVIDER_ZAI_API_KEY -> yamlLoader.getZAIApiKey()
-            KEY_PROVIDER_ZAI_BASE_URL -> yamlLoader.getZAIBaseUrl()
-
-            // Models (visibility is handled separately)
-            KEY_EMBEDDING_MODEL -> yamlLoader.getDefaultEmbeddingModel()
-
-            else -> null
-        }
+        val configKey = ConfigKeys.byKey(key)
+            ?: return null
+        return configKey.yamlAccessor?.invoke(yamlLoader)?.toString()
     }
 
     /**
@@ -782,6 +763,7 @@ class ConfigService(
      * @param taskId Optional task ID for task-level override
      * @return Timeout in milliseconds (default: 120000ms = 120s)
      */
+    @Deprecated("Use getTyped(ConfigKeys.API_CALL_TIMEOUT) instead", ReplaceWith("getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId) * 1000L"))
     fun getApiCallTimeoutMs(taskId: String? = null): Long {
         val config = getConfigWithPrecedence(
             key = KEY_API_CALL_TIMEOUT,
@@ -797,6 +779,7 @@ class ConfigService(
      * @param taskId Optional task ID for task-level override
      * @return Timeout in milliseconds (default: 120000ms = 120s)
      */
+    @Deprecated("Use getTyped(ConfigKeys.TOOL_EXECUTION_TIMEOUT) instead", ReplaceWith("getTyped(ConfigKeys.TOOL_EXECUTION_TIMEOUT, taskId) * 1000L"))
     fun getToolExecutionTimeoutMs(taskId: String? = null): Long {
         val config = getConfigWithPrecedence(
             key = KEY_TOOL_EXECUTION_TIMEOUT,
@@ -812,6 +795,7 @@ class ConfigService(
      * @param taskId Optional task ID for task-level override
      * @return Max context size in tokens (default: 128000)
      */
+    @Deprecated("Use getTyped(ConfigKeys.MAX_CONTEXT_SIZE) instead", ReplaceWith("getTyped(ConfigKeys.MAX_CONTEXT_SIZE, taskId)"))
     fun getMaxContextSize(taskId: String? = null): Int {
         val config = getConfigWithPrecedence(
             key = KEY_MAX_CONTEXT_SIZE,
@@ -826,6 +810,7 @@ class ConfigService(
      * @param taskId Optional task ID for task-level override
      * @return Max output size in tokens (default: 8192)
      */
+    @Deprecated("Use getTyped(ConfigKeys.MAX_OUTPUT_SIZE) instead", ReplaceWith("getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)"))
     fun getMaxOutputTokens(taskId: String? = null): Int {
         val config = getConfigWithPrecedence(
             key = KEY_MAX_OUTPUT_SIZE,
@@ -840,6 +825,7 @@ class ConfigService(
      * @param taskId Optional task ID for task-level override
      * @return Max file size in MB (default: 10)
      */
+    @Deprecated("Use getTyped(ConfigKeys.MAX_FILE_SIZE) instead", ReplaceWith("getTyped(ConfigKeys.MAX_FILE_SIZE, taskId)"))
     fun getMaxFileSizeMB(taskId: String? = null): Int {
         val config = getConfigWithPrecedence(
             key = KEY_MAX_FILE_SIZE,
@@ -856,6 +842,7 @@ class ConfigService(
      * @param taskId Optional task ID for task-level override
      * @return true if thinking is enabled (default: false)
      */
+    @Deprecated("Use getTyped(ConfigKeys.UI_THINKING_ENABLED) instead", ReplaceWith("getTyped(ConfigKeys.UI_THINKING_ENABLED, taskId)"))
     fun isThinkingEnabled(taskId: String? = null): Boolean {
         val scope = if (taskId != null) ConfigScope.TASK else ConfigScope.APP
         return get(
@@ -888,6 +875,7 @@ class ConfigService(
      * @param taskId Optional task ID for task-level override
      * @return true if no-egress is enabled (default: false)
      */
+    @Deprecated("Use getTyped(ConfigKeys.UI_NO_EGRESS_ENABLED) instead", ReplaceWith("getTyped(ConfigKeys.UI_NO_EGRESS_ENABLED, taskId)"))
     fun isNoEgressEnabled(taskId: String? = null): Boolean {
         val scope = if (taskId != null) ConfigScope.TASK else ConfigScope.APP
         return get(
@@ -914,6 +902,7 @@ class ConfigService(
         )
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.SECURITY_ALLOW_SYMLINKS) instead", ReplaceWith("getTyped(ConfigKeys.SECURITY_ALLOW_SYMLINKS)"))
     fun isSymlinkAccessAllowed(): Boolean {
         return getConfigWithPrecedence(KEY_SECURITY_ALLOW_SYMLINKS)?.value?.toBoolean() ?: false
     }
@@ -924,6 +913,7 @@ class ConfigService(
      * @param taskId Optional task ID for task-level override
      * @return Execution mode (AUTO/INTERACTIVE, default: AUTO)
      */
+    @Deprecated("Use getTyped(ConfigKeys.UI_EXECUTION_MODE) instead", ReplaceWith("getTyped(ConfigKeys.UI_EXECUTION_MODE, taskId)"))
     fun getExecutionMode(taskId: String? = null): String {
         val config = getConfigWithPrecedence(
             key = KEY_UI_EXECUTION_MODE,
@@ -955,6 +945,7 @@ class ConfigService(
      * @param taskId Optional task ID for task-level override
      * @return Selected mode (CHAT/PLAN/AGENT, default: CHAT)
      */
+    @Deprecated("Use getTyped(ConfigKeys.UI_SELECTED_MODE) instead", ReplaceWith("getTyped(ConfigKeys.UI_SELECTED_MODE, taskId)"))
     fun getSelectedMode(taskId: String? = null): String {
         val config = getConfigWithPrecedence(
             key = KEY_UI_SELECTED_MODE,
@@ -986,6 +977,7 @@ class ConfigService(
      * @param taskId Optional task ID for task-level override
      * @return Selected model (default: empty string)
      */
+    @Deprecated("Use getTyped(ConfigKeys.UI_SELECTED_MODEL) instead", ReplaceWith("getTyped(ConfigKeys.UI_SELECTED_MODEL, taskId)"))
     fun getSelectedModel(taskId: String? = null): String? {
         val config = getConfigWithPrecedence(
             key = KEY_UI_SELECTED_MODEL,
@@ -1072,6 +1064,7 @@ class ConfigService(
      * 4. System property OLLAMA_ENDPOINT (legacy)
      * 5. Default: http://localhost:11434
      */
+    @Deprecated("Use getTyped(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT) instead (note: system property fallback not included)")
     fun getOllamaEndpoint(): String {
         // 1. Check database
         val configured = configRepository.get(KEY_PROVIDER_OLLAMA_ENDPOINT, ConfigScope.APP)?.value?.takeIf { it.isNotBlank() }
@@ -1125,22 +1118,27 @@ class ConfigService(
         )
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_BASE_URL) instead", ReplaceWith("getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_BASE_URL)"))
     fun getCustomOpenAIBaseUrl(): String? {
         return get(KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL)?.takeIf { it.isNotBlank() }
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_API_KEY) instead", ReplaceWith("getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_API_KEY)"))
     fun getCustomOpenAIApiKey(): String? {
         return get(KEY_PROVIDER_CUSTOM_OPENAI_API_KEY)?.takeIf { it.isNotBlank() }
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_MODEL) instead", ReplaceWith("getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_MODEL)"))
     fun getCustomOpenAIModel(): String? {
         return get(KEY_PROVIDER_CUSTOM_OPENAI_MODEL)?.takeIf { it.isNotBlank() }
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.PROVIDER_ZAI_BASE_URL) instead", ReplaceWith("getTyped(ConfigKeys.PROVIDER_ZAI_BASE_URL)"))
     fun getZAIBaseUrl(): String {
         return normalizeZAIBaseUrl(get(KEY_PROVIDER_ZAI_BASE_URL))
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.PROVIDER_ZAI_API_KEY) instead", ReplaceWith("getTyped(ConfigKeys.PROVIDER_ZAI_API_KEY)"))
     fun getZAIApiKey(): String? {
         return get(KEY_PROVIDER_ZAI_API_KEY)?.takeIf { it.isNotBlank() }
     }
@@ -1339,6 +1337,7 @@ class ConfigService(
      *
      * @return true if markdown formatting is enabled (default: true)
      */
+    @Deprecated("Use getTyped(ConfigKeys.FORMAT_MARKDOWN) instead", ReplaceWith("getTyped(ConfigKeys.FORMAT_MARKDOWN)"))
     fun isFormatMarkdownEnabled(): Boolean {
         val config = configRepository.get(KEY_FORMAT_MARKDOWN, ConfigScope.APP)
         return config?.value?.toBoolean() ?: true
@@ -1349,6 +1348,7 @@ class ConfigService(
      *
      * @return true if streaming is enabled (default: true)
      */
+    @Deprecated("Use getTyped(ConfigKeys.STREAMING_ENABLED) instead", ReplaceWith("getTyped(ConfigKeys.STREAMING_ENABLED)"))
     fun isStreamingEnabled(): Boolean {
         val config = configRepository.get(KEY_STREAMING_ENABLED, ConfigScope.APP)
         return config?.value?.toBoolean() ?: true
@@ -1356,57 +1356,68 @@ class ConfigService(
 
     // ==================== RAG CONFIGURATION ====================
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_ENABLED) instead", ReplaceWith("getTyped(ConfigKeys.RAG_ENABLED)"))
     fun isRagEnabled(): Boolean {
         val config = configRepository.get(KEY_RAG_ENABLED, ConfigScope.APP)
         return config?.value?.toBoolean() ?: true
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_AUTO_INDEX_ON_CONTEXT) instead", ReplaceWith("getTyped(ConfigKeys.RAG_AUTO_INDEX_ON_CONTEXT)"))
     fun shouldAutoIndexOnContextBuild(): Boolean {
         val config = configRepository.get(KEY_RAG_AUTO_INDEX_ON_CONTEXT, ConfigScope.APP)
         return config?.value?.toBoolean() ?: true
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_INDEX_ON_STARTUP) instead", ReplaceWith("getTyped(ConfigKeys.RAG_INDEX_ON_STARTUP)"))
     fun shouldIndexRagOnStartup(): Boolean {
         val config = configRepository.get(KEY_RAG_INDEX_ON_STARTUP, ConfigScope.APP)
         return config?.value?.toBoolean() ?: DEFAULT_RAG_INDEX_ON_STARTUP
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_MAX_FILE_SIZE_MB) instead", ReplaceWith("getTyped(ConfigKeys.RAG_MAX_FILE_SIZE_MB) * 1024L * 1024L"))
     fun getRagMaxFileSizeBytes(): Long {
         val config = configRepository.get(KEY_RAG_MAX_FILE_SIZE_MB, ConfigScope.APP)
         val megabytes = config?.value?.toLongOrNull() ?: DEFAULT_RAG_MAX_FILE_SIZE_MB
         return megabytes * 1024L * 1024L
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_CACHE_TTL_MS) instead", ReplaceWith("getTyped(ConfigKeys.RAG_CACHE_TTL_MS)"))
     fun getRagCacheTtlMs(): Long {
         val config = configRepository.get(KEY_RAG_CACHE_TTL_MS, ConfigScope.APP)
         return config?.value?.toLongOrNull() ?: DEFAULT_RAG_CACHE_TTL_MS
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_MAX_CONCURRENT_JOBS) instead", ReplaceWith("getTyped(ConfigKeys.RAG_MAX_CONCURRENT_JOBS)"))
     fun getRagMaxConcurrentJobs(): Int {
         val config = configRepository.get(KEY_RAG_MAX_CONCURRENT_JOBS, ConfigScope.APP)
         return config?.value?.toIntOrNull()?.coerceAtLeast(1) ?: DEFAULT_RAG_MAX_CONCURRENT_JOBS
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_MAX_CHUNKS_PER_FILE) instead", ReplaceWith("getTyped(ConfigKeys.RAG_MAX_CHUNKS_PER_FILE)"))
     fun getRagMaxChunksPerFile(): Int {
         val config = configRepository.get(KEY_RAG_MAX_CHUNKS_PER_FILE, ConfigScope.APP)
         return config?.value?.toIntOrNull()?.coerceAtLeast(1) ?: DEFAULT_RAG_MAX_CHUNKS_PER_FILE
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_INDEX_BATCH_SIZE) instead", ReplaceWith("getTyped(ConfigKeys.RAG_INDEX_BATCH_SIZE)"))
     fun getRagIndexBatchSize(): Int {
         val config = configRepository.get(KEY_RAG_INDEX_BATCH_SIZE, ConfigScope.APP)
         return config?.value?.toIntOrNull()?.coerceAtLeast(1) ?: DEFAULT_RAG_INDEX_BATCH_SIZE
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_EMBEDDINGS_BATCH_SIZE) instead", ReplaceWith("getTyped(ConfigKeys.RAG_EMBEDDINGS_BATCH_SIZE)"))
     fun getRagEmbeddingBatchSize(): Int {
         val config = configRepository.get(KEY_RAG_EMBEDDINGS_BATCH_SIZE, ConfigScope.APP)
         return config?.value?.toIntOrNull()?.coerceAtLeast(1) ?: DEFAULT_RAG_EMBEDDING_BATCH_SIZE
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_EMBEDDING_CACHE_SIZE) instead", ReplaceWith("getTyped(ConfigKeys.RAG_EMBEDDING_CACHE_SIZE)"))
     fun getRagEmbeddingCacheSize(): Int {
         val config = configRepository.get(KEY_RAG_EMBEDDING_CACHE_SIZE, ConfigScope.APP)
         return config?.value?.toIntOrNull()?.coerceAtLeast(100) ?: DEFAULT_RAG_EMBEDDING_CACHE_SIZE
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_IGNORED_DIRECTORIES) instead", ReplaceWith("getTyped(ConfigKeys.RAG_IGNORED_DIRECTORIES).toSet()"))
     fun getRagIgnoredDirectories(): Set<String> {
         val config = configRepository.get(KEY_RAG_IGNORED_DIRECTORIES, ConfigScope.APP)
         val raw = config?.value ?: DEFAULT_RAG_IGNORED_DIRECTORIES.joinToString(",")
@@ -1416,59 +1427,70 @@ class ConfigService(
             .toSet()
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_CHUNKING_MODE) instead", ReplaceWith("getTyped(ConfigKeys.RAG_CHUNKING_MODE)"))
     fun getRagChunkingMode(): String {
         return get(KEY_RAG_CHUNKING_MODE)?.trim()?.lowercase()
             ?.takeIf { it.isNotBlank() }
             ?: DEFAULT_RAG_CHUNKING_MODE
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_SEARCH_SIMILARITY_THRESHOLD) instead", ReplaceWith("getTyped(ConfigKeys.RAG_SEARCH_SIMILARITY_THRESHOLD)"))
     fun getRagSearchSimilarityThreshold(): Float {
         val value = get(KEY_RAG_SEARCH_SIMILARITY_THRESHOLD)?.toFloatOrNull()
             ?: DEFAULT_RAG_SEARCH_SIMILARITY_THRESHOLD
         return value.coerceIn(0.0f, 1.0f)
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_SEARCH_TOP_K) instead", ReplaceWith("getTyped(ConfigKeys.RAG_SEARCH_TOP_K)"))
     fun getRagSearchTopK(): Int {
         return get(KEY_RAG_SEARCH_TOP_K)?.toIntOrNull()?.coerceAtLeast(1) ?: DEFAULT_RAG_SEARCH_TOP_K
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_SEARCH_CACHE_TTL_SECONDS) instead", ReplaceWith("getTyped(ConfigKeys.RAG_SEARCH_CACHE_TTL_SECONDS) * 1000L"))
     fun getRagSearchCacheTtlMs(): Long {
         val seconds = get(KEY_RAG_SEARCH_CACHE_TTL_SECONDS)?.toLongOrNull()
             ?: DEFAULT_RAG_SEARCH_CACHE_TTL_SECONDS
         return seconds.coerceAtLeast(0) * 1000L
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_SEARCH_HYBRID_ENABLED) instead", ReplaceWith("getTyped(ConfigKeys.RAG_SEARCH_HYBRID_ENABLED)"))
     fun getRagSearchHybridEnabled(): Boolean {
         return get(KEY_RAG_SEARCH_HYBRID_ENABLED)?.toBoolean() ?: DEFAULT_RAG_SEARCH_HYBRID_ENABLED
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_SEARCH_SEMANTIC_WEIGHT) instead", ReplaceWith("getTyped(ConfigKeys.RAG_SEARCH_SEMANTIC_WEIGHT)"))
     fun getRagSearchSemanticWeight(): Float {
         val value = get(KEY_RAG_SEARCH_SEMANTIC_WEIGHT)?.toFloatOrNull()
             ?: DEFAULT_RAG_SEARCH_SEMANTIC_WEIGHT
         return value.coerceIn(0.0f, 1.0f)
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS) instead", ReplaceWith("getTyped(ConfigKeys.RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS)"))
     fun getRagSearchIncludeContextChunks(): Boolean {
         return get(KEY_RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS)?.toBoolean()
             ?: DEFAULT_RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.WORKING_MEMORY_MAX_FACTS) instead", ReplaceWith("getTyped(ConfigKeys.WORKING_MEMORY_MAX_FACTS)"))
     fun getWorkingMemoryMaxFacts(): Int {
         val value = get(KEY_WORKING_MEMORY_MAX_FACTS)?.toIntOrNull()
             ?: DEFAULT_WORKING_MEMORY_MAX_FACTS
         return value.coerceAtLeast(1)
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.PROJECT_ANALYSIS_MAX_FILES) instead", ReplaceWith("getTyped(ConfigKeys.PROJECT_ANALYSIS_MAX_FILES)"))
     fun getProjectAnalysisMaxFiles(): Int {
         val config = configRepository.get(KEY_PROJECT_ANALYSIS_MAX_FILES, ConfigScope.APP)
         return config?.value?.toIntOrNull()?.coerceAtLeast(10) ?: DEFAULT_PROJECT_ANALYSIS_MAX_FILES
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.PROJECT_ANALYSIS_FINGERPRINT_LIMIT) instead", ReplaceWith("getTyped(ConfigKeys.PROJECT_ANALYSIS_FINGERPRINT_LIMIT)"))
     fun getProjectAnalysisFingerprintLimit(): Int {
         val config = configRepository.get(KEY_PROJECT_ANALYSIS_FINGERPRINT_LIMIT, ConfigScope.APP)
         return config?.value?.toIntOrNull()?.coerceAtLeast(100) ?: DEFAULT_PROJECT_ANALYSIS_FINGERPRINT_LIMIT
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.PROJECT_ANALYSIS_CACHE_TTL_MS) instead", ReplaceWith("getTyped(ConfigKeys.PROJECT_ANALYSIS_CACHE_TTL_MS)"))
     fun getProjectAnalysisCacheTtlMs(): Long {
         val config = configRepository.get(KEY_PROJECT_ANALYSIS_CACHE_TTL_MS, ConfigScope.APP)
         return config?.value?.toLongOrNull() ?: DEFAULT_PROJECT_ANALYSIS_CACHE_TTL_MS
@@ -1479,6 +1501,7 @@ class ConfigService(
      *
      * @return true if advanced view is enabled (default: false)
      */
+    @Deprecated("Use getTyped(ConfigKeys.ADVANCED_VIEW) instead", ReplaceWith("getTyped(ConfigKeys.ADVANCED_VIEW)"))
     fun isAdvancedViewEnabled(): Boolean {
         val config = configRepository.get(KEY_ADVANCED_VIEW, ConfigScope.APP)
         return config?.value?.toBoolean() ?: false
@@ -1491,6 +1514,7 @@ class ConfigService(
      *
      * @return Auto-optimize percentage (default: 85)
      */
+    @Deprecated("Use getTyped(ConfigKeys.AUTO_OPTIMIZE_PERCENTAGE) instead", ReplaceWith("getTyped(ConfigKeys.AUTO_OPTIMIZE_PERCENTAGE)"))
     fun getAutoOptimizePercentage(): Int {
         val config = configRepository.get(KEY_AUTO_OPTIMIZE_PERCENTAGE, ConfigScope.APP)
         return config?.value?.toIntOrNull() ?: 85
@@ -1501,6 +1525,7 @@ class ConfigService(
      *
      * @return true if no-egress is default (default: false)
      */
+    @Deprecated("Use getTyped(ConfigKeys.NO_EGRESS_DEFAULT) instead", ReplaceWith("getTyped(ConfigKeys.NO_EGRESS_DEFAULT)"))
     fun isNoEgressDefault(): Boolean {
         val config = configRepository.get(KEY_NO_EGRESS_DEFAULT, ConfigScope.APP)
         return config?.value?.toBoolean() ?: false
@@ -1511,6 +1536,7 @@ class ConfigService(
      *
      * @return true if read-only mode is enabled (default: false)
      */
+    @Deprecated("Use getTyped(ConfigKeys.READ_ONLY_MODE) instead", ReplaceWith("getTyped(ConfigKeys.READ_ONLY_MODE)"))
     fun isReadOnlyMode(): Boolean {
         val config = configRepository.get(KEY_READ_ONLY_MODE, ConfigScope.APP)
         return config?.value?.toBoolean() ?: false
@@ -1523,6 +1549,7 @@ class ConfigService(
      *
      * @return Ollama context size in tokens (default: 32768)
      */
+    @Deprecated("Use getTyped(ConfigKeys.PROVIDER_OLLAMA_CONTEXT_SIZE) instead", ReplaceWith("getTyped(ConfigKeys.PROVIDER_OLLAMA_CONTEXT_SIZE)"))
     fun getOllamaContextSize(): Int {
         val config = configRepository.get(KEY_PROVIDER_OLLAMA_CONTEXT_SIZE, ConfigScope.APP)
         return config?.value?.toIntOrNull() ?: DEFAULT_CONTEXT_SIZE
@@ -1533,6 +1560,7 @@ class ConfigService(
      *
      * @return Ollama keep_alive in seconds (default: 1800 = 30 minutes)
      */
+    @Deprecated("Use getTyped(ConfigKeys.PROVIDER_OLLAMA_KEEP_ALIVE) instead", ReplaceWith("getTyped(ConfigKeys.PROVIDER_OLLAMA_KEEP_ALIVE)"))
     fun getOllamaKeepAlive(): Int {
         val config = configRepository.get(KEY_PROVIDER_OLLAMA_KEEP_ALIVE, ConfigScope.APP)
         return config?.value?.toIntOrNull() ?: 1800
@@ -1558,6 +1586,7 @@ class ConfigService(
      *
      * @return LM Studio context size in tokens (default: 32768)
      */
+    @Deprecated("Use getTyped(ConfigKeys.PROVIDER_LM_STUDIO_CONTEXT_SIZE) instead", ReplaceWith("getTyped(ConfigKeys.PROVIDER_LM_STUDIO_CONTEXT_SIZE)"))
     fun getLMStudioContextSize(): Int {
         val config = configRepository.get(KEY_PROVIDER_LM_STUDIO_CONTEXT_SIZE, ConfigScope.APP)
         return config?.value?.toIntOrNull() ?: DEFAULT_CONTEXT_SIZE
@@ -1615,6 +1644,7 @@ class ConfigService(
      *
      * @return true if run_terminal_command is allowed (default: true)
      */
+    @Deprecated("Use getTyped(ConfigKeys.TOOL_PERMISSION_RUN_TERMINAL) instead", ReplaceWith("getTyped(ConfigKeys.TOOL_PERMISSION_RUN_TERMINAL)"))
     fun isRunTerminalCommandAllowed(): Boolean {
         val config = configRepository.get(KEY_TOOL_PERMISSION_RUN_TERMINAL, ConfigScope.APP)
         return config?.value?.toBoolean() ?: true
@@ -1774,6 +1804,7 @@ class ConfigService(
      *
      * @return true if tool summarization is enabled (default: true)
      */
+    @Deprecated("Use getTyped(ConfigKeys.TOOL_SUMMARY_ENABLED) instead", ReplaceWith("getTyped(ConfigKeys.TOOL_SUMMARY_ENABLED)"))
     fun isToolSummaryEnabled(): Boolean {
         return get(KEY_TOOL_SUMMARY_ENABLED)?.toBoolean() ?: DEFAULT_TOOL_SUMMARY_ENABLED
     }
@@ -1799,6 +1830,7 @@ class ConfigService(
      *
      * @return Minimum length in characters (default: 500)
      */
+    @Deprecated("Use getTyped(ConfigKeys.TOOL_SUMMARY_MIN_LENGTH) instead", ReplaceWith("getTyped(ConfigKeys.TOOL_SUMMARY_MIN_LENGTH)"))
     fun getToolSummaryMinLength(): Int {
         return get(KEY_TOOL_SUMMARY_MIN_LENGTH)?.toIntOrNull() ?: DEFAULT_TOOL_SUMMARY_MIN_LENGTH
     }
@@ -1826,6 +1858,7 @@ class ConfigService(
      *
      * @return Full data limit (default: 2)
      */
+    @Deprecated("Use getTyped(ConfigKeys.RECENT_WORK_FULL_DATA_LIMIT) instead", ReplaceWith("getTyped(ConfigKeys.RECENT_WORK_FULL_DATA_LIMIT)"))
     fun getRecentWorkFullDataLimit(): Int {
         val config = configRepository.get(KEY_RECENT_WORK_FULL_DATA_LIMIT, ConfigScope.APP)
         return config?.value?.toIntOrNull() ?: DEFAULT_RECENT_WORK_FULL_DATA_LIMIT
@@ -1852,6 +1885,7 @@ class ConfigService(
      *
      * @return Summary max length in characters (default: 150)
      */
+    @Deprecated("Use getTyped(ConfigKeys.RECENT_WORK_SUMMARY_MAX_LENGTH) instead", ReplaceWith("getTyped(ConfigKeys.RECENT_WORK_SUMMARY_MAX_LENGTH)"))
     fun getRecentWorkSummaryMaxLength(): Int {
         val config = configRepository.get(KEY_RECENT_WORK_SUMMARY_MAX_LENGTH, ConfigScope.APP)
         return config?.value?.toIntOrNull() ?: DEFAULT_RECENT_WORK_SUMMARY_MAX_LENGTH
@@ -1928,6 +1962,7 @@ class ConfigService(
      * Get streaming read timeout (time between chunks) in milliseconds.
      * Used to detect stalled streaming connections.
      */
+    @Deprecated("Use getTyped(ConfigKeys.STREAMING_READ_TIMEOUT) instead", ReplaceWith("getTyped(ConfigKeys.STREAMING_READ_TIMEOUT).toLong() * 1000L"))
     fun getStreamingReadTimeoutMs(): Long {
         val seconds = get(KEY_STREAMING_READ_TIMEOUT)?.toLongOrNull()
             ?: DEFAULT_STREAMING_READ_TIMEOUT.toLong()
@@ -1938,6 +1973,7 @@ class ConfigService(
      * Get streaming request timeout (total time) in milliseconds.
      * Used as maximum total duration for streaming requests.
      */
+    @Deprecated("Use getTyped(ConfigKeys.STREAMING_REQUEST_TIMEOUT) instead", ReplaceWith("getTyped(ConfigKeys.STREAMING_REQUEST_TIMEOUT).toLong() * 1000L"))
     fun getStreamingRequestTimeoutMs(): Long {
         val seconds = get(KEY_STREAMING_REQUEST_TIMEOUT)?.toLongOrNull()
             ?: DEFAULT_STREAMING_REQUEST_TIMEOUT.toLong()
@@ -2553,6 +2589,7 @@ class ConfigService(
      * @param taskId Optional task ID for task-level override
      * @return true if orchestration is enabled (default: true)
      */
+    @Deprecated("Use getTyped(ConfigKeys.ORCHESTRATION_ENABLED) instead", ReplaceWith("getTyped(ConfigKeys.ORCHESTRATION_ENABLED, taskId)"))
     fun isOrchestrationEnabled(taskId: String? = null): Boolean {
         val config = getConfigWithPrecedence(
             key = KEY_ORCHESTRATION_ENABLED,
@@ -2563,6 +2600,7 @@ class ConfigService(
         return result
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.TASK_VERIFICATION_ENABLED) instead", ReplaceWith("getTyped(ConfigKeys.TASK_VERIFICATION_ENABLED, taskId)"))
     fun isTaskVerificationEnabled(taskId: String? = null): Boolean {
         val config = getConfigWithPrecedence(
             key = KEY_TASK_VERIFICATION_ENABLED,
@@ -2594,6 +2632,7 @@ class ConfigService(
         return iterationCount >= 5
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS) instead", ReplaceWith("getTyped(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS, taskId)"))
     fun getMaxConsecutiveToolErrors(taskId: String? = null): Int {
         val config = getConfigWithPrecedence(
             key = KEY_MAX_CONSECUTIVE_TOOL_ERRORS,
@@ -2611,6 +2650,7 @@ class ConfigService(
         return result
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.MAX_ITERATIONS) instead", ReplaceWith("getTyped(ConfigKeys.MAX_ITERATIONS, taskId)"))
     fun getMaxIterations(taskId: String? = null): Int {
         val config = getConfigWithPrecedence(
             key = KEY_MAX_ITERATIONS,
@@ -2628,6 +2668,7 @@ class ConfigService(
         return result
     }
 
+    @Deprecated("Use getTyped(ConfigKeys.JSON_THINKING_XML_TAGS) instead", ReplaceWith("getTyped(ConfigKeys.JSON_THINKING_XML_TAGS, taskId)"))
     fun getJsonThinkingXmlTags(taskId: String? = null): List<String> {
         val raw = getConfigWithPrecedence(
             key = KEY_JSON_THINKING_XML_TAGS,

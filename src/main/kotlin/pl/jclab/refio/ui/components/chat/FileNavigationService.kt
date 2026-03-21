@@ -13,7 +13,10 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFileManager
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import pl.jclab.refio.api.models.ContextReference
 import pl.jclab.refio.api.models.ContextType
 import pl.jclab.refio.services.logging.dualLogger
@@ -26,6 +29,7 @@ internal class FileNavigationService(
 
     private val logger = dualLogger("FileNavigationService")
     private val coreManager = pl.jclab.refio.services.core.CoreConnectionManager.getInstance()
+    private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun openFileReference(path: String?) {
         val resolved = resolveAbsolutePath(path)
@@ -90,36 +94,8 @@ internal class FileNavigationService(
         logger.info { "[DIFF] Opening diff viewer for: ${changes.filePath}" }
         logger.info { "[DIFF] Changes: +${changes.addedLines} -${changes.removedLines}, snapshotId=${changes.snapshotId}" }
 
-        ApplicationManager.getApplication().invokeLater {
+        coroutineScope.launch {
             try {
-                val basePath = project.basePath ?: run {
-                    logger.error { "[DIFF] Project basePath is null!" }
-                    showNotification("Error", "Project path not found", NotificationType.ERROR)
-                    return@invokeLater
-                }
-                logger.info { "[DIFF] Project basePath: $basePath" }
-
-                val fullPath = Paths.get(basePath, changes.filePath)
-                logger.info { "[DIFF] Full path resolved: $fullPath" }
-                logger.info { "[DIFF] File exists: ${Files.exists(fullPath)}" }
-
-                if (!Files.exists(fullPath)) {
-                    logger.warn { "[DIFF] File not found at: $fullPath" }
-                    showNotification("Error", "File not found: ${changes.filePath}", NotificationType.ERROR)
-                    return@invokeLater
-                }
-
-                logger.info { "[DIFF] Attempting to load VirtualFile from: $fullPath" }
-                val vFile = VirtualFileManager.getInstance().findFileByNioPath(fullPath) ?: run {
-                    logger.error { "[DIFF] VirtualFileManager could not find file: $fullPath" }
-                    showNotification("Error", "Could not load file: ${changes.filePath}", NotificationType.ERROR)
-                    return@invokeLater
-                }
-                logger.info { "[DIFF] VirtualFile loaded: ${vFile.path}, fileType=${vFile.fileType.name}" }
-
-                val diffManager = DiffManager.getInstance()
-                val contentFactory = DiffContentFactory.getInstance()
-
                 val snapshotContent = if (!changes.snapshotId.isNullOrBlank()) {
                     logger.info { "[DIFF] Loading snapshot: ${changes.snapshotId}" }
                     val content = loadSnapshotContent(changes.snapshotId, changes.filePath)
@@ -134,39 +110,79 @@ internal class FileNavigationService(
                     null
                 }
 
-                val diffRequest = if (snapshotContent != null) {
-                    logger.info { "[DIFF] Creating diff request: Before (snapshot) vs After (current)" }
-                    val beforeContent = contentFactory.create(snapshotContent, vFile.fileType)
-                    val afterContent = contentFactory.create(project, vFile)
+                ApplicationManager.getApplication().invokeLater {
+                    try {
+                        val basePath = project.basePath ?: run {
+                            logger.error { "[DIFF] Project basePath is null!" }
+                            showNotification("Error", "Project path not found", NotificationType.ERROR)
+                            return@invokeLater
+                        }
+                        logger.info { "[DIFF] Project basePath: $basePath" }
 
-                    SimpleDiffRequest(
-                        "Changes: ${changes.filePath}",
-                        beforeContent,
-                        afterContent,
-                        "Before",
-                        "After"
-                    )
-                } else {
-                    logger.info { "[DIFF] Creating diff request: Empty vs Current (no snapshot)" }
-                    val emptyContent = contentFactory.create("")
-                    val currentContent = contentFactory.create(project, vFile)
+                        val fullPath = Paths.get(basePath, changes.filePath)
+                        logger.info { "[DIFF] Full path resolved: $fullPath" }
+                        logger.info { "[DIFF] File exists: ${Files.exists(fullPath)}" }
 
-                    SimpleDiffRequest(
-                        if (changes.removedLines == 0 && changes.addedLines > 0) "Created: ${changes.filePath}" else "Changes: ${changes.filePath}",
-                        emptyContent,
-                        currentContent,
-                        "Empty",
-                        "Current"
-                    )
+                        if (!Files.exists(fullPath)) {
+                            logger.warn { "[DIFF] File not found at: $fullPath" }
+                            showNotification("Error", "File not found: ${changes.filePath}", NotificationType.ERROR)
+                            return@invokeLater
+                        }
+
+                        logger.info { "[DIFF] Attempting to load VirtualFile from: $fullPath" }
+                        val vFile = VirtualFileManager.getInstance().findFileByNioPath(fullPath) ?: run {
+                            logger.error { "[DIFF] VirtualFileManager could not find file: $fullPath" }
+                            showNotification("Error", "Could not load file: ${changes.filePath}", NotificationType.ERROR)
+                            return@invokeLater
+                        }
+                        logger.info { "[DIFF] VirtualFile loaded: ${vFile.path}, fileType=${vFile.fileType.name}" }
+
+                        val diffManager = DiffManager.getInstance()
+                        val contentFactory = DiffContentFactory.getInstance()
+
+                        val diffRequest = if (snapshotContent != null) {
+                            logger.info { "[DIFF] Creating diff request: Before (snapshot) vs After (current)" }
+                            val beforeContent = contentFactory.create(snapshotContent, vFile.fileType)
+                            val afterContent = contentFactory.create(project, vFile)
+
+                            SimpleDiffRequest(
+                                "Changes: ${changes.filePath}",
+                                beforeContent,
+                                afterContent,
+                                "Before",
+                                "After"
+                            )
+                        } else {
+                            logger.info { "[DIFF] Creating diff request: Empty vs Current (no snapshot)" }
+                            val emptyContent = contentFactory.create("")
+                            val currentContent = contentFactory.create(project, vFile)
+
+                            SimpleDiffRequest(
+                                if (changes.removedLines == 0 && changes.addedLines > 0) {
+                                    "Created: ${changes.filePath}"
+                                } else {
+                                    "Changes: ${changes.filePath}"
+                                },
+                                emptyContent,
+                                currentContent,
+                                "Empty",
+                                "Current"
+                            )
+                        }
+
+                        logger.info { "[DIFF] Opening IntelliJ diff viewer" }
+                        diffManager.showDiff(project, diffRequest)
+                        logger.info { "[DIFF] Diff viewer opened successfully" }
+                    } catch (e: Exception) {
+                        logger.error(e) { "Error opening diff for file: ${changes.filePath}" }
+                        showNotification("Error", "Could not open diff: ${e.message}", NotificationType.ERROR)
+                    }
                 }
-
-                logger.info { "[DIFF] Opening IntelliJ diff viewer" }
-                diffManager.showDiff(project, diffRequest)
-                logger.info { "[DIFF] Diff viewer opened successfully" }
-
             } catch (e: Exception) {
-                logger.error(e) { "Error opening diff for file: ${changes.filePath}" }
-                showNotification("Error", "Could not open diff: ${e.message}", NotificationType.ERROR)
+                logger.error(e) { "Error loading snapshot for diff: ${changes.filePath}" }
+                ApplicationManager.getApplication().invokeLater {
+                    showNotification("Error", "Could not load snapshot: ${e.message}", NotificationType.ERROR)
+                }
             }
         }
     }
@@ -195,13 +211,11 @@ internal class FileNavigationService(
         }
     }
 
-    private fun loadSnapshotContent(snapshotId: String, filePath: String): String? {
+    private suspend fun loadSnapshotContent(snapshotId: String, filePath: String): String? {
         return try {
             logger.info { "[SNAPSHOT] Loading snapshot content for: snapshotId=$snapshotId, filePath=$filePath" }
             val router = coreManager.getApiRouter()
-            val content = runBlocking {
-                router.getSnapshotFileContent(snapshotId, filePath)
-            }
+            val content = router.getSnapshotFileContent(snapshotId, filePath)
             if (content != null) {
                 logger.info { "[SNAPSHOT] Loaded successfully: ${content.length} chars" }
             } else {

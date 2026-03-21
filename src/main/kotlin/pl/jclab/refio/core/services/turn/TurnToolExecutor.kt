@@ -280,7 +280,8 @@ class TurnToolExecutor(
                 executionMode = executionMode,
                 runId = runId,
                 depth = depth,
-                profileOverrides = profileOverrides
+                profileOverrides = profileOverrides,
+                listener = listener
             )
 
             val toolCallRequest = CoreToolCall(
@@ -500,7 +501,8 @@ class TurnToolExecutor(
         executionMode: ExecutionMode,
         runId: String,
         depth: Int,
-        profileOverrides: TurnProfileOverrides?
+        profileOverrides: TurnProfileOverrides?,
+        listener: TurnEventListener? = null
     ) {
         if (toolCall.name != "invoke_subagent") return
 
@@ -513,6 +515,11 @@ class TurnToolExecutor(
         args.putIfAbsent("_parent_run_id", runId)
         args.putIfAbsent("_parent_depth", depth)
         args.putIfAbsent("_subagent_chain", chain)
+
+        // Inject the turn event listener so the subagent can stream progress back to the UI
+        if (listener != null && !args.containsKey("_turn_event_listener")) {
+            args["_turn_event_listener"] = listener
+        }
     }
 
     private fun buildToolResultMetadata(

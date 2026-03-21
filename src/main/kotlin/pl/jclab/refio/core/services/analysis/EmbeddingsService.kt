@@ -1,11 +1,15 @@
 package pl.jclab.refio.core.services.analysis
 
+import com.github.benmanes.caffeine.cache.Cache
+import com.github.benmanes.caffeine.cache.Caffeine
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.EmbeddingProvider
+import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.services.logging.dualLogger
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.security.MessageDigest
+import java.time.Duration
 import kotlin.text.Charsets
 
 class EmbeddingsService(
@@ -20,11 +24,10 @@ class EmbeddingsService(
     private val logger = dualLogger("EmbeddingsService")
     private val mutex = Mutex()
     private val digest = MessageDigest.getInstance("SHA-256")
-    private val cache = object : LinkedHashMap<String, FloatArray>(32, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, FloatArray>?): Boolean {
-            return size > configService.getRagEmbeddingCacheSize()
-        }
-    }
+    private val cache: Cache<String, FloatArray> = Caffeine.newBuilder()
+        .maximumSize(DEFAULT_CACHE_SIZE.toLong())
+        .expireAfterAccess(Duration.ofMinutes(30))
+        .build()
 
     suspend fun generate(
         text: String,
@@ -35,17 +38,20 @@ class EmbeddingsService(
         val key = cacheKey(providerId, modelId, text)
 
         mutex.withLock {
-            cache[key]?.let { cached ->
+            cache.getIfPresent(key)?.let { cached ->
+                GlobalMetrics.recordCacheAccess("embeddings", hit = true)
                 logger.info { "Embedding cache hit (provider=$providerId, model=$modelId)" }
                 return cached
             }
         }
 
+        GlobalMetrics.recordCacheAccess("embeddings", hit = false)
         val provider = providerFactory(providerId.lowercase())
         val embedding = provider.generateEmbedding(text, modelId)
 
         mutex.withLock {
-            cache[key] = embedding
+            cache.put(key, embedding)
+            GlobalMetrics.recordCacheSize("embeddings", cache.estimatedSize().toInt())
         }
 
         return embedding
@@ -67,7 +73,7 @@ class EmbeddingsService(
         mutex.withLock {
             texts.forEachIndexed { index, text ->
                 val key = cacheKey(providerId, modelId, text)
-                val cached = cache[key]
+                val cached = cache.getIfPresent(key)
                 if (cached != null) {
                     results[index] = cached
                 } else {
@@ -84,7 +90,7 @@ class EmbeddingsService(
             val text = texts[index]
             val embedding = provider.generateEmbedding(text, modelId)
             results[index] = embedding
-            mutex.withLock { cache[key] = embedding }
+            mutex.withLock { cache.put(key, embedding) }
         }
 
         return results

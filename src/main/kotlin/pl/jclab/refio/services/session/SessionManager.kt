@@ -4,6 +4,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import io.ktor.util.reflect.*
 import pl.jclab.refio.api.models.*
+import pl.jclab.refio.core.api.UIAdapter
 import pl.jclab.refio.core.utils.ProjectIdGenerator
 import pl.jclab.refio.services.core.CoreConnectionManager
 import pl.jclab.refio.services.execution.StepExecutionService
@@ -32,9 +33,16 @@ class SessionManager(private val project: Project) {
 
     private val logger = dualLogger("SessionManager")
 
+    /**
+     * Platform-agnostic UI adapter for notifications, logging, and user interaction.
+     * Initialized lazily to avoid circular dependency during service construction.
+     */
+    val uiAdapter: UIAdapter by lazy { IntelliJUIAdapter(project) }
+
     // Use proper coroutine scope for Project-level service with error handler
     private val exceptionHandler = CoroutineExceptionHandler { _, exception ->
         logger.error(exception) { "Unhandled exception in SessionManager coroutine" }
+        uiAdapter.showError("Unhandled error: ${exception.message}")
 
         // Show error message in chat
         val errorMessage = Message(
@@ -645,6 +653,7 @@ class SessionManager(private val project: Project) {
             }
         } catch (e: Exception) {
             logger.error(e) { "[SESSION] Workflow failed: taskId=${session.id}, error=${e.message}" }
+            uiAdapter.showError("Workflow failed: ${e.message}")
             val errorMessage = Message(
                 id = UUID.randomUUID().toString(),
                 taskId = session.id,
@@ -1124,6 +1133,7 @@ class SessionManager(private val project: Project) {
                 }
                 if (response.taskId != session.id) {
                     logger.info { "[CHAT] Task ID changed: ${session.id} -> ${response.taskId}, syncing session" }
+                    uiAdapter.log("INFO", "Session ID changed: ${session.id} -> ${response.taskId}")
                     val newSession = session.copy(id = response.taskId)
                     stateManager.setActiveSession(newSession)
                     com.intellij.ide.util.PropertiesComponent.getInstance(project)

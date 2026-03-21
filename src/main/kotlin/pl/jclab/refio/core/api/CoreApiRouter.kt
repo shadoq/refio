@@ -538,10 +538,13 @@ class CoreApiRouter(
                 if (!toolRegistry.hasTool("invoke_subagent")) {
                     val invokeSubagentTool = pl.jclab.refio.core.tools.implementations.InvokeSubagentTool(
                         subagentRouterProvider = { subagentRouter },
-                        runTurnCallback = { request, listener ->
+                        runTurnCallback = { request, turnEventListener, streamCallback ->
                             runTurn(
                                 request = request,
-                                listener = listener
+                                streamCallback = streamCallback,
+                                listener = turnEventListener?.let {
+                                    pl.jclab.refio.core.services.AgentTurnLoop.TurnEventListener.fromTurnEventListener(it)
+                                }
                             )
                         },
                         configServiceProvider = { configService }

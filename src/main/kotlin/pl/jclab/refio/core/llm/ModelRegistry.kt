@@ -13,6 +13,7 @@ import pl.jclab.refio.core.llm.adapters.OllamaAdapter
 import pl.jclab.refio.core.llm.adapters.OpenAIAdapter
 import pl.jclab.refio.core.llm.adapters.OpenRouterAdapter
 import pl.jclab.refio.core.llm.adapters.ZAIAdapter
+import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.services.logging.dualLogger
 
 private val logger = dualLogger("ModelRegistry")
@@ -185,10 +186,17 @@ fun inferProvider(model: String, default: String = "ollama"): String {
 suspend fun getAllModels(
     configService: pl.jclab.refio.core.services.ConfigService? = null
 ): List<ModelConfig> {
-    getCachedModelsIfFresh()?.let { return it }
+    getCachedModelsIfFresh()?.let {
+        GlobalMetrics.recordCacheAccess("model_registry", hit = true)
+        return it
+    }
 
     return modelsCacheMutex.withLock {
-        getCachedModelsIfFresh()?.let { return@withLock it }
+        getCachedModelsIfFresh()?.let {
+            GlobalMetrics.recordCacheAccess("model_registry", hit = true)
+            return@withLock it
+        }
+        GlobalMetrics.recordCacheAccess("model_registry", hit = false)
 
         val now = System.currentTimeMillis()
         logger.info { "[ModelRegistry] Fetching models from all providers (single-flight, parallel providers)" }

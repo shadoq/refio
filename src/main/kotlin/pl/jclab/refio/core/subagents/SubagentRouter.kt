@@ -47,17 +47,6 @@ class SubagentRouter(
 
     private val parser = SubagentParser()
     private val registry = SubagentRegistry(projectRoot, parser)
-    private val toolFilter = SubagentToolFilter(toolPermissionsService)
-    private val executor = SubagentExecutor(
-        llmClient = llmClient,
-        toolRegistry = toolRegistry,
-        toolFilter = toolFilter,
-        configService = configService,
-        chatMessageRepository = chatMessageRepository,
-        contextService = contextService,
-        projectRoot = projectRoot,
-        ideProject = ideProject
-    )
 
     init {
         // Auto-initialize registry on construction
@@ -172,60 +161,51 @@ class SubagentRouter(
         logger.info { "[SubagentRouter] Invoking subagent via AgentTurnLoop: $name" }
         val (resolvedModel, resolvedProvider) = definition.resolveModel(configService, parentModel)
 
-        if (runTurnCallback != null) {
-            val request = TurnRequest(
-                taskId = taskId,
-                userInput = prompt,
-                mode = TaskMode.AGENT,
-                executionMode = ExecutionMode.AUTO,
-                model = resolvedModel,
-                provider = resolvedProvider,
-                userContextRefs = contextRefs,
-                runProfile = TurnRunProfile.SUBAGENT,
-                profileOverrides = TurnProfileOverrides(
-                    subagentName = name,
-                    systemPromptOverride = definition.systemPrompt,
-                    allowedTools = definition.allowedTools,
-                    disallowedTools = definition.disallowedTools,
-                    modelOverride = resolvedModel,
-                    providerOverride = resolvedProvider,
-                    maxIterationsOverride = definition.maxSteps,
-                    depth = 0,
-                    subagentChain = emptyList()
-                )
-            )
-
-            val streamCallback = if (stream && onChunk != null) {
-                { chunk: StreamChunk -> onChunk(chunk) }
-            } else {
-                null
-            }
-
-            val result = runTurnCallback.invoke(request, streamCallback)
-            return SubagentResult(
-                success = result.success,
-                response = result.response,
-                toolsUsed = emptyList(),
-                tokensUsed = result.tokensIn + result.tokensOut,
-                durationMs = System.currentTimeMillis() - startTime,
-                metadata = mapOf(
-                    "run_profile" to TurnRunProfile.SUBAGENT.name,
-                    "model" to resolvedModel,
-                    "provider" to resolvedProvider
-                )
-            )
+        requireNotNull(runTurnCallback) {
+            "runTurnCallback must be initialized before invoking subagents. " +
+            "Ensure CoreApiRouter.initialize() has been called."
         }
 
-        logger.warn { "[SubagentRouter] Falling back to legacy SubagentExecutor (runTurnCallback unavailable)" }
-        return executor.execute(
+        val request = TurnRequest(
             taskId = taskId,
-            definition = definition,
-            userPrompt = prompt,
-            contextItems = contextItems,
-            contextRefs = contextRefs,
-            stream = stream,
-            onChunk = onChunk,
-            parentModel = parentModel
+            userInput = prompt,
+            mode = TaskMode.AGENT,
+            executionMode = ExecutionMode.AUTO,
+            model = resolvedModel,
+            provider = resolvedProvider,
+            userContextRefs = contextRefs,
+            runProfile = TurnRunProfile.SUBAGENT,
+            profileOverrides = TurnProfileOverrides(
+                subagentName = name,
+                systemPromptOverride = definition.systemPrompt,
+                allowedTools = definition.allowedTools,
+                disallowedTools = definition.disallowedTools,
+                modelOverride = resolvedModel,
+                providerOverride = resolvedProvider,
+                maxIterationsOverride = definition.maxSteps,
+                depth = 0,
+                subagentChain = emptyList()
+            )
+        )
+
+        val streamCallback = if (stream && onChunk != null) {
+            { chunk: StreamChunk -> onChunk(chunk) }
+        } else {
+            null
+        }
+
+        val result = runTurnCallback.invoke(request, streamCallback)
+        return SubagentResult(
+            success = result.success,
+            response = result.response,
+            toolsUsed = result.toolsUsed,
+            tokensUsed = result.tokensIn + result.tokensOut,
+            durationMs = System.currentTimeMillis() - startTime,
+            metadata = mapOf(
+                "run_profile" to TurnRunProfile.SUBAGENT.name,
+                "model" to resolvedModel,
+                "provider" to resolvedProvider
+            )
         )
     }
 

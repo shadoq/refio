@@ -16,6 +16,8 @@ private val logger = dualLogger("ProblemsContextProvider")
  */
 class ProblemsContextProvider : BaseContextProvider() {
 
+    override val environment = ContextProviderEnvironment.IDE_ONLY
+
     override val description = ContextProviderDescription(
         title = "problems",
         displayTitle = "Problems",

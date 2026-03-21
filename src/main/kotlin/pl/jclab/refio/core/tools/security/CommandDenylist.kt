@@ -7,54 +7,100 @@ private val logger = dualLogger("CommandDenylist")
 /**
  * Security denylist for terminal commands.
  *
- * Blocks dangerous commands that could:
- * - Damage the system (rm -rf, format, dd)
- * - Compromise security (curl | sh, wget | sh)
- * - Consume resources (fork bombs, infinite loops)
- * - Access sensitive data (ssh, scp, credentials)
+ * Blocks truly dangerous commands that could:
+ * - Destroy filesystems or partitions (rm -rf /, format, dd, mkfs)
+ * - Compromise system integrity (passwd, useradd, shutdown)
+ * - Read highly sensitive system files (/etc/shadow, .ssh private keys)
+ * - Cause resource exhaustion (fork bombs)
+ *
+ * Development commands (build, test, package install, docker, git, ssh)
+ * are NOT blocked here — use CommandWhitelist for fine-grained control.
  */
 class CommandDenylist(
     private val customBlockedPatterns: List<String> = emptyList()
 ) {
     /**
-     * Default blocked command patterns
+     * Default blocked command patterns — only truly destructive operations
      */
     private val defaultBlockedPatterns = listOf(
-        // Destructive file operations
-        "rm -rf", "rm -fr", "rm --recursive --force",
-        "rmdir /s", "rmdir /q", "del /f /s /q",
-        "format", "mkfs", "dd if=", "dd of=/dev",
+        // ── Destructive filesystem operations ──
+        "rm -rf /",
+        "rm -rf /*",
+        "rm -fr /",
+        "rm -fr /*",
+        "rm --recursive --force /",
+        "rmdir /s /q c:\\",
+        "rmdir /s /q c:/",
+        "del /f /s /q c:\\",
+        "format c:",
+        "mkfs",
+        "dd if=",
+        "dd of=/dev",
 
-        // Network operations that download and execute
-        "curl.*\\|.*sh", "wget.*\\|.*sh", "curl.*\\|.*bash", "wget.*\\|.*bash",
+        // ── System-level modifications ──
+        "chmod 777 /",
+        "chown -r",
+        "chgrp -r",
 
-        // System modification
-        "chmod 777", "chown", "chgrp",
-        "sudo", "su -", "su root",
+        // ── Download-and-execute patterns ──
+        "curl.*\\|.*sh",
+        "wget.*\\|.*sh",
+        "curl.*\\|.*bash",
+        "wget.*\\|.*bash",
 
-        // Process/system manipulation
-        "kill -9", "killall", "pkill",
-        "reboot", "shutdown", "halt", "poweroff",
+        // ── Privilege escalation ──
+        "sudo",
+        "su root",
+        "su -",
 
-        // Sensitive operations
-        "passwd", "useradd", "userdel", "groupadd", "groupdel",
+        // ── System administration ──
+        "passwd",
+        "useradd",
+        "userdel",
+        "groupadd",
+        "groupdel",
+        "reboot",
+        "shutdown",
+        "halt",
+        "poweroff",
+        "init 0",
+        "init 6",
 
-        // Remote access
-        "ssh", "scp", "rsync", "ftp", "telnet",
+        // ── Sensitive file access ──
+        "cat /etc/shadow",
+        "cat /etc/gshadow",
+        "cat.*\\.ssh/id_",
+        "cat.*\\.ssh/.*_key",
+        "cat.*\\.aws/credentials",
+        "cat.*\\.gnupg/",
 
-        // Credential access
-        "cat.*\\.ssh", "cat.*\\.aws", "cat.*\\.env",
-        "grep.*password", "grep.*api_key", "grep.*secret",
+        // ── System package managers (modify OS) ──
+        "apt-get install",
+        "apt install",
+        "yum install",
+        "dnf install",
+        "pacman -s",
+        "brew install",
+        "choco install",
+        "winget install",
+        "snap install",
 
-        // Encoding tricks
-        "base64 -d", "eval", "exec",
+        // ── Encoding tricks / code injection ──
+        "base64 -d.*\\|.*sh",
+        "base64 -d.*\\|.*bash",
+        "eval",
 
-        // Fork bombs and resource exhaustion
-        ":(){ :|:& };:", "while true; do", "while :; do",
+        // ── Fork bombs and resource exhaustion ──
+        ":(){ :|:& };:",
+        "while true; do",
+        "while :; do",
+        "for(;;)",
 
-        // Package managers (could install malware)
-        "npm install -g", "pip install", "gem install",
-        "apt-get install", "yum install", "brew install"
+        // ── Registry / system config (Windows) ──
+        "reg delete",
+        "reg add.*hklm",
+        "bcdedit",
+        "diskpart"
     )
 
     private val allBlockedPatterns = defaultBlockedPatterns + customBlockedPatterns
@@ -99,14 +145,14 @@ class CommandDenylist(
                 // Block all network operations
                 "curl", "wget", "nc", "netcat",
 
-                // Block all git operations
+                // Block all remote git operations
                 "git push", "git pull", "git clone",
 
-                // Block docker
+                // Block docker container execution
                 "docker run", "docker exec", "docker-compose",
 
-                // Block all sudo/root escalation
-                "sudo", "su"
+                // Block SSH and remote access
+                "ssh", "scp", "rsync", "ftp", "telnet"
             )
 
             return CommandDenylist(additionalPatterns)
@@ -121,12 +167,12 @@ data class CommandLimits(
     /**
      * Maximum command execution time in seconds
      */
-    val timeoutSeconds: Long = 30,
+    val timeoutSeconds: Long = 120,
 
     /**
      * Maximum output size in characters
      */
-    val maxOutputSize: Int = 100_000, // 100 KB
+    val maxOutputSize: Int = 200_000, // 200 KB
 
     /**
      * Maximum number of concurrent commands

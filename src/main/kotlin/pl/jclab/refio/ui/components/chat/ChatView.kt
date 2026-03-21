@@ -3,7 +3,6 @@ package pl.jclab.refio.ui.components.chat
 import com.intellij.notification.Notification
 import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBPanel
 import pl.jclab.refio.api.models.ExecutionMode
@@ -25,14 +24,16 @@ import pl.jclab.refio.ui.components.chat.bubble.ToolBubbleRenderer
 import pl.jclab.refio.ui.components.chat.bubble.UserBubbleRenderer
 import pl.jclab.refio.ui.theme.LCATheme
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
-import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.Graphics
@@ -98,7 +99,7 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     private val TOOLBAR_TOP_GAP = 10
     private val SCROLL_BAR_AND_PADDING = 0
 
-    private val cs = CoroutineScope(SupervisorJob())
+    private val cs = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val sessionManager = SessionManager.getInstance(project)
     private val stepExecutionService = StepExecutionService.getInstance(project)
     private val globalMetrics = GlobalMetrics
@@ -302,11 +303,12 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
 
     private val messagePanelCache = mutableMapOf<String, CachedMessagePanel>()
     private var lastRenderedMessageIds = emptyList<String>()
+    @Volatile
     private var lastReceivedMessages = emptyList<Message>()
-    private var pendingMessages: List<Message>? = null
-    private var updateMessagesTimer: Timer? = null
-    private val uiUpdateDebounceMs = 200
-    private var lastUiFlushAtMs = 0L
+    private val messageUpdateFlow = MutableSharedFlow<List<Message>>(extraBufferCapacity = 1)
+    private val immediateMessageUpdateFlow = MutableSharedFlow<List<Message>>(extraBufferCapacity = 1)
+    @Suppress("MagicNumber")
+    private val uiUpdateDebounceMs = 200L
 
     private fun resolveAvailableWidth(): Int {
         val viewportWidth = (SwingUtilities.getAncestorOfClass(JViewport::class.java, this) as? JViewport)?.width ?: 0
@@ -401,6 +403,24 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
             sessionManager.messages.collect { messages ->
                 scheduleMessagesUpdate(messages)
             }
+        }
+
+        cs.launch {
+            @OptIn(kotlinx.coroutines.FlowPreview::class)
+            messageUpdateFlow
+                .debounce(uiUpdateDebounceMs)
+                .collect { _ ->
+                    // Use latest received messages instead of stale debounced value.
+                    // An immediate flush (e.g. from loadMessages) may have already
+                    // rendered newer data; updateMessages' hash check makes this a no-op
+                    // when nothing changed.
+                    updateMessages(lastReceivedMessages)
+                }
+        }
+
+        cs.launch {
+            immediateMessageUpdateFlow
+                .collect { messages -> updateMessages(messages) }
         }
     }
 
@@ -505,12 +525,47 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     }
 
     private fun rebuildMessagesPanel(messages: List<Message>) {
-        messagesPanel.removeAll()
-        messagesPanel.layout = GridBagLayout()
+        val previousIds = lastRenderedMessageIds
+        val newIds = messages.map { it.id }
 
-        messages.forEachIndexed { index, message ->
-            val bubble = resolveBubble(message)
-            messagesPanel.add(bubble, createMessageConstraints(index, messages.lastIndex))
+        // If the new list is an append-only change (common case: new messages added at the end),
+        // we can skip removing and re-adding existing messages.
+        val isAppendOnly = previousIds.size <= newIds.size &&
+            previousIds == newIds.subList(0, previousIds.size)
+
+        if (isAppendOnly && previousIds.isNotEmpty()) {
+            // Remove trailing toolbar and glue (last 2 components)
+            val componentCount = messagesPanel.componentCount
+            if (componentCount >= 2) {
+                messagesPanel.remove(componentCount - 1) // glue
+                messagesPanel.remove(componentCount - 2) // toolbar
+            }
+
+            // Update constraints on previously-last message if it exists
+            if (previousIds.isNotEmpty()) {
+                val prevLastIndex = previousIds.size - 1
+                val prevLastComponent = messagesPanel.getComponent(prevLastIndex)
+                val layout = messagesPanel.layout as GridBagLayout
+                layout.setConstraints(
+                    prevLastComponent,
+                    createMessageConstraints(prevLastIndex, messages.lastIndex)
+                )
+            }
+
+            // Add only new messages
+            for (index in previousIds.size..messages.lastIndex) {
+                val bubble = resolveBubble(messages[index])
+                messagesPanel.add(bubble, createMessageConstraints(index, messages.lastIndex))
+            }
+        } else {
+            // Full rebuild when message order changed or messages were removed
+            messagesPanel.removeAll()
+            messagesPanel.layout = GridBagLayout()
+
+            messages.forEachIndexed { index, message ->
+                val bubble = resolveBubble(message)
+                messagesPanel.add(bubble, createMessageConstraints(index, messages.lastIndex))
+            }
         }
 
         val toolbarRow = messages.size
@@ -590,36 +645,13 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     private fun scheduleMessagesUpdate(messages: List<Message>) {
         val previous = lastReceivedMessages
         lastReceivedMessages = messages
-        pendingMessages = messages
 
-        val now = System.currentTimeMillis()
         val flushNow = shouldFlushImmediately(previous, messages)
         if (flushNow) {
-            lastUiFlushAtMs = now
-            updateMessagesTimer?.stop()
-            updateMessagesTimer = null
-            updateMessages(messages)
-            return
+            immediateMessageUpdateFlow.tryEmit(messages)
+        } else {
+            messageUpdateFlow.tryEmit(messages)
         }
-
-        if (messages.any { it.isStreaming } && now - lastUiFlushAtMs >= uiUpdateDebounceMs) {
-            lastUiFlushAtMs = now
-            updateMessagesTimer?.stop()
-            updateMessagesTimer = null
-            updateMessages(messages)
-            return
-        }
-
-        val timer = updateMessagesTimer ?: Timer(uiUpdateDebounceMs) {
-            val pending = pendingMessages ?: return@Timer
-            updateMessages(pending)
-            lastUiFlushAtMs = System.currentTimeMillis()
-        }.also { newTimer ->
-            newTimer.isRepeats = false
-            updateMessagesTimer = newTimer
-        }
-
-        timer.restart()
     }
 
     private fun shouldFlushImmediately(previous: List<Message>, current: List<Message>): Boolean {

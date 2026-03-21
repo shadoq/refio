@@ -86,8 +86,7 @@ class PromptInputPanel(
         private val IS_AUTOCOMPLETE_VISIBLE_KEY = Key.create<() -> Boolean>("refio.promptEditor.isAutocompleteVisible")
     }
 
-    // Use EDT dispatcher for UI updates in IntelliJ
-    private val cs = CoroutineScope(SupervisorJob())
+    private val cs = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val sessionManager = SessionManager.getInstance(project)
     private val globalMetrics = GlobalMetrics
     private val stepExecutionService = StepExecutionService.getInstance(project)

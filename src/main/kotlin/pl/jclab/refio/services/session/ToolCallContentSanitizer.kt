@@ -54,14 +54,14 @@ internal object ToolCallContentSanitizer {
                 ?.takeIf { it.isString }
                 ?.content
             if (!contentField.isNullOrBlank()) {
-                return contentField
+                return unwrapNestedTextPayload(contentField)
             }
 
             val responseField = (root["response"] as? JsonPrimitive)
                 ?.takeIf { it.isString }
                 ?.content
             if (!responseField.isNullOrBlank()) {
-                return responseField
+                return unwrapNestedTextPayload(responseField)
             }
 
             if (root["actions"] is JsonArray) {
@@ -71,6 +71,32 @@ internal object ToolCallContentSanitizer {
             null
         } catch (_: Exception) {
             null
+        }
+    }
+
+    /**
+     * Unwrap nested JSON text payload. Models sometimes double-wrap responses:
+     * {"response": "{\"answer\": \"actual content\"}"}
+     */
+    fun unwrapNestedPayload(text: String): String = unwrapNestedTextPayload(text)
+
+    private fun unwrapNestedTextPayload(text: String, depth: Int = 0): String {
+        if (depth > 1) return text
+        val trimmed = text.trim()
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return text
+
+        return try {
+            val inner = Json { ignoreUnknownKeys = true }.parseToJsonElement(trimmed) as? JsonObject ?: return text
+            val payloadKeys = listOf("answer", "content", "response", "result", "output", "text")
+            for (key in payloadKeys) {
+                val field = inner[key]
+                if (field is JsonPrimitive && field.isString && field.content.isNotBlank()) {
+                    return unwrapNestedTextPayload(field.content, depth + 1)
+                }
+            }
+            text
+        } catch (_: Exception) {
+            text
         }
     }
 

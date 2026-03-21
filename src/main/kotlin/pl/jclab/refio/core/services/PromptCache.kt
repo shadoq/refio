@@ -1,10 +1,13 @@
 package pl.jclab.refio.core.services
 
+import com.github.benmanes.caffeine.cache.Cache
+import com.github.benmanes.caffeine.cache.Caffeine
 import pl.jclab.refio.core.db.PromptType
 import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
+import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.services.logging.dualLogger
-import java.util.concurrent.ConcurrentHashMap
+import java.time.Duration
 
 private val logger = dualLogger("PromptCache")
 
@@ -28,18 +31,17 @@ class PromptCache(
         val systemPrompt: String,
         val toolDescriptions: String,
         val cacheKey: String,
-        val createdAt: Long,
         val tokenEstimate: Int
     )
 
-    private val cache = ConcurrentHashMap<String, CacheEntry>()
+    private val cache: Cache<String, CacheEntry> = Caffeine.newBuilder()
+        .maximumSize(100)
+        .expireAfterWrite(Duration.ofMinutes(5))
+        .build()
 
     // Cache statistics
     private var hitCount = 0
     private var missCount = 0
-
-    // Cache TTL (5 minutes, matching Anthropic cache lifetime)
-    private val cacheTtlMs = 5 * 60 * 1000L
 
     /**
      * Get cached static prefix or build and cache it.
@@ -55,10 +57,11 @@ class PromptCache(
         tokenEstimator: TokenEstimator
     ): StaticPromptPrefix {
         val cacheKey = buildCacheKey(mode, taskId)
-        val existing = cache[cacheKey]
+        val existing = cache.getIfPresent(cacheKey)
 
-        if (existing != null && !isExpired(existing)) {
+        if (existing != null) {
             hitCount++
+            GlobalMetrics.recordCacheAccess("prompt_cache", hit = true)
             logger.debug { "[CACHE_HIT] Using cached prefix for $mode/$taskId" }
             return StaticPromptPrefix(
                 systemPrompt = existing.systemPrompt,
@@ -69,6 +72,7 @@ class PromptCache(
         }
 
         missCount++
+        GlobalMetrics.recordCacheAccess("prompt_cache", hit = false)
 
         // Build new prefix
         val systemPrompt = buildSystemPrompt(mode)
@@ -82,10 +86,9 @@ class PromptCache(
             systemPrompt = systemPrompt,
             toolDescriptions = toolDescriptions,
             cacheKey = cacheKey,
-            createdAt = System.currentTimeMillis(),
             tokenEstimate = tokenEstimate
         )
-        cache[cacheKey] = entry
+        cache.put(cacheKey, entry)
 
         logger.info {
             "[CACHE_MISS] Built and cached prefix for $mode/$taskId " +
@@ -106,8 +109,9 @@ class PromptCache(
      * @param taskId Task ID
      */
     fun invalidate(taskId: String) {
-        val keysToRemove = cache.keys.filter { it.endsWith(":$taskId") }
-        keysToRemove.forEach { cache.remove(it) }
+        val allEntries = cache.asMap()
+        val keysToRemove = allEntries.keys.filter { it.endsWith(":$taskId") }
+        cache.invalidateAll(keysToRemove)
         logger.debug { "[CACHE_INVALIDATE] Removed ${keysToRemove.size} entries for $taskId" }
     }
 
@@ -115,8 +119,8 @@ class PromptCache(
      * Invalidate all cache entries (e.g., on prompts change).
      */
     fun invalidateAll() {
-        val size = cache.size
-        cache.clear()
+        val size = cache.estimatedSize()
+        cache.invalidateAll()
         logger.info { "[CACHE_CLEAR] Cleared all $size entries" }
     }
 
@@ -137,14 +141,14 @@ class PromptCache(
         hitCount = hitCount,
         missCount = missCount,
         hitRate = getHitRate(),
-        size = cache.size
+        size = cache.estimatedSize().toInt()
     )
 
     /**
      * Clear all cache entries.
      */
     fun clear() {
-        cache.clear()
+        cache.invalidateAll()
         hitCount = 0
         missCount = 0
         logger.info { "[CACHE_CLEAR] All entries and stats cleared" }
@@ -154,10 +158,6 @@ class PromptCache(
         // Include config hash to invalidate on changes
         val configHash = promptsService.hashCode()
         return "${mode.name}:$configHash:$taskId"
-    }
-
-    private fun isExpired(entry: CacheEntry): Boolean {
-        return System.currentTimeMillis() - entry.createdAt > cacheTtlMs
     }
 
     private fun buildSystemPrompt(mode: TaskMode): String {

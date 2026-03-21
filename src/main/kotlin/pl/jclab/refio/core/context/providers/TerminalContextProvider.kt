@@ -23,6 +23,8 @@ class TerminalContextProvider : BaseContextProvider() {
         const val MAX_TERMINAL_LINES = 200
     }
 
+    override val environment = ContextProviderEnvironment.IDE_ONLY
+
     override val description = ContextProviderDescription(
         title = "terminal",
         displayTitle = "Terminal",

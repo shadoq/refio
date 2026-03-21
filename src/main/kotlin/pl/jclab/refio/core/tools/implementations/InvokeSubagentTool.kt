@@ -1,14 +1,16 @@
 package pl.jclab.refio.core.tools.implementations
 
 import pl.jclab.refio.api.models.ContextReference
+import pl.jclab.refio.core.api.StreamCallback
+import pl.jclab.refio.core.api.StreamChunk
 import pl.jclab.refio.core.api.TurnProfileOverrides
 import pl.jclab.refio.core.api.TurnRequest
 import pl.jclab.refio.core.api.TurnRunProfile
 import pl.jclab.refio.core.db.ExecutionMode
 import pl.jclab.refio.core.db.TaskMode
-import pl.jclab.refio.core.services.AgentTurnLoop
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.TurnResult
+import pl.jclab.refio.core.services.turn.TurnEventListener
 import pl.jclab.refio.core.subagents.SubagentRouter
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
@@ -20,7 +22,7 @@ private val logger = dualLogger("InvokeSubagentTool")
 
 class InvokeSubagentTool(
     private val subagentRouterProvider: () -> SubagentRouter?,
-    private val runTurnCallback: suspend (TurnRequest, AgentTurnLoop.TurnEventListener?) -> TurnResult,
+    private val runTurnCallback: suspend (TurnRequest, TurnEventListener?, StreamCallback?) -> TurnResult,
     private val configServiceProvider: () -> ConfigService
 ) : Tool {
 
@@ -46,7 +48,16 @@ class InvokeSubagentTool(
         val parentChain = (params["_subagent_chain"] as? List<*>)
             ?.mapNotNull { it?.toString() }
             .orEmpty()
-        val turnListener = params["_turn_event_listener"] as? AgentTurnLoop.TurnEventListener
+        val turnListener = params["_turn_event_listener"] as? TurnEventListener
+
+        // Build a StreamCallback from the turn listener so subagent LLM output streams to the UI
+        val streamCallback: StreamCallback? = if (turnListener != null) {
+            { chunk: StreamChunk ->
+                turnListener.onStreamChunk(taskId, chunk.delta, chunk.accumulated)
+            }
+        } else {
+            null
+        }
 
         if (parentChain.any { it.equals(subagentName, ignoreCase = true) }) {
             return ToolResult.error("Subagent recursion detected for '$subagentName'")
@@ -101,14 +112,14 @@ class InvokeSubagentTool(
         )
 
         return try {
-            val result = runTurnCallback(request, turnListener)
+            val result = runTurnCallback(request, turnListener, streamCallback)
             if (!result.success) {
                 ToolResult.error("Subagent '$subagentName' failed: ${result.response}")
             } else {
                 ToolResult.success(
                     output = result.response,
                     metadata = mapOf(
-                        "subagent" to subagentName,
+                        "subagent_name" to subagentName,
                         "depth" to childDepth,
                         "iterations" to result.iterations,
                         "tokens_in" to result.tokensIn,
@@ -153,28 +164,20 @@ class InvokeSubagentTool(
     }
 
     private fun buildDynamicDescription(): String {
-        val base = "Invoke a specialized subagent to solve part of the task"
-        val router = subagentRouterProvider() ?: return "$base. Available subagents: none."
+        val router = subagentRouterProvider()
+            ?: return "Invoke a specialized subagent for a specific task. Available subagents: none. " +
+                "Use 'subagent_name' parameter to select one and 'goal' to describe the task."
 
         val subagents = runCatching { router.listSubagents(includeDisabled = false) }
             .getOrElse {
                 logger.warn(it) { "[INVOKE_SUBAGENT] Failed to load subagent list for tool description" }
-                return "$base. Available subagents: unavailable."
+                return "Invoke a specialized subagent for a specific task. Available subagents: unavailable. " +
+                    "Use 'subagent_name' parameter to select one and 'goal' to describe the task."
             }
 
-        if (subagents.isEmpty()) {
-            return "$base. Available subagents: none."
-        }
-
-        val entries = subagents.joinToString("; ") { subagent ->
-            val tools = if (subagent.tools.isNullOrEmpty()) {
-                "tools=inherit"
-            } else {
-                "tools=${subagent.tools.joinToString(",")}"
-            }
-            "${subagent.name}: ${subagent.description} ($tools)"
-        }
-
-        return "$base. Available subagents: $entries"
+        val names = subagents.joinToString(", ") { it.name }
+        return "Invoke a specialized subagent for a specific task. " +
+            "Available subagents: $names. " +
+            "Use 'subagent_name' parameter to select one and 'goal' to describe the task."
     }
 }

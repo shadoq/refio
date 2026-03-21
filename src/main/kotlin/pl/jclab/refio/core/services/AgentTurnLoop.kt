@@ -120,6 +120,33 @@ class AgentTurnLoop(
         fun onToolExecutionCompleted(taskId: String, toolCall: pl.jclab.refio.core.db.ToolCallData, result: String, success: Boolean) {}
         fun onStreamChunk(taskId: String, delta: String, accumulated: String) {}
 
+        companion object {
+            /**
+             * Create from turn/ package TurnEventListener (inverse of [toTurnEventListener]).
+             */
+            fun fromTurnEventListener(source: pl.jclab.refio.core.services.turn.TurnEventListener): TurnEventListener =
+                object : TurnEventListener {
+                    override fun onTurnStarted(taskId: String, mode: TaskMode, runId: String, parentRunId: String?, depth: Int) {
+                        source.onTurnStarted(taskId, mode, runId, parentRunId, depth)
+                    }
+                    override fun onToolExecutionStarted(taskId: String, toolCall: pl.jclab.refio.core.db.ToolCallData) {
+                        source.onToolExecutionStarted(taskId, toolCall)
+                    }
+                    override fun onToolStreamChunk(taskId: String, toolCallId: String, delta: String, accumulated: String) {
+                        source.onToolStreamChunk(taskId, toolCallId, delta, accumulated)
+                    }
+                    override fun onToolExecutionCompleted(taskId: String, toolCall: pl.jclab.refio.core.db.ToolCallData, result: String, success: Boolean) {
+                        source.onToolExecutionCompleted(taskId, toolCall, result, success)
+                    }
+                    override fun onStreamChunk(taskId: String, delta: String, accumulated: String) {
+                        source.onStreamChunk(taskId, delta, accumulated)
+                    }
+                    override fun onTurnCompleted(taskId: String, result: pl.jclab.refio.core.services.TurnResult, runId: String, parentRunId: String?, depth: Int) {
+                        source.onTurnCompleted(taskId, result, runId, parentRunId, depth)
+                    }
+                }
+        }
+
         /**
          * Convert to turn/ package TurnEventListener for compatibility.
          */
@@ -356,6 +383,11 @@ class AgentTurnLoop(
         var totalTokensIn = 0
         var totalTokensOut = 0
         var totalCost = 0.0
+        val usedTools = mutableListOf<String>()
+        val subagentMetadata: String? = if (runProfile == TurnRunProfile.SUBAGENT) {
+            val name = profileOverrides?.subagentName ?: "subagent"
+            """{"subagent_name":"$name"}"""
+        } else null
         val (effectiveModel, effectiveProvider) = turnLLMCaller.resolveModelSelection(
             mode = mode,
             taskId = taskId,
@@ -478,9 +510,10 @@ class AgentTurnLoop(
                             iterations = iteration,
                             tokensIn = totalTokensIn,
                             tokensOut = totalTokensOut,
-                            cost = totalCost
+                            cost = totalCost,
+                            toolsUsed = usedTools.distinct()
                         )
-                        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true)
+                        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
                     }
 
                     // Check if model invoked tools
@@ -508,9 +541,10 @@ class AgentTurnLoop(
                             iterations = iteration,
                             tokensIn = totalTokensIn,
                             tokensOut = totalTokensOut,
-                            cost = totalCost
+                            cost = totalCost,
+                            toolsUsed = usedTools.distinct()
                         )
-                        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true)
+                        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
                     }
 
                     // Format retry logic
@@ -544,9 +578,10 @@ class AgentTurnLoop(
                                         iterations = iteration,
                                         tokensIn = totalTokensIn,
                                         tokensOut = totalTokensOut,
-                                        cost = totalCost
+                                        cost = totalCost,
+                                        toolsUsed = usedTools.distinct()
                                     )
-                                    return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true)
+                                    return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
                                 }
                                 is TurnGuardrails.LoopStatus.WARN -> {
                                     logger.warn { "[LOOP_WARNING] ${loopStatus.message}" }
@@ -567,6 +602,9 @@ class AgentTurnLoop(
                             tokensOut = llmResponse.usage.outputTokens,
                             cost = llmResponse.cost
                         )
+
+                        // Track used tool names
+                        usedTools.addAll(toolCalls.map { it.name })
 
                         if (GlobalMetrics.isCancelled()) {
                             throw CancellationException("Operation cancelled by user")
@@ -651,9 +689,10 @@ class AgentTurnLoop(
                                 iterations = iteration,
                                 tokensIn = totalTokensIn,
                                 tokensOut = totalTokensOut,
-                                cost = totalCost
+                                cost = totalCost,
+                                toolsUsed = usedTools.distinct()
                             )
-                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true)
+                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
                         }
 
                         // Continue loop - model will see the results
@@ -688,7 +727,8 @@ class AgentTurnLoop(
                                 iterations = iteration,
                                 tokensIn = totalTokensIn,
                                 tokensOut = totalTokensOut,
-                                cost = totalCost
+                                cost = totalCost,
+                                toolsUsed = usedTools.distinct()
                             )
                             return turnFinalizer.completeTurn(
                                 taskId,
@@ -697,7 +737,8 @@ class AgentTurnLoop(
                                 runId,
                                 parentRunId,
                                 depth,
-                                persistAssistantMessage = true
+                                persistAssistantMessage = true,
+                                metadata = subagentMetadata
                             )
                         }
 
@@ -709,9 +750,10 @@ class AgentTurnLoop(
                                 iterations = iteration,
                                 tokensIn = totalTokensIn,
                                 tokensOut = totalTokensOut,
-                                cost = totalCost
+                                cost = totalCost,
+                                toolsUsed = usedTools.distinct()
                             )
-                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true)
+                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
                         }
 
                         // Check for missing intent field (AGENT mode)
@@ -741,9 +783,10 @@ class AgentTurnLoop(
                                 iterations = iteration,
                                 tokensIn = totalTokensIn,
                                 tokensOut = totalTokensOut,
-                                cost = totalCost
+                                cost = totalCost,
+                                toolsUsed = usedTools.distinct()
                             )
-                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true)
+                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
                         }
 
                         // NO_CHANGES_NEEDED reconfirmation: let LLM reconsider once
@@ -776,10 +819,11 @@ class AgentTurnLoop(
                             iterations = iteration,
                             tokensIn = totalTokensIn,
                             tokensOut = totalTokensOut,
-                            cost = totalCost
+                            cost = totalCost,
+                            toolsUsed = usedTools.distinct()
                         )
 
-                        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = false)
+                        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = false, metadata = subagentMetadata)
                     }
                 } finally {
                     GlobalMetrics.endOperation(iterationToken)
@@ -792,9 +836,10 @@ class AgentTurnLoop(
                 iterations = iteration,
                 tokensIn = totalTokensIn,
                 tokensOut = totalTokensOut,
-                cost = totalCost
+                cost = totalCost,
+                toolsUsed = usedTools.distinct()
             )
-            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true)
+            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
         }
 
         // Max iterations exceeded
@@ -805,9 +850,10 @@ class AgentTurnLoop(
             iterations = iteration,
             tokensIn = totalTokensIn,
             tokensOut = totalTokensOut,
-            cost = totalCost
+            cost = totalCost,
+            toolsUsed = usedTools.distinct()
         )
-        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true)
+        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
     }
 
     /**
@@ -920,5 +966,6 @@ data class TurnResult(
     val iterations: Int,
     val tokensIn: Int,
     val tokensOut: Int,
-    val cost: Double
+    val cost: Double,
+    val toolsUsed: List<String> = emptyList()
 )

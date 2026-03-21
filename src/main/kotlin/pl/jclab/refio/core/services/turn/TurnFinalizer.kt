@@ -29,7 +29,8 @@ class TurnFinalizer(
         runId: String,
         parentRunId: String?,
         depth: Int,
-        persistAssistantMessage: Boolean
+        persistAssistantMessage: Boolean,
+        metadata: String? = null
     ): TurnResult {
         if (persistAssistantMessage) {
             val content = result.response.ifBlank {
@@ -38,7 +39,8 @@ class TurnFinalizer(
             chatMessageRepository.create(
                 taskId = taskId,
                 role = MessageRole.ASSISTANT,
-                content = content
+                content = content,
+                metadata = metadata
             )
         }
 

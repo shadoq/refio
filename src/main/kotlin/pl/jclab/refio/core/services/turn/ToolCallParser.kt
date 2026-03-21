@@ -139,11 +139,11 @@ class ToolCallParser(
                 // Prefer explicit human-facing payload fields.
                 val contentElement = jsonElement["content"]
                 if (contentElement is JsonPrimitive && contentElement.isString) {
-                    return contentElement.content
+                    return unwrapNestedTextPayload(contentElement.content)
                 }
                 val responseElement = jsonElement["response"]
                 if (responseElement is JsonPrimitive && responseElement.isString) {
-                    return responseElement.content
+                    return unwrapNestedTextPayload(responseElement.content)
                 }
 
                 // JSON with actions and no textual payload
@@ -162,6 +162,38 @@ class ToolCallParser(
             }
         } catch (e: Exception) {
             content // Failed to parse, return original
+        }
+    }
+
+    /**
+     * Unwrap nested JSON text payload from model response.
+     *
+     * Some models wrap their response in a double JSON envelope, e.g.:
+     * {"actions":[],"response":"{\n  \"answer\": \"# Report\\n...\"}" }
+     *
+     * This method detects when extracted text is itself a JSON object with
+     * a text payload field (answer, content, response, result, output, text)
+     * and unwraps it recursively (up to 2 levels).
+     */
+    private fun unwrapNestedTextPayload(text: String, depth: Int = 0): String {
+        if (depth > 1) return text
+        val trimmed = text.trim()
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return text
+
+        return try {
+            val inner = json.parseToJsonElement(trimmed)
+            if (inner !is JsonObject) return text
+
+            val payloadKeys = listOf("answer", "content", "response", "result", "output", "text")
+            for (key in payloadKeys) {
+                val field = inner[key]
+                if (field is JsonPrimitive && field.isString && field.content.isNotBlank()) {
+                    return unwrapNestedTextPayload(field.content, depth + 1)
+                }
+            }
+            text
+        } catch (_: Exception) {
+            text
         }
     }
 

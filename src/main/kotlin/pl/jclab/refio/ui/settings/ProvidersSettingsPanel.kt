@@ -1,5 +1,6 @@
 package pl.jclab.refio.ui.settings
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
@@ -11,7 +12,14 @@ import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.api.CoreApiClient
 import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
 import pl.jclab.refio.services.logging.dualLogger
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.awt.*
 import javax.swing.*
 import javax.swing.event.DocumentEvent
@@ -30,7 +38,7 @@ import javax.swing.event.DocumentListener
 class ProvidersSettingsPanel(
     private val onSettingChanged: (section: String, key: String, value: Any) -> Unit,
     private val coreApiClient: CoreApiClient?
-) : JBPanel<ProvidersSettingsPanel>(BorderLayout()) {
+) : JBPanel<ProvidersSettingsPanel>(BorderLayout()), Disposable {
 
     private val logger = dualLogger("ProvidersSettingsPanel")
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -708,6 +716,10 @@ class ProvidersSettingsPanel(
             "custom_openai" -> "custom_openai"
             else -> providerName.lowercase()
         }
+    }
+
+    override fun dispose() {
+        coroutineScope.cancel()
     }
 
     /**

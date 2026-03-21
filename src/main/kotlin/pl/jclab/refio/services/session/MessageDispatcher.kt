@@ -302,7 +302,8 @@ class MessageDispatcher(
             val isPlanJson = root.has("plan") || root.has("subtasks")
             val contentField = getJsonString(root, "content")
             val responseField = getJsonString(root, "response")
-            val payload = contentField?.takeIf { it.isNotBlank() } ?: responseField?.takeIf { it.isNotBlank() }
+            val rawPayload = contentField?.takeIf { it.isNotBlank() } ?: responseField?.takeIf { it.isNotBlank() }
+            val payload = rawPayload?.let { ToolCallContentSanitizer.unwrapNestedPayload(it) }
             AssistantJsonEnvelope(
                 hasActions = hasActions,
                 hasEmptyActions = hasEmptyActions,
