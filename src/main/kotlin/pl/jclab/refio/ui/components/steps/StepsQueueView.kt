@@ -278,7 +278,8 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
     /**
      * Create compact action buttons for header (icons only)
      */
-    private fun createCompactActions(subtask: SubtaskDto, stepNumber: Int): JPanel {
+    @Suppress("UNUSED_PARAMETER")
+    private fun createCompactActions(subtask: SubtaskDto, _stepNumber: Int): JPanel {
 
         val panel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0))
 
@@ -638,6 +639,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
         }
     }
 
+    @Suppress("UNCHECKED_CAST")
     private fun parseToolsFromSubtask(subtask: SubtaskDto): List<ToolInfo>? {
         try {
             // Try step_plan_json first (from prepare endpoint)

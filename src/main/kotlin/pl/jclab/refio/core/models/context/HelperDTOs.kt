@@ -7,15 +7,6 @@ import java.time.Instant
  * Based on Python context_dto.py
  */
 
-data class FileInfoDTO(
-    val path: String,
-    val name: String,
-    val size: Long = 0,
-    val type: String = "",
-    val extension: String? = null,
-    val content: String? = null
-)
-
 data class CurrentTaskDTO(
     val id: String,
     val name: String,
@@ -53,31 +44,6 @@ data class ConversationMessageDTO(
     val metadata: Map<String, Any?>? = null
 )
 
-data class AgentInfoDTO(
-    val type: String,
-    val capabilities: List<String> = emptyList(),
-    val tools: List<String> = emptyList()
-)
-
-data class SubtaskContextDTO(
-    val id: String? = null,
-    val name: String,
-    val description: String,
-    val agentType: String? = null,
-    val stepType: String? = null,
-    val tool: String? = null,
-    val toolArgs: Map<String, Any> = emptyMap(),
-    val order: Int? = null
-)
-
-data class TaskContextDTO(
-    val id: String,
-    val name: String,
-    val description: String,
-    val status: String,
-    val priority: String? = null
-)
-
 /**
  * Code fragment DTO - relevant code/documentation fragment from RAG search
  */
@@ -104,15 +70,3 @@ data class ResolvedContextDTO(
     val estimatedTokens: Int = 0
 )
 
-data class AgentConfigDTO(
-    val name: String,
-    val role: String? = null,
-    val tools: List<String> = emptyList(),
-    val metadata: Map<String, Any> = emptyMap()
-)
-
-data class ToolMetadataDTO(
-    val name: String,
-    val description: String? = null,
-    val params: Map<String, Any> = emptyMap()
-)

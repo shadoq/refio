@@ -145,7 +145,8 @@ class ParallelToolExecutor(
             }
         } catch (e: TimeoutCancellationException) {
             logger.warn { "[TIMEOUT] Tool ${toolCall.name} exceeded ${config.toolTimeout}" }
-            val errorResult = ToolResult(success = false, error = "Timeout exceeded")
+            @Suppress("UNUSED_VARIABLE")
+            val _errorResult = ToolResult(success = false, error = "Timeout exceeded")
             ToolResultData(
                 toolCallId = toolCall.id,
                 content = "Error: Tool execution timed out after ${config.toolTimeout}",

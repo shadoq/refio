@@ -10,6 +10,7 @@ import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
+import pl.jclab.refio.core.config.ConfigKey
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.tools.PathSandbox
@@ -47,6 +48,7 @@ class AdvanceCodeEditingToolTest {
         mockConfigService = mockk {
             coEvery { getModel(any(), any()) } returns Pair("test-model", "test-provider")
             every { getMaxOutputTokens() } returns 4096
+            every { getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
         }
         mockPromptsService = mockk {
             every { getSystemPrompt(any(), any()) } returns "System prompt with {{FILE_PATH}} and {{LANGUAGE}}"

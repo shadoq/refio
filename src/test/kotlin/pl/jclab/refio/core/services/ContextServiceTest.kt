@@ -15,6 +15,7 @@ import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.db.repositories.SubtaskRepository
 import pl.jclab.refio.core.db.repositories.TaskRepository
 import pl.jclab.refio.core.services.analysis.FileAnalyzerService
+import pl.jclab.refio.core.config.ConfigKey
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -38,6 +39,7 @@ class ContextServiceTest {
         subtaskRepository = mockk()
         fileAnalyzerService = mockk()
         configService = mockk()
+        every { configService.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
         ragSearchService = mockk()
 
         mockkStatic("org.jetbrains.exposed.sql.transactions.ThreadLocalTransactionManagerKt")

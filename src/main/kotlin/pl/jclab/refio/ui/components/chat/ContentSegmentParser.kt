@@ -212,7 +212,7 @@ object ContentSegmentParser {
             val description = map["plan"] as? String ?: map["response"] as? String
             val subtasks = (map["subtasks"] as? List<*> ?: map["actions"] as? List<*> ?: emptyList<Any>())
                 .filterIsInstance<Map<*, *>>()
-                .map { step -> step.entries.associate { (k, v) -> k.toString() to (v as Any?) } }
+                .map { step: Map<*, *> -> step.entries.associate { (k, v) -> k.toString() to v } }
 
             ContentSegment.Plan(description, subtasks)
         } catch (_: Exception) {

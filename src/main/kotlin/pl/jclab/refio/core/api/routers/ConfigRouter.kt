@@ -3,6 +3,7 @@ package pl.jclab.refio.core.api.routers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import pl.jclab.refio.core.api.*
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.db.repositories.ConfigRepository
 import pl.jclab.refio.core.errors.RefioError
@@ -241,7 +242,7 @@ class ConfigRouter(
                     resolvedBaseUrl = "http://localhost:1234/v1"
                 }
                 if (provider.equals("custom_openai", ignoreCase = true) && resolvedBaseUrl.isNullOrEmpty()) {
-                    resolvedBaseUrl = configService.getCustomOpenAIBaseUrl()
+                    resolvedBaseUrl = configService.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_BASE_URL)
                 }
                 if (provider.equals("zai", ignoreCase = true)) {
                     resolvedBaseUrl = configService.normalizeZAIBaseUrl(resolvedBaseUrl)
@@ -434,6 +435,7 @@ class ConfigRouter(
         }
     }
 
+    @Suppress("UNUSED_PARAMETER")
     internal fun buildRateLimitedConnectionResult(
         provider: String,
         models: List<ModelConfig>,

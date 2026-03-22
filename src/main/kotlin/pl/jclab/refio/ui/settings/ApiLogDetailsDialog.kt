@@ -133,7 +133,8 @@ class ApiLogDetailsDialog(
 
             // HTTP Status
             val statusText = if (log.httpStatus != null) {
-                val statusColor = when {
+                @Suppress("UNUSED_VARIABLE")
+                val _statusColor = when {
                     log.httpStatus in 200..299 -> LCATheme.successColor
                     log.httpStatus in 400..499 -> LCATheme.warningColor
                     log.httpStatus >= 500 -> LCATheme.errorColor

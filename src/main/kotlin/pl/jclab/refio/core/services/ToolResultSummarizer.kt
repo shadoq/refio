@@ -6,6 +6,7 @@ import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.services.context.CompressionLevel
 import pl.jclab.refio.core.services.context.ToolResultCompression
 import pl.jclab.refio.core.services.context.ToolResultCompressionConfig
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.services.logging.dualLogger
 
 private val logger = dualLogger("ToolResultSummarizer")
@@ -79,7 +80,7 @@ class ToolResultSummarizer(
         contextType: SummaryContextType
     ): ToolResultSummary {
         // Check if summarization is enabled
-        val summaryEnabled = configService.isToolSummaryEnabled()
+        val summaryEnabled = configService.getTyped(ConfigKeys.TOOL_SUMMARY_ENABLED)
         if (!summaryEnabled) {
             return ToolResultSummary(
                 summary = rawOutput,
@@ -90,7 +91,7 @@ class ToolResultSummarizer(
             )
         }
 
-        val minLength = configService.getToolSummaryMinLength()
+        val minLength = configService.getTyped(ConfigKeys.TOOL_SUMMARY_MIN_LENGTH)
 
         if (rawOutput.length <= minLength) {
             // Too short to summarize, return as-is
@@ -216,7 +217,8 @@ $instructions
     /**
      * Build system prompt for summarization based on context type.
      */
-    private fun buildSystemPrompt(toolName: String, contextType: SummaryContextType): String {
+    @Suppress("UNUSED_PARAMETER")
+    private fun buildSystemPrompt(_toolName: String, contextType: SummaryContextType): String {
         return when (contextType) {
             SummaryContextType.CODE_ANALYSIS -> """
 You are a code analysis summarizer. Create detailed summaries of code files.
@@ -266,7 +268,7 @@ Guidelines:
     }
 
     fun compressToolResult(rawOutput: String, summary: String?, level: CompressionLevel): String {
-        val summaryMax = configService.getRecentWorkSummaryMaxLength()
+        val summaryMax = configService.getTyped(ConfigKeys.RECENT_WORK_SUMMARY_MAX_LENGTH)
         val compressionConfig = ToolResultCompressionConfig(
             detailedMaxChars = (summaryMax * 3).coerceAtLeast(600),
             summaryMaxChars = summaryMax

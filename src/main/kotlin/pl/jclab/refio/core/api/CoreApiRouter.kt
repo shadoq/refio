@@ -26,6 +26,7 @@ import pl.jclab.refio.core.models.api.ChatResponse
 import pl.jclab.refio.core.models.api.SummarizeResponse
 import pl.jclab.refio.core.models.context.*
 import pl.jclab.refio.core.services.*
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.analysis.EmbeddingsService
 import pl.jclab.refio.core.services.turn.TurnFinalizer
 import pl.jclab.refio.core.services.turn.TurnLLMCaller
@@ -35,6 +36,8 @@ import pl.jclab.refio.core.services.turn.TurnResponseProcessor
 import pl.jclab.refio.core.services.turn.TurnSubagentValidator
 import pl.jclab.refio.core.services.turn.TurnToolExecutor
 import pl.jclab.refio.core.services.analysis.FileAnalyzerService
+import pl.jclab.refio.core.services.analysis.CppLanguageAnalyzer
+import pl.jclab.refio.core.services.analysis.CssLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.HtmlLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.JavaLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.KotlinLanguageAnalyzer
@@ -125,7 +128,9 @@ class CoreApiRouter(
         JavaLanguageAnalyzer(),
         PythonLanguageAnalyzer(),
         TypeScriptLanguageAnalyzer(),
-        HtmlLanguageAnalyzer()
+        HtmlLanguageAnalyzer(),
+        CppLanguageAnalyzer(),
+        CssLanguageAnalyzer()
     )
 
     private val embeddingsService: EmbeddingsService? = if (projectRoot != null) {
@@ -135,7 +140,7 @@ class CoreApiRouter(
         )
     } else null
 
-    private val ragChunkingStrategy: ChunkingStrategy = when (ChunkingMode.fromConfig(configService.getRagChunkingMode())) {
+    private val ragChunkingStrategy: ChunkingStrategy = when (ChunkingMode.fromConfig(configService.getTyped(ConfigKeys.RAG_CHUNKING_MODE))) {
         ChunkingMode.LINE_BASED -> DefaultChunkingStrategy()
         ChunkingMode.SEMANTIC -> SemanticChunkingStrategy()
     }
@@ -296,7 +301,7 @@ class CoreApiRouter(
         val toolCallParser = ToolCallParser(
             toolRegistry = toolRegistry,
             toolPermissionsService = toolPermissionsService,
-            getJsonThinkingXmlTags = { taskId -> configService.getJsonThinkingXmlTags(taskId) }
+            getJsonThinkingXmlTags = { taskId -> configService.getTyped(ConfigKeys.JSON_THINKING_XML_TAGS, taskId) }
         )
 
         val turnToolExecutor = TurnToolExecutor(
@@ -611,7 +616,7 @@ class CoreApiRouter(
 
         val effectiveProjectId = request.projectId.ifBlank { routerProjectId ?: LEGACY_PROJECT_ID }
         val effectiveProjectPath = request.projectPath.ifBlank { routerProjectPath ?: LEGACY_PROJECT_PATH }
-        val readOnly = request.readOnly ?: (request.mode == TaskMode.PLAN || configService.isReadOnlyMode())
+        val readOnly = request.readOnly ?: (request.mode == TaskMode.PLAN || configService.getTyped(ConfigKeys.READ_ONLY_MODE))
         val requiresPlanApproval = request.requiresPlanApproval ?: false
 
         val task = taskRepository.create(
@@ -2119,7 +2124,7 @@ $contextPrompt
             },
             userContextRefs = userContextRefDTOs,
             conversationHistory = conversationDTOs,
-            previousSubtasks = context.previousSubtasks,
+            previousSubtasks = context.executedSteps.map { it.displayContent },
             domainAnalysis = context.domainAnalysis,
             directoryCount = context.structure.directoryCount,
             maxDepth = context.structure.maxDepth,
@@ -2129,6 +2134,7 @@ $contextPrompt
             auxiliaryEstimatedTokens = auxiliaryEstimatedTokens,
             combinedEstimatedTokens = combinedEstimatedTokens,
             semanticSummary = context.semanticSummary,
+            projectInstructions = context.projectInstructions,
             recentWorkPrompt = recentWorkPrompt,
             activeLlmRequestPrompt = activeLlmPreviewPrompt,
             auxiliaryPromptsPreview = auxiliaryPreviewPrompt
@@ -2426,7 +2432,7 @@ $contextPrompt
     private fun embeddingProviderFor(providerId: String): EmbeddingProvider {
         return when (providerId.lowercase()) {
             "ollama" -> {
-                val ollamaEndpoint = configService.getOllamaEndpoint()
+                val ollamaEndpoint = configService.getTyped(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT)
                 OllamaEmbeddingProvider(ollamaEndpoint)
             }
 

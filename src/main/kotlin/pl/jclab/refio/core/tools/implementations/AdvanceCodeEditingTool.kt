@@ -7,6 +7,7 @@ import pl.jclab.refio.core.db.Subtask
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
 import pl.jclab.refio.core.llm.LLMMessage
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.db.repositories.TaskRepository
@@ -137,12 +138,13 @@ class AdvanceCodeEditingTool(
     /**
      * Internal execute with all options.
      */
+    @Suppress("UNUSED_PARAMETER")
     private suspend fun executeWithListener(
         params: Map<String, Any>,
         stream: Boolean,
         onChunk: StreamCallback?,
-        subtask: Subtask?,
-        listener: ExecutionEventListener?
+        _subtask: Subtask?,
+        _listener: ExecutionEventListener?
     ): ToolResult {
         val startTime = System.currentTimeMillis()
         val pathStr = params["path"] as? String
@@ -273,7 +275,7 @@ class AdvanceCodeEditingTool(
                 messages = messages,
                 systemPrompt = systemPrompt,
                 temperature = 0.2, // Low temperature for deterministic output
-                maxTokens = configService.getMaxOutputTokens() * 2, // From limits settings
+                maxTokens = configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE) * 2, // From limits settings
                 stream = stream,
                 onChunk = streamingCallback,
                 taskId = null,  // Tool-level call, no task context
@@ -653,7 +655,8 @@ class AdvanceCodeEditingTool(
      * Optional: Validate syntax (language-specific)
      * For MVP: skip or basic checks only
      */
-    private fun validateSyntax(content: String, language: String): String? {
+    @Suppress("UNUSED_PARAMETER")
+    private fun validateSyntax(content: String, _language: String): String? {
         // Future: language-specific parsers
         // For MVP: just check if file is not empty and has basic structure
         if (content.trim().isEmpty()) {

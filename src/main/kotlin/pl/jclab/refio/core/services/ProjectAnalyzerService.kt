@@ -2,8 +2,11 @@ package pl.jclab.refio.core.services
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.services.logging.dualLogger
 import pl.jclab.refio.core.services.ConfigService
+import pl.jclab.refio.core.services.analysis.project.FrameworkAnalysis
+import pl.jclab.refio.core.services.analysis.project.FrameworkAnalyzer
 import pl.jclab.refio.core.services.analysis.project.ProjectAnalysisReport
 import pl.jclab.refio.core.services.analysis.project.RichProjectAnalysisEngine
 import pl.jclab.refio.core.utils.AiIgnoreMatcher
@@ -25,6 +28,7 @@ class ProjectAnalyzerService(
     private val richAnalysisEngine: RichProjectAnalysisEngine? = null
 ) {
 
+    private val frameworkAnalyzer = FrameworkAnalyzer()
     private val cache = ConcurrentHashMap<String, Triple<ProjectAnalysis, Long, Long>>() // analysis, cacheTime, lastModified
     private val analysisMutexes = ConcurrentHashMap<String, Mutex>()
     private val cacheTTL = 600_000L // 10 minutes (reduced from 1 hour for fresher data)
@@ -64,6 +68,10 @@ class ProjectAnalyzerService(
             // ADR 0017: Detect architectural patterns
             val architectureInfo = detectArchitecturalPatterns(fileTree)
 
+            // Framework-aware analysis
+            val allFilePaths = flattenFiles(fileTree).map { it.relativePath }
+            val frameworkAnalysis = frameworkAnalyzer.analyze(allFilePaths, projectRoot)
+
             // Detect primary programming language
             val (primaryLanguage, _) = detectPrimaryLanguage(structure.fileTypes)
 
@@ -81,7 +89,8 @@ class ProjectAnalyzerService(
                 summary = generateSummary(structure, technologies, codeAnalysis, primaryLanguage),
                 domainAnalysis = domainAnalysis,
                 analyzedAt = System.currentTimeMillis(),
-                architectureInfo = architectureInfo
+                architectureInfo = architectureInfo,
+                frameworkAnalysis = frameworkAnalysis
             )
 
             val enrichedAnalysis = enrichWithRichReport(analysis, projectRoot)
@@ -363,6 +372,10 @@ class ProjectAnalyzerService(
     private fun analyzeDependencies(projectRoot: Path, fileTree: FileNode): DependenciesInfo {
         val python = mutableListOf<String>()
         val javascript = mutableListOf<String>()
+        val typescript = mutableListOf<String>()
+        val kotlin = mutableListOf<String>()
+        val java = mutableListOf<String>()
+        val cpp = mutableListOf<String>()
         val packageManagers = mutableListOf<String>()
         val configFiles = mutableListOf<String>()
 
@@ -381,28 +394,58 @@ class ProjectAnalyzerService(
                     configFiles.add(file.relativePath)
                 }
                 "package.json" -> {
-                    packageManagers.add("npm/yarn")
+                    val path = projectRoot.resolve(file.relativePath)
                     configFiles.add(file.relativePath)
-                    javascript.addAll(parsePackageJson(projectRoot.resolve(file.relativePath)))
+                    val deps = parsePackageJson(path)
+                    javascript.addAll(deps)
+                    // Check if TypeScript project
+                    if (deps.any { it == "typescript" || it.startsWith("@types/") }) {
+                        packageManagers.add("npm/yarn (TypeScript)")
+                        typescript.addAll(deps)
+                    } else {
+                        packageManagers.add("npm/yarn")
+                    }
                 }
                 "pom.xml" -> {
                     packageManagers.add("maven")
                     configFiles.add(file.relativePath)
+                    java.addAll(parseMavenDependencies(projectRoot.resolve(file.relativePath)))
                 }
                 "build.gradle", "build.gradle.kts" -> {
                     packageManagers.add("gradle")
                     configFiles.add(file.relativePath)
+                    val deps = parseGradleDependencies(projectRoot.resolve(file.relativePath))
+                    kotlin.addAll(deps)
+                    java.addAll(deps)
                 }
                 "Cargo.toml" -> {
                     packageManagers.add("cargo")
                     configFiles.add(file.relativePath)
                 }
+                "CMakeLists.txt" -> {
+                    packageManagers.add("cmake")
+                    configFiles.add(file.relativePath)
+                    cpp.addAll(parseCMakeDependencies(projectRoot.resolve(file.relativePath)))
+                }
+                "conanfile.txt", "conanfile.py" -> {
+                    packageManagers.add("conan")
+                    configFiles.add(file.relativePath)
+                }
+                "vcpkg.json" -> {
+                    packageManagers.add("vcpkg")
+                    configFiles.add(file.relativePath)
+                    cpp.addAll(parseVcpkgDependencies(projectRoot.resolve(file.relativePath)))
+                }
             }
         }
 
         return DependenciesInfo(
-            python = python.sorted(),
-            javascript = javascript.sorted(),
+            python = python.distinct().sorted(),
+            javascript = javascript.distinct().sorted(),
+            typescript = typescript.distinct().sorted(),
+            kotlin = kotlin.distinct().sorted(),
+            java = java.distinct().sorted(),
+            cpp = cpp.distinct().sorted(),
             packageManagers = packageManagers.distinct().sorted(),
             configFiles = configFiles.sorted()
         )
@@ -503,6 +546,84 @@ class ProjectAnalyzerService(
         }
     }
 
+    private fun parseGradleDependencies(path: Path): List<String> {
+        if (!path.exists()) return emptyList()
+        return try {
+            val content = Files.readString(path)
+            val deps = mutableListOf<String>()
+            // Match: implementation("group:artifact:version"), api("group:artifact"), etc.
+            val depRegex = Regex("""(?:implementation|api|compileOnly|runtimeOnly|testImplementation|kapt|ksp)\s*\(\s*["']([^"']+)["']\s*\)""")
+            depRegex.findAll(content).forEach { match ->
+                val dep = match.groupValues[1]
+                // Extract group:artifact (without version)
+                val parts = dep.split(":")
+                if (parts.size >= 2) {
+                    deps.add("${parts[0]}:${parts[1]}")
+                } else {
+                    deps.add(dep)
+                }
+            }
+            deps.distinct()
+        } catch (e: Exception) {
+            logger.warn { "Failed to parse Gradle dependencies: ${e.message}" }
+            emptyList()
+        }
+    }
+
+    private fun parseMavenDependencies(path: Path): List<String> {
+        if (!path.exists()) return emptyList()
+        return try {
+            val content = Files.readString(path)
+            val deps = mutableListOf<String>()
+            // Simple regex for <groupId>...</groupId> <artifactId>...</artifactId> pairs
+            val depRegex = Regex("""<dependency>\s*<groupId>([^<]+)</groupId>\s*<artifactId>([^<]+)</artifactId>""")
+            depRegex.findAll(content).forEach { match ->
+                deps.add("${match.groupValues[1]}:${match.groupValues[2]}")
+            }
+            deps.distinct()
+        } catch (e: Exception) {
+            logger.warn { "Failed to parse Maven dependencies: ${e.message}" }
+            emptyList()
+        }
+    }
+
+    private fun parseCMakeDependencies(path: Path): List<String> {
+        if (!path.exists()) return emptyList()
+        return try {
+            val content = Files.readString(path)
+            val deps = mutableListOf<String>()
+            // find_package(Boost REQUIRED), find_package(OpenSSL), target_link_libraries(... lib)
+            val findPkgRegex = Regex("""find_package\s*\(\s*(\w+)""")
+            findPkgRegex.findAll(content).forEach { match ->
+                deps.add(match.groupValues[1])
+            }
+            deps.distinct()
+        } catch (e: Exception) {
+            logger.warn { "Failed to parse CMake dependencies: ${e.message}" }
+            emptyList()
+        }
+    }
+
+    private fun parseVcpkgDependencies(path: Path): List<String> {
+        if (!path.exists()) return emptyList()
+        return try {
+            val content = Files.readString(path)
+            val json = com.google.gson.JsonParser.parseString(content).asJsonObject
+            val deps = mutableListOf<String>()
+            json.getAsJsonArray("dependencies")?.forEach { dep ->
+                if (dep.isJsonPrimitive) {
+                    deps.add(dep.asString)
+                } else if (dep.isJsonObject) {
+                    dep.asJsonObject.get("name")?.asString?.let { deps.add(it) }
+                }
+            }
+            deps
+        } catch (e: Exception) {
+            logger.warn { "Failed to parse vcpkg dependencies: ${e.message}" }
+            emptyList()
+        }
+    }
+
     /**
      * Analyze code structure (classes, functions, patterns)
      */
@@ -530,7 +651,8 @@ class ProjectAnalyzerService(
         )
     }
 
-    private fun analyzeKotlinCode(projectRoot: Path, fileTree: FileNode, includeContent: Boolean): Map<String, Any> {
+    @Suppress("UNUSED_PARAMETER")
+    private fun analyzeKotlinCode(projectRoot: Path, fileTree: FileNode, _includeContent: Boolean): Map<String, Any> {
         val files = flattenFiles(fileTree).filter { it.name.endsWith(".kt") }
         val classes = mutableListOf<String>()
         val dataClasses = mutableListOf<String>()
@@ -666,7 +788,8 @@ class ProjectAnalyzerService(
         )
     }
 
-    private fun analyzeJavaCode(projectRoot: Path, fileTree: FileNode, includeContent: Boolean): Map<String, Any> {
+    @Suppress("UNUSED_PARAMETER")
+    private fun analyzeJavaCode(projectRoot: Path, fileTree: FileNode, _includeContent: Boolean): Map<String, Any> {
         val files = flattenFiles(fileTree).filter { it.name.endsWith(".java") }
         val classes = mutableListOf<String>()
         val interfaces = mutableListOf<String>()
@@ -792,7 +915,8 @@ class ProjectAnalyzerService(
         )
     }
 
-    private fun analyzePythonCode(projectRoot: Path, fileTree: FileNode, includeContent: Boolean): Map<String, Any> {
+    @Suppress("UNUSED_PARAMETER")
+    private fun analyzePythonCode(projectRoot: Path, fileTree: FileNode, _includeContent: Boolean): Map<String, Any> {
         val files = flattenFiles(fileTree).filter { it.name.endsWith(".py") }
         val classes = mutableListOf<String>()
         val functions = mutableListOf<String>()
@@ -917,7 +1041,8 @@ class ProjectAnalyzerService(
         )
     }
 
-    private fun analyzeJavaScriptCode(projectRoot: Path, fileTree: FileNode, includeContent: Boolean): Map<String, Any> {
+    @Suppress("UNUSED_PARAMETER")
+    private fun analyzeJavaScriptCode(projectRoot: Path, fileTree: FileNode, _includeContent: Boolean): Map<String, Any> {
         val files = flattenFiles(fileTree).filter { it.name.endsWith(".js") || it.name.endsWith(".jsx") }
         val classes = mutableListOf<String>()
         val functions = mutableListOf<String>()
@@ -955,7 +1080,8 @@ class ProjectAnalyzerService(
         )
     }
 
-    private fun analyzeTypeScriptCode(projectRoot: Path, fileTree: FileNode, includeContent: Boolean): Map<String, Any> {
+    @Suppress("UNUSED_PARAMETER")
+    private fun analyzeTypeScriptCode(projectRoot: Path, fileTree: FileNode, _includeContent: Boolean): Map<String, Any> {
         val files = flattenFiles(fileTree).filter { it.name.endsWith(".ts") || it.name.endsWith(".tsx") }
         val classes = mutableListOf<String>()
         val interfaces = mutableListOf<String>()
@@ -1055,7 +1181,8 @@ class ProjectAnalyzerService(
         )
     }
 
-    private fun analyzeHtmlCode(projectRoot: Path, fileTree: FileNode, includeContent: Boolean): Map<String, Any> {
+    @Suppress("UNUSED_PARAMETER")
+    private fun analyzeHtmlCode(projectRoot: Path, fileTree: FileNode, _includeContent: Boolean): Map<String, Any> {
         val files = flattenFiles(fileTree).filter { it.name.endsWith(".html") }
         val pages = mutableListOf<Map<String, Any>>()
         val canvasGames = mutableListOf<String>()
@@ -1137,7 +1264,8 @@ class ProjectAnalyzerService(
         )
     }
 
-    private fun analyzeCssCode(projectRoot: Path, fileTree: FileNode, includeContent: Boolean): Map<String, Any> {
+    @Suppress("UNUSED_PARAMETER")
+    private fun analyzeCssCode(projectRoot: Path, fileTree: FileNode, _includeContent: Boolean): Map<String, Any> {
         val files = flattenFiles(fileTree).filter { it.name.endsWith(".css") || it.name.endsWith(".scss") || it.name.endsWith(".sass") }
         val cssClasses = mutableSetOf<String>()
         val cssIds = mutableSetOf<String>()
@@ -1284,7 +1412,7 @@ class ProjectAnalyzerService(
         score += minOf(totalCodeFiles * 0.4, 8.0)
 
         // Bonus for having a dominant language (consistency)
-        val (primaryLang, primaryCount) = detectPrimaryLanguage(fileTypes)
+        val (_, primaryCount) = detectPrimaryLanguage(fileTypes)
         if (primaryCount > 0 && totalCodeFiles > 0) {
             val dominanceRatio = primaryCount.toDouble() / totalCodeFiles
             if (dominanceRatio > 0.5) {
@@ -1318,7 +1446,8 @@ class ProjectAnalyzerService(
         return minOf(score, 10.0)
     }
 
-    private fun scoreCreativeProject(fileTypes: Map<String, Int>, folderStructure: List<String>): Double {
+    @Suppress("UNUSED_PARAMETER")
+    private fun scoreCreativeProject(fileTypes: Map<String, Int>, _folderStructure: List<String>): Double {
         var score = 0.0
 
         val creativeExtensions = listOf(".jpg", ".png", ".gif", ".svg", ".mp3", ".mp4", ".blend", ".psd")
@@ -1328,7 +1457,8 @@ class ProjectAnalyzerService(
         return minOf(score, 10.0)
     }
 
-    private fun scoreResearchProject(fileTypes: Map<String, Int>, folderStructure: List<String>): Double {
+    @Suppress("UNUSED_PARAMETER")
+    private fun scoreResearchProject(fileTypes: Map<String, Int>, _folderStructure: List<String>): Double {
         var score = 0.0
 
         val researchExtensions = listOf(".csv", ".xlsx", ".json", ".ipynb", ".r")
@@ -1338,7 +1468,8 @@ class ProjectAnalyzerService(
         return minOf(score, 10.0)
     }
 
-    private fun scoreBusinessProject(fileTypes: Map<String, Int>, folderStructure: List<String>): Double {
+    @Suppress("UNUSED_PARAMETER")
+    private fun scoreBusinessProject(fileTypes: Map<String, Int>, _folderStructure: List<String>): Double {
         var score = 0.0
 
         val businessExtensions = listOf(".xlsx", ".docx", ".pptx", ".pdf")
@@ -1348,7 +1479,8 @@ class ProjectAnalyzerService(
         return minOf(score, 10.0)
     }
 
-    private fun scoreEducationalProject(fileTypes: Map<String, Int>, folderStructure: List<String>): Double {
+    @Suppress("UNUSED_PARAMETER")
+    private fun scoreEducationalProject(_fileTypes: Map<String, Int>, folderStructure: List<String>): Double {
         var score = 0.0
 
         val eduFolders = listOf("lessons", "courses", "modules", "exercises")
@@ -1639,7 +1771,7 @@ class ProjectAnalyzerService(
     }
 
     private fun resolveIgnoreMatcher(projectRoot: Path): AiIgnoreMatcher {
-        val patterns = configService.getRagIgnoredDirectories()
+        val patterns = configService.getTyped<List<String>>(ConfigKeys.RAG_IGNORED_DIRECTORIES).toSet()
         return try {
             AiIgnoreMatcher.load(projectRoot) ?: AiIgnoreMatcher.fromPatterns(patterns)
         } catch (e: Exception) {
@@ -1844,7 +1976,8 @@ data class ProjectAnalysis(
     val domainAnalysis: DomainAnalysis,
     val analyzedAt: Long,
     val richReport: ProjectAnalysisReport? = null,
-    val architectureInfo: ArchitectureInfo? = null  // ADR 0017: Enhanced architecture analysis
+    val architectureInfo: ArchitectureInfo? = null,  // ADR 0017: Enhanced architecture analysis
+    val frameworkAnalysis: FrameworkAnalysis? = null
 )
 
 data class StructureInfo(
@@ -1858,6 +1991,10 @@ data class StructureInfo(
 data class DependenciesInfo(
     val python: List<String>,
     val javascript: List<String>,
+    val typescript: List<String> = emptyList(),
+    val kotlin: List<String> = emptyList(),
+    val java: List<String> = emptyList(),
+    val cpp: List<String> = emptyList(),
     val packageManagers: List<String>,
     val configFiles: List<String>
 )

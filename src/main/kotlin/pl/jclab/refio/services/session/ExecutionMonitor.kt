@@ -497,7 +497,7 @@ class ExecutionMonitor(
         override fun onReflectionStream(
             step: pl.jclab.refio.core.db.Subtask,
             streamContent: String,
-            isFinal: Boolean
+            isComplete: Boolean
         ) {
             if (reflectionMessageId == null) {
                 val state = createStreamingMessage(
@@ -522,7 +522,7 @@ class ExecutionMonitor(
                 }
             }
 
-            if (isFinal) {
+            if (isComplete) {
                 val msgId = reflectionMessageId
                 if (msgId != null) {
                     // Update message to final state instead of removing

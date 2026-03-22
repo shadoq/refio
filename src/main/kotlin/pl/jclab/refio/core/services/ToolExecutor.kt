@@ -458,7 +458,8 @@ class ToolExecutor(
      * Extract file paths from tool parameters.
      * Looks for common parameter names: path, file_path, paths, files.
      */
-    private fun extractFilePaths(toolName: String, params: Map<String, Any>): List<String> {
+    @Suppress("UNUSED_PARAMETER")
+    private fun extractFilePaths(_toolName: String, params: Map<String, Any>): List<String> {
         val paths = mutableListOf<String>()
 
         // Single file path

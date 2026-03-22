@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.tools
 
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.services.logging.dualLogger
 import java.nio.file.Files
@@ -133,7 +134,7 @@ class PathSandbox(
     companion object {
         fun withConfig(projectRoot: Path, configService: ConfigService): PathSandbox {
             return PathSandbox(projectRoot) {
-                configService.isSymlinkAccessAllowed()
+                configService.getTyped(ConfigKeys.SECURITY_ALLOW_SYMLINKS)
             }
         }
 

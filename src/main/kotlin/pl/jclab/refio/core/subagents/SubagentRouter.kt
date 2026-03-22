@@ -140,11 +140,12 @@ class SubagentRouter(
      * @throws SubagentNotFoundException Jeśli subagent nie istnieje
      * @throws SubagentDisabledException Jeśli subagent jest wyłączony
      */
+    @Suppress("UNUSED_PARAMETER")
     suspend fun invoke(
         taskId: String,
         name: String,
         prompt: String,
-        contextItems: List<ContextItem> = emptyList(),
+        _contextItems: List<ContextItem> = emptyList(),
         contextRefs: List<pl.jclab.refio.api.models.ContextReference> = emptyList(),
         stream: Boolean = false,
         onChunk: ((StreamChunk) -> Unit)? = null,
@@ -184,7 +185,8 @@ class SubagentRouter(
                 providerOverride = resolvedProvider,
                 maxIterationsOverride = definition.maxSteps,
                 depth = 0,
-                subagentChain = emptyList()
+                subagentChain = emptyList(),
+                contextProfile = definition.contextProfile
             )
         )
 

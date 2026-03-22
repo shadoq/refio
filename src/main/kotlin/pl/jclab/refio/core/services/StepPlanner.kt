@@ -21,6 +21,7 @@ import pl.jclab.refio.core.api.PlanDecisionInfo
 import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.api.StreamCallback
 import pl.jclab.refio.core.api.ToolCallSpec
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
@@ -194,7 +195,7 @@ class StepPlanner(
                     LLMMessage(role = "user", content = userContext)
                 ),
                 systemPrompt = systemPrompt,
-                maxTokens = configService.getMaxOutputTokens(task.id),
+                maxTokens = configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, task.id),
                 temperature = 0.3,
                 responseFormat = mapOf("type" to "json_object"),
                 thinking = thinkingEnabled,
@@ -521,6 +522,7 @@ class StepPlanner(
     /**
      * Parse params_json string to map.
      */
+    @Suppress("UNCHECKED_CAST")
     private fun parseParamsJson(paramsJson: String?): Map<String, Any> {
         if (paramsJson.isNullOrBlank()) {
             return emptyMap()
@@ -793,7 +795,8 @@ class StepPlanner(
         return allowedTools.first()
     }
 
-    private fun skipSubtaskDueToMissingTools(subtask: Subtask, task: Task, reason: String): Nothing {
+    @Suppress("UNUSED_PARAMETER")
+    private fun skipSubtaskDueToMissingTools(subtask: Subtask, _task: Task, reason: String): Nothing {
         logger.warn { "[PLANNER] $reason" }
         subtaskRepository.updateStatus(subtask.id, TaskStatus.CANCELED)
         subtaskRepository.updateResult(

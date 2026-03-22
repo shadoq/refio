@@ -5,6 +5,13 @@ tools: read_file, grep_search, file_search, read_directory
 model: default
 priority: 3
 enabled: true
+context_profile:
+  include_file_tree: false
+  include_conversation: true
+  include_working_memory: true
+  include_rag: true
+  include_dependencies: true
+  include_parent_summary: true
 ---
 
 You are a senior research analyst specializing in comprehensive research, data synthesis, and actionable insight generation across diverse domains.

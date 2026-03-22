@@ -10,6 +10,7 @@ import com.intellij.ui.components.JBTextField
 import kotlinx.coroutines.*
 import pl.jclab.refio.core.context.ContextProviderRegistry
 import pl.jclab.refio.core.context.ProviderType
+import pl.jclab.refio.core.config.ConfigKeys as TypedConfigKeys
 import pl.jclab.refio.core.services.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.services.core.CoreConnectionManager
@@ -63,6 +64,11 @@ class ContextSettingsPanel(
     private lateinit var ragSearchSemanticWeightField: JBTextField
     private lateinit var ragSearchHybridEnabledCheckbox: JCheckBox
     private lateinit var ragSearchIncludeContextChunksCheckbox: JCheckBox
+    private lateinit var chunkingStrategyCombo: JComboBox<String>
+    private lateinit var bm25K1Field: JBTextField
+    private lateinit var bm25BField: JBTextField
+    private lateinit var embeddingModelField: JBTextField
+    private lateinit var indexStatsLabel: JLabel
     private val defaultIgnorePathsText = ConfigService.DEFAULT_RAG_IGNORED_DIRECTORIES.joinToString("\n")
     private var indexJob: Job? = null
     private var embeddingJob: Job? = null
@@ -84,11 +90,19 @@ class ContextSettingsPanel(
             add(createSectionPanel("Embedding Management", createEmbeddingsSection()))
             add(Box.createVerticalStrut(LCATheme.spacingLg))
 
-            // Section 3: Search Settings
+            // Section 3: Chunking & Embedding
+            add(createSectionPanel("Chunking & Embedding", createChunkingEmbeddingSection()))
+            add(Box.createVerticalStrut(LCATheme.spacingLg))
+
+            // Section 4: Search Settings
             add(createSectionPanel("Search Settings", createSearchSettingsSection()))
             add(Box.createVerticalStrut(LCATheme.spacingLg))
 
-            // Section 4: Providers
+            // Section 5: Index Statistics
+            add(createSectionPanel("Index Statistics", createIndexStatisticsSection()))
+            add(Box.createVerticalStrut(LCATheme.spacingLg))
+
+            // Section 6: Providers
             add(createSectionPanel("Providers", createBuiltInProvidersPanel()))
         }
 
@@ -335,6 +349,30 @@ class ContextSettingsPanel(
                 add(ragSearchHybridEnabledCheckbox)
                 add(ragSearchIncludeContextChunksCheckbox)
             })
+
+            add(Box.createVerticalStrut(8))
+            add(JBLabel("BM25 Parameters (used in hybrid search):").apply {
+                foreground = LCATheme.descriptionForeground
+            })
+
+            bm25K1Field = JBTextField("1.5", 4)
+            bm25BField = JBTextField("0.75", 4)
+
+            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
+                add(JBLabel("k1:"))
+                add(bm25K1Field)
+                add(JBLabel("(term saturation, default 1.5)").apply {
+                    foreground = LCATheme.descriptionForeground
+                })
+            })
+
+            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
+                add(JBLabel("b:"))
+                add(bm25BField)
+                add(JBLabel("(length normalization, default 0.75)").apply {
+                    foreground = LCATheme.descriptionForeground
+                })
+            })
         }
     }
 
@@ -378,6 +416,83 @@ class ContextSettingsPanel(
                 add(generateEmbeddingsButton)
                 add(stopEmbeddingsButton)
             })
+        }
+    }
+
+    private fun createChunkingEmbeddingSection(): JPanel {
+        chunkingStrategyCombo = JComboBox(arrayOf("Semantic (recommended for code)", "Default (line-based)")).apply {
+            selectedIndex = 0
+        }
+        embeddingModelField = JBTextField("ollama/nomic-embed-text", 25)
+
+        return JBPanel<JBPanel<*>>().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+
+            add(JBLabel("Chunking Strategy:").apply {
+                font = LCATheme.boldFont
+            })
+            add(JBLabel("Semantic chunking preserves code structure boundaries (classes, functions).").apply {
+                foreground = LCATheme.descriptionForeground
+            })
+            add(Box.createVerticalStrut(4))
+            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
+                add(JBLabel("Strategy:"))
+                add(chunkingStrategyCombo)
+            })
+            add(Box.createVerticalStrut(8))
+
+            add(JBLabel("Embedding Model:").apply {
+                font = LCATheme.boldFont
+            })
+            add(JBLabel("Model used for generating vector embeddings.").apply {
+                foreground = LCATheme.descriptionForeground
+            })
+            add(Box.createVerticalStrut(4))
+            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
+                add(JBLabel("Model:"))
+                add(embeddingModelField)
+            })
+        }
+    }
+
+    private fun createIndexStatisticsSection(): JPanel {
+        indexStatsLabel = JLabel("Loading statistics...")
+
+        return JBPanel<JBPanel<*>>().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+
+            add(JBLabel("Index Statistics:").apply {
+                font = LCATheme.boldFont
+            })
+            add(Box.createVerticalStrut(4))
+            add(indexStatsLabel)
+        }
+    }
+
+    private fun loadIndexStatistics() {
+        val projectPath = project.basePath ?: return
+
+        cs.launch {
+            try {
+                val projectRoot = java.nio.file.Paths.get(projectPath)
+                val router = coreManager.getOrCreateProjectRouter(projectRoot)
+                val stats = router.getRagStatistics()
+
+                SwingUtilities.invokeLater {
+                    indexStatsLabel.text = buildString {
+                        append("<html>")
+                        append("Total files indexed: <b>${stats.filesCount}</b><br>")
+                        append("Total chunks: <b>${stats.chunksCount}</b><br>")
+                        append("Total embeddings: <b>${stats.embeddingsCount}</b>")
+                        append("</html>")
+                    }
+                }
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to load index statistics" }
+                SwingUtilities.invokeLater {
+                    indexStatsLabel.text = "Failed to load statistics"
+                }
+            }
         }
     }
 
@@ -626,8 +741,8 @@ class ContextSettingsPanel(
 
     fun reload() {
         loadIgnorePaths()
-        loadIgnorePaths()
         loadRagSearchSettings()
+        loadIndexStatistics()
     }
 
     fun dispose() {
@@ -657,11 +772,11 @@ class ContextSettingsPanel(
                 val router = coreManager.getOrCreateProjectRouter(java.nio.file.Paths.get(projectPath))
                 val configService = router.getConfigService()
 
-                val threshold = configService.getRagSearchSimilarityThreshold()
-                val topK = configService.getRagSearchTopK()
-                val hybridEnabled = configService.getRagSearchHybridEnabled()
-                val semanticWeight = configService.getRagSearchSemanticWeight()
-                val includeContextChunks = configService.getRagSearchIncludeContextChunks()
+                val threshold = configService.getTyped(TypedConfigKeys.RAG_SEARCH_SIMILARITY_THRESHOLD)
+                val topK = configService.getTyped(TypedConfigKeys.RAG_SEARCH_TOP_K)
+                val hybridEnabled = configService.getTyped(TypedConfigKeys.RAG_SEARCH_HYBRID_ENABLED)
+                val semanticWeight = configService.getTyped(TypedConfigKeys.RAG_SEARCH_SEMANTIC_WEIGHT)
+                val includeContextChunks = configService.getTyped(TypedConfigKeys.RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS)
 
                 SwingUtilities.invokeLater {
                     isLoadingSearchSettings = true

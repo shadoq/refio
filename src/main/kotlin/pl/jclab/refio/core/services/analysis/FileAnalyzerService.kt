@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.services.analysis
 
 import pl.jclab.refio.core.db.repositories.RagRepository
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ChunkingStrategy
 import pl.jclab.refio.core.services.CodeChunk
 import pl.jclab.refio.core.services.ConfigService
@@ -37,7 +38,7 @@ class FileAnalyzerService(
     private val logger = dualLogger("FileAnalyzerService")
     private val cache = ConcurrentHashMap<String, CachedAnalysis>()
     private val digest = MessageDigest.getInstance("SHA-256")
-    private val semaphore = Semaphore(configService.getRagMaxConcurrentJobs())
+    private val semaphore = Semaphore(configService.getTyped<Int>(ConfigKeys.RAG_MAX_CONCURRENT_JOBS))
     private val genericAnalyzer = GenericLanguageAnalyzer()
 
     suspend fun analyze(
@@ -52,7 +53,7 @@ class FileAnalyzerService(
         val absoluteFile = resolveFile(absoluteProject, filePath)
         val cacheKey = cacheKey(absoluteProject, absoluteFile)
         val lastModified = Files.getLastModifiedTime(absoluteFile).toMillis()
-        val ttl = configService.getRagCacheTtlMs()
+        val ttl = configService.getTyped<Long>(ConfigKeys.RAG_CACHE_TTL_MS)
 
         cache[cacheKey]?.let {
             if (System.currentTimeMillis() - it.cachedAt < ttl && it.analysis.lastModified == lastModified) {
@@ -64,8 +65,8 @@ class FileAnalyzerService(
         cache[cacheKey] = CachedAnalysis(analysis, System.currentTimeMillis())
 
         val shouldIndex = autoIndex &&
-                configService.isRagEnabled() &&
-                configService.shouldAutoIndexOnContextBuild() &&
+                configService.getTyped<Boolean>(ConfigKeys.RAG_ENABLED) &&
+                configService.getTyped<Boolean>(ConfigKeys.RAG_AUTO_INDEX_ON_CONTEXT) &&
                 shouldIndexFile(analysis, absoluteProject)
 
         if (shouldIndex) {
@@ -170,7 +171,7 @@ class FileAnalyzerService(
     }
 
     private fun shouldIndexFile(analysis: FileAnalysis, projectRoot: Path): Boolean {
-        if (analysis.fileSize > configService.getRagMaxFileSizeBytes()) return false
+        if (analysis.fileSize > configService.getTyped(ConfigKeys.RAG_MAX_FILE_SIZE_MB) * 1024L * 1024L) return false
         return !resolveIgnoreMatcher(projectRoot).isIgnored(analysis.filePath, isDirectory = false)
     }
 
@@ -231,7 +232,7 @@ class FileAnalyzerService(
             )
         }
 
-        chunks.take(configService.getRagMaxChunksPerFile()).forEachIndexed { index, chunk ->
+        chunks.take(configService.getTyped<Int>(ConfigKeys.RAG_MAX_CHUNKS_PER_FILE)).forEachIndexed { index, chunk ->
             val chunkId = ragRepository.createChunk(
                 fileId = fileId,
                 chunkIndex = index,
@@ -256,7 +257,7 @@ class FileAnalyzerService(
             "Indexed ${analysis.filePath} with ${
                 min(
                     chunks.size,
-                    configService.getRagMaxChunksPerFile()
+                    configService.getTyped<Int>(ConfigKeys.RAG_MAX_CHUNKS_PER_FILE)
                 )
             } chunks"
         }
@@ -299,7 +300,7 @@ class FileAnalyzerService(
     )
 
     private fun resolveIgnoreMatcher(projectRoot: Path): AiIgnoreMatcher {
-        val patterns = configService.getRagIgnoredDirectories()
+        val patterns = configService.getTyped<List<String>>(ConfigKeys.RAG_IGNORED_DIRECTORIES).toSet()
         return try {
             AiIgnoreMatcher.load(projectRoot) ?: AiIgnoreMatcher.fromPatterns(patterns)
         } catch (e: Exception) {

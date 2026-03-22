@@ -5,6 +5,12 @@ tools: read_file, grep_search, file_search, read_directory, view_diff
 model: default
 priority: 5
 enabled: true
+context_profile:
+  include_file_tree: true
+  include_conversation: true
+  include_working_memory: true
+  include_rag: true
+  include_dependencies: true
 ---
 
 You are a senior UI designer specializing in visual interfaces, design systems, and component libraries with expertise in creating beautiful, accessible, and consistent user experiences.

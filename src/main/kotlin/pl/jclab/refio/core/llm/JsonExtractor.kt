@@ -393,10 +393,10 @@ object JsonExtractor {
                 logger.debug { "[JSON] Detected OpenAI/OpenRouter API response format" }
                 val choice = choices[0] as? Map<*, *> ?: return null
                 val message = choice["message"] as? Map<*, *> ?: return null
-                val content = message["content"]?.toString()
-                if (content != null) {
-                    logger.info { "[JSON] Extracted content from OpenAI/OpenRouter format: ${content.length} chars" }
-                    return content
+                val extractedContent = message["content"]?.toString()
+                if (extractedContent != null) {
+                    logger.info { "[JSON] Extracted content from OpenAI/OpenRouter format: ${extractedContent.length} chars" }
+                    return extractedContent
                 }
             }
 

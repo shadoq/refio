@@ -107,7 +107,8 @@ class InvokeSubagentTool(
                 maxIterationsOverride = definition.maxSteps,
                 parentRunId = parentRunId,
                 depth = childDepth,
-                subagentChain = parentChain
+                subagentChain = parentChain,
+                contextProfile = definition.contextProfile
             )
         )
 

@@ -10,6 +10,7 @@ import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.llm.StreamChunk
 import pl.jclab.refio.core.llm.toModelConfig
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
 import pl.jclab.refio.core.utils.GsonInstance.gson
@@ -55,8 +56,8 @@ class LMStudioAdapter(
     private val logger = dualLogger("LMStudioAdapter")
 
     private val timeout: Long
-        get() = configService?.getApiCallTimeoutMs(taskId)
-            ?: ConfigService.DEFAULT_API_CALL_TIMEOUT * 1000L
+        get() = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+            ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
 
     private val client = HttpClient(CIO) {
         install(ContentNegotiation) {
@@ -79,8 +80,8 @@ class LMStudioAdapter(
             }
         }
         install(HttpTimeout) {
-            val timeoutMs = configService?.getApiCallTimeoutMs(taskId)
-                ?: ConfigService.DEFAULT_API_CALL_TIMEOUT * 1000L
+            val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+                ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
             requestTimeoutMillis = timeoutMs
             connectTimeoutMillis = 30000
             socketTimeoutMillis = timeoutMs
@@ -127,8 +128,8 @@ class LMStudioAdapter(
             lmMessages.add(mapOf("role" to msg.role, "content" to msg.content))
         }
 
-        val maxOutputLimit = configService?.getMaxOutputTokens(taskId)
-            ?: ConfigService.DEFAULT_MAX_OUTPUT_SIZE
+        val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)
+            ?: ConfigKeys.MAX_OUTPUT_SIZE.default
         val requestedMaxTokens = when {
             maxTokens != null && maxTokens > 0 -> minOf(maxTokens, maxOutputLimit)
             else -> maxOutputLimit
@@ -224,6 +225,7 @@ class LMStudioAdapter(
                 throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, errorMessage)
             }
 
+            @Suppress("UNCHECKED_CAST")
             val usageMap = rawResponse["usage"] as? Map<String, Any?> ?: emptyMap()
             val promptTokens = (usageMap["prompt_tokens"] as? Number)?.toInt() ?: 0
             val completionTokens = (usageMap["completion_tokens"] as? Number)?.toInt() ?: 0
@@ -235,8 +237,10 @@ class LMStudioAdapter(
                 totalTokens = totalTokens
             )
 
+            @Suppress("UNCHECKED_CAST")
             val choices = rawResponse["choices"] as? List<Map<String, Any?>> ?: emptyList()
             val firstChoice = choices.firstOrNull() ?: emptyMap()
+            @Suppress("UNCHECKED_CAST")
             val message = firstChoice["message"] as? Map<String, Any?> ?: emptyMap()
             val content = message["content"] as? String ?: ""
             val normalizedToolCallsJson = if (content.isBlank()) {
@@ -359,8 +363,10 @@ class LMStudioAdapter(
                     try {
                         @Suppress("UNCHECKED_CAST")
                         val chunk = gson.fromJson(data, Map::class.java) as Map<String, Any?>
+                        @Suppress("UNCHECKED_CAST")
                         val choices = chunk["choices"] as? List<Map<String, Any?>> ?: emptyList()
                         val first = choices.firstOrNull() ?: emptyMap()
+                        @Suppress("UNCHECKED_CAST")
                         val delta = first["delta"] as? Map<String, Any?>
                         toolCallAccumulator.consumeDelta(delta)
                         val content = delta?.get("content") as? String
@@ -388,6 +394,7 @@ class LMStudioAdapter(
                 }
             }
 
+            @Suppress("UNCHECKED_CAST")
             val inputTokensEstimate = (requestBody["messages"] as? List<Map<String, String>>)
                 ?.sumOf { it["content"]?.length ?: 0 } ?: 0
             val outputTokensEstimate = contentBuilder.length / 4
@@ -477,9 +484,10 @@ class LMStudioAdapter(
             }
 
             val body: Map<String, Any?> = response.body()
+            @Suppress("UNCHECKED_CAST")
             val modelsData = body["data"] as? List<Map<String, Any?>> ?: emptyList()
 
-            val contextSize = configService?.getLMStudioContextSize() ?: DEFAULT_CONTEXT_SIZE
+            val contextSize = configService?.getTyped(ConfigKeys.PROVIDER_LM_STUDIO_CONTEXT_SIZE) ?: ConfigKeys.PROVIDER_LM_STUDIO_CONTEXT_SIZE.default
 
             return@withContext modelsData.mapNotNull { modelData ->
                 val modelId = modelData["id"] as? String ?: return@mapNotNull null

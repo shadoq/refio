@@ -113,7 +113,7 @@ object TurnJsonUtils {
                 is Map<*, *> -> {
                     @Suppress("UNCHECKED_CAST")
                     JsonObject(
-                        (any as Map<String, Any>).mapValues { (_, v) -> anyToJsonElement(v!!) }
+                        (any as Map<String, Any>).mapValues { (_, v) -> anyToJsonElement(v) }
                     )
                 }
                 is List<*> -> {

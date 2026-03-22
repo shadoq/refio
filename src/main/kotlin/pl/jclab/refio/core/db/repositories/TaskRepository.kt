@@ -122,7 +122,7 @@ class TaskRepository {
         rate: Int? = null
     ): Task? {
         return transaction {
-            val existing = findById(id) ?: return@transaction null
+            findById(id) ?: return@transaction null
 
             TasksTable.update({ TasksTable.id eq id }) {
                 name?.let { value -> it[TasksTable.name] = value }
@@ -344,14 +344,14 @@ class TaskRepository {
     }
 
     fun getForProject(projectId: String, limit: Int = 200): List<Task> = transaction {
-        TasksTable.select { TasksTable.projectId eq projectId }
+        TasksTable.selectAll().where { TasksTable.projectId eq projectId }
             .orderBy(TasksTable.createdAt to SortOrder.DESC)
             .limit(limit)
             .map { rowToTask(it) }
     }
 
     fun getLastForProject(projectId: String): Task? = transaction {
-        TasksTable.select { TasksTable.projectId eq projectId }
+        TasksTable.selectAll().where { TasksTable.projectId eq projectId }
             .orderBy(TasksTable.createdAt to SortOrder.DESC)
             .limit(1)
             .firstOrNull()

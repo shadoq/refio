@@ -138,13 +138,13 @@ class TurnToolExecutor(
                             subtaskId = subtaskId,
                             listener = listener,
                             iteration = iteration,
-                            config = config,
+                            _config = config,
                             mode = mode,
                             executionMode = executionMode,
                             runId = runId,
                             depth = depth,
                             profileOverrides = profileOverrides,
-                            subtaskIds = subtaskIds
+                            _subtaskIds = subtaskIds
                         )
                         originalIndex to (toolCall to result)
                     }
@@ -174,13 +174,13 @@ class TurnToolExecutor(
                         subtaskId = subtaskId,
                         listener = listener,
                         iteration = iteration,
-                        config = config,
+                        _config = config,
                         mode = mode,
                         executionMode = executionMode,
                         runId = runId,
                         depth = depth,
                         profileOverrides = profileOverrides,
-                        subtaskIds = subtaskIds
+                        _subtaskIds = subtaskIds
                     )
                     originalIndex to (toolCall to result)
                 }
@@ -213,13 +213,13 @@ class TurnToolExecutor(
                 subtaskId = subtaskId,
                 listener = listener,
                 iteration = iteration,
-                config = config,
+                _config = config,
                 mode = mode,
                 executionMode = executionMode,
                 runId = runId,
                 depth = depth,
                 profileOverrides = profileOverrides,
-                subtaskIds = subtaskIds
+                _subtaskIds = subtaskIds
             )
             sequentialResults.add(index to (toolCall to resultData))
         }
@@ -232,19 +232,20 @@ class TurnToolExecutor(
     /**
      * Execute a single tool call.
      */
+    @Suppress("UNUSED_PARAMETER")
     suspend fun executeSingleTool(
         taskId: String,
         toolCall: ToolCallData,
         subtaskId: String,
         listener: TurnEventListener?,
         iteration: Int,
-        config: TurnLoopConfig,
+        _config: TurnLoopConfig,
         mode: TaskMode,
         executionMode: ExecutionMode,
         runId: String,
         depth: Int,
         profileOverrides: TurnProfileOverrides?,
-        subtaskIds: Map<String, String>
+        _subtaskIds: Map<String, String>
     ): ToolResultData {
         if (toolCall.error != null) {
             val errorText = "Error: ${toolCall.error}"

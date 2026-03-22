@@ -14,6 +14,19 @@ enum class SubagentScope {
 }
 
 /**
+ * Context profile for subagent - controls which context sections are included.
+ */
+data class SubagentContextProfile(
+    val includeFileTree: Boolean = true,
+    val includeConversation: Boolean = true,
+    val includeWorkingMemory: Boolean = true,
+    val includeRag: Boolean = true,
+    val includeDependencies: Boolean = true,
+    val maxContextTokens: Int? = null,
+    val includeParentSummary: Boolean = false
+)
+
+/**
  * Definicja subagenta sparsowana z pliku .md.
  * Zgodna z formatem Claude Code Sub-agents.
  *
@@ -92,7 +105,12 @@ data class SubagentDefinition(
     /**
      * Maksymalna liczba kroków (tylko dla multi_step).
      */
-    val maxSteps: Int = 10
+    val maxSteps: Int = 10,
+
+    /**
+     * Profil kontekstu - kontroluje które sekcje kontekstu są włączone.
+     */
+    val contextProfile: SubagentContextProfile = SubagentContextProfile()
 ) {
     /**
      * Rozwiązuje alias modelu na rzeczywisty ID.

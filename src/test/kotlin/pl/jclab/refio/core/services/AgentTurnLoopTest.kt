@@ -27,6 +27,7 @@ import pl.jclab.refio.core.services.turn.TurnResponseProcessor
 import pl.jclab.refio.core.services.turn.TurnSubagentValidator
 import pl.jclab.refio.core.services.turn.ToolCallParser
 import pl.jclab.refio.core.services.turn.TurnToolExecutor
+import pl.jclab.refio.core.config.ConfigKey
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -98,6 +99,7 @@ class AgentTurnLoopTest {
 
         every { promptsService.getSystemPrompt(any(), any()) } returns "System prompt"
         every { configService.getModel(any(), any()) } returns Pair("gpt-4", "openai")
+        every { configService.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
 
         val mockTask = createMockTask()
         every { taskRepository.findById(testTaskId) } returns mockTask

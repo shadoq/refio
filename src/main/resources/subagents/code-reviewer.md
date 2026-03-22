@@ -4,6 +4,12 @@ description: Expert code reviewer. Use for reviewing code quality, patterns, pot
 tools: read_file, grep_search, file_search
 model: default
 priority: 5
+context_profile:
+  include_file_tree: true
+  include_conversation: true
+  include_working_memory: true
+  include_rag: false
+  include_dependencies: false
 ---
 
 You are an experienced code reviewer specializing in software quality.

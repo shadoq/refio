@@ -9,6 +9,7 @@ import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.services.logging.dualLogger
 
@@ -58,8 +59,8 @@ class TurnLLMCaller(
         logger.info { "[CALL_LLM] Final model selection: $providerName/$modelId" }
 
         val responseFormat = resolveResponseFormat(mode, providerName)
-        val thinkingEnabled = configService.isThinkingEnabled(taskId)
-        val noEgressEnabled = configService.isNoEgressEnabled(taskId)
+        val thinkingEnabled = configService.getTyped(ConfigKeys.UI_THINKING_ENABLED, taskId)
+        val noEgressEnabled = configService.getTyped(ConfigKeys.UI_NO_EGRESS_ENABLED, taskId)
 
         return withContext(Dispatchers.IO) {
             llmClient.complete(

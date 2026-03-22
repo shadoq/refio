@@ -89,6 +89,7 @@ class DefaultChunkingStrategy : ChunkingStrategy {
         language: String?,
         maxChunkChars: Int
     ): List<CodeChunk> {
+        @Suppress("DEPRECATION")
         val legacyChunks = chunkText(content, maxChunkChars, maxChunkChars / 5)
         return legacyChunks.map {
             CodeChunk(

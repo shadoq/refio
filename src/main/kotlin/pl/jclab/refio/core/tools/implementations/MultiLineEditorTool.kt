@@ -10,6 +10,7 @@ import pl.jclab.refio.core.db.Subtask
 import pl.jclab.refio.core.db.repositories.TaskRepository
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
@@ -241,7 +242,7 @@ class MultiLineEditorTool(
                 messages = messages,
                 systemPrompt = systemPrompt,
                 temperature = 0.1, // Low temp for precision
-                maxTokens = configService.getMaxOutputTokens(),
+                maxTokens = configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE),
                 stream = stream,
                 onChunk = streamingCallback,
                 taskId = null,
@@ -365,7 +366,8 @@ class MultiLineEditorTool(
     /**
      * Parse JSON response from LLM into list of EditChange objects
      */
-    private fun parseEdits(jsonResponse: String, totalLines: Int): List<EditChange> {
+    @Suppress("UNUSED_PARAMETER")
+    private fun parseEdits(jsonResponse: String, _totalLines: Int): List<EditChange> {
         try {
             // Extract JSON from response (might be wrapped in markdown)
             val jsonContent = extractJsonFromResponse(jsonResponse)

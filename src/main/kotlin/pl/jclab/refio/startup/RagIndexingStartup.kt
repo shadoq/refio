@@ -4,6 +4,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.services.core.CoreConnectionManager
 import pl.jclab.refio.services.logging.dualLogger
 import pl.jclab.refio.services.rag.BackgroundIndexingTask
@@ -21,7 +22,7 @@ class RagIndexingStartup : ProjectActivity {
         val coreManager = CoreConnectionManager.getInstance()
         val configService = coreManager.getApiRouter().configService
 
-        if (!configService.isRagEnabled() || !configService.shouldIndexRagOnStartup()) {
+        if (!configService.getTyped<Boolean>(ConfigKeys.RAG_ENABLED) || !configService.getTyped<Boolean>(ConfigKeys.RAG_INDEX_ON_STARTUP)) {
             logger.info { "Startup RAG indexing disabled via configuration" }
             return
         }
@@ -33,7 +34,7 @@ class RagIndexingStartup : ProjectActivity {
                     logger.info { "Queued RAG indexing task for project ${project.name}" }
                 }
             },
-            ModalityState.NON_MODAL
+            ModalityState.nonModal()
         )
     }
 }

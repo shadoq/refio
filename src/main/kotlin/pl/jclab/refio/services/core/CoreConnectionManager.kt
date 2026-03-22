@@ -14,6 +14,7 @@ import pl.jclab.refio.core.tools.base.ToolFactory
 import pl.jclab.refio.core.context.ContextProviderRegistry
 import pl.jclab.refio.core.context.mcp.MCPManager
 import pl.jclab.refio.core.utils.ProjectIdGenerator
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.tools.security.FileLimits
 import java.io.File
 import java.nio.file.Paths
@@ -212,7 +213,7 @@ class CoreConnectionManager {
         val promptsService = router.promptsService
         val taskRepository = router.taskRepository
 
-        val maxFileSizeBytes = configService.getMaxFileSizeMB().toLong() * 1024 * 1024
+        val maxFileSizeBytes = configService.getTyped(ConfigKeys.MAX_FILE_SIZE).toLong() * 1024 * 1024
         val fileLimits = FileLimits(maxFileSize = maxFileSizeBytes)
 
         val toolFactory = ToolFactory(

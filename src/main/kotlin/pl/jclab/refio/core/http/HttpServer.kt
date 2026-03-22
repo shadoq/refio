@@ -261,7 +261,8 @@ class HttpServer(
         }
 
         delete("/api/chat/{taskId}/messages/{messageId}") {
-            val taskId = call.parameters["taskId"]
+            @Suppress("UNUSED_VARIABLE")
+            val _taskId = call.parameters["taskId"]
                 ?: throw IllegalArgumentException("Missing taskId")
             val messageId = call.parameters["messageId"]
                 ?: throw IllegalArgumentException("Missing messageId")

@@ -155,6 +155,7 @@ internal abstract class BaseBubbleRenderer {
         return panel
     }
 
+    @Suppress("UNUSED_PARAMETER")
     internal fun createUniversalBubble(
         icon: String,
         title: String,
@@ -162,7 +163,7 @@ internal abstract class BaseBubbleRenderer {
         content: String,
         messageId: String? = null,
         isStreaming: Boolean = false,
-        preferPlainTextMarkdown: Boolean = false,
+        _preferPlainTextMarkdown: Boolean = false,
         backgroundColor: Color,
         foregroundColor: Color,
         context: BubbleContentContext,

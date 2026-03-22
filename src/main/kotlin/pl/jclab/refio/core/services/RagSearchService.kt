@@ -4,6 +4,7 @@ import kotlinx.coroutines.withTimeout
 import pl.jclab.refio.core.db.RagContentType
 import pl.jclab.refio.core.db.repositories.RagRepository
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
+import pl.jclab.refio.core.services.rag.BM25Scorer
 import pl.jclab.refio.core.services.rag.RagSearchConfig
 import pl.jclab.refio.services.logging.dualLogger
 import java.nio.ByteBuffer
@@ -40,7 +41,8 @@ private val logger = dualLogger("RagSearchService")
 class RagSearchService(
     private val ragRepository: RagRepository,
     private val embeddingProvider: EmbeddingProvider,
-    private val defaultConfig: RagSearchConfig = RagSearchConfig()
+    private val defaultConfig: RagSearchConfig = RagSearchConfig(),
+    private val bm25Scorer: BM25Scorer? = null
 ) {
     companion object {
         private const val MIN_SIMILARITY_THRESHOLD = 0.3f
@@ -245,7 +247,7 @@ class RagSearchService(
             addContextChunks(
                 results = results,
                 similarityByChunkId = similarityByChunkId,
-                chunksMap = chunksMap,
+                chunksMap,
                 filesMap = filesMap,
                 config = config
             )
@@ -332,11 +334,35 @@ class RagSearchService(
             config = config.copy(topK = config.topK * 2, hybridSearch = false)
         )
 
+        // 2. Re-rank with BM25 or keyword boosting
+        if (bm25Scorer != null) {
+            logger.debug { "Using BM25 scorer for hybrid re-ranking" }
+            val bm25Scores = try {
+                bm25Scorer.score(query, projectRoot)
+            } catch (e: Exception) {
+                logger.error(e) { "BM25 scoring failed, falling back to keyword scoring" }
+                null
+            }
+
+            if (bm25Scores != null) {
+                val rerankedResults = semanticResults.map { result ->
+                    val bm25Score = bm25Scores[result.chunkId] ?: 0f
+                    val hybridScore = result.similarity * config.semanticWeight +
+                        (bm25Score * (1.0f - config.semanticWeight))
+                    result.copy(similarity = hybridScore)
+                }
+
+                return rerankedResults
+                    .sortedByDescending { it.similarity }
+                    .take(config.topK)
+            }
+        }
+
+        // Fallback: keyword-based re-ranking
         if (keywords.isEmpty()) {
             return semanticResults.take(config.topK)
         }
 
-        // 2. Re-rank with keyword boosting
         val rerankedResults = semanticResults.map { result ->
             val keywordScore = calculateKeywordScore(result.content, keywords)
             val hybridScore = result.similarity * config.semanticWeight +
@@ -351,10 +377,11 @@ class RagSearchService(
             .take(config.topK)
     }
 
+    @Suppress("UNUSED_PARAMETER")
     private fun addContextChunks(
         results: List<RagSearchResult>,
         similarityByChunkId: Map<Int, Float>,
-        chunksMap: Map<Int, pl.jclab.refio.core.db.IndexChunk>,
+        _chunksMap: Map<Int, pl.jclab.refio.core.db.IndexChunk>,
         filesMap: Map<Int, pl.jclab.refio.core.db.IndexFile>,
         config: RagSearchConfig
     ): List<RagSearchResult> {

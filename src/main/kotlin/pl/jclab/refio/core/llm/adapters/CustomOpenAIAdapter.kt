@@ -23,6 +23,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.llm.BaseLLMAdapter
 import pl.jclab.refio.core.llm.LLMMessage
@@ -82,8 +83,8 @@ open class CustomOpenAIAdapter(
             }
         }
         install(HttpTimeout) {
-            val timeoutMs = configService?.getApiCallTimeoutMs(taskId)
-                ?: ConfigService.DEFAULT_API_CALL_TIMEOUT * 1000L
+            val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+                ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
             requestTimeoutMillis = timeoutMs
             connectTimeoutMillis = 30_000L
             socketTimeoutMillis = timeoutMs
@@ -93,8 +94,8 @@ open class CustomOpenAIAdapter(
     private fun resolveBaseUrl(): String {
         val configured = baseUrlOverride?.takeIf { it.isNotBlank() }
             ?: when (providerName) {
-                "zai" -> configService?.getZAIBaseUrl()
-                else -> configService?.getCustomOpenAIBaseUrl()
+                "zai" -> configService?.getTyped(ConfigKeys.PROVIDER_ZAI_BASE_URL)
+                else -> configService?.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_BASE_URL)
             }
             ?: when (providerName) {
                 "zai" -> System.getProperty("ZAI_BASE_URL") ?: System.getenv("ZAI_BASE_URL")
@@ -109,8 +110,8 @@ open class CustomOpenAIAdapter(
     private fun resolveApiKey(): String? {
         val key = apiKeyOverride?.takeIf { it.isNotBlank() }
             ?: when (providerName) {
-                "zai" -> configService?.getZAIApiKey()
-                else -> configService?.getCustomOpenAIApiKey()
+                "zai" -> configService?.getTyped(ConfigKeys.PROVIDER_ZAI_API_KEY)
+                else -> configService?.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_API_KEY)
             }
             ?: when (providerName) {
                 "zai" -> System.getProperty("ZAI_API_KEY") ?: System.getenv("ZAI_API_KEY")
@@ -138,7 +139,7 @@ open class CustomOpenAIAdapter(
             systemMessages.filter { it.isNotBlank() }.forEach { add(mapOf("role" to "system", "content" to it)) }
             messages.filter { it.role != "system" }.forEach { add(mapOf("role" to it.role, "content" to it.content)) }
         }
-        val maxOutputLimit = configService?.getMaxOutputTokens(taskId) ?: ConfigService.DEFAULT_MAX_OUTPUT_SIZE
+        val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId) ?: ConfigKeys.MAX_OUTPUT_SIZE.default
         val effectiveMaxTokens = when {
             maxTokens != null && maxTokens > 0 -> minOf(maxTokens, maxOutputLimit)
             else -> maxOutputLimit
@@ -168,7 +169,7 @@ open class CustomOpenAIAdapter(
                 executeStandard(baseUrl, apiKey, requestBody, requestJson, startTime, logPrefix)
             }
         } catch (e: HttpRequestTimeoutException) {
-            throw RefioError.LLMTimeout(providerName, model, configService?.getApiCallTimeoutMs(taskId) ?: 0L, e)
+            throw RefioError.LLMTimeout(providerName, model, configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L) ?: 0L, e)
         }
     }
 
@@ -199,8 +200,10 @@ open class CustomOpenAIAdapter(
             ensureSuccess(httpStatus, rawResponse, baseUrl)
 
             val usage = extractUsage(rawResponse)
+            @Suppress("UNCHECKED_CAST")
             val choices = rawResponse["choices"] as? List<Map<String, Any?>> ?: emptyList()
             val firstChoice = choices.firstOrNull() ?: emptyMap()
+            @Suppress("UNCHECKED_CAST")
             val message = firstChoice["message"] as? Map<String, Any?> ?: emptyMap()
             val content = message["content"] as? String ?: ""
             val normalizedToolCallsJson = if (content.isBlank()) {
@@ -305,8 +308,10 @@ open class CustomOpenAIAdapter(
                             runCatching {
                                 @Suppress("UNCHECKED_CAST")
                                 val chunk = gson.fromJson(data, Map::class.java) as Map<String, Any?>
+                                @Suppress("UNCHECKED_CAST")
                                 val choices = chunk["choices"] as? List<Map<String, Any?>> ?: emptyList()
                                 val first = choices.firstOrNull() ?: emptyMap()
+                                @Suppress("UNCHECKED_CAST")
                                 val delta = first["delta"] as? Map<String, Any?>
                                 toolCallAccumulator.consumeDelta(delta)
                                 val content = delta?.get("content") as? String
@@ -325,10 +330,12 @@ open class CustomOpenAIAdapter(
                 toolCallAccumulator.toCanonicalJson()?.let { contentBuilder.append(it) }
             }
 
+            @Suppress("UNCHECKED_CAST")
+            val inputTokensEstimate = (requestBody["messages"] as? List<Map<String, String>>)?.sumOf { it["content"]?.length ?: 0 } ?: 0
             val usage = LLMUsage(
-                inputTokens = ((requestBody["messages"] as? List<Map<String, String>>)?.sumOf { it["content"]?.length ?: 0 } ?: 0),
+                inputTokens = inputTokensEstimate,
                 outputTokens = contentBuilder.length / 4,
-                totalTokens = (((requestBody["messages"] as? List<Map<String, String>>)?.sumOf { it["content"]?.length ?: 0 } ?: 0) + contentBuilder.length / 4)
+                totalTokens = inputTokensEstimate + contentBuilder.length / 4
             )
             onStreamChunk(StreamChunk(delta = "", finishReason = finalFinishReason, usage = usage))
 
@@ -463,6 +470,7 @@ open class CustomOpenAIAdapter(
     }
 
     private fun extractUsage(rawResponse: Map<String, Any?>): LLMUsage {
+        @Suppress("UNCHECKED_CAST")
         val usageMap = rawResponse["usage"] as? Map<String, Any?> ?: emptyMap()
         val promptTokens = (usageMap["prompt_tokens"] as? Number)?.toInt() ?: 0
         val completionTokens = (usageMap["completion_tokens"] as? Number)?.toInt() ?: 0
@@ -470,7 +478,8 @@ open class CustomOpenAIAdapter(
         return LLMUsage(promptTokens, completionTokens, totalTokens)
     }
 
-    private fun ensureSuccess(httpStatus: Int, rawResponse: Map<String, Any?>, baseUrl: String) {
+    @Suppress("UNUSED_PARAMETER")
+    private fun ensureSuccess(httpStatus: Int, rawResponse: Map<String, Any?>, _baseUrl: String) {
         if (httpStatus in 200..299) return
 
         val message = (rawResponse["error"] as? Map<*, *>)?.get("message") as? String
@@ -510,7 +519,7 @@ open class CustomOpenAIAdapter(
 
     internal fun parseProviderError(rawBody: String): ProviderErrorPayload {
         return runCatching {
-            val parsed = gson.fromJson(rawBody, Map::class.java) as? Map<*, *>
+            val parsed = gson.fromJson(rawBody, Map::class.java)
             val error = parsed?.get("error") as? Map<*, *>
             ProviderErrorPayload(
                 code = error?.get("code")?.toString(),

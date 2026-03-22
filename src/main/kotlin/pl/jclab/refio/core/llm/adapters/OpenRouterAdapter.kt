@@ -19,6 +19,7 @@ import io.ktor.client.plugins.logging.Logger as KtorLogger
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.gson.*
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.errors.LLMErrorMapper
 import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.security.SecureLogger
@@ -52,8 +53,8 @@ class OpenRouterAdapter(
     }
 
     private val timeoutMs: Long
-        get() = configService?.getApiCallTimeoutMs(taskId)
-            ?: pl.jclab.refio.core.services.ConfigService.DEFAULT_API_CALL_TIMEOUT * 1000L
+        get() = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+            ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
 
     private val client = HttpClient(CIO) {
         install(ContentNegotiation) {

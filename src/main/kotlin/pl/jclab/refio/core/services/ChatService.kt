@@ -16,6 +16,7 @@ import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.TokenEstimator
 import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 import pl.jclab.refio.core.utils.GsonInstance.gson
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.utils.ProjectIdGenerator
 import pl.jclab.refio.services.logging.dualLogger
 import java.util.UUID
@@ -103,7 +104,7 @@ class ChatService(
                 mode = TaskMode.CHAT,
                 projectId = fallbackProjectId,
                 projectPath = fallbackProjectPath,
-                readOnly = configService.isReadOnlyMode()
+                readOnly = configService.getTyped(ConfigKeys.READ_ONLY_MODE)
             ).also {
                 logger.info { "[CHAT_SERVICE] Created new task: ${it.id} (requested: ${request.taskId})" }
             }
@@ -189,10 +190,10 @@ class ChatService(
             variables = emptyMap()  // Context is now passed separately
         )
 
-        val autoOptimizePercentage = configService.getAutoOptimizePercentage()
+        val autoOptimizePercentage = configService.getTyped(ConfigKeys.AUTO_OPTIMIZE_PERCENTAGE)
         if (autoOptimizePercentage > 0) {
             val modelMaxContext = TokenEstimator.getMaxContextForModel(model, provider, configService)
-            val configuredLimit = configService.getMaxContextSize(task.id)
+            val configuredLimit = configService.getTyped(ConfigKeys.MAX_CONTEXT_SIZE, task.id)
             val effectiveMaxContext = minOf(modelMaxContext, configuredLimit)
             val threshold = (effectiveMaxContext * autoOptimizePercentage) / 100
             val estimatedTokens = TokenEstimator.estimateRequestTokens(messages, systemPrompt)

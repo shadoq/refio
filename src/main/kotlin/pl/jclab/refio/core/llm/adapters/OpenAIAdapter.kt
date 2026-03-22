@@ -21,6 +21,7 @@ import io.ktor.client.plugins.logging.Logger as KtorLogger
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.gson.*
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.errors.LLMErrorMapper
 import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.security.SecureLogger
@@ -58,8 +59,8 @@ class OpenAIAdapter(
     }
 
     private val timeoutMs: Long
-        get() = configService?.getApiCallTimeoutMs(taskId)
-            ?: pl.jclab.refio.core.services.ConfigService.DEFAULT_API_CALL_TIMEOUT * 1000L
+        get() = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+            ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
 
     /**
      * Get API endpoint path based on model definition.
@@ -169,8 +170,9 @@ class OpenAIAdapter(
 
         // Log output in readable format (full JSON)
         try {
-            val outputJson = gson.toJson(output)
-//            logger.info { "[OPENAI] Responses API output JSON: $outputJson" }
+            @Suppress("UNUSED_VARIABLE")
+            val _outputJson = gson.toJson(output)
+//            logger.info { "[OPENAI] Responses API output JSON: $_outputJson" }
         } catch (e: Exception) {
             logger.warn { "[OPENAI] Failed to serialize output: ${e.message}" }
         }
@@ -234,9 +236,8 @@ class OpenAIAdapter(
                 }
 
                 is Map<*, *> -> {
-                    @Suppress("UNCHECKED_CAST")
-                    val textMap = topLevelText as Map<String, Any?>
-                    val textContent = textMap["content"] as? String ?: textMap["text"] as? String ?: ""
+                    val textMap = topLevelText
+                    val textContent = textMap["content"]?.toString() ?: textMap["text"]?.toString() ?: ""
                     logger.info { "[OPENAI] Using text from map, length: ${textContent.length}" }
                     textContent
                 }
@@ -283,6 +284,7 @@ class OpenAIAdapter(
         }
 
         // Log incomplete details if present
+        @Suppress("UNCHECKED_CAST")
         val incompleteDetails = response["incomplete_details"] as? Map<String, Any?>
         if (incompleteDetails != null) {
             val reason = incompleteDetails["reason"]
@@ -297,8 +299,8 @@ class OpenAIAdapter(
 
     // Get timeout from ConfigService
     private val timeout: Long
-        get() = configService?.getApiCallTimeoutMs(taskId)
-            ?: pl.jclab.refio.core.services.ConfigService.DEFAULT_API_CALL_TIMEOUT * 1000L
+        get() = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+            ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
 
     private val client = HttpClient(CIO) {
         install(ContentNegotiation) {
@@ -321,9 +323,8 @@ class OpenAIAdapter(
             }
         }
         install(HttpTimeout) {
-            // Get dynamic timeout from ConfigService
-            val timeoutMs = configService?.getApiCallTimeoutMs(taskId)
-                ?: pl.jclab.refio.core.services.ConfigService.DEFAULT_API_CALL_TIMEOUT * 1000L
+            val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+                ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
             requestTimeoutMillis = timeoutMs
             connectTimeoutMillis = 30000
             socketTimeoutMillis = timeoutMs
@@ -434,8 +435,8 @@ class OpenAIAdapter(
         }
 
         // Use min of provided maxTokens and configured limit
-        val maxOutputLimit = configService?.getMaxOutputTokens(taskId)
-            ?: pl.jclab.refio.core.services.ConfigService.DEFAULT_MAX_OUTPUT_SIZE
+        val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)
+            ?: ConfigKeys.MAX_OUTPUT_SIZE.default
         val requestedMax = when {
             maxTokens != null && maxTokens > 0 -> minOf(maxTokens, maxOutputLimit)
             else -> maxOutputLimit
@@ -739,6 +740,7 @@ class OpenAIAdapter(
                     val errorMessage = try {
                         @Suppress("UNCHECKED_CAST")
                         val errorResponse = gson.fromJson(errorBody, Map::class.java) as Map<String, Any?>
+                        @Suppress("UNCHECKED_CAST")
                         val errorObj = errorResponse["error"] as? Map<String, Any?>
                         val message = errorObj?.get("message") as? String ?: errorBody
                         val errorType = errorObj?.get("type") as? String
@@ -1026,6 +1028,7 @@ class OpenAIAdapter(
                             }
 
                             "response.completed" -> {
+                                @Suppress("UNCHECKED_CAST")
                                 finalRawResponse = eventData["response"] as? Map<String, Any?>
                                 finalUsage = mapUsage(eventData["usage"] ?: finalRawResponse?.get("usage"))
                                 val status = finalRawResponse?.get("status") as? String
@@ -1137,6 +1140,7 @@ class OpenAIAdapter(
         return try {
             @Suppress("UNCHECKED_CAST")
             val errorResponse = gson.fromJson(errorBody, Map::class.java) as Map<String, Any?>
+            @Suppress("UNCHECKED_CAST")
             val errorObj = errorResponse["error"] as? Map<String, Any?>
             val message = errorObj?.get("message") as? String ?: errorBody
             val errorType = errorObj?.get("type") as? String
@@ -1168,6 +1172,7 @@ class OpenAIAdapter(
             return inputList.sumOf { item ->
                 when (val content = item["content"]) {
                     is List<*> -> content.sumOf { block ->
+                        @Suppress("UNCHECKED_CAST")
                         val blockMap = block as? Map<String, Any?>
                         val text = blockMap?.get("text") as? String ?: ""
                         countApproxTokens(text)
@@ -1208,6 +1213,7 @@ class OpenAIAdapter(
         val contentList = eventData["content"] as? List<*>
         if (contentList != null) {
             val aggregated = contentList.joinToString("") { block ->
+                @Suppress("UNCHECKED_CAST")
                 val blockMap = block as? Map<String, Any?>
                 blockMap?.get("text") as? String ?: ""
             }
@@ -1220,6 +1226,7 @@ class OpenAIAdapter(
     }
 
     private fun extractResponsesError(eventData: Map<String, Any?>): String {
+        @Suppress("UNCHECKED_CAST")
         val errorObj = eventData["error"] as? Map<String, Any?>
         val message = errorObj?.get("message") as? String
         val code = errorObj?.get("code") as? String

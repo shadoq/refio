@@ -456,6 +456,7 @@ ContextService.buildProjectContext()
 | TOOL_DESCRIPTIONS | 2,000 | 1,500 |
 | WORKING_MEMORY | 3,000 | 4,000 |
 | PROJECT_CONTEXT | 1,500 | 1,000 |
+| PROJECT_INSTRUCTIONS | 2,000 | 1,500 |
 | RECENT_WORK | 4,000 | 5,000 |
 | USER_CONTEXT | 5,000 | 4,000 |
 | RAG_FRAGMENTS | 3,000 | 2,000 |
@@ -463,6 +464,41 @@ ContextService.buildProjectContext()
 | **Total** | ~28,500 | ~23,000 |
 
 Small models: ≤32KB context window
+
+### Project Instructions
+
+Refio automatically loads project-level instruction files into the LLM context (TIER 1 STABLE, section `PROJECT_INSTRUCTIONS`). These provide project-specific conventions, rules, and guidance to the model.
+
+**Supported files (loaded in priority order):**
+
+| File | Priority | Description |
+|------|----------|-------------|
+| `.refio/agent.md` | 1 | Refio-specific project instructions |
+| `AGENTS.md` | 2 | Universal standard (supported by Codex, Copilot, Cursor, Windsurf) |
+| Subdirectory `AGENTS.md` | 3 | Cascading — loaded when agent works in a subdirectory |
+
+**Conditional rules (`.refio/rules/*.md`):**
+
+Cursor-style rules with YAML frontmatter for selective activation:
+
+```markdown
+---
+description: Kotlin coding conventions
+globs: "*.kt,*.kts"
+alwaysApply: false
+---
+Use data classes for DTOs.
+Prefer val over var.
+```
+
+| Frontmatter | Effect |
+|-------------|--------|
+| `alwaysApply: true` | Always included in context |
+| `globs: "*.kt"` | Included when active files match the glob pattern |
+| `description` only | Included (LLM decides relevance based on description) |
+| No frontmatter | Treated as always-apply |
+
+Files are cached (30s TTL) and invalidated on modification. Max 4000 chars per file, 8000 total.
 
 ---
 

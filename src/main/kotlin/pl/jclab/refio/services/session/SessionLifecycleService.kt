@@ -16,6 +16,7 @@ import pl.jclab.refio.api.models.TaskStatus
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.api.UpdateTaskRequest
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
 import pl.jclab.refio.services.logging.dualLogger
@@ -37,10 +38,11 @@ class SessionLifecycleService(
 
     fun getSelectedMode(): TaskMode = selectedMode
 
+    @Suppress("UNUSED_PARAMETER")
     fun initialize(
         messageDispatcher: MessageDispatcher,
         subtaskTracker: SubtaskTracker,
-        executionMonitor: ExecutionMonitor
+        _executionMonitor: ExecutionMonitor
     ) {
         loadUIState()
 
@@ -120,7 +122,7 @@ class SessionLifecycleService(
         }
 
         // Step 2: Build request
-        val readOnly = mode == TaskMode.PLAN || configService.isReadOnlyMode()
+        val readOnly = mode == TaskMode.PLAN || configService.getTyped(ConfigKeys.READ_ONLY_MODE)
         val request = pl.jclab.refio.core.api.CreateTaskRequest(
             name = name,
             mode = pl.jclab.refio.core.db.TaskMode.valueOf(mode.name),
@@ -236,11 +238,12 @@ class SessionLifecycleService(
         }
     }
 
+    @Suppress("UNUSED_PARAMETER")
     suspend fun loadSession(
         sessionId: String,
         messageDispatcher: MessageDispatcher,
         subtaskTracker: SubtaskTracker,
-        executionMonitor: ExecutionMonitor
+        _executionMonitor: ExecutionMonitor
     ) {
         modeSwitchMutex.lock()
         try {
@@ -520,7 +523,7 @@ class SessionLifecycleService(
             val modelConfig = pl.jclab.refio.core.llm.getModelConfigFromCache(modelId)
 
             val modelMaxContext = modelConfig?.maxContext ?: DEFAULT_CONTEXT_SIZE
-            val configuredLimit = configService.getMaxContextSize(session.id)
+            val configuredLimit = configService.getTyped(ConfigKeys.MAX_CONTEXT_SIZE, session.id)
             val effectiveContextWindow = minOf(modelMaxContext, configuredLimit)
 
             logger.debug {
@@ -667,7 +670,7 @@ class SessionLifecycleService(
             taskId = taskId,
             projectId = projectId
         )?.also { hasAny = true }?.toBoolean()
-            ?: if (scope == ConfigScope.APP && configService.isNoEgressDefault()) {
+            ?: if (scope == ConfigScope.APP && configService.getTyped(ConfigKeys.NO_EGRESS_DEFAULT)) {
                 hasAny = true
                 true
             } else {
@@ -681,14 +684,14 @@ class SessionLifecycleService(
             projectId = projectId
         )?.also { hasAny = true }
 
-        val orchestrationEnabled = configService.get(
+        @Suppress("UNUSED_VARIABLE") val _orchestrationEnabled = configService.get(
             ConfigService.KEY_UI_ORCHESTRATION_ENABLED,
             scope,
             taskId = taskId,
             projectId = projectId
         )?.also { hasAny = true }?.toBoolean()
 
-        val intentClassificationEnabled = configService.get(
+        @Suppress("UNUSED_VARIABLE") val _intentClassificationEnabled = configService.get(
             ConfigService.KEY_UI_INTENT_CLASSIFICATION_ENABLED,
             scope,
             taskId = taskId,

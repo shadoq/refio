@@ -18,6 +18,7 @@ import io.ktor.client.plugins.logging.Logger as KtorLogger
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.gson.gson
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.services.logging.dualLogger
 import pl.jclab.refio.core.security.SecureLogger
 import io.ktor.client.request.get
@@ -48,8 +49,8 @@ class GeminiAdapter(
     }
 
     private val timeoutMs: Long
-        get() = configService?.getApiCallTimeoutMs(taskId)
-            ?: pl.jclab.refio.core.services.ConfigService.DEFAULT_API_CALL_TIMEOUT * 1000L
+        get() = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+            ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
 
     private val client = HttpClient(CIO) {
         install(ContentNegotiation) {
@@ -72,8 +73,8 @@ class GeminiAdapter(
             }
         }
         install(HttpTimeout) {
-            val timeoutMs = configService?.getApiCallTimeoutMs(taskId)
-                ?: pl.jclab.refio.core.services.ConfigService.DEFAULT_API_CALL_TIMEOUT * 1000L
+            val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+                ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
             requestTimeoutMillis = timeoutMs
             connectTimeoutMillis = 30_000
             socketTimeoutMillis = timeoutMs
@@ -154,8 +155,8 @@ class GeminiAdapter(
 
         val generationConfig = mutableMapOf<String, Any>()
 
-        val maxOutputLimit = configService?.getMaxOutputTokens(taskId)
-            ?: pl.jclab.refio.core.services.ConfigService.DEFAULT_MAX_OUTPUT_SIZE
+        val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)
+            ?: ConfigKeys.MAX_OUTPUT_SIZE.default
         val requestedMax = when {
             maxTokens != null && maxTokens > 0 -> minOf(maxTokens, maxOutputLimit)
             else -> maxOutputLimit

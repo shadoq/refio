@@ -70,7 +70,8 @@ class ConversationCompactor(
      * @param targetTokens Target token count after compaction
      * @return True if compaction was successful
      */
-    suspend fun compact(taskId: String, targetTokens: Int): Boolean {
+    @Suppress("UNUSED_PARAMETER")
+    suspend fun compact(taskId: String, _targetTokens: Int): Boolean {
         // Use IO dispatcher for database operations
         return withContext(Dispatchers.IO) {
             val messages = chatMessageRepository.findByTaskId(taskId)
@@ -82,7 +83,8 @@ class ConversationCompactor(
             // Strategy: Keep last N messages raw, summarize older ones
             val keepRawCount = 4  // Last user message + assistant + 2 tool results
             val toSummarize = messages.dropLast(keepRawCount)
-            val toKeep = messages.takeLast(keepRawCount)
+            @Suppress("UNUSED_VARIABLE")
+            val _toKeep = messages.takeLast(keepRawCount)
 
             if (toSummarize.isEmpty()) {
                 logger.debug { "[COMPACT] No messages to summarize" }

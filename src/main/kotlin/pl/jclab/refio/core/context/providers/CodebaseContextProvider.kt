@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.context.providers
 
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.context.*
 import pl.jclab.refio.core.db.repositories.ConfigRepository
 import pl.jclab.refio.core.db.repositories.RagRepository
@@ -135,7 +136,7 @@ class CodebaseContextProvider : BaseContextProvider() {
 
             val config = RagSearchConfig.forCodeSearch().copy(topK = 5)
             val cacheKey = CacheKey(projectRoot, searchQuery, embeddingModel, config.topK)
-            val ttlMs = configService.getRagSearchCacheTtlMs()
+            val ttlMs = configService.getTyped(ConfigKeys.RAG_SEARCH_CACHE_TTL_SECONDS) * 1000L
             val cached = cache[cacheKey]
             if (cached != null && System.currentTimeMillis() - cached.createdAt <= ttlMs) {
                 return@withContext cached.items
@@ -240,7 +241,7 @@ class CodebaseContextProvider : BaseContextProvider() {
     }
 
     private fun resolveIgnoreMatcher(projectRoot: Path): AiIgnoreMatcher {
-        val patterns = configService.getRagIgnoredDirectories()
+        val patterns = configService.getTyped(ConfigKeys.RAG_IGNORED_DIRECTORIES).toSet()
         return try {
             AiIgnoreMatcher.load(projectRoot) ?: AiIgnoreMatcher.fromPatterns(patterns)
         } catch (e: Exception) {
@@ -275,7 +276,7 @@ class CodebaseContextProvider : BaseContextProvider() {
             }
             "ollama" -> {
                 logger.info { "Using Ollama embedding provider (local)" }
-                OllamaEmbeddingProvider(configService.getOllamaEndpoint())
+                OllamaEmbeddingProvider(configService.getTyped(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT))
             }
             else -> {
                 logger.warn { "Unsupported embedding provider: $providerId" }

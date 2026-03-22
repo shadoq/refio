@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.models.context
 
 import pl.jclab.refio.core.api.ContextSectionTokenInfo
+import pl.jclab.refio.core.services.analysis.project.FrameworkAnalysis
 import java.time.Instant
 
 data class ProjectContextDTO(
@@ -18,13 +19,10 @@ data class ProjectContextDTO(
     val technologies: List<String> = emptyList(),
     val technologyVersions: Map<String, String?> = emptyMap(),
     val keyComponents: List<String> = emptyList(),
-    val files: List<FileInfoDTO> = emptyList(),
 
     // Task and subtasks
     val currentTask: CurrentTaskDTO? = null,
     val subtasks: List<SubtaskDTO> = emptyList(),
-    val subtaskContext: SubtaskContextDTO? = null,
-    val taskContext: TaskContextDTO? = null,
 
     // Conversation history
     val conversationHistory: List<ConversationMessageDTO> = emptyList(),
@@ -44,26 +42,20 @@ data class ProjectContextDTO(
     // User-provided context (from @ mentions + extracted from messages)
     val userContextRefs: List<ResolvedContextDTO> = emptyList(),
 
-    // Multi-agent support
-    val agents: List<AgentConfigDTO> = emptyList(),
-    val agentInfo: List<AgentInfoDTO> = emptyList(),
-    val coordinationStrategy: String? = null,
-    val agentConfig: Map<String, Any> = emptyMap(),
-    val toolConfig: Map<String, Any> = emptyMap(),
+    // Project instructions (from AGENTS.md, .refio/agent.md, .refio/rules/)
+    val projectInstructions: String? = null,
 
     // Additional context
-    val availableTools: List<ToolMetadataDTO> = emptyList(),
-    val templateReference: Map<String, Any> = emptyMap(),
     val mcpResources: List<MCPContextResourceDTO> = emptyList(),
 
     // Context generation metadata
     val contextGeneratedAt: Instant,
     val analyzerVersion: String,
     val domainAnalysis: Map<String, Double> = emptyMap(),
-    val semanticMetaData: Map<String, Any> = emptyMap(),
-    val workflowPatterns: Map<String, Any> = emptyMap(),
-    val llmContext: Map<String, Any> = emptyMap(),
     val semanticSummary: String? = null,
+
+    // Framework analysis
+    val frameworkAnalysis: FrameworkAnalysis? = null,
 
     // Error information
     val sectionTokens: Map<String, ContextSectionTokenInfo>? = null,

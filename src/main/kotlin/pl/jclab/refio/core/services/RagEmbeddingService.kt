@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.services
 
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.db.repositories.RagRepository
 import pl.jclab.refio.services.logging.dualLogger
 import pl.jclab.refio.core.llm.TokenEstimator
@@ -8,8 +9,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import pl.jclab.refio.core.db.IndexChunk
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.security.MessageDigest
 
 private val logger = dualLogger("RagEmbeddingService")
 
@@ -63,11 +66,20 @@ class RagEmbeddingService(
         val maxInputChars = resolveMaxInputChars(modelId, provider)
         logger.info { "Embedding input clamp for $model (provider=$provider): $maxInputChars chars" }
 
-        // Get chunks without embeddings
+        // Get chunks without embeddings, plus filter out unchanged chunks via delta check
         val chunks = if (skipExisting) {
             ragRepository.getChunksWithoutEmbeddings(projectRoot, model)
         } else {
-            ragRepository.getChunksForProject(projectRoot)
+            // When not skipping existing, filter out chunks whose content hasn't changed
+            val allChunks = ragRepository.getChunksForProject(projectRoot)
+            val existingEmbeddingChunkIds = ragRepository.getEmbeddingChunkIds(projectRoot, model)
+            allChunks.filter { chunk ->
+                if (chunk.id in existingEmbeddingChunkIds) {
+                    needsReembedding(chunk, model)
+                } else {
+                    true
+                }
+            }
         }
 
         val totalChunks = chunks.size
@@ -84,7 +96,7 @@ class RagEmbeddingService(
         var successCount = 0
         var errorCount = 0
 
-        val batchSize = configService?.getRagEmbeddingBatchSize() ?: BATCH_SIZE
+        val batchSize = configService?.getTyped<Int>(ConfigKeys.RAG_EMBEDDINGS_BATCH_SIZE) ?: BATCH_SIZE
 
         chunks.chunked(batchSize).forEach { batch ->
             val preparedBatch = batch.map { chunk ->
@@ -304,6 +316,26 @@ class RagEmbeddingService(
             vector[i] = buffer.getFloat()
         }
         return vector
+    }
+
+    /**
+     * Check if a chunk needs re-embedding by comparing its current contentHash
+     * against the stored contentHash at the time the embedding was created.
+     *
+     * Returns true if the embedding should be regenerated (content has changed),
+     * false if the existing embedding is still valid.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    private fun needsReembedding(chunk: IndexChunk, _model: String): Boolean {
+        val storedHash = ragRepository.getChunkContentHash(chunk.id) ?: return true
+        val currentHash = calculateContentHash(chunk.content)
+        return storedHash != currentHash
+    }
+
+    private fun calculateContentHash(content: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val hash = digest.digest(content.toByteArray())
+        return hash.joinToString("") { "%02x".format(it) }
     }
 }
 

@@ -61,7 +61,8 @@ class RefioCompletionContributor : CompletionContributor() {
             return Regex("""\{(\w+)\}""").findAll(template).map { it.groupValues[1] }.toList()
         }
 
-        private fun loadSlashCommands(project: Project): List<SlashCommand> {
+        @Suppress("UNUSED_PARAMETER")
+        private fun loadSlashCommands(_project: Project): List<SlashCommand> {
             val now = System.currentTimeMillis()
             synchronized(slashCommandsCacheLock) {
                 if (now - lastSlashCommandsLoadAt < SLASH_COMMANDS_CACHE_MS && cachedSlashCommands.isNotEmpty()) {

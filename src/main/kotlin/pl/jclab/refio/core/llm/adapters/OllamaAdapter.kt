@@ -19,6 +19,7 @@ import io.ktor.client.plugins.logging.Logger as KtorLogger
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.gson.*
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.errors.LLMErrorMapper
 import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.core.services.OllamaRequestGate
@@ -46,7 +47,7 @@ class OllamaAdapter(
 
     private val logger = dualLogger("OllamaAdapter")
     private val baseUrl: String = baseUrlOverride?.takeIf { it.isNotBlank() }
-        ?: configService?.getOllamaEndpoint()
+        ?: configService?.getTyped(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT)
         ?: System.getProperty("OLLAMA_BASE_URL")?.takeIf { it.isNotBlank() }
         ?: System.getProperty("OLLAMA_ENDPOINT")?.takeIf { it.isNotBlank() }
         ?: System.getenv("OLLAMA_BASE_URL")?.takeIf { it.isNotBlank() }
@@ -60,7 +61,8 @@ class OllamaAdapter(
 
     // Get timeout from ConfigService (fallback to 120s for Ollama local models)
     private val timeout: Long
-        get() = configService?.getApiCallTimeoutMs(taskId) ?: ConfigService.DEFAULT_TOOL_EXECUTION_TIMEOUT * 1000L
+        get() = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+            ?: ConfigKeys.TOOL_EXECUTION_TIMEOUT.default.toLong() * 1000L
 
     private val client = HttpClient(CIO) {
         install(ContentNegotiation) {
@@ -83,9 +85,8 @@ class OllamaAdapter(
             }
         }
         install(HttpTimeout) {
-            // Get dynamic timeout from ConfigService
-            val timeoutMs = configService?.getApiCallTimeoutMs(taskId)
-                ?: ConfigService.DEFAULT_TOOL_EXECUTION_TIMEOUT * 1000L
+            val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+                ?: ConfigKeys.TOOL_EXECUTION_TIMEOUT.default.toLong() * 1000L
             requestTimeoutMillis = timeoutMs
             connectTimeoutMillis = 30000
             socketTimeoutMillis = timeoutMs
@@ -144,7 +145,7 @@ class OllamaAdapter(
 
             // Keep model in GPU memory to avoid loading delays
             // Get from config (default: 1800 seconds = 30 minutes)
-            val keepAlive = configService?.getOllamaKeepAlive() ?: 1800
+            val keepAlive = configService?.getTyped(ConfigKeys.PROVIDER_OLLAMA_KEEP_ALIVE) ?: ConfigKeys.PROVIDER_OLLAMA_KEEP_ALIVE.default
             put("keep_alive", keepAlive)
 
             // JSON mode for Ollama (if requested)
@@ -166,7 +167,7 @@ class OllamaAdapter(
                 put("num_ctx", contextSize)
 
                 // Use min of provided maxTokens and configured limit
-                val maxOutputLimit = configService?.getMaxOutputTokens(taskId) ?: ConfigService.DEFAULT_MAX_OUTPUT_SIZE
+                val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId) ?: ConfigKeys.MAX_OUTPUT_SIZE.default
                 val requestedMaxTokens = when {
                     maxTokens != null && maxTokens > 0 -> minOf(maxTokens, maxOutputLimit)
                     else -> maxOutputLimit

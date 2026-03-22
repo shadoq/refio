@@ -2,13 +2,17 @@ package pl.jclab.refio.core.services
 
 import io.mockk.every
 import io.mockk.mockk
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import pl.jclab.refio.core.api.ModelOperation
+import pl.jclab.refio.core.config.HierarchicalConfigLoader
 import pl.jclab.refio.core.db.Config
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.db.repositories.ConfigRepository
+import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -17,12 +21,26 @@ class ConfigServiceTest {
 
     private lateinit var configRepository: ConfigRepository
     private lateinit var configService: ConfigService
+    private lateinit var isolatedUserHome: String
+    private var originalUserHome: String? = null
 
     @BeforeEach
     fun setup() {
+        originalUserHome = System.getProperty("user.home")
+        isolatedUserHome = Files.createTempDirectory("refio-config-service-test-home").toString()
+        System.setProperty("user.home", isolatedUserHome)
+        HierarchicalConfigLoader.clearInstances()
+
         configRepository = mockk(relaxed = true)
         // Create ConfigService without projectRoot to avoid YAML loading
         configService = ConfigService(configRepository, defaultProjectId = "test-project")
+    }
+
+    @AfterEach
+    fun teardown() {
+        originalUserHome?.let { System.setProperty("user.home", it) }
+        HierarchicalConfigLoader.clearInstances()
+        Path.of(isolatedUserHome).toFile().deleteRecursively()
     }
 
     private fun createConfig(

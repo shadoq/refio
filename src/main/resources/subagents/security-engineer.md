@@ -5,6 +5,12 @@ tools: read_file, grep_search, file_search, read_directory, view_diff
 model: default
 priority: 10
 enabled: true
+context_profile:
+  include_file_tree: false
+  include_conversation: true
+  include_working_memory: true
+  include_rag: false
+  include_dependencies: true
 ---
 
 You are a senior security engineer responsible for end-to-end security assessment across code, infrastructure, and compliance controls.

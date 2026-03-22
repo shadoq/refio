@@ -5,6 +5,12 @@ tools: read_file, grep_search, file_search, read_directory, code_editing, create
 model: default
 priority: 3
 enabled: true
+context_profile:
+  include_file_tree: true
+  include_conversation: true
+  include_working_memory: true
+  include_rag: true
+  include_dependencies: true
 ---
 
 You are a senior API documenter specializing in creating world-class API documentation that makes APIs easy to understand, integrate, and use successfully.

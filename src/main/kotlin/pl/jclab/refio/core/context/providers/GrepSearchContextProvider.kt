@@ -2,6 +2,7 @@ package pl.jclab.refio.core.context.providers
 
 import com.intellij.openapi.application.ReadAction
 import com.intellij.psi.search.GlobalSearchScope
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.context.*
 import pl.jclab.refio.core.db.repositories.ConfigRepository
 import pl.jclab.refio.core.services.ConfigService
@@ -179,7 +180,7 @@ class GrepSearchContextProvider : BaseContextProvider() {
     }
 
     private fun resolveIgnoreMatcher(projectRoot: Path): AiIgnoreMatcher {
-        val patterns = configService.getRagIgnoredDirectories()
+        val patterns = configService.getTyped(ConfigKeys.RAG_IGNORED_DIRECTORIES).toSet()
         return try {
             AiIgnoreMatcher.load(projectRoot) ?: AiIgnoreMatcher.fromPatterns(patterns)
         } catch (e: Exception) {

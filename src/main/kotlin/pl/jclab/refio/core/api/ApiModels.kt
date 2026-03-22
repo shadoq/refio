@@ -64,7 +64,8 @@ data class TurnProfileOverrides(
     val maxIterationsOverride: Int? = null,
     val parentRunId: String? = null,
     val depth: Int = 0,
-    val subagentChain: List<String> = emptyList()
+    val subagentChain: List<String> = emptyList(),
+    val contextProfile: pl.jclab.refio.core.subagents.models.SubagentContextProfile? = null
 )
 
 /**
@@ -420,6 +421,7 @@ data class ProjectContextResponse(
     // Combined preview (active + auxiliary) estimated tokens
     val combinedEstimatedTokens: Int = 0,
     val semanticSummary: String? = null,
+    val projectInstructions: String? = null,
     // Actual RECENT_WORK section content that will be sent to LLM (after compression)
     val recentWorkPrompt: String? = null,
     // Active LLM request preview (exact runtime shape for next call)

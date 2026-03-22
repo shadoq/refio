@@ -179,6 +179,7 @@ class DocumentationIndexingService(
                     }
 
                     // Chunk text
+                    @Suppress("DEPRECATION")
                     val chunks = chunkingStrategy.chunkText(
                         textContent,
                         CHUNK_SIZE_TOKENS,
@@ -324,6 +325,7 @@ class DocumentationIndexingService(
             )
         }
 
+        @Suppress("DEPRECATION")
         val chunks = chunkingStrategy.chunkText(
             content,
             CHUNK_SIZE_TOKENS,

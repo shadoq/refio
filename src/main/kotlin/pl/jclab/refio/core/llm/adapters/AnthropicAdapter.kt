@@ -20,6 +20,7 @@ import io.ktor.client.plugins.logging.Logger as KtorLogger
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.gson.*
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.errors.LLMErrorMapper
 import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.services.logging.dualLogger
@@ -50,8 +51,8 @@ class AnthropicAdapter(
 
     // Get timeout from ConfigService
     private val timeout: Long
-        get() = configService?.getApiCallTimeoutMs(taskId)
-            ?: pl.jclab.refio.core.services.ConfigService.DEFAULT_API_CALL_TIMEOUT * 1000L
+        get() = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+            ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
 
     private val client = HttpClient(CIO) {
         install(ContentNegotiation) {
@@ -74,9 +75,8 @@ class AnthropicAdapter(
             }
         }
         install(HttpTimeout) {
-            // Get dynamic timeout from ConfigService
-            val timeoutMs = configService?.getApiCallTimeoutMs(taskId)
-                ?: pl.jclab.refio.core.services.ConfigService.DEFAULT_API_CALL_TIMEOUT * 1000L
+            val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+                ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
             requestTimeoutMillis = timeoutMs
             connectTimeoutMillis = 30000
             socketTimeoutMillis = timeoutMs
@@ -145,8 +145,8 @@ class AnthropicAdapter(
             }
 
             // Use min of provided maxTokens and configured limit (Claude requires max_tokens)
-            val maxOutputLimit = configService?.getMaxOutputTokens(taskId)
-                ?: pl.jclab.refio.core.services.ConfigService.DEFAULT_MAX_OUTPUT_SIZE
+            val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)
+                ?: ConfigKeys.MAX_OUTPUT_SIZE.default
             val requestedMax = when {
                 maxTokens != null && maxTokens > 0 -> minOf(maxTokens, maxOutputLimit)
                 else -> maxOutputLimit
@@ -420,6 +420,7 @@ class AnthropicAdapter(
                     val errorMessage = try {
                         @Suppress("UNCHECKED_CAST")
                         val errorResponse = gson.fromJson(errorBody, Map::class.java) as Map<String, Any?>
+                        @Suppress("UNCHECKED_CAST")
                         val errorObj = errorResponse["error"] as? Map<String, Any?>
                         val message = errorObj?.get("message") as? String ?: errorBody
                         val errorType = errorObj?.get("type") as? String
@@ -452,8 +453,6 @@ class AnthropicAdapter(
 
                 val channel: io.ktor.utils.io.ByteReadChannel = httpResponse.body()
 
-                var currentEvent: String? = null
-
                 // Read SSE stream line by line
                 while (!channel.isClosedForRead) {
                     // Check cancellation - break to return partial response
@@ -469,7 +468,7 @@ class AnthropicAdapter(
                     // SSE format: "event: type" or "data: {...}"
                     when {
                         line.startsWith("event: ") -> {
-                            currentEvent = line.removePrefix("event: ").trim()
+                            // Event type tracked by SSE protocol; data block handles type via chunk["type"]
                         }
                         line.startsWith("data: ") -> {
                             val data = line.removePrefix("data: ").trim()

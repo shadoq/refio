@@ -81,7 +81,8 @@ class StepExecutionService(private val project: Project) {
      *
      * Mode switching is only allowed BEFORE execution starts.
      */
-    fun switchExecutionMode(taskId: String, newMode: ExecutionMode) {
+    @Suppress("UNUSED_PARAMETER")
+    fun switchExecutionMode(_taskId: String, newMode: ExecutionMode) {
         logger.info { "Switching execution mode to: $newMode" }
 
         if (_isExecuting.value) {

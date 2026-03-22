@@ -9,40 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.1.4] - 2025-03-22
+
 ### Added
 
-- `UIAdapter` interface for platform-agnostic UI interactions; `IntelliJUIAdapter` implementation.
-- `ConfigKeys` — central typed registry of configuration keys replacing ad-hoc string constants in `ConfigService`.
-- `ConfigService.getTyped()`/`setTyped()` — type-safe config access with DB → YAML → default cascade.
-- `HttpServer` (Ktor/Netty) exposing `CoreApiRouter` over HTTP/JSON with SSE streaming (`127.0.0.1:8080`).
-- `GlobalMetrics` module and Caffeine cache dependency.
-- `TurnResult.toolsUsed` — agent turn loop tracks tool names used during a turn.
-- 4 new test classes (`ConfigServiceTest`, `RagSearchServiceTest`, `SubagentRouterTest`, `WorkflowIntegrationTest`).
+- Project instructions support via `.refio/agent.md`, `AGENTS.md`, and conditional rules from `.refio/rules/*.md`, now included in context and visible in the Context Panel.
+- Richer project analysis for CSS, TypeScript, HTML, C++, and dependency ecosystems.
+- Typed configuration access through `ConfigKeys` and `ConfigService.getTyped()` / `setTyped()`.
+- HTTP API server exposing `CoreApiRouter` over JSON and SSE.
+- Expanded automated test coverage for config, RAG, workflow, subagent, and analysis areas.
 
 ### Changed
 
-- `SubagentExecutor.executeMultiStep()` now generates and executes a real JSON step plan; deprecation raised to `ERROR`.
-- `ConfigService.getFromYaml()` rewritten to use `ConfigKeys.byKey` lookup; model validation no longer uses `runBlocking`.
-- `AgentTurnLoop.TurnEventListener` exposes `fromTurnEventListener()` factory.
+- Context building and project analysis now expose more useful structured data while suppressing empty sections.
+- Subagent execution was aligned with the newer turn-loop and JSON planning flow.
+- Configuration and model resolution were simplified across DB, YAML, and fallback defaults.
 
 ### Improved
 
-- Terminal command whitelist expanded from ~36 to ~120+ commands covering all major dev ecosystems (build tools, JS/TS, Python, Ruby, PHP, Swift, C/C++, Dart/Flutter, Docker, DB CLIs, cloud CLIs, IaC, shell utils, version managers, PowerShell cmdlets).
-- `git`/`npm`/`yarn`/`docker` policies relaxed — common dev operations allowed, only destructive actions and `publish`/`--global` blocked.
-- `ssh`/`scp`/`rsync`/`curl`/`wget`/`kill` moved from hard-block to allowed (with `requireConfirmation` where appropriate).
-- `CommandDenylist` refined — blocks only truly destructive ops (filesystem wipe, privilege escalation, sensitive file reads, OS package managers, fork bombs); added Windows-specific entries (`reg delete`, `bcdedit`, `diskpart`).
-- `rm -rf` denylist precision-scoped to block only root paths (`/`, `/*`), not project-relative paths like `./build`.
-- Command timeout increased 30s→120s, output limit 100KB→200KB for longer build/test runs.
+- Terminal command policies were expanded and relaxed for normal development workflows while keeping destructive actions guarded.
+- Command validation was refined to better distinguish project-safe operations from unsafe system-level ones.
+- Command timeouts and output limits were increased for longer builds and test runs.
 
 ### Removed
 
-- Deprecated `SubagentExecutor.executeMultiStep()` (875 LOC) — dead code since switch to `AgentTurnLoop`-based subagent execution.
+- Unused context and DTO code.
+- Legacy multi-step subagent execution path replaced by the current turn-loop flow.
 
 ### Fixed
 
-- Nested JSON responses from models that double-wrap output (`{"response": "{\"answer\": \"...\"}"`) are now recursively unwrapped before display.
-- Tool bubbles in CHAT mode no longer disappear after streaming completes — fixed race condition where debounced SharedFlow overwrote correct DB messages with stale streaming data.
-- Subagent assistant messages now display "Subagent • name" header instead of generic "Assistant", using metadata propagated through `TurnFinalizer` → DB → `AssistantBubbleRenderer`.
+- Nested JSON model responses are now unwrapped more reliably before display.
+- Chat tool bubbles remain stable after streaming completes.
+- Subagent responses now show clearer attribution in the UI.
 
 ## [0.0.1.3] - 2025-03-18
 

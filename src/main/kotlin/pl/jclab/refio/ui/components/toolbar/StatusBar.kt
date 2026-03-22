@@ -185,8 +185,6 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
     private var globalTokensOut = 0L
     private var globalCostUsd = 0.0
 
-    private lateinit var mainPanel: JPanel
-
     init {
         val row1Panel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
             coreHealthLabel = JBLabel("●").apply {
@@ -227,7 +225,7 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
             add(costLabel)
         }
 
-        mainPanel = JPanel().apply {
+        val mainPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             border = BorderFactory.createEmptyBorder(4, 8, 4, 8)
             add(row1Panel)
@@ -335,7 +333,8 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
     /**
      * Update core health indicator (dot color only)
      */
-    private fun updateCoreHealth(state: CoreHealthState, latencyMs: Int?) {
+    @Suppress("UNUSED_PARAMETER")
+    private fun updateCoreHealth(state: CoreHealthState, _latencyMs: Int?) {
         when (state) {
             CoreHealthState.CONNECTED -> {
                 coreHealthLabel.foreground = LCATheme.successColor
@@ -507,7 +506,8 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
         )
     }
 
-    fun setAdvancedViewEnabled(enabled: Boolean) {
+    @Suppress("UNUSED_PARAMETER")
+    fun setAdvancedViewEnabled(_enabled: Boolean) {
         // Single-row layout - no advanced view
         logger.debug { "Advanced view toggle ignored (single-row layout)" }
     }

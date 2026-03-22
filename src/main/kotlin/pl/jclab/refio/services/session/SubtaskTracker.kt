@@ -1,6 +1,7 @@
 package pl.jclab.refio.services.session
 
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.project.guessProjectDir
 import pl.jclab.refio.api.CoreApiClient
 import pl.jclab.refio.api.models.Message
 import pl.jclab.refio.api.models.SubtaskDto
@@ -90,7 +91,7 @@ class SubtaskTracker(
                 if (executeResponse != null) {
                     logger.info {
                         "[INTERACTIVE] Subtask executed: status=${executeResponse.status}, " +
-                            "summary=${executeResponse.summary?.take(100)}"
+                            "summary=${executeResponse.summary.take(100)}"
                     }
                 } else {
                     logger.error { "[INTERACTIVE] Failed to execute subtask: $subtaskId" }
@@ -231,7 +232,7 @@ class SubtaskTracker(
                     "[SUBTASK] Subtask executed: taskId=${currentSession.id}, subtaskId=$subtaskId, " +
                         "status=${executeResponse.status}, durationMs=${executeResponse.durationMs}ms"
                 }
-                project.baseDir?.refresh(true, true)
+                project.guessProjectDir()?.refresh(true, true)
             } else {
                 logger.error { "Failed to execute subtask: $subtaskId" }
             }

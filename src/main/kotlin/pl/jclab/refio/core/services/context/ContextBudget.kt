@@ -1,6 +1,66 @@
 package pl.jclab.refio.core.services.context
 
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.max
+
+/**
+ * Cached stable context layer — invalidated only on project file change.
+ */
+data class StableContextCache(
+    val content: String,
+    val tokensUsed: Int,
+    val contextVersion: Long,
+    val cachedAt: Long = System.currentTimeMillis()
+)
+
+/**
+ * Manages context layer caching across turns.
+ * - STABLE layer: cached, invalidated on project file change (not per-turn)
+ * - Tool descriptions: cached, invalidated on permission change
+ */
+class ContextLayerCache {
+    private val stableCache = ConcurrentHashMap<String, StableContextCache>()
+    private val toolDescriptionsCache = ConcurrentHashMap<String, Pair<String, Long>>()
+    private val contextVersionCounter = AtomicLong(0)
+
+    fun getStableContext(taskId: String): StableContextCache? = stableCache[taskId]
+
+    fun putStableContext(taskId: String, content: String, tokensUsed: Int) {
+        stableCache[taskId] = StableContextCache(
+            content = content,
+            tokensUsed = tokensUsed,
+            contextVersion = contextVersionCounter.get()
+        )
+    }
+
+    fun getToolDescriptions(taskId: String): String? {
+        val (desc, version) = toolDescriptionsCache[taskId] ?: return null
+        return if (version == contextVersionCounter.get()) desc else null
+    }
+
+    fun putToolDescriptions(taskId: String, descriptions: String) {
+        toolDescriptionsCache[taskId] = descriptions to contextVersionCounter.get()
+    }
+
+    fun invalidateStable(taskId: String) {
+        stableCache.remove(taskId)
+        contextVersionCounter.incrementAndGet()
+    }
+
+    fun invalidateAll() {
+        stableCache.clear()
+        toolDescriptionsCache.clear()
+        contextVersionCounter.incrementAndGet()
+    }
+
+    fun currentContextVersion(): Long = contextVersionCounter.get()
+
+    fun getContextStabilityPercent(taskId: String): Int {
+        val cached = stableCache[taskId] ?: return 0
+        return if (cached.contextVersion == contextVersionCounter.get()) 100 else 0
+    }
+}
 
 /**
  * Token budget configuration for context building.

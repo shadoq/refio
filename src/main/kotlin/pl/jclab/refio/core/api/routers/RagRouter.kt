@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import pl.jclab.refio.core.api.*
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.DocIndexingProgress
 import pl.jclab.refio.core.services.DocumentationIndexingService
 import pl.jclab.refio.core.db.DocumentationSource
@@ -105,10 +106,10 @@ class RagRouter(
             ?: throw IllegalStateException("RAG search service not available")
 
         val config = RagSearchConfig(
-            similarityThreshold = configService.getRagSearchSimilarityThreshold(),
+            similarityThreshold = configService.getTyped(ConfigKeys.RAG_SEARCH_SIMILARITY_THRESHOLD),
             topK = topK,
             contentType = contentType,
-            includeContextChunks = configService.getRagSearchIncludeContextChunks()
+            includeContextChunks = configService.getTyped(ConfigKeys.RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS)
         )
 
         val results = searchService.search(
@@ -303,7 +304,7 @@ class RagRouter(
             val indexingService = RagIndexingService(
                 ragRepository = ragRepository,
                 configService = configService,
-                chunkingStrategy = when (ChunkingMode.fromConfig(configService.getRagChunkingMode())) {
+                chunkingStrategy = when (ChunkingMode.fromConfig(configService.getTyped(ConfigKeys.RAG_CHUNKING_MODE))) {
                     ChunkingMode.LINE_BASED -> DefaultChunkingStrategy()
                     ChunkingMode.SEMANTIC -> SemanticChunkingStrategy()
                 }

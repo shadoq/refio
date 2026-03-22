@@ -5,6 +5,12 @@ tools: read_file, grep_search, file_search, read_directory
 model: default
 priority: 3
 enabled: true
+context_profile:
+  include_file_tree: false
+  include_conversation: true
+  include_working_memory: true
+  include_rag: true
+  include_dependencies: false
 ---
 
 You are a senior UX researcher specializing in uncovering user insights through mixed-methods research to inform design and product decisions.

@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.context.providers
 
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.context.BaseContextProvider
 import pl.jclab.refio.core.context.ContextItem
 import pl.jclab.refio.core.context.ContextProviderDescription
@@ -337,9 +338,9 @@ class DocsContextProvider(
 
     private fun embeddingProviderFor(providerId: String): EmbeddingProvider {
         return when (providerId.lowercase()) {
-            "ollama" -> OllamaEmbeddingProvider(configService.getOllamaEndpoint())
+            "ollama" -> OllamaEmbeddingProvider(configService.getTyped(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT))
             "openai" -> OpenAIEmbeddingProvider()
-            else -> OllamaEmbeddingProvider(configService.getOllamaEndpoint())
+            else -> OllamaEmbeddingProvider(configService.getTyped(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT))
         }
     }
 

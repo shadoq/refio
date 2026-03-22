@@ -313,9 +313,9 @@ class MCPConnection(
                     val obj = element.asJsonObject
                     val inputSchemaElement = obj.get("inputSchema")
                     val schemaMap: Map<String, Any> = if (inputSchemaElement != null && inputSchemaElement.isJsonObject) {
-                        val rawSchema = gson.fromJson(inputSchemaElement, Map::class.java) as? Map<*, *> ?: emptyMap<Any?, Any?>()
-                        rawSchema.entries.mapNotNull { (key, value) ->
-                            val name = key as? String ?: return@mapNotNull null
+                        val rawSchema = gson.fromJson(inputSchemaElement, Map::class.java) ?: emptyMap<Any?, Any?>()
+                        rawSchema.entries.mapNotNull entry@{ (key, value) ->
+                            val name = key as? String ?: return@entry null
                             value?.let { name to it }
                         }.toMap()
                     } else {

@@ -18,6 +18,7 @@ import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.tools.base.ToolResult
+import pl.jclab.refio.core.config.ConfigKey
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -59,6 +60,7 @@ class StepPlannerTest {
             projectRoot = null
         )
 
+        every { configService.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
         every { subtaskRepository.countByTaskId(any()) } returns 1L
         every { toolDescriptionBuilder.getToolDescriptionsForTools(any(), any()) } returns "Tool descriptions"
         every { toolDescriptionBuilder.getValidToolNamesForTools(any()) } returns "read_file"

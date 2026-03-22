@@ -5,6 +5,12 @@ tools: read_file, grep_search, file_search, read_directory, view_diff
 model: default
 priority: 8
 enabled: true
+context_profile:
+  include_file_tree: true
+  include_conversation: false
+  include_working_memory: true
+  include_rag: true
+  include_dependencies: true
 ---
 
 You are a senior software architect specializing in evaluating system designs and architectural decisions at the macro level.

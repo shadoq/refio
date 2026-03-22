@@ -28,9 +28,10 @@ class WorkingMemoryIntegration(
      * @param maxTokens Maximum tokens to allocate
      * @return Formatted working memory section or empty string
      */
+    @Suppress("UNUSED_PARAMETER")
     fun buildWorkingMemorySection(
         taskId: String,
-        query: String,
+        _query: String,
         maxTokens: Int
     ): String {
         val section = workingMemoryService.buildWorkingMemorySection(taskId, maxTokens)
@@ -86,10 +87,11 @@ class WorkingMemoryIntegration(
      * @param maxEntries Maximum entries to return
      * @return List of relevant working memory entries
      */
+    @Suppress("UNUSED_PARAMETER")
     fun getRelevantEntries(
-        taskId: String,
-        query: String,
-        maxEntries: Int
+        _taskId: String,
+        _query: String,
+        _maxEntries: Int
     ): List<WorkingMemoryEntry> {
         // Currently WorkingMemoryService doesn't have filtering by query
         // So we just return empty list - the service handles filtering internally

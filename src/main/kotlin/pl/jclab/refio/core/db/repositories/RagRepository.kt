@@ -430,6 +430,28 @@ class RagRepository {
         }
     }
 
+    /**
+     * Get the contentHash for a specific chunk.
+     */
+    fun getChunkContentHash(chunkId: Int): String? = transaction {
+        IndexChunksTable.selectAll().where { IndexChunksTable.id eq chunkId }
+            .map { it[IndexChunksTable.contentHash] }
+            .firstOrNull()
+    }
+
+    /**
+     * Get all chunk IDs that have embeddings for a given model in a project.
+     */
+    fun getEmbeddingChunkIds(projectRoot: String, model: String): Set<Int> = transaction {
+        EmbeddingsTable
+            .innerJoin(IndexChunksTable, { chunkId }, { IndexChunksTable.id })
+            .innerJoin(IndexFilesTable, { IndexChunksTable.fileId }, { IndexFilesTable.id })
+            .select(EmbeddingsTable.chunkId)
+            .where { (IndexFilesTable.projectRoot eq projectRoot) and (EmbeddingsTable.model eq model) }
+            .map { it[EmbeddingsTable.chunkId] }
+            .toSet()
+    }
+
     // ========== Statistics ==========
 
     /**

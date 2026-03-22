@@ -4,6 +4,8 @@ import pl.jclab.refio.core.db.RagContentType
 import pl.jclab.refio.core.db.repositories.IndexingProgressRepository
 import pl.jclab.refio.core.db.repositories.RagRepository
 import pl.jclab.refio.core.services.analysis.CodeElements
+import pl.jclab.refio.core.services.analysis.CppLanguageAnalyzer
+import pl.jclab.refio.core.services.analysis.CssLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.HtmlLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.JavaLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.KotlinLanguageAnalyzer
@@ -11,6 +13,7 @@ import pl.jclab.refio.core.services.analysis.LanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.PythonLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.TypeScriptLanguageAnalyzer
 import pl.jclab.refio.core.utils.GsonInstance.gson
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.utils.AiIgnoreMatcher
 import pl.jclab.refio.services.logging.dualLogger
 import kotlinx.coroutines.CancellationException
@@ -37,13 +40,16 @@ class RagIndexingService(
     private val ragRepository: RagRepository,
     private val configService: ConfigService,
     private val chunkingStrategy: ChunkingStrategy = DefaultChunkingStrategy(),
+    private val semanticChunkingStrategy: ChunkingStrategy = SemanticChunkingStrategy(),
     private val progressRepository: IndexingProgressRepository = IndexingProgressRepository(),
     private val analyzers: List<LanguageAnalyzer> = listOf(
         KotlinLanguageAnalyzer(),
         JavaLanguageAnalyzer(),
         PythonLanguageAnalyzer(),
         TypeScriptLanguageAnalyzer(),
-        HtmlLanguageAnalyzer()
+        HtmlLanguageAnalyzer(),
+        CppLanguageAnalyzer(),
+        CssLanguageAnalyzer()
     )
 ) {
 
@@ -51,6 +57,12 @@ class RagIndexingService(
         private const val CHUNK_SIZE_TOKENS = 1024
         private const val CHUNK_OVERLAP_TOKENS = 256
         private const val BATCH_DELAY_MS = 100L
+
+        private val CODE_FILE_EXTENSIONS = setOf(
+            "kt", "kts", "java", "py", "js", "ts", "tsx", "jsx",
+            "c", "cpp", "cc", "cxx", "h", "hpp", "hh",
+            "go", "rs", "cs", "rb", "swift", "scala", "groovy"
+        )
 
         private val TEXT_FILE_EXTENSIONS = setOf(
             "kt", "kts", "java", "py", "js", "ts", "tsx", "jsx", "go", "rs", "c", "cpp", "h", "hpp",
@@ -69,7 +81,7 @@ class RagIndexingService(
         val absoluteRoot = projectRoot.toAbsolutePath().normalize()
         val projectKey = absoluteRoot.toString()
         val ignoreMatcher = resolveIgnoreMatcher(absoluteRoot, additionalIgnorePatterns)
-        val maxFileSize = configService.getRagMaxFileSizeBytes()
+        val maxFileSize = configService.getTyped(ConfigKeys.RAG_MAX_FILE_SIZE_MB) * 1024L * 1024L
 
         logger.info { "Starting RAG indexing for $projectKey" }
 
@@ -134,7 +146,7 @@ class RagIndexingService(
         }
 
         try {
-            val batchSize = configService.getRagIndexBatchSize().coerceAtLeast(1)
+            val batchSize = configService.getTyped<Int>(ConfigKeys.RAG_INDEX_BATCH_SIZE).coerceAtLeast(1)
 
             filesToIndex.chunked(batchSize).forEach { batch ->
                 coroutineContext.ensureActive()
@@ -208,7 +220,7 @@ class RagIndexingService(
     }.flowOn(Dispatchers.IO)
 
     private fun resolveIgnoredDirectories(additionalIgnorePatterns: Set<String>): Set<String> {
-        val configured = configService.getRagIgnoredDirectories()
+        val configured = configService.getTyped<List<String>>(ConfigKeys.RAG_IGNORED_DIRECTORIES).toSet()
         return (configured + additionalIgnorePatterns)
             .filter { it.isNotBlank() }
             .toSet()
@@ -336,20 +348,25 @@ class RagIndexingService(
         }
 
         val content = readFileContent(projectFile.absolutePath)
-        val chunkMode = ChunkingMode.fromConfig(configService.getRagChunkingMode())
+        val chunkMode = ChunkingMode.fromConfig(configService.getTyped<String>(ConfigKeys.RAG_CHUNKING_MODE))
         val language = projectFile.absolutePath.extension.lowercase().ifBlank { null }
         val codeElements = if (chunkMode == ChunkingMode.SEMANTIC) {
             analyzeContent(projectFile.absolutePath, content)
         } else {
             CodeElements()
         }
-        val chunks = chunkingStrategy.createChunks(
+        val effectiveStrategy = if (language != null && language in CODE_FILE_EXTENSIONS) {
+            semanticChunkingStrategy
+        } else {
+            chunkingStrategy
+        }
+        val chunks = effectiveStrategy.createChunks(
             content = content,
             codeElements = codeElements,
             language = language,
             maxChunkChars = CHUNK_SIZE_TOKENS
         )
-        val maxChunks = configService.getRagMaxChunksPerFile()
+        val maxChunks = configService.getTyped<Int>(ConfigKeys.RAG_MAX_CHUNKS_PER_FILE)
         val mimeType = try {
             Files.probeContentType(projectFile.absolutePath)
         } catch (_: Exception) {

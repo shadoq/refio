@@ -6,6 +6,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.io.TempDir
+import pl.jclab.refio.core.config.ConfigKey
 import pl.jclab.refio.core.services.analysis.project.*
 import java.nio.file.Path
 import kotlin.io.path.createDirectories
@@ -26,6 +27,7 @@ class ProjectAnalyzerServiceIntegrationTest {
     fun setup() {
         richAnalysisEngine = mockk()
         configService = mockk()
+        every { configService.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
         every { configService.getRagIgnoredDirectories() } returns ConfigService.DEFAULT_RAG_IGNORED_DIRECTORIES.toSet()
 
         // Prepare test project structure

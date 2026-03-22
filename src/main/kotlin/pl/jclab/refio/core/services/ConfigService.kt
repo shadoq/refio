@@ -506,12 +506,13 @@ class ConfigService(
      * @param userId Optional user ID for audit
      * @throws IllegalArgumentException If model_id doesn't exist in model_registry or provider mismatch
      */
+    @Suppress("UNUSED_PARAMETER")
     fun setDefaultModel(
         operation: ModelOperation,
         modelId: String,
         provider: String,
         taskId: String? = null,
-        userId: String? = null
+        _userId: String? = null
     ) {
         // Validate model exists using cached model registry (no suspend/runBlocking needed)
         if (operation != ModelOperation.EMBEDDING) {
@@ -578,7 +579,7 @@ class ConfigService(
                 modelId = modelId,
                 provider = provider,
                 taskId = taskId,
-                userId = userId
+                _userId = userId
             )
         }
 
@@ -594,6 +595,7 @@ class ConfigService(
     fun getModelVisibility(modelId: String): Boolean {
         val config = configRepository.get(KEY_MODELS_VISIBILITY, ConfigScope.APP)
         if (config != null) {
+            @Suppress("UNCHECKED_CAST")
             val visibilityMap = gson.fromJson(config.value, Map::class.java) as? Map<String, Boolean>
             return visibilityMap?.get(modelId) ?: true  // Default to visible
         }
@@ -609,6 +611,7 @@ class ConfigService(
     fun setModelVisibility(modelId: String, showInDropdown: Boolean) {
         // Get current visibility map
         val config = configRepository.get(KEY_MODELS_VISIBILITY, ConfigScope.APP)
+        @Suppress("UNCHECKED_CAST")
         val visibilityMap = if (config != null) {
             gson.fromJson(config.value, Map::class.java) as? Map<String, Boolean> ?: emptyMap()
         } else {
@@ -663,6 +666,7 @@ class ConfigService(
         // 1. Check database first
         val config = configRepository.get(KEY_MODELS_VISIBILITY, ConfigScope.APP)
         if (config != null) {
+            @Suppress("UNCHECKED_CAST")
             val visibilityMap = gson.fromJson(config.value, Map::class.java) as? Map<String, Boolean>
             if (visibilityMap != null && visibilityMap.isNotEmpty()) {
                 return visibilityMap
@@ -1155,9 +1159,9 @@ class ConfigService(
 
     private fun buildGeneralConfig(): pl.jclab.refio.core.config.GeneralConfig {
         return pl.jclab.refio.core.config.GeneralConfig(
-            formatMarkdown = isFormatMarkdownEnabled(),
-            streamingEnabled = isStreamingEnabled(),
-            advancedView = isAdvancedViewEnabled()
+            formatMarkdown = getTyped(ConfigKeys.FORMAT_MARKDOWN),
+            streamingEnabled = getTyped(ConfigKeys.STREAMING_ENABLED),
+            advancedView = getTyped(ConfigKeys.ADVANCED_VIEW)
         )
     }
 
@@ -1168,9 +1172,9 @@ class ConfigService(
 
         return pl.jclab.refio.core.config.ProvidersConfig(
             ollama = pl.jclab.refio.core.config.OllamaConfig(
-                endpoint = ollamaEndpoint ?: getOllamaEndpoint(),
-                contextSize = getOllamaContextSize(),
-                keepAlive = getOllamaKeepAlive()
+                endpoint = ollamaEndpoint ?: getTyped(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT),
+                contextSize = getTyped(ConfigKeys.PROVIDER_OLLAMA_CONTEXT_SIZE),
+                keepAlive = getTyped(ConfigKeys.PROVIDER_OLLAMA_KEEP_ALIVE)
             ),
             anthropic = if (includeApiKeys) {
                 pl.jclab.refio.core.config.AnthropicConfig(
@@ -1195,7 +1199,7 @@ class ConfigService(
             lmstudio = pl.jclab.refio.core.config.LMStudioConfig(
                 apiKey = if (includeApiKeys) get(KEY_PROVIDER_LM_STUDIO_API_KEY) else null,
                 baseUrl = lmstudioBaseUrl,
-                contextSize = getLMStudioContextSize()
+                contextSize = getTyped(ConfigKeys.PROVIDER_LM_STUDIO_CONTEXT_SIZE)
             ),
             customOpenai = pl.jclab.refio.core.config.CustomOpenAIConfig(
                 apiKey = if (includeApiKeys) get(KEY_PROVIDER_CUSTOM_OPENAI_API_KEY) else null,
@@ -1230,21 +1234,21 @@ class ConfigService(
 
     private fun buildLimitsConfig(): pl.jclab.refio.core.config.LimitsConfig {
         return pl.jclab.refio.core.config.LimitsConfig(
-            apiCallTimeout = (getApiCallTimeoutMs() / 1000).toInt(),
-            toolExecutionTimeout = (getToolExecutionTimeoutMs() / 1000).toInt(),
-            streamingReadTimeout = (getStreamingReadTimeoutMs() / 1000).toInt(),
-            streamingRequestTimeout = (getStreamingRequestTimeoutMs() / 1000).toInt(),
-            maxContextSize = getMaxContextSize(),
-            maxOutputSize = getMaxOutputTokens(),
-            maxFileSize = getMaxFileSizeMB()
+            apiCallTimeout = getTyped(ConfigKeys.API_CALL_TIMEOUT),
+            toolExecutionTimeout = getTyped(ConfigKeys.TOOL_EXECUTION_TIMEOUT),
+            streamingReadTimeout = getTyped(ConfigKeys.STREAMING_READ_TIMEOUT),
+            streamingRequestTimeout = getTyped(ConfigKeys.STREAMING_REQUEST_TIMEOUT),
+            maxContextSize = getTyped(ConfigKeys.MAX_CONTEXT_SIZE),
+            maxOutputSize = getTyped(ConfigKeys.MAX_OUTPUT_SIZE),
+            maxFileSize = getTyped(ConfigKeys.MAX_FILE_SIZE)
         )
     }
 
     private fun buildAdvancedConfig(): pl.jclab.refio.core.config.AdvancedConfig {
         return pl.jclab.refio.core.config.AdvancedConfig(
-            noEgressDefault = isNoEgressDefault(),
-            readOnlyMode = isReadOnlyMode(),
-            autoOptimizePercentage = getAutoOptimizePercentage()
+            noEgressDefault = getTyped(ConfigKeys.NO_EGRESS_DEFAULT),
+            readOnlyMode = getTyped(ConfigKeys.READ_ONLY_MODE),
+            autoOptimizePercentage = getTyped(ConfigKeys.AUTO_OPTIMIZE_PERCENTAGE)
         )
     }
 
@@ -1290,31 +1294,31 @@ class ConfigService(
 
     private fun buildRagConfig(): pl.jclab.refio.core.config.RagConfig {
         return pl.jclab.refio.core.config.RagConfig(
-            enabled = isRagEnabled(),
-            indexOnStartup = shouldIndexRagOnStartup(),
-            autoIndexOnContextBuild = shouldAutoIndexOnContextBuild(),
-            maxFileSizeMB = getRagMaxFileSizeBytes() / (1024 * 1024),
-            maxChunksPerFile = getRagMaxChunksPerFile(),
-            indexBatchSize = getRagIndexBatchSize(),
-            embeddingsBatchSize = getRagEmbeddingBatchSize(),
-            cacheTtlMs = getRagCacheTtlMs(),
-            maxConcurrentJobs = getRagMaxConcurrentJobs(),
-            ignoredDirectories = getRagIgnoredDirectories().toList(),
-            searchSimilarityThreshold = getRagSearchSimilarityThreshold(),
-            searchTopK = getRagSearchTopK(),
-            searchHybridEnabled = getRagSearchHybridEnabled(),
-            searchSemanticWeight = getRagSearchSemanticWeight(),
-            searchIncludeContextChunks = getRagSearchIncludeContextChunks()
+            enabled = getTyped(ConfigKeys.RAG_ENABLED),
+            indexOnStartup = getTyped(ConfigKeys.RAG_INDEX_ON_STARTUP),
+            autoIndexOnContextBuild = getTyped(ConfigKeys.RAG_AUTO_INDEX_ON_CONTEXT),
+            maxFileSizeMB = getTyped(ConfigKeys.RAG_MAX_FILE_SIZE_MB),
+            maxChunksPerFile = getTyped(ConfigKeys.RAG_MAX_CHUNKS_PER_FILE),
+            indexBatchSize = getTyped(ConfigKeys.RAG_INDEX_BATCH_SIZE),
+            embeddingsBatchSize = getTyped(ConfigKeys.RAG_EMBEDDINGS_BATCH_SIZE),
+            cacheTtlMs = getTyped(ConfigKeys.RAG_CACHE_TTL_MS),
+            maxConcurrentJobs = getTyped(ConfigKeys.RAG_MAX_CONCURRENT_JOBS),
+            ignoredDirectories = getTyped(ConfigKeys.RAG_IGNORED_DIRECTORIES),
+            searchSimilarityThreshold = getTyped(ConfigKeys.RAG_SEARCH_SIMILARITY_THRESHOLD),
+            searchTopK = getTyped(ConfigKeys.RAG_SEARCH_TOP_K),
+            searchHybridEnabled = getTyped(ConfigKeys.RAG_SEARCH_HYBRID_ENABLED),
+            searchSemanticWeight = getTyped(ConfigKeys.RAG_SEARCH_SEMANTIC_WEIGHT),
+            searchIncludeContextChunks = getTyped(ConfigKeys.RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS)
         )
     }
 
     private fun buildUiConfig(): pl.jclab.refio.core.config.UiConfig {
         return pl.jclab.refio.core.config.UiConfig(
-            thinkingEnabled = isThinkingEnabled(),
-            noEgressEnabled = isNoEgressEnabled(),
-            executionMode = getExecutionMode(),
-            selectedMode = getSelectedMode(),
-            selectedModel = getSelectedModel()
+            thinkingEnabled = getTyped(ConfigKeys.UI_THINKING_ENABLED),
+            noEgressEnabled = getTyped(ConfigKeys.UI_NO_EGRESS_ENABLED),
+            executionMode = getTyped(ConfigKeys.UI_EXECUTION_MODE),
+            selectedMode = getTyped(ConfigKeys.UI_SELECTED_MODE),
+            selectedModel = getTyped(ConfigKeys.UI_SELECTED_MODEL)
         )
     }
 
@@ -1617,6 +1621,7 @@ class ConfigService(
     fun getToolsPermissions(): Map<String, Boolean> {
         val config = configRepository.get(KEY_TOOLS_PERMISSIONS, ConfigScope.APP)
         if (config != null) {
+            @Suppress("UNCHECKED_CAST")
             val permissionsMap = gson.fromJson(config.value, Map::class.java) as? Map<String, Boolean>
             return permissionsMap ?: emptyMap()
         }
@@ -1763,7 +1768,7 @@ class ConfigService(
     fun getBuiltinSubagentEnabledOverrides(): Map<String, Boolean> {
         val config = configRepository.get(KEY_SUBAGENTS_BUILTIN_ENABLED, ConfigScope.APP)
         if (config != null) {
-            val raw = gson.fromJson(config.value, Map::class.java) as? Map<*, *>
+            val raw = gson.fromJson(config.value, Map::class.java)
             if (raw != null) {
                 return raw.mapNotNull { (key, value) ->
                     val name = key as? String ?: return@mapNotNull null
@@ -1947,13 +1952,13 @@ class ConfigService(
     }
 
     private fun resolveContextSizeForBudget(operation: ModelOperation?, taskId: String?): Int {
-        val fallback = getMaxContextSize(taskId)
+        val fallback = getTyped(ConfigKeys.MAX_CONTEXT_SIZE, taskId)
         if (operation == null) return fallback
 
         val (_, provider) = getModel(operation, taskId)
         return when (provider.lowercase()) {
-            "ollama" -> getOllamaContextSize()
-            "lmstudio" -> getLMStudioContextSize()
+            "ollama" -> getTyped(ConfigKeys.PROVIDER_OLLAMA_CONTEXT_SIZE)
+            "lmstudio" -> getTyped(ConfigKeys.PROVIDER_LM_STUDIO_CONTEXT_SIZE)
             else -> fallback
         }
     }

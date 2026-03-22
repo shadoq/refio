@@ -13,6 +13,7 @@ import pl.jclab.refio.core.llm.adapters.OllamaAdapter
 import pl.jclab.refio.core.llm.adapters.OpenAIAdapter
 import pl.jclab.refio.core.llm.adapters.OpenRouterAdapter
 import pl.jclab.refio.core.llm.adapters.ZAIAdapter
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.services.logging.dualLogger
 
@@ -217,7 +218,7 @@ suspend fun getAllModels(
                             "gemini" -> GeminiAdapter(configService = configService).listModels()
                             "lmstudio" -> LMStudioAdapter(configService = configService).listModels()
                             "custom_openai" -> CustomOpenAIAdapter(
-                                model = configService?.getCustomOpenAIModel() ?: "custom-openai",
+                                model = configService?.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_MODEL) ?: "custom-openai",
                                 providerName = "custom_openai",
                                 configService = configService
                             ).listModels()
@@ -296,7 +297,7 @@ suspend fun getModelsByProvider(
             }
             "custom_openai" -> {
                 val adapter = CustomOpenAIAdapter(
-                    model = configService?.getCustomOpenAIModel() ?: "custom-openai",
+                    model = configService?.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_MODEL) ?: "custom-openai",
                     providerName = "custom_openai",
                     configService = configService
                 )

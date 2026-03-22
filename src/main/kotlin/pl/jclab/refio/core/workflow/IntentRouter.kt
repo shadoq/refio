@@ -30,10 +30,11 @@ class IntentRouter(
      * @param listener Optional listener
      * @return Resolved workflow intent
      */
+    @Suppress("UNUSED_PARAMETER")
     suspend fun determineIntent(
         uiState: UIState,
-        projectAnalysis: String? = null,
-        listener: WorkflowEventListener? = null
+        _projectAnalysis: String? = null,
+        _listener: WorkflowEventListener? = null
     ): WorkflowIntent {
         val input = uiState.input
 

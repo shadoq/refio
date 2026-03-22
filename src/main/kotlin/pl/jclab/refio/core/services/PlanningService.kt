@@ -13,6 +13,7 @@ import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 import pl.jclab.refio.core.tools.base.ToolRegistry
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.core.utils.ProjectIdGenerator
 import pl.jclab.refio.services.logging.dualLogger
@@ -166,7 +167,7 @@ class PlanningService(
             model = model,
             messages = messages,
             systemPrompt = systemPrompt,
-            maxTokens = configService.getMaxOutputTokens(taskId),
+            maxTokens = configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId),
             temperature = 0.7,
             responseFormat = mapOf("type" to "json_object"),
             thinking = thinkingEnabled,

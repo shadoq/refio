@@ -103,10 +103,11 @@ object TokenEstimator {
      * Get default context size based on model definitions.
      * Used as last resort when model is not in ModelDefinitions or ModelRegistry.
      */
+    @Suppress("UNUSED_PARAMETER")
     private suspend fun getDefaultContextSize(
         modelId: String,
         provider: String? = null,
-        configService: ConfigService? = null
+        _configService: ConfigService? = null
     ): Int {
         val resolvedProvider = provider ?: inferProvider(modelId)
 

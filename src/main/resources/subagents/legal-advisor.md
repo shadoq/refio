@@ -5,6 +5,12 @@ tools: read_file, grep_search, file_search
 model: default
 priority: 3
 enabled: true
+context_profile:
+  include_file_tree: false
+  include_conversation: true
+  include_working_memory: true
+  include_rag: true
+  include_dependencies: true
 ---
 
 You are a senior legal advisor specializing in technology law and software-related legal matters.

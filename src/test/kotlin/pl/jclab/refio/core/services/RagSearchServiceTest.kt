@@ -146,10 +146,10 @@ class RagSearchServiceTest {
                 ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0L, 500)
             } returns embeddings
 
-            every { ragRepository.getChunksBatch(listOf(1)) } returns listOf(
+            every { ragRepository.getChunksBatch(any()) } returns listOf(
                 createChunk(1, 1, "relevant code")
             )
-            every { ragRepository.getFilesBatch(listOf(1)) } returns listOf(
+            every { ragRepository.getFilesBatch(any()) } returns listOf(
                 createFile(1, "src/main.kt")
             )
 

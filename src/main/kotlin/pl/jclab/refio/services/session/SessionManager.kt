@@ -937,7 +937,7 @@ class SessionManager(private val project: Project) {
 
             if (subagentCommand != null && subagentInvocation == null) {
                 val (requestedName, _) = subagentCommand
-                val allSubagents = subagentRouter?.listSubagents(includeDisabled = true).orEmpty()
+                val allSubagents = subagentRouter.listSubagents(includeDisabled = true)
                 val matched = allSubagents.firstOrNull { it.name.equals(requestedName, ignoreCase = true) }
                 val enabledSubagentNames = allSubagents
                     .filter { it.enabled }
@@ -976,7 +976,7 @@ class SessionManager(private val project: Project) {
 
             val turnRequest = if (subagentInvocation != null) {
                 val (subagentName, subagentPrompt) = subagentInvocation
-                val definition = subagentRouter?.getSubagent(subagentName)
+                val definition = subagentRouter.getSubagent(subagentName)
 
                 if (definition != null) {
                     val parentModel = if (model != null && provider != null) "$provider/$model" else model
@@ -1005,7 +1005,8 @@ class SessionManager(private val project: Project) {
                             providerOverride = resolvedProvider,
                             maxIterationsOverride = definition.maxSteps,
                             depth = 0,
-                            subagentChain = emptyList()
+                            subagentChain = emptyList(),
+                            contextProfile = definition.contextProfile
                         )
                     )
                 } else {

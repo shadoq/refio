@@ -170,7 +170,7 @@ class WorkflowOrchestrator(
                 listener.onStreamChunk(streamContent)
             }
 
-            override fun onReflectionStream(step: pl.jclab.refio.core.db.Subtask, streamContent: String, isFinal: Boolean) {
+            override fun onReflectionStream(step: pl.jclab.refio.core.db.Subtask, streamContent: String, isComplete: Boolean) {
                 listener.onStreamChunk(streamContent)
             }
         }

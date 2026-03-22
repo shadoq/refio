@@ -84,6 +84,7 @@ Then open the **Refio** tool window (View -> Tool Windows -> Refio), select a mo
 - **6 LLM providers** — Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio
 - **MCP protocol support** — 18 built-in server presets (GitHub, PostgreSQL, Brave Search, etc.)
 - **21 built-in subagents** — specialized agents invocable with `!agent-name` prefix
+- **Project instructions** — auto-loads `AGENTS.md` and `.refio/agent.md` into LLM context; conditional rules via `.refio/rules/*.md` with glob-based activation
 - **Custom subagents** — define your own in `.refio/agents/*.md`
 - **Token budgeting** — per-section context limits (~28K tokens default)
 - **File snapshots** — automatic backup before every write operation

@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.llm.adapters
 
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 
 class ZAIAdapter(
@@ -16,7 +17,7 @@ class ZAIAdapter(
     subtaskId = subtaskId,
     source = source,
     requireApiKey = true,
-    defaultBaseUrl = configService?.getZAIBaseUrl() ?: ConfigService.DEFAULT_ZAI_BASE_URL
+    defaultBaseUrl = configService?.getTyped(ConfigKeys.PROVIDER_ZAI_BASE_URL) ?: ConfigService.DEFAULT_ZAI_BASE_URL
 ) {
     override suspend fun listModels() = super.listModels()
 }

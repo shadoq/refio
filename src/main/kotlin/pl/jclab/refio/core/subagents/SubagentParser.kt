@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.subagents
 
 import org.yaml.snakeyaml.Yaml
+import pl.jclab.refio.core.subagents.models.SubagentContextProfile
 import pl.jclab.refio.core.subagents.models.SubagentDefinition
 import pl.jclab.refio.core.subagents.models.SubagentExecutionMode
 import pl.jclab.refio.core.subagents.models.SubagentScope
@@ -103,7 +104,8 @@ class SubagentParser {
             sourcePath = sourcePath,
             scope = scope,
             executionMode = parseExecutionMode(frontmatter["executionMode"]),
-            maxSteps = parseIntSafe(frontmatter["maxSteps"]) ?: 10
+            maxSteps = parseIntSafe(frontmatter["maxSteps"]) ?: 10,
+            contextProfile = parseContextProfile(frontmatter["context_profile"])
         )
     }
 
@@ -170,6 +172,30 @@ class SubagentParser {
             is String -> value.toIntOrNull()
             else -> null
         }
+    }
+
+    /**
+     * Parsuje profil kontekstu z YAML frontmatter.
+     * Obsługuje mapę z kluczami snake_case.
+     */
+    private fun parseContextProfile(value: Any?): SubagentContextProfile {
+        if (value == null) return SubagentContextProfile()
+        if (value !is Map<*, *>) {
+            logger.warn { "Unexpected context_profile format: ${value::class.simpleName}, using defaults" }
+            return SubagentContextProfile()
+        }
+
+        @Suppress("UNCHECKED_CAST")
+        val map = value as Map<String, Any?>
+        return SubagentContextProfile(
+            includeFileTree = (map["include_file_tree"] as? Boolean) ?: true,
+            includeConversation = (map["include_conversation"] as? Boolean) ?: true,
+            includeWorkingMemory = (map["include_working_memory"] as? Boolean) ?: true,
+            includeRag = (map["include_rag"] as? Boolean) ?: true,
+            includeDependencies = (map["include_dependencies"] as? Boolean) ?: true,
+            maxContextTokens = parseIntSafe(map["max_context_tokens"]),
+            includeParentSummary = (map["include_parent_summary"] as? Boolean) ?: false
+        )
     }
 
     /**

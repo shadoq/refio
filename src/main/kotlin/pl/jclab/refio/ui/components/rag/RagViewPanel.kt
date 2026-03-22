@@ -9,6 +9,7 @@ import com.intellij.ui.components.JBTextField
 import com.intellij.ui.table.JBTable
 import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.core.db.RagContentType
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.services.core.CoreConnectionManager
 import pl.jclab.refio.services.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
@@ -445,7 +446,7 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
                     null
                 ) ?: "ollama/nomic-embed-text"
 
-                val defaultTopK = router.getConfigService().getRagSearchTopK()
+                val defaultTopK = router.getConfigService().getTyped(ConfigKeys.RAG_SEARCH_TOP_K)
                 val results = router.searchRag(
                     query = query,
                     model = embeddingModel,

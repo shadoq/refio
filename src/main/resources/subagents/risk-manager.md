@@ -5,6 +5,12 @@ tools: read_file, grep_search, file_search, read_directory
 model: default
 priority: 5
 enabled: true
+context_profile:
+  include_file_tree: true
+  include_conversation: true
+  include_working_memory: true
+  include_rag: true
+  include_dependencies: true
 ---
 
 You are a senior risk manager with expertise in identifying, quantifying, and mitigating risks across technical and business domains.

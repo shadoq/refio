@@ -2,6 +2,7 @@ package pl.jclab.refio.core.services.analysis.project
 
 import pl.jclab.refio.core.db.repositories.ProjectAnalysisReportRecord
 import pl.jclab.refio.core.db.repositories.ProjectAnalysisReportRepository
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.analysis.CodeElements
 import pl.jclab.refio.core.services.analysis.FileAnalyzerService
@@ -60,7 +61,7 @@ class RichProjectAnalysisEngine(
             val fingerprint = fingerprintProject(normalizedRoot, ignoreMatcher)
 
             cache[projectKey]?.let { cached ->
-                if ((System.currentTimeMillis() - cached.cachedAt) < configService.getProjectAnalysisCacheTtlMs()
+                if ((System.currentTimeMillis() - cached.cachedAt) < configService.getTyped<Long>(ConfigKeys.PROJECT_ANALYSIS_CACHE_TTL_MS)
                     && cached.matches(fingerprint)
                 ) {
                     logger.debug { "Rich analysis cache hit for $projectKey" }
@@ -372,12 +373,24 @@ class RichProjectAnalysisEngine(
             }
         }
 
+        // Detect framework from annotations — verify Spring presence before attributing
+        val hasSpringAnnotations = codeStructure.classes.any { cls ->
+            cls.annotations.any { it.startsWith("org.springframework") }
+        }
+
         val frameworkPatterns = codeStructure.classes.flatMap { cls ->
             cls.annotations.mapNotNull { ann ->
                 when {
-                    ann.contains("Controller") -> FrameworkPattern("Spring", "Controller", listOf(cls.qualifiedName ?: cls.name))
-                    ann.contains("Service") -> FrameworkPattern("Spring", "Service", listOf(cls.qualifiedName ?: cls.name))
-                    ann.contains("Repository") -> FrameworkPattern("Spring", "Repository", listOf(cls.qualifiedName ?: cls.name))
+                    // Full qualified Spring annotations → definitely Spring
+                    ann.startsWith("org.springframework") && ann.contains("Controller") -> FrameworkPattern("Spring", "Controller", listOf(cls.qualifiedName ?: cls.name))
+                    ann.startsWith("org.springframework") && ann.contains("Service") -> FrameworkPattern("Spring", "Service", listOf(cls.qualifiedName ?: cls.name))
+                    ann.startsWith("org.springframework") && ann.contains("Repository") -> FrameworkPattern("Spring", "Repository", listOf(cls.qualifiedName ?: cls.name))
+                    // Short annotations → only Spring if Spring imports are present elsewhere
+                    ann.contains("Controller") && hasSpringAnnotations -> FrameworkPattern("Spring", "Controller", listOf(cls.qualifiedName ?: cls.name))
+                    ann.contains("Service") && hasSpringAnnotations -> FrameworkPattern("Spring", "Service", listOf(cls.qualifiedName ?: cls.name))
+                    ann.contains("Repository") && hasSpringAnnotations -> FrameworkPattern("Spring", "Repository", listOf(cls.qualifiedName ?: cls.name))
+                    // Non-Spring: generic DI/Service pattern
+                    ann.contains("Service") -> FrameworkPattern("DI", "Service", listOf(cls.qualifiedName ?: cls.name))
                     else -> null
                 }
             }
@@ -494,7 +507,7 @@ class RichProjectAnalysisEngine(
         }.toMap()
 
         val frameworks = patterns.frameworkPatterns.groupBy { "${it.framework}:${it.pattern}" }.map { (name, entries) ->
-            val (framework, pattern) = name.split(':', limit = 2)
+            val (framework, _) = name.split(':', limit = 2)
             FrameworkInfo(
                 name = framework,
                 version = null,
@@ -610,7 +623,7 @@ class RichProjectAnalysisEngine(
     }
 
     private fun discoverSourceFiles(projectRoot: Path, ignoreMatcher: AiIgnoreMatcher): List<Path> {
-        val maxFiles = configService.getProjectAnalysisMaxFiles()
+        val maxFiles = configService.getTyped<Int>(ConfigKeys.PROJECT_ANALYSIS_MAX_FILES)
         val result = mutableListOf<Path>()
         Files.walk(projectRoot).use { stream ->
             stream.filter { Files.isRegularFile(it) }
@@ -638,7 +651,7 @@ class RichProjectAnalysisEngine(
         Files.walk(projectRoot).use { stream ->
             stream.filter { Files.isRegularFile(it) }
                 .filter { !isIgnored(projectRoot, it, ignoreMatcher) }
-                .limit(configService.getProjectAnalysisFingerprintLimit().toLong())
+                .limit(configService.getTyped<Int>(ConfigKeys.PROJECT_ANALYSIS_FINGERPRINT_LIMIT).toLong())
                 .forEach { path ->
                     val modified = Files.getLastModifiedTime(path).toMillis()
                     newest = maxOf(newest, modified)
@@ -696,7 +709,7 @@ class RichProjectAnalysisEngine(
     }
 
     private fun resolveIgnoreMatcher(projectRoot: Path): AiIgnoreMatcher {
-        val patterns = configService.getRagIgnoredDirectories()
+        val patterns = configService.getTyped<List<String>>(ConfigKeys.RAG_IGNORED_DIRECTORIES).toSet()
         return try {
             AiIgnoreMatcher.load(projectRoot) ?: AiIgnoreMatcher.fromPatterns(patterns)
         } catch (e: Exception) {

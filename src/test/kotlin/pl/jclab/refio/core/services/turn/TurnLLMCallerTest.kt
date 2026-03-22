@@ -12,6 +12,8 @@ import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.LLMMessage
+import pl.jclab.refio.core.config.ConfigKey
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 
 class TurnLLMCallerTest {
@@ -40,8 +42,9 @@ class TurnLLMCallerTest {
     @Test
     fun `should pass thinking and no-egress flags to llm client`() {
         every { configService.getModel(any(), any(), any()) } returns ("model-a" to "anthropic")
-        every { configService.isThinkingEnabled("task-1") } returns true
-        every { configService.isNoEgressEnabled("task-1") } returns true
+        every { configService.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
+        every { configService.getTyped(ConfigKeys.UI_THINKING_ENABLED, "task-1") } returns true
+        every { configService.getTyped(ConfigKeys.UI_NO_EGRESS_ENABLED, "task-1") } returns true
         coEvery {
             llmClient.complete(
                 provider = any(),

@@ -1,54 +1,34 @@
 package pl.jclab.refio.core.services
 
-import com.intellij.openapi.project.Project
-import pl.jclab.refio.api.models.ContextReference
-import pl.jclab.refio.api.models.ContextType
-import pl.jclab.refio.core.context.ContextProviderExtras
-import pl.jclab.refio.core.context.ContextProviderRegistry
-import pl.jclab.refio.core.db.ChatMessage
-import pl.jclab.refio.core.db.MessageRole
-import pl.jclab.refio.core.llm.LLMMessage
-import pl.jclab.refio.core.db.Subtask
-import pl.jclab.refio.core.db.TaskMode
-import pl.jclab.refio.core.db.TaskStatus
-import pl.jclab.refio.core.db.repositories.ChatMessageRepository
-import pl.jclab.refio.core.db.repositories.SubtaskRepository
-import pl.jclab.refio.core.db.repositories.TaskRepository
-import pl.jclab.refio.core.api.ModelOperation
-import pl.jclab.refio.core.models.context.*
-import pl.jclab.refio.core.services.analysis.FileAnalysis
-import pl.jclab.refio.core.services.analysis.FileAnalyzerService
-import pl.jclab.refio.core.tools.PathSandbox
-import pl.jclab.refio.core.services.ConfigService
-import pl.jclab.refio.core.services.context.CompressionLevel
-import pl.jclab.refio.core.services.context.ContextBudget
-import pl.jclab.refio.core.services.context.ContextSection
-import pl.jclab.refio.core.services.context.ContextTokenEstimator
-import pl.jclab.refio.core.services.context.ToolResultCompression
-import pl.jclab.refio.core.services.context.ToolResultCompressionConfig
-import pl.jclab.refio.core.services.context.WorkingMemoryService
-import pl.jclab.refio.core.services.EmbeddingCircuitBreaker
-import pl.jclab.refio.core.services.rag.RagSearchConfig
-import pl.jclab.refio.core.context.mcp.MCPManager
-import pl.jclab.refio.core.context.mcp.MCPToolCallResult
-import pl.jclab.refio.core.context.mcp.MCPToolArgumentResolver
-import pl.jclab.refio.core.context.mcp.MCPToolWorkflowExecutor
-import pl.jclab.refio.core.context.mcp.MCPToolsExposureMode
-import pl.jclab.refio.core.models.context.MCPContextResourceDTO
-import pl.jclab.refio.core.utils.ProjectIdGenerator
-import pl.jclab.refio.services.logging.dualLogger
-import pl.jclab.refio.core.services.monitoring.GlobalMetrics
-import pl.jclab.refio.core.services.monitoring.OperationInfo
 import com.google.gson.reflect.TypeToken
-import pl.jclab.refio.core.api.ContextSectionTokenInfo
+import com.intellij.openapi.project.Project
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jetbrains.exposed.sql.transactions.transaction
+import pl.jclab.refio.api.models.ContextReference
+import pl.jclab.refio.api.models.ContextType
+import pl.jclab.refio.core.api.ContextSectionTokenInfo
+import pl.jclab.refio.core.api.ModelOperation
+import pl.jclab.refio.core.config.ConfigKeys
+import pl.jclab.refio.core.context.ContextProviderExtras
+import pl.jclab.refio.core.context.ContextProviderRegistry
+import pl.jclab.refio.core.context.mcp.*
+import pl.jclab.refio.core.db.*
+import pl.jclab.refio.core.db.repositories.ChatMessageRepository
+import pl.jclab.refio.core.db.repositories.SubtaskRepository
+import pl.jclab.refio.core.db.repositories.TaskRepository
+import pl.jclab.refio.core.llm.LLMMessage
+import pl.jclab.refio.core.models.context.*
+import pl.jclab.refio.core.services.analysis.FileAnalysis
+import pl.jclab.refio.core.services.analysis.FileAnalyzerService
+import pl.jclab.refio.core.services.context.*
+import pl.jclab.refio.core.services.rag.RagSearchConfig
+import pl.jclab.refio.core.tools.PathSandbox
+import pl.jclab.refio.core.utils.ProjectIdGenerator
+import pl.jclab.refio.services.logging.dualLogger
 import java.nio.file.Path
 import java.time.Instant
-import java.time.LocalDate
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.jvm.Volatile
 
 private val logger = dualLogger("ContextService")
 private const val MAX_RAG_FRAGMENTS = 15
@@ -111,6 +91,8 @@ class ContextService(
     ragSearchModel: String? = null,
     ragSearchProvider: String? = null
 ) {
+    private val projectInstructionsLoader = ProjectInstructionsLoader()
+
     @Volatile
     private var ragSearchServiceRef: RagSearchService? = ragSearchService
 
@@ -119,6 +101,11 @@ class ContextService(
 
     @Volatile
     private var ragSearchProviderRef: String? = ragSearchProvider
+
+    /**
+     * Context layer cache for stable/accumulated context reuse across turns.
+     */
+    val contextLayerCache = ContextLayerCache()
 
     private data class McpToolCacheKey(
         val projectId: String,
@@ -285,6 +272,10 @@ class ContextService(
         val dependencies = DependenciesDTO(
             python = projectAnalysis.dependencies.python,
             javascript = projectAnalysis.dependencies.javascript,
+            typescript = projectAnalysis.dependencies.typescript,
+            kotlin = projectAnalysis.dependencies.kotlin,
+            java = projectAnalysis.dependencies.java,
+            cpp = projectAnalysis.dependencies.cpp,
             packageManagers = projectAnalysis.dependencies.packageManagers,
             configFiles = projectAnalysis.dependencies.configFiles
         )
@@ -403,13 +394,10 @@ class ContextService(
             technologies = projectAnalysis.technologies,
             technologyVersions = projectAnalysis.technologyVersions,
             keyComponents = projectAnalysis.keyComponents,
-            files = emptyList(),  // Not included in default analysis
 
             // Task and subtasks
             currentTask = currentTask,
             subtasks = subtaskDTOs,
-            subtaskContext = null,
-            taskContext = null,
 
             // Conversation history (filtered!)
             conversationHistory = conversationDTOs,
@@ -428,26 +416,20 @@ class ContextService(
             // User-provided context (from @ mentions)
             userContextRefs = resolvedUserContext,
 
-            // Multi-agent support (not used yet)
-            agents = emptyList(),
-            agentInfo = emptyList(),
-            coordinationStrategy = null,
-            agentConfig = emptyMap(),
-            toolConfig = emptyMap(),
+            // Project instructions (AGENTS.md, .refio/agent.md, .refio/rules/)
+            projectInstructions = loadProjectInstructions(projectRoot),
 
             // Additional context
-            availableTools = emptyList(),
-            templateReference = emptyMap(),
             mcpResources = mcpResources,
 
             // Context generation metadata
             contextGeneratedAt = Instant.now(),
             analyzerVersion = "kotlin-v1.0",
             domainAnalysis = projectAnalysis.domainAnalysis.domainScores,
-            semanticMetaData = emptyMap(),
-            workflowPatterns = emptyMap(),
-            llmContext = emptyMap(),
             semanticSummary = semanticSummary,
+
+            // Framework analysis
+            frameworkAnalysis = projectAnalysis.frameworkAnalysis,
 
             // Error information
             error = null,
@@ -763,7 +745,7 @@ class ContextService(
             return emptyList()
         }
         if (ragSearchProviderRef.equals("ollama", ignoreCase = true)) {
-            val endpoint = configService.getOllamaEndpoint()
+            val endpoint = configService.getTyped(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT)
             val providerKey = "ollama:$endpoint"
             if (EmbeddingCircuitBreaker.getState(providerKey) == "OPEN") {
                 val retryMs = EmbeddingCircuitBreaker.getCooldownRemaining(providerKey)
@@ -786,19 +768,19 @@ class ContextService(
 
         val combinedQuery = queryParts.joinToString("\n\n")
         val keywords = extractRagKeywords(queryParts)
-        val hybridEnabled = configService.getRagSearchHybridEnabled()
+        val hybridEnabled = configService.getTyped(ConfigKeys.RAG_SEARCH_HYBRID_ENABLED)
 
         return try {
             logger.info {
                 "[CONTEXT] Running hybrid RAG search: query='${combinedQuery.take(120)}...', keywords=$keywords"
             }
             val config = RagSearchConfig(
-                similarityThreshold = configService.getRagSearchSimilarityThreshold(),
+                similarityThreshold = configService.getTyped(ConfigKeys.RAG_SEARCH_SIMILARITY_THRESHOLD),
                 topK = MAX_RAG_FRAGMENTS,
                 hybridSearch = hybridEnabled,
                 keywords = keywords,
-                semanticWeight = configService.getRagSearchSemanticWeight(),
-                includeContextChunks = configService.getRagSearchIncludeContextChunks()
+                semanticWeight = configService.getTyped(ConfigKeys.RAG_SEARCH_SEMANTIC_WEIGHT),
+                includeContextChunks = configService.getTyped(ConfigKeys.RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS)
             )
             val results = searchService.search(
                 projectRoot = projectRoot.toString(),
@@ -921,17 +903,74 @@ class ContextService(
             usage.add("${section.name}=${tokens}/${maxTokens}$overflowMarker")
         }
 
-        // TIER 1: ESSENTIAL CONTEXT
-        val projectContextParts = mutableListOf<String>()
-        projectContextParts.add(buildCompactProjectOverview(context))
-        projectContextParts.add(buildCurrentTaskSection(context))
-        if (context.userRequirements.isNotEmpty()) {
-            projectContextParts.add(buildUserRequirementsSection(context))
-        }
-        addSection(ContextSection.PROJECT_CONTEXT, projectContextParts.joinToString("\n\n"))
-
-        // TIER 1.5: WORKING MEMORY
         val taskId = context.currentTask?.id
+
+        // === STABLE CONTEXT LAYER (cached, invalidated on project file change) ===
+        val stableCacheHit = taskId?.let { contextLayerCache.getStableContext(it) }
+        if (stableCacheHit != null) {
+            parts.add(stableCacheHit.content)
+            val tokens = stableCacheHit.tokensUsed
+            remainingTokens = (remainingTokens - tokens).coerceAtLeast(0)
+            usage.add("STABLE_CONTEXT=$tokens (cached)")
+            logger.debug { "[CONTEXT_BUDGET] Using cached STABLE layer: $tokens tokens" }
+        } else {
+            val stableParts = mutableListOf<String>()
+
+            // TIER 1: ESSENTIAL CONTEXT
+            val projectContextParts = mutableListOf<String>()
+            projectContextParts.add(buildCompactProjectOverview(context))
+            projectContextParts.add(buildCurrentTaskSection(context))
+            if (context.userRequirements.isNotEmpty()) {
+                projectContextParts.add(buildUserRequirementsSection(context))
+            }
+            val projectContent = projectContextParts.joinToString("\n\n")
+            stableParts.add(projectContent)
+            addSection(ContextSection.PROJECT_CONTEXT, projectContent)
+
+            // Project instructions (AGENTS.md, .refio/agent.md, .refio/rules/)
+            if (!context.projectInstructions.isNullOrBlank()) {
+                val instructionsContent = buildProjectInstructionsSection(context)
+                stableParts.add(instructionsContent)
+                addSection(ContextSection.PROJECT_INSTRUCTIONS, instructionsContent)
+            }
+
+            // TIER 4: REFERENCE CONTEXT (stable)
+            val referenceParts = mutableListOf<String>()
+
+            // Semantic project summary (architecture, key components, patterns, navigation)
+            if (!context.semanticSummary.isNullOrBlank()) {
+                referenceParts.add(context.semanticSummary)
+            }
+
+            if (context.subtasks.isNotEmpty()) {
+                referenceParts.add(buildSubtasksStatusSection(context))
+            }
+            if (context.keyComponents.isNotEmpty() && !context.semanticSummary.orEmpty().contains("<KEY_COMPONENTS>")) {
+                referenceParts.add(buildKeyComponentsSection(context))
+            }
+            buildDependenciesSection(context)?.let { referenceParts.add(it) }
+
+            // Language-specific analysis sections (only for projects that use these languages)
+            buildTypeScriptAnalysisSection(context)?.let { referenceParts.add(it) }
+            buildHtmlAnalysisSection(context)?.let { referenceParts.add(it) }
+            buildCssAnalysisSection(context)?.let { referenceParts.add(it) }
+
+            if (referenceParts.isNotEmpty()) {
+                val referenceContent = referenceParts.joinToString("\n\n")
+                stableParts.add(referenceContent)
+                addSection(ContextSection.REFERENCE, referenceContent)
+            }
+
+            // Cache stable layer for reuse across turns
+            if (taskId != null) {
+                val stableContent = "<STABLE_CONTEXT>\n${stableParts.joinToString("\n\n")}\n</STABLE_CONTEXT>"
+                val stableTokens = ContextTokenEstimator.estimateTokens(stableContent)
+                contextLayerCache.putStableContext(taskId, stableContent, stableTokens)
+            }
+        }
+
+        // === ACCUMULATED CONTEXT LAYER (grows across turns) ===
+        // TIER 1.5: WORKING MEMORY
         if (taskId != null && workingMemoryService != null) {
             val workingBudget = minOf(budget.budgetFor(ContextSection.WORKING_MEMORY), remainingTokens / 4)
             if (workingBudget > 0) {
@@ -951,6 +990,7 @@ class ContextService(
             )
         }
 
+        // === EPHEMERAL CONTEXT LAYER (rebuilt every turn) ===
         val userContextParts = mutableListOf<String>()
         if (context.userContextRefs.isNotEmpty()) {
             userContextParts.add(buildUserContextSection(context))
@@ -975,19 +1015,6 @@ class ContextService(
                 conversationBudget
             )
         }
-
-        // TIER 4: REFERENCE CONTEXT
-        val referenceParts = mutableListOf<String>()
-        if (context.subtasks.isNotEmpty()) {
-            referenceParts.add(buildSubtasksStatusSection(context))
-        }
-        if (context.keyComponents.isNotEmpty()) {
-            referenceParts.add(buildKeyComponentsSection(context))
-        }
-        if (context.dependencies.python.isNotEmpty() || context.dependencies.javascript.isNotEmpty()) {
-            referenceParts.add(buildDependenciesSection(context))
-        }
-        addSection(ContextSection.REFERENCE, referenceParts.joinToString("\n\n"))
 
         val contextPrompt = parts.joinToString("\n\n")
 
@@ -1209,10 +1236,9 @@ class ContextService(
         val parts = mutableListOf<String>()
 
         parts.add(buildArchitectureSummary(projectAnalysis, richReport))
-        parts.add(buildKeyComponentsSummary(richReport))
-        parts.add(buildPatternsAndConventions(richReport))
-        parts.add(buildExternalDependenciesList(richReport))
-        parts.add(buildNavigationMap(richReport))
+        buildKeyComponentsSummary(richReport)?.let { parts.add(it) }
+        buildPatternsAndConventions(richReport)?.let { parts.add(it) }
+        buildNavigationMap(richReport, projectAnalysis)?.let { parts.add(it) }
 
         return parts.joinToString("\n\n").take(maxTokens * 4)
     }
@@ -1227,20 +1253,21 @@ class ContextService(
         val entryPoints = arch?.apiSurface?.entryPoints?.take(5).orEmpty()
         val layersLine = if (layers.isNotEmpty()) "Layers: ${layers.joinToString(" -> ")}" else ""
 
+        val entryPointsLine = if (entryPoints.isNotEmpty()) "\nKey Entry Points: ${entryPoints.joinToString(", ")}" else ""
+
         return """
             <PROJECT_ARCHITECTURE>
             Style: $style
             Primary Language: ${analysis.primaryLanguage}
-            $layersLine
-            Key Entry Points: ${if (entryPoints.isNotEmpty()) entryPoints.joinToString(", ") else "N/A"}
+            $layersLine$entryPointsLine
             </PROJECT_ARCHITECTURE>
         """.trimIndent()
     }
 
     private fun buildKeyComponentsSummary(
         rich: pl.jclab.refio.core.services.analysis.project.ProjectAnalysisReport?
-    ): String {
-        if (rich == null) return "<KEY_COMPONENTS>No detailed analysis available</KEY_COMPONENTS>"
+    ): String? {
+        if (rich == null) return null
 
         val classes = rich.codeStructure.classes
         val controllers = classes.filter { cls -> cls.annotations.any { it.contains("Controller") } }
@@ -1249,6 +1276,18 @@ class ContextService(
         val models = classes.filter { cls ->
             cls.name.endsWith("DTO") || cls.name.endsWith("Entity") || cls.modifiers.contains("data")
         }
+
+        // Also detect non-JVM key classes: decorators (@app.route), base classes, main modules
+        val keyClasses = classes.filter { cls ->
+            cls.annotations.any { a ->
+                a.contains("route") || a.contains("endpoint") || a.contains("view") ||
+                a.contains("Component") || a.contains("Injectable") || a.contains("Module")
+            } || cls.methods.size >= 5
+        }.filterNot { it in controllers || it in services || it in repositories || it in models }
+
+        val hasContent = controllers.isNotEmpty() || services.isNotEmpty() ||
+            repositories.isNotEmpty() || models.isNotEmpty() || keyClasses.isNotEmpty()
+        if (!hasContent) return null
 
         val parts = mutableListOf<String>()
         parts.add("<KEY_COMPONENTS>")
@@ -1287,66 +1326,158 @@ class ContextService(
             }
         }
 
+        if (keyClasses.isNotEmpty()) {
+            parts.add("## Key Classes")
+            keyClasses.take(10).forEach { cls ->
+                val methodNames = cls.methods.take(5).joinToString(", ") { it.name }
+                val suffix = if (methodNames.isNotBlank()) ": $methodNames" else ""
+                parts.add("- ${cls.name}$suffix")
+            }
+        }
+
         parts.add("</KEY_COMPONENTS>")
         return parts.joinToString("\n")
     }
 
     private fun buildPatternsAndConventions(
         rich: pl.jclab.refio.core.services.analysis.project.ProjectAnalysisReport?
-    ): String {
-        if (rich == null) return "<PATTERNS>No detailed analysis available</PATTERNS>"
+    ): String? {
+        if (rich == null) return null
 
         val patterns = rich.patterns
-        val frameworkPatterns = patterns.frameworkPatterns.take(5).joinToString(", ") {
-            "${it.framework}:${it.pattern}"
-        }
+        // Deduplicate framework patterns by unique framework:pattern pairs
+        val frameworkPatterns = patterns.frameworkPatterns
+            .map { "${it.framework}:${it.pattern}" }
+            .distinct()
+            .take(5)
+            .joinToString(", ")
         val naming = patterns.namingConventions
 
-        return """
-            <PATTERNS>
-            Framework patterns: ${if (frameworkPatterns.isNotBlank()) frameworkPatterns else "N/A"}
-            Naming: class=${naming.classNaming}, method=${naming.methodNaming}
-            </PATTERNS>
-        """.trimIndent()
+        val parts = mutableListOf<String>()
+        parts.add("<PATTERNS>")
+        if (frameworkPatterns.isNotBlank()) {
+            parts.add("Framework patterns: $frameworkPatterns")
+        }
+        parts.add("Naming: class=${naming.classNaming}, method=${naming.methodNaming}")
+        parts.add("</PATTERNS>")
+
+        return parts.joinToString("\n")
     }
 
-    private fun buildExternalDependenciesList(
-        rich: pl.jclab.refio.core.services.analysis.project.ProjectAnalysisReport?
-    ): String {
-        if (rich == null) return "<EXTERNAL_DEPENDENCIES>No detailed analysis available</EXTERNAL_DEPENDENCIES>"
-        val deps = rich.dependencies.externalDependencies.take(10).map { "- ${it.name} (usage: ${it.usageCount})" }
-        val body = if (deps.isNotEmpty()) deps.joinToString("\n") else "- None detected"
-        return "<EXTERNAL_DEPENDENCIES>\n$body\n</EXTERNAL_DEPENDENCIES>"
-    }
+    // Removed buildExternalDependenciesList() — it listed import package prefixes (java, com, kotlinx)
+    // which are not actual dependencies. Real dependencies are in buildDependenciesSection().
 
     private fun buildNavigationMap(
-        rich: pl.jclab.refio.core.services.analysis.project.ProjectAnalysisReport?
-    ): String {
-        val structure = rich?.codeStructure ?: return "<NAVIGATION_MAP>No detailed analysis available</NAVIGATION_MAP>"
+        rich: pl.jclab.refio.core.services.analysis.project.ProjectAnalysisReport?,
+        projectAnalysis: ProjectAnalysis
+    ): String? {
+        val structure = rich?.codeStructure ?: return null
 
+        // Categorize packages/directories by purpose
         val packageMap = structure.packages.groupBy { pkg ->
+            val name = pkg.name.lowercase()
             when {
-                pkg.name.contains(".api") || pkg.name.contains(".controller") -> "API"
-                pkg.name.contains(".service") -> "Business Logic"
-                pkg.name.contains(".repository") || pkg.name.contains(".db") -> "Data Access"
-                pkg.name.contains(".model") || pkg.name.contains(".dto") -> "Models"
-                pkg.name.contains(".config") -> "Configuration"
-                pkg.name.contains(".util") -> "Utilities"
-                else -> "Other"
+                name.contains(".api") || name.contains(".controller") || name.contains("/api") ||
+                    name.contains("/controllers") || name.contains("/routes") || name.contains("/views") ||
+                    name.contains("/endpoints") -> "API / Routes"
+                name.contains(".service") || name.contains("/services") || name.contains("/logic") ||
+                    name.contains("/core") -> "Business Logic"
+                name.contains(".repository") || name.contains(".db") || name.contains("/db") ||
+                    name.contains("/database") || name.contains("/repositories") ||
+                    name.contains("/models") || name.contains("/dao") -> "Data Access"
+                name.contains(".model") || name.contains(".dto") || name.contains("/schemas") ||
+                    name.contains("/entities") || name.contains("/types") -> "Models"
+                name.contains(".config") || name.contains("/config") || name.contains("/settings") -> "Configuration"
+                name.contains(".util") || name.contains("/utils") || name.contains("/helpers") ||
+                    name.contains("/lib") || name.contains("/common") -> "Utilities"
+                name.contains("/test") || name.contains("/tests") || name.contains("/spec") -> "Tests"
+                name.contains("/ui") || name.contains("/components") || name.contains("/pages") ||
+                    name.contains("/templates") || name.contains("/static") -> "UI / Frontend"
+                name.contains("/scripts") || name.contains("/tools") || name.contains("/bin") -> "Scripts / Tools"
+                name.contains("/docs") || name.contains("/documentation") -> "Documentation"
+                else -> null
             }
+        }
+
+        // Filter out uncategorized and empty categories
+        val categorized = packageMap.filterKeys { it != null }
+        if (categorized.isEmpty()) {
+            // Fall back to top-level directory structure from project analysis
+            val topLevelDirs = projectAnalysis.structure.topLevelItems
+                .filter { !it.startsWith(".") }
+            if (topLevelDirs.isEmpty()) return null
+
+            val parts = mutableListOf<String>()
+            parts.add("<NAVIGATION_MAP>")
+            parts.add("Top-level structure:")
+            compactDirectoryList(topLevelDirs).forEach { parts.add("- $it") }
+            parts.add("</NAVIGATION_MAP>")
+            return parts.joinToString("\n")
         }
 
         val parts = mutableListOf<String>()
         parts.add("<NAVIGATION_MAP>")
         parts.add("Where to find what:")
 
-        packageMap.entries.sortedBy { it.key }.forEach { (category, packages) ->
-            val names = packages.map { it.name.substringAfterLast('.') }.distinct().take(5)
+        categorized.entries.sortedBy { it.key }.forEach { (category, packages) ->
+            val names = packages.map { it.name.substringAfterLast('.').substringAfterLast('/') }
+                .distinct().take(5)
             parts.add("- $category: ${names.joinToString(", ")}")
         }
 
         parts.add("</NAVIGATION_MAP>")
         return parts.joinToString("\n")
+    }
+
+    /**
+     * Groups similar directory/file names by common prefix to reduce noise.
+     * E.g., ["mimir_benchmark_20260130_143610", "mimir_benchmark_20260130_144914", "mimir_benchmark_20260310_103925"]
+     * becomes ["mimir_benchmark_* (3 dirs)"]
+     */
+    private fun compactDirectoryList(items: List<String>): List<String> {
+        if (items.size <= 10) {
+            // Try grouping by common prefix (at least 4 chars) with numeric/date suffix
+            val groups = mutableMapOf<String, MutableList<String>>()
+            val standalone = mutableListOf<String>()
+
+            for (item in items) {
+                // Find prefix before numeric/date suffix pattern
+                val prefixMatch = Regex("""^(.{4,?})[\d_.-]+\d{4,}.*$""").find(item)
+                if (prefixMatch != null) {
+                    groups.getOrPut(prefixMatch.groupValues[1]) { mutableListOf() }.add(item)
+                } else {
+                    standalone.add(item)
+                }
+            }
+
+            val result = mutableListOf<String>()
+            for ((prefix, members) in groups) {
+                if (members.size >= 2) {
+                    result.add("${prefix.trimEnd('_', '-', '.')}* (${members.size} items)")
+                } else {
+                    result.addAll(members)
+                }
+            }
+            result.addAll(standalone)
+            return result.take(12)
+        }
+
+        // Many items — group aggressively
+        val byExtension = items.groupBy { item ->
+            val dot = item.lastIndexOf('.')
+            if (dot > 0) item.substring(dot) else ""
+        }
+
+        val result = mutableListOf<String>()
+        for ((ext, members) in byExtension.entries.sortedByDescending { it.value.size }) {
+            if (ext.isNotEmpty() && members.size > 3) {
+                result.add("*$ext (${members.size} files)")
+            } else {
+                result.addAll(members.take(3))
+                if (members.size > 3) result.add("... and ${members.size - 3} more")
+            }
+        }
+        return result.take(12)
     }
 
     /**
@@ -1394,7 +1525,7 @@ class ContextService(
 
     /**
      * Build compact project overview (ADR 0017).
-     * Max 200 tokens, essential information only.
+     * Includes essential project info + code analysis summary.
      */
     private fun buildCompactProjectOverview(context: ProjectContextDTO): String {
         val projectName = context.metaData.projectName
@@ -1417,101 +1548,155 @@ class ContextService(
             else -> "$type with $files files"
         }
 
-        return """
-            |<PROJECT_CONTEXT>
-            |$projectName: $summary
-            |Stack: $lang | $tech
-            |Complexity: ${context.summary.complexity}
-            |</PROJECT_CONTEXT>
-        """.trimMargin()
-    }
-
-    private fun buildProjectOverview(context: ProjectContextDTO): String {
-        val projectName = context.metaData.projectName
-        val osName = System.getProperty("os.name")?.ifBlank { "Unknown OS" } ?: "Unknown OS"
-        val currentDate = runCatching { LocalDate.now().toString() }.getOrElse { "Unknown date" }
-
-        // Build architecture description from key components
-        val architecture = if (context.keyComponents.isNotEmpty()) {
-            "Architecture: Key components: ${context.keyComponents.take(5).joinToString(", ")}"
-        } else if (context.summary.architectureNotes != null) {
-            "Architecture: ${context.summary.architectureNotes}"
-        } else {
-            ""
+        // Code analysis summary (inline)
+        val codeLines = mutableListOf<String>()
+        context.codeAnalysis.kotlin.let { m ->
+            val f = m["files"] as? Int ?: 0
+            if (f > 0) codeLines.add("Kotlin: $f files, ${m["classes"]} classes, ${m["functions"]} functions")
         }
+        context.codeAnalysis.java.let { m ->
+            val f = m["files"] as? Int ?: 0
+            if (f > 0) codeLines.add("Java: $f files, ${m["classes"]} classes")
+        }
+        context.codeAnalysis.python.let { m ->
+            val f = m["files"] as? Int ?: 0
+            if (f > 0) codeLines.add("Python: $f files, ${m["classes"]} classes, ${m["functions"]} functions")
+        }
+        context.codeAnalysis.javascript.let { m ->
+            val f = m["files"] as? Int ?: 0
+            if (f > 0) codeLines.add("JS: $f files, ${m["classes"]} classes, ${m["functions"]} functions")
+        }
+        context.codeAnalysis.typescript.let { m ->
+            val f = m["files"] as? Int ?: 0
+            if (f > 0) codeLines.add("TS: $f files, ${m["classes"]} classes, ${m["functions"]} functions")
+        }
+        context.codeAnalysis.html.let { m ->
+            val f = m["files"] as? Int ?: 0
+            if (f > 0) codeLines.add("HTML: $f files")
+        }
+        context.codeAnalysis.css.let { m ->
+            val f = m["files"] as? Int ?: 0
+            if (f > 0) {
+                val classesCount = m["classes_count"] as? Int ?: 0
+                val extra = if (classesCount > 0) ", $classesCount selectors" else ""
+                codeLines.add("CSS: $f files$extra")
+            }
+        }
+        val codeAnalysisSummary = if (codeLines.isNotEmpty()) "\nCode: ${codeLines.joinToString("; ")}" else ""
 
-        // Build file types summary
+        // Architecture notes
+        val archNotes = context.summary.architectureNotes?.let { "\nArchitecture: $it" } ?: ""
+
+        // File types summary
         val fileTypesSummary = context.structure.fileTypes.entries
             .sortedByDescending { it.value }
             .take(8)
             .joinToString(", ") { ".${it.key}(${it.value})" }
+        val fileTypesLine = if (fileTypesSummary.isNotBlank()) "\nFile types: $fileTypesSummary" else ""
+
+        val frameworkSection = buildFrameworkAnalysisSection(context)
 
         return """
-            |<PROJECT_OVERVIEW>
-            |Project: $projectName
-            |Type: ${context.projectType} | Language: ${context.summary.mainLanguage} | Complexity: ${context.summary.complexity}
-            |Runtime: $osName | Date: $currentDate
-            |Files: ${context.structure.totalFiles}
-            |Technologies: ${context.technologies.joinToString(", ")}
-            |${if (architecture.isNotBlank()) "$architecture\n" else ""}|File Types: $fileTypesSummary
-            |</PROJECT_OVERVIEW>
-        """.trimMargin()
+            |<PROJECT_CONTEXT>
+            |$projectName: $summary
+            |Stack: $lang | $tech
+            |Complexity: ${context.summary.complexity}$codeAnalysisSummary$archNotes$fileTypesLine
+            |</PROJECT_CONTEXT>
+            |$frameworkSection
+        """.trimMargin().trim()
     }
 
-    private fun buildDependenciesSection(context: ProjectContextDTO): String {
+    private fun buildFrameworkAnalysisSection(context: ProjectContextDTO): String {
+        val fa = context.frameworkAnalysis ?: return ""
+        if (fa.frameworks.isEmpty()) return ""
+
         val parts = mutableListOf<String>()
-        parts.add("<PROJECT_DEPENDENCIES>")
+        parts.add("<FRAMEWORK_ANALYSIS>")
 
-        if (context.dependencies.python.isNotEmpty()) {
-            parts.add(
-                "Python: ${
-                    context.dependencies.python.take(15).joinToString(", ")
-                }${if (context.dependencies.python.size > 15) " (+${context.dependencies.python.size - 15} more)" else ""}"
-            )
+        // Detected frameworks with conventions
+        val detected = fa.frameworks.joinToString(", ") { fw ->
+            val conventionSuffix = fa.conventions
+                .firstOrNull { it.startsWith(fw.name) }
+                ?.substringAfter(": ", "")
+                ?.let { " ($it)" } ?: ""
+            val versionSuffix = fw.version?.let { " $it" } ?: ""
+            "${fw.name}${versionSuffix}${conventionSuffix}"
+        }
+        parts.add("Detected: $detected")
+
+        // Layers with example files
+        if (fa.layers.isNotEmpty()) {
+            parts.add("Layers:")
+            for (layer in fa.layers) {
+                val examples = layer.exampleFiles.take(3).joinToString(", ") {
+                    it.substringAfterLast("/")
+                }
+                parts.add("- ${layer.name}: $examples")
+            }
         }
 
-        if (context.dependencies.javascript.isNotEmpty()) {
-            parts.add(
-                "JavaScript: ${
-                    context.dependencies.javascript.take(15).joinToString(", ")
-                }${if (context.dependencies.javascript.size > 15) " (+${context.dependencies.javascript.size - 15} more)" else ""}"
-            )
+        // Endpoints (if any)
+        if (fa.endpoints.isNotEmpty()) {
+            parts.add("Endpoints: ${fa.endpoints.take(5).joinToString(", ")}")
         }
 
-        parts.add("</PROJECT_DEPENDENCIES>")
+        // Config files (if any)
+        if (fa.configFiles.isNotEmpty()) {
+            parts.add("Config: ${fa.configFiles.take(5).joinToString(", ")}")
+        }
+
+        parts.add("</FRAMEWORK_ANALYSIS>")
         return parts.joinToString("\n")
     }
 
-    private fun buildCodeAnalysisSection(context: ProjectContextDTO): String {
+    private fun loadProjectInstructions(projectRoot: Path): String? {
+        val loaded = projectInstructionsLoader.load(projectRoot)
+        if (loaded.isEmpty) return null
+
         val parts = mutableListOf<String>()
-        parts.add("<CODE_ANALYSIS>")
 
-        context.codeAnalysis.kotlin.let { kotlin ->
-            if (kotlin["files"] as? Int ?: 0 > 0) {
-                parts.add("Kotlin: ${kotlin["files"]} files, ${kotlin["classes"]} classes, ${kotlin["functions"]} functions")
+        // Instruction files (AGENTS.md, .refio/agent.md)
+        for (inst in loaded.instructions) {
+            parts.add("## ${inst.source}\n${inst.content}")
+        }
+
+        // Conditional rules that matched
+        for (rule in loaded.rules) {
+            val header = if (rule.description.isNotBlank()) "## Rule: ${rule.name} (${rule.description})" else "## Rule: ${rule.name}"
+            parts.add("$header\n${rule.content}")
+        }
+
+        return parts.joinToString("\n\n")
+    }
+
+    private fun buildProjectInstructionsSection(context: ProjectContextDTO): String {
+        return "<PROJECT_INSTRUCTIONS>\n${context.projectInstructions}\n</PROJECT_INSTRUCTIONS>"
+    }
+
+    private fun buildDependenciesSection(context: ProjectContextDTO): String? {
+        val depLines = mutableListOf<String>()
+
+        fun addDeps(label: String, deps: List<String>) {
+            if (deps.isNotEmpty()) {
+                val shown = deps.take(15).joinToString(", ")
+                val more = if (deps.size > 15) " (+${deps.size - 15} more)" else ""
+                depLines.add("$label: $shown$more")
             }
         }
 
-        context.codeAnalysis.java.let { java ->
-            if (java["files"] as? Int ?: 0 > 0) {
-                parts.add("Java: ${java["files"]} files, ${java["classes"]} classes")
-            }
+        addDeps("Kotlin/Java", (context.dependencies.kotlin + context.dependencies.java).distinct())
+        addDeps("Python", context.dependencies.python)
+        addDeps("JavaScript", context.dependencies.javascript)
+        addDeps("TypeScript", context.dependencies.typescript.filter { it !in context.dependencies.javascript })
+        addDeps("C/C++", context.dependencies.cpp)
+
+        if (depLines.isEmpty()) return null
+
+        if (context.dependencies.packageManagers.isNotEmpty()) {
+            depLines.add("Package managers: ${context.dependencies.packageManagers.joinToString(", ")}")
         }
 
-        context.codeAnalysis.python.let { python ->
-            if (python["files"] as? Int ?: 0 > 0) {
-                parts.add("Python: ${python["files"]} files, ${python["classes"]} classes, ${python["functions"]} functions")
-            }
-        }
-
-        context.codeAnalysis.javascript.let { js ->
-            if (js["files"] as? Int ?: 0 > 0) {
-                parts.add("JavaScript: ${js["files"]} files, ${js["classes"]} classes, ${js["functions"]} functions")
-            }
-        }
-
-        parts.add("</CODE_ANALYSIS>")
-        return parts.joinToString("\n")
+        return "<PROJECT_DEPENDENCIES>\n${depLines.joinToString("\n")}\n</PROJECT_DEPENDENCIES>"
     }
 
     private fun buildKeyComponentsSection(context: ProjectContextDTO): String {
@@ -1639,14 +1824,16 @@ class ContextService(
             }
         }
 
-        return """
-            |<CURRENT_TASK>
-            |${task.description}${if (task.status == "SUCCESS") " [completed]" else if (task.status == "RUNNING") " [in progress]" else ""}
-            |${task.description}
-            |
-            |${if (context.subtasks.isNotEmpty()) "Subtasks: ${context.subtasks.size} total ($statusSummary)" else ""}
-            |</CURRENT_TASK>
-        """.trimMargin()
+        val statusTag = when (task.status) {
+            "SUCCESS" -> " [completed]"
+            "RUNNING" -> " [in progress]"
+            else -> ""
+        }
+        val subtasksLine = if (context.subtasks.isNotEmpty()) {
+            "\nSubtasks: ${context.subtasks.size} total ($statusSummary)"
+        } else ""
+
+        return "<CURRENT_TASK>\n${task.description}$statusTag$subtasksLine\n</CURRENT_TASK>"
     }
 
     /**
@@ -1779,11 +1966,11 @@ class ContextService(
     }
 
     private fun buildRecentWorkConfig(): RecentWorkConfig {
-        val summaryMax = configService.getRecentWorkSummaryMaxLength()
+        val summaryMax = configService.getTyped(ConfigKeys.RECENT_WORK_SUMMARY_MAX_LENGTH)
         val detailedMax = (summaryMax * 5).coerceAtLeast(1024)
 
         return RecentWorkConfig(
-            fullDataLimit = configService.getRecentWorkFullDataLimit(),
+            fullDataLimit = configService.getTyped(ConfigKeys.RECENT_WORK_FULL_DATA_LIMIT),
             detailedMaxLength = detailedMax,
             summaryMaxLength = summaryMax,
             includeMetadata = true
@@ -2266,48 +2453,26 @@ class ContextService(
         return if (text.length > limit) "${text.take(limit)}..." else text
     }
 
-    private fun hasCodeAnalysis(codeAnalysis: CodeAnalysisDTO): Boolean {
-        return (codeAnalysis.kotlin["files"] as? Int ?: 0) > 0 ||
-                (codeAnalysis.java["files"] as? Int ?: 0) > 0 ||
-                (codeAnalysis.python["files"] as? Int ?: 0) > 0 ||
-                (codeAnalysis.javascript["files"] as? Int ?: 0) > 0
-    }
-
-    private fun hasTypeScriptAnalysis(codeAnalysis: CodeAnalysisDTO): Boolean {
-        return (codeAnalysis.typescript["files"] as? Int ?: 0) > 0
-    }
-
-    private fun hasHtmlAnalysis(codeAnalysis: CodeAnalysisDTO): Boolean {
-        return (codeAnalysis.html["files"] as? Int ?: 0) > 0
-    }
-
-    private fun hasCssAnalysis(codeAnalysis: CodeAnalysisDTO): Boolean {
-        return (codeAnalysis.css["files"] as? Int ?: 0) > 0
-    }
-
-    private fun buildTypeScriptAnalysisSection(context: ProjectContextDTO): String {
-        val parts = mutableListOf<String>()
-        parts.add("<TYPESCRIPT_ANALYSIS>")
-
+    private fun buildTypeScriptAnalysisSection(context: ProjectContextDTO): String? {
         val ts = context.codeAnalysis.typescript
         val filesCount = ts["files"] as? Int ?: 0
+        if (filesCount == 0) return null
+
+        val parts = mutableListOf<String>()
+        parts.add("<TYPESCRIPT_ANALYSIS>")
+        parts.add("Files: $filesCount")
+
         val interfacesCount = ts["interfaces"] as? Int ?: 0
         val typesCount = ts["types"] as? Int ?: 0
         val classesCount = ts["classes"] as? Int ?: 0
         val functionsCount = ts["functions"] as? Int ?: 0
 
-        parts.add("Files: $filesCount")
         if (interfacesCount > 0 || typesCount > 0) {
             parts.add("Interfaces: $interfacesCount, Types: $typesCount")
         }
-        if (classesCount > 0) {
-            parts.add("Classes: $classesCount")
-        }
-        if (functionsCount > 0) {
-            parts.add("Functions: $functionsCount")
-        }
+        if (classesCount > 0) parts.add("Classes: $classesCount")
+        if (functionsCount > 0) parts.add("Functions: $functionsCount")
 
-        // Add sample interface/type names if available
         @Suppress("UNCHECKED_CAST")
         val interfaceNames = ts["interface_names"] as? List<String>
         if (!interfaceNames.isNullOrEmpty()) {
@@ -2326,31 +2491,33 @@ class ContextService(
             parts.add("Decorators: ${decorators.take(10).joinToString(", ")}")
         }
 
+        @Suppress("UNCHECKED_CAST")
+        val reactComponents = ts["react_components"] as? Int ?: 0
+        @Suppress("UNCHECKED_CAST")
+        val reactHooks = ts["react_hooks"] as? Int ?: 0
+        if (reactComponents > 0 || reactHooks > 0) {
+            parts.add("React: $reactComponents components, $reactHooks hooks")
+        }
+
         parts.add("</TYPESCRIPT_ANALYSIS>")
         return parts.joinToString("\n")
     }
 
-    private fun buildHtmlAnalysisSection(context: ProjectContextDTO): String {
-        val parts = mutableListOf<String>()
-        parts.add("<HTML_ANALYSIS>")
-
+    private fun buildHtmlAnalysisSection(context: ProjectContextDTO): String? {
         val html = context.codeAnalysis.html
         val filesCount = html["files"] as? Int ?: 0
+        if (filesCount == 0) return null
+
+        val parts = mutableListOf<String>()
+        parts.add("<HTML_ANALYSIS>")
         parts.add("HTML Files: $filesCount")
 
         @Suppress("UNCHECKED_CAST")
         val pages = html["pages"] as? List<Map<String, Any>>
         if (!pages.isNullOrEmpty()) {
-            parts.add("")
             parts.add("Pages:")
-
-            val toProcess = if (pages.size > 10) {
-                pages.take(5).union(pages.takeLast(5))
-            } else {
-                pages
-            }
-
-            toProcess.take(5).union(pages.takeLast(5)).forEach { page ->
+            val displayPages = if (pages.size > 10) pages.take(10) else pages
+            displayPages.forEach { page ->
                 val file = page["file"] as? String ?: "unknown"
                 val title = page["title"] as? String
                 val hasCanvas = page["has_canvas"] as? Boolean ?: false
@@ -2365,20 +2532,7 @@ class ContextService(
                     if (formsCount != null && formsCount > 0) append(" [Forms: $formsCount]")
                 }
                 parts.add(pageInfo)
-
-                @Suppress("UNCHECKED_CAST")
-                val gameIndicators = page["game_indicators"] as? List<String>
-                if (!gameIndicators.isNullOrEmpty()) {
-                    parts.add("    Game indicators: ${gameIndicators.joinToString(", ")}")
-                }
-
-                @Suppress("UNCHECKED_CAST")
-                val canvasIds = page["canvas_ids"] as? List<String>
-                if (!canvasIds.isNullOrEmpty()) {
-                    parts.add("    Canvas IDs: ${canvasIds.joinToString(", ")}")
-                }
             }
-
             if (pages.size > 10) {
                 parts.add("  ... and ${pages.size - 10} more pages")
             }
@@ -2387,24 +2541,20 @@ class ContextService(
         @Suppress("UNCHECKED_CAST")
         val canvasGames = html["canvas_games"] as? List<String>
         if (!canvasGames.isNullOrEmpty()) {
-            parts.add("")
-            parts.add("Canvas Games Detected: ${canvasGames.size}")
-            parts.add("  ${canvasGames.take(5).joinToString(", ")}")
-            if (canvasGames.size > 5) {
-                parts.add("  ... and ${canvasGames.size - 5} more")
-            }
+            parts.add("Canvas Games Detected: ${canvasGames.take(5).joinToString(", ")}")
         }
 
         parts.add("</HTML_ANALYSIS>")
         return parts.joinToString("\n")
     }
 
-    private fun buildCssAnalysisSection(context: ProjectContextDTO): String {
-        val parts = mutableListOf<String>()
-        parts.add("<CSS_ANALYSIS>")
-
+    private fun buildCssAnalysisSection(context: ProjectContextDTO): String? {
         val css = context.codeAnalysis.css
         val filesCount = css["files"] as? Int ?: 0
+        if (filesCount == 0) return null
+
+        val parts = mutableListOf<String>()
+        parts.add("<CSS_ANALYSIS>")
         parts.add("CSS Files: $filesCount")
 
         val classesCount = css["classes_count"] as? Int ?: 0
@@ -2417,9 +2567,6 @@ class ContextService(
         val variables = css["variables"] as? List<String>
         if (!variables.isNullOrEmpty()) {
             parts.add("CSS Variables: ${variables.take(10).joinToString(", ")}")
-            if (variables.size > 10) {
-                parts.add("  ... and ${variables.size - 10} more")
-            }
         }
 
         @Suppress("UNCHECKED_CAST")
@@ -2431,20 +2578,7 @@ class ContextService(
         @Suppress("UNCHECKED_CAST")
         val mediaQueries = css["media_queries"] as? List<String>
         if (!mediaQueries.isNullOrEmpty()) {
-            parts.add("Media Queries: ${mediaQueries.take(3).joinToString(", ")}")
-            if (mediaQueries.size > 3) {
-                parts.add("  ... and ${mediaQueries.size - 3} more")
-            }
-        }
-
-        @Suppress("UNCHECKED_CAST")
-        val classes = css["classes"] as? List<String>
-        if (!classes.isNullOrEmpty() && classesCount > 0) {
-            parts.add("")
-            parts.add("Common Classes: ${classes.take(15).joinToString(", ")}")
-            if (classes.size > 15) {
-                parts.add("  ... and ${classes.size - 15} more")
-            }
+            parts.add("Media Queries: ${mediaQueries.take(5).joinToString(", ")}")
         }
 
         parts.add("</CSS_ANALYSIS>")
@@ -3433,6 +3567,7 @@ class ContextService(
      * @param llmPrompt The actual LLM prompt generated by buildLLMContextPrompt()
      * @return Map of section key to token info (chars, tokens, percentage)
      */
+    @Suppress("UNUSED_PARAMETER")
     fun calculateContextSectionTokens(
         _context: ProjectContextDTO,
         llmPrompt: String
@@ -3445,6 +3580,7 @@ class ContextService(
         // Section patterns that are expected in the generated prompt
         val sectionPatterns = listOf(
             "PROJECT_CONTEXT" to "project_overview",
+            "PROJECT_INSTRUCTIONS" to "project_instructions",
             "CURRENT_TASK" to "current_task",
             "USER_REQUIREMENTS" to "user_requirements",
             "USER_PROVIDED_CONTEXT" to "user_context",
@@ -3456,11 +3592,19 @@ class ContextService(
             "SUBTASKS_STATUS" to "subtasks",
             "KEY_COMPONENTS" to "key_components",
             "PROJECT_DEPENDENCIES" to "dependencies",
+            "PROJECT_ARCHITECTURE" to "architecture",
+            "FRAMEWORK_ANALYSIS" to "framework_analysis",
+            "TYPESCRIPT_ANALYSIS" to "typescript_analysis",
+            "HTML_ANALYSIS" to "html_analysis",
+            "CSS_ANALYSIS" to "css_analysis",
+            "PATTERNS" to "patterns",
+            "NAVIGATION_MAP" to "navigation_map",
             "CODE_ANALYSIS" to "code_analysis"
         )
 
         val sectionNames = mapOf(
             "project_overview" to "Project Context",
+            "project_instructions" to "Project Instructions",
             "current_task" to "Current Task",
             "user_requirements" to "User Requirements",
             "user_context" to "User Context",
@@ -3472,6 +3616,13 @@ class ContextService(
             "subtasks" to "Subtasks",
             "key_components" to "Key Components",
             "dependencies" to "Dependencies",
+            "architecture" to "Architecture",
+            "framework_analysis" to "Framework Analysis",
+            "typescript_analysis" to "TypeScript Analysis",
+            "html_analysis" to "HTML Analysis",
+            "css_analysis" to "CSS Analysis",
+            "patterns" to "Patterns",
+            "navigation_map" to "Navigation Map",
             "code_analysis" to "Code Analysis"
         )
 

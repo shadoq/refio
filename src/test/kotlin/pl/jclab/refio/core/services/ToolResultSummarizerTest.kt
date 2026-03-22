@@ -6,6 +6,8 @@ import io.mockk.mockk
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import pl.jclab.refio.core.api.ModelOperation
+import pl.jclab.refio.core.config.ConfigKey
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.db.repositories.TaskRepository
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMResponse
@@ -25,9 +27,10 @@ class ToolResultSummarizerTest {
 
     @Test
     fun `should use deterministic compression when llm summary is empty`() = kotlinx.coroutines.test.runTest {
-        every { configService.isToolSummaryEnabled() } returns true
-        every { configService.getToolSummaryMinLength() } returns 10
-        every { configService.getRecentWorkSummaryMaxLength() } returns 120
+        every { configService.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
+        every { configService.getTyped(ConfigKeys.TOOL_SUMMARY_ENABLED) } returns true
+        every { configService.getTyped(ConfigKeys.TOOL_SUMMARY_MIN_LENGTH) } returns 10
+        every { configService.getTyped(ConfigKeys.RECENT_WORK_SUMMARY_MAX_LENGTH) } returns 120
         every { configService.getModel(ModelOperation.WEAK, "task-1") } returns ("qwen3.5:35b" to "ollama")
         every { taskRepository.incrementMetrics(any(), any(), any(), any()) } returns null
 

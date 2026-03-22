@@ -3,6 +3,7 @@ package pl.jclab.refio.core.services.turn
 import pl.jclab.refio.api.models.ContextReference
 import pl.jclab.refio.core.api.TurnProfileOverrides
 import pl.jclab.refio.core.api.TurnRunProfile
+import pl.jclab.refio.core.subagents.models.SubagentContextProfile
 import pl.jclab.refio.core.db.MessageRole
 import pl.jclab.refio.core.db.PromptType
 import pl.jclab.refio.core.db.TaskMode
@@ -58,6 +59,11 @@ class TurnPromptBuilder(
             writeToolsExecutedInTurn = writeToolsExecutedInTurn
         )
 
+        // Resolve context profile for subagents
+        val contextProfile = if (runProfile == TurnRunProfile.SUBAGENT) {
+            profileOverrides?.contextProfile
+        } else null
+
         // Use ContextService for messages and project context (for PLAN and AGENT modes)
         if ((mode == TaskMode.PLAN || mode == TaskMode.AGENT) && contextService != null && projectRoot != null) {
             try {
@@ -74,22 +80,66 @@ class TurnPromptBuilder(
                     query = lastUserMessage
                 )
 
+                // Apply context profile filtering for subagents
+                var filteredContextPrompt = turnResult.projectContextPrompt
+                var filteredMessages = turnResult.messages
+
+                if (contextProfile != null) {
+                    filteredContextPrompt = applyContextProfileToProjectContext(filteredContextPrompt, contextProfile)
+                    if (!contextProfile.includeConversation) {
+                        filteredMessages = filteredMessages.filter { it.role == "system" || it == filteredMessages.lastOrNull() }
+                    }
+                }
+
+                // Add parent working memory summary if requested
+                if (contextProfile?.includeParentSummary == true && workingMemoryService != null) {
+                    val parentSummary = workingMemoryService.buildWorkingMemorySection(taskId, contextProfile.maxContextTokens ?: 2048)
+                    if (parentSummary.isNotBlank()) {
+                        systemPrompt = """
+$systemPrompt
+
+<parent_working_memory>
+$parentSummary
+</parent_working_memory>
+                        """.trimIndent()
+                    }
+                }
+
                 // Append project context to system prompt
-                if (turnResult.projectContextPrompt.isNotBlank()) {
+                if (filteredContextPrompt.isNotBlank()) {
                     systemPrompt = """
 $systemPrompt
 
 <context>
-${turnResult.projectContextPrompt}
+$filteredContextPrompt
 </context>
                     """.trimIndent()
                 }
 
-                logger.info { "[BUILD_PROMPT] Using ContextService: ${turnResult.messages.size} messages, context=${turnResult.projectContextPrompt.length} chars" }
+                // Apply maxContextTokens limit if set
+                if (contextProfile?.maxContextTokens != null) {
+                    val totalTokens = tokenEstimator.estimateString(systemPrompt) +
+                        filteredMessages.sumOf { tokenEstimator.estimateString(it.content) }
+                    if (totalTokens > contextProfile.maxContextTokens) {
+                        val systemTokens = tokenEstimator.estimateString(systemPrompt)
+                        val remainingBudget = contextProfile.maxContextTokens - systemTokens
+                        if (remainingBudget > 0) {
+                            filteredMessages = truncateMessagesToTokenBudget(filteredMessages, remainingBudget)
+                        } else {
+                            // Truncate system prompt to fit within budget
+                            val maxChars = (contextProfile.maxContextTokens * 3.5).toInt()
+                            systemPrompt = systemPrompt.take(maxChars)
+                            filteredMessages = emptyList()
+                        }
+                    }
+                }
+
+                logger.info { "[BUILD_PROMPT] Using ContextService: ${filteredMessages.size} messages, context=${filteredContextPrompt.length} chars" +
+                    if (contextProfile != null) ", contextProfile applied" else "" }
 
                 return TurnPrompt(
                     systemPrompt = systemPrompt,
-                    messages = turnResult.messages
+                    messages = filteredMessages
                 )
             } catch (e: Exception) {
                 logger.warn(e) { "[BUILD_PROMPT] Failed to use ContextService, falling back to direct: ${e.message}" }
@@ -323,7 +373,8 @@ $iterationInfo
     /**
      * Build iteration info with warnings about remaining loop budget.
      */
-    fun buildIterationInfo(current: Int, max: Int, writeToolsExecutedInTurn: Int = 0): String {
+    @Suppress("UNUSED_PARAMETER")
+    fun buildIterationInfo(current: Int, max: Int, _writeToolsExecutedInTurn: Int = 0): String {
         val remaining = max - current
 
         val warning = when {
@@ -395,5 +446,70 @@ ${warning}
             return normalizedName !in disallowed
         }
         return true
+    }
+
+    /**
+     * Applies context profile filtering to project context prompt.
+     * Removes sections based on profile flags.
+     */
+    private fun applyContextProfileToProjectContext(
+        contextPrompt: String,
+        profile: SubagentContextProfile
+    ): String {
+        var result = contextPrompt
+
+        if (!profile.includeFileTree) {
+            // Remove file tree sections
+            result = result.replace(Regex("<file_tree>.*?</file_tree>", RegexOption.DOT_MATCHES_ALL), "")
+            result = result.replace(Regex("<project_structure>.*?</project_structure>", RegexOption.DOT_MATCHES_ALL), "")
+        }
+
+        if (!profile.includeRag) {
+            // Remove RAG fragment sections
+            result = result.replace(Regex("<rag_fragments>.*?</rag_fragments>", RegexOption.DOT_MATCHES_ALL), "")
+            result = result.replace(Regex("<rag_context>.*?</rag_context>", RegexOption.DOT_MATCHES_ALL), "")
+        }
+
+        if (!profile.includeDependencies) {
+            // Remove dependency sections
+            result = result.replace(Regex("<dependencies>.*?</dependencies>", RegexOption.DOT_MATCHES_ALL), "")
+            result = result.replace(Regex("<dependency_analysis>.*?</dependency_analysis>", RegexOption.DOT_MATCHES_ALL), "")
+        }
+
+        if (!profile.includeWorkingMemory) {
+            // Remove working memory sections
+            result = result.replace(Regex("<working_memory>.*?</working_memory>", RegexOption.DOT_MATCHES_ALL), "")
+        }
+
+        // Clean up excessive blank lines
+        result = result.replace(Regex("\n{3,}"), "\n\n")
+
+        return result.trim()
+    }
+
+    /**
+     * Truncates messages to fit within a token budget, keeping the most recent messages.
+     */
+    private fun truncateMessagesToTokenBudget(
+        messages: List<LLMMessage>,
+        tokenBudget: Int
+    ): List<LLMMessage> {
+        if (messages.isEmpty()) return messages
+
+        val result = mutableListOf<LLMMessage>()
+        var usedTokens = 0
+
+        // Work backwards from most recent messages
+        for (msg in messages.reversed()) {
+            val msgTokens = tokenEstimator.estimateString(msg.content)
+            if (usedTokens + msgTokens <= tokenBudget) {
+                result.add(0, msg)
+                usedTokens += msgTokens
+            } else {
+                break
+            }
+        }
+
+        return result
     }
 }
