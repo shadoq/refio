@@ -5,7 +5,7 @@ import pl.jclab.refio.core.subagents.models.SubagentContextProfile
 import pl.jclab.refio.core.subagents.models.SubagentDefinition
 import pl.jclab.refio.core.subagents.models.SubagentExecutionMode
 import pl.jclab.refio.core.subagents.models.SubagentScope
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Path
 
 private val logger = dualLogger("SubagentParser")

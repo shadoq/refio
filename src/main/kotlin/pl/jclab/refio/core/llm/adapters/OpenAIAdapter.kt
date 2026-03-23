@@ -25,7 +25,7 @@ import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.errors.LLMErrorMapper
 import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.security.SecureLogger
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.util.UUID
 
 /**

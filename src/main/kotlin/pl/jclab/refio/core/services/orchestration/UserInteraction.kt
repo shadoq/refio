@@ -3,7 +3,7 @@ package pl.jclab.refio.core.services.orchestration
 import pl.jclab.refio.core.db.MessageRole
 import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.utils.GsonInstance.gson
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

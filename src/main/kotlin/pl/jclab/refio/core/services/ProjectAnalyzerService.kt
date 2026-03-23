@@ -3,7 +3,7 @@ package pl.jclab.refio.core.services
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import pl.jclab.refio.core.config.ConfigKeys
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.analysis.project.FrameworkAnalysis
 import pl.jclab.refio.core.services.analysis.project.FrameworkAnalyzer

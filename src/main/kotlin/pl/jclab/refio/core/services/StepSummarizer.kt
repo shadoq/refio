@@ -7,7 +7,7 @@ import pl.jclab.refio.core.db.TaskStatus
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.utils.GsonInstance.gson
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.api.StreamCallback
 
 private val logger = dualLogger("StepSummarizer")

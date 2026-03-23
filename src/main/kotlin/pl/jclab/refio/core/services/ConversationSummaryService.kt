@@ -9,7 +9,7 @@ import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.services.context.ContextTokenEstimator
 import pl.jclab.refio.core.utils.GsonInstance
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private const val CONVERSATION_SUMMARY_METADATA_TYPE = "conversation_summary"
 private val logger = dualLogger("ConversationSummaryService")

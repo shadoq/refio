@@ -7,7 +7,7 @@ import pl.jclab.refio.core.models.api.ToolPermissionDto
 import pl.jclab.refio.core.models.api.ToolPermissionsResponse
 import pl.jclab.refio.core.services.ToolPermissionsService
 import pl.jclab.refio.core.tools.base.ToolRegistry
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("ToolRouter")
 

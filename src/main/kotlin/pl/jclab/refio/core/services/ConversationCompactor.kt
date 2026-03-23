@@ -9,7 +9,7 @@ import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.db.repositories.TaskRepository
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("ConversationCompactor")
 

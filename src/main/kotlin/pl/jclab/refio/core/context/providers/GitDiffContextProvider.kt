@@ -4,7 +4,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.vcs.changes.Change
 import com.intellij.openapi.vcs.changes.ChangeListManager
 import pl.jclab.refio.core.context.*
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("GitDiffContextProvider")
 

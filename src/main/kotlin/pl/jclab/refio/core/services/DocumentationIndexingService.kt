@@ -3,7 +3,7 @@ package pl.jclab.refio.core.services
 import pl.jclab.refio.core.db.*
 import pl.jclab.refio.core.db.repositories.DocumentationRepository
 import pl.jclab.refio.core.db.repositories.RagRepository
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow

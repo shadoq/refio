@@ -5,7 +5,7 @@ import pl.jclab.refio.core.api.TaskResponse
 import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.db.TaskStatus
 import pl.jclab.refio.core.db.repositories.TaskRepository
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("TaskRouter")
 

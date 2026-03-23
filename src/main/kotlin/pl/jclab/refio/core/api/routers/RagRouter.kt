@@ -28,7 +28,7 @@ import pl.jclab.refio.core.services.IndexingProgress
 import pl.jclab.refio.core.services.EmbeddingProgress
 import pl.jclab.refio.core.services.SemanticChunkingStrategy
 import pl.jclab.refio.core.services.rag.RagSearchConfig
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("RagRouter")
 

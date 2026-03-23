@@ -37,7 +37,7 @@ import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
 import pl.jclab.refio.core.utils.GsonInstance.gson
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.util.UUID
 
 open class CustomOpenAIAdapter(

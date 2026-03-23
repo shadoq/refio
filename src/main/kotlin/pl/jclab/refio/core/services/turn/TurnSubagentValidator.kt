@@ -2,7 +2,7 @@ package pl.jclab.refio.core.services.turn
 
 import pl.jclab.refio.core.api.TurnProfileOverrides
 import pl.jclab.refio.core.api.TurnRunProfile
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("TurnSubagentValidator")
 

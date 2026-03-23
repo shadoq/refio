@@ -18,7 +18,7 @@ import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.utils.ProjectIdGenerator
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.util.UUID
 
 private val logger = dualLogger("ChatService")

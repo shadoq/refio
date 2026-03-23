@@ -1,7 +1,7 @@
 package pl.jclab.refio.core.db.repositories
 
 import pl.jclab.refio.core.db.*
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.statements.api.ExposedBlob

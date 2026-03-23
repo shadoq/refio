@@ -5,7 +5,7 @@ import pl.jclab.refio.core.api.StreamCallback
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.util.concurrent.CancellationException
 
 private val logger = dualLogger("LLMRetryHandler")

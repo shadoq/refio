@@ -23,7 +23,7 @@ import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.services.ToolExecutionResult
 import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
 import pl.jclab.refio.core.services.ToolCallOutput
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Path
 
 private val logger = dualLogger("AgentRouter")

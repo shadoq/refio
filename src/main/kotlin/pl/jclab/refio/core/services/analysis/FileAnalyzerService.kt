@@ -5,7 +5,7 @@ import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ChunkingStrategy
 import pl.jclab.refio.core.services.CodeChunk
 import pl.jclab.refio.core.services.ConfigService
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.core.utils.AiIgnoreMatcher
 import kotlinx.coroutines.CoroutineScope

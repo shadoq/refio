@@ -54,7 +54,7 @@ import pl.jclab.refio.core.workflow.executors.ChatExecutor
 import pl.jclab.refio.core.workflow.executors.PlanExecutor
 import pl.jclab.refio.core.workflow.executors.StepExecutor
 import pl.jclab.refio.core.workflow.executors.SubagentExecutor
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("CoreApiRouter")
 

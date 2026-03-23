@@ -16,7 +16,7 @@ import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("InvokeSubagentTool")
 

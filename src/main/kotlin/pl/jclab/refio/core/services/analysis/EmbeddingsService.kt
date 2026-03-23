@@ -5,7 +5,7 @@ import com.github.benmanes.caffeine.cache.Caffeine
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.EmbeddingProvider
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.security.MessageDigest

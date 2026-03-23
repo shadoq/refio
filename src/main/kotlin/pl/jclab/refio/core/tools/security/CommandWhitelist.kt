@@ -1,6 +1,6 @@
 package pl.jclab.refio.core.tools.security
 
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import kotlin.text.RegexOption.IGNORE_CASE
 
 private val logger = dualLogger("CommandWhitelist")

@@ -15,7 +15,7 @@ import org.jetbrains.exposed.sql.and
 import pl.jclab.refio.core.db.Config
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.db.ConfigTable
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("ConfigRepository")
 

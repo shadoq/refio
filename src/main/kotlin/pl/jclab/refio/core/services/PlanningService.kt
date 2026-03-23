@@ -16,7 +16,7 @@ import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.core.utils.ProjectIdGenerator
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 import java.util.*

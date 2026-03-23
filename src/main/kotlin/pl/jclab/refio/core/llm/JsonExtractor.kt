@@ -3,7 +3,7 @@ package pl.jclab.refio.core.llm
 import com.google.gson.JsonSyntaxException
 import pl.jclab.refio.core.db.SubtaskKind
 import pl.jclab.refio.core.utils.GsonInstance.gson
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("JsonExtractor")
 

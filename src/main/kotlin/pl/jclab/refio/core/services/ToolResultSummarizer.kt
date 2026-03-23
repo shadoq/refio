@@ -7,7 +7,7 @@ import pl.jclab.refio.core.services.context.CompressionLevel
 import pl.jclab.refio.core.services.context.ToolResultCompression
 import pl.jclab.refio.core.services.context.ToolResultCompressionConfig
 import pl.jclab.refio.core.config.ConfigKeys
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("ToolResultSummarizer")
 

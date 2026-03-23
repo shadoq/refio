@@ -9,7 +9,7 @@ import pl.jclab.refio.core.tools.security.CommandDenylist
 import pl.jclab.refio.core.tools.security.CommandLimits
 import pl.jclab.refio.core.tools.security.CommandWhitelist
 import pl.jclab.refio.core.tools.security.FileLimits
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Path
 
 private val logger = dualLogger("ToolFactory")

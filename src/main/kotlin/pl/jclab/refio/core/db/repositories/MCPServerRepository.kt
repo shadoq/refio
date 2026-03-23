@@ -11,7 +11,7 @@ import org.jetbrains.exposed.sql.transactions.transaction
 import pl.jclab.refio.core.context.mcp.MCPServerConfig
 import pl.jclab.refio.core.db.MCPServersTable
 import pl.jclab.refio.core.utils.GsonInstance
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("MCPServerRepository")
 

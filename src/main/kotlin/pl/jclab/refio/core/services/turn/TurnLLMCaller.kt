@@ -11,7 +11,7 @@ import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("TurnLLMCaller")
 

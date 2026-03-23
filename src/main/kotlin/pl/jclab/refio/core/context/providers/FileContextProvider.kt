@@ -5,7 +5,7 @@ import com.intellij.psi.search.FilenameIndex
 import com.intellij.psi.search.GlobalSearchScope
 import pl.jclab.refio.core.context.*
 import pl.jclab.refio.core.tools.PathSandbox
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Files
 import java.nio.file.Paths
 

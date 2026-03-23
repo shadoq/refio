@@ -8,7 +8,7 @@ import pl.jclab.refio.core.models.api.ChatResponse
 import pl.jclab.refio.core.models.api.SummarizeResponse
 import pl.jclab.refio.core.services.ChatService
 import pl.jclab.refio.core.api.StreamCallback
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("ChatRouter")
 

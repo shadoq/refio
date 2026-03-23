@@ -5,7 +5,7 @@ import org.htmlunit.IncorrectnessListener
 import org.htmlunit.SilentCssErrorHandler
 import org.htmlunit.WebClient
 import org.htmlunit.html.HtmlPage
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.io.Closeable
 
 /**

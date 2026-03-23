@@ -14,7 +14,7 @@ import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
 import pl.jclab.refio.core.utils.GsonInstance.gson
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.errors.LLMErrorMapper
 import pl.jclab.refio.core.security.SecureLogger
 import io.ktor.client.HttpClient

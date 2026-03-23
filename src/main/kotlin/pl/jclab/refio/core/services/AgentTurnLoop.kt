@@ -28,7 +28,7 @@ import pl.jclab.refio.core.services.turn.TurnResponseProcessor
 import pl.jclab.refio.core.services.turn.TurnSubagentValidator
 import pl.jclab.refio.core.services.turn.TurnToolExecutor
 import pl.jclab.refio.core.tools.base.ToolRegistry
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.util.*
 import java.util.concurrent.CancellationException
 

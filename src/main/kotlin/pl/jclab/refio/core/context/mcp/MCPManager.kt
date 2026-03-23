@@ -7,7 +7,7 @@ import kotlinx.coroutines.launch
 import pl.jclab.refio.core.context.ContextProviderRegistry
 import pl.jclab.refio.core.db.repositories.MCPServerRepository
 import pl.jclab.refio.core.tools.base.ToolRegistry
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.util.concurrent.ConcurrentHashMap
 
 private val logger = dualLogger("MCPManager")

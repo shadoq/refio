@@ -11,7 +11,7 @@ import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.tools.base.ToolResult
 import pl.jclab.refio.core.tools.implementations.AdvanceCodeEditingTool
 import pl.jclab.refio.core.tools.implementations.MultiLineEditorTool
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.api.models.ExecutionMode
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo

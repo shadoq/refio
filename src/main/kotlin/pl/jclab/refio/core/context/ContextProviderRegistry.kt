@@ -3,7 +3,7 @@ package pl.jclab.refio.core.context
 import pl.jclab.refio.core.context.providers.*
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.extensions.PluginId
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("ContextProviderRegistry")
 

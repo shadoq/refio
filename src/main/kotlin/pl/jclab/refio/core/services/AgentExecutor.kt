@@ -10,7 +10,7 @@ import pl.jclab.refio.core.db.repositories.TaskRepository
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 

@@ -16,7 +16,7 @@ import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolRegistry
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.api.PlanDecisionInfo
 import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.api.StreamCallback

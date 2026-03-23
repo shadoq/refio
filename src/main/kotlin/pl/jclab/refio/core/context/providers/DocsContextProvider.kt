@@ -20,7 +20,7 @@ import pl.jclab.refio.core.services.OpenAIEmbeddingProvider
 import pl.jclab.refio.core.services.OllamaEmbeddingProvider
 import pl.jclab.refio.core.services.RagSearchService
 import pl.jclab.refio.core.services.rag.RagSearchConfig
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.file.Paths

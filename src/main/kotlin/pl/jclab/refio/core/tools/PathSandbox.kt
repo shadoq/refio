@@ -2,7 +2,7 @@ package pl.jclab.refio.core.tools
 
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths

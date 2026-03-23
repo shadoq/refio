@@ -3,7 +3,7 @@ package pl.jclab.refio.core.context.mcp
 import com.google.gson.Gson
 import pl.jclab.refio.core.context.*
 import pl.jclab.refio.core.utils.GsonInstance
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("MCPContextProvider")
 

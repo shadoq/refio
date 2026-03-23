@@ -6,7 +6,7 @@ import pl.jclab.refio.core.db.repositories.RagRepository
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.rag.BM25Scorer
 import pl.jclab.refio.core.services.rag.RagSearchConfig
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.PriorityQueue

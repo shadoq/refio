@@ -6,7 +6,7 @@ import pl.jclab.refio.core.db.PromptType
 import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.time.Duration
 
 private val logger = dualLogger("PromptCache")

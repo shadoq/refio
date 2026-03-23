@@ -5,7 +5,7 @@ import pl.jclab.refio.core.db.Prompt
 import pl.jclab.refio.core.db.PromptType
 import pl.jclab.refio.core.db.repositories.PromptsRepository
 import pl.jclab.refio.core.prompts.PromptTemplate
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("PromptsService")
 

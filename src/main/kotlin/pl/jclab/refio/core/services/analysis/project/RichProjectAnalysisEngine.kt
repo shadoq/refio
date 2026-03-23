@@ -13,7 +13,7 @@ import pl.jclab.refio.core.services.analysis.FunctionElement
 import pl.jclab.refio.core.services.analysis.ParameterElement
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.core.utils.AiIgnoreMatcher
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex

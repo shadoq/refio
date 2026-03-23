@@ -2,7 +2,7 @@ package pl.jclab.refio.core.services
 
 import pl.jclab.refio.core.db.repositories.SnapshotRepository
 import pl.jclab.refio.core.db.Snapshot
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path

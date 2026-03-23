@@ -14,7 +14,7 @@ import pl.jclab.refio.core.workflow.executors.SubagentExecutor
 import pl.jclab.refio.core.workflow.models.IntentResult
 import pl.jclab.refio.core.workflow.models.WorkflowIntent
 import pl.jclab.refio.core.workflow.models.WorkflowRequest
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("WorkflowOrchestrator")
 

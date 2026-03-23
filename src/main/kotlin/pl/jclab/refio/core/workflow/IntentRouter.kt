@@ -6,7 +6,7 @@ import pl.jclab.refio.core.db.repositories.SubtaskRepository
 import pl.jclab.refio.core.subagents.SubagentRouter
 import pl.jclab.refio.core.workflow.models.UIState
 import pl.jclab.refio.core.workflow.models.WorkflowIntent
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("IntentRouter")
 

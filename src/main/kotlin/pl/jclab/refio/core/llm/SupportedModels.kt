@@ -1,6 +1,6 @@
 package pl.jclab.refio.core.llm
 
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("SupportedModels")
 

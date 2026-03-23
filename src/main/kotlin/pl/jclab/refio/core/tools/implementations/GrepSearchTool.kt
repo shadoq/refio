@@ -8,7 +8,7 @@ import pl.jclab.refio.core.tools.base.ToolResult
 import pl.jclab.refio.core.tools.normalizePath
 import pl.jclab.refio.core.tools.security.FileLimits
 import pl.jclab.refio.core.tools.security.LimitExceededException
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Files
 import kotlin.io.path.isDirectory
 import kotlin.io.path.isRegularFile

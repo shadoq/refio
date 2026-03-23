@@ -11,7 +11,7 @@ import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.tools.base.ToolResult
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Paths
 
 private val logger = dualLogger("ParallelToolExecutor")

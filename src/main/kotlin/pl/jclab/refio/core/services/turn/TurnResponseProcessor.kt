@@ -10,7 +10,7 @@ import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.utils.GsonInstance.gson
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("TurnResponseProcessor")
 

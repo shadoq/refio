@@ -3,7 +3,7 @@ package pl.jclab.refio.core.api.routers
 import pl.jclab.refio.core.api.Router
 import pl.jclab.refio.core.db.ApiLog
 import pl.jclab.refio.core.db.repositories.ApiLogRepository
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("ApiLogsRouter")
 

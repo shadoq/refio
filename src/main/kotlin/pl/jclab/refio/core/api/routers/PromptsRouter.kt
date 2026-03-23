@@ -3,7 +3,7 @@ package pl.jclab.refio.core.api.routers
 import pl.jclab.refio.core.api.*
 import pl.jclab.refio.core.db.PromptType
 import pl.jclab.refio.core.services.PromptsService
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("PromptsRouter")
 

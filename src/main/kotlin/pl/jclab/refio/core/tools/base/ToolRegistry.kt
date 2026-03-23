@@ -3,7 +3,7 @@ package pl.jclab.refio.core.tools.base
 import pl.jclab.refio.core.db.SubtaskKind
 import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.services.ToolPermissionsService
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.util.concurrent.ConcurrentHashMap
 
 private val logger = dualLogger("ToolRegistry")

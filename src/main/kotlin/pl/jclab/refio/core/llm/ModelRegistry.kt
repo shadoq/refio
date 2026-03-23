@@ -15,7 +15,7 @@ import pl.jclab.refio.core.llm.adapters.OpenRouterAdapter
 import pl.jclab.refio.core.llm.adapters.ZAIAdapter
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("ModelRegistry")
 

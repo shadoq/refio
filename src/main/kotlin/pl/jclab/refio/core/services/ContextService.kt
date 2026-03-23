@@ -25,7 +25,7 @@ import pl.jclab.refio.core.services.context.*
 import pl.jclab.refio.core.services.rag.RagSearchConfig
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.utils.ProjectIdGenerator
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Path
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap

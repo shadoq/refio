@@ -1,7 +1,7 @@
 package pl.jclab.refio.core.context.providers
 
 import pl.jclab.refio.core.context.*
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File

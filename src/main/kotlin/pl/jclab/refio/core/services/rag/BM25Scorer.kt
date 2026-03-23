@@ -1,7 +1,7 @@
 package pl.jclab.refio.core.services.rag
 
 import pl.jclab.refio.core.db.repositories.RagRepository
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import kotlin.math.ln
 
 private val logger = dualLogger("BM25Scorer")

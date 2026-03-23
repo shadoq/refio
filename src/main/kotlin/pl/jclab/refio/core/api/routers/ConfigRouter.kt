@@ -15,7 +15,7 @@ import pl.jclab.refio.core.llm.getModelsByProvider
 import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.core.services.ConfigService
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("ConfigRouter")
 

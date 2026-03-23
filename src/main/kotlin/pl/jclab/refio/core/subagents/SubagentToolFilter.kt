@@ -6,7 +6,7 @@ import pl.jclab.refio.core.services.ToolPermissionsService
 import pl.jclab.refio.core.subagents.models.SubagentDefinition
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolMode
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("SubagentToolFilter")
 

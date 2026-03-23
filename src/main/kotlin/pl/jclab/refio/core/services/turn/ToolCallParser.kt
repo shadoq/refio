@@ -10,7 +10,7 @@ import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.db.ToolCallData
 import pl.jclab.refio.core.llm.JsonExtractor
 import pl.jclab.refio.core.tools.base.ToolRegistry
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.util.UUID
 
 private val logger = dualLogger("ToolCallParser")

@@ -4,7 +4,7 @@ import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.transaction
 import pl.jclab.refio.core.db.migrations.MigrationRunner
 import pl.jclab.refio.core.db.MCPServersTable
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.sql.DriverManager
 
 private val logger = dualLogger("DatabaseFactory")

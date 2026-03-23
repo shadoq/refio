@@ -18,7 +18,7 @@ import pl.jclab.refio.core.tools.security.CommandWhitelistConfig
 import pl.jclab.refio.core.tools.security.CommandWhitelistDefaults
 import pl.jclab.refio.core.tools.security.WhitelistMode
 import pl.jclab.refio.core.utils.GsonInstance.gson
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Path
 
 /**

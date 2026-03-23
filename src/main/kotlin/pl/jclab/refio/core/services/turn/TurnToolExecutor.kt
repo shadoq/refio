@@ -25,7 +25,7 @@ import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.tools.base.ToolResult
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.utils.GsonInstance.gson
 
 private val logger = dualLogger("TurnToolExecutor")

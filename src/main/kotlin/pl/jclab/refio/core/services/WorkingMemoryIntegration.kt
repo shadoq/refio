@@ -2,7 +2,7 @@ package pl.jclab.refio.core.services
 
 import pl.jclab.refio.core.services.context.WorkingMemoryEntry
 import pl.jclab.refio.core.services.context.WorkingMemoryService
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("WorkingMemoryIntegration")
 

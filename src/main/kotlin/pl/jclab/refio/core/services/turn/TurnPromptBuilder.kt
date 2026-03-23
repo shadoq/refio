@@ -14,7 +14,7 @@ import pl.jclab.refio.core.services.ContextService
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.services.TokenEstimator
 import pl.jclab.refio.core.services.PromptCache
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Path
 
 private val logger = dualLogger("TurnPromptBuilder")

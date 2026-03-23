@@ -1,6 +1,6 @@
 package pl.jclab.refio.core.tools
 
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Path
 import java.security.MessageDigest
 import kotlin.io.path.*

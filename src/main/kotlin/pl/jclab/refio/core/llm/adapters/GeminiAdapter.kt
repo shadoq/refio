@@ -19,7 +19,7 @@ import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.gson.gson
 import pl.jclab.refio.core.config.ConfigKeys
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.security.SecureLogger
 import io.ktor.client.request.get
 import kotlinx.coroutines.withContext

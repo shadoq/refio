@@ -10,7 +10,7 @@ import pl.jclab.refio.core.tools.security.CommandWhitelist
 import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.util.concurrent.TimeUnit
 
 private val logger = dualLogger("RunTerminalCommandTool")

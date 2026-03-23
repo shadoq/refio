@@ -2,7 +2,7 @@ package pl.jclab.refio.core.subagents
 
 import pl.jclab.refio.core.subagents.models.SubagentDefinition
 import pl.jclab.refio.core.subagents.models.SubagentScope
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.net.JarURLConnection
 import java.nio.file.Files
 import java.nio.file.Path

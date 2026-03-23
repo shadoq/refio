@@ -2,8 +2,10 @@ package pl.jclab.refio.core.services
 
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
+import pl.jclab.refio.core.logging.LogSinkRegistry
 import pl.jclab.refio.services.core.CoreConnectionManager
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.services.logging.PluginLoggerSink
+import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.*
 import java.nio.file.Paths
 
@@ -23,6 +25,11 @@ class ProjectStartupActivity : ProjectActivity {
     private val logger = dualLogger("ProjectStartupActivity")
 
     override suspend fun execute(project: Project) {
+        // Register IntelliJ LogSink so DualLogger can output to plugin UI panel
+        if (LogSinkRegistry.get() == null) {
+            LogSinkRegistry.register(PluginLoggerSink())
+        }
+
         val projectPath = project.basePath
         if (projectPath == null) {
             logger.warn { "Project path is null, skipping background analysis" }

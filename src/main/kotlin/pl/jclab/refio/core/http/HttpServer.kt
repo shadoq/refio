@@ -17,7 +17,7 @@ import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.models.api.ChatRequest
 import pl.jclab.refio.core.models.api.LLMParams
 import pl.jclab.refio.core.utils.GsonInstance
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("HttpServer")
 

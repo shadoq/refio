@@ -6,7 +6,7 @@ import pl.jclab.refio.core.api.SubtaskResponse
 import pl.jclab.refio.core.api.UpdateSubtaskRequest
 import pl.jclab.refio.core.db.ApprovalStatus
 import pl.jclab.refio.core.db.repositories.SubtaskRepository
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("SubtaskRouter")
 

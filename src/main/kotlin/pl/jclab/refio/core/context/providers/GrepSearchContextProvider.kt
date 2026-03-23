@@ -7,7 +7,7 @@ import pl.jclab.refio.core.context.*
 import pl.jclab.refio.core.db.repositories.ConfigRepository
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.utils.AiIgnoreMatcher
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.concurrent.Callable
