@@ -4,7 +4,6 @@ import pl.jclab.refio.core.db.*
 import pl.jclab.refio.core.logging.dualLogger
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
-import org.jetbrains.exposed.sql.SqlExpressionBuilder.greater
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.greaterEq
 import org.jetbrains.exposed.sql.transactions.transaction
 
@@ -99,7 +98,7 @@ class ChatMessageRepository {
         return transaction {
             ChatMessagesTable.selectAll()
                 .where { ChatMessagesTable.taskId eq taskId }
-                .orderBy(ChatMessagesTable.createdAt to SortOrder.ASC, ChatMessagesTable.id to SortOrder.ASC)
+                .orderBy(ChatMessagesTable.seq to SortOrder.ASC)
                 .map { rowToChatMessage(it) }
         }
     }
@@ -111,7 +110,7 @@ class ChatMessageRepository {
         return transaction {
             ChatMessagesTable.selectAll()
                 .where { (ChatMessagesTable.taskId eq taskId) and (ChatMessagesTable.role eq role) }
-                .orderBy(ChatMessagesTable.createdAt to SortOrder.ASC, ChatMessagesTable.id to SortOrder.ASC)
+                .orderBy(ChatMessagesTable.seq to SortOrder.ASC)
                 .map { rowToChatMessage(it) }
         }
     }
@@ -165,8 +164,7 @@ class ChatMessageRepository {
     /**
      * Delete conversation history starting from the given message (inclusive).
      *
-     * Ordering is consistent with [findByTaskId]: createdAt ASC, id ASC.
-     * If multiple messages share the same createdAt, the id tie-breaker defines what is "after".
+     * Ordering is consistent with [findByTaskId]: seq ASC.
      *
      * @throws IllegalArgumentException If message is not found or does not belong to task
      */
@@ -178,15 +176,10 @@ class ChatMessageRepository {
                 .singleOrNull()
                 ?: throw IllegalArgumentException("Message not found in task: taskId=$taskId, messageId=$fromMessageId")
 
-            val pivotCreatedAt = pivot[ChatMessagesTable.createdAt]
-            val pivotId = pivot[ChatMessagesTable.id]
+            val pivotSeq = pivot[ChatMessagesTable.seq]
 
             val deleted = ChatMessagesTable.deleteWhere {
-                (ChatMessagesTable.taskId eq taskId) and (
-                    (ChatMessagesTable.createdAt greater pivotCreatedAt) or (
-                        (ChatMessagesTable.createdAt eq pivotCreatedAt) and (ChatMessagesTable.id greaterEq pivotId)
-                        )
-                    )
+                (ChatMessagesTable.taskId eq taskId) and (ChatMessagesTable.seq greaterEq pivotSeq)
             }
 
             logger.info {

@@ -34,6 +34,7 @@ object ChatMessagesTable : Table("chat_messages") {
     val cost = double("cost").nullable()
 
     val createdAt = long("created_at").clientDefault { System.currentTimeMillis() }
+    val seq = long("seq").clientDefault { System.nanoTime() }
 
     override val primaryKey = PrimaryKey(id)
 

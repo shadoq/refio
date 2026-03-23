@@ -1,5 +1,6 @@
 package pl.jclab.refio.ui.toolwindow
 
+import com.intellij.openapi.Disposable
 import pl.jclab.refio.services.logging.dualLogger
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBPanel
@@ -46,7 +47,7 @@ import javax.swing.SwingUtilities
  *
  * Title bar actions (+ New Session, History, Settings, Help) are added via setTitleActions() in RefioToolWindowFactory
  */
-class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(BorderLayout()) {
+class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(BorderLayout()), Disposable {
 
     private val logger = dualLogger("RefioMainPanel")
 
@@ -452,7 +453,7 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
     /**
      * Dispose resources when tool window is closed
      */
-    fun dispose() {
+    override fun dispose() {
         cs.cancel()
         chatView.removePropertyChangeListener("messagesUpdated", chatMessagesUpdatedListener)
         statusBar.removePropertyChangeListener("stopExecution", stopExecutionListener)

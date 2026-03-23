@@ -105,7 +105,7 @@ class PromptInputPanel(
     private val sendButton: JButton
     private var isOperationRunning = false
     private var lastPreferredEditorHeight: Int = -1
-    private val editorShortcutsDisposable = Disposer.newDisposable("refio.promptInputPanel.editorShortcuts")
+    private val editorShortcutsDisposable = Disposer.newDisposable(project, "refio.promptInputPanel.editorShortcuts")
 
     // Autocomplete
     private var contextAutocomplete: AutocompletePopup<ContextAutocompleteItem>
