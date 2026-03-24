@@ -14,7 +14,7 @@ data class FilePathMatch(
  *
  * Supports patterns:
  * - src/main/kotlin/File.kt
- * - agent/plugin/src/Main.kt
+ * - agent/plugin/src/main.kt
  * - docs/readme.md
  * - path/to/file.java
  */

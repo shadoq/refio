@@ -3,7 +3,7 @@
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.runBlocking
-import com.intellij.openapi.project.Project
+// Project type erased to Any? for platform independence (see ProjectHandle)
 import pl.jclab.refio.core.api.*
 import pl.jclab.refio.core.db.ApprovalStatus
 import pl.jclab.refio.core.db.DatabaseFactory
@@ -58,7 +58,7 @@ class AgentRouter(
     private val promptsService: pl.jclab.refio.core.services.PromptsService,
     private val contextService: ContextService?,
     private val projectRoot: Path?,
-    private val ideProject: Project?,
+    private val ideProject: Any?,
     private val toolDescriptionBuilder: pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 ) : Router {
 

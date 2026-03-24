@@ -474,8 +474,9 @@ class MultiEditToolTest {
             Files.writeString(tempDir.resolve("file.txt"), "foo bar foo baz")
 
             // When - apply two edits to the same file
-            // Note: MultiEditTool prepares all edits first (reading original content),
-            // then applies them. Each edit operates on the ORIGINAL content, not cumulative.
+            // Edits are applied sequentially (cumulative):
+            // 1st edit: "foo bar foo baz" -> replaces first "foo" -> "qux bar foo baz"
+            // 2nd edit: "qux bar foo baz" -> replaces "bar" -> "qux zap foo baz"
             val result = tool.execute(mapOf(
                 "edits" to listOf(
                     mapOf("path" to "file.txt", "old_string" to "foo", "new_string" to "qux"),
@@ -486,11 +487,8 @@ class MultiEditToolTest {
             // Then
             assertToolSuccess(result)
             val content = readFileContent(tempDir, "file.txt")
-            // First edit operates on original: "foo bar foo baz" -> replaces first "foo" -> "qux bar foo baz"
-            // Second edit operates on original: "foo bar foo baz" -> replaces "bar" -> "foo zap foo baz"
-            // The last write wins: "foo zap foo baz"
-            assertEquals("foo zap foo baz", content)
-            assertTrue(content.contains("foo"))
+            assertEquals("qux zap foo baz", content)
+            assertTrue(content.contains("qux"))
             assertTrue(content.contains("zap"))
         }
     }

@@ -178,6 +178,16 @@ class ConfigRepository {
         }
     }
 
+    fun deleteByScope(scope: ConfigScope, projectId: String? = null): Int = transaction {
+        val deleted = ConfigTable.deleteWhere {
+            val conditions = mutableListOf<Op<Boolean>>(ConfigTable.scope eq scope)
+            if (projectId != null) conditions.add(ConfigTable.projectId eq projectId)
+            conditions.reduce { acc, op -> acc and op }
+        }
+        logger.info { "Deleted $deleted configs for scope=$scope, projectId=$projectId" }
+        deleted
+    }
+
     fun deleteByTaskId(taskId: String): Int = transaction {
         val deleted = ConfigTable.deleteWhere {
             (ConfigTable.scope eq ConfigScope.TASK) and (ConfigTable.taskId eq taskId)

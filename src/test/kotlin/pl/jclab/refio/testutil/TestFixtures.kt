@@ -47,7 +47,7 @@ object TestFixtures {
     object Paths {
         const val PROJECT_ROOT = "/test/project"
         const val SRC_DIR = "/test/project/src"
-        const val TEST_FILE = "/test/project/src/Main.kt"
+        const val TEST_FILE = "/test/project/src/main.kt"
     }
 
     /**

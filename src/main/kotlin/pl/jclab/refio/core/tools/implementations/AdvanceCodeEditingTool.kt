@@ -11,6 +11,7 @@ import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.db.repositories.TaskRepository
+import pl.jclab.refio.core.tools.FileLockManager
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
@@ -188,209 +189,211 @@ class AdvanceCodeEditingTool(
             return ToolResult.error("File extension not allowed: ${path.fileName}")
         }
 
-        val originalContent: String
-        val fileSize: Long
+        return FileLockManager.withFileLock(path.toAbsolutePath().toString()) {
+            val originalContent: String
+            val fileSize: Long
 
-        if (!fileExists) {
-            // File doesn't exist - will create it with LLM-generated content
-            logger.info { "LLM-assisted create: path=$pathStr, description='$editDescription' (file will be created)" }
+            if (!fileExists) {
+                // File doesn't exist - will create it with LLM-generated content
+                logger.info { "LLM-assisted create: path=$pathStr, description='$editDescription' (file will be created)" }
 
-            // Create parent directories if needed
-            path.parent?.let { parent ->
-                if (!Files.exists(parent)) {
-                    Files.createDirectories(parent)
-                    logger.info { "Created parent directories: ${path.parent}" }
+                // Create parent directories if needed
+                path.parent?.let { parent ->
+                    if (!Files.exists(parent)) {
+                        Files.createDirectories(parent)
+                        logger.info { "Created parent directories: ${path.parent}" }
+                    }
                 }
+
+                originalContent = ""
+                fileSize = 0
+            } else {
+                // File exists - will edit it
+                if (!path.isRegularFile()) {
+                    return@withFileLock ToolResult.error("Not a regular file: $pathStr")
+                }
+
+                // Check file size
+                fileSize = path.fileSize()
+                if (fileSize > limits.maxFileSize) {
+                    return@withFileLock ToolResult.error(
+                        "File too large for LLM-assisted editing: $fileSize bytes (max ${limits.maxFileSize} bytes). " +
+                                "Use simple search-replace mode or split into smaller edits."
+                    )
+                }
+
+                originalContent = Files.readString(path)
+                logger.info { "LLM-assisted edit: path=$pathStr, description='$editDescription', size=$fileSize bytes" }
             }
 
-            originalContent = ""
-            fileSize = 0
-        } else {
-            // File exists - will edit it
-            if (!path.isRegularFile()) {
-                return ToolResult.error("Not a regular file: $pathStr")
+            // 2. Get file extension for language detection
+            val extension = path.fileName.toString().substringAfterLast('.', "")
+            val language = detectLanguage(extension)
+
+            // 3. Build LLM prompts using PromptsService with automatic variable substitution
+            // CODE_EDITING_SYSTEM: Instructions for LLM behavior → sent as LLM role "system"
+            // CODE_EDITING_USER: Data template with variables → sent as LLM role "user" after substitution
+            val systemPrompt = promptsService.getSystemPrompt(
+                type = pl.jclab.refio.core.db.PromptType.CODE_EDITING_SYSTEM
+            )
+
+            val userPrompt = promptsService.getSystemPrompt(
+                type = pl.jclab.refio.core.db.PromptType.CODE_EDITING_USER,
+                variables = mapOf(
+                    "FILE_PATH" to pathStr,
+                    "LANGUAGE" to language,
+                    "ORIGINAL_CONTENT" to originalContent,
+                    "EDIT_DESCRIPTION" to editDescription
+                )
+            )
+
+            // 4. Call LLM with paired prompts
+            // - systemPrompt → sent via systemPrompt parameter (instructions: rules, format, constraints)
+            // - userPrompt → sent as user message (data: file content, edit request)
+            val messages = listOf(
+                LLMMessage(role = "user", content = userPrompt)
+            )
+
+            // Get model from config (uses CODING operation type)
+            val (model, provider) = configService.getModel(
+                operation = ModelOperation.CODING,
+                taskId = taskId
+            )
+            logger.info { "Using agent model for edit (${originalContent.lines().size} lines): $model ($provider), stream=$stream, hasOnChunk=${onChunk != null}" }
+
+            // RFC 0032: Use unified complete() with stream flag
+            var didStream = false
+            val streamingCallback: StreamCallback? = if (stream && onChunk != null) { chunk ->
+                didStream = true
+                onChunk(chunk)
+            } else {
+                null
             }
 
-            // Check file size
-            fileSize = path.fileSize()
-            if (fileSize > limits.maxFileSize) {
-                return ToolResult.error(
-                    "File too large for LLM-assisted editing: $fileSize bytes (max ${limits.maxFileSize} bytes). " +
-                            "Use simple search-replace mode or split into smaller edits."
+            val response = try {
+                llmClient.complete(
+                    provider = provider,
+                    model = model,
+                    messages = messages,
+                    systemPrompt = systemPrompt,
+                    temperature = 0.2, // Low temperature for deterministic output
+                    maxTokens = configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE) * 2, // From limits settings
+                    stream = stream,
+                    onChunk = streamingCallback,
+                    taskId = null,  // Tool-level call, no task context
+                    subtaskId = null,  // Tool-level call, no subtask context
+                    source = "AdvCodeEditor"  // Request source for tracking
+                )
+            } catch (e: Exception) {
+                logger.error(e) { "LLM request failed" }
+                return@withFileLock ToolResult.error("LLM request failed: ${e.message}. Try again or use simple search-replace mode.")
+            }
+
+            val responseContent = response.content
+            val usage = response.usage
+            val cost = response.cost
+
+            if (stream && onChunk != null && !didStream) {
+                onChunk(
+                    StreamChunk(
+                        delta = responseContent,
+                        accumulated = responseContent,
+                        isComplete = true,
+                        source = "AdvCodeEditor",
+                        usage = usage,
+                        cost = cost
+                    )
                 )
             }
 
-            originalContent = Files.readString(path)
-            logger.info { "LLM-assisted edit: path=$pathStr, description='$editDescription', size=$fileSize bytes" }
-        }
+            // 5. Extract code from response
+            val newContent = extractCodeBlock(responseContent, language)
+                ?: return@withFileLock ToolResult.error(
+                    "LLM did not return valid code block. Try rephrasing the edit description or use simple search-replace mode."
+                )
 
-        // 2. Get file extension for language detection
-        val extension = path.fileName.toString().substringAfterLast('.', "")
-        val language = detectLanguage(extension)
-
-        // 3. Build LLM prompts using PromptsService with automatic variable substitution
-        // CODE_EDITING_SYSTEM: Instructions for LLM behavior → sent as LLM role "system"
-        // CODE_EDITING_USER: Data template with variables → sent as LLM role "user" after substitution
-        val systemPrompt = promptsService.getSystemPrompt(
-            type = pl.jclab.refio.core.db.PromptType.CODE_EDITING_SYSTEM
-        )
-
-        val userPrompt = promptsService.getSystemPrompt(
-            type = pl.jclab.refio.core.db.PromptType.CODE_EDITING_USER,
-            variables = mapOf(
-                "FILE_PATH" to pathStr,
-                "LANGUAGE" to language,
-                "ORIGINAL_CONTENT" to originalContent,
-                "EDIT_DESCRIPTION" to editDescription
+            // 6. Generate diff
+            val diff = generateUnifiedDiff(
+                originalContent = originalContent,
+                newContent = newContent,
+                filePath = pathStr
             )
-        )
 
-        // 4. Call LLM with paired prompts
-        // - systemPrompt → sent via systemPrompt parameter (instructions: rules, format, constraints)
-        // - userPrompt → sent as user message (data: file content, edit request)
-        val messages = listOf(
-            LLMMessage(role = "user", content = userPrompt)
-        )
+            // 7. Optional: Syntax validation
+            val validationError = validateSyntax(newContent, language)
+            if (validationError != null) {
+                logger.warn { "Syntax validation warning: $validationError" }
+                // Continue anyway - user can rollback
+            }
 
-        // Get model from config (uses CODING operation type)
-        val (model, provider) = configService.getModel(
-            operation = ModelOperation.CODING,
-            taskId = taskId
-        )
-        logger.info { "Using agent model for edit (${originalContent.lines().size} lines): $model ($provider), stream=$stream, hasOnChunk=${onChunk != null}" }
+            // 8. Snapshot creation
+            // Note: Snapshots are created by AgentExecutor before tool execution
+            // Tool itself doesn't create snapshots - this is handled at the workflow level
 
-        // RFC 0032: Use unified complete() with stream flag
-        var didStream = false
-        val streamingCallback: StreamCallback? = if (stream && onChunk != null) { chunk ->
-            didStream = true
-            onChunk(chunk)
-        } else {
-            null
-        }
+            // 9. Write file
+            Files.writeString(path, newContent)
+            val duration = (System.currentTimeMillis() - startTime).toInt()
+            val newFileSize = path.fileSize()
 
-        val response = try {
-            llmClient.complete(
-                provider = provider,
-                model = model,
-                messages = messages,
-                systemPrompt = systemPrompt,
-                temperature = 0.2, // Low temperature for deterministic output
-                maxTokens = configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE) * 2, // From limits settings
-                stream = stream,
-                onChunk = streamingCallback,
-                taskId = null,  // Tool-level call, no task context
-                subtaskId = null,  // Tool-level call, no subtask context
-                source = "AdvCodeEditor"  // Request source for tracking
-            )
-        } catch (e: Exception) {
-            logger.error(e) { "LLM request failed" }
-            return ToolResult.error("LLM request failed: ${e.message}. Try again or use simple search-replace mode.")
-        }
+            logger.info {
+                "LLM-assisted edit completed: path=$pathStr, model=$model, " +
+                        "tokens_in=${usage.inputTokens}, tokens_out=${usage.outputTokens}, " +
+                        "cost_usd=$cost, diff_lines=${diff.lines().size}, duration=${duration}ms"
+            }
 
-        val responseContent = response.content
-        val usage = response.usage
-        val cost = response.cost
+            // Update task metrics if taskId is provided
+            if (taskId != null) {
+                taskRepository.incrementMetrics(
+                    id = taskId,
+                    tokensIn = usage.inputTokens,
+                    tokensOut = usage.outputTokens,
+                    costUsd = cost
+                )
+            }
 
-        if (stream && onChunk != null && !didStream) {
-            onChunk(
-                StreamChunk(
-                    delta = responseContent,
-                    accumulated = responseContent,
-                    isComplete = true,
-                    source = "AdvCodeEditor",
-                    usage = usage,
-                    cost = cost
+            // 10. Parse diff stats for UI display
+            val (addedLines, removedLines) = parseDiffStats(diff)
+
+            // 11. Return result (changes displayed as badge in UI)
+            ToolResult(
+                success = true,
+                output = buildString {
+                    if (fileExists) {
+                        appendLine("File edited successfully: $pathStr")
+                    } else {
+                        appendLine("File created successfully: $pathStr")
+                    }
+                    if (fileExists) {
+                        appendLine("Size: $fileSize bytes → $newFileSize bytes")
+                    } else {
+                        appendLine("Size: $newFileSize bytes")
+                    }
+                    appendLine("Model: $model, Tokens: ${usage.inputTokens}/${usage.outputTokens}, Cost: $${"%.4f".format(cost)}")
+                    // Wrap diff in markdown code block for proper UI rendering
+                    appendLine("Diff:")
+                    appendLine("```diff")
+                    diff.lines().forEach { line -> appendLine(line) }
+                    append("```")
+                },
+                bytesRead = originalContent.toByteArray().size,
+                bytesWritten = newContent.toByteArray().size,
+                durationMs = duration,
+                filesChanged = listOf(pathStr),
+                metadata = mapOf(
+                    "path" to pathStr,  // Relative path to project root
+                    "mode" to "llm_assisted",
+                    "diff_lines" to diff.lines().size,
+                    "added_lines" to addedLines,
+                    "removed_lines" to removedLines,
+                    "edit_description" to editDescription,
+                    "model" to model,
+                    "provider" to provider,
+                    "tokens_in" to usage.inputTokens,
+                    "tokens_out" to usage.outputTokens,
+                    "cost_usd" to cost
                 )
             )
         }
-
-        // 5. Extract code from response
-        val newContent = extractCodeBlock(responseContent, language)
-            ?: return ToolResult.error(
-                "LLM did not return valid code block. Try rephrasing the edit description or use simple search-replace mode."
-            )
-
-        // 6. Generate diff
-        val diff = generateUnifiedDiff(
-            originalContent = originalContent,
-            newContent = newContent,
-            filePath = pathStr
-        )
-
-        // 7. Optional: Syntax validation
-        val validationError = validateSyntax(newContent, language)
-        if (validationError != null) {
-            logger.warn { "Syntax validation warning: $validationError" }
-            // Continue anyway - user can rollback
-        }
-
-        // 8. Snapshot creation
-        // Note: Snapshots are created by AgentExecutor before tool execution
-        // Tool itself doesn't create snapshots - this is handled at the workflow level
-
-        // 9. Write file
-        Files.writeString(path, newContent)
-        val duration = (System.currentTimeMillis() - startTime).toInt()
-        val newFileSize = path.fileSize()
-
-        logger.info {
-            "LLM-assisted edit completed: path=$pathStr, model=$model, " +
-                    "tokens_in=${usage.inputTokens}, tokens_out=${usage.outputTokens}, " +
-                    "cost_usd=$cost, diff_lines=${diff.lines().size}, duration=${duration}ms"
-        }
-
-        // Update task metrics if taskId is provided
-        if (taskId != null) {
-            taskRepository.incrementMetrics(
-                id = taskId,
-                tokensIn = usage.inputTokens,
-                tokensOut = usage.outputTokens,
-                costUsd = cost
-            )
-        }
-
-        // 10. Parse diff stats for UI display
-        val (addedLines, removedLines) = parseDiffStats(diff)
-
-        // 11. Return result (changes displayed as badge in UI)
-        return ToolResult(
-            success = true,
-            output = buildString {
-                if (fileExists) {
-                    appendLine("File edited successfully: $pathStr")
-                } else {
-                    appendLine("File created successfully: $pathStr")
-                }
-                if (fileExists) {
-                    appendLine("Size: $fileSize bytes → $newFileSize bytes")
-                } else {
-                    appendLine("Size: $newFileSize bytes")
-                }
-                appendLine("Model: $model, Tokens: ${usage.inputTokens}/${usage.outputTokens}, Cost: $${"%.4f".format(cost)}")
-                // Wrap diff in markdown code block for proper UI rendering
-                appendLine("Diff:")
-                appendLine("```diff")
-                diff.lines().forEach { line -> appendLine(line) }
-                append("```")
-            },
-            bytesRead = originalContent.toByteArray().size,
-            bytesWritten = newContent.toByteArray().size,
-            durationMs = duration,
-            filesChanged = listOf(pathStr),
-            metadata = mapOf(
-                "path" to pathStr,  // Relative path to project root
-                "mode" to "llm_assisted",
-                "diff_lines" to diff.lines().size,
-                "added_lines" to addedLines,
-                "removed_lines" to removedLines,
-                "edit_description" to editDescription,
-                "model" to model,
-                "provider" to provider,
-                "tokens_in" to usage.inputTokens,
-                "tokens_out" to usage.outputTokens,
-                "cost_usd" to cost
-            )
-        )
     }
 
     /**

@@ -499,28 +499,8 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
     }
 }
 
-// ========== DTOs ==========
-
-data class RagIndexedFileDto(
-    val id: Int,
-    val filePath: String,
-    val chunksCount: Int,
-    val embeddingsCount: Int,
-    val fileSize: Long,
-    val contentType: RagContentType,
-    val indexedAt: Long
-)
-
-data class RagStatisticsDto(
-    val filesCount: Int,
-    val chunksCount: Int,
-    val embeddingsCount: Int
-)
-
-data class RagChunkDto(
-    val id: Int,
-    val chunkIndex: Int,
-    val content: String,
-    val startLine: Int?,
-    val endLine: Int?
-)
+// DTOs moved to pl.jclab.refio.core.api.RagModels for platform independence
+// Import aliases for backward compatibility
+typealias RagIndexedFileDto = pl.jclab.refio.core.api.RagIndexedFileDto
+typealias RagStatisticsDto = pl.jclab.refio.core.api.RagStatisticsDto
+typealias RagChunkDto = pl.jclab.refio.core.api.RagChunkDto

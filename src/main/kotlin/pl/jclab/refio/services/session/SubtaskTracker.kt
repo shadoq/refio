@@ -57,7 +57,8 @@ class SubtaskTracker(
                     tokensOut = coreSubtask.tokensOut,
                     costUsd = coreSubtask.costUsd,
                     model = coreSubtask.model,
-                    provider = coreSubtask.provider
+                    provider = coreSubtask.provider,
+                    resultSummary = coreSubtask.resultSummary
                 )
             }
 

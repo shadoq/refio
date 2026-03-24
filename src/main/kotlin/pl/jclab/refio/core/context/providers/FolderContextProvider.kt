@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.context.providers
 
+import com.intellij.openapi.project.Project
 import pl.jclab.refio.core.context.*
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.logging.dualLogger
@@ -31,7 +32,7 @@ class FolderContextProvider : BaseContextProvider() {
     override suspend fun loadSubmenuItems(
         args: LoadSubmenuItemsArgs
     ): List<ContextSubmenuItem> {
-        val project = args.project
+        val project = args.project as? Project ?: return emptyList()
         val query = args.query.trim()
         val workspacePath = project.basePath ?: ""
 
@@ -167,7 +168,7 @@ class FolderContextProvider : BaseContextProvider() {
         logger.debug { "Getting context for folder: $folderPath" }
 
         // Security: Validate path with PathSandbox
-        val workspacePath = extras.workspacePath.ifEmpty { extras.project?.basePath ?: "" }
+        val workspacePath = extras.workspacePath.ifEmpty { (extras.project as? Project)?.basePath ?: "" }
         if (workspacePath.isEmpty()) {
             logger.error { "Workspace path not available for PathSandbox validation" }
             return emptyList()

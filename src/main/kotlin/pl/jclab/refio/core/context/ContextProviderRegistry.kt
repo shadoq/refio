@@ -1,8 +1,5 @@
 package pl.jclab.refio.core.context
 
-import pl.jclab.refio.core.context.providers.*
-import com.intellij.ide.plugins.PluginManagerCore
-import com.intellij.openapi.extensions.PluginId
 import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("ContextProviderRegistry")
@@ -12,12 +9,25 @@ private val logger = dualLogger("ContextProviderRegistry")
  *
  * Providers are registered at startup and can be queried by title.
  * Singleton pattern ensures consistent provider instances across the plugin.
+ *
+ * Provider creation is delegated to [providerFactory] to keep this class
+ * free of IntelliJ Platform dependencies. The IntelliJ plugin layer sets
+ * the factory to create IDE-specific providers; standalone/CLI uses a
+ * minimal factory with only platform-independent providers.
  */
 object ContextProviderRegistry {
 
     private val providers = mutableMapOf<String, BaseContextProvider>()
     private var initialized = false
     private var ideEnvironment = true
+
+    /**
+     * Factory that creates the list of built-in providers.
+     * Set by the platform layer before [initialize] is called.
+     *
+     * Default factory returns an empty list — override in plugin or CLI bootstrap.
+     */
+    var providerFactory: (isIdeEnvironment: Boolean) -> List<BaseContextProvider> = { emptyList() }
 
     /**
      * Register all built-in providers.
@@ -36,29 +46,11 @@ object ContextProviderRegistry {
         this.ideEnvironment = isIdeEnvironment
         logger.info { "Initializing context providers (IDE environment: $isIdeEnvironment)..." }
 
-        // Phase 1: MVP - Basic file providers
-        register(OpenFilesContextProvider())
-        register(FileContextProvider())
-        register(RecentFilesContextProvider())
-
-        // Phase 2: Extended file system and clipboard
-        register(CurrentFileContextProvider())
-        register(FolderContextProvider())
-        register(ClipboardContextProvider())
-
-        // Phase 3: IDE integration
-        if (isIdeEnvironment && isTerminalPluginAvailable()) {
-            register(TerminalContextProvider())
+        // Create and register providers from the platform-specific factory
+        val builtinProviders = providerFactory(isIdeEnvironment)
+        for (provider in builtinProviders) {
+            register(provider)
         }
-        register(ProblemsContextProvider())
-        register(GitDiffContextProvider())
-
-        // Phase 4: Advanced features
-        register(CodebaseContextProvider())
-        register(UrlContextProvider())
-        register(GrepSearchContextProvider())
-        register(GitCommitContextProvider())
-        register(DocsContextProvider())
 
         initialized = true
         logger.info { "Registered ${providers.size} context providers" }
@@ -132,12 +124,6 @@ object ContextProviderRegistry {
     fun hasProvider(title: String): Boolean {
         if (!initialized) initialize()
         return providers.containsKey(title)
-    }
-
-    private fun isTerminalPluginAvailable(): Boolean {
-        val pluginId = PluginId.getId("com.intellij.terminal")
-        val plugin = PluginManagerCore.getPlugin(pluginId)
-        return plugin?.isEnabled == true
     }
 
     /**

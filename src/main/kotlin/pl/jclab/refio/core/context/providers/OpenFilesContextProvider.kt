@@ -2,6 +2,7 @@ package pl.jclab.refio.core.context.providers
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import pl.jclab.refio.core.context.*
 import pl.jclab.refio.core.tools.PathSandbox
@@ -20,6 +21,8 @@ private val logger = dualLogger("OpenFilesContextProvider")
  */
 class OpenFilesContextProvider : BaseContextProvider() {
 
+    override val environment = ContextProviderEnvironment.IDE_ONLY
+
     override val description = ContextProviderDescription(
         title = "open_files",
         displayTitle = "open_files",
@@ -32,7 +35,7 @@ class OpenFilesContextProvider : BaseContextProvider() {
         query: String,
         extras: ContextProviderExtras
     ): List<ContextItem> {
-        val project = extras.project
+        val project = extras.project as? Project
         if (project == null) {
             logger.warn { "No project provided in extras - cannot get open files" }
             return emptyList()

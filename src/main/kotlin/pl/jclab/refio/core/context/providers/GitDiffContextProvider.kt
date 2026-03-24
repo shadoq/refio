@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.context.providers
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.vcs.changes.Change
 import com.intellij.openapi.vcs.changes.ChangeListManager
 import pl.jclab.refio.core.context.*
@@ -28,7 +29,7 @@ class GitDiffContextProvider : BaseContextProvider() {
         query: String,
         extras: ContextProviderExtras
     ): List<ContextItem> {
-        val project = extras.project ?: return emptyList()
+        val project = extras.project as? Project ?: return emptyList()
         val workspacePath = extras.workspacePath.ifEmpty { project.basePath ?: "" }
 
         logger.debug { "Getting git diff for project: ${project.name}" }

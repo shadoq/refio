@@ -1,7 +1,7 @@
 package pl.jclab.refio.core.services
 
 import com.google.gson.reflect.TypeToken
-import com.intellij.openapi.project.Project
+// Project type erased to Any? for platform independence (see ProjectHandle)
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -176,7 +176,7 @@ class ContextService(
     suspend fun buildProjectContext(
         projectRoot: Path,
         taskId: String,
-        project: Project? = null,
+        project: Any? = null,
         query: String? = null,
         userContextRefs: List<ContextReference> = emptyList()
     ): ProjectContextDTO {
@@ -1087,7 +1087,7 @@ class ContextService(
     suspend fun buildAgentTurnMessages(
         taskId: String,
         projectRoot: Path,
-        project: Project? = null,
+        project: Any? = null,
         userContextRefs: List<ContextReference> = emptyList(),
         query: String? = null
     ): AgentTurnMessagesResult {
@@ -2969,7 +2969,7 @@ class ContextService(
     private suspend fun resolveAndConvertUserContextRefs(
         refs: List<ContextReference>,
         projectRoot: Path,
-        project: Project?,
+        project: Any?,
         currentQuery: String?
     ): List<ResolvedContextDTO> {
         val resolved = resolveUserContextReferences(refs, projectRoot, project, currentQuery)
@@ -3029,7 +3029,7 @@ class ContextService(
     private suspend fun resolveUserContextReferences(
         refs: List<ContextReference>,
         projectRoot: Path,
-        project: Project? = null,
+        project: Any? = null,
         currentQuery: String? = null
     ): List<ContextReference> = withContext(Dispatchers.IO) {
         logger.info { "[CONTEXT] Resolving ${refs.size} user context reference(s)" }
@@ -3087,7 +3087,7 @@ class ContextService(
     private suspend fun resolveProviderReference(
         ref: ContextReference,
         projectRoot: Path,
-        project: Project?,
+        project: Any?,
         pathSandbox: PathSandbox,
         currentQuery: String?
     ): ContextReference {
@@ -3177,7 +3177,7 @@ class ContextService(
     private suspend fun resolveDocsReference(
         ref: ContextReference,
         projectRoot: Path,
-        project: Project?,
+        project: Any?,
         currentQuery: String?
     ): ContextReference {
         val provider = ContextProviderRegistry.getProvider("docs")
@@ -3227,7 +3227,7 @@ class ContextService(
     private suspend fun resolveLegacyFileReference(
         ref: ContextReference,
         projectRoot: Path,
-        project: Project?,
+        project: Any?,
         pathSandbox: PathSandbox
     ): ContextReference {
         logger.debug { "[CONTEXT] Resolving legacy FILE reference: ${ref.path}" }
@@ -3289,7 +3289,7 @@ class ContextService(
     private suspend fun resolveLegacyFolderReference(
         ref: ContextReference,
         projectRoot: Path,
-        project: Project?,
+        project: Any?,
         pathSandbox: PathSandbox
     ): ContextReference {
         logger.debug { "[CONTEXT] Resolving legacy FOLDER reference: ${ref.path}" }
@@ -3336,7 +3336,7 @@ class ContextService(
     private suspend fun resolveLegacyOpenReference(
         ref: ContextReference,
         projectRoot: Path,
-        project: Project?,
+        project: Any?,
         pathSandbox: PathSandbox
     ): ContextReference {
         logger.debug { "[CONTEXT] Resolving legacy OPEN reference" }
@@ -3392,7 +3392,7 @@ class ContextService(
     private suspend fun resolveLegacyRulesReference(
         ref: ContextReference,
         projectRoot: Path,
-        project: Project?,
+        project: Any?,
         pathSandbox: PathSandbox
     ): ContextReference {
         logger.debug { "[CONTEXT] Resolving legacy RULES reference" }

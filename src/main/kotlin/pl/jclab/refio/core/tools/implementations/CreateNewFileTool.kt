@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.tools.implementations
 
+import pl.jclab.refio.core.tools.FileLockManager
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
@@ -71,54 +72,56 @@ class CreateNewFileTool(
 
             logger.info { "Creating file: relative='$pathStr', absolute='${path.toAbsolutePath()}', contentSize=${content.length} chars, lineCount=${content.lines().size}" }
 
-            // Check if file already exists
-            if (path.exists()) {
-                logger.warn { "File already exists: $pathStr (resolved to ${path.toAbsolutePath()})" }
+            return FileLockManager.withFileLock(path.toAbsolutePath().toString()) {
+                // Check if file already exists
+                if (path.exists()) {
+                    logger.warn { "File already exists: $pathStr (resolved to ${path.toAbsolutePath()})" }
+                    val duration = (System.currentTimeMillis() - startTime).toInt()
+                    return@withFileLock ToolResult(
+                        success = true,
+                        output = "⚠️ Warning: File already exists: $pathStr (skipped, use code_editing to modify existing files)",
+                        bytesWritten = 0,
+                        durationMs = duration,
+                        filesChanged = emptyList(),
+                        metadata = mapOf(
+                            "path" to pathStr,
+                            "warning" to "file_already_exists"
+                        )
+                    )
+                }
+
+                // Check if parent is a directory
+                val parent = path.parent
+                if (parent != null && parent.exists() && !parent.isDirectory()) {
+                    return@withFileLock ToolResult.error("Parent path exists but is not a directory: ${parent.fileName}")
+                }
+
+                // Create parent directories if needed
+                if (parent != null && !parent.exists()) {
+                    Files.createDirectories(parent)
+                    logger.info { "Created parent directories: ${parent.fileName}" }
+                }
+
+                // Write file
+                Files.writeString(path, content)
                 val duration = (System.currentTimeMillis() - startTime).toInt()
-                return ToolResult(
+                val createdFileSize = path.fileSize()
+
+                logger.info { "Successfully created file: $pathStr (${content.length} chars, ${duration}ms, size: $createdFileSize bytes, absolute='${path.toAbsolutePath()}')" }
+
+                ToolResult(
                     success = true,
-                    output = "⚠️ Warning: File already exists: $pathStr (skipped, use code_editing to modify existing files)",
-                    bytesWritten = 0,
+                    output = "File created successfully: $pathStr",
+                    bytesWritten = content.toByteArray().size,
                     durationMs = duration,
-                    filesChanged = emptyList(),
+                    filesChanged = listOf(pathStr),
                     metadata = mapOf(
                         "path" to pathStr,
-                        "warning" to "file_already_exists"
+                        "line_count" to content.lines().size,
+                        "char_count" to content.length
                     )
                 )
             }
-
-            // Check if parent is a directory
-            val parent = path.parent
-            if (parent != null && parent.exists() && !parent.isDirectory()) {
-                return ToolResult.error("Parent path exists but is not a directory: ${parent.fileName}")
-            }
-
-            // Create parent directories if needed
-            if (parent != null && !parent.exists()) {
-                Files.createDirectories(parent)
-                logger.info { "Created parent directories: ${parent.fileName}" }
-            }
-
-            // Write file
-            Files.writeString(path, content)
-            val duration = (System.currentTimeMillis() - startTime).toInt()
-            val createdFileSize = path.fileSize()
-
-            logger.info { "Successfully created file: $pathStr (${content.length} chars, ${duration}ms, size: $createdFileSize bytes, absolute='${path.toAbsolutePath()}')" }
-
-            return ToolResult(
-                success = true,
-                output = "File created successfully: $pathStr",
-                bytesWritten = content.toByteArray().size,
-                durationMs = duration,
-                filesChanged = listOf(pathStr),
-                metadata = mapOf(
-                    "path" to pathStr,
-                    "line_count" to content.lines().size,
-                    "char_count" to content.length
-                )
-            )
 
         } catch (e: SecurityException) {
             logger.warn { "Security violation in create_new_file: ${e.message}" }

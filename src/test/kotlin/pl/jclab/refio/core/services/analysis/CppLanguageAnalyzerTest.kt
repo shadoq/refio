@@ -19,7 +19,7 @@ class CppLanguageAnalyzerTest {
         assertTrue(analyzer.matches(Paths.get("main.c")))
         assertTrue(analyzer.matches(Paths.get("header.h")))
         assertTrue(analyzer.matches(Paths.get("header.hpp")))
-        assertFalse(analyzer.matches(Paths.get("Main.kt")))
+        assertFalse(analyzer.matches(Paths.get("main.kt")))
         assertFalse(analyzer.matches(Paths.get("Main.java")))
     }
 

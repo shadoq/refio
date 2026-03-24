@@ -52,7 +52,7 @@ class PlanningService(
     private val toolPermissionsService: ToolPermissionsService? = null,
     private val contextService: ContextService? = null,
     private val projectRoot: java.nio.file.Path? = null,
-    private val ideProject: com.intellij.openapi.project.Project? = null
+    private val ideProject: Any? = null
 ) {
     private val fallbackProjectId: String =
         projectRoot?.let { ProjectIdGenerator.generate(it) } ?: LEGACY_PROJECT_ID
@@ -555,7 +555,8 @@ class PlanningService(
             tokensOut = subtask.outputTokens,
             costUsd = subtask.costUsd,
             model = subtask.llmModel,
-            provider = subtask.llmProvider
+            provider = subtask.llmProvider,
+            resultSummary = subtask.summary ?: subtask.result?.take(500)
         )
     }
 }

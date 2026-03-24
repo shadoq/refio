@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.context.providers
 
+import com.intellij.openapi.project.Project
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.context.*
 import pl.jclab.refio.core.db.repositories.ConfigRepository
@@ -90,7 +91,7 @@ class CodebaseContextProvider : BaseContextProvider() {
             val projectRoot = if (extras.workspacePath.isNotBlank()) {
                 extras.workspacePath
             } else {
-                extras.project?.basePath.orEmpty()
+                (extras.project as? Project)?.basePath.orEmpty()
             }
 
             if (projectRoot.isEmpty()) {

@@ -285,11 +285,11 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
     }
 
     /**
-     * Public method for toolbar action: Show help (TODO: not yet implemented)
+     * Public method for toolbar action: Show help (opens GitHub docs)
      */
     fun showHelp() {
         logger.info { "Show help requested" }
-        // TODO: Implement help dialog or documentation view
+        com.intellij.ide.BrowserUtil.browse("https://github.com/jclab-joseph/refio")
     }
 
     /**
@@ -406,8 +406,8 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
     }
 
     private fun updateStepsQueueVisibility(@Suppress("UNUSED_PARAMETER") mode: TaskMode) {
-        // TODO: Implement steps queue visibility logic when split pane is re-enabled
-        // Currently using tabbed pane, so steps are always accessible via Steps tab
+        // No-op: using tabbed pane layout — steps are always accessible via Steps tab.
+        // If split pane layout is re-enabled, add show/hide logic here based on mode.
     }
 
     /**

@@ -195,7 +195,7 @@ data class FileInfo(
  * Security-focused normalization that ensures paths work correctly:
  * - Converts backslashes to forward slashes (Windows compatibility)
  * - Adds "./" prefix for bare filenames (e.g., "file.txt" → "./file.txt")
- * - Preserves existing relative paths (e.g., "src/Main.kt" stays unchanged)
+ * - Preserves existing relative paths (e.g., "src/main.kt" stays unchanged)
  * - Does NOT resolve ".." or "." - PathSandbox handles security
  *
  * This is a defense-in-depth measure: PathSandbox.resolve() already prevents

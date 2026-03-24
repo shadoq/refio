@@ -1768,7 +1768,7 @@ class PromptInputPanel(
         logger.info { "Submenu item selected: ${item.title} (id=${item.id}) for provider: $providerId" }
 
         // Create final context reference using stored provider ID
-        // item.id contains the path/value (e.g., "/home/user/project/src/Main.kt")
+        // item.id contains the path/value (e.g., "/home/user/project/src/main.kt")
         val contextRef = ContextReference.provider(
             providerId = providerId,
             query = item.id,  // Use full item.id as the query/path

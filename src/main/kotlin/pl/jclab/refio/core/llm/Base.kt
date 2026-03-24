@@ -187,8 +187,8 @@ abstract class BaseLLMAdapter(
         // Step 4: Map message roles (if messages field exists)
         // Example: "system" → "user" for reasoning models that don't support system role
         // This is handled by checking if model definition has message_role_mappings capability
-        // For now, this is implemented in adapters directly (see OpenAIAdapter line 174)
-        // TODO: Move message role mapping logic here if needed across all adapters
+        // Currently implemented in adapters directly (see OpenAIAdapter).
+        // Consolidate here if more adapters need role mapping in the future.
 
         // Step 5: Remove null values (some APIs don't tolerate null)
         val cleanedParams = filteredParams.filterValues { it != null }.mapValues { it.value!! }

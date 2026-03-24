@@ -476,8 +476,10 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
             }
 
             // Section: Execution Summary
-            // Note: resultSummary doesn't exist in SubtaskDto, skipping for now
-            // TODO: Add result_summary field to SubtaskDto when backend supports it
+            if (!subtask.resultSummary.isNullOrBlank()) {
+                add(createSection("📋 Result:", subtask.resultSummary))
+                add(Box.createVerticalStrut(8))
+            }
 
             // Section: Error Message
             if (subtask.status == "FAILED" && !subtask.errorMessage.isNullOrBlank()) {

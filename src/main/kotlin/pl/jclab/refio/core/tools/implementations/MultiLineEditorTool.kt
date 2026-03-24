@@ -14,6 +14,7 @@ import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
+import pl.jclab.refio.core.tools.FileLockManager
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
@@ -180,187 +181,189 @@ class MultiLineEditorTool(
             )
         }
 
-        // Read content
-        val originalContent = Files.readString(path)
-        val lines = originalContent.lines()
+        return FileLockManager.withFileLock(path.toAbsolutePath().toString()) {
+            // Read content
+            val originalContent = Files.readString(path)
+            val lines = originalContent.lines()
 
-        logger.info {
-            "Multi-line edit: path=$pathStr, description='$editDescription', " +
-            "file_size=$fileSize bytes, line_count=${lines.size}"
-        }
+            logger.info {
+                "Multi-line edit: path=$pathStr, description='$editDescription', " +
+                "file_size=$fileSize bytes, line_count=${lines.size}"
+            }
 
-        // 2. Prepare file with line numbers for LLM
-        val numberedContent = lines.mapIndexed { index, line ->
-            "${index + 1}: $line"
-        }.joinToString("\n")
+            // 2. Prepare file with line numbers for LLM
+            val numberedContent = lines.mapIndexed { index, line ->
+                "${index + 1}: $line"
+            }.joinToString("\n")
 
-        // 3. Detect language
-        val extension = path.fileName.toString().substringAfterLast('.', "")
-        val language = detectLanguage(extension)
+            // 3. Detect language
+            val extension = path.fileName.toString().substringAfterLast('.', "")
+            val language = detectLanguage(extension)
 
-        // 4. Build prompts
-        val systemPrompt = promptsService.getSystemPrompt(
-            type = PromptType.MULTI_LINE_EDITING_SYSTEM
-        )
-
-        val userPrompt = promptsService.getSystemPrompt(
-            type = PromptType.MULTI_LINE_EDITING_USER,
-            variables = mapOf(
-                "FILE_PATH" to pathStr,
-                "LANGUAGE" to language,
-                "EDIT_DESCRIPTION" to editDescription,
-                "NUMBERED_CONTENT" to numberedContent
+            // 4. Build prompts
+            val systemPrompt = promptsService.getSystemPrompt(
+                type = PromptType.MULTI_LINE_EDITING_SYSTEM
             )
-        )
 
-        // 5. Call LLM
-        val messages = listOf(
-            LLMMessage(role = "user", content = userPrompt)
-        )
-
-        val (model, provider) = configService.getModel(
-            operation = ModelOperation.CODING,
-            taskId = taskId
-        )
-
-        logger.info {
-            "Using model for multi-line edit: $model ($provider), file has ${lines.size} lines, stream=$stream, hasOnChunk=${onChunk != null}"
-        }
-
-        var didStream = false
-        val streamingCallback: StreamCallback? = if (stream && onChunk != null) { chunk ->
-            didStream = true
-            onChunk(chunk)
-        } else {
-            null
-        }
-
-        val response = try {
-            llmClient.complete(
-                provider = provider,
-                model = model,
-                messages = messages,
-                systemPrompt = systemPrompt,
-                temperature = 0.1, // Low temp for precision
-                maxTokens = configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE),
-                stream = stream,
-                onChunk = streamingCallback,
-                taskId = null,
-                subtaskId = null,
-                source = "MultiLineEditor"
+            val userPrompt = promptsService.getSystemPrompt(
+                type = PromptType.MULTI_LINE_EDITING_USER,
+                variables = mapOf(
+                    "FILE_PATH" to pathStr,
+                    "LANGUAGE" to language,
+                    "EDIT_DESCRIPTION" to editDescription,
+                    "NUMBERED_CONTENT" to numberedContent
+                )
             )
-        } catch (e: Exception) {
-            logger.error(e) { "LLM request failed" }
-            return ToolResult.error("LLM request failed: ${e.message}. Try rephrasing the edit description.")
-        }
 
-        val responseContent = response.content
-        val usage = response.usage
-        val cost = response.cost
+            // 5. Call LLM
+            val messages = listOf(
+                LLMMessage(role = "user", content = userPrompt)
+            )
 
-        if (stream && onChunk != null && !didStream) {
-            onChunk(
-                StreamChunk(
-                    delta = responseContent,
-                    accumulated = responseContent,
-                    isComplete = true,
-                    source = "MultiLineEditor",
-                    usage = usage,
-                    cost = cost
+            val (model, provider) = configService.getModel(
+                operation = ModelOperation.CODING,
+                taskId = taskId
+            )
+
+            logger.info {
+                "Using model for multi-line edit: $model ($provider), file has ${lines.size} lines, stream=$stream, hasOnChunk=${onChunk != null}"
+            }
+
+            var didStream = false
+            val streamingCallback: StreamCallback? = if (stream && onChunk != null) { chunk ->
+                didStream = true
+                onChunk(chunk)
+            } else {
+                null
+            }
+
+            val response = try {
+                llmClient.complete(
+                    provider = provider,
+                    model = model,
+                    messages = messages,
+                    systemPrompt = systemPrompt,
+                    temperature = 0.1, // Low temp for precision
+                    maxTokens = configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE),
+                    stream = stream,
+                    onChunk = streamingCallback,
+                    taskId = null,
+                    subtaskId = null,
+                    source = "MultiLineEditor"
+                )
+            } catch (e: Exception) {
+                logger.error(e) { "LLM request failed" }
+                return@withFileLock ToolResult.error("LLM request failed: ${e.message}. Try rephrasing the edit description.")
+            }
+
+            val responseContent = response.content
+            val usage = response.usage
+            val cost = response.cost
+
+            if (stream && onChunk != null && !didStream) {
+                onChunk(
+                    StreamChunk(
+                        delta = responseContent,
+                        accumulated = responseContent,
+                        isComplete = true,
+                        source = "MultiLineEditor",
+                        usage = usage,
+                        cost = cost
+                    )
+                )
+            }
+
+            // 6. Parse JSON response
+            val edits = try {
+                parseEdits(responseContent, lines.size)
+            } catch (e: Exception) {
+                logger.warn {
+                    "Failed to parse LLM response as JSON: ${e.message}. " +
+                        "Response preview: ${responseContent.take(200)}"
+                }
+                return@withFileLock ToolResult.error(
+                    "Failed to parse LLM response. Response was: ${responseContent.take(200)}... " +
+                    "Try rephrasing the edit description or use advance_code_editing."
+                )
+            }
+
+            if (edits.isEmpty()) {
+                logger.warn { "LLM returned no edits for description: $editDescription" }
+                return@withFileLock ToolResult.error(
+                    "LLM did not identify any changes to make. Try being more specific in the edit description."
+                )
+            }
+
+            logger.info { "LLM identified ${edits.size} edits" }
+
+            // 7. Validate edits
+            val validationError = validateEdits(edits, lines.size)
+            if (validationError != null) {
+                return@withFileLock ToolResult.error(validationError)
+            }
+
+            // 8. Apply edits (from end to start to preserve line numbers)
+            val newContent = applyEdits(lines, edits)
+
+            // 9. Generate diff
+            val diff = generateUnifiedDiff(originalContent, newContent, pathStr)
+            val (addedLines, removedLines) = parseDiffStats(diff)
+
+            // 10. Write file
+            Files.writeString(path, newContent)
+            val duration = (System.currentTimeMillis() - startTime).toInt()
+            val newFileSize = path.fileSize()
+
+            logger.info {
+                "Multi-line edit completed: path=$pathStr, model=$model, " +
+                "edits=${edits.size}, tokens_in=${usage.inputTokens}, tokens_out=${usage.outputTokens}, " +
+                "cost_usd=$cost, duration=${duration}ms"
+            }
+
+            // 11. Update task metrics
+            if (taskId != null) {
+                taskRepository.incrementMetrics(
+                    id = taskId,
+                    tokensIn = usage.inputTokens,
+                    tokensOut = usage.outputTokens,
+                    costUsd = cost
+                )
+            }
+
+            // 12. Return result
+            ToolResult(
+                success = true,
+                output = buildString {
+                    appendLine("File edited successfully: $pathStr")
+                    appendLine("Applied ${edits.size} edits to file")
+                    appendLine("Size: $fileSize bytes → $newFileSize bytes")
+                    appendLine("Model: $model, Tokens: ${usage.inputTokens}/${usage.outputTokens}, Cost: $${"%.4f".format(cost)}")
+                    // Wrap diff in markdown code block for proper UI rendering
+                    appendLine("Diff:")
+                    appendLine("```diff")
+                    diff.lines().forEach { line -> appendLine(line) }
+                    append("```")
+                },
+                bytesRead = originalContent.toByteArray().size,
+                bytesWritten = newContent.toByteArray().size,
+                durationMs = duration,
+                filesChanged = listOf(pathStr),
+                metadata = mapOf(
+                    "path" to pathStr,
+                    "mode" to "multi_line_edit",
+                    "edits_count" to edits.size,
+                    "added_lines" to addedLines,
+                    "removed_lines" to removedLines,
+                    "edit_description" to editDescription,
+                    "model" to model,
+                    "provider" to provider,
+                    "tokens_in" to usage.inputTokens,
+                    "tokens_out" to usage.outputTokens,
+                    "cost_usd" to cost,
+                    "diff" to diff
                 )
             )
         }
-
-        // 6. Parse JSON response
-        val edits = try {
-            parseEdits(responseContent, lines.size)
-        } catch (e: Exception) {
-            logger.warn {
-                "Failed to parse LLM response as JSON: ${e.message}. " +
-                    "Response preview: ${responseContent.take(200)}"
-            }
-            return ToolResult.error(
-                "Failed to parse LLM response. Response was: ${responseContent.take(200)}... " +
-                "Try rephrasing the edit description or use advance_code_editing."
-            )
-        }
-
-        if (edits.isEmpty()) {
-            logger.warn { "LLM returned no edits for description: $editDescription" }
-            return ToolResult.error(
-                "LLM did not identify any changes to make. Try being more specific in the edit description."
-            )
-        }
-
-        logger.info { "LLM identified ${edits.size} edits" }
-
-        // 7. Validate edits
-        val validationError = validateEdits(edits, lines.size)
-        if (validationError != null) {
-            return ToolResult.error(validationError)
-        }
-
-        // 8. Apply edits (from end to start to preserve line numbers)
-        val newContent = applyEdits(lines, edits)
-
-        // 9. Generate diff
-        val diff = generateUnifiedDiff(originalContent, newContent, pathStr)
-        val (addedLines, removedLines) = parseDiffStats(diff)
-
-        // 10. Write file
-        Files.writeString(path, newContent)
-        val duration = (System.currentTimeMillis() - startTime).toInt()
-        val newFileSize = path.fileSize()
-
-        logger.info {
-            "Multi-line edit completed: path=$pathStr, model=$model, " +
-            "edits=${edits.size}, tokens_in=${usage.inputTokens}, tokens_out=${usage.outputTokens}, " +
-            "cost_usd=$cost, duration=${duration}ms"
-        }
-
-        // 11. Update task metrics
-        if (taskId != null) {
-            taskRepository.incrementMetrics(
-                id = taskId,
-                tokensIn = usage.inputTokens,
-                tokensOut = usage.outputTokens,
-                costUsd = cost
-            )
-        }
-
-        // 12. Return result
-        return ToolResult(
-            success = true,
-            output = buildString {
-                appendLine("File edited successfully: $pathStr")
-                appendLine("Applied ${edits.size} edits to file")
-                appendLine("Size: $fileSize bytes → $newFileSize bytes")
-                appendLine("Model: $model, Tokens: ${usage.inputTokens}/${usage.outputTokens}, Cost: $${"%.4f".format(cost)}")
-                // Wrap diff in markdown code block for proper UI rendering
-                appendLine("Diff:")
-                appendLine("```diff")
-                diff.lines().forEach { line -> appendLine(line) }
-                append("```")
-            },
-            bytesRead = originalContent.toByteArray().size,
-            bytesWritten = newContent.toByteArray().size,
-            durationMs = duration,
-            filesChanged = listOf(pathStr),
-            metadata = mapOf(
-                "path" to pathStr,
-                "mode" to "multi_line_edit",
-                "edits_count" to edits.size,
-                "added_lines" to addedLines,
-                "removed_lines" to removedLines,
-                "edit_description" to editDescription,
-                "model" to model,
-                "provider" to provider,
-                "tokens_in" to usage.inputTokens,
-                "tokens_out" to usage.outputTokens,
-                "cost_usd" to cost,
-                "diff" to diff
-            )
-        )
     }
 
     /**

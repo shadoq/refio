@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.context.providers
 
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectFileIndex
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.problems.WolfTheProblemSolver
@@ -30,7 +31,7 @@ class ProblemsContextProvider : BaseContextProvider() {
         query: String,
         extras: ContextProviderExtras
     ): List<ContextItem> {
-        val project = extras.project ?: return emptyList()
+        val project = extras.project as? Project ?: return emptyList()
         val workspacePath = extras.workspacePath.ifEmpty { project.basePath ?: "" }
 
         logger.debug { "Getting problems for project: ${project.name}" }

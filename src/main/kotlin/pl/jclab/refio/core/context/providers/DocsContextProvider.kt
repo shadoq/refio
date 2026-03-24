@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.context.providers
 
+import com.intellij.openapi.project.Project
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.context.BaseContextProvider
 import pl.jclab.refio.core.context.ContextItem
@@ -52,7 +53,7 @@ class DocsContextProvider(
     override suspend fun loadSubmenuItems(
         args: LoadSubmenuItemsArgs
     ): List<ContextSubmenuItem> {
-        val projectRoot = args.project.basePath ?: return emptyList()
+        val projectRoot = (args.project as? Project)?.basePath ?: return emptyList()
         val docSources = getDocSourcesForProject(projectRoot)
             .filter { it.status == DocIndexingStatus.INDEXED }
 
@@ -84,7 +85,7 @@ class DocsContextProvider(
         query: String,
         extras: ContextProviderExtras
     ): List<ContextItem> = withContext(Dispatchers.IO) {
-        val projectRoot = extras.workspacePath.ifEmpty { extras.project?.basePath ?: "" }
+        val projectRoot = extras.workspacePath.ifEmpty { (extras.project as? Project)?.basePath ?: "" }
         if (projectRoot.isEmpty()) {
             logger.warn { "No project root found" }
             return@withContext listOf(

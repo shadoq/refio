@@ -39,9 +39,32 @@ object GlobalMetrics {
     // Operation time tracking
     val operationMetrics = ConcurrentHashMap<String, OperationMetrics>()
 
-    // Current operation tracking
+    // Current operation tracking (backward compat — delegates to "default" agent)
     private val _currentOperation = MutableStateFlow<OperationInfo>(OperationInfo.Idle)
     val currentOperation: StateFlow<OperationInfo> = _currentOperation.asStateFlow()
+
+    // ── Per-agent tracking (multi-agent support) ──
+
+    private val agentMetricsMap = ConcurrentHashMap<String, AgentMetrics>()
+
+    /**
+     * Get or create per-agent metrics.
+     * Multi-agent orchestrator uses this to track each agent independently.
+     */
+    fun forAgent(agentId: String): AgentMetrics =
+        agentMetricsMap.getOrPut(agentId) { AgentMetrics(agentId) }
+
+    /**
+     * Remove agent metrics (cleanup after agent completes).
+     */
+    fun removeAgent(agentId: String) {
+        agentMetricsMap.remove(agentId)
+    }
+
+    /**
+     * Get all active agent metrics (for GUI dashboard).
+     */
+    fun allAgentMetrics(): Map<String, AgentMetrics> = agentMetricsMap.toMap()
 
     // Metrics state
     data class MetricsSnapshot(
@@ -370,3 +393,35 @@ data class OperationMetrics(
     val totalTimeMs: AtomicLong = AtomicLong(0),
     val maxTimeMs: AtomicLong = AtomicLong(0)
 )
+
+/**
+ * Per-agent metrics for multi-agent execution.
+ * Each agent has its own operation state and cancellation flag,
+ * preventing one agent's state from overwriting another's.
+ */
+class AgentMetrics(val agentId: String) {
+    private val _currentOperation = MutableStateFlow<OperationInfo>(OperationInfo.Idle)
+    val currentOperation: StateFlow<OperationInfo> = _currentOperation.asStateFlow()
+
+    private val _isCancelled = AtomicBoolean(false)
+
+    private val _tokensIn = AtomicLong(0)
+    private val _tokensOut = AtomicLong(0)
+    private val _costUsd = AtomicLong(0) // cents
+
+    fun setCurrentOperation(op: OperationInfo) { _currentOperation.value = op }
+    fun clearCurrentOperation() { _currentOperation.value = OperationInfo.Idle }
+    fun requestCancellation() { _isCancelled.set(true) }
+    fun resetCancellation() { _isCancelled.set(false) }
+    fun isCancelled(): Boolean = _isCancelled.get()
+
+    fun recordTokens(tokensIn: Int, tokensOut: Int, costUsd: Double) {
+        _tokensIn.addAndGet(tokensIn.toLong())
+        _tokensOut.addAndGet(tokensOut.toLong())
+        _costUsd.addAndGet((costUsd * 100).toLong())
+    }
+
+    val totalTokensIn: Long get() = _tokensIn.get()
+    val totalTokensOut: Long get() = _tokensOut.get()
+    val totalCostUsd: Double get() = _costUsd.get() / 100.0
+}

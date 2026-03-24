@@ -15,6 +15,7 @@ import java.util.UUID
 object ChatMessagesTable : Table("chat_messages") {
     val id = varchar("id", 36).clientDefault { UUID.randomUUID().toString() }
     val taskId = varchar("task_id", 36).references(TasksTable.id, onDelete = ReferenceOption.CASCADE)
+    val agentInstanceId = varchar("agent_instance_id", 36).nullable()  // Links message to specific agent in multi-agent sessions
     val role = enumerationByName<MessageRole>("role", 16)
     val content = text("content")
     val thinking = text("thinking").nullable()  // Reasoning process from models (gpt-oss, Claude)
@@ -86,6 +87,7 @@ data class ToolCallData(
 data class ChatMessage(
     val id: String,
     val taskId: String,
+    val agentInstanceId: String? = null,
     val role: MessageRole,
     val content: String,
     val thinking: String? = null,         // Reasoning process (gpt-oss, Claude)

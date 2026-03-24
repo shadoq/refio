@@ -105,8 +105,7 @@ class SessionContextBar(private val project: Project, private val chatView: pl.j
         add(historyButton)
         add(settingsButton)
 
-        // TODO: Add session tabs
-        // TODO: Add content tabs
+        // Session/content tabs deferred — current tabbed pane approach is sufficient.
 
         // Listen to session changes
         cs.launch {

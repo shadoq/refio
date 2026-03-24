@@ -76,7 +76,11 @@ object DatabaseFactory {
                 EmbeddingsTable,
                 IndexingProgressTable,
                 DocumentationSourcesTable,  // External documentation sources (US-024)
-                ProjectAnalysisReportsTable
+                ProjectAnalysisReportsTable,
+                // Multi-agent tables
+                AgentSessionsTable,
+                AgentInstancesTable,
+                AgentEventsTable
             )
 
             logger.info { "All tables created successfully" }

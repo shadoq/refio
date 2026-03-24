@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.context.providers
 
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindowManager
 import pl.jclab.refio.core.context.*
 import pl.jclab.refio.core.logging.dualLogger
@@ -37,7 +38,7 @@ class TerminalContextProvider : BaseContextProvider() {
         query: String,
         extras: ContextProviderExtras
     ): List<ContextItem> {
-        val project = extras.project ?: return emptyList()
+        val project = extras.project as? Project ?: return emptyList()
 
         logger.debug { "Getting terminal output for project: ${project.name}" }
 

@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.context.providers
 
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.project.Project
 import com.intellij.psi.search.GlobalSearchScope
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.context.*
@@ -43,7 +44,7 @@ class GrepSearchContextProvider : BaseContextProvider() {
 
         logger.debug { "Grep search pattern: $searchPattern" }
 
-        val project = extras.project ?: return emptyList()
+        val project = extras.project as? Project ?: return emptyList()
         val workspacePath = extras.workspacePath.ifEmpty { project.basePath ?: "" }
 
         // Perform search using IntelliJ Find API

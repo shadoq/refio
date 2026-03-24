@@ -269,7 +269,7 @@ class ProjectInstructionsRuleMatchingTest {
             name = "kotlin", description = "", globs = listOf("*.kt"),
             alwaysApply = false, content = "Kotlin rule"
         )
-        assertTrue(loader.shouldIncludeRule(rule, listOf("Main.kt")))
+        assertTrue(loader.shouldIncludeRule(rule, listOf("main.kt")))
         assertFalse(loader.shouldIncludeRule(rule, listOf("Main.java")))
     }
 
@@ -355,7 +355,7 @@ class ProjectInstructionsConditionalRulesIntegrationTest {
             """.trimIndent())
 
             // With kotlin file active — both rules should load
-            val result = loader.load(projectRoot, activeFiles = listOf("Main.kt"))
+            val result = loader.load(projectRoot, activeFiles = listOf("main.kt"))
 
             assertEquals(2, result.rules.size)
             assertTrue(result.rules.any { it.name == "kotlin" })

@@ -99,7 +99,8 @@ class PathSandboxTest {
 
             val result = permissiveSandbox.validatePath(symlinkInSandbox)
 
-            assertTrue(result.startsWith(tempDir))
+            // Result is resolved to real path (e.g. /private/var on macOS)
+            assertTrue(result.startsWith(tempDir.toRealPath()))
         } finally {
             symlinkInSandbox.deleteIfExists()
             insideFile.deleteIfExists()
@@ -130,7 +131,8 @@ class PathSandboxTest {
 
         val result = sandbox.validatePath(nonExistentPath, followSymlinks = false)
 
-        assertEquals(nonExistentPath.normalize().toAbsolutePath(), result)
+        // Result is resolved via real path of existing parent
+        assertEquals(tempDir.toRealPath().resolve("non-existent.txt"), result)
     }
 
     @Test
@@ -149,7 +151,8 @@ class PathSandboxTest {
 
         val result = sandbox.validatePath(nestedFile)
 
-        assertTrue(result.startsWith(tempDir))
+        // Result is resolved to real path (e.g. /private/var on macOS)
+        assertTrue(result.startsWith(tempDir.toRealPath()))
     }
 
     private fun isSymlinkSupported(): Boolean {

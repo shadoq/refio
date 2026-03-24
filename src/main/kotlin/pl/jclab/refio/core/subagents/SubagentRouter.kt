@@ -40,7 +40,7 @@ class SubagentRouter(
     private val toolPermissionsService: ToolPermissionsService,
     private val chatMessageRepository: ChatMessageRepository,
     private val contextService: pl.jclab.refio.core.services.ContextService?,
-    private val ideProject: com.intellij.openapi.project.Project?,
+    private val ideProject: Any?,
     private val runTurnCallback: (suspend (TurnRequest, pl.jclab.refio.core.api.StreamCallback?) -> TurnResult)? = null
 ) : Router {
     private val invocationRegex = Regex("^!([a-zA-Z0-9_-]+)(?:\\s+([\\s\\S]+))?$")

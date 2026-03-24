@@ -354,8 +354,9 @@ class RunTerminalCommandToolTest {
             // Given - create a test file in temp directory
             java.nio.file.Files.writeString(tempDir.resolve("test.txt"), "content")
 
-            // When - command that lists current directory
-            val result = tool.execute(mapOf("command" to "dir"))  // Windows
+            // When - use cross-platform command
+            val command = if (System.getProperty("os.name").lowercase().contains("windows")) "dir" else "ls"
+            val result = tool.execute(mapOf("command" to command))
 
             // Then
             assertTrue(result.success)

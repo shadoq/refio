@@ -18,13 +18,16 @@ class PathSandbox(
     private val projectRoot: Path,
     private val allowSymlinksProvider: () -> Boolean = { false }
 ) {
-    private val normalizedRoot: Path = projectRoot.normalize().toAbsolutePath()
+    private val normalizedRoot: Path
 
     init {
         require(projectRoot.isAbsolute) { "Project root must be an absolute path" }
         require(projectRoot.exists()) { "Project root must exist: $projectRoot" }
         require(projectRoot.isDirectory()) { "Project root must be a directory: $projectRoot" }
-        logger.info { "PathSandbox initialized: projectRoot=$projectRoot" }
+        // Use toRealPath() to resolve symlinks (e.g. macOS /var -> /private/var)
+        // so that sandbox root matches paths resolved by validatePath's toRealPath() call.
+        normalizedRoot = projectRoot.toRealPath()
+        logger.info { "PathSandbox initialized: projectRoot=$projectRoot, normalizedRoot=$normalizedRoot" }
     }
 
     /**
@@ -35,17 +38,22 @@ class PathSandbox(
         val normalizedPath = path.normalize().toAbsolutePath()
         val allowSymlinks = allowSymlinksProvider()
 
-        if (!normalizedPath.startsWith(normalizedRoot)) {
+        // Resolve parent chain to real path for consistent comparison on platforms
+        // where system paths contain symlinks (e.g. macOS /var -> /private/var)
+        val comparablePath = resolveComparablePath(normalizedPath)
+
+        if (!comparablePath.startsWith(normalizedRoot)) {
             throw SecurityException(
                 "Path outside sandbox: $normalizedPath (sandbox: $normalizedRoot)"
             )
         }
 
         if (!allowSymlinks) {
+            // Check symlinks on the original path (preserves symlink entries)
             rejectSymlinks(normalizedPath)
         }
 
-        val realPath = resolveRealPathIfNeeded(normalizedPath, followSymlinks)
+        val realPath = resolveRealPathIfNeeded(comparablePath, followSymlinks)
         if (!realPath.startsWith(normalizedRoot)) {
             throw SecurityException(
                 "Path outside sandbox (symlink): $normalizedPath (real: $realPath, sandbox: $normalizedRoot)"
@@ -56,8 +64,8 @@ class PathSandbox(
             logger.warn { "Symlink detected in path: $normalizedPath" }
         }
 
-        logger.debug { "Path validated: $normalizedPath" }
-        return normalizedPath
+        logger.debug { "Path validated: $comparablePath" }
+        return comparablePath
     }
 
     /**
@@ -101,20 +109,55 @@ class PathSandbox(
         return validatePath(path, followSymlinks)
     }
 
-    private fun rejectSymlinks(path: Path) {
-        if (Files.exists(path) && Files.isSymbolicLink(path)) {
-            throw SecurityException("Symbolic links are not allowed for security reasons: $path")
+    private fun rejectSymlinks(originalPath: Path) {
+        if (Files.exists(originalPath) && Files.isSymbolicLink(originalPath)) {
+            throw SecurityException("Symbolic links are not allowed for security reasons: $originalPath")
         }
 
-        var current = path.parent
-        while (current != null && current.startsWith(normalizedRoot)) {
+        var current = originalPath.parent
+        val realRoot = normalizedRoot
+        while (current != null) {
+            val currentComparable = resolveComparablePath(current)
+            if (!currentComparable.startsWith(realRoot)) break
             if (Files.exists(current) && Files.isSymbolicLink(current)) {
                 throw SecurityException("Path contains symbolic link in parent directory: $current")
             }
-            if (current == normalizedRoot) {
-                break
-            }
+            if (currentComparable == realRoot) break
             current = current.parent
+        }
+    }
+
+    /**
+     * Resolve a path for consistent comparison with normalizedRoot.
+     * For existing paths, resolves the existing parent chain to real path
+     * (handles platform symlinks like macOS /var -> /private/var).
+     * For non-existing paths, resolves the existing ancestor to real path
+     * and appends the remaining relative portion.
+     */
+    private fun resolveComparablePath(path: Path): Path {
+        if (path.exists()) {
+            return try {
+                path.toRealPath()
+            } catch (_: Exception) {
+                path
+            }
+        }
+        // For non-existent paths, resolve the nearest existing ancestor
+        var existing = path.parent
+        val remaining = mutableListOf(path.fileName)
+        while (existing != null && !existing.exists()) {
+            remaining.add(0, existing.fileName)
+            existing = existing.parent
+        }
+        if (existing == null) return path
+        return try {
+            var result = existing.toRealPath()
+            for (part in remaining) {
+                result = result.resolve(part)
+            }
+            result
+        } catch (_: Exception) {
+            path
         }
     }
 

@@ -85,8 +85,38 @@ class CoreConnectionManager {
             logger.info { "Initializing default configuration values" }
             router.configService.initializeDefaults()
 
-            // Initialize Context Provider Registry
+            // Initialize Context Provider Registry with IntelliJ-specific providers
             logger.info { "Initializing Context Provider Registry" }
+            ContextProviderRegistry.providerFactory = { isIdeEnvironment ->
+                val terminalAvailable = try {
+                    val pluginId = com.intellij.openapi.extensions.PluginId.getId("com.intellij.terminal")
+                    val plugin = com.intellij.ide.plugins.PluginManagerCore.getPlugin(pluginId)
+                    plugin?.isEnabled == true
+                } catch (_: Exception) { false }
+
+                buildList {
+                    // Phase 1: MVP - Basic file providers
+                    add(pl.jclab.refio.core.context.providers.OpenFilesContextProvider())
+                    add(pl.jclab.refio.core.context.providers.FileContextProvider())
+                    add(pl.jclab.refio.core.context.providers.RecentFilesContextProvider())
+                    // Phase 2: Extended file system and clipboard
+                    add(pl.jclab.refio.core.context.providers.CurrentFileContextProvider())
+                    add(pl.jclab.refio.core.context.providers.FolderContextProvider())
+                    add(pl.jclab.refio.core.context.providers.ClipboardContextProvider())
+                    // Phase 3: IDE integration
+                    if (isIdeEnvironment && terminalAvailable) {
+                        add(pl.jclab.refio.core.context.providers.TerminalContextProvider())
+                    }
+                    add(pl.jclab.refio.core.context.providers.ProblemsContextProvider())
+                    add(pl.jclab.refio.core.context.providers.GitDiffContextProvider())
+                    // Phase 4: Advanced features
+                    add(pl.jclab.refio.core.context.providers.CodebaseContextProvider())
+                    add(pl.jclab.refio.core.context.providers.UrlContextProvider())
+                    add(pl.jclab.refio.core.context.providers.GrepSearchContextProvider())
+                    add(pl.jclab.refio.core.context.providers.GitCommitContextProvider())
+                    add(pl.jclab.refio.core.context.providers.DocsContextProvider())
+                }
+            }
             ContextProviderRegistry.initialize()
 
             // Initialize MCP Manager

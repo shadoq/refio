@@ -1328,7 +1328,7 @@ class ProjectAnalyzerService(
     private fun identifyKeyComponents(fileTree: FileNode): List<String> {
         val keyFiles = listOf(
             "README.md", "CHANGELOG.md", "LICENSE",
-            "main.kt", "Main.kt", "Main.java", "main.py", "__main__.py",
+            "main.kt", "main.kt", "Main.java", "main.py", "__main__.py",
             "index.js", "index.ts", "App.tsx", "App.jsx",
             "package.json", "requirements.txt", "pom.xml", "build.gradle.kts",
             "Dockerfile", "docker-compose.yml", ".env.example"
@@ -1835,7 +1835,7 @@ class ProjectAnalyzerService(
                 file.name == "index.html" -> entryPoints.add(
                     EntryPoint(file.relativePath, "Web entry", "HTML")
                 )
-                file.name == "main.kt" || file.name == "Main.kt" -> entryPoints.add(
+                file.name == "main.kt" || file.name == "main.kt" -> entryPoints.add(
                     EntryPoint(file.relativePath, "Application entry", "Kotlin")
                 )
                 file.name == "index.js" || file.name == "index.ts" -> entryPoints.add(

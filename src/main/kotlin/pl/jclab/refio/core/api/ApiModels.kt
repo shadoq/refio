@@ -460,3 +460,46 @@ data class MCPResourceResponse(
     val description: String? = null,
     val mimeType: String? = null
 )
+
+// ========== Multi-Agent API ==========
+
+/**
+ * Request to launch a multi-agent session.
+ *
+ * @property name Session name
+ * @property yamlDefinition YAML content defining agents, dependencies, and tasks
+ * @property model Default model override for all agents (individual agents can override)
+ * @property provider Default provider override
+ */
+data class MultiAgentSessionRequest(
+    val name: String,
+    val yamlDefinition: String,
+    val model: String? = null,
+    val provider: String? = null
+)
+
+/**
+ * Response from launching or querying a multi-agent session.
+ */
+data class MultiAgentSessionResponse(
+    val sessionId: String,
+    val name: String,
+    val status: String,
+    val agents: List<MultiAgentInstanceResponse>,
+    val totalTokens: Long = 0,
+    val totalCostUsd: Double = 0.0,
+    val durationMs: Long = 0,
+    val createdAt: Long,
+    val completedAt: Long? = null
+)
+
+data class MultiAgentInstanceResponse(
+    val agentName: String,
+    val status: String,
+    val success: Boolean? = null,
+    val response: String? = null,
+    val tokensUsed: Long = 0,
+    val costUsd: Double = 0.0,
+    val durationMs: Long = 0,
+    val error: String? = null
+)

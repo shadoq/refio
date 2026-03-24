@@ -77,8 +77,8 @@ class ContextServiceTest {
             val refs = listOf(
                 ContextReference(
                     type = ContextType.FILE,
-                    path = "/src/main/Main.kt",
-                    displayName = "Main.kt",
+                    path = "/src/main/main.kt",
+                    displayName = "main.kt",
                     content = "fun main() {}"
                 )
             )
@@ -87,7 +87,7 @@ class ContextServiceTest {
             val formatted = service.formatContextReferencesForLLM(refs)
 
             // Then
-            assertTrue(formatted.contains("Main.kt"))
+            assertTrue(formatted.contains("main.kt"))
             assertTrue(formatted.contains("fun main()"))
         }
 
@@ -142,12 +142,12 @@ class ContextServiceTest {
         @Test
         fun `should convert file path to context reference`() {
             // When
-            val refs = ContextService.convertStringRefsToContextReferences(listOf("@file:/src/Main.kt"))
+            val refs = ContextService.convertStringRefsToContextReferences(listOf("@file:/src/main.kt"))
 
             // Then
             assertEquals(1, refs.size)
             assertEquals(ContextType.FILE, refs.first().type)
-            assertEquals("/src/Main.kt", refs.first().path)
+            assertEquals("/src/main.kt", refs.first().path)
         }
 
         @Test

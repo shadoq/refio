@@ -9,6 +9,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Multi-Agent Architecture
+- **AgentEventBus** — SharedFlow-based event bus for inter-agent communication with replay (200 events), filtered subscriptions (by session, agent, lifecycle, chat stream, approvals), and optional persistence
+- **AgentEvent** sealed interface — 12 event types: lifecycle (Started/Completed/Failed), data exchange (DataRequest/DataResponse), coordination (ArtifactProduced, SpawnAgentRequest, AgentSpawned), approval (ApprovalRequired/ApprovalDecision), progress (ProgressUpdate, StreamChunk)
+- **AgentEventHandler** — Per-agent event handler with CompletableDeferred for async DataRequest/Response and Approval flows with timeout support
+- **MultiAgentRunner** — Parallel agent orchestrator with DAG dependency resolution, event emission, per-agent metrics, and supervisor scope for failure isolation
+- **MultiAgentTaskParser** — YAML task definition parser for multi-agent sessions with agent specs, validation steps, and scoring metrics
+
+#### Multi-Agent API (CoreApiRouter)
+- `launchMultiAgentSession()` — Public API to launch multi-agent sessions from YAML definitions, creates DB session/instances, runs agents in parallel via turn-loop, returns aggregated results
+- `getMultiAgentSession()` — Query session status with per-agent metrics
+- `listMultiAgentSessions()` — List all sessions for current project
+- `MultiAgentSessionRequest/Response` and `MultiAgentInstanceResponse` DTOs
+- `agentEventBus` exposed on CoreApiRouter for GUI subscriptions
+- `multiAgentRunner` lazy val on CoreApiRouter for direct access
+
+#### Database (Multi-Agent)
+- `agent_sessions` table — Groups agent instances into multi-agent sessions
+- `agent_instances` table — Individual agent instances with profile, model, dependencies (JSON), status, and metrics
+- `agent_events` table — Persisted events with session/agent/type indexes
+- `AgentSessionRepository` and `AgentInstanceRepository` — CRUD repositories
+
+#### Standalone CLI + Compose Desktop GUI
+- **Gradle multi-module** — 3 modules: `:core` (pure Kotlin/JVM), `:intellij-plugin`, `:cli` (Compose Desktop)
+- **StandaloneCoreBootstrap** — Initializes core without IntelliJ SDK
+- **Compose Desktop GUI** (Kotlin 2.0.21 + Compose 1.7.3) — Chat panel (2/3) + Status panel (1/3), dark Material3 theme
+- **ComposeWorkflowListener** — Bridges core WorkflowEventListener to Compose StateFlows
+- **ChatMessageMapper** — Maps 12 AgentEvent types to UIChatMessage with 8 per-agent colors
+- **RefioViewModel** — Bridge between core and Compose state (messages, agents, metrics, approvals, streaming)
+- **AgentFlowPanel** — DAG visualization with dependency tracking, status icons, progress bars
+- **ApprovalPanel** — Approve/reject UI for agent actions requiring confirmation
+- **MetricsCard** — Aggregated token usage, cost, agent completion, and duration display
+- Clikt CLI with `--project`, `--mode`, `--model`, `--headless`, `--no-egress` options
+
+#### Standalone Context Providers
+- 7 standalone context providers in `core/context/providers/standalone/` (no IntelliJ dependency):
+  - **StandaloneFileContextProvider** — File search via `Files.walk()` (replaces `FilenameIndex`)
+  - **StandaloneFolderContextProvider** — Directory tree via filesystem API
+  - **StandaloneGitDiffContextProvider** — `git diff` CLI (replaces `ChangeListManager`)
+  - **StandaloneGitCommitContextProvider** — `git log/show` CLI
+  - **StandaloneGrepSearchContextProvider** — Java regex search (replaces `PsiSearchHelper`)
+  - **StandaloneCodebaseContextProvider** — RAG semantic search without IntelliJ `Project`
+  - **StandaloneDocsContextProvider** — Documentation search without IntelliJ `Project`
+- 5 IDE-only providers marked `ContextProviderEnvironment.IDE_ONLY` (auto-skipped in CLI): `@current`, `@open_files`, `@recent`, `@problems`, `@terminal`
+- CLI standalone mode: 9/14 context providers available (was 2/14)
+
+#### Platform Abstraction
+- **ProjectHandle** interface — Platform-agnostic project abstraction (replaces `com.intellij.openapi.project.Project` in core)
+- **StandaloneProjectHandle** — CLI/standalone implementation using filesystem path
+- `CoreApiRouter` now accepts optional `projectHandle` parameter (backward-compatible)
+- `BaseContextProvider` extras changed from `Project?` to `Any?` (IDE providers cast internally)
+
+#### Concurrency Support
+- **AgentMetrics** class — Per-agent operation state, cancellation flag, and token tracking via `GlobalMetrics.forAgent(agentId)` (backward-compatible)
+- **FileLockManager** — Mutex-per-path file locking for all 5 write tools (CodeEditing, CreateNewFile, AdvanceCodeEditing, MultiLineEditor, MultiEdit)
+- **OllamaRequestGate** — Now configurable (`maxConcurrentPerEndpoint`, default 1)
+
+#### Tests (Critical Gap Coverage)
+- LLMClientTest, ChatServiceTest, LLMRetryHandlerTest, ContextProviderRegistryTest, TurnGuardrailsTest
+- ProjectHandleTest, GlobalMetricsMultiAgentTest, FileLockManagerTest
+- AgentEventBusTest, AgentSessionRepositoryTest, AgentInstanceRepositoryTest
+- MultiAgentRunnerTest, MultiAgentTaskParserTest
+- StandaloneContextProvidersTest (15 tests for standalone providers)
+- Compose Desktop UI tests: ChatPanelTest, StatusPanelTest, AppTest (19 tests)
+- MultiAgentIntegrationTest (6 tests with real DB)
+- CoreApiRouterMultiAgentTest (6 tests)
+
+### Fixed
+
+- **PathSandbox symlink resolution** — `normalizedRoot` now uses `toRealPath()` to resolve macOS `/var` → `/private/var` symlink, fixing ~181 tool test failures
+- **ConfigRouter.resetAllSettingsToDefaults()** — Now actually deletes APP and PROJECT scope config entries and re-initializes defaults (was a no-op stub)
+- **CLI EventBus wiring** — `RefioViewModel` now bridges `CoreApiRouter.agentEventBus` events to the local event bus for multi-agent UI visualization
+- **MultiEditTool test** — Fixed assertion to match sequential (cumulative) edit behavior
+- **RunTerminalCommandTool test** — Cross-platform command selection (`ls` on Unix, `dir` on Windows)
+- **Help action** — `showHelp()` and toolbar help button now open project GitHub page via `BrowserUtil.browse()`
+- Removed 8 stale TODOs across IntelliJ UI components
+
 ### Changed
 
 - Removing IntelliJ compile-time dependency from the core module.

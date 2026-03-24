@@ -47,5 +47,7 @@ data class SubtaskDto(
     @SerializedName("model")
     val model: String? = null,
     @SerializedName("provider")
-    val provider: String? = null
+    val provider: String? = null,
+    @SerializedName("result_summary")
+    val resultSummary: String? = null
 )

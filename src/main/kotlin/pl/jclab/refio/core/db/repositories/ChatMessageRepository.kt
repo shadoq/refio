@@ -30,11 +30,13 @@ class ChatMessageRepository {
         rawOutput: String? = null,
         tokensIn: Int? = null,
         tokensOut: Int? = null,
-        cost: Double? = null
+        cost: Double? = null,
+        agentInstanceId: String? = null
     ): ChatMessage {
         return transaction {
             val messageId = ChatMessagesTable.insert {
                 it[ChatMessagesTable.taskId] = taskId
+                it[ChatMessagesTable.agentInstanceId] = agentInstanceId
                 it[ChatMessagesTable.role] = role
                 it[ChatMessagesTable.content] = content
                 it[ChatMessagesTable.thinking] = thinking
@@ -191,6 +193,18 @@ class ChatMessageRepository {
     }
 
     /**
+     * Find messages for a specific agent instance within a multi-agent session.
+     */
+    fun findByAgentInstanceId(agentInstanceId: String): List<ChatMessage> {
+        return transaction {
+            ChatMessagesTable.selectAll()
+                .where { ChatMessagesTable.agentInstanceId eq agentInstanceId }
+                .orderBy(ChatMessagesTable.seq to SortOrder.ASC)
+                .map { rowToChatMessage(it) }
+        }
+    }
+
+    /**
      * Count messages for a task
      */
     fun countByTaskId(taskId: String): Long {
@@ -208,6 +222,7 @@ class ChatMessageRepository {
         return ChatMessage(
             id = row[ChatMessagesTable.id],
             taskId = row[ChatMessagesTable.taskId],
+            agentInstanceId = row[ChatMessagesTable.agentInstanceId],
             role = row[ChatMessagesTable.role],
             content = row[ChatMessagesTable.content],
             thinking = row[ChatMessagesTable.thinking],

@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.context.providers
 
+import com.intellij.openapi.project.Project
 import pl.jclab.refio.core.context.*
 import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.Dispatchers
@@ -40,7 +41,7 @@ class GitCommitContextProvider : BaseContextProvider() {
 
         try {
             val projectPath = extras.workspacePath.ifEmpty {
-                extras.project?.basePath ?: ""
+                (extras.project as? Project)?.basePath ?: ""
             }
 
             if (projectPath.isEmpty()) {

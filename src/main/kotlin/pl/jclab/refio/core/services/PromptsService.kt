@@ -598,7 +598,7 @@ Respond with valid JSON only. No text before or after.
 - "query" → "pattern"
 
 **PATH RULES:**
-- All paths relative to project root (e.g., "src/Main.kt")
+- All paths relative to project root (e.g., "src/main.kt")
 - Use forward slashes (/) even on Windows
 - No absolute paths, no ".." navigation
 </parameter_rules>
@@ -708,7 +708,7 @@ FIELD REQUIREMENTS:
 CRITICAL JSON RULES:
 - Use ONLY exact tool names from {{valid_tool_names}}
 - Use ONLY exact parameter names from tool descriptions (e.g., "path" NOT "file_path", "old_string" NOT "search")
-- All paths must be relative to project root (e.g., "src/Main.kt", "./index.html", "docs/README.md")
+- All paths must be relative to project root (e.g., "src/main.kt", "./index.html", "docs/README.md")
 - Use forward slashes (/) in paths, even on Windows
 - For bare filenames in project root: use "./" prefix (e.g., "./config.json" NOT "config.json")
 - For search tools (grep_search, file_search): use "." for current directory or specific subdirectory path

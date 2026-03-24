@@ -1,7 +1,5 @@
 package pl.jclab.refio.core.context
 
-import com.intellij.openapi.project.Project
-
 /**
  * Base interface for all context providers.
  *
@@ -102,7 +100,7 @@ data class ContextUri(
  * Extras passed to provider.
  */
 data class ContextProviderExtras(
-    val project: Project? = null,   // IntelliJ Project (nullable for CLI usage)
+    val project: Any? = null,       // IntelliJ Project or null (opaque — IDE providers cast to Project)
     val fullInput: String = "",     // Full user input for context
     val workspacePath: String = ""  // Workspace root path
 )
@@ -112,7 +110,7 @@ data class ContextProviderExtras(
  */
 data class LoadSubmenuItemsArgs(
     val query: String = "",
-    val project: Project
+    val project: Any? = null        // IntelliJ Project (opaque — nullable for CLI)
 )
 
 /**

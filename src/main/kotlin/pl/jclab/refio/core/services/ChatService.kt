@@ -51,7 +51,7 @@ class ChatService(
     private val toolDescriptionBuilder: ToolDescriptionBuilder,
     private val contextService: ContextService? = null,
     private val projectRoot: java.nio.file.Path? = null,
-    private val ideProject: com.intellij.openapi.project.Project? = null
+    private val ideProject: Any? = null
 ) {
     private val fallbackProjectId: String =
         projectRoot?.let { ProjectIdGenerator.generate(it) } ?: LEGACY_PROJECT_ID

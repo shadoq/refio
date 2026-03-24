@@ -26,7 +26,6 @@ import pl.jclab.refio.core.services.StepPlanResult
 import pl.jclab.refio.core.services.ExecutionPlan
 import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 import pl.jclab.refio.core.llm.LLMClient
-import com.intellij.openapi.project.Project
 import java.nio.file.Paths
 
 class AgentRouterTest {
@@ -39,7 +38,7 @@ class AgentRouterTest {
     private lateinit var llmClient: LLMClient
     private lateinit var promptsService: PromptsService
     private lateinit var contextService: ContextService
-    private lateinit var ideProject: Project
+    private var ideProject: Any? = null
     private lateinit var toolDescriptionBuilder: ToolDescriptionBuilder
     private lateinit var agentRouter: AgentRouter
 
@@ -53,7 +52,7 @@ class AgentRouterTest {
         llmClient = mockk()
         promptsService = mockk()
         contextService = mockk()
-        ideProject = mockk()
+        ideProject = null // Platform-independent test
         toolDescriptionBuilder = mockk()
         agentRouter = AgentRouter(
             agentExecutor = agentExecutor,

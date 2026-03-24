@@ -2,6 +2,7 @@ package pl.jclab.refio.core.context.providers
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.ex.FileEditorManagerEx
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import pl.jclab.refio.core.context.*
 import pl.jclab.refio.core.tools.PathSandbox
@@ -20,6 +21,8 @@ private val logger = dualLogger("RecentFilesContextProvider")
  */
 class RecentFilesContextProvider : BaseContextProvider() {
 
+    override val environment = ContextProviderEnvironment.IDE_ONLY
+
     override val description = ContextProviderDescription(
         title = "recent",
         displayTitle = "recent",
@@ -31,7 +34,7 @@ class RecentFilesContextProvider : BaseContextProvider() {
     override suspend fun loadSubmenuItems(
         args: LoadSubmenuItemsArgs
     ): List<ContextSubmenuItem> {
-        val project = args.project
+        val project = args.project as? Project ?: return emptyList()
         val workspacePath = project.basePath ?: ""
 
         logger.debug { "Loading recent files submenu" }
@@ -78,7 +81,7 @@ class RecentFilesContextProvider : BaseContextProvider() {
         logger.debug { "Getting context for recent file: $filePath" }
 
         // Security: Validate path with PathSandbox
-        val workspacePath = extras.workspacePath.ifEmpty { extras.project?.basePath ?: "" }
+        val workspacePath = extras.workspacePath.ifEmpty { (extras.project as? Project)?.basePath ?: "" }
         if (workspacePath.isEmpty()) {
             logger.error { "Workspace path not available for PathSandbox validation" }
             return emptyList()
@@ -131,7 +134,7 @@ class RecentFilesContextProvider : BaseContextProvider() {
     }
 
     private suspend fun getAllRecentFiles(extras: ContextProviderExtras): List<ContextItem> {
-        val project = extras.project ?: return emptyList()
+        val project = extras.project as? Project ?: return emptyList()
         val workspacePath = extras.workspacePath.ifEmpty { project.basePath ?: "" }
 
         if (workspacePath.isEmpty()) {

@@ -700,18 +700,24 @@ class ConfigRouter(
     fun resetAllSettingsToDefaults(): ResetConfigResponse {
         logger.info { "[ConfigRouter] Resetting all settings to defaults" }
 
-        // TODO: Implement actual config reset
-        // For now, just log the action
         val affectedSections = listOf(
             "general", "providers", "models", "prompts",
             "tools", "index", "docs", "limits", "advanced"
         )
 
-        logger.info { "Reset completed for sections: $affectedSections" }
+        // Delete all APP-scope config entries (user overrides via Settings UI)
+        val deletedApp = configRepository.deleteByScope(pl.jclab.refio.core.db.ConfigScope.APP)
+        // Delete all PROJECT-scope config entries
+        val deletedProject = configRepository.deleteByScope(pl.jclab.refio.core.db.ConfigScope.PROJECT)
+
+        logger.info { "Reset completed: deleted $deletedApp APP + $deletedProject PROJECT config entries" }
+
+        // Re-initialize defaults from code
+        configService.initializeDefaults()
 
         return ResetConfigResponse(
             success = true,
-            message = "All settings reset to defaults",
+            message = "All settings reset to defaults (removed ${deletedApp + deletedProject} overrides)",
             affectedSections = affectedSections
         )
     }

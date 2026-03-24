@@ -48,7 +48,8 @@ data class SubtaskResponse(
     val tokensOut: Int,
     val costUsd: Double,
     val model: String?,
-    val provider: String?
+    val provider: String?,
+    val resultSummary: String? = null
 )
 
 /**

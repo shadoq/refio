@@ -2,6 +2,7 @@ package pl.jclab.refio.core.context.providers
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import pl.jclab.refio.core.context.*
 import pl.jclab.refio.core.tools.PathSandbox
@@ -20,6 +21,8 @@ private val logger = dualLogger("CurrentFileContextProvider")
  */
 class CurrentFileContextProvider : BaseContextProvider() {
 
+    override val environment = ContextProviderEnvironment.IDE_ONLY
+
     override val description = ContextProviderDescription(
         title = "current",
         displayTitle = "current",
@@ -32,7 +35,7 @@ class CurrentFileContextProvider : BaseContextProvider() {
         query: String,
         extras: ContextProviderExtras
     ): List<ContextItem> {
-        val project = extras.project ?: return emptyList()
+        val project = extras.project as? Project ?: return emptyList()
         val workspacePath = extras.workspacePath.ifEmpty { project.basePath ?: "" }
 
         if (workspacePath.isEmpty()) {

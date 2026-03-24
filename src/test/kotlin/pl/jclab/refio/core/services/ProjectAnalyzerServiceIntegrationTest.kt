@@ -44,7 +44,7 @@ class ProjectAnalyzerServiceIntegrationTest {
         srcDir.createDirectories()
         
         // Create test files
-        srcDir.resolve("Main.kt").writeText("""
+        srcDir.resolve("main.kt").writeText("""
             package com.example
             
             class Main {
@@ -307,7 +307,7 @@ class ProjectAnalyzerServiceIntegrationTest {
                 packages = listOf(
                     PackageInfo(
                         name = "com.example",
-                        files = listOf("Main.kt", "Service.kt"),
+                        files = listOf("main.kt", "Service.kt"),
                         classes = listOf("Main", "User"),
                         publicApi = listOf("Main.main", "UserService.getUser"),
                         dependencies = emptyList()
@@ -317,7 +317,7 @@ class ProjectAnalyzerServiceIntegrationTest {
                     ClassInfo(
                         name = "Main",
                         qualifiedName = "com.example.Main",
-                        filePath = "src/main/kotlin/com/example/Main.kt",
+                        filePath = "src/main/kotlin/com/example/main.kt",
                         startLine = 3,
                         endLine = 7,
                         modifiers = listOf("class"),
@@ -329,7 +329,7 @@ class ProjectAnalyzerServiceIntegrationTest {
                             FunctionInfo(
                                 name = "main",
                                 signature = "fun main()",
-                                filePath = "src/main/kotlin/com/example/Main.kt",
+                                filePath = "src/main/kotlin/com/example/main.kt",
                                 startLine = 4,
                                 endLine = 6,
                                 returnType = "Unit",

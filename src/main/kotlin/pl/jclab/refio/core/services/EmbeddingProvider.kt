@@ -1,7 +1,6 @@
 package pl.jclab.refio.core.services
 
 import com.google.gson.annotations.SerializedName
-import com.jetbrains.rd.generator.nova.PredefinedType
 import pl.jclab.refio.core.logging.dualLogger
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*

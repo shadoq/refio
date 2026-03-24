@@ -142,7 +142,10 @@ object TestDatabase {
             EmbeddingsTable,
             IndexingProgressTable,
             DocumentationSourcesTable,
-            ProjectAnalysisReportsTable
+            ProjectAnalysisReportsTable,
+            AgentSessionsTable,
+            AgentInstancesTable,
+            AgentEventsTable
         )
     }
 

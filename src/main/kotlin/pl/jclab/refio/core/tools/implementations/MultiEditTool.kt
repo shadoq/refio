@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.tools.implementations
 
+import pl.jclab.refio.core.tools.FileLockManager
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
@@ -67,14 +68,13 @@ class MultiEditTool(
                 parseEdit(edit, index)
             }
 
-            // Prepare all edits (read files, validate)
-            val preparations = parsedEdits.map { edit ->
-                prepareEdit(edit)
-            }
-
-            // Apply all edits
-            val results = preparations.map { prep ->
-                applyEdit(prep)
+            // Prepare and apply each edit under a per-file lock
+            val results = parsedEdits.map { edit ->
+                val resolvedPath = sandbox.resolve(edit.path)
+                FileLockManager.withFileLock(resolvedPath.toAbsolutePath().toString()) {
+                    val prep = prepareEdit(edit)
+                    applyEdit(prep)
+                }
             }
 
             val duration = (System.currentTimeMillis() - startTime).toInt()

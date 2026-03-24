@@ -70,11 +70,20 @@ private val logger = dualLogger("CoreApiRouter")
 class CoreApiRouter(
     private val toolRegistry: ToolRegistry? = null,
     private val projectRoot: java.nio.file.Path? = null,
-    private val ideProject: com.intellij.openapi.project.Project? = null,
-    private val llmClientOverride: LLMClient? = null
+    private val ideProject: Any? = null,
+    private val llmClientOverride: LLMClient? = null,
+    /** Platform-agnostic project handle. When provided, ideProject is derived from platformProject. */
+    val projectHandle: pl.jclab.refio.core.project.ProjectHandle? = null,
+    /** Callback to invalidate codebase context cache after RAG operations. Set by plugin layer. */
+    private val codebaseCacheInvalidator: (projectRoot: String) -> Unit = {}
 ) {
-    private val routerProjectId: String? = projectRoot?.let { ProjectIdGenerator.generate(it) }
-    private val routerProjectPath: String? = projectRoot?.toAbsolutePath()?.normalize()?.toString()
+    private val routerProjectId: String? = projectHandle?.id ?: projectRoot?.let { ProjectIdGenerator.generate(it) }
+    private val routerProjectPath: String? = projectHandle?.rootPath?.toAbsolutePath()?.normalize()?.toString()
+        ?: projectRoot?.toAbsolutePath()?.normalize()?.toString()
+
+    /** Resolved IDE project — from projectHandle.platformProject or direct ideProject param */
+    private val resolvedIdeProject: Any?
+        get() = ideProject ?: projectHandle?.platformProject
 
     // Repositories
     private val chatMessageRepository = ChatMessageRepository()
@@ -86,6 +95,11 @@ class CoreApiRouter(
     private val documentationRepository = DocumentationRepository()
     private val snapshotRepository = SnapshotRepository()
     private val projectAnalysisReportRepository = ProjectAnalysisReportRepository()
+    private val agentSessionRepository = pl.jclab.refio.core.db.repositories.AgentSessionRepository()
+    private val agentInstanceRepository = pl.jclab.refio.core.db.repositories.AgentInstanceRepository()
+
+    // Multi-agent infrastructure
+    val agentEventBus = pl.jclab.refio.core.agents.events.AgentEventBus()
 
     // Services (internal for access by CoreConnectionManager)
     internal val taskRepository = TaskRepository()
@@ -118,7 +132,7 @@ class CoreApiRouter(
     }
 
     fun hasIdeProject(): Boolean {
-        return ideProject != null
+        return resolvedIdeProject != null
     }
 
     private val routerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -204,7 +218,7 @@ class CoreApiRouter(
         toolDescriptionBuilder = toolDescriptionBuilder,
         contextService = contextService,
         projectRoot = projectRoot,
-        ideProject = ideProject
+        ideProject = resolvedIdeProject
     )
     private val planningService = PlanningService(
         taskRepository = taskRepository,
@@ -218,7 +232,7 @@ class CoreApiRouter(
         toolPermissionsService = toolPermissionsService,
         contextService = contextService,
         projectRoot = projectRoot,
-        ideProject = ideProject
+        ideProject = resolvedIdeProject
     )
 
     // Agent execution services (optional if toolRegistry not provided)
@@ -424,7 +438,7 @@ class CoreApiRouter(
             promptsService = promptsService,
             contextService = contextService,
             projectRoot = projectRoot,
-            ideProject = ideProject,
+            ideProject = resolvedIdeProject,
             toolDescriptionBuilder = toolDescriptionBuilder
         )
     }
@@ -442,7 +456,8 @@ class CoreApiRouter(
             fileAnalyzerService = fileAnalyzerService,
             projectRoot = projectRoot,
             configService = configService,
-            embeddingProviderFactory = { model -> createEmbeddingProvider(model) }
+            embeddingProviderFactory = { model -> createEmbeddingProvider(model) },
+            codebaseCacheInvalidator = codebaseCacheInvalidator
         )
     }
 
@@ -500,7 +515,7 @@ class CoreApiRouter(
                 toolPermissionsService = toolPermissionsService,
                 chatMessageRepository = chatMessageRepository,
                 contextService = contextService,
-                ideProject = ideProject,
+                ideProject = resolvedIdeProject,
                 runTurnCallback = { request, callback ->
                     runTurn(
                         request = request,
@@ -537,6 +552,13 @@ class CoreApiRouter(
         )
     }
 
+    /**
+     * Multi-agent runner for parallel agent orchestration.
+     */
+    val multiAgentRunner by lazy {
+        pl.jclab.refio.core.agents.MultiAgentRunner(agentEventBus)
+    }
+
     init {
         if (toolRegistry != null && projectRoot != null) {
             try {
@@ -568,7 +590,7 @@ class CoreApiRouter(
         } else {
             logger.warn { "CoreApiRouter: ContextService NOT available (projectRoot not provided)" }
         }
-        logger.info { "CoreApiRouter: ideProject available=${ideProject != null}" }
+        logger.info { "CoreApiRouter: ideProject available=${resolvedIdeProject != null}, projectHandle=${projectHandle != null}" }
         if (toolRegistry != null) {
             logger.info { "CoreApiRouter: Agent execution services initialized" }
         } else {
@@ -589,6 +611,47 @@ class CoreApiRouter(
      */
     fun getProjectAnalyzerService(): ProjectAnalyzerService? {
         return projectAnalyzer
+    }
+
+    /**
+     * Create a project-level router from this app-level router.
+     *
+     * Shares the same database but creates project-specific tools and services.
+     * Used by StandaloneCoreBootstrap and CoreConnectionManager.
+     *
+     * @param projectRoot Project root directory
+     * @param projectHandle Platform-agnostic project handle (optional)
+     * @param ideProject Platform-specific project instance (optional)
+     * @return Configured project-level CoreApiRouter
+     */
+    fun createProjectRouter(
+        projectRoot: java.nio.file.Path,
+        projectHandle: pl.jclab.refio.core.project.ProjectHandle? = null,
+        ideProject: Any? = null
+    ): CoreApiRouter {
+        val toolRegistry = ToolRegistry()
+
+        val maxFileSizeBytes = configService.getTyped(ConfigKeys.MAX_FILE_SIZE).toLong() * 1024 * 1024
+        val fileLimits = pl.jclab.refio.core.tools.security.FileLimits(maxFileSize = maxFileSizeBytes)
+
+        val toolFactory = pl.jclab.refio.core.tools.base.ToolFactory(
+            projectRoot = projectRoot,
+            toolRegistry = toolRegistry,
+            llmClient = llmClient,
+            configService = configService,
+            promptsService = promptsService,
+            taskRepository = taskRepository,
+            fileLimits = fileLimits
+        )
+        val tools = toolFactory.createAllTools()
+        tools.forEach { tool -> toolRegistry.register(tool) }
+
+        return CoreApiRouter(
+            toolRegistry = toolRegistry,
+            projectRoot = projectRoot,
+            ideProject = ideProject,
+            projectHandle = projectHandle
+        )
     }
 
     /**
@@ -937,6 +1000,182 @@ class CoreApiRouter(
                 { chunk -> onChunk(chunk) }
             } else null
         )
+    }
+
+    // ========== Multi-Agent API ==========
+
+    /**
+     * Launch a multi-agent session from YAML definition.
+     *
+     * Parses the YAML, creates a DB session, registers agent instances,
+     * and runs all agents in parallel respecting DAG dependencies.
+     * Each agent executes as an independent turn-loop with its own task.
+     *
+     * @param request Multi-agent session request with YAML definition
+     * @param streamCallback Optional callback for streaming updates
+     * @return Session response with agent results
+     */
+    suspend fun launchMultiAgentSession(
+        request: MultiAgentSessionRequest,
+        streamCallback: StreamCallback? = null
+    ): MultiAgentSessionResponse {
+        val projectId = routerProjectId ?: LEGACY_PROJECT_ID
+
+        // Parse YAML definition
+        val definition = pl.jclab.refio.core.agents.MultiAgentTaskParser.parse(request.yamlDefinition)
+        val specs = pl.jclab.refio.core.agents.MultiAgentTaskParser.toAgentSpecs(definition)
+
+        // Validate dependencies before creating DB records
+        multiAgentRunner.validateDependencies(specs)
+
+        // Create DB session
+        val session = agentSessionRepository.create(
+            projectId = projectId,
+            name = request.name,
+            definitionYaml = request.yamlDefinition
+        )
+        agentSessionRepository.updateStatus(session.id, "RUNNING")
+
+        // Register agent instances in DB
+        val instanceMap = mutableMapOf<String, pl.jclab.refio.core.db.AgentInstance>()
+        for (spec in specs) {
+            val instance = agentInstanceRepository.create(
+                sessionId = session.id,
+                name = spec.name,
+                taskDescription = spec.task,
+                profile = spec.profile,
+                model = spec.model ?: request.model,
+                dependsOn = if (spec.dependsOn.isNotEmpty()) spec.dependsOn.joinToString(",") else null
+            )
+            instanceMap[spec.name] = instance
+        }
+
+        val startTime = System.currentTimeMillis()
+
+        try {
+            // Run agents via MultiAgentRunner with turn-loop executor
+            val results = multiAgentRunner.run(session.id, specs) { spec, agentId ->
+                val instance = instanceMap[spec.name]!!
+                agentInstanceRepository.updateStatus(
+                    instance.id, pl.jclab.refio.core.db.AgentInstanceStatus.RUNNING,
+                    startedAt = System.currentTimeMillis()
+                )
+
+                // Create a task for this agent
+                val agentTask = createTask(CreateTaskRequest(
+                    name = "${request.name} — ${spec.name}",
+                    mode = spec.mode,
+                    projectId = projectId,
+                    projectPath = routerProjectPath ?: LEGACY_PROJECT_PATH
+                ))
+
+                // Execute via turn-loop
+                val turnResult = runTurn(
+                    request = TurnRequest(
+                        taskId = agentTask.id,
+                        userInput = spec.task,
+                        mode = spec.mode,
+                        executionMode = pl.jclab.refio.core.db.ExecutionMode.AUTO,
+                        model = spec.model ?: request.model,
+                        provider = request.provider
+                    ),
+                    streamCallback = streamCallback
+                )
+
+                val completedAt = System.currentTimeMillis()
+                agentInstanceRepository.updateStatus(
+                    instance.id, pl.jclab.refio.core.db.AgentInstanceStatus.COMPLETED,
+                    completedAt = completedAt
+                )
+                agentInstanceRepository.updateResult(
+                    instance.id,
+                    result = turnResult.response.take(10000),
+                    tokensIn = turnResult.tokensIn,
+                    tokensOut = turnResult.tokensOut,
+                    costUsd = turnResult.cost
+                )
+
+                pl.jclab.refio.core.agents.AgentResult(
+                    agentName = spec.name,
+                    success = turnResult.success,
+                    response = turnResult.response,
+                    tokensUsed = (turnResult.tokensIn + turnResult.tokensOut).toLong(),
+                    costUsd = turnResult.cost,
+                    durationMs = completedAt - (instance.startedAt ?: completedAt)
+                )
+            }
+
+            val completedAt = System.currentTimeMillis()
+            agentSessionRepository.updateStatus(session.id, "COMPLETED", completedAt)
+
+            return MultiAgentSessionResponse(
+                sessionId = session.id,
+                name = request.name,
+                status = "COMPLETED",
+                agents = results.map { (name, result) ->
+                    MultiAgentInstanceResponse(
+                        agentName = name,
+                        status = if (result.success) "COMPLETED" else "FAILED",
+                        success = result.success,
+                        response = result.response.take(2000),
+                        tokensUsed = result.tokensUsed,
+                        costUsd = result.costUsd,
+                        durationMs = result.durationMs,
+                        error = result.error
+                    )
+                },
+                totalTokens = results.values.sumOf { it.tokensUsed },
+                totalCostUsd = results.values.sumOf { it.costUsd },
+                durationMs = completedAt - startTime,
+                createdAt = session.createdAt,
+                completedAt = completedAt
+            )
+        } catch (e: Exception) {
+            agentSessionRepository.updateStatus(session.id, "FAILED", System.currentTimeMillis())
+            throw e
+        }
+    }
+
+    /**
+     * Get status of a multi-agent session.
+     */
+    fun getMultiAgentSession(sessionId: String): MultiAgentSessionResponse? {
+        val session = agentSessionRepository.findById(sessionId) ?: return null
+        val instances = agentInstanceRepository.findBySessionId(sessionId)
+
+        return MultiAgentSessionResponse(
+            sessionId = session.id,
+            name = session.name,
+            status = session.status,
+            agents = instances.map { inst ->
+                MultiAgentInstanceResponse(
+                    agentName = inst.name,
+                    status = inst.status,
+                    success = inst.status == "COMPLETED",
+                    response = inst.result?.take(2000),
+                    tokensUsed = (inst.tokensIn + inst.tokensOut).toLong(),
+                    costUsd = inst.costUsd,
+                    durationMs = if (inst.startedAt != null && inst.completedAt != null)
+                        inst.completedAt - inst.startedAt else 0,
+                    error = if (inst.status == "FAILED") inst.result else null
+                )
+            },
+            totalTokens = instances.sumOf { (it.tokensIn + it.tokensOut).toLong() },
+            totalCostUsd = instances.sumOf { it.costUsd },
+            durationMs = if (session.completedAt != null) session.completedAt - session.createdAt else 0,
+            createdAt = session.createdAt,
+            completedAt = session.completedAt
+        )
+    }
+
+    /**
+     * List all multi-agent sessions for the current project.
+     */
+    fun listMultiAgentSessions(): List<MultiAgentSessionResponse> {
+        val projectId = routerProjectId ?: return emptyList()
+        return agentSessionRepository.findByProjectId(projectId).map { session ->
+            getMultiAgentSession(session.id)!!
+        }
     }
 
     /**
@@ -1438,7 +1677,7 @@ class CoreApiRouter(
             val context = contextService.buildProjectContext(
                 projectRoot = projectRoot,
                 taskId = taskId,
-                project = ideProject,
+                project = resolvedIdeProject,
                 query = effectiveQuery,
                 userContextRefs = userContextRefs
             )
@@ -2290,7 +2529,7 @@ $contextPrompt
      *
      * @return List of indexed files with chunks/embeddings count
      */
-    suspend fun getRagIndexedFiles(): List<pl.jclab.refio.ui.components.rag.RagIndexedFileDto> {
+    suspend fun getRagIndexedFiles(): List<pl.jclab.refio.core.api.RagIndexedFileDto> {
         return ragRouter.getRagIndexedFiles()
     }
 
@@ -2300,7 +2539,7 @@ $contextPrompt
      *
      * @return Statistics (files, chunks, embeddings count)
      */
-    suspend fun getRagStatistics(): pl.jclab.refio.ui.components.rag.RagStatisticsDto {
+    suspend fun getRagStatistics(): pl.jclab.refio.core.api.RagStatisticsDto {
         return ragRouter.getRagStatistics()
     }
 
@@ -2310,7 +2549,7 @@ $contextPrompt
      * @param filePath File path (relative)
      * @return List of chunks for file
      */
-    suspend fun getRagChunksForFile(filePath: String): List<pl.jclab.refio.ui.components.rag.RagChunkDto> {
+    suspend fun getRagChunksForFile(filePath: String): List<pl.jclab.refio.core.api.RagChunkDto> {
         return ragRouter.getRagChunksForFile(filePath)
     }
 

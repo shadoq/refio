@@ -18,7 +18,7 @@ import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.RagSearchService
 import pl.jclab.refio.core.services.analysis.EmbeddingsService
 import pl.jclab.refio.core.services.analysis.FileAnalyzerService
-import pl.jclab.refio.core.context.providers.CodebaseContextProvider
+// CodebaseContextProvider.invalidateCache moved to pluggable callback (see codebaseCacheInvalidator)
 import pl.jclab.refio.core.services.ChunkingMode
 import pl.jclab.refio.core.services.DefaultChunkingStrategy
 import pl.jclab.refio.core.services.RagIndexingService
@@ -61,7 +61,9 @@ class RagRouter(
     private val fileAnalyzerService: FileAnalyzerService?,
     private val projectRoot: java.nio.file.Path?,
     private val configService: ConfigService,
-    private val embeddingProviderFactory: (String) -> EmbeddingProvider
+    private val embeddingProviderFactory: (String) -> EmbeddingProvider,
+    /** Callback to invalidate codebase context cache after RAG indexing. Set by plugin layer. */
+    private val codebaseCacheInvalidator: (projectRoot: String) -> Unit = {}
 ) : Router {
 
     private val embeddingsMutex = Mutex()
@@ -142,7 +144,7 @@ class RagRouter(
      * @return List of indexed files with chunks/embeddings count
      * @throws IllegalStateException if projectRoot not available
      */
-    suspend fun getRagIndexedFiles(): List<pl.jclab.refio.ui.components.rag.RagIndexedFileDto> {
+    suspend fun getRagIndexedFiles(): List<RagIndexedFileDto> {
         if (projectRoot == null) {
             throw IllegalStateException("Project root not available - RAG operations require project context")
         }
@@ -174,7 +176,7 @@ class RagRouter(
                 val chunks = ragRepository.getChunksForFile(file.id)
                 val embeddings = ragRepository.getEmbeddingsForFile(file.id)
 
-                pl.jclab.refio.ui.components.rag.RagIndexedFileDto(
+                RagIndexedFileDto(
                     id = file.id,
                     filePath = file.filePath,
                     chunksCount = chunks.size,
@@ -197,7 +199,7 @@ class RagRouter(
      * @return Statistics (files, chunks, embeddings count)
      * @throws IllegalStateException if projectRoot not available
      */
-    suspend fun getRagStatistics(): pl.jclab.refio.ui.components.rag.RagStatisticsDto {
+    suspend fun getRagStatistics(): RagStatisticsDto {
         if (projectRoot == null) {
             throw IllegalStateException("Project root not available - RAG operations require project context")
         }
@@ -211,7 +213,7 @@ class RagRouter(
             val chunksCount = allFiles.sumOf { it.chunksCount }
             val embeddingsCount = allFiles.sumOf { it.embeddingsCount }
 
-            pl.jclab.refio.ui.components.rag.RagStatisticsDto(
+            RagStatisticsDto(
                 filesCount = filesCount,
                 chunksCount = chunksCount,
                 embeddingsCount = embeddingsCount
@@ -230,7 +232,7 @@ class RagRouter(
      * @throws IllegalStateException if projectRoot not available
      * @throws IllegalArgumentException if file not found in index
      */
-    suspend fun getRagChunksForFile(filePath: String): List<pl.jclab.refio.ui.components.rag.RagChunkDto> {
+    suspend fun getRagChunksForFile(filePath: String): List<RagChunkDto> {
         if (projectRoot == null) {
             throw IllegalStateException("Project root not available - RAG operations require project context")
         }
@@ -244,7 +246,7 @@ class RagRouter(
             val chunks = ragRepository.getChunksForFile(file.id)
 
             chunks.map { chunk ->
-                pl.jclab.refio.ui.components.rag.RagChunkDto(
+                RagChunkDto(
                     id = chunk.id,
                     chunkIndex = chunk.chunkIndex,
                     content = chunk.content,
@@ -274,7 +276,7 @@ class RagRouter(
             ragRepository.deleteIndexedFilesForProject(projectRoot.toString())
             ragRepository.deleteChunksForProject(projectRoot.toString())
             ragRepository.deleteEmbeddingsForProject(projectRoot.toString())
-            CodebaseContextProvider.invalidateCache(projectRoot.toString())
+            codebaseCacheInvalidator(projectRoot.toString())
 
             logger.info { "[RagRouter] RAG index cleared for project=$projectRoot" }
         } catch (e: Exception) {
@@ -319,7 +321,7 @@ class RagRouter(
                 logger.debug { "[RagRouter] Indexing progress: ${progress.percentage}% - ${progress.message}" }
             }
 
-            CodebaseContextProvider.invalidateCache(projectRoot.toString())
+            codebaseCacheInvalidator(projectRoot.toString())
             logger.info { "[RagRouter] Project indexing completed for project=$projectRoot" }
         } catch (e: Exception) {
             logger.error(e) { "[RagRouter] Project indexing failed" }
@@ -367,7 +369,7 @@ class RagRouter(
                     logger.debug { "[RagRouter] Embedding progress: ${progress.progressPercent}% - ${progress.statusMessage}" }
                 }
 
-                CodebaseContextProvider.invalidateCache(projectRoot.toString())
+                codebaseCacheInvalidator(projectRoot.toString())
                 logger.info { "[RagRouter] Embeddings generated for project=$projectRoot" }
             } catch (e: Exception) {
                 logger.error(e) { "[RagRouter] Embedding generation failed" }

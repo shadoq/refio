@@ -148,7 +148,7 @@ class ToolDescriptionBuilder(
         // Add example
         val exampleParams = properties.keys.take(2).associateWith {
             when (it) {
-                "path" -> "src/Main.kt"
+                "path" -> "src/main.kt"
                 "command" -> "gradle test"
                 "pattern" -> "*.kt"
                 "content" -> "// file content"
