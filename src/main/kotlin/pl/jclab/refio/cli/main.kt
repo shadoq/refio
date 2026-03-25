@@ -1,6 +1,7 @@
 package pl.jclab.refio.cli
 
 import com.github.ajalt.clikt.core.CliktCommand
+import com.github.ajalt.clikt.core.main
 import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
@@ -9,7 +10,7 @@ import com.github.ajalt.clikt.parameters.types.path
 import kotlinx.coroutines.runBlocking
 import pl.jclab.refio.api.models.ExecutionMode
 import pl.jclab.refio.api.models.TaskMode
-import pl.jclab.refio.cli.ui.launchComposeApp
+import pl.jclab.refio.cli.tui.launchTuiApp
 import pl.jclab.refio.core.api.CreateTaskRequest
 import pl.jclab.refio.core.api.MultiAgentSessionRequest
 import pl.jclab.refio.core.workflow.WorkflowEventListener
@@ -50,7 +51,7 @@ class RefioCommand : CliktCommand(name = "refio") {
         } else if (headless) {
             echo("Error: --headless requires --prompt or --multi-agent <file>", err = true)
         } else {
-            launchComposeApp(project, mode, model, noEgress)
+            launchTuiApp(project, mode, model, noEgress)
         }
     }
 

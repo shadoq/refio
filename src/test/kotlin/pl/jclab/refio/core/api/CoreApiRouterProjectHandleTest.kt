@@ -49,7 +49,7 @@ class CoreApiRouterProjectHandleTest {
             projectHandle = handle
         )
 
-        assertEquals("/tmp/project", router.projectHandle?.rootPath?.toString())
+        assertEquals(Path.of("/tmp/project").toString(), router.projectHandle?.rootPath?.toString())
         assertEquals(handle.name, router.projectHandle?.name)
     }
 }

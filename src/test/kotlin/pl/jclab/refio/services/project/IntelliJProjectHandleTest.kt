@@ -4,6 +4,7 @@ import com.intellij.openapi.project.Project
 import io.mockk.every
 import io.mockk.mockk
 import org.junit.jupiter.api.Test
+import java.nio.file.Path
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -20,7 +21,7 @@ class IntelliJProjectHandleTest {
         val handle = IntelliJProjectHandle(project)
 
         assertEquals("test-project", handle.name)
-        assertEquals("/tmp/test-project", handle.rootPath.toString())
+        assertEquals(Path.of("/tmp/test-project").toString(), handle.rootPath.toString())
         assertNotNull(handle.id)
         assertTrue(handle.id.length == 64) // SHA-256 hex = 64 chars
     }

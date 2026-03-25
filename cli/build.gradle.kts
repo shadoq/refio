@@ -1,8 +1,6 @@
 plugins {
     id("org.jetbrains.kotlin.jvm") version "2.0.21"
     id("org.jetbrains.kotlin.plugin.serialization") version "2.0.21"
-    id("org.jetbrains.kotlin.plugin.compose") version "2.0.21"
-    id("org.jetbrains.compose") version "1.7.3"
     application
 }
 
@@ -43,12 +41,15 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
 
-    // CLI argument parsing
-    implementation("com.github.ajalt.clikt:clikt:4.2.1")
+    // CLI argument parsing (5.x required for Mordant 3.x compatibility)
+    implementation("com.github.ajalt.clikt:clikt:5.0.2")
 
-    // Compose Desktop
-    implementation(compose.desktop.currentOs)
-    implementation(compose.material3)
+    // TUI rendering (same author as Clikt)
+    implementation("com.github.ajalt.mordant:mordant:3.0.1")
+    implementation("com.github.ajalt.mordant:mordant-markdown:3.0.1")
+
+    // Raw terminal input (key events, arrow keys, Ctrl+combinations, autocomplete)
+    implementation("org.jline:jline:3.26.3")
 
     // Logging
     implementation("io.github.microutils:kotlin-logging-jvm:3.0.5")
@@ -68,9 +69,6 @@ dependencies {
     testImplementation(kotlin("test"))
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 
-    // Compose UI testing (JUnit4 rules via vintage engine on JUnit5 platform)
-    testImplementation(compose.desktop.uiTestJUnit4)
-    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.10.1")
 }
 
 application {
@@ -86,11 +84,20 @@ tasks {
         kotlinOptions.jvmTarget = "17"
     }
 
+    named<JavaExec>("run") {
+        standardInput = System.`in`
+    }
+
     test {
         useJUnitPlatform()
         testLogging {
             events("passed", "skipped", "failed")
             showStandardStreams = true
         }
+    }
+
+    // Ensure `build` also generates the CLI start scripts
+    named("build") {
+        dependsOn("installDist")
     }
 }

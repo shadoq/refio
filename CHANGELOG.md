@@ -32,12 +32,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `agent_events` table — Persisted events with session/agent/type indexes
 - `AgentSessionRepository` and `AgentInstanceRepository` — CRUD repositories
 
-#### Standalone CLI + Compose Desktop GUI
-- **Gradle multi-module** — 3 modules: `:core` (pure Kotlin/JVM), `:intellij-plugin`, `:cli` (Compose Desktop)
+#### Standalone CLI + TUI (Terminal User Interface)
+- **Gradle multi-module** — 3 modules: `:core` (pure Kotlin/JVM), `:intellij-plugin`, `:cli` (Mordant+JLine3 TUI)
 - **StandaloneCoreBootstrap** — Initializes core without IntelliJ SDK
-- **Compose Desktop GUI** (Kotlin 2.0.21 + Compose 1.7.3) — Chat panel (2/3) + Status panel (1/3), dark Material3 theme
-- **ComposeWorkflowListener** — Bridges core WorkflowEventListener to Compose StateFlows
-- **ChatMessageMapper** — Maps 12 AgentEvent types to UIChatMessage with 8 per-agent colors
+- **TUI replaces Compose Desktop** — Full terminal UI mirroring the IntelliJ plugin GUI. Mordant 3.0.1 + JLine3 3.26.3. No desktop window required.
+- **Split-pane layout** — Chat panel (left, 55%) + active tab panel (right, 45%). Full-width when Chat tab is active. Responsive to terminal resize (300ms polling).
+- **7 main tabs** — Chat (F1), Steps (F2), Context (F3), RAG (F4), Logs (F5), Debug (F6), API Logs (F7). F8 opens Settings screen.
+- **Tab bar with inline status** — Mode, model, streaming indicator, cost, token count, and quit shortcut displayed in the tab bar. No separate status bar — cursor always blinks at the input prompt.
+- **Settings screen (11 sub-tabs)** — General, Providers (8 providers with masked API keys), Models, Prompts, Context/RAG, MCP, Docs, Tools (12 tools × Plan/Agent permissions), Subagents, Advanced (security + limits), Theme preview. All connected to ConfigRouter for live read/write.
+- **@context autocomplete** — Typing `@` in the input shows a popup overlay with 14 context prefixes. Arrow keys navigate, Enter accepts, Esc dismisses.
+- **History screen** — Browse, search, load, and delete previous sessions.
+- **ANSI color system** — 8 per-agent colors for multi-agent visualization, role-based message coloring (user=green, assistant=cyan, tool=yellow, system=red), status badges, log levels, context categories.
+- **TuiRenderBuffer** — ANSI-aware line buffer for split-pane composition. Handles escape code measurement, truncation, padding, and side-by-side merging.
+- **TuiViewModel** — Bridges core to TUI via 20 StateFlows merged into a single reactive state (no Compose deps). Any flow change triggers re-render.
+- **TuiWorkflowListener** — WorkflowEventListener impl for streaming with synchronized chunk accumulation, duplicate prevention, and per-request reset.
+- **TuiChatMessageMapper** — Maps 12 AgentEvent types to TuiChatMessage with 8 per-agent ANSI colors
+- **TuiInputHandler** — Dual-mode input: raw TTY (JLine3 F1-F8, Ctrl+Q, single-char dispatch) + line fallback (System.in, /commands, :tab shortcuts) for IDE/pipe/dumb terminals
+- **TuiRenderer** — Full-screen rendering with alternate screen buffer, in-place overwrite (no flicker), full clear only on resize. Cursor hidden during redraw, shown at input prompt.
+- **Clikt 5.0.2** — Upgraded from 4.2.1 for Mordant 3.x binary compatibility (`main()` is now extension function)
+- **CLI logback to file** — Separate `logback.xml` for CLI module, logs to `.refio/refio-cli.log` instead of console. Clean terminal output for TUI.
+- **Gradle stdin forwarding** — `standardInput = System.in` in CLI `run` task, fixes immediate exit when running via `./gradlew cli:run`
+
+### Fixed
+- **Regex PatternSyntaxException** in `ContextService.compactDirectoryList()` — `{4,?}` → `{4,}?` (lazy quantifier must follow closing brace)
+- **JLine WARNING noise** — Suppressed `org.jline` java.util.logging output on dumb terminals
+- **Loading message in non-interactive mode** — `showLoading()` now conditional on TTY detection, prevents noise in piped/IDE environments
+- **TUI streaming duplicate messages** — Race condition in `onStreamChunk` fixed with `synchronized(accumulatedContent)`, `@Volatile completed` flag, and per-request `reset()`
+- **TUI input not rendering** — `_inputBuffer` and 15 other flows were not in `combine()` that produces `stateFlow`. Replaced with `merge()` of all 20 flows so any change triggers re-render.
+- **TUI cursor flicker** — Removed separate bottom status bar; all info merged into tab bar. Cursor always positioned at input prompt after each render cycle. Hidden during redraw to prevent ghost cursor.
+
+### Removed
+- **Compose Desktop GUI** — Replaced by TUI. Removed: App.kt, ChatPanel.kt, StatusPanel.kt, RefioViewModel.kt, ComposeWorkflowListener.kt, ChatMessageMapper.kt, UIChatMessage.kt and their tests
+- **Compose dependencies** — `org.jetbrains.compose`, `compose.desktop.currentOs`, `compose.material3`, `compose.desktop.uiTestJUnit4`
 - **RefioViewModel** — Bridge between core and Compose state (messages, agents, metrics, approvals, streaming)
 - **AgentFlowPanel** — DAG visualization with dependency tracking, status icons, progress bars
 - **ApprovalPanel** — Approve/reject UI for agent actions requiring confirmation

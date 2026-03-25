@@ -4,7 +4,7 @@
 [![IntelliJ](https://img.shields.io/badge/IntelliJ-2024.x-orange.svg)](https://www.jetbrains.com/idea/)
 [![Version](https://img.shields.io/badge/version-0.0.1-green.svg)](CHANGELOG.md)
 
-**Local-first AI coding assistant for IntelliJ IDEA.**
+**Local-first AI coding assistant for IntelliJ IDEA and the terminal.**
 Built for developers who want control over context, tools, and execution.
 
 ---
@@ -47,6 +47,8 @@ Plus **21 built-in subagents** for specialized tasks: code review, security audi
 
 ## Quick Start
 
+### IntelliJ Plugin
+
 ```bash
 # 1. Install Ollama + models
 ollama pull nomic-embed-text    # Required for RAG embeddings
@@ -62,6 +64,21 @@ git clone https://github.com/shadoq/refio.git && cd refio
 ```
 
 Then open the **Refio** tool window (View -> Tool Windows -> Refio), select a mode, choose your model, and start.
+
+### CLI (Terminal User Interface)
+
+```bash
+# Build the CLI
+./gradlew :cli:installDist
+
+# Run
+./cli/build/install/cli/bin/cli --project /path/to/your/project
+
+# Options
+./cli/build/install/cli/bin/cli --project . --mode AGENT --model ollama/qwen2.5-coder:7b --no-egress
+```
+
+The CLI provides a full-featured TUI that mirrors the IntelliJ plugin GUI — no IDE required.
 
 ---
 
@@ -91,6 +108,78 @@ Then open the **Refio** tool window (View -> Tool Windows -> Refio), select a mo
 - **Auto-compaction** — prevents context overflow during long agent sessions
 - **Parallel tool execution** — READ_ONLY tools run concurrently (~2-3x faster)
 - **Native Swing UI** — no WebView, no Electron, pure IntelliJ components
+
+---
+
+## Terminal User Interface (TUI)
+
+Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ plugin GUI. No IDE required — works in any terminal emulator.
+
+### Layout
+
+```
+┌─F1:Chat│F2:Steps│F3:Context│F4:RAG│F5:Logs│F6:Debug│F7:API│F8:Set  [CHAT|default] $0.02│5K tok [Ctrl+Q]─┐
+├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ## Architektura                        │ Steps                                                            │
+│                                        │                                                                  │
+│ Projekt stosuje warstwowa             │  [OK] analyze_codebase                                           │
+│ architekture (Layered Architecture):   │  [OK] identify_patterns                                         │
+│  1. API Layer (routers, api)           │  [>>] generate_report                                           │
+│  2. Service Layer                      │  [ ] review_output                                               │
+│  3. Domain Layer                       │                                                                  │
+│                                        │                                                                  │
+│────────────────────────────────────────│                                                                  │
+│ [CHAT]                                 │                                                                  │
+│ > your message here_                   │                                                                  │
+└────────────────────────────────────────┴──────────────────────────────────────────────────────────────────┘
+```
+
+### Features
+
+- **Split-pane layout** — Chat on the left (55%), active tab on the right (45%). Full-width when Chat tab is active.
+- **7 tabs + Settings** — F1-F7 for main tabs, F8 for settings. Tab bar shows mode, cost, and streaming status.
+- **Two input modes** — Raw TTY (real terminal: F-keys, Ctrl+Q, single-char dispatch) and line mode (IDE terminal, pipes: /commands, :tab shortcuts).
+- **@context autocomplete** — Type `@` for a popup with 14 context prefixes (file, folder, grep, diff, etc.).
+- **Settings screen** — 11 sub-tabs covering providers, models, prompts, context/RAG, MCP, tools, subagents, and more.
+- **Resize-responsive** — UI adapts to terminal window size changes in real time.
+- **Multi-agent visualization** — 8 ANSI colors for agent messages, status badges, streaming indicators.
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| F1-F7 | Switch tabs (Chat, Steps, Context, RAG, Logs, Debug, API) |
+| F8 | Open Settings screen |
+| Ctrl+Q | Quit |
+| Ctrl+S | Settings |
+| Ctrl+M | Cycle mode (Chat / Plan / Agent) |
+| Enter | Send message |
+| Escape | Back to main screen |
+| `@` | Open context autocomplete |
+
+### Architecture
+
+The TUI is built with **Mordant 3.0.1** (ANSI terminal rendering) and **JLine3 3.26.3** (raw input handling), following an MVVM pattern:
+
+- **TuiViewModel** — 20 StateFlows merged into a single reactive `TuiState`. Any flow change triggers a re-render.
+- **TuiRenderer** — Compositor that builds the full screen from `TuiRenderBuffer` components. In-place overwrite with cursor positioning to avoid flicker.
+- **TuiRenderBuffer** — ANSI-aware line buffer that handles escape code measurement, truncation, padding, and side-by-side merging for the split-pane layout.
+- **TuiInputHandler** — Detects TTY vs dumb terminal and provides raw key dispatch or line-based input accordingly.
+
+```
+TuiApp (entry point)
+├── TuiViewModel (state management, 20 StateFlows → merge → TuiState)
+│   ├── TuiWorkflowListener (streaming bridge)
+│   └── TuiChatMessageMapper (AgentEvent → TuiChatMessage)
+├── TuiRenderer (full-screen compositor)
+│   ├── TuiRenderBuffer (ANSI-aware split-pane composition)
+│   ├── TuiChatView (messages + prompt)
+│   ├── TuiStepsView, TuiContextView, TuiRagView, TuiLogsView, ...
+│   └── TuiSettingsScreen (11 sub-tabs, live ConfigRouter read/write)
+├── TuiInputHandler (raw TTY / line mode)
+│   └── TuiKeybindings (F-keys, Ctrl+combinations, escape sequences)
+└── TuiColors (ANSI palette: roles, agents, status, logs, context)
+```
 
 ---
 

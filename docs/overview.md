@@ -1,10 +1,10 @@
 # Refio - Technical Architecture Overview
 
-> **Last Updated:** 2026-02-11
+> **Last Updated:** 2026-03-25
 > **Version:** 0.0.1
 > **Status:** Active Development
 
-This document provides a comprehensive technical overview of Refio - a local-first AI coding assistant for IntelliJ IDEA.
+This document provides a comprehensive technical overview of Refio - a local-first AI coding assistant for IntelliJ IDEA and the terminal.
 
 ---
 
@@ -24,6 +24,7 @@ This document provides a comprehensive technical overview of Refio - a local-fir
 12. [Database Schema](#12-database-schema)
 13. [Security Model](#13-security-model)
 14. [Key Data Flows](#14-key-data-flows)
+15. [Terminal User Interface (TUI)](#15-terminal-user-interface-tui)
 
 ---
 
@@ -62,6 +63,8 @@ Traditional Approach:          Refio Approach:
 
 ## 2. High-Level Architecture
 
+Refio runs in two environments sharing the same `:core` module:
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         IntelliJ IDEA Plugin                            │
@@ -78,7 +81,24 @@ Traditional Approach:          Refio Approach:
 │  │   ├── MessageDispatcher (mode-specific routing)                      │
 │  │   └── SubtaskTracker (subtask CRUD)                                  │
 │  └── CoreConnectionManager (router factory)                             │
+└──────────────────────────────┬──────────────────────────────────────────┘
+                               │
+┌──────────────────────────────┼──────────────────────────────────────────┐
+│                  Standalone CLI + TUI                                    │
 ├─────────────────────────────────────────────────────────────────────────┤
+│  TUI Layer (Mordant 3.0.1 + JLine3 3.26.3)                             │
+│  ├── TuiRenderer (full-screen compositor, split-pane layout)            │
+│  │   ├── TuiRenderBuffer (ANSI-aware line buffers)                      │
+│  │   └── 7 view renderers + Settings screen (11 sub-tabs)              │
+│  ├── TuiInputHandler (raw TTY / line mode dual input)                   │
+│  │   └── TuiKeybindings (F1-F8, Ctrl+combinations)                     │
+│  ├── TuiViewModel (20 StateFlows → merge → reactive TuiState)          │
+│  │   └── TuiWorkflowListener (streaming bridge)                        │
+│  └── TuiColors (ANSI palette: 8 agent colors, roles, status)           │
+│  StandaloneCoreBootstrap (initializes core without IntelliJ SDK)        │
+└──────────────────────────────┬──────────────────────────────────────────┘
+                               │ shared
+┌──────────────────────────────┴──────────────────────────────────────────┐
 │  Execution Layer                                                        │
 │  ├── CHAT mode → WorkflowOrchestrator → ChatExecutor                    │
 │  │   ├── IntentRouter (fast paths: subagent, answer question)           │
@@ -87,7 +107,7 @@ Traditional Approach:          Refio Approach:
 │      ├── TurnEventListener (progress callbacks)                         │
 │      └── ToolResultSummarizer (context optimization)                    │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  Core Layer (In-Process API)                                            │
+│  Core Layer (In-Process API) — :core module                             │
 │  ├── CoreApiRouter (facade + 9 domain routers)                          │
 │  │   ├── ChatRouter → ChatService                                       │
 │  │   ├── TaskRouter, SubtaskRouter                                      │
@@ -108,21 +128,37 @@ Traditional Approach:          Refio Approach:
 ### Package Structure
 
 ```
+Gradle modules:
+├── :core                     # Pure Kotlin/JVM — no IntelliJ SDK dependency
+├── :intellij-plugin          # IntelliJ IDEA plugin (depends on :core)
+└── :cli                      # Standalone CLI + TUI (depends on :core)
+
 src/main/kotlin/pl/jclab/refio/
-├── core/                     # Embedded core (no IDE dependencies)
+├── core/                     # Embedded core (:core module)
 │   ├── api/                  # Router layer (9 domain routers)
 │   ├── context/              # Context providers + MCP
 │   │   ├── providers/        # 14 built-in providers
+│   │   │   └── standalone/   # 7 CLI-compatible providers (no IDE)
 │   │   └── mcp/              # Model Context Protocol
 │   ├── db/                   # Database tables & repositories
 │   ├── llm/                  # LLM integration (6 adapters)
 │   ├── services/             # Core services (RAG, context, analysis)
 │   │   └── analysis/         # Language analyzers
-│   ├── subagents/            # Subagent system
+│   ├── agents/               # Multi-agent system
+│   │   └── events/           # AgentEventBus, AgentEvent sealed interface
+│   ├── subagents/            # Subagent system (21 built-in)
 │   ├── tools/                # Tool system (12 registered implementations)
 │   │   ├── implementations/
 │   │   └── security/
 │   └── prompts/              # Prompt templates
+├── cli/                      # Standalone CLI + TUI (:cli module)
+│   └── tui/                  # Terminal User Interface
+│       ├── rendering/        # TuiRenderer, TuiRenderBuffer, TuiLayout, TuiColors
+│       ├── views/            # 7 tab views (Chat, Steps, Context, RAG, Logs, Debug, API)
+│       ├── screens/          # Settings (11 sub-tabs), History
+│       ├── components/       # MessageBubble, PromptInput, ProgressBar, Table
+│       ├── input/            # TuiInputHandler, TuiKeybindings
+│       └── state/            # TuiViewModel, TuiState, TuiWorkflowListener
 ├── services/                 # Plugin services (project-scoped)
 │   └── session/              # SessionManager (6 components)
 └── ui/                       # IntelliJ UI components
@@ -1111,6 +1147,136 @@ IndexingProgress via Flow
 
 ---
 
+## 15. Terminal User Interface (TUI)
+
+Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ plugin GUI. The CLI uses the same `:core` module as the IntelliJ plugin — all execution modes, tools, context providers, and RAG capabilities are available.
+
+### TUI Layout Design
+
+```
+┌─F1:Chat│F2:Steps│F3:Context│F4:RAG│F5:Logs│F6:Debug│F7:API│F8:Set  [CHAT|model] $0.02│5K tok [Ctrl+Q]─┐
+├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Chat messages (scrollable)             │ Right panel (active tab content)                                 │
+│                                        │                                                                  │
+│ [user] describe the architecture       │ Steps:                                                           │
+│                                        │   [OK] analyze_structure                                         │
+│ [assistant] The project uses a         │   [>>] generate_report      (streaming)                         │
+│ layered architecture with:             │   [ ] review_output                                              │
+│  1. API Layer (routers)                │                                                                  │
+│  2. Service Layer                      │ Context sections with token progress bars:                       │
+│  3. Domain Layer                       │   [project] 2,400/4,000 tok ████████░░░                         │
+│                                        │   [rag]     1,200/4,000 tok ████░░░░░░░                         │
+│────────────────────────────────────────│                                                                  │
+│ [CHAT] [ollama/qwen2.5-coder:7b]      │                                                                  │
+│ > your message here_                   │                                                                  │
+└────────────────────────────────────────┴──────────────────────────────────────────────────────────────────┘
+```
+
+**Key design decisions:**
+- **No separate status bar** — mode, cost, streaming indicator, and token count are displayed in the tab bar (right-aligned). The cursor always blinks at the input prompt, never at the bottom of the screen.
+- **Split-pane** when any tab other than Chat is active (55% left / 45% right). **Full-width** chat when F1:Chat is selected.
+- **Responsive** — layout adapts to terminal resize in real time (300ms polling).
+
+### TUI Technology Stack
+
+| Component | Library | Purpose |
+|-----------|---------|---------|
+| Terminal rendering | Mordant 3.0.1 | ANSI colors, styled text, terminal size detection |
+| Raw input | JLine3 3.26.3 | F-keys, Ctrl+combinations, escape sequence parsing |
+| CLI arguments | Clikt 5.0.2 | `--project`, `--mode`, `--model`, `--no-egress` |
+| State management | Kotlin Coroutines Flow | 20 StateFlows → merge → reactive TuiState |
+
+### TUI Architecture
+
+```
+TuiApp (entry point — launchTuiApp())
+│
+├── Detects interactive mode: System.console() != null
+│   ├── Interactive: alternate screen buffer, raw JLine3 input, F-key navigation
+│   └── Non-interactive: inline rendering, line-based input (/commands, :shortcuts)
+│
+├── Three concurrent coroutines:
+│   ├── Render loop — stateFlow.collect { renderer.render(state) }
+│   ├── Resize watcher — polls terminal.size every 300ms, forceRender on change
+│   └── Input loop — TuiInputHandler.startInputLoop(viewModel)
+│
+├── TuiViewModel (MVVM pattern)
+│   ├── 20 MutableStateFlows (messages, streaming, agents, input, tabs, etc.)
+│   ├── All flows merged via merge().map { buildCurrentState() }
+│   ├── Any flow change triggers stateFlow emission → re-render
+│   ├── sendMessage() → WorkflowOrchestrator.execute(request, workflowListener)
+│   ├── Settings: getConfigSection(), updateConfig() via ConfigRouter
+│   └── Autocomplete: triggerAutocomplete(), updateAutocompleteFilter()
+│
+├── TuiRenderer (full-screen compositor)
+│   ├── Hash-based skip: only re-renders when state.hashCode() changes or terminal resizes
+│   ├── Cursor hidden during redraw (\u001b[?25l), shown at input after (\u001b[?25h)
+│   ├── In-place overwrite (\u001b[H) — no flicker. Full clear (\u001b[2J) only on resize.
+│   ├── renderTabBar() — tabs + right-aligned status info (mode, cost, streaming)
+│   ├── renderFullWidthChat() — chat messages buffer + prompt buffer (no split)
+│   ├── renderSplitPane() — left (chat+prompt) + right (tab view), merged side-by-side
+│   ├── renderAutocompletePopup() — ANSI cursor-positioned overlay above prompt
+│   └── positionCursorAtInput() — places cursor at "> {input}_" position
+│
+├── TuiRenderBuffer (ANSI-aware line composition)
+│   ├── visibleLength() — measures string width ignoring ANSI escape codes
+│   ├── fitToWidth() — pads or truncates preserving ANSI state
+│   ├── mergeSideBySide() — combines left + right buffers with separator column
+│   └── Each view renders into a TuiRenderBuffer → compositor merges them
+│
+├── TuiInputHandler (dual-mode input)
+│   ├── Raw mode (real TTY): JLine3 reader, single-char dispatch, escape sequence parsing
+│   ├── Line mode (IDE/pipe): BufferedReader from System.in, /commands, :tab shortcuts
+│   ├── dispatchAction() handles: tab switching, typing, backspace, send, autocomplete
+│   └── Slash commands: /quit, /clear, /help, /mode, /history, /settings, /set section.key value
+│
+├── TuiWorkflowListener (streaming bridge)
+│   ├── synchronized(accumulatedContent) on all methods — no race conditions
+│   ├── @Volatile completed flag — prevents late chunks after onStreamComplete
+│   ├── reset() called before each new request — clears accumulated content
+│   └── Stream message identified by streamId, replaced in-place, gets UUID on completion
+│
+└── TuiColors (ANSI color palette)
+    ├── Message roles: user (bright green), assistant (bright cyan), tool (yellow), system (red)
+    ├── Agent colors: 8-color cycle (cyan, green, magenta, yellow, blue, white, red, bright cyan)
+    ├── Status: new (white), pending (yellow), running (blue), success (green), failed (red)
+    ├── Log levels: debug (gray), info (white), warn (yellow), error (red)
+    └── Context categories: project (cyan), user (green), rag (magenta), conversation (yellow)
+```
+
+### TUI Tabs
+
+| Tab | Key | View | Content |
+|-----|-----|------|---------|
+| Chat | F1 | TuiChatView | Message history + prompt input (full-width mode) |
+| Steps | F2 | TuiStepsView | Subtask list with status icons and expand/collapse |
+| Context | F3 | TuiContextView | Context sections with token usage progress bars |
+| RAG | F4 | TuiRagView | RAG indexing status and search results |
+| Logs | F5 | TuiLogsView | Application log stream with level coloring |
+| Debug | F6 | TuiDebugView | Session info, core health, connection status |
+| API | F7 | TuiApiLogsView | API call table with provider, tokens, cost, totals |
+| Settings | F8 | TuiSettingsScreen | 11 sub-tabs (General, Providers, Models, Prompts, Context, MCP, Docs, Tools, Subagents, Advanced, Theme) |
+
+### TUI Settings Screen
+
+The Settings screen provides full configuration access via `ConfigRouter`, matching the IntelliJ plugin's settings panels:
+
+| Sub-tab | Section | Content |
+|---------|---------|---------|
+| General | `general` | Markdown rendering, streaming, advanced view toggles |
+| Providers | `providers` | 8 providers (Ollama, Anthropic, OpenAI, OpenRouter, Gemini, LM Studio, Custom OpenAI, Z.AI) with masked API keys and status indicators |
+| Models | `models` | Model assignments: default, planning, coding, auxiliary, embeddings |
+| Prompts | `prompts` | Custom system prompts and slash commands |
+| Context | `index` | RAG search tuning (similarity threshold, top-k, hybrid search) and indexing settings |
+| MCP | `mcp` | MCP server list with enable/disable and type |
+| Docs | `docs` | Documentation sources for @docs context provider |
+| Tools | `tools` | 12 tools × Plan/Agent mode permission matrix |
+| Subagents | `subagents` | Enable/disable individual subagent profiles |
+| Advanced | `advanced`+`limits` | Security (no-egress, read-only), timeouts, limits, performance |
+| Theme | — | ANSI color preview (roles, status, agents, log levels) |
+
+---
+
 ## Quick Reference
 
 ### Build Commands
@@ -1118,6 +1284,7 @@ IndexingProgress via Flow
 ```bash
 ./gradlew runIde              # Run in sandbox IDE
 ./gradlew buildPlugin         # Build ZIP distribution
+./gradlew :cli:installDist    # Build standalone CLI
 ./gradlew test                # Run tests
 ./gradlew detekt              # Static analysis
 ./gradlew ktlintCheck         # Lint check
@@ -1146,6 +1313,12 @@ refio_poc.db                  # SQLite database (project root)
 | ToolRegistry | core/tools/base/ | Tool catalog |
 | MCPManager | core/context/mcp/ | MCP server lifecycle |
 | SubagentRouter | core/subagents/ | Subagent operations |
+| TuiApp | cli/tui/ | TUI entry point (launchTuiApp) |
+| TuiViewModel | cli/tui/state/ | TUI state management (20 StateFlows) |
+| TuiRenderer | cli/tui/rendering/ | Full-screen split-pane compositor |
+| TuiRenderBuffer | cli/tui/rendering/ | ANSI-aware line buffer composition |
+| TuiInputHandler | cli/tui/input/ | Dual-mode input (raw TTY / line) |
+| StandaloneCoreBootstrap | cli/ | Core initialization without IntelliJ SDK |
 
 ### Environment Variables
 

@@ -1442,7 +1442,7 @@ class ContextService(
 
             for (item in items) {
                 // Find prefix before numeric/date suffix pattern
-                val prefixMatch = Regex("""^(.{4,?})[\d_.-]+\d{4,}.*$""").find(item)
+                val prefixMatch = Regex("""^(.{4,}?)[\d_.-]+\d{4,}.*$""").find(item)
                 if (prefixMatch != null) {
                     groups.getOrPut(prefixMatch.groupValues[1]) { mutableListOf() }.add(item)
                 } else {
