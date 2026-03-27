@@ -75,6 +75,9 @@ class CodeEditingTool(
             logger.info { "Editing file: relative='$pathStr', absolute='${path.toAbsolutePath()}', sandbox_root='${getSandboxRoot()}', oldString=${oldString.length} chars, newString=${newString.length} chars, replaceAll=$replaceAll" }
 
             return FileLockManager.withFileLock(path.toAbsolutePath().toString()) {
+                // Re-validate path inside lock to close TOCTOU window (symlink swap between validate and I/O)
+                sandbox.revalidateBeforeIO(path)
+
                 // Check if file exists
                 val fileExists = path.exists()
                 val content: String
@@ -233,14 +236,7 @@ class CodeEditingTool(
     }
 
     private fun getSandboxRoot(): String {
-        // Use reflection to access private projectRoot field from PathSandbox
-        return try {
-            val field = sandbox.javaClass.getDeclaredField("projectRoot")
-            field.isAccessible = true
-            field.get(sandbox).toString()
-        } catch (e: Exception) {
-            "<unable to access>"
-        }
+        return sandbox.getProjectRoot().toString()
     }
 
     private fun countOccurrences(text: String, substring: String): Int {

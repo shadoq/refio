@@ -73,6 +73,9 @@ class CreateNewFileTool(
             logger.info { "Creating file: relative='$pathStr', absolute='${path.toAbsolutePath()}', contentSize=${content.length} chars, lineCount=${content.lines().size}" }
 
             return FileLockManager.withFileLock(path.toAbsolutePath().toString()) {
+                // Re-validate path inside lock to close TOCTOU window
+                sandbox.revalidateBeforeIO(path)
+
                 // Check if file already exists
                 if (path.exists()) {
                     logger.warn { "File already exists: $pathStr (resolved to ${path.toAbsolutePath()})" }

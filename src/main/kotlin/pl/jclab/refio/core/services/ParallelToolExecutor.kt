@@ -29,9 +29,9 @@ class ParallelToolExecutor(
     private val toolRegistry: ToolRegistry,
     private val snapshotService: SnapshotService?
 ) {
-    // Track statistics
-    private var parallelExecutions = 0
-    private var sequentialExecutions = 0
+    // Track statistics (thread-safe — mutated from coroutines)
+    private val parallelExecutions = java.util.concurrent.atomic.AtomicInteger(0)
+    private val sequentialExecutions = java.util.concurrent.atomic.AtomicInteger(0)
 
     /**
      * Execute tool calls with optimal parallelism.
@@ -51,7 +51,7 @@ class ParallelToolExecutor(
 
         if (!config.parallelReadTools) {
             // Sequential execution (original behavior)
-            sequentialExecutions += toolCalls.size
+            sequentialExecutions.addAndGet(toolCalls.size)
             return@coroutineScope executeSequentially(
                 toolCalls, taskId, subtaskId, config
             )
@@ -63,8 +63,8 @@ class ParallelToolExecutor(
             getToolMode(tc.name) == ToolMode.READ_ONLY
         }
 
-        parallelExecutions += readOnlyIndexed.size
-        sequentialExecutions += writeIndexed.size
+        parallelExecutions.addAndGet(readOnlyIndexed.size)
+        sequentialExecutions.addAndGet(writeIndexed.size)
 
         logger.info {
             "[PARALLEL] Executing ${readOnlyIndexed.size} READ_ONLY in parallel, " +
@@ -106,7 +106,7 @@ class ParallelToolExecutor(
         subtaskId: String,
         config: TurnLoopConfig
     ): List<Pair<ToolCallData, ToolResultData>> {
-        sequentialExecutions += toolCalls.size
+        sequentialExecutions.addAndGet(toolCalls.size)
 
         return toolCalls.map { toolCall ->
             // Create snapshot before write operation
@@ -234,8 +234,8 @@ class ParallelToolExecutor(
      * Get execution statistics.
      */
     fun getStats(): ParallelExecutionStats = ParallelExecutionStats(
-        parallelExecutions = parallelExecutions,
-        sequentialExecutions = sequentialExecutions
+        parallelExecutions = parallelExecutions.get(),
+        sequentialExecutions = sequentialExecutions.get()
     )
 }
 

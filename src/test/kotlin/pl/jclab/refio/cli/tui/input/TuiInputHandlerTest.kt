@@ -42,30 +42,30 @@ class TuiInputHandlerTest {
     }
 
     @Test
-    fun `dispatchAction TypeChar should append to input buffer`() {
+    fun `dispatchAction TypeChar should insert at cursor`() {
         every { viewModel.stateFlow } returns mockk {
             every { value } returns TuiState(inputBuffer = "hel")
         }
         handler.dispatchAction(TuiAction.TypeChar('l'), viewModel)
-        verify { viewModel.updateInputBuffer("hell") }
+        verify { viewModel.insertAtCursor('l') }
     }
 
     @Test
-    fun `dispatchAction Backspace should remove last char`() {
+    fun `dispatchAction Backspace should delete at cursor`() {
         every { viewModel.stateFlow } returns mockk {
             every { value } returns TuiState(inputBuffer = "hello")
         }
         handler.dispatchAction(TuiAction.Backspace, viewModel)
-        verify { viewModel.updateInputBuffer("hell") }
+        verify { viewModel.deleteAtCursor() }
     }
 
     @Test
-    fun `dispatchAction Backspace on empty buffer should do nothing`() {
+    fun `dispatchAction Backspace on empty buffer should still call deleteAtCursor`() {
         every { viewModel.stateFlow } returns mockk {
             every { value } returns TuiState(inputBuffer = "")
         }
         handler.dispatchAction(TuiAction.Backspace, viewModel)
-        verify(exactly = 0) { viewModel.updateInputBuffer(any()) }
+        verify { viewModel.deleteAtCursor() }
     }
 
     @Test
@@ -78,5 +78,26 @@ class TuiInputHandlerTest {
     fun `dispatchAction Quit should call shutdown and stop`() {
         handler.dispatchAction(TuiAction.Quit, viewModel)
         verify { viewModel.shutdown() }
+    }
+
+    @Test
+    fun `dispatchAction ScrollLeft should move cursor left`() {
+        handler.dispatchAction(TuiAction.ScrollLeft, viewModel)
+        verify { viewModel.moveCursorLeft() }
+    }
+
+    @Test
+    fun `dispatchAction ScrollRight should move cursor right`() {
+        handler.dispatchAction(TuiAction.ScrollRight, viewModel)
+        verify { viewModel.moveCursorRight() }
+    }
+
+    @Test
+    fun `dispatchAction ScrollUp on chat tab should scroll chat`() {
+        every { viewModel.stateFlow } returns mockk {
+            every { value } returns TuiState(activeTab = TuiTab.CHAT, screen = TuiScreen.MAIN)
+        }
+        handler.dispatchAction(TuiAction.ScrollUp, viewModel)
+        verify { viewModel.chatScrollUp() }
     }
 }

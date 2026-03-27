@@ -116,10 +116,22 @@ class SnapshotService(
         val restored = mutableListOf<String>()
         val errors = mutableListOf<FileError>()
 
+        val normalizedRoot = projectRoot.toRealPath()
+
         for ((relPath, content) in snapshotData) {
             val fullPath = projectRoot.resolve(relPath).normalize()
 
             try {
+                // Validate path stays within project root (defense against path traversal from DB).
+                // Resolve via normalizedRoot (which uses toRealPath) to handle platform symlinks
+                // (e.g. macOS /var -> /private/var) for both existing and non-existing paths.
+                val resolvedPath = normalizedRoot.resolve(relPath).normalize()
+                if (!resolvedPath.startsWith(normalizedRoot)) {
+                    errors.add(FileError(relPath, "Path traversal blocked: resolves outside project root"))
+                    logger.warn { "Snapshot restore blocked path traversal: $relPath -> $resolvedPath" }
+                    continue
+                }
+
                 // Ensure parent directory exists
                 fullPath.parent?.createDirectories()
 

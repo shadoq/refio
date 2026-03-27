@@ -67,11 +67,48 @@ class TuiRenderBuffer(val maxWidth: Int, val maxHeight: Int) {
     companion object {
         private val ANSI_REGEX = Regex("\u001b\\[[0-9;]*m")
 
-        /** Measure visible width of a string (stripping ANSI escape codes). */
-        fun visibleLength(s: String): Int = stripAnsi(s).length
+        /** Measure visible (display) width of a string, stripping ANSI escape codes.
+         *  Accounts for wide characters (emoji, CJK) that take 2 terminal columns. */
+        fun visibleLength(s: String): Int {
+            val stripped = stripAnsi(s)
+            var width = 0
+            var i = 0
+            while (i < stripped.length) {
+                val cp = stripped.codePointAt(i)
+                width += charDisplayWidth(cp)
+                i += Character.charCount(cp)
+            }
+            return width
+        }
 
         /** Strip all ANSI escape sequences from a string. */
         fun stripAnsi(s: String): String = ANSI_REGEX.replace(s, "")
+
+        /** Approximate terminal display width for a Unicode code point. */
+        internal fun charDisplayWidth(cp: Int): Int {
+            // Zero-width: combining marks, ZWJ, ZWNJ, variation selectors, zero-width joiner
+            if (cp == 0x200D || cp == 0x200B || cp == 0x200C || cp == 0xFEFF) return 0
+            if (Character.getType(cp).let { it == Character.NON_SPACING_MARK.toInt() ||
+                        it == Character.ENCLOSING_MARK.toInt() ||
+                        it == Character.FORMAT.toInt() }) return 0
+            // Variation selectors (FE00-FE0F) are zero-width modifiers
+            if (cp in 0xFE00..0xFE0F) return 0
+            // Emoji: ALL emoji are width 2 in modern terminals (including BMP emoji)
+            if (cp in 0x1F600..0x1F64F || cp in 0x1F300..0x1F5FF || cp in 0x1F680..0x1F6FF ||
+                cp in 0x1F900..0x1F9FF || cp in 0x1FA00..0x1FA6F ||
+                cp in 0x1FA70..0x1FAFF) return 2
+            // Miscellaneous Symbols & Dingbats (U+2600-U+27BF): width 2 on modern terminals
+            if (cp in 0x2600..0x27BF) return 2
+            // Other common emoji-width symbols
+            if (cp in 0x2300..0x23FF) return 2 // Misc Technical (⌚⏰ etc.)
+            if (cp in 0x25A0..0x25FF) return 2 // Geometric Shapes (■□▲ etc.)
+            // CJK Unified Ideographs, Hangul, Katakana/Hiragana, fullwidth forms
+            if (cp in 0x1100..0x115F || cp in 0x2E80..0x303E || cp in 0x3040..0x33BF ||
+                cp in 0x3400..0x4DBF || cp in 0x4E00..0x9FFF || cp in 0xA000..0xA4CF ||
+                cp in 0xAC00..0xD7AF || cp in 0xF900..0xFAFF || cp in 0xFE30..0xFE4F ||
+                cp in 0xFF01..0xFF60 || cp in 0xFFE0..0xFFE6 || cp in 0x20000..0x2FA1F) return 2
+            return 1
+        }
 
         /**
          * Pad or truncate a string to exactly [width] visible characters,
@@ -109,11 +146,16 @@ class TuiRenderBuffer(val maxWidth: Int, val maxHeight: Int) {
                         visibleCount++
                     }
                 } else {
-                    sb.append(s[i])
-                    i++
-                    visibleCount++
+                    val cp = s.codePointAt(i)
+                    val charWidth = charDisplayWidth(cp)
+                    if (visibleCount + charWidth > width) break
+                    sb.appendCodePoint(cp)
+                    i += Character.charCount(cp)
+                    visibleCount += charWidth
                 }
             }
+            // Pad if wide char caused us to stop 1 short
+            if (visibleCount < width) sb.append(" ".repeat(width - visibleCount))
             if (hasAnsi) sb.append("\u001b[0m")
             return sb.toString()
         }

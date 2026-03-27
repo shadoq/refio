@@ -29,8 +29,13 @@ class TuiWorkflowListener(
     private val messagesState: MutableStateFlow<List<TuiChatMessage>>,
     private val streamingState: MutableStateFlow<Boolean>,
     private val stepsState: MutableStateFlow<List<TuiStep>>,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private var viewModel: TuiViewModel? = null
 ) : WorkflowEventListener {
+
+    fun setViewModel(vm: TuiViewModel) {
+        viewModel = vm
+    }
 
     private val streamId = "$agentId-stream"
     private val accumulatedContent = StringBuilder()
@@ -53,15 +58,32 @@ class TuiWorkflowListener(
         }
     }
 
+    private var currentPhase = ""
+
     override fun onChatStarted() {
+        viewModel?.updateExecutionStatus("Chatting...")
+        currentPhase = "chat"
         startStreaming("")
     }
 
     override fun onPlanningStarted() {
+        viewModel?.updateExecutionStatus("Planning...")
+        currentPhase = "planning"
         startStreaming("Planning...")
     }
 
+    override fun onDecisionPhase() {
+        viewModel?.updateExecutionStatus("Deciding next action...")
+        currentPhase = "decision"
+    }
+
+    override fun onReflectionPhase() {
+        viewModel?.updateExecutionStatus("Reflecting on results...")
+        currentPhase = "reflection"
+    }
+
     override fun onSubagentStarted(subagentName: String) {
+        viewModel?.updateExecutionStatus("Subagent: $subagentName")
         startStreaming("[$subagentName] ...")
     }
 
@@ -117,6 +139,7 @@ class TuiWorkflowListener(
     }
 
     override fun onToolStarted(toolName: String) {
+        viewModel?.updateExecutionStatus("Tool: $toolName")
         stepsState.update { steps ->
             val existing = steps.indexOfLast { it.id == "tool-$toolName" && it.status == "RUNNING" }
             if (existing >= 0) steps // already tracking this tool
@@ -125,6 +148,17 @@ class TuiWorkflowListener(
                 name = toolName,
                 status = "RUNNING"
             )
+        }
+        // Also update subtask status if we're tracking subtasks
+        viewModel?.let { vm ->
+            val subtasks = vm.stateFlow.value.subtasks
+            val running = subtasks.indexOfFirst { it.status == "RUNNING" }
+            if (running >= 0) {
+                // Currently executing subtask — update execution status with step count
+                val total = subtasks.size
+                val completed = subtasks.count { it.status in listOf("COMPLETED", "SKIPPED", "FAILED") }
+                vm.updateExecutionStatus("Executing step ${completed + 1}/$total: $toolName")
+            }
         }
     }
 
@@ -137,6 +171,8 @@ class TuiWorkflowListener(
                 steps + TuiStep(id = subtaskId, name = subtaskId, status = "RUNNING")
             }
         }
+        // Update corresponding subtask status
+        viewModel?.updateSubtaskStatus(subtaskId, "RUNNING")
     }
 
     override fun onIntentCompleted(intent: WorkflowIntent, result: IntentResult) {
@@ -147,9 +183,23 @@ class TuiWorkflowListener(
                 steps.toMutableList().also { it[running] = it[running].copy(status = "COMPLETED") }
             } else steps
         }
+
+        // In INTERACTIVE mode, auto-switch to Steps tab for next approval
+        val vm = viewModel ?: return
+        val state = vm.stateFlow.value
+        if (state.executionMode == "INTERACTIVE") {
+            val subtasks = state.subtasks
+            val nextPending = subtasks.indexOfFirst { it.status in listOf("NEW", "PENDING") }
+            if (nextPending >= 0) {
+                vm.setActiveTab(TuiTab.STEPS)
+                vm.selectStep(nextPending)
+                vm.addSystemMessage("Step completed. Next step awaiting approval: ${subtasks[nextPending].name}")
+            }
+        }
     }
 
     override fun onWorkflowComplete(result: IntentResult) {
+        viewModel?.updateExecutionStatus("Idle")
         streamingState.value = false
         // Mark all remaining RUNNING steps as completed
         stepsState.update { steps ->
@@ -171,6 +221,33 @@ class TuiWorkflowListener(
                 } else messages
             }
         }
+
+        // Generate execution completion summary for PLAN/AGENT mode
+        val vm = viewModel ?: return
+        val subtasks = vm.stateFlow.value.subtasks
+        if (subtasks.isNotEmpty()) {
+            val completed = subtasks.count { it.status == "COMPLETED" }
+            val failed = subtasks.count { it.status == "FAILED" }
+            val skipped = subtasks.count { it.status == "SKIPPED" }
+            val total = subtasks.size
+            val totalCost = subtasks.sumOf { it.costUsd }
+            val totalTokens = subtasks.sumOf { it.tokensIn + it.tokensOut }
+            val summary = buildString {
+                append("Execution completed: $completed/$total successful")
+                if (failed > 0) append(", $failed failed")
+                if (skipped > 0) append(", $skipped skipped")
+                append(" | ${totalTokens} tokens | \$${String.format("%.4f", totalCost)}")
+            }
+            messagesState.update { messages ->
+                messages + TuiChatMessage(
+                    id = UUID.randomUUID().toString(),
+                    timestamp = System.currentTimeMillis(),
+                    role = "assistant",
+                    content = summary,
+                    messageType = TuiMessageType.EXECUTION_SUMMARY
+                )
+            }
+        }
     }
 
     private fun extractCosts(result: IntentResult): ChatCosts? {
@@ -181,6 +258,7 @@ class TuiWorkflowListener(
     }
 
     override fun onWorkflowError(error: Exception) {
+        viewModel?.updateExecutionStatus("Error")
         synchronized(accumulatedContent) {
             completed = true
             streamingState.value = false

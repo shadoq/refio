@@ -14,9 +14,13 @@ object TuiTabBar {
     }
 
     fun renderToString(activeTab: TuiTab): String {
-        return TuiTab.entries.mapIndexed { i, tab ->
-            val label = " F${i + 1}:${tab.label} "
+        val sep = TuiColors.border("│")
+        val helpLabel = TuiColors.tabInactive(" F1:Help ")
+        val tabs = TuiTab.entries.filter { it != TuiTab.CHAT }.map { tab ->
+            val fKeyNum = tab.fKey ?: (tab.ordinal + 1)
+            val label = " F${fKeyNum}:${tab.label} "
             if (tab == activeTab) TuiColors.tabActive(label) else TuiColors.tabInactive(label)
-        }.joinToString(TuiColors.border("│"))
+        }
+        return helpLabel + sep + tabs.joinToString(sep)
     }
 }

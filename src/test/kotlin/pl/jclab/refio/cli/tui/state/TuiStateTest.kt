@@ -22,8 +22,8 @@ class TuiStateTest {
     }
 
     @Test
-    fun `TuiTab should have 7 entries`() {
-        assertEquals(7, TuiTab.entries.size)
+    fun `TuiTab should have 8 entries`() {
+        assertEquals(8, TuiTab.entries.size)
     }
 
     @Test
@@ -34,13 +34,13 @@ class TuiStateTest {
     }
 
     @Test
-    fun `TuiScreen should have 3 entries`() {
-        assertEquals(3, TuiScreen.entries.size)
+    fun `TuiScreen should have 4 entries`() {
+        assertEquals(4, TuiScreen.entries.size)
     }
 
     @Test
-    fun `TuiMessageType should have 7 entries`() {
-        assertEquals(7, TuiMessageType.entries.size)
+    fun `TuiMessageType should have 11 entries`() {
+        assertEquals(11, TuiMessageType.entries.size)
     }
 
     @Test

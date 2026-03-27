@@ -190,6 +190,9 @@ class AdvanceCodeEditingTool(
         }
 
         return FileLockManager.withFileLock(path.toAbsolutePath().toString()) {
+            // Re-validate path inside lock to close TOCTOU window
+            sandbox.revalidateBeforeIO(path)
+
             val originalContent: String
             val fileSize: Long
 

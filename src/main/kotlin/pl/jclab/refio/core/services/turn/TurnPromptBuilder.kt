@@ -12,7 +12,7 @@ import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 import pl.jclab.refio.core.services.ContextService
 import pl.jclab.refio.core.services.PromptsService
-import pl.jclab.refio.core.services.TokenEstimator
+import pl.jclab.refio.core.services.PromptTokenEstimator
 import pl.jclab.refio.core.services.PromptCache
 import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Path
@@ -30,7 +30,7 @@ class TurnPromptBuilder(
     private val contextService: ContextService?,
     private val workingMemoryService: pl.jclab.refio.core.services.context.WorkingMemoryService?,
     private val projectRoot: Path?,
-    private val tokenEstimator: TokenEstimator = TokenEstimator(),
+    private val tokenEstimator: PromptTokenEstimator = PromptTokenEstimator(),
     private val promptCache: PromptCache? = null
 ) {
 

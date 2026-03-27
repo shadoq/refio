@@ -77,6 +77,28 @@ class PathSandbox(
     }
 
     /**
+     * Re-validates that a previously validated path still resolves within the sandbox.
+     * Use this immediately before file I/O (inside a file lock) to close the TOCTOU
+     * window between initial validation and actual file operation.
+     *
+     * @throws SecurityException if the path's real location is now outside the sandbox
+     */
+    fun revalidateBeforeIO(path: Path) {
+        if (!path.exists()) return // Non-existent paths can't be symlink-swapped
+        val realPath = try {
+            path.toRealPath()
+        } catch (_: Exception) {
+            return // Can't resolve — will fail on the actual I/O anyway
+        }
+        if (!realPath.startsWith(normalizedRoot)) {
+            throw SecurityException(
+                "Path escaped sandbox between validation and I/O (possible symlink swap): " +
+                    "$path (real: $realPath, sandbox: $normalizedRoot)"
+            )
+        }
+    }
+
+    /**
      * Checks if a path is within the sandbox (doesn't throw)
      */
     fun isPathAllowed(path: Path): Boolean {
@@ -173,6 +195,16 @@ class PathSandbox(
             path
         }
     }
+
+    /**
+     * Returns the project root path (for logging and diagnostics).
+     */
+    fun getProjectRoot(): Path = projectRoot
+
+    /**
+     * Returns the normalized (real) root path used for sandbox comparisons.
+     */
+    fun getNormalizedRoot(): Path = normalizedRoot
 
     companion object {
         fun withConfig(projectRoot: Path, configService: ConfigService): PathSandbox {

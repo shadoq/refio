@@ -19,19 +19,46 @@ private val logger = KotlinLogging.logger {}
  * Two modes based on terminal capabilities:
  * - **Full-screen TUI** (real TTY): Alternate screen buffer, raw input, F-key navigation
  * - **Simple TUI** (no TTY / IDE runner): Inline rendering, line-based input, /commands
+ *
+ * A single JLine terminal is created for interactive mode and shared between
+ * the renderer (output via JLine's writer) and the input handler (input via
+ * JLine's reader). This ensures all I/O goes through one coordinated channel.
  */
 fun launchTuiApp(projectPath: Path, mode: TaskMode, model: String?, noEgress: Boolean) {
-    val terminal = Terminal()
-    val renderer = TuiRenderer(terminal)
+    val mordantTerminal = Terminal()
     val viewModel = TuiViewModel(projectPath, mode, model, noEgress)
-    val inputHandler = TuiInputHandler(terminal)
+    val inputHandler = TuiInputHandler(mordantTerminal)
 
+    // --- Create JLine terminal for interactive mode ---
+    var jlineTerminal: org.jline.terminal.Terminal? = null
     val interactive = System.console() != null
 
+    if (interactive) {
+        try {
+            java.util.logging.Logger.getLogger("org.jline").level = java.util.logging.Level.OFF
+
+            val jt = org.jline.terminal.TerminalBuilder.builder()
+                .system(true)
+                .jansi(true)
+                .build()
+
+            if (jt.type != "dumb" && isRealTerminal(jt)) {
+                jlineTerminal = jt
+            } else {
+                logger.info { "Dumb terminal detected, falling back to simple TUI mode" }
+                jt.close()
+            }
+        } catch (e: Exception) {
+            logger.warn(e) { "Failed to create JLine terminal, falling back to simple TUI mode" }
+        }
+    }
+
+    val jt = jlineTerminal
+    // Renderer requires JLine terminal for interactive mode
+    val renderer = if (jt != null) TuiRenderer(mordantTerminal, jt) else null
+
     runBlocking {
-        if (interactive) {
-            // Enter alternate screen buffer FIRST — before any output,
-            // so the normal buffer stays clean (no scroll-back artifacts).
+        if (renderer != null) {
             renderer.enterFullScreen()
             renderer.showLoading("Initializing Refio for ${projectPath.toAbsolutePath().fileName}...")
         }
@@ -41,36 +68,44 @@ fun launchTuiApp(projectPath: Path, mode: TaskMode, model: String?, noEgress: Bo
 
         val error = viewModel.error.value
         if (error != null) {
-            if (interactive) renderer.exitFullScreen()
-            renderer.showError(error)
+            renderer?.exitFullScreen()
+            renderer?.showError(error) ?: mordantTerminal.println("Error: $error")
+            jlineTerminal?.close()
             return@runBlocking
         }
 
-        if (!interactive) {
+        if (renderer == null) {
             logger.info { "Non-interactive terminal detected — using simple TUI mode (line input)" }
-            terminal.println("Refio TUI ready. Type messages or /help for commands. /quit to exit.")
+            mordantTerminal.println("Refio TUI ready. Type messages or /help for commands. /quit to exit.")
         }
 
         try {
-            // Render loop: re-render on state change
-            val renderJob = launch {
-                viewModel.stateFlow.collect { state ->
-                    if (interactive) {
-                        renderer.render(state)
-                    }
-                }
+            // Initial full render — read terminal size and draw before starting collect loop.
+            // Without this, the first frame from stateFlow.collect may render with stale
+            // or zero dimensions (especially on Windows where alternate screen buffer
+            // size may not be available immediately).
+            if (renderer != null) {
+                renderer.forceRender(viewModel.stateFlow.value)
             }
 
+            // Render loop: re-render on state change
+            val renderJob = if (renderer != null) launch {
+                viewModel.stateFlow.collect { state ->
+                    renderer.render(state)
+                }
+            } else null
+
             // Resize watcher: poll terminal size and force re-render on change
-            val resizeJob = if (interactive) launch {
-                var prevW = terminal.size.width
-                var prevH = terminal.size.height
+            val resizeJob = if (renderer != null && jt != null) launch {
+                var prevW = jt.width
+                var prevH = jt.height
                 while (isActive) {
                     delay(300)
-                    val s = terminal.size
-                    if (s.width != prevW || s.height != prevH) {
-                        prevW = s.width
-                        prevH = s.height
+                    val w = jt.width
+                    val h = jt.height
+                    if (w != prevW || h != prevH) {
+                        prevW = w
+                        prevH = h
                         renderer.forceRender(viewModel.stateFlow.value)
                     }
                 }
@@ -78,18 +113,26 @@ fun launchTuiApp(projectPath: Path, mode: TaskMode, model: String?, noEgress: Bo
 
             // Input loop: raw keys (interactive) or line input (non-interactive)
             val inputJob = launch(Dispatchers.IO) {
-                inputHandler.startInputLoop(viewModel)
+                inputHandler.startInputLoop(viewModel, jlineTerminal)
             }
 
             // Wait for input loop to finish (user pressed Ctrl+Q or /quit)
             inputJob.join()
             resizeJob?.cancelAndJoin()
-            renderJob.cancelAndJoin()
+            renderJob?.cancelAndJoin()
         } finally {
-            if (interactive) {
-                renderer.exitFullScreen()
-            }
+            renderer?.exitFullScreen()
+            jlineTerminal?.close()
             viewModel.shutdown()
         }
+    }
+}
+
+private fun isRealTerminal(jlineTerminal: org.jline.terminal.Terminal): Boolean {
+    return try {
+        val size = jlineTerminal.size
+        size.columns > 0 && size.rows > 0
+    } catch (_: Exception) {
+        false
     }
 }

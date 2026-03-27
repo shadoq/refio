@@ -182,6 +182,9 @@ class MultiLineEditorTool(
         }
 
         return FileLockManager.withFileLock(path.toAbsolutePath().toString()) {
+            // Re-validate path inside lock to close TOCTOU window
+            sandbox.revalidateBeforeIO(path)
+
             // Read content
             val originalContent = Files.readString(path)
             val lines = originalContent.lines()

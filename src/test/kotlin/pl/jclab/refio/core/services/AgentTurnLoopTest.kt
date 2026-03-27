@@ -116,7 +116,7 @@ class AgentTurnLoopTest {
     }
 
     private fun buildAgentTurnLoop(taskVerifier: TaskVerifier): AgentTurnLoop {
-        val tokenEstimator = pl.jclab.refio.core.services.TokenEstimator()
+        val tokenEstimator = pl.jclab.refio.core.services.PromptTokenEstimator()
 
         val turnPromptBuilder = TurnPromptBuilder(
             promptsService = promptsService,

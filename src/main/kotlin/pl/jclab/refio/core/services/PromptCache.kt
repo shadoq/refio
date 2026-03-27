@@ -54,7 +54,7 @@ class PromptCache(
     fun getOrBuildStaticPrefix(
         mode: TaskMode,
         taskId: String,
-        tokenEstimator: TokenEstimator
+        tokenEstimator: PromptTokenEstimator
     ): StaticPromptPrefix {
         val cacheKey = buildCacheKey(mode, taskId)
         val existing = cache.getIfPresent(cacheKey)

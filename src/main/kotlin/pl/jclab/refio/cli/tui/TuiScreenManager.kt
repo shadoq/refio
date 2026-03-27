@@ -2,6 +2,7 @@ package pl.jclab.refio.cli.tui
 
 import com.github.ajalt.mordant.terminal.Terminal
 import pl.jclab.refio.cli.tui.rendering.TuiLayoutRegions
+import pl.jclab.refio.cli.tui.screens.TuiHelpScreen
 import pl.jclab.refio.cli.tui.screens.TuiHistoryScreen
 import pl.jclab.refio.cli.tui.screens.TuiSettingsScreen
 import pl.jclab.refio.cli.tui.state.TuiScreen
@@ -16,6 +17,7 @@ object TuiScreenManager {
         when (state.screen) {
             TuiScreen.HISTORY -> TuiHistoryScreen.render(terminal, state, layout.contentHeight)
             TuiScreen.SETTINGS -> TuiSettingsScreen.render(terminal, state, layout.contentHeight)
+            TuiScreen.HELP -> { /* handled by TuiRenderer */ }
             TuiScreen.MAIN -> { /* handled by TuiRenderer */ }
         }
     }

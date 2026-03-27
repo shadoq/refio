@@ -21,7 +21,7 @@ class ConversationCompactorTest {
     private lateinit var chatMessageRepository: ChatMessageRepository
     private lateinit var taskRepository: TaskRepository
     private lateinit var configService: ConfigService
-    private lateinit var tokenEstimator: TokenEstimator
+    private lateinit var tokenEstimator: PromptTokenEstimator
     private lateinit var compactor: ConversationCompactor
 
     @BeforeEach
@@ -30,7 +30,7 @@ class ConversationCompactorTest {
         chatMessageRepository = mockk(relaxed = true)
         taskRepository = mockk(relaxed = true)
         configService = mockk(relaxed = true)
-        tokenEstimator = TokenEstimator()
+        tokenEstimator = PromptTokenEstimator()
 
         every { configService.getModel(ModelOperation.WEAK, any()) } returns Pair("gpt-4o-mini", "openai")
 
@@ -80,7 +80,7 @@ class ConversationCompactorTest {
             every { chatMessageRepository.findByTaskId("task-1") } returns
                 (1..8).map { makeMessage("$it") }
 
-            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any()) } returns
+            coEvery { llmClient.complete(provider = any(), model = any(), messages = any(), systemPrompt = any(), taskId = any(), source = any(), maxTokens = any()) } returns
                 makeLLMResponse("Summary of conversation")
 
             val result = compactor.maybeCompact("task-1", 8500, 10000, 0.85)
@@ -92,7 +92,7 @@ class ConversationCompactorTest {
             every { chatMessageRepository.findByTaskId("task-1") } returns
                 (1..6).map { makeMessage("$it") }
 
-            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any()) } returns
+            coEvery { llmClient.complete(provider = any(), model = any(), messages = any(), systemPrompt = any(), taskId = any(), source = any(), maxTokens = any()) } returns
                 makeLLMResponse("Summary")
 
             val result = compactor.maybeCompact("task-1", 9500, 10000, 0.85)
@@ -117,7 +117,7 @@ class ConversationCompactorTest {
             val messages = (1..8).map { makeMessage("msg-$it") }
             every { chatMessageRepository.findByTaskId("task-1") } returns messages
 
-            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any()) } returns
+            coEvery { llmClient.complete(provider = any(), model = any(), messages = any(), systemPrompt = any(), taskId = any(), source = any(), maxTokens = any()) } returns
                 makeLLMResponse("Concise summary")
 
             val result = compactor.compact("task-1", 5000)
@@ -139,7 +139,7 @@ class ConversationCompactorTest {
             every { chatMessageRepository.findByTaskId("task-1") } returns
                 (1..6).map { makeMessage("msg-$it") }
 
-            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any()) } returns
+            coEvery { llmClient.complete(provider = any(), model = any(), messages = any(), systemPrompt = any(), taskId = any(), source = any(), maxTokens = any()) } returns
                 makeLLMResponse("Summary")
 
             compactor.compact("task-1", 5000)
@@ -152,7 +152,7 @@ class ConversationCompactorTest {
             every { chatMessageRepository.findByTaskId("task-1") } returns
                 (1..6).map { makeMessage("msg-$it") }
 
-            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any()) } returns
+            coEvery { llmClient.complete(provider = any(), model = any(), messages = any(), systemPrompt = any(), taskId = any(), source = any(), maxTokens = any()) } returns
                 makeLLMResponse("Summary")
 
             compactor.compact("task-1", 5000)

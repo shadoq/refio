@@ -77,18 +77,29 @@ object SecureLogger {
         }
     }
 
+    /** Exact sensitive key names — avoids false positives like "totalTokens" or "contextTokenCount" */
+    private val sensitiveKeyNames = setOf(
+        "apikey", "api_key", "api-key",
+        "authorization", "bearer",
+        "token", "access_token", "refresh_token", "auth_token", "api_token",
+        "secret", "client_secret",
+        "password", "passwd",
+        "credential", "credentials",
+        "x-api-key", "x-goog-api-key",
+        "private_key", "secret_key"
+    )
+
     private fun isSensitiveKey(key: String): Boolean {
         val normalized = key.lowercase()
-        return normalized.contains("apikey") ||
-            normalized.contains("api_key") ||
-            normalized.contains("api-key") ||
-            normalized.contains("authorization") ||
-            normalized.contains("bearer") ||
-            normalized.contains("token") ||
-            normalized.contains("secret") ||
-            normalized.contains("password") ||
-            normalized.contains("credential") ||
-            normalized.contains("x-api-key") ||
-            normalized.contains("x-goog-api-key")
+        // Check exact match first (fast path)
+        if (normalized in sensitiveKeyNames) return true
+        // Check if key ends with a sensitive suffix (e.g. "myApiKey", "oauth_token")
+        // but NOT generic words like "tokenCount", "totalTokens"
+        return normalized.endsWith("_key") ||
+            normalized.endsWith("apikey") ||
+            normalized.endsWith("_token") ||
+            normalized.endsWith("_secret") ||
+            normalized.endsWith("_password") ||
+            normalized.endsWith("_credential")
     }
 }

@@ -96,7 +96,7 @@ class AgentTurnLoop(
     private val turnSubagentValidator: TurnSubagentValidator,
 
     // ADR-0028: Optional dependencies for enhanced turn loop
-    private val tokenEstimator: TokenEstimator = TokenEstimator(),
+    private val tokenEstimator: PromptTokenEstimator = PromptTokenEstimator(),
     private val conversationCompactor: ConversationCompactor? = null,
     private val llmRetryHandler: LLMRetryHandler? = null,
     private val workingMemoryIntegration: WorkingMemoryIntegration? = null

@@ -55,6 +55,13 @@ class LLMClient(
         HttpClientConfig.fromConfigService(configService)
     }
 
+    /**
+     * Pool of reusable adapters keyed by provider name.
+     * Avoids creating a new HttpClient (with CIO engine thread pool) on every request.
+     * Adapters are created lazily on first use and reused for subsequent requests.
+     */
+    private val adapterPool = java.util.concurrent.ConcurrentHashMap<String, BaseLLMAdapter>()
+
     data class PreparedRequestPayload(
         val systemMessages: List<String>,
         val messages: List<LLMMessage>,
@@ -165,16 +172,34 @@ class LLMClient(
         }
 
         // US-006: No-egress enforcement
+        // Known local providers are allowed only if their endpoint is actually local.
+        // All other providers are blocked.
         if (noEgressEnabled) {
-            val cloudProviders = listOf("openai", "anthropic", "openrouter", "gemini", "zai")
-            if (provider.lowercase() in cloudProviders) {
+            val providerLower = provider.lowercase()
+            val localProviders = listOf("ollama", "lmstudio")
+            if (providerLower !in localProviders) {
                 logger.warn {
-                    "[LLM_CLIENT] No-egress violation blocked: attempted to use cloud provider '$provider' " +
-                    "with model '$model' while no-egress mode is enabled"
+                    "[LLM_CLIENT] No-egress violation blocked: provider '$provider' " +
+                    "with model '$model' is not a local provider"
                 }
                 throw NoEgressViolationException(
                     "No-egress mode is enabled. Cannot use cloud provider: $provider. " +
-                    "Only local providers (ollama) are allowed."
+                    "Only local providers (ollama, lmstudio) are allowed."
+                )
+            }
+            // Even for local providers, verify the endpoint is actually localhost
+            val endpoint = when (providerLower) {
+                "ollama" -> configService?.getTyped(pl.jclab.refio.core.config.ConfigKeys.PROVIDER_OLLAMA_ENDPOINT) ?: "http://localhost:11434"
+                "lmstudio" -> configService?.get(pl.jclab.refio.core.services.ConfigService.KEY_PROVIDER_LM_STUDIO_BASE_URL) ?: "http://localhost:1234"
+                else -> ""
+            }
+            if (endpoint.isNotBlank() && !isLocalEndpoint(endpoint)) {
+                logger.warn {
+                    "[LLM_CLIENT] No-egress violation blocked: provider '$provider' " +
+                    "has remote endpoint '$endpoint'"
+                }
+                throw NoEgressViolationException(
+                    "No-egress mode is enabled. Provider $provider endpoint is not local: $endpoint"
                 )
             }
         }
@@ -229,70 +254,8 @@ class LLMClient(
             "connect=${httpClientConfig.connectTimeoutMs}ms"
         }
 
-        // Create adapter
-        val adapter: BaseLLMAdapter = when (provider.lowercase()) {
-            "ollama" -> OllamaAdapter(
-                model = model,
-                configService = configService,
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-            "openai" -> OpenAIAdapter(
-                model = model,
-                configService = configService,
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-            "anthropic" -> AnthropicAdapter(
-                model = model,
-                configService = configService,
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-            "gemini" -> GeminiAdapter(
-                model = model,
-                configService = configService,
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-            "lmstudio" -> LMStudioAdapter(
-                model = model,
-                configService = configService,
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-            "custom_openai" -> CustomOpenAIAdapter(
-                model = model,
-                providerName = "custom_openai",
-                configService = configService,
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-            "zai" -> ZAIAdapter(
-                model = model,
-                configService = configService,
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-            "openrouter" -> OpenRouterAdapter(
-                model = model,
-                configService = configService,
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-            else -> {
-                logger.error { "[LLM_CLIENT] Unknown provider: $provider" }
-                throw RefioError.ProviderNotConfigured(provider, "provider")
-            }
-        }
+        // Get or create adapter (reuses HttpClient across requests for the same provider)
+        val adapter: BaseLLMAdapter = getOrCreateAdapter(provider, model, taskId, subtaskId, source)
 
         try {
             logger.info { "[LLM_CLIENT] Calling $provider adapter for model $model (stream=$stream)" }
@@ -414,9 +377,61 @@ class LLMClient(
             }
 
             throw e
-        } finally {
-            adapter.close()
         }
+        // Note: adapter is NOT closed here — it is pooled and reused across requests.
+        // Call LLMClient.shutdown() when the application exits to close all adapters.
+    }
+
+    /**
+     * Get or create a pooled adapter for the given provider.
+     * The same adapter (and its HttpClient) is reused across requests.
+     */
+    /**
+     * Get or create a pooled adapter for the given provider+model combination.
+     * The same adapter (and its HttpClient) is reused across requests with the same provider+model.
+     * taskId/subtaskId/source are per-request metadata — NOT cached in the pool.
+     */
+    private fun getOrCreateAdapter(
+        provider: String,
+        model: String,
+        taskId: String?,
+        subtaskId: String?,
+        source: String?
+    ): BaseLLMAdapter {
+        val providerKey = provider.lowercase()
+        // Pool by provider:model to avoid stale model in adapter (model is used in API request bodies)
+        val poolKey = "$providerKey:$model"
+        return adapterPool.computeIfAbsent(poolKey) {
+            when (providerKey) {
+                "ollama" -> OllamaAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
+                "openai" -> OpenAIAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
+                "anthropic" -> AnthropicAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
+                "gemini" -> GeminiAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
+                "lmstudio" -> LMStudioAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
+                "custom_openai" -> CustomOpenAIAdapter(model = model, providerName = "custom_openai", configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
+                "zai" -> ZAIAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
+                "openrouter" -> OpenRouterAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
+                else -> {
+                    logger.error { "[LLM_CLIENT] Unknown provider: $provider" }
+                    throw RefioError.ProviderNotConfigured(provider, "provider")
+                }
+            }
+        }
+    }
+
+    /**
+     * Shutdown all pooled adapters and their HttpClients.
+     * Call this when the application is shutting down.
+     */
+    suspend fun shutdown() {
+        adapterPool.values.forEach { adapter ->
+            try {
+                adapter.close()
+            } catch (e: Exception) {
+                logger.error(e) { "[LLM_CLIENT] Error closing adapter: ${adapter.provider}" }
+            }
+        }
+        adapterPool.clear()
     }
 
     private fun estimateCost(usage: LLMUsage, provider: String, model: String): Double {
@@ -451,5 +466,19 @@ class LLMClient(
      */
     fun inferProvider(model: String): String {
         return inferProvider(model, default = "ollama")
+    }
+
+    /**
+     * Check if an endpoint URL points to a local address (localhost, 127.0.0.1, ::1).
+     */
+    private fun isLocalEndpoint(url: String): Boolean {
+        return try {
+            val uri = java.net.URI(url)
+            val host = uri.host?.lowercase() ?: return false
+            host == "localhost" || host == "127.0.0.1" || host == "::1" ||
+                host == "0.0.0.0" || host.startsWith("192.168.") || host.startsWith("10.")
+        } catch (_: Exception) {
+            false
+        }
     }
 }

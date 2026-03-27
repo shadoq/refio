@@ -89,7 +89,7 @@ class AdvancedSettingsPanel(
                 if (isUpdatingProgrammatically) {
                     return@addItemListener
                 }
-                val (section, key) = pl.jclab.refio.core.services.ConfigKeys.split(
+                val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
                     pl.jclab.refio.core.services.ConfigService.KEY_NO_EGRESS_DEFAULT
                 )
                 onSettingChanged(section, key, isSelected)
@@ -101,7 +101,7 @@ class AdvancedSettingsPanel(
                 if (isUpdatingProgrammatically) {
                     return@addItemListener
                 }
-                val (section, key) = pl.jclab.refio.core.services.ConfigKeys.split(
+                val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
                     pl.jclab.refio.core.services.ConfigService.KEY_READ_ONLY_MODE
                 )
                 onSettingChanged(section, key, isSelected)
@@ -155,7 +155,7 @@ class AdvancedSettingsPanel(
                     if (isUpdatingProgrammatically) {
                         return@addChangeListener
                     }
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeys.split(
+                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
                         pl.jclab.refio.core.services.ConfigService.KEY_TOOL_EXECUTION_TIMEOUT
                     )
                     onSettingChanged(section, key, toolExecutionSlider.value)
@@ -185,7 +185,7 @@ class AdvancedSettingsPanel(
                     if (isUpdatingProgrammatically) {
                         return@addChangeListener
                     }
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeys.split(
+                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
                         pl.jclab.refio.core.services.ConfigService.KEY_API_CALL_TIMEOUT
                     )
                     onSettingChanged(section, key, apiCallSlider.value)
@@ -213,7 +213,7 @@ class AdvancedSettingsPanel(
                             return
                         }
                         val value = text.toIntOrNull() ?: 10
-                        val (section, key) = pl.jclab.refio.core.services.ConfigKeys.split(
+                        val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
                             pl.jclab.refio.core.services.ConfigService.KEY_MAX_FILE_SIZE
                         )
                         onSettingChanged(section, key, value)
@@ -234,7 +234,7 @@ class AdvancedSettingsPanel(
                             return
                         }
                         val value = text.toIntOrNull() ?: 128000
-                        val (section, key) = pl.jclab.refio.core.services.ConfigKeys.split(
+                        val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
                             pl.jclab.refio.core.services.ConfigService.KEY_MAX_CONTEXT_SIZE
                         )
                         onSettingChanged(section, key, value)
@@ -255,7 +255,7 @@ class AdvancedSettingsPanel(
                             return
                         }
                         val value = text.toIntOrNull() ?: 8192
-                        val (section, key) = pl.jclab.refio.core.services.ConfigKeys.split(
+                        val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
                             pl.jclab.refio.core.services.ConfigService.KEY_MAX_OUTPUT_SIZE
                         )
                         onSettingChanged(section, key, value)
@@ -289,7 +289,7 @@ class AdvancedSettingsPanel(
                     if (isUpdatingProgrammatically) {
                         return@addChangeListener
                     }
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeys.split(
+                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
                         pl.jclab.refio.core.services.ConfigService.KEY_AUTO_OPTIMIZE_PERCENTAGE
                     )
                     onSettingChanged(section, key, autoOptimizeSlider.value)

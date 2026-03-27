@@ -5,6 +5,8 @@ import com.github.ajalt.mordant.terminal.TerminalRecorder
 import org.junit.jupiter.api.Test
 import pl.jclab.refio.cli.tui.rendering.TuiRenderer
 import pl.jclab.refio.cli.tui.state.*
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 
 class TuiAppTest {
 
@@ -32,10 +34,16 @@ class TuiAppTest {
         }
     }
 
+    private fun createTestJlineTerminal(): org.jline.terminal.Terminal =
+        org.jline.terminal.TerminalBuilder.builder()
+            .streams(ByteArrayInputStream(ByteArray(0)), ByteArrayOutputStream())
+            .type("dumb")
+            .build()
+
     @Test
     fun `TuiRenderer should handle full state render`() {
         val terminal = Terminal(terminalInterface = TerminalRecorder())
-        val renderer = TuiRenderer(terminal)
+        val renderer = TuiRenderer(terminal, createTestJlineTerminal())
         val state = TuiState(
             mode = "AGENT",
             model = "gpt-4o",
@@ -52,7 +60,7 @@ class TuiAppTest {
     @Test
     fun `TuiRenderer should handle split-pane mode`() {
         val terminal = Terminal(terminalInterface = TerminalRecorder())
-        val renderer = TuiRenderer(terminal)
+        val renderer = TuiRenderer(terminal, createTestJlineTerminal())
         val state = TuiState(
             activeTab = TuiTab.STEPS,
             mode = "PLAN",

@@ -12,83 +12,96 @@ private val logger = dualLogger("DatabaseFactory")
 object DatabaseFactory {
     @Volatile
     private var initialized = false
+    private val initLock = Object()
 
     fun isInitialized(): Boolean = initialized
 
     fun init(dbPath: String = "refio_poc.db") {
-        logger.info { "Initializing database at: $dbPath" }
-
-        val jdbcUrl = "jdbc:sqlite:$dbPath"
-
-        // Load and register SQLite JDBC driver explicitly for IntelliJ Plugin classloader
-        try {
-            val driver = org.sqlite.JDBC()
-            DriverManager.registerDriver(driver)
-            logger.info { "SQLite JDBC driver registered successfully" }
-        } catch (e: Exception) {
-            logger.error { "Failed to register SQLite driver: ${e.message}" }
-            throw e
-        }
-
-        // Configure SQLite PRAGMA settings using direct JDBC (must be OUTSIDE any transaction)
-        DriverManager.getConnection(jdbcUrl).use { connection ->
-            connection.createStatement().use { statement ->
-                // Enable WAL mode for better concurrency
-                statement.execute("PRAGMA journal_mode=WAL")
-                // Set synchronous mode (can only be changed outside transaction)
-                statement.execute("PRAGMA synchronous=NORMAL")
-                // Set busy timeout to prevent SQLITE_BUSY errors (10 seconds)
-                statement.execute("PRAGMA busy_timeout=10000")
-                // Enable foreign key constraints
-                statement.execute("PRAGMA foreign_keys=ON")
-                logger.info { "Database configured: WAL mode, synchronous=NORMAL, busy_timeout=10s, foreign keys enabled" }
+        // Synchronized to prevent double initialization from concurrent callers
+        synchronized(initLock) {
+            if (initialized) {
+                logger.info { "Database already initialized, skipping" }
+                return
             }
-        }
 
-        // Now connect via Exposed
-        val database = Database.connect(
-            url = jdbcUrl,
-            driver = "org.sqlite.JDBC"
-        )
-        initialized = true
+            logger.info { "Initializing database at: $dbPath" }
 
-        // Configure transaction retry behavior
-        org.jetbrains.exposed.sql.transactions.TransactionManager.manager.defaultRepetitionAttempts = 5
-        org.jetbrains.exposed.sql.transactions.TransactionManager.manager.defaultMinRepetitionDelay = 100
-        org.jetbrains.exposed.sql.transactions.TransactionManager.manager.defaultMaxRepetitionDelay = 1000
+            val jdbcUrl = "jdbc:sqlite:$dbPath"
 
-        // Create tables
-        transaction(database) {
+            // Load and register SQLite JDBC driver explicitly for IntelliJ Plugin classloader
+            try {
+                val driver = org.sqlite.JDBC()
+                DriverManager.registerDriver(driver)
+                logger.info { "SQLite JDBC driver registered successfully" }
+            } catch (e: Exception) {
+                logger.error { "Failed to register SQLite driver: ${e.message}" }
+                throw e
+            }
 
-            // Create tables in dependency order
-            // Note: Subtasks <-> Snapshots have circular reference (both nullable)
-            SchemaUtils.createMissingTablesAndColumns(
-                TasksTable,
-                SnapshotsTable,      // Created before Subtasks (circular ref handled via nullable FKs)
-                SubtasksTable,
-                ChatMessagesTable,
-                ApiLogsTable,
-                MCPServersTable,
-                ConfigTable,
-                PromptsTable,
-                IndexFilesTable,
-                IndexChunksTable,
-                EmbeddingsTable,
-                IndexingProgressTable,
-                DocumentationSourcesTable,  // External documentation sources (US-024)
-                ProjectAnalysisReportsTable,
-                // Multi-agent tables
-                AgentSessionsTable,
-                AgentInstancesTable,
-                AgentEventsTable
+            // Set WAL journal mode via direct JDBC (persistent, only needs to be set once per DB file)
+            DriverManager.getConnection(jdbcUrl).use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute("PRAGMA journal_mode=WAL")
+                    logger.info { "Database WAL mode enabled (persistent)" }
+                }
+            }
+
+            // Connect via Exposed with per-connection PRAGMA setup.
+            // synchronous, busy_timeout, foreign_keys are per-connection settings —
+            // they MUST be set on every new connection, not just once.
+            val database = Database.connect(
+                url = jdbcUrl,
+                driver = "org.sqlite.JDBC",
+                setupConnection = { connection ->
+                    connection.createStatement().use { stmt ->
+                        stmt.execute("PRAGMA synchronous=NORMAL")
+                        stmt.execute("PRAGMA busy_timeout=10000")
+                        stmt.execute("PRAGMA foreign_keys=ON")
+                    }
+                }
             )
 
-            logger.info { "All tables created successfully" }
+            // Configure transaction retry behavior
+            org.jetbrains.exposed.sql.transactions.TransactionManager.manager.defaultRepetitionAttempts = 5
+            org.jetbrains.exposed.sql.transactions.TransactionManager.manager.defaultMinRepetitionDelay = 100
+            org.jetbrains.exposed.sql.transactions.TransactionManager.manager.defaultMaxRepetitionDelay = 1000
+
+            // Create tables
+            transaction(database) {
+
+                // Create tables in dependency order
+                // Note: Subtasks <-> Snapshots have circular reference (both nullable)
+                SchemaUtils.createMissingTablesAndColumns(
+                    TasksTable,
+                    SnapshotsTable,      // Created before Subtasks (circular ref handled via nullable FKs)
+                    SubtasksTable,
+                    ChatMessagesTable,
+                    ApiLogsTable,
+                    MCPServersTable,
+                    ConfigTable,
+                    PromptsTable,
+                    IndexFilesTable,
+                    IndexChunksTable,
+                    EmbeddingsTable,
+                    IndexingProgressTable,
+                    DocumentationSourcesTable,  // External documentation sources (US-024)
+                    ProjectAnalysisReportsTable,
+                    // Multi-agent tables
+                    AgentSessionsTable,
+                    AgentInstancesTable,
+                    AgentEventsTable
+                )
+
+                logger.info { "All tables created successfully" }
+            }
+
+            MigrationRunner.run(database)
+
+            // Set initialized AFTER everything is complete (tables + migrations)
+            initialized = true
+
+            logger.info { "Database initialization complete" }
         }
-
-        MigrationRunner.run(database)
-
-        logger.info { "Database initialization complete" }
     }
 
     fun <T> dbQuery(block: () -> T): T = transaction {

@@ -31,7 +31,7 @@ class ConversationCompactor(
     private val chatMessageRepository: ChatMessageRepository,
     private val taskRepository: TaskRepository,
     private val configService: ConfigService,
-    private val tokenEstimator: TokenEstimator
+    private val tokenEstimator: PromptTokenEstimator
 ) {
     // Track compaction statistics
     private var totalCompactions = 0
@@ -70,8 +70,7 @@ class ConversationCompactor(
      * @param targetTokens Target token count after compaction
      * @return True if compaction was successful
      */
-    @Suppress("UNUSED_PARAMETER")
-    suspend fun compact(taskId: String, _targetTokens: Int): Boolean {
+    suspend fun compact(taskId: String, @Suppress("UNUSED_PARAMETER") targetTokens: Int): Boolean {
         // Use IO dispatcher for database operations
         return withContext(Dispatchers.IO) {
             val messages = chatMessageRepository.findByTaskId(taskId)
@@ -93,6 +92,12 @@ class ConversationCompactor(
 
             // Generate summary
             val summary = generateSummary(taskId, toSummarize)
+
+            // Validate summary is non-empty — don't delete messages if LLM returned garbage
+            if (summary.isBlank()) {
+                logger.warn { "[COMPACT] LLM returned empty summary, aborting compaction to preserve messages" }
+                return@withContext false
+            }
 
             // Replace old messages with summary
             transaction {

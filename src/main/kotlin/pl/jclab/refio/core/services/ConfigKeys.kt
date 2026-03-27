@@ -9,7 +9,7 @@ package pl.jclab.refio.core.services
  * This ensures all configuration keys use constants from ConfigService and eliminates
  * hardcoded strings in UI panels.
  */
-object ConfigKeys {
+object ConfigKeyUtil {
 
     /**
      * Split a full configuration key into (section, key) pair.

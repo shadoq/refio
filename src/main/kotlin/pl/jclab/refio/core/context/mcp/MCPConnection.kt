@@ -34,8 +34,8 @@ class MCPConnection(
     private val requestId = AtomicLong(1)
     private val pendingRequests = ConcurrentHashMap<Long, CompletableDeferred<MCPSuccessResponse>>()
 
-    private val cachedResources = mutableListOf<MCPResource>();
-    private val cachedTools = mutableListOf<MCPToolDefinition>();
+    private val cachedResources = mutableListOf<MCPResource>()
+    private val cachedTools = mutableListOf<MCPToolDefinition>()
     private var capabilities: MCPServerCapabilities? = null
 
     suspend fun connect() {

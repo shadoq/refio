@@ -2,6 +2,7 @@ package pl.jclab.refio.cli.tui.input
 
 import com.github.ajalt.mordant.terminal.Terminal
 import mu.KotlinLogging
+import org.jline.keymap.BindingReader
 import pl.jclab.refio.cli.tui.screens.TuiSettingsScreen
 import pl.jclab.refio.cli.tui.state.TuiScreen
 import pl.jclab.refio.cli.tui.state.TuiTab
@@ -22,53 +23,57 @@ class TuiInputHandler(private val terminal: Terminal) {
     private var running = true
 
     /**
-     * Main input loop. Tries raw mode first, falls back to line mode if no TTY.
+     * Main input loop.
+     *
+     * When a JLine terminal is provided (interactive mode), enters raw mode
+     * for single-key dispatch. Otherwise falls back to line-based input.
+     *
+     * The caller owns the JLine terminal lifecycle — this method does NOT close it.
      */
-    fun startInputLoop(viewModel: TuiViewModel) {
-        try {
-            // Suppress JLine's java.util.logging WARNING on dumb terminals
-            java.util.logging.Logger.getLogger("org.jline").level = java.util.logging.Level.OFF
-
-            val jlineTerminal = org.jline.terminal.TerminalBuilder.builder()
-                .system(true)
-                .jansi(true)
-                .build()
-
-            // Check if we got a real terminal (not dumb)
-            if (jlineTerminal.type == "dumb" || !isRealTerminal(jlineTerminal)) {
-                logger.info { "No interactive terminal detected, falling back to line mode" }
-                jlineTerminal.close()
-                startLineInputLoop(viewModel)
-                return
-            }
-
+    fun startInputLoop(viewModel: TuiViewModel, jlineTerminal: org.jline.terminal.Terminal? = null) {
+        if (jlineTerminal != null) {
             startRawInputLoop(jlineTerminal, viewModel)
-        } catch (e: Exception) {
-            logger.warn(e) { "Failed to create JLine terminal, falling back to line mode" }
+        } else {
             startLineInputLoop(viewModel)
         }
     }
 
     /**
-     * Raw mode input — single character dispatch, F-keys, escape sequences.
-     * Requires a real TTY (macOS Terminal, iTerm2, Windows Terminal, Linux TTY).
+     * Raw mode input using JLine's [BindingReader] + [org.jline.keymap.KeyMap].
+     *
+     * JLine handles all platform differences: Windows Console API key codes,
+     * Unix terminfo escape sequences, and macOS keycodes are all resolved
+     * by the same cross-platform KeyMap infrastructure. No manual escape
+     * sequence parsing or timeouts required.
+     *
+     * Note: does NOT close the terminal — caller manages lifecycle.
      */
     private fun startRawInputLoop(jlineTerminal: org.jline.terminal.Terminal, viewModel: TuiViewModel) {
         jlineTerminal.enterRawMode()
-        val reader = jlineTerminal.reader()
+        val bindingReader = BindingReader(jlineTerminal.reader())
+        val keyMap = TuiKeybindings.buildKeyMap(jlineTerminal)
 
-        try {
-            while (running) {
-                val ch = reader.read()
-                if (ch == -1) break
+        while (running) {
+            val binding = try {
+                bindingReader.readBinding(keyMap)
+            } catch (e: Exception) {
+                if (running) logger.error(e) { "Input read error" }
+                break
+            } ?: break // null = EOF / terminal closed
 
-                val action = resolveInput(ch, reader)
-                if (action != null) {
-                    dispatchAction(action, viewModel)
-                }
+            // Printable ASCII chars have explicit KeyMap bindings and arrive as
+            // ready-to-use TypeChar actions. The SELF_INSERT sentinel (char=\u0000)
+            // is only returned for non-ASCII Unicode — resolve from lastBinding.
+            val action = if (binding is TuiAction.TypeChar && binding.char == '\u0000') {
+                val seq = bindingReader.lastBinding
+                if (!seq.isNullOrEmpty()) TuiAction.TypeChar(seq[0]) else null
+            } else {
+                binding
             }
-        } finally {
-            jlineTerminal.close()
+
+            if (action != null) {
+                dispatchAction(action, viewModel)
+            }
         }
     }
 
@@ -113,6 +118,7 @@ class TuiInputHandler(private val terminal: Terminal) {
                     ":logs", ":5" -> { viewModel.setActiveTab(TuiTab.LOGS); continue }
                     ":debug", ":6" -> { viewModel.setActiveTab(TuiTab.DEBUG); continue }
                     ":api", ":7" -> { viewModel.setActiveTab(TuiTab.API_LOGS); continue }
+                    ":files", ":10" -> { viewModel.setActiveTab(TuiTab.FILES); continue }
                 }
 
                 // Regular message — send to chat
@@ -129,63 +135,305 @@ class TuiInputHandler(private val terminal: Terminal) {
         running = false
     }
 
-    private fun isRealTerminal(jlineTerminal: org.jline.terminal.Terminal): Boolean {
-        return try {
-            // A real terminal supports getting size
-            val size = jlineTerminal.size
-            size.columns > 0 && size.rows > 0
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun resolveInput(firstChar: Int, reader: java.io.Reader): TuiAction? {
-        // Escape sequence
-        if (firstChar == 27) {
-            val sb = StringBuilder()
-            sb.append(27.toChar())
-
-            val next = reader.read()
-            if (next == -1) return TuiAction.BackToMain // Pure Escape
-
-            sb.append(next.toChar())
-
-            if (next == '['.code || next == 'O'.code) {
-                var c = reader.read()
-                while (c != -1) {
-                    sb.append(c.toChar())
-                    if (c.toChar().isLetter() || c.toChar() == '~') break
-                    c = reader.read()
-                }
-            }
-
-            return TuiKeybindings.resolveEscapeSequence(sb.toString())
-        }
-
-        // Control character
-        if (firstChar < 32 || firstChar == 127) {
-            return TuiKeybindings.resolveControlChar(firstChar)
-        }
-
-        // Regular character
-        return TuiAction.TypeChar(firstChar.toChar())
-    }
-
     internal fun dispatchAction(action: TuiAction, viewModel: TuiViewModel) {
         val state = viewModel.stateFlow.value
 
-        // If approval dialog is visible, intercept y/n keys
-        if (state.pendingApprovals.isNotEmpty()) {
-            val approvalId = state.pendingApprovals.first().id
+        // If plan approval dialog is visible, intercept y/n keys
+        if (state.pendingPlanApproval != null) {
             when (action) {
                 is TuiAction.TypeChar -> when (action.char.lowercaseChar()) {
-                    'y' -> { viewModel.approve(approvalId); return }
-                    'n' -> { viewModel.reject(approvalId); return }
+                    'y' -> { viewModel.approvePlan(); return }
+                    'n' -> { viewModel.rejectPlan(); return }
+                    else -> return
+                }
+                is TuiAction.SendMessage -> { viewModel.approvePlan(); return }
+                is TuiAction.BackToMain -> { viewModel.rejectPlan(); return }
+                else -> return
+            }
+        }
+
+        // If approval dialog is visible, intercept y/n/t keys
+        if (state.pendingApprovals.isNotEmpty()) {
+            val approval = state.pendingApprovals.first()
+            when (action) {
+                is TuiAction.TypeChar -> when (action.char.lowercaseChar()) {
+                    'y' -> { viewModel.approve(approval.id); return }
+                    'n' -> { viewModel.reject(approval.id); return }
+                    't' -> { viewModel.trustAgent(approval.agentId); viewModel.approve(approval.id); return }
                     else -> return // ignore other keys
                 }
-                is TuiAction.BackToMain -> { viewModel.reject(approvalId); return }
-                is TuiAction.SendMessage -> { viewModel.approve(approvalId); return }
+                is TuiAction.BackToMain -> { viewModel.reject(approval.id); return }
+                is TuiAction.SendMessage -> { viewModel.approve(approval.id); return }
                 else -> return // block all other actions while approval visible
+            }
+        }
+
+        // Settings screen: intercept keys for interactive editing
+        if (state.screen == TuiScreen.SETTINGS) {
+            // If editing a text field, capture all input
+            if (state.settingsEditingField != null) {
+                when (action) {
+                    is TuiAction.TypeChar -> {
+                        viewModel.settingsUpdateEditBuffer(state.settingsEditBuffer + action.char)
+                        return
+                    }
+                    is TuiAction.Backspace -> {
+                        if (state.settingsEditBuffer.isNotEmpty()) {
+                            viewModel.settingsUpdateEditBuffer(state.settingsEditBuffer.dropLast(1))
+                        }
+                        return
+                    }
+                    is TuiAction.SendMessage -> { viewModel.settingsCommitEdit(); return }
+                    is TuiAction.BackToMain -> { viewModel.settingsCancelEdit(); return }
+                    else -> return
+                }
+            }
+
+            when (action) {
+                is TuiAction.BackToMain -> { viewModel.setScreen(TuiScreen.MAIN); return }
+                is TuiAction.ScrollUp -> { viewModel.settingsFieldUp(); return }
+                is TuiAction.ScrollDown -> { viewModel.settingsFieldDown(); return }
+                is TuiAction.ScrollLeft -> {
+                    val newTab = (state.settingsTab - 1).coerceIn(0, 10)
+                    viewModel.setSettingsTab(newTab)
+                    TuiSettingsScreen.invalidateCache()
+                    return
+                }
+                is TuiAction.ScrollRight -> {
+                    val newTab = (state.settingsTab + 1).coerceIn(0, 10)
+                    viewModel.setSettingsTab(newTab)
+                    TuiSettingsScreen.invalidateCache()
+                    return
+                }
+                is TuiAction.SendMessage -> {
+                    // Toggle bool or start editing text field
+                    val field = TuiSettingsScreen.getSelectedField(state.settingsSelectedField)
+                    if (field != null) {
+                        val parts = field.sectionKey.split(".", limit = 2)
+                        if (parts.size == 2) {
+                            val section = parts[0]
+                            val key = parts[1]
+                            val config = viewModel.getConfigSection(section)
+                            when (field.type) {
+                                TuiSettingsScreen.FieldType.BOOL -> {
+                                    val current = config[key]?.lowercase() in listOf("true", "1", "yes")
+                                    viewModel.settingsToggleBool(section, key, current)
+                                }
+                                TuiSettingsScreen.FieldType.TEXT -> {
+                                    viewModel.settingsStartEdit(field.sectionKey, config[key] ?: "")
+                                }
+                            }
+                        }
+                    }
+                    return
+                }
+                is TuiAction.TypeChar -> {
+                    // Tab switching: 1-9, 0
+                    val tabNum = action.char.toString().toIntOrNull()
+                    if (tabNum != null) {
+                        val tabIndex = if (tabNum == 0) 9 else tabNum - 1
+                        if (tabIndex in 0..10) {
+                            viewModel.setSettingsTab(tabIndex)
+                            TuiSettingsScreen.invalidateCache()
+                            return
+                        }
+                    }
+                    when (action.char) {
+                        'R' -> {
+                            viewModel.resetAllSettings()
+                            TuiSettingsScreen.invalidateCache()
+                            viewModel.addSystemMessage("Settings reset to defaults.")
+                            return
+                        }
+                        'E' -> { viewModel.exportUserConfig(); return }
+                        'P' -> { viewModel.exportProjectConfig(); return }
+                        'L' -> { viewModel.reloadConfig(); return }
+                        'F' -> {
+                            // Refresh models from providers (Models tab = index 2)
+                            if (state.settingsTab == 2) {
+                                viewModel.refreshSettingsModels()
+                                return
+                            }
+                        }
+                    }
+                }
+                else -> {} // fall through
+            }
+        }
+
+        // Help screen: scroll with arrows/PgUp/PgDn, Esc or F1 to close
+        if (state.screen == TuiScreen.HELP) {
+            when (action) {
+                is TuiAction.ScrollUp -> { viewModel.helpScrollUp(); return }
+                is TuiAction.ScrollDown -> { viewModel.helpScrollDown(); return }
+                is TuiAction.PageUp -> { viewModel.helpPageUp(); return }
+                is TuiAction.PageDown -> { viewModel.helpPageDown(); return }
+                is TuiAction.BackToMain -> { viewModel.setScreen(TuiScreen.MAIN); return }
+                is TuiAction.SwitchScreen -> {
+                    if (action.screen == TuiScreen.HELP) { viewModel.setScreen(TuiScreen.MAIN); return }
+                    else { viewModel.setScreen(action.screen); return }
+                }
+                is TuiAction.SwitchTab -> { viewModel.setScreen(TuiScreen.MAIN); viewModel.setActiveTab(action.tab); return }
+                is TuiAction.Quit -> { viewModel.shutdown(); stop(); return }
+                else -> return // block other actions on help screen
+            }
+        }
+
+        // History screen: intercept navigation keys
+        if (state.screen == TuiScreen.HISTORY) {
+            when (action) {
+                is TuiAction.ScrollUp -> { viewModel.selectHistoryUp(); return }
+                is TuiAction.ScrollDown -> { viewModel.selectHistoryDown(); return }
+                is TuiAction.SendMessage -> { viewModel.loadSelectedSession(); return }
+                is TuiAction.BackToMain -> { viewModel.setScreen(TuiScreen.MAIN); return }
+                is TuiAction.TypeChar -> {
+                    when (action.char.lowercaseChar()) {
+                        'p' -> { viewModel.togglePinSession(); return }
+                        'r' -> { viewModel.refreshSessions(); return }
+                        'd' -> { viewModel.deleteSelectedSession(); return }
+                        'c' -> { viewModel.setHistoryFilter("CHAT"); return }
+                        'l' -> { viewModel.setHistoryFilter("PLAN"); return }
+                        'a' -> { viewModel.setHistoryFilter("AGENT"); return }
+                        '*' -> { viewModel.setHistoryFilter("*"); return }
+                        '/' -> { viewModel.setHistoryFilter("/"); return } // start search mode
+                    }
+                    // If in search mode (filter starts with /), append chars to search query
+                    if (state.historyFilter.startsWith("/")) {
+                        viewModel.setHistoryFilter(state.historyFilter + action.char)
+                        return
+                    }
+                }
+                is TuiAction.Backspace -> {
+                    if (state.historyFilter.startsWith("/") && state.historyFilter.length > 1) {
+                        viewModel.setHistoryFilter(state.historyFilter.dropLast(1))
+                        return
+                    } else if (state.historyFilter.startsWith("/")) {
+                        viewModel.setHistoryFilter("*") // exit search mode
+                        return
+                    }
+                }
+                else -> return // block other actions on history screen
+            }
+        }
+
+        // RAG tab: intercept action keys
+        if (state.activeTab == TuiTab.RAG && state.screen == TuiScreen.MAIN) {
+            when (action) {
+                is TuiAction.ScrollUp -> { viewModel.ragFileUp(); return }
+                is TuiAction.ScrollDown -> { viewModel.ragFileDown(); return }
+                is TuiAction.SendMessage -> { viewModel.ragViewSelectedChunks(); return }
+                is TuiAction.TypeChar -> {
+                    when (action.char.lowercaseChar()) {
+                        'r' -> { viewModel.ragReindex(); return }
+                        'e' -> { viewModel.ragGenerateEmbeddings(); return }
+                        's' -> { viewModel.ragStopIndexing(); return }
+                        'c' -> { viewModel.ragClearIndex(); return }
+                        'v' -> { viewModel.ragViewSelectedChunks(); return }
+                        'q' -> {
+                            // Prompt user for search query via input buffer
+                            viewModel.addSystemMessage("Type search query in the chat input and press Enter, or use /rag-search <query>")
+                            return
+                        }
+                    }
+                }
+                else -> {} // fall through
+            }
+        }
+
+        // Context tab: navigate sections
+        if (state.activeTab == TuiTab.CONTEXT && state.screen == TuiScreen.MAIN) {
+            when (action) {
+                is TuiAction.ScrollUp -> { viewModel.contextSectionUp(); return }
+                is TuiAction.ScrollDown -> { viewModel.contextSectionDown(); return }
+                else -> {} // fall through
+            }
+        }
+
+        // API Logs tab: navigation, detail, filter
+        if (state.activeTab == TuiTab.API_LOGS && state.screen == TuiScreen.MAIN) {
+            when (action) {
+                is TuiAction.ScrollUp -> { viewModel.apiLogUp(); return }
+                is TuiAction.ScrollDown -> { viewModel.apiLogDown(); return }
+                is TuiAction.SendMessage -> {
+                    if (state.apiLogDetailVisible) {
+                        viewModel.toggleApiLogDetail() // back to list
+                    } else if (state.apiLogs.isNotEmpty()) {
+                        viewModel.toggleApiLogDetail() // show detail
+                    }
+                    return
+                }
+                is TuiAction.BackToMain -> {
+                    if (state.apiLogDetailVisible) {
+                        viewModel.toggleApiLogDetail()
+                        return
+                    }
+                    // else fall through to normal BackToMain handling
+                }
+                is TuiAction.TypeChar -> {
+                    if (action.char.lowercaseChar() == 'f') {
+                        viewModel.cycleApiLogsFilter()
+                        return
+                    }
+                }
+                else -> {} // fall through
+            }
+        }
+
+        // Files tab: file browser navigation
+        if (state.activeTab == TuiTab.FILES && state.screen == TuiScreen.MAIN) {
+            when (action) {
+                is TuiAction.ScrollUp -> { viewModel.fileBrowserUp(); return }
+                is TuiAction.ScrollDown -> { viewModel.fileBrowserDown(); return }
+                is TuiAction.SendMessage -> { viewModel.fileBrowserEnter(); return }
+                is TuiAction.Backspace -> { viewModel.fileBrowserGoUp(); return }
+                is TuiAction.TypeChar -> {
+                    when (action.char.lowercaseChar()) {
+                        'h' -> { viewModel.fileBrowserToggleHidden(); return }
+                        'a' -> { viewModel.fileBrowserAddAsContext(); return }
+                        'o' -> { viewModel.fileBrowserOpenExternal(); return }
+                        'i' -> { viewModel.fileBrowserShowInfo(); return }
+                        'r' -> { viewModel.fileBrowserRefresh(); return }
+                    }
+                }
+                is TuiAction.PageUp -> { repeat(10) { viewModel.fileBrowserUp() }; return }
+                is TuiAction.PageDown -> { repeat(10) { viewModel.fileBrowserDown() }; return }
+                else -> {} // fall through
+            }
+        }
+
+        // Steps tab: intercept navigation and action keys when Steps tab is active
+        if (state.activeTab == TuiTab.STEPS && state.subtasks.isNotEmpty()) {
+            when (action) {
+                is TuiAction.ScrollUp -> { viewModel.selectStepUp(); return }
+                is TuiAction.ScrollDown -> { viewModel.selectStepDown(); return }
+                is TuiAction.TypeChar -> {
+                    val idx = state.selectedStepIndex
+                    val subtask = state.subtasks.getOrNull(idx)
+                    when (action.char.lowercaseChar()) {
+                        'a' -> { subtask?.let { viewModel.approveSubtask(it.id) }; return }
+                        's' -> { subtask?.let { viewModel.skipSubtask(it.id) }; return }
+                        'd' -> { subtask?.let { viewModel.deleteSubtask(it.id) }; return }
+                        'u' -> { viewModel.moveStepUp(idx); return }
+                        'j' -> { viewModel.moveStepDown(idx); return }
+                        'p' -> { viewModel.togglePause(); return }
+                        'r' -> { viewModel.replanSteps(); return }
+                        else -> {} // fall through for other chars (typing in input)
+                    }
+                    if (action.char == 'C') { viewModel.cancelAllPending(); return }
+                    if (action.char == 'R') { viewModel.executeStep(idx); return }
+                }
+                else -> {} // fall through
+            }
+        }
+
+        // Model selector: intercept keys when model selector popup is visible
+        if (state.modelSelectorVisible) {
+            when (action) {
+                is TuiAction.ScrollUp -> { viewModel.modelSelectorPrev(); return }
+                is TuiAction.ScrollDown -> { viewModel.modelSelectorNext(); return }
+                is TuiAction.SendMessage -> { viewModel.modelSelectorAccept(); return }
+                is TuiAction.BackToMain -> { viewModel.dismissModelSelector(); return }
+                else -> return
             }
         }
 
@@ -215,7 +463,7 @@ class TuiInputHandler(private val terminal: Terminal) {
                 }
                 is TuiAction.TypeChar -> {
                     // Continue typing while autocomplete is visible
-                    viewModel.updateInputBuffer(state.inputBuffer + action.char)
+                    viewModel.insertAtCursor(action.char)
                     viewModel.updateAutocompleteFilter()
                     return
                 }
@@ -227,11 +475,15 @@ class TuiInputHandler(private val terminal: Terminal) {
         }
 
         when (action) {
-            is TuiAction.SwitchTab -> viewModel.setActiveTab(action.tab)
-            is TuiAction.SwitchScreen -> viewModel.setScreen(action.screen)
+            is TuiAction.SwitchTab -> { viewModel.clearMessageSelection(); viewModel.setActiveTab(action.tab) }
+            is TuiAction.SwitchScreen -> {
+                if (action.screen == TuiScreen.HISTORY) viewModel.loadSessions()
+                viewModel.setScreen(action.screen)
+            }
             is TuiAction.BackToMain -> viewModel.setScreen(TuiScreen.MAIN)
             is TuiAction.SendMessage -> {
                 val input = state.inputBuffer
+                viewModel.clearPasteMarker()
                 if (input.isNotBlank()) {
                     handleCommand(input, viewModel) || run {
                         viewModel.sendMessage(input)
@@ -240,41 +492,87 @@ class TuiInputHandler(private val terminal: Terminal) {
                 }
             }
             is TuiAction.TypeChar -> {
-                val newBuffer = state.inputBuffer + action.char
-                viewModel.updateInputBuffer(newBuffer)
+                viewModel.insertAtCursor(action.char)
+                val newBuffer = viewModel.stateFlow.value.inputBuffer
                 // Trigger autocomplete on '@', '!', '/'
                 when (action.char) {
                     '@' -> viewModel.triggerAutocomplete()
                     '!' -> viewModel.triggerSubagentAutocomplete()
                     '/' -> {
-                        // Only trigger at start of input (slash commands)
-                        if (newBuffer.trimStart() == "/") {
+                        // Trigger slash command autocomplete when "/" is typed at start of input
+                        // (allow leading whitespace)
+                        if (newBuffer.trimStart().startsWith("/") && !newBuffer.trimStart().contains(" ")) {
                             viewModel.triggerCommandAutocomplete()
                         }
                     }
                 }
+                // Clear paste marker on manual typing
+                viewModel.clearPasteMarker()
             }
             is TuiAction.Backspace -> {
-                val current = state.inputBuffer
-                if (current.isNotEmpty()) {
-                    viewModel.updateInputBuffer(current.dropLast(1))
-                }
+                viewModel.deleteAtCursor()
             }
             is TuiAction.CycleMode -> viewModel.cycleMode()
             is TuiAction.ToggleThinking -> viewModel.toggleThinking()
             is TuiAction.ToggleNoEgress -> viewModel.toggleNoEgress()
             is TuiAction.ToggleExecutionMode -> viewModel.toggleExecutionMode()
+            is TuiAction.SelectModel -> viewModel.showModelSelector()
+            is TuiAction.NewSession -> viewModel.showNewSessionDialog()
+            is TuiAction.ContinueConversation -> viewModel.continueConversation()
+            is TuiAction.SummarizeConversation -> viewModel.summarizeConversation()
+            is TuiAction.CopyLastMessage -> viewModel.copyLastMessageToClipboard()
+            is TuiAction.CycleAgentFilter -> viewModel.cycleAgentFilter()
+            is TuiAction.MessageSelectionUp -> {
+                if (state.activeTab == TuiTab.CHAT) viewModel.messageSelectionUp()
+            }
+            is TuiAction.MessageSelectionDown -> {
+                if (state.activeTab == TuiTab.CHAT) viewModel.messageSelectionDown()
+            }
             is TuiAction.CancelOperation -> {
-                // Cancel streaming or return to main
+                if (state.isStreaming) {
+                    viewModel.cancelCurrentOperation()
+                } else if (state.modelSelectorVisible) {
+                    viewModel.dismissModelSelector()
+                } else if (state.autocompleteVisible) {
+                    viewModel.autocompleteDismiss()
+                } else if (state.screen != TuiScreen.MAIN) {
+                    viewModel.setScreen(TuiScreen.MAIN)
+                }
             }
             is TuiAction.Quit -> {
                 viewModel.shutdown()
                 stop()
             }
-            is TuiAction.ScrollUp -> { /* handled by view */ }
-            is TuiAction.ScrollDown -> { /* handled by view */ }
-            is TuiAction.PageUp -> { /* handled by view */ }
-            is TuiAction.PageDown -> { /* handled by view */ }
+            is TuiAction.ScrollUp -> {
+                // On Chat tab: scroll chat up
+                if (state.activeTab == TuiTab.CHAT && state.screen == TuiScreen.MAIN) {
+                    viewModel.chatScrollUp()
+                }
+            }
+            is TuiAction.ScrollDown -> {
+                // On Chat tab: scroll chat down
+                if (state.activeTab == TuiTab.CHAT && state.screen == TuiScreen.MAIN) {
+                    viewModel.chatScrollDown()
+                }
+            }
+            is TuiAction.ScrollLeft -> {
+                // Move cursor left in input buffer
+                viewModel.moveCursorLeft()
+            }
+            is TuiAction.ScrollRight -> {
+                // Move cursor right in input buffer
+                viewModel.moveCursorRight()
+            }
+            is TuiAction.PageUp -> {
+                if (state.activeTab == TuiTab.CHAT && state.screen == TuiScreen.MAIN) {
+                    repeat(10) { viewModel.chatScrollUp() }
+                }
+            }
+            is TuiAction.PageDown -> {
+                if (state.activeTab == TuiTab.CHAT && state.screen == TuiScreen.MAIN) {
+                    repeat(10) { viewModel.chatScrollDown() }
+                }
+            }
             is TuiAction.ToggleExpand -> { /* handled by view */ }
             is TuiAction.NewLine -> viewModel.updateInputBuffer(
                 state.inputBuffer + "\n"
@@ -287,148 +585,17 @@ class TuiInputHandler(private val terminal: Terminal) {
     }
 
     /**
-     * Handle slash commands. Returns true if the input was a command.
+     * Handle slash commands (prompt templates only).
+     * Returns true if the input was handled.
+     *
+     * All system operations (history, settings, export, etc.) are accessed
+     * through GUI keybindings and screens, not slash commands.
+     * Slash commands: /explain, /refactor, etc. — prompt templates from SlashCommand.BUILTINS
      */
-    private fun handleCommand(input: String, viewModel: TuiViewModel): Boolean {
-        val trimmed = input.trim()
-        return when {
-            trimmed == "/quit" || trimmed == "/q" -> {
-                viewModel.shutdown()
-                stop()
-                true
-            }
-            trimmed == "/resend" -> {
-                viewModel.resendLastMessage()
-                viewModel.updateInputBuffer("")
-                true
-            }
-            trimmed == "/clear" -> {
-                viewModel.updateInputBuffer("")
-                true
-            }
-            trimmed == "/help" || trimmed == "/?" -> {
-                viewModel.addSystemMessage(buildHelpText())
-                viewModel.updateInputBuffer("")
-                true
-            }
-            trimmed.startsWith("/mode") -> {
-                viewModel.cycleMode()
-                viewModel.updateInputBuffer("")
-                true
-            }
-            trimmed == "/thinking" -> {
-                viewModel.toggleThinking()
-                viewModel.updateInputBuffer("")
-                true
-            }
-            trimmed == "/no-egress" || trimmed == "/noegress" -> {
-                viewModel.toggleNoEgress()
-                viewModel.updateInputBuffer("")
-                true
-            }
-            trimmed == "/auto" || trimmed == "/interactive" -> {
-                viewModel.toggleExecutionMode()
-                viewModel.updateInputBuffer("")
-                true
-            }
-            trimmed == "/history" -> {
-                viewModel.loadSessions()
-                viewModel.setScreen(TuiScreen.HISTORY)
-                viewModel.updateInputBuffer("")
-                true
-            }
-            trimmed.startsWith("/history-delete ") -> {
-                val id = trimmed.removePrefix("/history-delete ").trim()
-                viewModel.deleteSession(id)
-                viewModel.updateInputBuffer("")
-                true
-            }
-            trimmed.startsWith("/model ") -> {
-                val model = trimmed.removePrefix("/model ").trim()
-                viewModel.setModel(model)
-                viewModel.updateInputBuffer("")
-                true
-            }
-            trimmed == "/model" -> {
-                // Show current model
-                viewModel.updateInputBuffer("")
-                true
-            }
-            trimmed.startsWith("/export ") -> {
-                val path = trimmed.removePrefix("/export ").trim()
-                viewModel.exportConversation(path)
-                viewModel.updateInputBuffer("")
-                true
-            }
-            trimmed == "/settings" -> {
-                viewModel.setScreen(TuiScreen.SETTINGS)
-                viewModel.updateInputBuffer("")
-                true
-            }
-            trimmed == "/settings-reset" -> {
-                viewModel.resetAllSettings()
-                TuiSettingsScreen.invalidateCache()
-                viewModel.updateInputBuffer("")
-                true
-            }
-            trimmed.startsWith("/set ") -> {
-                handleSetCommand(trimmed.removePrefix("/set ").trim(), viewModel)
-                viewModel.updateInputBuffer("")
-                true
-            }
-            else -> false
-        }
-    }
-
-    private fun buildHelpText(): String = """
-Commands:
-  /mode              — Cycle mode (CHAT → PLAN → AGENT)
-  /thinking          — Toggle thinking mode (🧠)
-  /no-egress         — Toggle no-egress mode (🔒)
-  /auto, /interactive — Toggle execution mode (⚡/🤚)
-  /model <name>      — Switch model (e.g. /model ollama/qwen2.5-coder:7b)
-  /history           — Browse session history
-  /history-delete <id> — Delete session
-  /settings          — Open settings screen
-  /set <key> <value> — Set config (e.g. /set general.streaming_enabled true)
-  /settings-reset    — Reset all settings to defaults
-  /export <path>     — Export conversation to Markdown file
-  /resend            — Resend last user message
-  /clear             — Clear input buffer
-  /quit, /q          — Exit Refio
-
-Keyboard shortcuts (raw TTY mode):
-  F1-F7              — Switch tabs (Chat, Steps, Context, RAG, Logs, Debug, API)
-  F8                 — Settings
-  Ctrl+M             — Cycle mode
-  Ctrl+T             — Toggle thinking
-  Ctrl+E             — Toggle execution mode (auto/interactive)
-  Ctrl+Q             — Quit
-  Escape             — Back to main / dismiss autocomplete
-  @                  — Context autocomplete popup
-  !                  — Subagent autocomplete popup
-  /                  — Command autocomplete popup
-""".trim()
-
-    /**
-     * Handle /set section.key value command.
-     */
-    private fun handleSetCommand(args: String, viewModel: TuiViewModel) {
-        val spaceIdx = args.indexOf(' ')
-        if (spaceIdx < 0) {
-            logger.info { "Usage: /set section.key value" }
-            return
-        }
-        val fullKey = args.substring(0, spaceIdx)
-        val value = args.substring(spaceIdx + 1).trim()
-        val dotIdx = fullKey.indexOf('.')
-        if (dotIdx < 0) {
-            logger.info { "Key must be in section.key format, e.g. general.streaming_enabled" }
-            return
-        }
-        val section = fullKey.substring(0, dotIdx)
-        val key = fullKey.substring(dotIdx + 1)
-        viewModel.updateConfig(section, key, value)
-        TuiSettingsScreen.invalidateCache()
+    internal fun handleCommand(input: String, viewModel: TuiViewModel): Boolean {
+        // Slash commands (prompt templates) are NOT handled here.
+        // They are processed inline in TuiViewModel.sendMessage() — same as the plugin.
+        // Unknown /commands are passed through as normal messages.
+        return false
     }
 }

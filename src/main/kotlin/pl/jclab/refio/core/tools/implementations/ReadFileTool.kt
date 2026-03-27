@@ -117,14 +117,7 @@ class ReadFileTool(
     }
 
     private fun getSandboxRoot(): String {
-        // Use reflection to access private projectRoot field from PathSandbox
-        return try {
-            val field = sandbox.javaClass.getDeclaredField("projectRoot")
-            field.isAccessible = true
-            field.get(sandbox).toString()
-        } catch (e: Exception) {
-            "<unable to access>"
-        }
+        return sandbox.getProjectRoot().toString()
     }
 
     override fun getParameterSchema(): Map<String, Any> {

@@ -72,6 +72,9 @@ class MultiEditTool(
             val results = parsedEdits.map { edit ->
                 val resolvedPath = sandbox.resolve(edit.path)
                 FileLockManager.withFileLock(resolvedPath.toAbsolutePath().toString()) {
+                    // Re-validate path inside lock to close TOCTOU window
+                    sandbox.revalidateBeforeIO(resolvedPath)
+
                     val prep = prepareEdit(edit)
                     applyEdit(prep)
                 }

@@ -1,6 +1,6 @@
 package pl.jclab.refio.cli.tui.rendering
 
-import com.github.ajalt.mordant.terminal.Terminal
+import java.io.Writer
 
 /**
  * Full-screen framebuffer for TUI rendering.
@@ -15,8 +15,8 @@ import com.github.ajalt.mordant.terminal.Terminal
  * val screen = TuiScreenBuffer(width, height)
  * screen.setRows(0, baseContentLines)
  * screen.overlay(row, col, popupLines)        // modal on top
- * screen.flush(terminal)                      // one atomic write
- * screen.positionCursor(terminal, row, col)   // cursor at input
+ * screen.flush(output)                        // one atomic write
+ * screen.positionCursorAndShow(output, row, col)
  * ```
  */
 class TuiScreenBuffer(val width: Int, val height: Int) {
@@ -54,38 +54,38 @@ class TuiScreenBuffer(val width: Int, val height: Int) {
     }
 
     /**
-     * Flush the entire screen buffer to the terminal in one atomic write.
+     * Flush the entire screen buffer in one atomic write.
      *
-     * - Cursor is hidden during write
-     * - Each row includes \u001b[K (clear to EOL) to prevent artifacts
-     * - Last row has no trailing newline to prevent scroll in alternate screen buffer
+     * Uses the provided [Writer] (typically JLine terminal's writer) to ensure
+     * raw ANSI control sequences reach the terminal unprocessed. Each row uses
+     * absolute cursor positioning to prevent scroll caused by line wrapping.
      */
-    fun flush(terminal: Terminal, clearScreen: Boolean = false) {
-        val sb = StringBuilder(width * height + height * 10)
+    fun flush(output: Writer, clearScreen: Boolean = false) {
+        val sb = StringBuilder(width * height + height * 20)
         sb.append("\u001b[?25l") // hide cursor
         if (clearScreen) {
-            sb.append("\u001b[H\u001b[2J")
-        } else {
-            sb.append("\u001b[H")
+            sb.append("\u001b[2J")
         }
         for (i in 0 until height) {
+            // Absolute cursor positioning per row (1-based ANSI coordinates)
+            sb.append("\u001b[${i + 1};1H")
             sb.append(rows[i])
-            sb.append("\u001b[K")
-            if (i < height - 1) {
-                sb.append('\n')
-            }
+            sb.append("\u001b[K") // clear to end of line
         }
-        terminal.print(sb.toString())
+        output.write(sb.toString())
+        output.flush()
     }
 
     /** Position cursor at (row, col) and show it. 1-based for ANSI. */
-    fun positionCursorAndShow(terminal: Terminal, row: Int, col: Int) {
-        terminal.print("\u001b[${row};${col}H\u001b[?25h")
+    fun positionCursorAndShow(output: Writer, row: Int, col: Int) {
+        output.write("\u001b[${row};${col}H\u001b[?25h")
+        output.flush()
     }
 
     /** Show cursor without repositioning. */
-    fun showCursor(terminal: Terminal) {
-        terminal.print("\u001b[?25h")
+    fun showCursor(output: Writer) {
+        output.write("\u001b[?25h")
+        output.flush()
     }
 
     // --- ANSI string splicing ---
@@ -124,7 +124,12 @@ class TuiScreenBuffer(val width: Int, val height: Int) {
                         sb.append(s[i]); i++; visible++
                     }
                 } else {
-                    sb.append(s[i]); i++; visible++
+                    val cp = s.codePointAt(i)
+                    val w = TuiRenderBuffer.charDisplayWidth(cp)
+                    if (visible + w > n) break
+                    sb.appendCodePoint(cp)
+                    i += Character.charCount(cp)
+                    visible += w
                 }
             }
             return sb.toString()
@@ -146,7 +151,10 @@ class TuiScreenBuffer(val width: Int, val height: Int) {
                         i++; visible++
                     }
                 } else {
-                    i++; visible++
+                    val cp = s.codePointAt(i)
+                    val w = TuiRenderBuffer.charDisplayWidth(cp)
+                    i += Character.charCount(cp)
+                    visible += w
                 }
             }
             return if (i < s.length) s.substring(i) else ""

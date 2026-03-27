@@ -106,6 +106,13 @@ class TurnLLMCaller(
             return ModelSelection(model, provider)
         }
 
+        // If model is set but provider is missing, infer provider from model name
+        if (model != null && provider == null) {
+            val inferredProvider = llmClient.inferProvider(model)
+            logger.info { "[MODEL_RESOLVE] Using request model with inferred provider: $inferredProvider/$model" }
+            return ModelSelection(model, inferredProvider)
+        }
+
         val operation = when (mode) {
             TaskMode.CHAT -> ModelOperation.DEFAULT
             TaskMode.PLAN -> ModelOperation.PLAN

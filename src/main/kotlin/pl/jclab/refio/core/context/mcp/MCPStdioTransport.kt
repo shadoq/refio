@@ -25,6 +25,14 @@ class MCPStdioTransport(
     private var scope: CoroutineScope? = null
     private var writer: BufferedWriter? = null
 
+    companion object {
+        /** Allowed characters in environment variable names (POSIX-safe) */
+        private val ENV_NAME_PATTERN = Regex("^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+        /** Characters that could enable shell injection in env values */
+        private val DANGEROUS_VALUE_CHARS = Regex("[`\$\\\\;|&]")
+    }
+
     suspend fun connect() {
         val command = config.command ?: throw IllegalArgumentException("stdio transport requires command")
 
@@ -34,6 +42,15 @@ class MCPStdioTransport(
             redirectErrorStream(false)
             config.env.forEach { envVar ->
                 if (envVar.name.isNotBlank()) {
+                    // Validate env var name (POSIX-safe characters only)
+                    if (!ENV_NAME_PATTERN.matches(envVar.name)) {
+                        transportLogger.warn { "[${config.id}] Skipping env var with invalid name: '${envVar.name}'" }
+                        return@forEach
+                    }
+                    // Warn on potentially dangerous values (but still allow — MCP servers may need them)
+                    if (DANGEROUS_VALUE_CHARS.containsMatchIn(envVar.value)) {
+                        transportLogger.warn { "[${config.id}] Env var '${envVar.name}' contains shell metacharacters" }
+                    }
                     environment()[envVar.name] = envVar.value
                 }
             }
@@ -85,9 +102,29 @@ class MCPStdioTransport(
         readerJob?.cancel()
         stderrJob?.cancel()
         scope?.cancel()
+
+        // Close writer before destroying process to flush pending data
+        try {
+            writer?.close()
+        } catch (_: Exception) {
+            // Ignore — process may already be dead
+        }
         writer = null
 
-        process?.destroy()
+        val proc = process
+        if (proc != null) {
+            proc.destroy()
+            try {
+                // Give process 3 seconds to exit gracefully, then force-kill
+                val exited = proc.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)
+                if (!exited) {
+                    transportLogger.warn { "[${config.id}] Process did not exit gracefully, force-killing" }
+                    proc.destroyForcibly()
+                }
+            } catch (_: InterruptedException) {
+                proc.destroyForcibly()
+            }
+        }
         process = null
     }
 }

@@ -21,6 +21,7 @@ import pl.jclab.refio.core.db.repositories.TaskRepository
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.TokenEstimator
+import pl.jclab.refio.core.services.PromptTokenEstimator
 import pl.jclab.refio.core.models.api.ChatRequest
 import pl.jclab.refio.core.models.api.ChatResponse
 import pl.jclab.refio.core.models.api.SummarizeResponse
@@ -298,7 +299,7 @@ class CoreApiRouter(
             configService = configService,
             chatMessageRepository = chatMessageRepository
         )
-        val tokenEstimator = TokenEstimator()
+        val tokenEstimator = PromptTokenEstimator()
 
         // Create turn/ package components
         val turnPromptBuilder = TurnPromptBuilder(

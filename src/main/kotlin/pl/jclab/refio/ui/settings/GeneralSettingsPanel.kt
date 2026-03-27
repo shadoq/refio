@@ -55,7 +55,7 @@ class GeneralSettingsPanel(
             addItemListener { event ->
                 if (!isUpdatingProgrammatically) {
                     val isSelected = event.stateChange == ItemEvent.SELECTED
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeys.split(
+                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
                         pl.jclab.refio.core.services.ConfigService.KEY_FORMAT_MARKDOWN
                     )
                     onSettingChanged(section, key, isSelected)
@@ -76,7 +76,7 @@ class GeneralSettingsPanel(
             addItemListener { event ->
                 if (!isUpdatingProgrammatically) {
                     val isSelected = event.stateChange == ItemEvent.SELECTED
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeys.split(
+                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
                         pl.jclab.refio.core.services.ConfigService.KEY_STREAMING_ENABLED
                     )
                     onSettingChanged(section, key, isSelected)
@@ -97,7 +97,7 @@ class GeneralSettingsPanel(
             addItemListener { event ->
                 if (!isUpdatingProgrammatically) {
                     val isSelected = event.stateChange == ItemEvent.SELECTED
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeys.split(
+                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
                         pl.jclab.refio.core.services.ConfigService.KEY_ADVANCED_VIEW
                     )
                     onSettingChanged(section, key, isSelected)

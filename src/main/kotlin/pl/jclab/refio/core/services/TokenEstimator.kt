@@ -13,7 +13,12 @@ private val logger = dualLogger("TokenEstimator")
  *
  * Reference: ADR-0028 - Context Management
  */
-class TokenEstimator {
+/**
+ * Note: This is the prompt-level estimator with provider-specific multipliers (3.5 chars/token).
+ * The simpler [pl.jclab.refio.core.llm.TokenEstimator] (4 chars/token) is used for
+ * context size validation in LLMClient.
+ */
+class PromptTokenEstimator {
 
     companion object {
         // Average chars per token (conservative estimate)

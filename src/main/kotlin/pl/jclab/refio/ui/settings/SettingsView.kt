@@ -150,7 +150,7 @@ class SettingsView(
      * @param value New value for the setting
      */
     fun onSettingChanged(fullKey: String, value: Any) {
-        val (section, key) = pl.jclab.refio.core.services.ConfigKeys.split(fullKey)
+        val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(fullKey)
         onSettingChanged(section, key, value)
     }
 

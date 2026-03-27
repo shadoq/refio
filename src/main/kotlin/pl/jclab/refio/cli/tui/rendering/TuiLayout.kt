@@ -12,7 +12,7 @@ data class TuiLayoutRegions(
     val tabBarHeight: Int = 1,
     val statusBarHeight: Int = 0,
     val separatorHeight: Int = 1,
-    val promptHeight: Int = 3,
+    val promptHeight: Int = 3, // base prompt height, actual may be larger for multi-line input
     val isSplitMode: Boolean = true,
     val splitRatio: Double = 0.55,
 ) {

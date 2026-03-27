@@ -3,6 +3,7 @@ package pl.jclab.refio.cli.tui.input
 import org.jline.reader.Candidate
 import org.jline.reader.impl.DefaultParser
 import org.junit.jupiter.api.Test
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class TuiCompleterTest {
@@ -20,17 +21,11 @@ class TuiCompleterTest {
     }
 
     @Test
-    fun `should complete slash commands`() {
-        val candidates = complete("/he")
-        assertTrue(candidates.contains("/help"), "Should suggest /help for /he")
-    }
-
-    @Test
-    fun `should complete all commands for slash prefix`() {
+    fun `should complete slash commands from prompt templates`() {
         val candidates = complete("/")
-        assertTrue(candidates.size > 5, "Should suggest multiple commands")
-        assertTrue(candidates.contains("/help"))
-        assertTrue(candidates.contains("/quit"))
+        // Only prompt templates (SlashCommand.BUILTINS), no system commands
+        assertFalse(candidates.contains("/help"), "System commands should not appear")
+        assertFalse(candidates.contains("/quit"), "System commands should not appear")
     }
 
     @Test

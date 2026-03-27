@@ -11,7 +11,7 @@ import kotlinx.coroutines.*
 import pl.jclab.refio.core.context.ContextProviderRegistry
 import pl.jclab.refio.core.context.ProviderType
 import pl.jclab.refio.core.config.ConfigKeys as TypedConfigKeys
-import pl.jclab.refio.core.services.ConfigKeys
+import pl.jclab.refio.core.services.ConfigKeyUtil
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.services.core.CoreConnectionManager
 import pl.jclab.refio.services.logging.dualLogger
@@ -700,21 +700,21 @@ class ContextSettingsPanel(
         val includeContextChunks = ragSearchIncludeContextChunksCheckbox.isSelected
 
         SwingUtilities.invokeLater {
-            val (thresholdSection, thresholdKey) = ConfigKeys.split(
+            val (thresholdSection, thresholdKey) = ConfigKeyUtil.split(
                 ConfigService.KEY_RAG_SEARCH_SIMILARITY_THRESHOLD
             )
             onSettingChanged(thresholdSection, thresholdKey, threshold)
 
-            val (topKSection, topKKey) = ConfigKeys.split(ConfigService.KEY_RAG_SEARCH_TOP_K)
+            val (topKSection, topKKey) = ConfigKeyUtil.split(ConfigService.KEY_RAG_SEARCH_TOP_K)
             onSettingChanged(topKSection, topKKey, topK)
 
-            val (hybridSection, hybridKey) = ConfigKeys.split(ConfigService.KEY_RAG_SEARCH_HYBRID_ENABLED)
+            val (hybridSection, hybridKey) = ConfigKeyUtil.split(ConfigService.KEY_RAG_SEARCH_HYBRID_ENABLED)
             onSettingChanged(hybridSection, hybridKey, hybridEnabled)
 
-            val (weightSection, weightKey) = ConfigKeys.split(ConfigService.KEY_RAG_SEARCH_SEMANTIC_WEIGHT)
+            val (weightSection, weightKey) = ConfigKeyUtil.split(ConfigService.KEY_RAG_SEARCH_SEMANTIC_WEIGHT)
             onSettingChanged(weightSection, weightKey, semanticWeight)
 
-            val (contextSection, contextKey) = ConfigKeys.split(
+            val (contextSection, contextKey) = ConfigKeyUtil.split(
                 ConfigService.KEY_RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS
             )
             onSettingChanged(contextSection, contextKey, includeContextChunks)

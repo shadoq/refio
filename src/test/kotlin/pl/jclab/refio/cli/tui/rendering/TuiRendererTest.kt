@@ -4,13 +4,19 @@ import com.github.ajalt.mordant.terminal.Terminal
 import com.github.ajalt.mordant.terminal.TerminalRecorder
 import org.junit.jupiter.api.Test
 import pl.jclab.refio.cli.tui.state.*
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class TuiRendererTest {
 
     private val terminal = Terminal(terminalInterface = TerminalRecorder())
-    private val renderer = TuiRenderer(terminal)
+    private val jlineTerminal = org.jline.terminal.TerminalBuilder.builder()
+        .streams(ByteArrayInputStream(ByteArray(0)), ByteArrayOutputStream())
+        .type("dumb")
+        .build()
+    private val renderer = TuiRenderer(terminal, jlineTerminal)
 
     @Test
     fun `render should handle empty state`() {

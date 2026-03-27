@@ -52,8 +52,15 @@ class SessionManager(private val project: Project) {
             content = "Error: ${exception.message}\n\nStack trace: ${exception.stackTraceToString()}",
             createdAt = System.currentTimeMillis()
         )
-        CoroutineScope(Dispatchers.IO).launch {
-            stateManager.appendMessage(errorMessage)
+        // We can't use `cs` here because it's not yet initialized (exceptionHandler is
+        // defined before cs). GlobalScope is acceptable here as a last-resort error reporter.
+        @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
+        kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+            try {
+                stateManager.appendMessage(errorMessage)
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to append error message to state" }
+            }
         }
     }
 

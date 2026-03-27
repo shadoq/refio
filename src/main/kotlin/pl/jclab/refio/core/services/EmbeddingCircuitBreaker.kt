@@ -26,7 +26,11 @@ object EmbeddingCircuitBreaker {
         HALF_OPEN   // Testing if service is back
     }
 
-    private data class CircuitStatus(
+    /**
+     * Mutable status holder — NOT a data class to avoid equals/hashCode based on mutable fields,
+     * which would be incorrect for identity-based synchronization.
+     */
+    private class CircuitStatus(
         var state: CircuitState = CircuitState.CLOSED,
         var failureCount: Int = 0,
         var lastFailureTime: Long = 0,

@@ -11,11 +11,11 @@ import kotlin.test.assertTrue
 class TuiKeybindingsTest {
 
     @Test
-    fun `F1 should switch to Chat tab`() {
+    fun `F1 should open Help screen`() {
         val action = TuiKeybindings.resolveEscapeSequence("\u001bOP")
         assertNotNull(action)
-        assertTrue(action is TuiAction.SwitchTab)
-        assertEquals(TuiTab.CHAT, (action as TuiAction.SwitchTab).tab)
+        assertTrue(action is TuiAction.SwitchScreen)
+        assertEquals(TuiScreen.HELP, (action as TuiAction.SwitchScreen).screen)
     }
 
     @Test
@@ -71,8 +71,25 @@ class TuiKeybindingsTest {
     }
 
     @Test
-    fun `Ctrl+H should switch to history`() {
+    fun `code 8 (BS) should produce Backspace action`() {
+        // On Windows, Backspace sends code 8 (BS). Must NOT open History.
         val action = TuiKeybindings.resolveControlChar(8)
+        assertNotNull(action)
+        assertTrue(action is TuiAction.Backspace)
+    }
+
+    @Test
+    fun `code 127 (DEL) should produce Backspace action`() {
+        // On macOS/Linux, Backspace sends code 127 (DEL).
+        val action = TuiKeybindings.resolveControlChar(127)
+        assertNotNull(action)
+        assertTrue(action is TuiAction.Backspace)
+    }
+
+    @Test
+    fun `Alt+H should switch to History`() {
+        // History moved from Ctrl+H to Alt+H to avoid Backspace conflict
+        val action = TuiKeybindings.resolveEscapeSequence("\u001bh")
         assertNotNull(action)
         assertTrue(action is TuiAction.SwitchScreen)
         assertEquals(TuiScreen.HISTORY, (action as TuiAction.SwitchScreen).screen)
@@ -83,13 +100,6 @@ class TuiKeybindingsTest {
         val action = TuiKeybindings.resolveControlChar(13)
         assertNotNull(action)
         assertTrue(action is TuiAction.SendMessage)
-    }
-
-    @Test
-    fun `Backspace should produce Backspace action`() {
-        val action = TuiKeybindings.resolveControlChar(127)
-        assertNotNull(action)
-        assertTrue(action is TuiAction.Backspace)
     }
 
     @Test

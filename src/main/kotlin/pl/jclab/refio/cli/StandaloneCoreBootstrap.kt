@@ -113,11 +113,23 @@ class StandaloneCoreBootstrap(
     }
 
     /**
-     * Gracefully shut down the core layer.
+     * Gracefully shut down the core layer, releasing all resources.
      */
     fun shutdown() {
         logger.info { "Shutting down standalone core" }
+
+        // Note: CoreApiRouter doesn't expose a direct shutdown() method.
+        // Sub-routers are shut down when references are released.
+
+        try {
+            MCPManager.shutdown()
+        } catch (e: Exception) {
+            logger.warn { "Error shutting down MCP: ${e.message}" }
+        }
+
         projectRouter = null
         appRouter = null
+
+        logger.info { "Standalone core shut down" }
     }
 }

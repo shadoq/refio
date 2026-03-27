@@ -6,7 +6,7 @@ import pl.jclab.refio.cli.tui.rendering.TuiRenderBuffer
 import pl.jclab.refio.cli.tui.state.TuiState
 
 /**
- * RAG tab view — indexed files, search, statistics.
+ * RAG tab view — indexed files, search, statistics, interactive actions.
  * Mirrors RagViewPanel from the IntelliJ plugin.
  */
 object TuiRagView {
@@ -47,12 +47,71 @@ object TuiRagView {
             buf.addLine()
         }
 
-        buf.addLine(TuiColors.highlight("  Commands"))
-        buf.addLine(TuiColors.muted("    /rag-search <query>    — search indexed content"))
-        buf.addLine(TuiColors.muted("    /rag-refresh            — re-index project files"))
-        buf.addLine(TuiColors.muted("    /rag-chunks <file>      — show chunks for file"))
+        // Progress bar (when indexing)
+        if (state.ragIndexingProgress >= 0) {
+            buf.addLine(TuiColors.highlight("  Indexing Progress"))
+            buf.addLine(TuiColors.border("  ${"─".repeat((width - 4).coerceAtLeast(10))}"))
+
+            val barWidth = (width - 20).coerceIn(10, 40)
+            val filled = (barWidth * state.ragIndexingProgress).toInt()
+            val empty = barWidth - filled
+            val pctText = "${(state.ragIndexingProgress * 100).toInt()}%"
+            val bar = TuiColors.statusRunning("█".repeat(filled)) + TuiColors.muted("░".repeat(empty))
+            buf.addLine("    [$bar] $pctText")
+
+            if (state.ragIndexingStatus.isNotBlank()) {
+                buf.addLine("    ${TuiColors.muted(state.ragIndexingStatus)}")
+            }
+            buf.addLine()
+        } else if (state.ragIndexingStatus.isNotBlank()) {
+            buf.addLine("    ${TuiColors.muted(state.ragIndexingStatus)}")
+            buf.addLine()
+        }
+
+        // Indexed files table
+        val files = state.ragIndexedFiles
+        if (files.isNotEmpty()) {
+            buf.addLine(TuiColors.highlight("  Indexed Files (${files.size})"))
+            buf.addLine(TuiColors.border("  ${"─".repeat((width - 4).coerceAtLeast(10))}"))
+            // Header
+            buf.addLine(TuiColors.muted("    ${"File".padEnd(40)} ${"Chunks".padStart(6)} ${"Embeds".padStart(6)} ${"Size".padStart(8)}"))
+            // Show up to 15 files
+            val maxFiles = (height - buf.lineCount - 4).coerceIn(0, 15)
+            for ((idx, file) in files.take(maxFiles).withIndex()) {
+                val cursor = if (idx == state.ragSelectedFileIndex) "> " else "  "
+                val name = if (file.filePath.length > 36) "..." + file.filePath.takeLast(35) else file.filePath
+                val sizeStr = formatFileSize(file.sizeBytes)
+                val embColor = if (file.embeddings >= file.chunks) TuiColors.statusSuccess else TuiColors.statusPending
+                buf.addLine("  $cursor${name.padEnd(38)} ${file.chunks.toString().padStart(6)} ${embColor(file.embeddings.toString().padStart(6))} ${sizeStr.padStart(8)}")
+            }
+            if (files.size > maxFiles) {
+                buf.addLine(TuiColors.muted("    ... and ${files.size - maxFiles} more"))
+            }
+            buf.addLine()
+        }
+
+        // RAG search results
+        if (state.ragSearchResults.isNotEmpty()) {
+            buf.addLine(TuiColors.highlight("  Search Results: \"${state.ragSearchQuery}\""))
+            buf.addLine(TuiColors.border("  ${"─".repeat((width - 4).coerceAtLeast(10))}"))
+            for (result in state.ragSearchResults.take(5)) {
+                if (buf.lineCount >= height - 3) break
+                buf.addWrapped("    $result")
+            }
+            buf.addLine()
+        }
+
+        // Toolbar
+        buf.addLine()
+        buf.addLine(TuiColors.muted("  [r] Reindex  [e] Embeddings  [s] Stop  [c] Clear  [v] View chunks  [q] Search  [↑↓] Navigate"))
 
         return buf
+    }
+
+    private fun formatFileSize(bytes: Long): String = when {
+        bytes >= 1_048_576 -> "${String.format("%.1f", bytes / 1_048_576.0)}M"
+        bytes >= 1_024 -> "${String.format("%.1f", bytes / 1_024.0)}K"
+        else -> "${bytes}B"
     }
 
     fun render(terminal: Terminal, state: TuiState, contentHeight: Int) {

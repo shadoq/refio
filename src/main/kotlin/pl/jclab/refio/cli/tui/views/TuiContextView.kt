@@ -102,8 +102,9 @@ object TuiContextView {
 
         // === Section detail list ===
         buf.addLine(TuiColors.border("─".repeat((width - 2).coerceAtLeast(10))))
-        for (section in state.contextSections) {
-            if (buf.lineCount >= height - 1) break
+        val selectedCtxIdx = state.selectedContextIndex
+        for ((idx, section) in state.contextSections.withIndex()) {
+            if (buf.lineCount >= height - 3) break
             val color = sectionColors[section.colorIndex % sectionColors.size]
             val categoryColor = when (section.category) {
                 "project" -> TuiColors.contextProject
@@ -114,10 +115,26 @@ object TuiContextView {
                 else -> TuiColors.muted
             }
 
+            val marker = if (idx == selectedCtxIdx) ">" else " "
             val tokens = formatTokens(section.tokensUsed)
             val percent = if (section.percentage > 0) " (${String.format("%.1f", section.percentage)}%)" else ""
-            buf.addLine("${color("●")} ${categoryColor(section.name)} ${TuiColors.muted("$tokens$percent")}")
+            buf.addLine("$marker${color("●")} ${categoryColor(section.name)} ${TuiColors.muted("$tokens$percent")}")
+
+            // Show content preview for selected section
+            if (idx == selectedCtxIdx && section.content != null) {
+                val preview = section.content.take(200).lines().take(4)
+                for (line in preview) {
+                    if (buf.lineCount >= height - 3) break
+                    buf.addLine(TuiColors.muted("    $line"))
+                }
+                if (section.content.length > 200) {
+                    buf.addLine(TuiColors.muted("    ... (${section.content.length} chars total)"))
+                }
+            }
         }
+
+        buf.addLine()
+        buf.addLine(TuiColors.muted("  [↑↓] Navigate  [i] Inspect content"))
 
         return buf
     }

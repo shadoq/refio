@@ -146,16 +146,68 @@ Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ
 
 ### Keyboard Shortcuts
 
+#### Navigation
+
 | Key | Action |
 |-----|--------|
 | F1-F7 | Switch tabs (Chat, Steps, Context, RAG, Logs, Debug, API) |
 | F8 | Open Settings screen |
-| Ctrl+Q | Quit |
 | Ctrl+S | Settings |
-| Ctrl+M | Cycle mode (Chat / Plan / Agent) |
+| Ctrl+H | Session history |
+| Escape | Back to main screen / dismiss popup |
+| Ctrl+Q | Quit |
+| Arrow Up/Down | Scroll chat / navigate lists |
+| Page Up/Down | Scroll chat (10 lines) |
+
+#### Session Management
+
+| Key | Action |
+|-----|--------|
+| Ctrl+W | **New session** (start a fresh conversation) |
+| Ctrl+H | Browse session history (switch to previous sessions) |
+| Ctrl+L | Continue conversation (resume after interruption) |
+| Ctrl+D | Summarize conversation (compact long history) |
+
+#### Chat & Input
+
+| Key | Action |
+|-----|--------|
 | Enter | Send message |
-| Escape | Back to main screen |
-| `@` | Open context autocomplete |
+| Alt+M | Cycle mode (Chat → Plan → Agent) |
+| Ctrl+O | Select model (popup selector) |
+| Ctrl+T | Toggle thinking/reasoning mode |
+| Ctrl+E | Toggle execution mode (AUTO / INTERACTIVE) |
+| Ctrl+N | Toggle no-egress mode (local-only) |
+| Ctrl+C | Cancel current operation |
+| Arrow Left/Right | Move cursor in input |
+
+#### Message Selection
+
+| Key | Action |
+|-----|--------|
+| Ctrl+P | Select previous message |
+| Ctrl+B | Select next message |
+| Ctrl+Y | Copy selected (or last) message to clipboard |
+| Ctrl+F | Filter chat by agent (multi-agent mode) |
+
+#### Autocomplete
+
+| Key | Action |
+|-----|--------|
+| `@` | Open context autocomplete (@file, @folder, @grep, @diff, etc.) |
+| `!` | Open subagent autocomplete (!review, !security, etc.) |
+| `/` | Open slash command autocomplete (/explain, /refactor, etc.) |
+| Tab / Arrow Down | Next autocomplete candidate |
+| Arrow Up | Previous autocomplete candidate |
+| Enter | Accept autocomplete selection |
+| Escape | Dismiss autocomplete |
+
+#### Input Features
+
+- **Multi-line input** — input expands up to 4 visible lines as you type
+- **Paste support** — large pastes (>200 chars) show a preview marker
+- **Slash commands** — type `/` at the start for prompt templates (/explain, /test, /fix, /refactor, etc.)
+- **System commands** — /help, /quit, /clear, /history, /export, /resend, /rewind, /edit, and more (type `/help` for full list)
 
 ### Architecture
 

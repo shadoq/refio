@@ -1277,6 +1277,135 @@ The Settings screen provides full configuration access via `ConfigRouter`, match
 
 ---
 
+### TUI Keyboard Reference
+
+#### Navigation & Tabs
+
+| Key | Action |
+|-----|--------|
+| F1-F7 | Switch tabs: Chat, Steps, Context, RAG, Logs, Debug, API |
+| F8 | Settings screen (←/→ switch sub-tabs, ↑/↓ navigate fields) |
+| Ctrl+S | Settings (alternative) |
+| Ctrl+H | Session history browser |
+| Escape | Back to main screen / dismiss popup |
+| Ctrl+Q | Quit |
+| Arrow Up/Down | Scroll chat messages / navigate lists |
+| Page Up/Down | Scroll chat (10 lines at a time) |
+
+#### Session Management
+
+| Key | Action | Details |
+|-----|--------|---------|
+| Ctrl+W | **New session** | Starts a fresh conversation. Previous session is saved and can be restored from history. |
+| Ctrl+H | **History** | Browse all previous sessions. Select one and press Enter to switch. Shows mode, status, date, tokens, cost, and name. |
+| Ctrl+L | **Continue** | Resume current conversation after interruption (e.g. if agent stopped mid-task). |
+| Ctrl+D | **Summarize** | Compact long conversation history to save context window space. Uses LLM to generate a summary of older messages. |
+
+You can also use slash commands for session management:
+- `/history` — Open session history
+- `/export <path>` — Export conversation to Markdown file
+- `/resend` — Resend last user message
+- `/rewind [N]` — Rewind to message N and resend
+- `/edit [N]` — Edit user message N (loads into input for re-editing)
+- `/copyall` — Copy entire conversation to clipboard
+- `/rate +/-` — Rate conversation quality
+
+#### Mode, Model & Toggles
+
+| Key | Action | Details |
+|-----|--------|---------|
+| Alt+M | Cycle mode | CHAT → PLAN → AGENT → CHAT. Mode determines available tools. |
+| Ctrl+O | Select model | Opens popup with available models. Arrow keys to select, Enter to confirm. |
+| Ctrl+T | Toggle thinking | Enable/disable reasoning mode (extended thinking for supported models). |
+| Ctrl+E | Toggle execution | AUTO (agent runs autonomously) / INTERACTIVE (step-by-step approval). |
+| Ctrl+N | Toggle no-egress | Local-only mode — blocks all cloud provider API calls. |
+
+#### Chat & Input
+
+| Key | Action |
+|-----|--------|
+| Enter | Send message |
+| Ctrl+C | Cancel current operation (streaming/agent execution) |
+| Arrow Left/Right | Move cursor within input |
+| Backspace | Delete character before cursor |
+
+**Multi-line input:** The input area expands from 1 to 4 lines as you type. Long lines wrap automatically. An overflow indicator shows when content exceeds 4 lines.
+
+**Paste support:** Large pastes (>200 characters) display a preview marker showing character count and first 30 characters. The full content is sent when you press Enter.
+
+#### Message Selection & Clipboard
+
+| Key | Action |
+|-----|--------|
+| Ctrl+P | Select previous message (move selection up) |
+| Ctrl+B | Select next message (move selection down) |
+| Ctrl+Y | Copy selected (or last) message to clipboard |
+| Ctrl+F | Cycle agent filter (multi-agent mode — filter chat by agent) |
+
+#### Autocomplete
+
+| Trigger | Action | Candidates |
+|---------|--------|------------|
+| `@` | Context autocomplete | @file, @folder, @codebase, @grep, @diff, @url, @docs, @clipboard, etc. |
+| `!` | Subagent autocomplete | !review, !security, !architect, !docs, and custom subagents |
+| `/` | Slash command autocomplete | /explain, /refactor, /test, /fix, /implement, /optimize, /security-review, etc. |
+
+When the autocomplete popup is visible:
+- **Arrow Down / Tab** — Next candidate
+- **Arrow Up** — Previous candidate
+- **Enter** — Accept selection
+- **Escape** — Dismiss
+- **Keep typing** — Filters candidates in real-time
+
+#### Slash Commands Reference
+
+**Prompt templates** (sent to LLM with your input as context):
+
+| Command | Description |
+|---------|-------------|
+| /explain | Explain what this code does |
+| /refactor | Suggest focused refactoring |
+| /test | Generate unit tests |
+| /fix | Fix a bug with root cause analysis |
+| /implement | Implement a change with plan |
+| /optimize | Analyze performance, propose optimizations |
+| /simplify | Simplify complex code |
+| /document | Generate documentation |
+| /security-review | Security vulnerability analysis |
+| /translate | Translate code to another language |
+
+**System commands** (executed locally, not sent to LLM):
+
+| Command | Description |
+|---------|-------------|
+| /help, /? | Show help with all commands and shortcuts |
+| /quit, /q | Exit Refio |
+| /clear | Clear input buffer |
+| /history | Browse session history |
+| /history-delete \<id\> | Delete a session |
+| /export \<path\> | Export conversation to Markdown |
+| /resend | Resend last user message |
+| /rewind [N] | Rewind to message N and resend |
+| /edit [N] | Edit user message N |
+| /copyall | Copy entire conversation to clipboard |
+| /rate +/- | Rate conversation quality |
+| /prompt | Show current system prompt |
+| /add-step \<desc\> | Add a new step to the plan |
+| /snippet \<file\> [start] [end] | Add file snippet as context |
+| /open \<file\> | Open file in external editor |
+| /clearctx | Remove all @context references from input |
+| /removectx \<name\> | Remove specific @context reference |
+| /docs-add \<url\> [depth] | Add documentation source for indexing |
+| /docs-delete \<id\> | Delete documentation source |
+| /docs-reindex \<id\> | Reindex documentation source |
+| /rag-search \<query\> | Search RAG index |
+| /mcp-add \<type\> \<name\> \<cmd\> | Add MCP server (stdio/http) |
+| /mcp-edit \<id\> \<field\> \<value\> | Edit MCP server field |
+| /mcp-remove \<id\> | Remove MCP server |
+| /mcp-list | List MCP servers with status |
+
+---
+
 ## Quick Reference
 
 ### Build Commands

@@ -2,11 +2,13 @@ package pl.jclab.refio.core.services
 
 import kotlinx.coroutines.delay
 import pl.jclab.refio.core.api.StreamCallback
+import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.logging.dualLogger
 import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicInteger
 
 private val logger = dualLogger("LLMRetryHandler")
 
@@ -29,9 +31,9 @@ private val logger = dualLogger("LLMRetryHandler")
 class LLMRetryHandler(
     private val llmClient: LLMClient
 ) {
-    // Track retry statistics
-    private var totalRetries = 0
-    private var totalFailures = 0
+    // Track retry statistics (thread-safe)
+    private val totalRetries = AtomicInteger(0)
+    private val totalFailures = AtomicInteger(0)
 
     /**
      * Call LLM with automatic retry on transient errors.
@@ -84,13 +86,13 @@ class LLMRetryHandler(
 
                 if (!shouldRetry) {
                     logger.error(e) { "[RETRY] Non-retryable error, giving up: ${e.message}" }
-                    totalFailures++
+                    totalFailures.incrementAndGet()
                     throw e
                 }
 
                 if (attempt < maxRetries - 1) {
                     val delayMs = baseDelayMs * (1 shl attempt)  // Exponential: 1s, 2s, 4s
-                    totalRetries++
+                    totalRetries.incrementAndGet()
 
                     logger.warn {
                         "[RETRY] Attempt ${attempt + 1}/$maxRetries failed: ${e.message}. " +
@@ -99,7 +101,7 @@ class LLMRetryHandler(
 
                     delay(delayMs)
                 } else {
-                    totalFailures++
+                    totalFailures.incrementAndGet()
                     logger.error(e) { "[RETRY] All $maxRetries attempts failed" }
                 }
             }
@@ -111,44 +113,45 @@ class LLMRetryHandler(
     /**
      * Determine if an exception should trigger a retry.
      *
+     * Uses typed RefioError subclasses first, then falls back to message matching
+     * only for non-RefioError exceptions (e.g. raw Ktor/IO exceptions).
+     *
      * @param e Exception to check
      * @return True if exception is retryable
      */
     private fun shouldRetryException(e: Exception): Boolean {
-        // Don't retry if user cancelled
-        if (e is CancellationException) {
-            return false
+        // Never retry cancellation
+        if (e is CancellationException) return false
+
+        // Never retry authentication errors
+        if (e is RefioError.LLMAuthentication) return false
+        if (e is RefioError.ProviderNotConfigured) return false
+
+        // Always retry rate limits and timeouts (typed)
+        if (e is RefioError.LLMRateLimit) return true
+        if (e is RefioError.LLMTimeout) return true
+
+        // For generic LLM errors, check the underlying cause
+        if (e is RefioError.LLMError) {
+            return shouldRetryByMessage(e)
         }
 
+        // For non-RefioError exceptions (raw IO/network), check message
+        return shouldRetryByMessage(e)
+    }
+
+    /**
+     * Fallback: check exception message for retryable patterns.
+     * Used for non-typed exceptions (Ktor, IO, etc).
+     */
+    private fun shouldRetryByMessage(e: Exception): Boolean {
         val message = e.message?.lowercase() ?: return false
-
-        // Check for retryable error patterns
         return when {
-            // Rate limits
-            message.contains("rate limit") -> true
-            message.contains("too many requests") -> true
-            message.contains("429") -> true
-
-            // Timeouts
-            message.contains("timeout") -> true
-            message.contains("timed out") -> true
-
-            // Server errors
-            message.contains("503") -> true
-            message.contains("502") -> true
-            message.contains("service unavailable") -> true
-            message.contains("bad gateway") -> true
-
-            // Overloaded
-            message.contains("overloaded") -> true
-            message.contains("server is busy") -> true
-
-            // Network errors (often transient)
-            message.contains("connection refused") -> true
-            message.contains("connection reset") -> true
-            message.contains("connection timed out") -> true
-
-            // Default: don't retry
+            message.contains("rate limit") || message.contains("too many requests") -> true
+            message.contains("timeout") || message.contains("timed out") -> true
+            message.contains("service unavailable") || message.contains("bad gateway") -> true
+            message.contains("overloaded") || message.contains("server is busy") -> true
+            message.contains("connection refused") || message.contains("connection reset") -> true
             else -> false
         }
     }
@@ -157,16 +160,16 @@ class LLMRetryHandler(
      * Get retry statistics.
      */
     fun getStats(): RetryStats = RetryStats(
-        totalRetries = totalRetries,
-        totalFailures = totalFailures
+        totalRetries = totalRetries.get(),
+        totalFailures = totalFailures.get()
     )
 
     /**
      * Reset statistics.
      */
     fun resetStats() {
-        totalRetries = 0
-        totalFailures = 0
+        totalRetries.set(0)
+        totalFailures.set(0)
         logger.info { "[RETRY] Statistics reset" }
     }
 }

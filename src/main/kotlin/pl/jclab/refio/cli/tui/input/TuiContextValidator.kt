@@ -3,10 +3,11 @@ package pl.jclab.refio.cli.tui.input
 import java.io.File
 
 /**
- * Validates context references (@file, @folder) before adding to prompt.
+ * Validates context references (@file, @folder, @codebase, @docs, @git_diff, etc.)
+ * before adding to prompt.
  * Adapted from plugin's ContextValidator (ui/components/autocomplete/ContextValidator.kt).
  *
- * Checks file size and folder depth to prevent sending too much context to the LLM.
+ * Checks file size, folder depth, and availability of RAG/git features.
  */
 object TuiContextValidator {
 
@@ -26,7 +27,16 @@ object TuiContextValidator {
         return when {
             reference.startsWith("@file:") -> validateFile(reference.removePrefix("@file:"), projectRoot)
             reference.startsWith("@folder:") -> validateFolder(reference.removePrefix("@folder:"), projectRoot)
-            else -> ValidationResult(isValid = true) // other context types don't need validation
+            reference.startsWith("@codebase:") -> validateCodebase(reference.removePrefix("@codebase:"), projectRoot)
+            reference.startsWith("@docs:") -> validateDocs(reference.removePrefix("@docs:"), projectRoot)
+            reference == "@git_diff" -> validateGitDiff(projectRoot)
+            reference.startsWith("@git_commit:") -> validateGitCommit(reference.removePrefix("@git_commit:"), projectRoot)
+            reference.startsWith("@url:") -> validateUrl(reference.removePrefix("@url:"))
+            reference.startsWith("@grep:") -> validateGrep(reference.removePrefix("@grep:"))
+            // Simple refs that don't need validation
+            reference in listOf("@selection", "@current", "@open_files", "@recent", "@problems", "@terminal") ->
+                ValidationResult(isValid = true)
+            else -> ValidationResult(isValid = true)
         }
     }
 
@@ -79,6 +89,67 @@ object TuiContextValidator {
             )
         }
 
+        return ValidationResult(isValid = true)
+    }
+
+    private fun validateCodebase(query: String, projectRoot: String): ValidationResult {
+        if (query.isBlank()) {
+            return ValidationResult(isValid = false, warning = "@codebase: requires a search query")
+        }
+        // Check if RAG index exists (look for database file)
+        val dbFile = File(projectRoot, ".refio/database.sqlite")
+        if (!dbFile.exists()) {
+            return ValidationResult(isValid = true, warning = "RAG index may not be available. Run reindex first.")
+        }
+        return ValidationResult(isValid = true)
+    }
+
+    private fun validateDocs(query: String, projectRoot: String): ValidationResult {
+        if (query.isBlank()) {
+            return ValidationResult(isValid = false, warning = "@docs: requires a search query")
+        }
+        return ValidationResult(isValid = true)
+    }
+
+    private fun validateGitDiff(projectRoot: String): ValidationResult {
+        val gitDir = File(projectRoot, ".git")
+        if (!gitDir.exists()) {
+            return ValidationResult(isValid = true, warning = "Not a git repository — @git_diff may not work")
+        }
+        return ValidationResult(isValid = true)
+    }
+
+    private fun validateGitCommit(ref: String, projectRoot: String): ValidationResult {
+        if (ref.isBlank()) {
+            return ValidationResult(isValid = false, warning = "@git_commit: requires a commit reference (hash, branch, tag)")
+        }
+        val gitDir = File(projectRoot, ".git")
+        if (!gitDir.exists()) {
+            return ValidationResult(isValid = true, warning = "Not a git repository — @git_commit may not work")
+        }
+        return ValidationResult(isValid = true)
+    }
+
+    private fun validateUrl(url: String): ValidationResult {
+        if (url.isBlank()) {
+            return ValidationResult(isValid = false, warning = "@url: requires a URL")
+        }
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            return ValidationResult(isValid = false, warning = "@url: must start with http:// or https://")
+        }
+        return ValidationResult(isValid = true)
+    }
+
+    private fun validateGrep(pattern: String): ValidationResult {
+        if (pattern.isBlank()) {
+            return ValidationResult(isValid = false, warning = "@grep: requires a search pattern")
+        }
+        // Validate regex
+        try {
+            Regex(pattern)
+        } catch (_: Exception) {
+            return ValidationResult(isValid = true, warning = "Invalid regex, will use literal search")
+        }
         return ValidationResult(isValid = true)
     }
 

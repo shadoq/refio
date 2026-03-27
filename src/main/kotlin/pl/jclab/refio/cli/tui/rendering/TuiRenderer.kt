@@ -1,12 +1,15 @@
 package pl.jclab.refio.cli.tui.rendering
 
 import com.github.ajalt.mordant.terminal.Terminal
+import pl.jclab.refio.cli.tui.components.TuiPromptInput
+import pl.jclab.refio.cli.tui.screens.TuiHelpScreen
 import pl.jclab.refio.cli.tui.screens.TuiHistoryScreen
 import pl.jclab.refio.cli.tui.screens.TuiSettingsScreen
 import pl.jclab.refio.cli.tui.state.TuiScreen
 import pl.jclab.refio.cli.tui.state.TuiState
 import pl.jclab.refio.cli.tui.state.TuiTab
 import pl.jclab.refio.cli.tui.views.*
+import java.io.Writer
 
 /**
  * Main rendering engine for split-pane TUI.
@@ -16,8 +19,9 @@ import pl.jclab.refio.cli.tui.views.*
  * painted on top. The entire composed frame is flushed to the terminal in
  * one atomic write — no partial draws, no cursor repositioning between draws.
  *
- * This architecture supports arbitrary overlays: autocomplete popups,
- * confirmation dialogs, file pickers, etc.
+ * All output goes through the JLine terminal's writer to ensure ANSI control
+ * sequences are sent through the same channel as the terminal's input handling.
+ * Mordant Terminal is kept only for text styling (render Markdown widgets).
  *
  * Layout:
  * ```
@@ -31,27 +35,47 @@ import pl.jclab.refio.cli.tui.views.*
  * └────────────────────────────┴───────────────────────────────────────────────────────┘
  * ```
  */
-class TuiRenderer(val terminal: Terminal) {
+class TuiRenderer(
+    val terminal: Terminal,
+    private val jlineTerminal: org.jline.terminal.Terminal
+) {
+
+    /** Single output channel — all ANSI goes through JLine's writer. */
+    private val output: Writer = jlineTerminal.writer()
 
     private var lastRenderedHash: Int = 0
     private var lastWidth: Int = 0
     private var lastHeight: Int = 0
 
+    private fun rawWrite(s: String) {
+        output.write(s)
+        output.flush()
+    }
+
     fun showLoading(message: String) {
-        terminal.println(TuiColors.accent(message))
+        val text = TuiColors.accent(message)
+        rawWrite("\u001b[H${text}\u001b[K")
     }
 
     fun showError(message: String) {
-        terminal.println(TuiColors.system("Error: $message"))
+        val text = TuiColors.system("Error: $message")
+        rawWrite("\u001b[H${text}\u001b[K")
     }
 
     fun enterFullScreen() {
-        terminal.print("\u001b[?1049h") // alternate screen buffer
+        rawWrite(
+            "\u001b[?1049h" + // alternate screen buffer
+            "\u001b[?7l" +    // disable auto-wrap — prevents line wrapping from creating scroll
+            "\u001b[2J\u001b[H" // clear screen + home
+        )
     }
 
     fun exitFullScreen() {
-        terminal.print("\u001b[?25h")    // show cursor
-        terminal.print("\u001b[?1049l")  // leave alternate screen buffer
+        rawWrite(
+            "\u001b[?25h" +    // show cursor
+            "\u001b[?7h" +     // re-enable auto-wrap
+            "\u001b[?1049l"    // leave alternate screen buffer
+        )
     }
 
     /**
@@ -65,17 +89,19 @@ class TuiRenderer(val terminal: Terminal) {
     }
 
     fun render(state: TuiState) {
-        val size = terminal.size
-        val resized = size.width != lastWidth || size.height != lastHeight
-        lastWidth = size.width
-        lastHeight = size.height
+        val width = jlineTerminal.width
+        val height = jlineTerminal.height
+        val resized = width != lastWidth || height != lastHeight
+        lastWidth = width
+        lastHeight = height
 
         val hash = state.hashCode()
         if (hash == lastRenderedHash && !resized) return
         lastRenderedHash = hash
 
         val isSplit = state.screen == TuiScreen.MAIN && state.activeTab != TuiTab.CHAT
-        val layout = TuiLayoutRegions.fromTerminal(size.width, size.height, isSplitMode = isSplit)
+        val effectiveHeight = height.coerceAtLeast(TuiLayoutRegions.MIN_HEIGHT)
+        val layout = TuiLayoutRegions.fromTerminal(width, effectiveHeight, isSplitMode = isSplit)
 
         // === 1. Build framebuffer ===
         val screen = TuiScreenBuffer(layout.width, layout.height)
@@ -91,6 +117,7 @@ class TuiRenderer(val terminal: Terminal) {
             TuiScreen.MAIN -> buildMainScreenLines(state, layout)
             TuiScreen.HISTORY -> TuiHistoryScreen.renderToLines(state, layout.width, layout.contentHeight)
             TuiScreen.SETTINGS -> TuiSettingsScreen.renderToLines(state, layout.width, layout.contentHeight)
+            TuiScreen.HELP -> TuiHelpScreen.renderToLines(state, layout.width, layout.contentHeight)
         }
         screen.setRows(contentStartRow, contentLines)
 
@@ -99,21 +126,38 @@ class TuiRenderer(val terminal: Terminal) {
             applyAutocompleteOverlay(screen, state, layout)
         }
 
+        // Model selector overlay
+        if (state.modelSelectorVisible && state.modelSelectorCandidates.isNotEmpty()) {
+            applyModelSelectorOverlay(screen, state, layout)
+        }
+
         // Approval dialog overlay (takes priority over autocomplete)
         if (state.pendingApprovals.isNotEmpty()) {
             applyApprovalOverlay(screen, state, layout)
         }
 
-        // === 3. Flush to terminal ===
-        screen.flush(terminal, clearScreen = resized)
+        // === 3. Flush to terminal (through JLine writer) ===
+        screen.flush(output, clearScreen = resized)
 
         // === 4. Position cursor ===
         if (state.screen == TuiScreen.MAIN) {
-            val inputRow = layout.tabBarHeight + layout.separatorHeight + layout.contentHeight
-            val inputCol = 3 + TuiRenderBuffer.visibleLength(state.inputBuffer) // "> " + input
-            screen.positionCursorAndShow(terminal, inputRow, inputCol)
+            // Calculate cursor position within multi-line input
+            val prefixLen = 2 // "> "
+            val editableWidth = (if (layout.isSplitMode) layout.leftPanelWidth else layout.contentWidth) - prefixLen
+            val (cursorRow, cursorCol) = TuiPromptInput.getCursorRowCol(
+                state.inputBuffer, state.cursorPosition, editableWidth.coerceAtLeast(10)
+            )
+            // The input lines start at (contentHeight - promptLines + status/separator lines)
+            // The last N lines of contentHeight are the prompt, and input starts after separator+status
+            val promptLines = TuiPromptInput.renderToLines(state, editableWidth + prefixLen)
+            val inputStartLine = promptLines.size - // total prompt lines
+                (promptLines.size - 2).coerceAtLeast(1) // lines that are input (subtract separator+status)
+            val inputRow = layout.tabBarHeight + layout.separatorHeight + layout.contentHeight -
+                promptLines.size + 2 + cursorRow + inputStartLine
+            val inputCol = (if (cursorRow == 0) prefixLen + 1 else 2 + 1) + cursorCol // prefix width + col
+            screen.positionCursorAndShow(output, inputRow, inputCol)
         } else {
-            screen.showCursor(terminal)
+            screen.showCursor(output)
         }
     }
 
@@ -128,8 +172,10 @@ class TuiRenderer(val terminal: Terminal) {
     }
 
     private fun buildFullWidthChatLines(state: TuiState, layout: TuiLayoutRegions): List<String> {
-        val chatBuf = TuiChatView.renderMessages(terminal, state, layout.contentWidth, layout.chatHeight)
         val promptBuf = TuiChatView.renderPrompt(state, layout.contentWidth)
+        val actualPromptHeight = promptBuf.lineCount
+        val chatHeight = (layout.contentHeight - actualPromptHeight).coerceAtLeast(3)
+        val chatBuf = TuiChatView.renderMessages(terminal, state, layout.contentWidth, chatHeight)
         return chatBuf.getVisibleLines() + promptBuf.getLines()
     }
 
@@ -137,8 +183,10 @@ class TuiRenderer(val terminal: Terminal) {
         val leftW = layout.leftPanelWidth
         val rightW = layout.rightPanelWidth
 
-        val chatBuf = TuiChatView.renderMessages(terminal, state, leftW, layout.chatHeight)
         val promptBuf = TuiChatView.renderPrompt(state, leftW)
+        val actualPromptHeight = promptBuf.lineCount
+        val chatHeight = (layout.contentHeight - actualPromptHeight).coerceAtLeast(3)
+        val chatBuf = TuiChatView.renderMessages(terminal, state, leftW, chatHeight)
         val leftLines = chatBuf.getVisibleLines() + promptBuf.getLines()
 
         val rightBuf = renderRightPanel(state, rightW, layout.contentHeight)
@@ -160,31 +208,23 @@ class TuiRenderer(val terminal: Terminal) {
             TuiTab.LOGS -> TuiLogsView.renderToBuffer(state, width, height)
             TuiTab.DEBUG -> TuiDebugView.renderToBuffer(state, width, height)
             TuiTab.API_LOGS -> TuiApiLogsView.renderToBuffer(state, width, height)
+            TuiTab.FILES -> TuiFilesView.renderToBuffer(state, width, height)
         }
     }
 
     // === Tab bar ===
 
     private fun buildTabBarLine(state: TuiState, layout: TuiLayoutRegions): String {
-        val tabs = TuiTab.entries.mapIndexed { i, tab ->
-            val label = " F${i + 1}:${tab.label} "
-            if (tab == state.activeTab) TuiColors.tabActive(label) else TuiColors.tabInactive(label)
-        }
-        val settingsLabel = if (state.screen == TuiScreen.SETTINGS) TuiColors.tabActive(" F8:Set ") else TuiColors.tabInactive(" F8:Set ")
         val sep = TuiColors.border("│")
-        val leftPart = tabs.joinToString(sep) + sep + settingsLabel
-
-        val mode = TuiColors.accent("[${state.mode}|${state.model ?: "default"}]")
-        val streaming = if (state.isStreaming) TuiColors.statusRunning(" streaming...") else ""
-        val cost = TuiColors.muted(" \$${String.format("%.4f", state.totalCostUsd)}|${formatTokens(state.totalTokens)}tok")
-        val quit = TuiColors.muted(" [Ctrl+Q]")
-        val rightPart = "$mode$streaming$cost$quit"
-
-        val leftVisible = TuiRenderBuffer.visibleLength(leftPart)
-        val rightVisible = TuiRenderBuffer.visibleLength(rightPart)
-        val gap = (layout.width - leftVisible - rightVisible).coerceAtLeast(1)
-
-        return "$leftPart${" ".repeat(gap)}$rightPart"
+        val helpLabel = if (state.screen == TuiScreen.HELP) TuiColors.tabActive(" F1:Help ") else TuiColors.tabInactive(" F1:Help ")
+        val tabLabels = TuiTab.entries.filter { it != TuiTab.CHAT }.map { tab ->
+            val fKeyNum = tab.fKey ?: (tab.ordinal + 1)
+            val label = " F${fKeyNum}:${tab.label} "
+            if (tab == state.activeTab && state.screen == TuiScreen.MAIN) TuiColors.tabActive(label) else TuiColors.tabInactive(label)
+        }
+        val settingsLabel = if (state.screen == TuiScreen.SETTINGS) TuiColors.tabActive(" F9:Set ") else TuiColors.tabInactive(" F9:Set ")
+        val tabsPart = helpLabel + sep + tabLabels.joinToString(sep) + sep + settingsLabel
+        return tabsPart
     }
 
     // === Overlays ===
@@ -270,7 +310,7 @@ class TuiRenderer(val terminal: Terminal) {
 
         // Separator + prompt
         lines.add(TuiColors.border("├") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┤"))
-        val promptText = " [y] Approve  [n] Reject  [Esc] Skip"
+        val promptText = " [y] Approve  [n] Reject  [t] Trust  [Esc] Skip"
         lines.add(TuiColors.border("│") + TuiColors.accent(promptText.padEnd(boxWidth - 2)) + TuiColors.border("│"))
         lines.add(TuiColors.border("└") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┘"))
 
@@ -281,7 +321,53 @@ class TuiRenderer(val terminal: Terminal) {
         screen.overlay(startRow, startCol, lines)
     }
 
-    private fun formatTokens(tokens: Long): String {
-        return if (tokens > 1000) "${String.format("%.1f", tokens / 1000.0)}K" else tokens.toString()
+    /**
+     * Render model selector popup as a centered overlay.
+     */
+    private fun applyModelSelectorOverlay(screen: TuiScreenBuffer, state: TuiState, layout: TuiLayoutRegions) {
+        val candidates = state.modelSelectorCandidates
+        val selected = state.modelSelectorIndex
+        val maxVisible = 10.coerceAtMost(candidates.size)
+        val longestModel = candidates.maxOfOrNull { it.length } ?: 20
+        val boxWidth = (longestModel + 6).coerceIn(30, layout.width - 4)
+        val innerWidth = boxWidth - 4
+
+        val lines = mutableListOf<String>()
+
+        // Title
+        lines.add(TuiColors.border("┌─") + TuiColors.highlight(" Select Model ") + TuiColors.border("─".repeat((boxWidth - 18).coerceAtLeast(0)) + "┐"))
+
+        // Candidates
+        val startIdx = if (selected >= maxVisible) selected - maxVisible + 1 else 0
+        for (i in 0 until maxVisible) {
+            val idx = startIdx + i
+            if (idx >= candidates.size) break
+            val candidate = candidates[idx]
+            val display = candidate.take(innerWidth).padEnd(innerWidth)
+            val marker = if (candidate == state.model) TuiColors.statusSuccess("● ") else "  "
+            if (idx == selected) {
+                lines.add(TuiColors.border("│") + TuiColors.tabActive(" $marker$display ") + TuiColors.border("│"))
+            } else {
+                lines.add(TuiColors.border("│") + " $marker$display " + TuiColors.border("│"))
+            }
+        }
+
+        if (candidates.size > maxVisible) {
+            val scrollInfo = " (${startIdx + 1}-${(startIdx + maxVisible).coerceAtMost(candidates.size)} of ${candidates.size})"
+            lines.add(TuiColors.border("│") + TuiColors.muted(scrollInfo.padEnd(boxWidth - 2)) + TuiColors.border("│"))
+        }
+
+        // Footer
+        lines.add(TuiColors.border("├") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┤"))
+        val hint = " [↑↓] Navigate  [Enter] Select  [Esc] Cancel"
+        lines.add(TuiColors.border("│") + TuiColors.muted(hint.take(boxWidth - 2).padEnd(boxWidth - 2)) + TuiColors.border("│"))
+        lines.add(TuiColors.border("└") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┘"))
+
+        // Center the dialog
+        val startRow = ((layout.height - lines.size) / 2).coerceAtLeast(2)
+        val startCol = ((layout.width - boxWidth) / 2).coerceAtLeast(0)
+
+        screen.overlay(startRow, startCol, lines)
     }
+
 }
