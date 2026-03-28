@@ -54,6 +54,17 @@ object TuiStepsView {
                 val statusIcon = statusIcon(subtask.status)
                 val statusStyle = statusStyle(subtask.status)
 
+                // Data preservation badge for completed steps
+                val dataBadge = if (subtask.status == "COMPLETED" && subtask.result != null && subtask.resultSummary != null) {
+                    val resultLen = subtask.result.length
+                    val summaryLen = subtask.resultSummary.length
+                    if (resultLen <= 32_000 && resultLen > summaryLen) {
+                        TuiColors.statusSuccess(" [FULL]")
+                    } else if (resultLen > 32_000) {
+                        TuiColors.statusPending(" [SUMM]")
+                    } else ""
+                } else ""
+
                 // Model + duration suffix for completed/failed steps
                 val modelSuffix = if (subtask.status in listOf("COMPLETED", "FAILED")) {
                     val parts = mutableListOf<String>()
@@ -65,22 +76,41 @@ object TuiStepsView {
                     if (parts.isNotEmpty()) TuiColors.muted(" [${parts.joinToString(" ")}]") else ""
                 } else ""
 
-                val line = "$prefix[$orderNum] $statusIcon ${statusStyle(subtask.status.padEnd(9))} ${subtask.name}$modelSuffix"
+                val line = "$prefix[$orderNum] $statusIcon ${statusStyle(subtask.status.padEnd(9))} ${subtask.name}$dataBadge$modelSuffix"
                 buf.addLine(line)
 
                 // Show expanded details for selected step
                 if (isSelected && subtask.status in listOf("COMPLETED", "FAILED", "RUNNING")) {
-                    if (subtask.tokensIn > 0 || subtask.costUsd > 0.0) {
+                    if (subtask.description.isNotBlank()) {
+                        buf.addLine(TuiColors.muted("       Desc: ${subtask.description.take(120)}"))
+                    }
+                    if (subtask.provider != null) {
+                        buf.addLine(TuiColors.muted("       Provider: ${subtask.provider}"))
+                    }
+                    if (subtask.model != null) {
+                        buf.addLine(TuiColors.muted("       Model: ${subtask.model}"))
+                    }
+                    if (subtask.tokensIn > 0 || subtask.tokensOut > 0 || subtask.costUsd > 0.0) {
+                        val totalTokens = subtask.tokensIn + subtask.tokensOut
                         buf.addLine(TuiColors.muted(
-                            "       Tokens: ${subtask.tokensIn}/${subtask.tokensOut}  " +
-                                    "Cost: $${String.format("%.4f", subtask.costUsd)}"
+                            "       Tokens: ${subtask.tokensIn} in / ${subtask.tokensOut} out ($totalTokens total)"
                         ))
+                        buf.addLine(TuiColors.muted(
+                            "       Cost: $${String.format("%.6f", subtask.costUsd)}"
+                        ))
+                    }
+                    if (subtask.startedAt != null && subtask.finishedAt != null) {
+                        val durationSec = (subtask.finishedAt - subtask.startedAt) / 1000.0
+                        buf.addLine(TuiColors.muted("       Duration: ${String.format("%.1f", durationSec)}s"))
                     }
                     if (subtask.toolName != null) {
                         buf.addLine(TuiColors.muted("       Tool: ${subtask.toolName}"))
                     }
+                    if (subtask.toolArgs != null) {
+                        buf.addLine(TuiColors.muted("       Args: ${subtask.toolArgs.take(150)}"))
+                    }
                     if (subtask.resultSummary != null) {
-                        val summary = subtask.resultSummary.take(120)
+                        val summary = subtask.resultSummary.take(200)
                         buf.addLine(TuiColors.muted("       Result: $summary"))
                     }
                 }

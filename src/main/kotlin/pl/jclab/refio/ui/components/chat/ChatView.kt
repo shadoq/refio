@@ -656,8 +656,13 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
 
     private fun shouldFlushImmediately(previous: List<Message>, current: List<Message>): Boolean {
         if (previous.isEmpty()) return true
-        if (current.none { it.isStreaming }) return true
 
+        // Structural change (messages added or removed) — show immediately
+        if (current.size != previous.size ||
+            current.map { it.id } != previous.map { it.id }
+        ) return true
+
+        // Streaming → finished transition — show final state immediately
         val prevById = previous.associateBy { it.id }
         return current.any { msg ->
             val prev = prevById[msg.id] ?: return@any false

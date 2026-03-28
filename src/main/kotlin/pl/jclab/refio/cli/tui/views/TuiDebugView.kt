@@ -13,34 +13,63 @@ object TuiDebugView {
 
     fun renderToBuffer(state: TuiState, width: Int, height: Int): TuiRenderBuffer {
         val buf = TuiRenderBuffer(width, height)
+
+        // Build all content lines first, then apply scroll
+        val allLines = buildDebugLines(state, width)
+
+        // Apply scroll offset
+        val scrollOffset = state.debugScrollOffset.coerceIn(0, (allLines.size - height + 2).coerceAtLeast(0))
+        val visible = allLines.drop(scrollOffset).take(height - 1) // -1 for toolbar
+
+        for (line in visible) {
+            buf.addLine(line)
+        }
+
+        // Fill remaining
+        val remaining = (height - 1) - visible.size
+        repeat(remaining.coerceAtLeast(0)) { buf.addLine("") }
+
+        // Toolbar
+        if (allLines.size > height - 1) {
+            val pct = if (allLines.size > height) ((scrollOffset.toDouble() / (allLines.size - height + 2).coerceAtLeast(1)) * 100).toInt() else 0
+            buf.addLine(TuiColors.muted("  [↑↓] Scroll  [PgUp/PgDn] Fast scroll  ${scrollOffset + 1}/${allLines.size} ($pct%)"))
+        } else {
+            buf.addLine(TuiColors.muted("  [↑↓] Scroll"))
+        }
+
+        return buf
+    }
+
+    private fun buildDebugLines(state: TuiState, width: Int): List<String> {
+        val lines = mutableListOf<String>()
         val debug = state.debugInfo
 
-        buf.addLine(bold("Session State"))
-        buf.addLine(TuiColors.border("─".repeat((width - 2).coerceAtLeast(10))))
-        buf.addLine("  ID:       ${debug.sessionId.ifEmpty { "N/A" }}")
-        buf.addLine("  Mode:     ${debug.mode}")
-        buf.addLine("  Model:    ${debug.model}")
-        buf.addLine("  Status:   ${debug.status}")
-        buf.addLine("  Tokens:   ${debug.tokensIn} in / ${debug.tokensOut} out")
-        buf.addLine("  Cost:     \$${String.format("%.4f", debug.costUsd)}")
-        buf.addLine("  Messages: ${debug.messageCount}")
-        buf.addLine()
+        lines.add(bold("Session State"))
+        lines.add(TuiColors.border("─".repeat((width - 2).coerceAtLeast(10))))
+        lines.add("  ID:       ${debug.sessionId.ifEmpty { "N/A" }}")
+        lines.add("  Mode:     ${debug.mode}")
+        lines.add("  Model:    ${debug.model}")
+        lines.add("  Status:   ${debug.status}")
+        lines.add("  Tokens:   ${debug.tokensIn} in / ${debug.tokensOut} out")
+        lines.add("  Cost:     \$${String.format("%.4f", debug.costUsd)}")
+        lines.add("  Messages: ${debug.messageCount}")
+        lines.add("")
 
-        buf.addLine(bold("Core Health"))
-        buf.addLine(TuiColors.border("─".repeat((width - 2).coerceAtLeast(10))))
+        lines.add(bold("Core Health"))
+        lines.add(TuiColors.border("─".repeat((width - 2).coerceAtLeast(10))))
         val connStatus = if (debug.connected) {
             TuiColors.statusSuccess("Connected")
         } else {
             TuiColors.statusFailed("Disconnected")
         }
-        buf.addLine("  Connection: $connStatus")
-        buf.addLine("  DB Path:    ${debug.dbPath.ifEmpty { "N/A" }}")
-        buf.addLine()
+        lines.add("  Connection: $connStatus")
+        lines.add("  DB Path:    ${debug.dbPath.ifEmpty { "N/A" }}")
+        lines.add("")
 
         // API Statistics (from api logs)
         if (state.apiLogs.isNotEmpty()) {
-            buf.addLine(bold("API Statistics"))
-            buf.addLine(TuiColors.border("─".repeat((width - 2).coerceAtLeast(10))))
+            lines.add(bold("API Statistics"))
+            lines.add(TuiColors.border("─".repeat((width - 2).coerceAtLeast(10))))
             val totalCalls = state.apiLogs.size
             val totalCost = state.apiLogs.sumOf { it.costUsd }
             val totalTokensIn = state.apiLogs.sumOf { it.tokensIn }
@@ -49,56 +78,54 @@ object TuiDebugView {
             val errors = state.apiLogs.count { it.errorType != null }
             val byProvider = state.apiLogs.groupBy { it.provider }
 
-            buf.addLine("  Total calls:    $totalCalls")
-            buf.addLine("  Total cost:     \$${String.format("%.4f", totalCost)}")
-            buf.addLine("  Total tokens:   ${totalTokensIn} in / ${totalTokensOut} out")
-            buf.addLine("  Avg latency:    ${avgLatency}ms")
+            lines.add("  Total calls:    $totalCalls")
+            lines.add("  Total cost:     \$${String.format("%.4f", totalCost)}")
+            lines.add("  Total tokens:   ${totalTokensIn} in / ${totalTokensOut} out")
+            lines.add("  Avg latency:    ${avgLatency}ms")
             val errColor = if (errors > 0) TuiColors.statusFailed else TuiColors.statusSuccess
-            buf.addLine("  Errors:         ${errColor(errors.toString())}")
+            lines.add("  Errors:         ${errColor(errors.toString())}")
 
             // Per-provider breakdown
-            buf.addLine("  Providers:")
+            lines.add("  Providers:")
             for ((prov, logs) in byProvider) {
                 val provCost = logs.sumOf { it.costUsd }
                 val provTok = logs.sumOf { it.tokensIn + it.tokensOut }
-                buf.addLine("    ${TuiColors.accent(prov)}: ${logs.size} calls, \$${String.format("%.4f", provCost)}, ${provTok} tok")
+                lines.add("    ${TuiColors.accent(prov)}: ${logs.size} calls, \$${String.format("%.4f", provCost)}, ${provTok} tok")
             }
-            buf.addLine()
+            lines.add("")
         }
 
         // Context budget
         if (state.contextMaxTokens > 0) {
-            buf.addLine(bold("Context Budget"))
-            buf.addLine(TuiColors.border("─".repeat((width - 2).coerceAtLeast(10))))
+            lines.add(bold("Context Budget"))
+            lines.add(TuiColors.border("─".repeat((width - 2).coerceAtLeast(10))))
             val pct = (state.contextUsedTokens.toDouble() / state.contextMaxTokens * 100).toInt()
             val pctColor = when {
                 pct >= 90 -> TuiColors.statusFailed
                 pct >= 75 -> TuiColors.statusPending
                 else -> TuiColors.statusSuccess
             }
-            buf.addLine("  Used:     ${state.contextUsedTokens} / ${state.contextMaxTokens} tokens (${pctColor("$pct%")})")
-            buf.addLine("  Session:  ${state.sessionTokensIn} in / ${state.sessionTokensOut} out")
+            lines.add("  Used:     ${state.contextUsedTokens} / ${state.contextMaxTokens} tokens (${pctColor("$pct%")})")
+            lines.add("  Session:  ${state.sessionTokensIn} in / ${state.sessionTokensOut} out")
             if (state.contextSections.isNotEmpty()) {
-                buf.addLine("  Sections: ${state.contextSections.size}")
+                lines.add("  Sections: ${state.contextSections.size}")
                 for (section in state.contextSections.take(8)) {
                     val secPct = if (section.percentage > 0) " (${String.format("%.1f", section.percentage)}%)" else ""
-                    buf.addLine("    ${section.name.padEnd(25)} ${section.tokensUsed} tok$secPct")
+                    lines.add("    ${section.name.padEnd(25)} ${section.tokensUsed} tok$secPct")
                 }
             }
-            buf.addLine()
+            lines.add("")
         }
 
         // Agent flow (when multi-agent session is active)
         if (state.agents.isNotEmpty()) {
-            val remainingHeight = (height - buf.lineCount).coerceAtLeast(5)
-            val agentBuf = TuiAgentFlowView.renderToBuffer(state, width, remainingHeight)
+            val agentBuf = TuiAgentFlowView.renderToBuffer(state, width, 30)
             for (line in agentBuf.getLines()) {
-                if (buf.lineCount >= height - 1) break
-                buf.addLine(line)
+                lines.add(line)
             }
         }
 
-        return buf
+        return lines
     }
 
     fun render(terminal: Terminal, state: TuiState, contentHeight: Int) {

@@ -28,7 +28,8 @@ class TuiStepsViewInteractiveTest {
             every { value } returns TuiState(
                 activeTab = TuiTab.STEPS,
                 subtasks = sampleSubtasks,
-                selectedStepIndex = 1
+                selectedStepIndex = 1,
+                panelFocused = true
             )
         }
     }

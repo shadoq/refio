@@ -105,6 +105,36 @@ object ModelDefinitions {
             ),
             active = true
         ),
+        "gpt-5.4-mini" to ModelDefinition(
+            id = "gpt-5.4-mini",
+            name = "GPT-5.4 Mini",
+            provider = "openai",
+            description = "Balanced GPT-5.4 tier for general tasks",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = 32_768,
+            costPer1MInput = 0.25,
+            costPer1MOutput = 2.00,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            paramMappings = mapOf(
+                "max_tokens" to "max_completion_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
 
         //
         // GPT 5.2

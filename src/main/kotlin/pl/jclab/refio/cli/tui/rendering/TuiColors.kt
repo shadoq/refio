@@ -45,6 +45,7 @@ object TuiColors {
 
     // === UI elements ===
     val tabActive: TextStyle = bold + brightWhite
+    val tabFocused: TextStyle = bold + brightCyan
     val tabInactive: TextStyle = gray
     val border: TextStyle = gray
     val accent = brightCyan

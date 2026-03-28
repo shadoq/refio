@@ -1,7 +1,6 @@
 package pl.jclab.refio.services.core
 
 import com.intellij.openapi.components.Service
-import com.intellij.openapi.application.PathManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,7 +16,6 @@ import pl.jclab.refio.core.utils.ProjectIdGenerator
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.tools.security.FileLimits
 import java.io.File
-import java.nio.file.Paths
 
 /**
  * Core health state
@@ -146,16 +144,15 @@ class CoreConnectionManager {
      * Get database path for storing plugin data
      */
     private fun getDbPath(): String {
-        val systemPath = PathManager.getSystemPath()
-        val dbDir = File(systemPath, "refio")
+        val userHome = System.getProperty("user.home")
+        val dbDir = File(userHome, ".refio/data")
 
-        // Create directory if it doesn't exist
         if (!dbDir.exists()) {
             dbDir.mkdirs()
             logger.info { "Created database directory: ${dbDir.absolutePath}" }
         }
 
-        return File(dbDir, "refio.db").absolutePath
+        return File(dbDir, "database.sqlite").absolutePath
     }
 
     /**

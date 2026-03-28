@@ -9,6 +9,7 @@ import pl.jclab.refio.core.context.providers.standalone.*
 import pl.jclab.refio.core.project.StandaloneProjectHandle
 import pl.jclab.refio.core.utils.ProjectIdGenerator
 import pl.jclab.refio.core.logging.dualLogger
+import java.io.File
 import java.nio.file.Path
 
 private val logger = dualLogger("StandaloneCoreBootstrap")
@@ -54,10 +55,15 @@ class StandaloneCoreBootstrap(
 
         val projectHandle = StandaloneProjectHandle(absolutePath)
 
-        // 1. Database path: <project>/.refio/database.sqlite
+        // Ensure project .refio dir exists for project-local config files
         val refioDir = absolutePath.resolve(".refio").toFile()
         if (!refioDir.exists()) refioDir.mkdirs()
-        val dbPath = refioDir.resolve("database.sqlite").absolutePath
+
+        // 1. Database path: ~/.refio/data/database.sqlite (shared across projects)
+        val userHome = System.getProperty("user.home")
+        val refioDataDir = File(userHome, ".refio/data")
+        if (!refioDataDir.exists()) refioDataDir.mkdirs()
+        val dbPath = File(refioDataDir, "database.sqlite").absolutePath
 
         // 2. App-level router (no tools, no project root — shared services)
         val appRouter = CoreApiRouter(toolRegistry = null, projectRoot = null)

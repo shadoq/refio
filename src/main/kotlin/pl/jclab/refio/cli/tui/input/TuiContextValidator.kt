@@ -97,7 +97,7 @@ object TuiContextValidator {
             return ValidationResult(isValid = false, warning = "@codebase: requires a search query")
         }
         // Check if RAG index exists (look for database file)
-        val dbFile = File(projectRoot, ".refio/database.sqlite")
+        val dbFile = File(System.getProperty("user.home"), ".refio/data/database.sqlite")
         if (!dbFile.exists()) {
             return ValidationResult(isValid = true, warning = "RAG index may not be available. Run reindex first.")
         }

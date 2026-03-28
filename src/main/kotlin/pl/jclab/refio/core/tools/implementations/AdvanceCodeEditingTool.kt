@@ -152,10 +152,11 @@ class AdvanceCodeEditingTool(
             ?: return ToolResult.error("Missing required parameter: 'path'")
         val editDescription = params["edit_description"] as? String
         val taskId = params["taskId"] as? String
+        val conversationContext = params["conversation_context"] as? String
 
         return try {
             if (editDescription != null) {
-                executeLLMAssistedEdit(pathStr, editDescription, taskId, startTime, stream, onChunk)
+                executeLLMAssistedEdit(pathStr, editDescription, taskId, startTime, stream, onChunk, conversationContext)
             } else {
                 ToolResult.error("Either 'edit_description' or 'old_string' must be provided")
             }
@@ -178,7 +179,8 @@ class AdvanceCodeEditingTool(
         taskId: String?,
         startTime: Long,
         stream: Boolean = false,
-        onChunk: StreamCallback? = null
+        onChunk: StreamCallback? = null,
+        conversationContext: String? = null
     ): ToolResult {
         // 1. Read file or prepare for creation
         val normalizedPathStr = normalizePath(pathStr)
@@ -253,9 +255,20 @@ class AdvanceCodeEditingTool(
             // 4. Call LLM with paired prompts
             // - systemPrompt → sent via systemPrompt parameter (instructions: rules, format, constraints)
             // - userPrompt → sent as user message (data: file content, edit request)
-            val messages = listOf(
-                LLMMessage(role = "user", content = userPrompt)
-            )
+            // - optional conversation_context from agent turn (recent tool results, user data)
+            val messages = buildList {
+                if (!conversationContext.isNullOrBlank()) {
+                    add(LLMMessage(
+                        role = "user",
+                        content = "<conversation_context>\n$conversationContext\n</conversation_context>"
+                    ))
+                    add(LLMMessage(
+                        role = "assistant",
+                        content = "I understand the context. I'll use this information when editing the file."
+                    ))
+                }
+                add(LLMMessage(role = "user", content = userPrompt))
+            }
 
             // Get model from config (uses CODING operation type)
             val (model, provider) = configService.getModel(

@@ -1202,6 +1202,22 @@ When user reports something doesn't work, is broken, or asks for a fix:
 
 **REMEMBER:** For ANY task requiring file creation/modification, respond with JSON containing "actions" with write tool calls.
 </workflow>
+
+<context_management>
+**IMPORTANT: Protect your context window from large data.**
+
+Your conversation context is limited. Large tool outputs (data files, API responses, long code output) can fill it up and get compacted, causing you to lose information between steps.
+
+**Rules:**
+- When fetching data via `http_request`, use `save_to_file` to save the response to disk instead of loading it into context.
+- When `run_code` produces large output, write results to a file inside the code (e.g., `open('result.json', 'w')`) and print only a short summary (counts, status, first few items).
+- Use `read_file` with `offset` and `limit` to read specific line ranges from large files instead of loading everything.
+  Examples: `{"tool": "read_file", "arguments": {"path": "data.csv", "limit": 5}}` reads only the first 5 lines (e.g., header + sample rows).
+  `{"tool": "read_file", "arguments": {"path": "data.csv", "offset": 100, "limit": 50}}` reads lines 100-149.
+- Treat files on disk as persistent memory between steps — context can be compacted, but files remain.
+
+**Principle:** Large data lives on disk, not in context. Keep tool outputs small. Use files as intermediate storage between processing steps.
+</context_management>
 """
 
     val ORCHESTRATOR_SYSTEM =

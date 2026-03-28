@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import pl.jclab.refio.core.api.StreamCallback
 import pl.jclab.refio.core.api.TurnProfileOverrides
 import pl.jclab.refio.core.api.TurnRunProfile
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.db.ExecutionMode
 import pl.jclab.refio.core.db.MessageRole
 import pl.jclab.refio.core.db.TaskMode
@@ -379,11 +380,13 @@ class AgentTurnLoop(
         var formatRetryCount = 0
         var writeToolsExecutedInTurn = 0
         var consecutiveReadOnlyIterations = 0
+        var consecutiveToolErrors = 0
         var intentNudgeCount = 0
         var totalTokensIn = 0
         var totalTokensOut = 0
         var totalCost = 0.0
         val usedTools = mutableListOf<String>()
+        val maxConsecutiveToolErrors = configService.getTyped(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS, taskId)
         val subagentMetadata: String? = if (runProfile == TurnRunProfile.SUBAGENT) {
             val name = profileOverrides?.subagentName ?: "subagent"
             """{"subagent_name":"$name"}"""
@@ -656,6 +659,7 @@ class AgentTurnLoop(
                         for ((_, result) in toolResults) {
                             val success = !result.content.startsWith("Error:")
                             errorTracker.recordResult(success)
+                            consecutiveToolErrors = if (success) 0 else consecutiveToolErrors + 1
                         }
 
                         writeToolsExecutedInTurn += turnToolExecutor.countWriteToolCalls(toolCalls)
@@ -682,7 +686,20 @@ class AgentTurnLoop(
                             consecutiveReadOnlyIterations = 0
                         }
 
-                        if (errorTracker.shouldAbort()) {
+                        if (consecutiveToolErrors >= maxConsecutiveToolErrors) {
+                            val result = TurnResult(
+                                success = false,
+                                response = "Too many consecutive tool errors ($consecutiveToolErrors/$maxConsecutiveToolErrors). Please review tool usage and arguments.",
+                                iterations = iteration,
+                                tokensIn = totalTokensIn,
+                                tokensOut = totalTokensOut,
+                                cost = totalCost,
+                                toolsUsed = usedTools.distinct()
+                            )
+                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
+                        }
+
+                        if (errorTracker.shouldAbort(config.errorRateThreshold)) {
                             val result = TurnResult(
                                 success = false,
                                 response = "Too many tool errors (${errorTracker.getStats()} failure rate). Please review tool usage and arguments.",
@@ -743,7 +760,7 @@ class AgentTurnLoop(
                         }
 
                         // Check error rate abort
-                        if (errorTracker.shouldAbort()) {
+                        if (errorTracker.shouldAbort(config.errorRateThreshold)) {
                             val result = TurnResult(
                                 success = false,
                                 response = "Too many tool errors (${errorTracker.getStats()} failure rate). Task aborted.",

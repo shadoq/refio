@@ -442,7 +442,8 @@ object TuiSettingsScreen {
         val tools = listOf(
             "read_file", "read_directory", "file_search", "grep_search", "view_diff",
             "create_new_file", "code_editing", "advance_code_editing",
-            "multi_line_editor", "multi_edit", "run_terminal_command", "invoke_subagent"
+            "multi_line_editor", "multi_edit", "run_terminal_command",
+            "http_request", "run_code", "invoke_subagent"
         )
         buf.addLine("    ${"Tool".padEnd(26)} ${"Plan".padEnd(8)} Agent")
         buf.addLine("    ${"─".repeat(26)} ${"─".repeat(8)} ${"─".repeat(8)}")

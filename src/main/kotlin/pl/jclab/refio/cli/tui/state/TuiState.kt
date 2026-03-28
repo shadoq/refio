@@ -71,7 +71,28 @@ data class TuiState(
     val fileBrowserPath: String = "",
     val fileBrowserEntries: List<TuiFileEntry> = emptyList(),
     val fileBrowserSelectedIndex: Int = 0,
-    val fileBrowserShowHidden: Boolean = false
+    val fileBrowserShowHidden: Boolean = false,
+    // Logs view state
+    val logsPaused: Boolean = false,
+    val selectedLogIndex: Int = 0,
+    val logDetailVisible: Boolean = false,
+    val logsFilter: String? = null, // null = show all, or level name (DEBUG, INFO, WARN, ERROR)
+    // Context detail view state
+    val contextDetailVisible: Boolean = false,
+    val contextDetailScrollOffset: Int = 0,
+    // API log detail scroll
+    val apiLogDetailScrollOffset: Int = 0,
+    // Panel focus indicator
+    val panelFocused: Boolean = false,
+    // Content viewer overlay state (used for file viewer, log detail, API log detail, debug detail)
+    val fileViewerVisible: Boolean = false,
+    val fileViewerPath: String = "",     // title of the viewer
+    val fileViewerContent: String = "",
+    val fileViewerScrollOffset: Int = 0,
+    val fileViewerShowLineNumbers: Boolean = true,  // false for log/debug/API detail views
+    val fileViewerAllowAddContext: Boolean = true,   // false for non-file content
+    // Debug panel scroll
+    val debugScrollOffset: Int = 0
 )
 
 data class TuiRagFile(

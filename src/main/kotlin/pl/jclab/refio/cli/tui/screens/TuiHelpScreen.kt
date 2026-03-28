@@ -62,8 +62,9 @@ object TuiHelpScreen {
 
         // Chat & Input
         section("Chat & Input")
-        key("Enter", "Send message")
-        key("Alt+M", "Cycle mode: CHAT → PLAN → AGENT")
+        key("Enter", "Send message (with text) / Cycle mode (empty input)")
+        key("Ctrl+M", "Cycle mode: CHAT → PLAN → AGENT (= Enter with empty input)")
+        key("Tab", "Toggle focus: panel actions ↔ text input")
         key("Ctrl+O", "Select model (popup)")
         key("Ctrl+W", "New session")
         key("Ctrl+L", "Continue conversation (add context and resume)")
@@ -100,6 +101,13 @@ object TuiHelpScreen {
         key("/<command>", "Slash command / prompt template (Tab to autocomplete)")
         add()
 
+        // Panel focus info
+        section("Panel Focus")
+        add("  ${TuiColors.muted("When a side panel is active, press Tab to toggle focus.")}")
+        add("  ${TuiColors.muted("Focused panel: letter keys trigger panel actions (a/s/d/r/...).")}")
+        add("  ${TuiColors.muted("Unfocused: letter keys go to text input. Arrow keys always navigate.")}")
+        add()
+
         // Steps panel (F2)
         section("Steps Panel (F2)")
         key("↑/↓", "Navigate steps")
@@ -123,6 +131,20 @@ object TuiHelpScreen {
         key("r", "Refresh listing")
         add()
 
+        // Context panel (F3)
+        section("Context Panel (F3)")
+        key("↑/↓", "Navigate context sections")
+        key("Enter / i", "Show full section content")
+        add()
+
+        // Logs panel (F5)
+        section("Logs Panel (F5)")
+        key("↑/↓", "Navigate log entries")
+        key("Enter", "Show full log message")
+        key("p", "Pause/resume log updates")
+        key("f", "Cycle level filter (All/DEBUG/INFO/WARN/ERROR)")
+        add()
+
         // RAG panel (F4)
         section("RAG Panel (F4)")
         key("r / e / s / c", "Reindex / Embeddings / Stop / Clear")
@@ -131,8 +153,10 @@ object TuiHelpScreen {
 
         // API Logs panel (F7)
         section("API Logs (F7)")
-        key("Enter", "Toggle detail view")
+        key("↑/↓", "Navigate logs / scroll detail view")
+        key("Enter", "Toggle detail view (formatted JSON)")
         key("f", "Cycle provider filter")
+        key("PgUp/PgDn", "Fast scroll in detail view")
         add()
 
         // Modes

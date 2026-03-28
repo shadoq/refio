@@ -52,10 +52,14 @@ class StandaloneCoreBootstrapTest {
             assertNotNull(router)
             assertEquals(router, bootstrap.router)
 
-            // .refio directory should be created
+            // .refio directory should be created in project root (for project-local config)
             val refioDir = tempDir.resolve(".refio").toFile()
             assertTrue(refioDir.exists(), ".refio directory should be created")
-            assertTrue(refioDir.resolve("database.sqlite").exists(), "database.sqlite should be created")
+
+            // Database should be created in ~/.refio/data/
+            val userHome = System.getProperty("user.home")
+            val dbFile = java.io.File(userHome, ".refio/data/database.sqlite")
+            assertTrue(dbFile.exists(), "database.sqlite should be created in ~/.refio/data/")
 
             // Shutdown
             bootstrap.shutdown()

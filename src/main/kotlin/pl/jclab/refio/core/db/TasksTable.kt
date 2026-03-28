@@ -61,6 +61,8 @@ enum class SubtaskKind {
     FILE_SEARCH,
     GREP_SEARCH,
     RUN_TERMINAL_COMMAND,
+    HTTP_REQUEST,
+    RUN_CODE,
     KNOWLEDGE_BASE,
     INVOKE_SUBAGENT
 }

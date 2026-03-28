@@ -23,8 +23,8 @@ object TurnNudgeBuilder {
      */
     fun buildMissingIntentNudgeMessage(): String {
         return "Your JSON response is missing required field 'intent'. " +
-            "For AGENT mode return intent as one of: implementation | analysis. " +
-            "Use format: {\"actions\":[...],\"response\":\"...\",\"intent\":\"implementation|analysis\"} " +
+            "For AGENT mode return intent as one of: implementation | analysis | response. " +
+            "Use format: {\"actions\":[...],\"response\":\"...\",\"intent\":\"implementation|analysis|response\"} " +
             "and include \"thinking\" only if you have useful short reasoning to add. " +
             "IMPORTANT: If the user reports a problem or asks for a fix, you MUST use tools to read and fix the file. " +
             "You cannot finish without action when the user explicitly asks for changes."
@@ -39,10 +39,12 @@ object TurnNudgeBuilder {
                 "{\"actions\":[...]} for READ_ONLY tools, or {\"plan\":\"...\",\"subtasks\":[...],\"actions\":[]} " +
                 "for the final plan. Use exact tool names/params from <available_tools>."
         } else {
-            "Invalid tool call format. Respond ONLY with JSON: " +
-                "{\"actions\":[...],\"response\":\"your status or final answer\",\"intent\":\"implementation|analysis\"}. " +
+            "Your previous response contained malformed JSON that could not be parsed. " +
+                "Common causes: unescaped quotes inside string values, truncated content_type (use \"application/json\" not \"application/\"). " +
+                "Respond ONLY with valid JSON: " +
+                "{\"actions\":[{\"tool\":\"...\",\"arguments\":{...}}],\"response\":\"your status or final answer\",\"intent\":\"implementation|analysis|response\"}. " +
                 "'response' and 'intent' are REQUIRED and must be non-empty. " +
-                "Include 'thinking' only when it adds short useful reasoning. " +
+                "IMPORTANT: When the 'body' parameter contains JSON, ensure all inner quotes are properly escaped with backslash. " +
                 "Use exact tool names and parameters from <available_tools>."
         }
     }

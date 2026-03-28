@@ -94,9 +94,10 @@ class MultiLineEditorTool(
         val editDescription = params["edit_description"] as? String
             ?: return ToolResult.error("Missing required parameter: 'edit_description'")
         val taskId = params["taskId"] as? String
+        val conversationContext = params["conversation_context"] as? String
 
         return try {
-            executeEdit(pathStr, editDescription, taskId, startTime, stream = false, onChunk = null)
+            executeEdit(pathStr, editDescription, taskId, startTime, stream = false, onChunk = null, conversationContext = conversationContext)
         } catch (e: SecurityException) {
             logger.warn { "Security violation in multi_line_editor: ${e.message}" }
             ToolResult.error("Security error: ${e.message}")
@@ -123,6 +124,8 @@ class MultiLineEditorTool(
             "[MLE_STREAM] executeWithListener called: path=$pathStr, hasListener=${listener != null}, hasSubtask=${subtask != null}"
         }
 
+        val conversationContext = params["conversation_context"] as? String
+
         val onChunk: StreamCallback? = if (listener != null && subtask != null) { chunk ->
             logger.debug {
                 "[MLE_STREAM] onChunk invoked: accumulated=${chunk.accumulated.length} chars, isComplete=${chunk.isComplete}"
@@ -140,7 +143,7 @@ class MultiLineEditorTool(
         }
 
         return try {
-            executeEdit(pathStr, editDescription, taskId, startTime, stream = listener != null, onChunk = onChunk)
+            executeEdit(pathStr, editDescription, taskId, startTime, stream = listener != null, onChunk = onChunk, conversationContext = conversationContext)
         } catch (e: SecurityException) {
             logger.warn { "Security violation in multi_line_editor: ${e.message}" }
             ToolResult.error("Security error: ${e.message}")
@@ -159,7 +162,8 @@ class MultiLineEditorTool(
         taskId: String?,
         startTime: Long,
         stream: Boolean,
-        onChunk: StreamCallback?
+        onChunk: StreamCallback?,
+        conversationContext: String? = null
     ): ToolResult {
         // 1. Read file and validate
         val path = sandbox.resolve(pathStr)
@@ -219,9 +223,20 @@ class MultiLineEditorTool(
             )
 
             // 5. Call LLM
-            val messages = listOf(
-                LLMMessage(role = "user", content = userPrompt)
-            )
+            // Include optional conversation_context from agent turn (recent tool results, user data)
+            val messages = buildList {
+                if (!conversationContext.isNullOrBlank()) {
+                    add(LLMMessage(
+                        role = "user",
+                        content = "<conversation_context>\n$conversationContext\n</conversation_context>"
+                    ))
+                    add(LLMMessage(
+                        role = "assistant",
+                        content = "I understand the context. I'll use this information when editing the file."
+                    ))
+                }
+                add(LLMMessage(role = "user", content = userPrompt))
+            }
 
             val (model, provider) = configService.getModel(
                 operation = ModelOperation.CODING,

@@ -37,6 +37,12 @@ object TuiContextView {
             return buf
         }
 
+        // Detail view for selected context section
+        if (state.contextDetailVisible) {
+            renderDetailView(buf, state, width, height)
+            return buf
+        }
+
         buf.addLine(TuiColors.highlight("Project Context"))
         buf.addLine()
 
@@ -134,9 +140,62 @@ object TuiContextView {
         }
 
         buf.addLine()
-        buf.addLine(TuiColors.muted("  [↑↓] Navigate  [i] Inspect content"))
+        buf.addLine(TuiColors.muted("  [↑↓] Navigate  [Enter] Detail view  [i] Inspect content"))
 
         return buf
+    }
+
+    private fun renderDetailView(buf: TuiRenderBuffer, state: TuiState, width: Int, height: Int) {
+        val section = state.contextSections.getOrNull(state.selectedContextIndex) ?: run {
+            buf.addLine(TuiColors.muted("No section selected."))
+            return
+        }
+
+        val color = sectionColors[section.colorIndex % sectionColors.size]
+        val categoryColor = when (section.category) {
+            "project" -> TuiColors.contextProject
+            "user" -> TuiColors.contextUser
+            "rag" -> TuiColors.contextRag
+            "conversation" -> TuiColors.contextConversation
+            "tools" -> TuiColors.contextTools
+            else -> TuiColors.muted
+        }
+
+        // Header
+        buf.addLine(TuiColors.highlight("Context Detail"))
+        buf.addLine(TuiColors.border("\u2500".repeat((width - 2).coerceAtLeast(10))))
+        buf.addLine("  ${color("\u25cf")} ${categoryColor(section.name)}")
+        val tokens = formatTokens(section.tokensUsed)
+        val percent = if (section.percentage > 0) String.format("%.1f%%", section.percentage) else "0.0%"
+        buf.addLine("  ${TuiColors.muted("Category:")} ${section.category}  ${TuiColors.muted("Tokens:")} $tokens  ${TuiColors.muted("Share:")} $percent")
+        buf.addLine()
+
+        // Full content with scroll support
+        val content = section.content
+        if (content.isNullOrBlank()) {
+            buf.addLine(TuiColors.muted("  (no content available)"))
+        } else {
+            val contentLines = content.lines()
+            val headerLines = 7 // lines used by header + toolbar
+            val contentHeight = (height - headerLines).coerceAtLeast(3)
+            val scrollOffset = state.contextDetailScrollOffset.coerceIn(0, (contentLines.size - contentHeight).coerceAtLeast(0))
+            val visible = contentLines.drop(scrollOffset).take(contentHeight)
+
+            for (line in visible) {
+                if (buf.lineCount >= height - 2) break
+                buf.addLine("  ${TuiColors.muted(line)}")
+            }
+
+            if (contentLines.size > contentHeight) {
+                val scrollPercent = if (contentLines.size > contentHeight) {
+                    ((scrollOffset.toDouble() / (contentLines.size - contentHeight).coerceAtLeast(1)) * 100).toInt()
+                } else 0
+                buf.addLine(TuiColors.muted("  --- ${contentLines.size} lines total, scroll: $scrollPercent% ---"))
+            }
+        }
+
+        buf.addLine()
+        buf.addLine(TuiColors.muted("[Enter/Esc] Back  [\u2191\u2193] Scroll"))
     }
 
     fun render(terminal: Terminal, state: TuiState, contentHeight: Int) {

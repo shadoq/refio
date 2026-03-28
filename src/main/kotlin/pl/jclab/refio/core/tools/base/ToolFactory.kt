@@ -109,7 +109,13 @@ class ToolFactory(
             MultiEditTool(sandbox, fileLimits),
 
             // Terminal operations
-            RunTerminalCommandTool(sandbox, whitelist, commandLimits)
+            RunTerminalCommandTool(sandbox, whitelist, commandLimits),
+
+            // Network operations
+            HttpRequestTool(sandbox),
+
+            // Code execution
+            RunCodeTool(sandbox)
         )
     }
 }

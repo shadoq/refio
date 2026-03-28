@@ -295,6 +295,9 @@ internal class AssistantBubbleRenderer(
         if (secondaryParams.isNotEmpty()) {
             addRow(factory.createToolParamsPanel(secondaryParams), topInset = context.bubbleCompactGap)
         }
+        info.result?.summary?.let {
+            addRow(factory.createToolResultPanel(it), topInset = context.bubbleCompactGap)
+        }
         addRow(factory.createToolStatusPanel(info.status), topInset = context.bubbleCompactGap)
         return addToOuter(outerPanel, messageBlock)
     }
@@ -332,7 +335,11 @@ internal class AssistantBubbleRenderer(
         val mainParam = info.parameters["path"]
             ?: info.parameters["file"]
             ?: info.parameters["pattern"]
-            ?: info.parameters.values.firstOrNull()
+            ?: info.parameters["url"]
+            ?: info.parameters["query"]
+            ?: info.parameters["command"]
+            ?: info.parameters["subagent_name"]
+            ?: info.parameters.values.firstOrNull { it.isNotBlank() }
         if (!mainParam.isNullOrBlank()) {
             val shortValue = if (mainParam.length > 100) "${mainParam.take(100)}..." else mainParam
             headerRow.add(JLabel(shortValue).apply {
@@ -341,12 +348,29 @@ internal class AssistantBubbleRenderer(
             })
         }
         val statusIcon = when (info.status) {
-            ToolCallStatus.EXECUTING -> "⟳"
-            ToolCallStatus.COMPLETED -> "✓"
-            ToolCallStatus.FAILED -> "✗"
+            ToolCallStatus.EXECUTING -> "\u27F3"
+            ToolCallStatus.COMPLETED -> "\u2713"
+            ToolCallStatus.FAILED -> "\u2717"
         }
         headerRow.add(JLabel(statusIcon).apply { font = LCATheme.bodyFont })
         addRow(headerRow)
+
+        // Show tool result summary inline (compact form)
+        info.result?.summary?.let { summary ->
+            if (summary.isNotBlank()) {
+                addRow(
+                    JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+                        isOpaque = false
+                        add(JLabel(summary).apply {
+                            foreground = LCATheme.descriptionForeground
+                            font = LCATheme.smallFont
+                        })
+                    },
+                    topInset = context.bubbleCompactGap
+                )
+            }
+        }
+
         addToolCallNarrative(::addRow, message, background)
         return addToOuter(outerPanel, messageBlock)
     }

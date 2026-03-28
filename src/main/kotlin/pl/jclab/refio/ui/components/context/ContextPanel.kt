@@ -89,6 +89,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private val keyComponentsSection = createSection("Key Components", "key_components")
     private val codeAnalysisSection = createSection("Code Analysis", "code_analysis")
     private val currentTaskSection = createSection("Current Task", "current_task")
+    private val taskRequirementsSection = createSection("Task Requirements (Sticky)", "task_requirements")
     private val userContextSection = createSection("User Context (@mentions)", "user_context")
     private val mcpResourcesSection = createSection("MCP Resources", "mcp_resources")
     private val userRequirementsSection = createSection("User Requirements", "user_requirements")
@@ -165,40 +166,43 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         SectionEntry("current_task", 7, currentTaskSection) { context, _ ->
             updateCurrentTaskSection(context)
         },
-        SectionEntry("user_requirements", 8, userRequirementsSection) { context, _ ->
+        SectionEntry("task_requirements", 8, taskRequirementsSection) { context, _ ->
+            updateTaskRequirementsSection(context)
+        },
+        SectionEntry("user_requirements", 9, userRequirementsSection) { context, _ ->
             updateUserRequirementsSection(context)
         },
-        SectionEntry("project_instructions", 9, projectInstructionsSection) { context, _ ->
+        SectionEntry("project_instructions", 10, projectInstructionsSection) { context, _ ->
             updateProjectInstructionsSection(context)
         },
-        SectionEntry("user_context", 10, userContextSection) { context, pendingRefs ->
+        SectionEntry("user_context", 11, userContextSection) { context, pendingRefs ->
             updateUserContextSection(context, pendingRefs)
         },
-        SectionEntry("mcp_resources", 10, mcpResourcesSection) { context, _ ->
+        SectionEntry("mcp_resources", 11, mcpResourcesSection) { context, _ ->
             updateMcpResourcesSection(context)
         },
-        SectionEntry("rag_fragments", 11, ragFragmentsSection) { context, _ ->
+        SectionEntry("rag_fragments", 12, ragFragmentsSection) { context, _ ->
             updateRagFragmentsSection(context)
         },
-        SectionEntry("conversation", 12, conversationSection) { context, _ ->
+        SectionEntry("conversation", 13, conversationSection) { context, _ ->
             updateConversationSection(context)
         },
-        SectionEntry("recent_work", 13, recentWorkSection) { context, _ ->
+        SectionEntry("recent_work", 14, recentWorkSection) { context, _ ->
             updateRecentWorkSection(context)
         },
-        SectionEntry("subtasks", 14, subtasksSection) { context, _ ->
+        SectionEntry("subtasks", 15, subtasksSection) { context, _ ->
             updateSubtasksSection(context)
         },
-        SectionEntry("framework_analysis", 15, frameworkAnalysisSection) { context, _ ->
+        SectionEntry("framework_analysis", 16, frameworkAnalysisSection) { context, _ ->
             updateFrameworkAnalysisSection(context)
         },
-        SectionEntry("working_memory", 16, workingMemorySection) { context, _ ->
+        SectionEntry("working_memory", 17, workingMemorySection) { context, _ ->
             updateWorkingMemorySection(context)
         },
-        SectionEntry("context_stability", 17, contextStabilitySection) { context, _ ->
+        SectionEntry("context_stability", 18, contextStabilitySection) { context, _ ->
             updateContextStabilitySection(context)
         },
-        SectionEntry("domain_analysis", 18, domainAnalysisSection) { context, _ ->
+        SectionEntry("domain_analysis", 19, domainAnalysisSection) { context, _ ->
             updateDomainAnalysisSection(context)
         }
     )
@@ -961,6 +965,33 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         userRequirementsSection.setContent(raw, html)
     }
 
+    private fun updateTaskRequirementsSection(context: pl.jclab.refio.core.api.ProjectContextResponse) {
+        val requirements = context.taskRequirementsPrompt
+        if (requirements.isNullOrBlank()) {
+            val html = """
+                <html><body style='padding: 5px; word-wrap: break-word;'>
+                No sticky task requirements captured yet.<br>
+                This section appears after the agent builds the runtime prompt.
+                </body></html>
+            """.trimIndent()
+            taskRequirementsSection.setContent("No sticky task requirements captured yet.", html)
+            return
+        }
+
+        val escaped = requirements
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", "<br>")
+
+        val html = """
+            <html><body style='padding: 5px; word-wrap: break-word; font-family: monospace; font-size: 11px;'>
+            $escaped
+            </body></html>
+        """.trimIndent()
+        taskRequirementsSection.setContent(requirements, html)
+    }
+
     private fun updateProjectInstructionsSection(context: pl.jclab.refio.core.api.ProjectContextResponse) {
         val instructions = context.projectInstructions
         if (instructions.isNullOrBlank()) {
@@ -1251,7 +1282,17 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                 val stepSize = (step.file?.length ?: 0) + step.tool.length + paramsSize + resultSize + summarySize
                 val stepTokens = stepSize / 4
 
-                htmlParts.add("&nbsp;&nbsp;<b>${step.tool}</b> on <code>$fileLabel</code> <font color='#808080'>(${String.format("%.1f", stepSize / 1024.0)} KB, ~$stepTokens tokens)</font><br>")
+                // Show data preservation status badge
+                val dataPreserved = summarySize > 0 && resultSize <= 32_000 && resultSize > summarySize
+                val preservationBadge = if (dataPreserved) {
+                    " <font color='#4CAF50'>[FULL]</font>"
+                } else if (summarySize > 0 && resultSize > 32_000) {
+                    " <font color='#FF9800'>[SUMMARIZED]</font>"
+                } else {
+                    ""
+                }
+
+                htmlParts.add("&nbsp;&nbsp;<b>${step.tool}</b> on <code>$fileLabel</code>$preservationBadge <font color='#808080'>(${String.format("%.1f", stepSize / 1024.0)} KB, ~$stepTokens tokens)</font><br>")
 
                 // Show breakdown if step is large
                 if (stepSize > 1000) {
@@ -1272,7 +1313,8 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                     htmlParts.add("&nbsp;&nbsp;&nbsp;&nbsp;<font color='#666666'><pre style='display: inline; margin: 0;'>$preview${if (step.result.length > 200) "..." else ""}</pre></font><br>")
                 }
 
-                rawParts.add("  - ${step.tool} on $fileLabel (${String.format("%.1f", stepSize / 1024.0)} KB, ~$stepTokens tokens)")
+                val preservationLabel = if (dataPreserved) " [FULL]" else if (summarySize > 0 && resultSize > 32_000) " [SUMMARIZED]" else ""
+                rawParts.add("  - ${step.tool} on $fileLabel$preservationLabel (${String.format("%.1f", stepSize / 1024.0)} KB, ~$stepTokens tokens)")
                 if (paramsSize > 0) rawParts.add("      Parameters: $paramsSize chars")
                 if (resultSize > 0) rawParts.add("      Result: $resultSize chars")
                 if (summarySize > 0) rawParts.add("      Summary: $summarySize chars")

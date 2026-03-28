@@ -120,6 +120,33 @@ class TuiViewModel(
     private val _fileBrowserSelectedIndex = MutableStateFlow(0)
     private val _fileBrowserShowHidden = MutableStateFlow(false)
 
+    // Panel focus state (Issue #1)
+    private val _panelFocused = MutableStateFlow(false)
+
+    // Logs view state (Issue #7)
+    private val _logsPaused = MutableStateFlow(false)
+    private val _selectedLogIndex = MutableStateFlow(0)
+    private val _logDetailVisible = MutableStateFlow(false)
+    private val _logsFilter = MutableStateFlow<String?>(null)
+
+    // Context detail view (Issue #2)
+    private val _contextDetailVisible = MutableStateFlow(false)
+    private val _contextDetailScrollOffset = MutableStateFlow(0)
+
+    // API log detail scroll (Issue #9)
+    private val _apiLogDetailScrollOffset = MutableStateFlow(0)
+
+    // Content viewer overlay (Issue #10) — used for files, logs, API details, debug
+    private val _fileViewerVisible = MutableStateFlow(false)
+    private val _fileViewerPath = MutableStateFlow("")
+    private val _fileViewerContent = MutableStateFlow("")
+    private val _fileViewerScrollOffset = MutableStateFlow(0)
+    private val _fileViewerShowLineNumbers = MutableStateFlow(true)
+    private val _fileViewerAllowAddContext = MutableStateFlow(true)
+
+    // Debug panel scroll
+    private val _debugScrollOffset = MutableStateFlow(0)
+
     private val _isInitialized = MutableStateFlow(false)
     private val _error = MutableStateFlow<String?>(null)
 
@@ -189,6 +216,21 @@ class TuiViewModel(
         _fileBrowserEntries.map { Unit },
         _fileBrowserSelectedIndex.map { Unit },
         _fileBrowserShowHidden.map { Unit },
+        _panelFocused.map { Unit },
+        _logsPaused.map { Unit },
+        _selectedLogIndex.map { Unit },
+        _logDetailVisible.map { Unit },
+        _logsFilter.map { Unit },
+        _contextDetailVisible.map { Unit },
+        _contextDetailScrollOffset.map { Unit },
+        _apiLogDetailScrollOffset.map { Unit },
+        _fileViewerVisible.map { Unit },
+        _fileViewerPath.map { Unit },
+        _fileViewerContent.map { Unit },
+        _fileViewerScrollOffset.map { Unit },
+        _fileViewerShowLineNumbers.map { Unit },
+        _fileViewerAllowAddContext.map { Unit },
+        _debugScrollOffset.map { Unit },
     ).debounce(16) // ~60fps cap — prevents excessive rebuilds during streaming
     .map {
         buildCurrentState()
@@ -260,6 +302,21 @@ class TuiViewModel(
         fileBrowserEntries = _fileBrowserEntries.value,
         fileBrowserSelectedIndex = _fileBrowserSelectedIndex.value,
         fileBrowserShowHidden = _fileBrowserShowHidden.value,
+        panelFocused = _panelFocused.value,
+        logsPaused = _logsPaused.value,
+        selectedLogIndex = _selectedLogIndex.value,
+        logDetailVisible = _logDetailVisible.value,
+        logsFilter = _logsFilter.value,
+        contextDetailVisible = _contextDetailVisible.value,
+        contextDetailScrollOffset = _contextDetailScrollOffset.value,
+        apiLogDetailScrollOffset = _apiLogDetailScrollOffset.value,
+        fileViewerVisible = _fileViewerVisible.value,
+        fileViewerPath = _fileViewerPath.value,
+        fileViewerContent = _fileViewerContent.value,
+        fileViewerScrollOffset = _fileViewerScrollOffset.value,
+        fileViewerShowLineNumbers = _fileViewerShowLineNumbers.value,
+        fileViewerAllowAddContext = _fileViewerAllowAddContext.value,
+        debugScrollOffset = _debugScrollOffset.value,
     )
 
     private var bootstrap: StandaloneCoreBootstrap? = null
@@ -341,7 +398,7 @@ class TuiViewModel(
                 it.copy(
                     connected = true,
                     sessionId = restoredTaskId,
-                    dbPath = projectPath.resolve(".refio/database.sqlite").toString(),
+                    dbPath = File(System.getProperty("user.home"), ".refio/data/database.sqlite").toString(),
                     mode = initialMode.name,
                     model = _model.value ?: "default"
                 )
@@ -2777,7 +2834,7 @@ Example:
         "current_task" to 4, "subtasks" to 4,
         "conversation_history" to 5, "recent_work" to 5,
         "rag_fragments" to 6, "rag_index" to 6,
-        "user_context" to 7, "user_requirements" to 7,
+        "user_context" to 7, "user_requirements" to 7, "task_requirements" to 7,
         "key_components" to 8, "domain_analysis" to 8,
         "working_memory" to 9, "mcp_resources" to 9,
     )
@@ -2786,12 +2843,62 @@ Example:
         return when {
             key.startsWith("project") || key == "semantic_summary" -> "project"
             key.startsWith("user") -> "user"
+            key == "task_requirements" -> "user"
             key.startsWith("rag") -> "rag"
             key.startsWith("conversation") || key == "recent_work" -> "conversation"
             key.startsWith("mcp") || key.startsWith("tool") -> "tools"
             else -> "project"
         }
     }
+
+    /**
+     * Extract section content from the LLM prompt by looking for XML-like tags.
+     * The prompt uses tags like <PROJECT_CONTEXT>...</PROJECT_CONTEXT>.
+     * The key (e.g., "project_overview") maps to a tag (e.g., "PROJECT_CONTEXT").
+     */
+    private fun extractSectionContent(llmPrompt: String, sectionKey: String): String? {
+        if (llmPrompt.isBlank()) return null
+
+        // Map section keys to XML tag names used in the prompt
+        val tagName = sectionKeyToTag[sectionKey] ?: sectionKey.uppercase()
+
+        val openTag = "<$tagName>"
+        val closeTag = "</$tagName>"
+        val startIdx = llmPrompt.indexOf(openTag)
+        if (startIdx < 0) return null
+        val contentStart = startIdx + openTag.length
+        val endIdx = llmPrompt.indexOf(closeTag, contentStart)
+        if (endIdx < 0) return null
+
+        return llmPrompt.substring(contentStart, endIdx).trim()
+    }
+
+    private val sectionKeyToTag = mapOf(
+        "project_overview" to "PROJECT_CONTEXT",
+        "project_instructions" to "PROJECT_INSTRUCTIONS",
+        "task_requirements" to "TASK_REQUIREMENTS",
+        "current_task" to "CURRENT_TASK",
+        "user_requirements" to "USER_REQUIREMENTS",
+        "user_context" to "USER_PROVIDED_CONTEXT",
+        "working_memory" to "WORKING_MEMORY",
+        "mcp_resources" to "MCP_RESOURCES",
+        "rag_fragments" to "RAG_FRAGMENTS",
+        "conversation" to "CONVERSATION_HISTORY",
+        "recent_work" to "RECENT_WORK",
+        "subtasks" to "SUBTASKS_STATUS",
+        "key_components" to "KEY_COMPONENTS",
+        "dependencies" to "PROJECT_DEPENDENCIES",
+        "architecture" to "PROJECT_ARCHITECTURE",
+        "framework_analysis" to "FRAMEWORK_ANALYSIS",
+        "typescript_analysis" to "TYPESCRIPT_ANALYSIS",
+        "html_analysis" to "HTML_ANALYSIS",
+        "css_analysis" to "CSS_ANALYSIS",
+        "patterns" to "PATTERNS",
+        "navigation_map" to "NAVIGATION_MAP",
+        "domain_analysis" to "DOMAIN_ANALYSIS",
+        "semantic_summary" to "SEMANTIC_SUMMARY",
+        "context_stability" to "CONTEXT_STABILITY",
+    )
 
     private fun refreshRagStats(r: CoreApiRouter) {
         scope.launch(Dispatchers.IO) {
@@ -2804,9 +2911,14 @@ Example:
                         val totalTokens = ctx.totalEstimatedTokens.coerceAtLeast(1)
                         val contextLimit = 128_000 // default context window
 
+                        // Extract section content from LLM prompt using <SECTION_TAG>...</SECTION_TAG> markers
+                        val llmPrompt = ctx.llmContextPrompt ?: ""
+
                         val sections = ctx.contextSectionTokens.entries
                             .sortedByDescending { it.value.tokens }
                             .mapIndexed { _, (key, info) ->
+                                // key is like "project_overview", tag is like "PROJECT_CONTEXT"
+                                val sectionContent = extractSectionContent(llmPrompt, key)
                                 TuiContextSection(
                                     name = info.name,
                                     category = categorizeSection(key),
@@ -2814,7 +2926,28 @@ Example:
                                     tokensMax = contextLimit,
                                     percentage = info.percentage,
                                     colorIndex = sectionColorMap[key] ?: (key.hashCode() and 0x7FFFFFFF) % 10,
+                                    content = sectionContent,
                                 )
+                            }
+                            .toMutableList()
+
+                        ctx.taskRequirementsPrompt
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { requirements ->
+                                val alreadyPresent = sections.any { it.name == "Task Requirements (Sticky)" }
+                                if (!alreadyPresent) {
+                                    sections.add(
+                                        TuiContextSection(
+                                            name = "Task Requirements (Sticky)",
+                                            category = "user",
+                                            tokensUsed = (requirements.length / 4).coerceAtLeast(1),
+                                            tokensMax = contextLimit,
+                                            percentage = 0.0,
+                                            colorIndex = sectionColorMap["task_requirements"] ?: 7,
+                                            content = requirements
+                                        )
+                                    )
+                                }
                             }
 
                         if (sections.isNotEmpty()) {
@@ -2932,8 +3065,8 @@ Example:
             _fileBrowserPath.value = newPath
             refreshFileBrowser()
         } else {
-            // Open file content as a system message (preview)
-            fileBrowserPreviewFile(entry)
+            // Open file in modal viewer overlay instead of injecting into chat
+            fileBrowserOpenInViewer(entry)
         }
     }
 
@@ -3005,24 +3138,31 @@ Example:
                 appendLine("  Contents: $count items")
             }
         }
-        addSystemMessage(info)
+        // Show info in viewer overlay for files, system message for directories
+        if (!entry.isDirectory && file.isFile && file.length() <= 500_000) {
+            try {
+                openFileViewer(fullPath, file.readText())
+            } catch (_: Exception) {
+                addSystemMessage(info)
+            }
+        } else {
+            addSystemMessage(info)
+        }
     }
 
-    private fun fileBrowserPreviewFile(entry: TuiFileEntry) {
+    private fun fileBrowserOpenInViewer(entry: TuiFileEntry) {
         val fullPath = File(_fileBrowserPath.value, entry.name).absolutePath
         val file = File(fullPath)
 
         if (!file.isFile) return
-        if (file.length() > 100_000) {
+        if (file.length() > 500_000) {
             addSystemMessage("File too large to preview: ${entry.name} (${formatFileSize(file.length())}). Use [a] to add as context or [o] to open externally.")
             return
         }
 
         try {
             val content = file.readText()
-            val ext = entry.name.substringAfterLast('.', "")
-            val preview = if (content.length > 2000) content.take(2000) + "\n... (truncated, ${content.length} chars total)" else content
-            addSystemMessage("```$ext\n$preview\n```\n📄 ${entry.name} (${formatFileSize(file.length())})")
+            openFileViewer(fullPath, content)
         } catch (e: Exception) {
             addSystemMessage("Cannot read file: ${e.message}")
         }
@@ -3036,5 +3176,233 @@ Example:
         bytes >= 1_048_576 -> String.format("%.1fM", bytes / 1_048_576.0)
         bytes >= 1_024 -> String.format("%.1fK", bytes / 1_024.0)
         else -> "${bytes}B"
+    }
+
+    // --- Panel focus toggle (Issue #1) ---
+
+    fun togglePanelFocus() {
+        if (_activeTab.value != TuiTab.CHAT) {
+            _panelFocused.update { !it }
+        }
+    }
+
+    // --- Logs view methods (Issue #7) ---
+
+    fun toggleLogPause() {
+        _logsPaused.update { !it }
+    }
+
+    fun logUp() {
+        _selectedLogIndex.update { (it - 1).coerceAtLeast(0) }
+    }
+
+    fun logDown() {
+        _selectedLogIndex.update { (it + 1).coerceAtMost((_logs.value.size - 1).coerceAtLeast(0)) }
+    }
+
+    fun toggleLogDetail() {
+        _logDetailVisible.update { !it }
+    }
+
+    fun cycleLogFilter() {
+        val levels = listOf(null, "DEBUG", "INFO", "WARN", "ERROR")
+        val currentIdx = levels.indexOf(_logsFilter.value)
+        _logsFilter.value = levels[(currentIdx + 1) % levels.size]
+    }
+
+    // --- Context detail view (Issue #2) ---
+
+    fun toggleContextDetail() {
+        _contextDetailVisible.update { !it }
+        _contextDetailScrollOffset.value = 0
+    }
+
+    fun contextDetailScrollUp() {
+        _contextDetailScrollOffset.update { (it - 1).coerceAtLeast(0) }
+    }
+
+    fun contextDetailScrollDown() {
+        val section = _contextSections.value.getOrNull(_selectedContextIndex.value) ?: return
+        val maxScroll = (section.content?.lines()?.size ?: 1) - 5
+        _contextDetailScrollOffset.update { (it + 1).coerceAtMost(maxScroll.coerceAtLeast(0)) }
+    }
+
+    // --- API log detail scroll (Issue #9) ---
+
+    fun apiLogDetailScrollUp() {
+        _apiLogDetailScrollOffset.update { (it - 1).coerceAtLeast(0) }
+    }
+
+    fun apiLogDetailScrollDown() {
+        _apiLogDetailScrollOffset.update { it + 1 }
+    }
+
+    fun resetApiLogDetailScroll() {
+        _apiLogDetailScrollOffset.value = 0
+    }
+
+    // --- Content viewer overlay (Issue #10) ---
+
+    fun openFileViewer(path: String, content: String) {
+        openContentViewer(title = path, content = content, showLineNumbers = true, allowAddContext = true)
+    }
+
+    /**
+     * Generic content viewer — used for files, log details, API payloads, debug info.
+     */
+    fun openContentViewer(title: String, content: String, showLineNumbers: Boolean = false, allowAddContext: Boolean = false) {
+        _fileViewerPath.value = title
+        _fileViewerContent.value = content
+        _fileViewerScrollOffset.value = 0
+        _fileViewerShowLineNumbers.value = showLineNumbers
+        _fileViewerAllowAddContext.value = allowAddContext
+        _fileViewerVisible.value = true
+    }
+
+    fun closeFileViewer() {
+        _fileViewerVisible.value = false
+        _fileViewerContent.value = ""
+        _fileViewerPath.value = ""
+    }
+
+    fun fileViewerScrollUp() {
+        _fileViewerScrollOffset.update { (it - 1).coerceAtLeast(0) }
+    }
+
+    fun fileViewerScrollDown() {
+        val maxScroll = (_fileViewerContent.value.lines().size - 5).coerceAtLeast(0)
+        _fileViewerScrollOffset.update { (it + 1).coerceAtMost(maxScroll) }
+    }
+
+    fun fileViewerPageUp() {
+        _fileViewerScrollOffset.update { (it - 20).coerceAtLeast(0) }
+    }
+
+    fun fileViewerPageDown() {
+        val maxScroll = (_fileViewerContent.value.lines().size - 5).coerceAtLeast(0)
+        _fileViewerScrollOffset.update { (it + 20).coerceAtMost(maxScroll) }
+    }
+
+    fun fileViewerAddAsContext() {
+        val path = _fileViewerPath.value
+        if (path.isBlank()) return
+        val relativePath = try {
+            projectPath.toAbsolutePath().relativize(java.nio.file.Paths.get(path)).toString()
+        } catch (_: Exception) { path }
+
+        val ref = "@file:$relativePath"
+        val current = _inputBuffer.value
+        val newBuffer = if (current.isBlank()) ref else "$current $ref"
+        updateInputBuffer(newBuffer)
+        _cursorPosition.value = newBuffer.length
+        closeFileViewer()
+        addSystemMessage("Added context: $ref")
+    }
+
+    fun fileViewerCopyToClipboard() {
+        val content = _fileViewerContent.value
+        if (content.isBlank()) return
+        try {
+            val clipboard = java.awt.Toolkit.getDefaultToolkit().systemClipboard
+            clipboard.setContents(java.awt.datatransfer.StringSelection(content), null)
+            addSystemMessage("Content copied to clipboard.")
+        } catch (e: Exception) {
+            addSystemMessage("Copy failed: ${e.message}")
+        }
+    }
+
+    // --- Debug panel scroll ---
+
+    fun debugScrollUp() {
+        _debugScrollOffset.update { (it - 1).coerceAtLeast(0) }
+    }
+
+    fun debugScrollDown() {
+        _debugScrollOffset.update { it + 1 }
+    }
+
+    // --- Log detail in content viewer ---
+
+    fun openLogDetailViewer() {
+        val logs = if (_logsFilter.value != null) {
+            _logs.value.filter { it.level == _logsFilter.value }
+        } else _logs.value
+        val log = logs.getOrNull(_selectedLogIndex.value) ?: return
+        val content = buildString {
+            appendLine("Timestamp: ${log.timestamp}")
+            appendLine("Level:     ${log.level}")
+            appendLine()
+            appendLine("Message:")
+            appendLine(log.message)
+        }
+        openContentViewer(title = "Log Detail [${log.level}] ${log.timestamp}", content = content)
+    }
+
+    // --- API log detail in content viewer ---
+
+    fun openApiLogDetailViewer() {
+        val logs = if (_apiLogsFilter.value != null) {
+            _apiLogs.value.filter { it.provider == _apiLogsFilter.value }
+        } else _apiLogs.value
+        val log = logs.getOrNull(_selectedApiLogIndex.value) ?: return
+        val content = buildString {
+            appendLine("Time:       ${log.timestamp}")
+            appendLine("Provider:   ${log.provider}")
+            appendLine("Model:      ${log.model}")
+            appendLine("Endpoint:   ${log.endpoint}")
+            appendLine("Source:     ${log.source ?: "-"}")
+            appendLine("HTTP:       ${log.httpStatus ?: "-"}")
+            appendLine()
+            appendLine("=== Metrics ===")
+            appendLine("Tokens:     ${log.tokensIn} in / ${log.tokensOut} out (${log.tokensIn + log.tokensOut} total)")
+            appendLine("Cost:       \$${String.format("%.6f", log.costUsd)}")
+            appendLine("Latency:    ${log.latencyMs}ms")
+            if (log.taskId != null) appendLine("Task:       ${log.taskId}")
+            if (log.subtaskId != null) appendLine("Subtask:    ${log.subtaskId}")
+            if (log.errorType != null || log.errorMessage != null) {
+                appendLine()
+                appendLine("=== Error ===")
+                if (log.errorType != null) appendLine("Type:       ${log.errorType}")
+                if (log.errorMessage != null) appendLine(log.errorMessage)
+            }
+            if (log.requestPayload.isNotBlank()) {
+                appendLine()
+                appendLine("=== Request (${log.requestPayload.length} chars) ===")
+                appendLine(prettyPrintJson(log.requestPayload))
+            }
+            if (log.responsePayload.isNotBlank()) {
+                appendLine()
+                appendLine("=== Response (${log.responsePayload.length} chars) ===")
+                appendLine(prettyPrintJson(log.responsePayload))
+            }
+        }
+        openContentViewer(title = "API Log: ${log.provider}/${log.model} ${log.timestamp}", content = content)
+    }
+
+    /** Simple JSON pretty-printer for content viewer */
+    private fun prettyPrintJson(json: String): String {
+        val trimmed = json.trim()
+        if (trimmed.isEmpty()) return ""
+        return try {
+            val sb = StringBuilder()
+            var indent = 0
+            var inString = false
+            var escaped = false
+            for (c in trimmed) {
+                if (escaped) { sb.append(c); escaped = false; continue }
+                if (c == '\\' && inString) { sb.append(c); escaped = true; continue }
+                if (c == '"') { inString = !inString; sb.append(c); continue }
+                if (inString) { sb.append(c); continue }
+                when (c) {
+                    '{', '[' -> { sb.append(c); indent++; sb.append('\n'); sb.append("  ".repeat(indent)) }
+                    '}', ']' -> { indent = (indent - 1).coerceAtLeast(0); sb.append('\n'); sb.append("  ".repeat(indent)); sb.append(c) }
+                    ',' -> { sb.append(c); sb.append('\n'); sb.append("  ".repeat(indent)) }
+                    ':' -> sb.append(": ")
+                    ' ', '\n', '\r', '\t' -> {}
+                    else -> sb.append(c)
+                }
+            }
+            sb.toString()
+        } catch (_: Exception) { json }
     }
 }

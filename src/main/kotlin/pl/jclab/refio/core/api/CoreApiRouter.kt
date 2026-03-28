@@ -658,7 +658,7 @@ class CoreApiRouter(
     /**
      * Initialize core components (database, etc.)
      */
-    fun initialize(dbPath: String = "refio.db") {
+    fun initialize(dbPath: String = "database.sqlite") {
         logger.info { "Initializing core with dbPath=$dbPath" }
         DatabaseFactory.init(dbPath)
         promptsService.initializeDefaults()
@@ -2316,7 +2316,8 @@ $contextPrompt
             )
         }
 
-        // Extract RECENT_WORK section from LLM prompt for display in ContextPanel
+        // Extract sticky prompt sections for display in ContextPanel/TUI
+        val taskRequirementsPrompt = extractSectionFromPrompt(llmPrompt, "TASK_REQUIREMENTS")
         val recentWorkPrompt = extractSectionFromPrompt(llmPrompt, "RECENT_WORK")
 
         return ProjectContextResponse(
@@ -2375,6 +2376,7 @@ $contextPrompt
             combinedEstimatedTokens = combinedEstimatedTokens,
             semanticSummary = context.semanticSummary,
             projectInstructions = context.projectInstructions,
+            taskRequirementsPrompt = taskRequirementsPrompt,
             recentWorkPrompt = recentWorkPrompt,
             activeLlmRequestPrompt = activeLlmPreviewPrompt,
             auxiliaryPromptsPreview = auxiliaryPreviewPrompt
@@ -2864,6 +2866,5 @@ private fun Task.toResponse(
         projectPath = projectPath
     )
 }
-
 
 

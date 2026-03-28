@@ -76,13 +76,20 @@ object TuiApiLogsView {
         buf.addLine(TuiColors.border("─".repeat((width - 2).coerceAtLeast(10))))
 
         val maxRows = height - 9
-        val visible = logs.takeLast(maxRows.coerceAtLeast(1))
-        val baseIdx = (logs.size - visible.size).coerceAtLeast(0)
+        // Center visible window around selectedApiLogIndex
+        val selectedIdx = state.selectedApiLogIndex.coerceIn(0, (logs.size - 1).coerceAtLeast(0))
+        val startIdx = when {
+            logs.size <= maxRows -> 0
+            selectedIdx < maxRows / 2 -> 0
+            selectedIdx > logs.size - maxRows / 2 -> (logs.size - maxRows).coerceAtLeast(0)
+            else -> selectedIdx - maxRows / 2
+        }
+        val visible = logs.subList(startIdx, (startIdx + maxRows).coerceAtMost(logs.size))
 
         for ((i, log) in visible.withIndex()) {
             if (buf.lineCount >= height - 1) break
-            val globalIdx = baseIdx + i
-            val cursor = if (globalIdx == state.selectedApiLogIndex) ">" else " "
+            val globalIdx = startIdx + i
+            val cursor = if (globalIdx == selectedIdx) ">" else " "
             val time = log.timestamp.takeLast(8)
             val prov = log.provider.take(provW)
             val st = log.httpStatus?.toString() ?: "-"
@@ -96,7 +103,12 @@ object TuiApiLogsView {
             val model = log.model.take(modelW)
             val tok = "${log.tokensIn}/${log.tokensOut}"
             val cost = "\$${String.format("%.4f", log.costUsd)}"
-            buf.addLine("$cursor${time.padEnd(timeW)} ${prov.padEnd(provW)} ${stColor(st.padEnd(statusW))} ${lat.padEnd(latW)} ${model.padEnd(modelW)} ${tok.padEnd(tokW)} ${cost.padEnd(costW)}")
+            val line = "$cursor${time.padEnd(timeW)} ${prov.padEnd(provW)} ${stColor(st.padEnd(statusW))} ${lat.padEnd(latW)} ${model.padEnd(modelW)} ${tok.padEnd(tokW)} ${cost.padEnd(costW)}"
+            if (globalIdx == selectedIdx) {
+                buf.addLine(TuiColors.accent(line))
+            } else {
+                buf.addLine(line)
+            }
         }
     }
 
@@ -106,75 +118,193 @@ object TuiApiLogsView {
             return
         }
 
-        buf.addLine(TuiColors.highlight("API Log Detail"))
-        buf.addLine(TuiColors.border("─".repeat((width - 2).coerceAtLeast(10))))
+        // Build all detail lines, then apply scroll offset
+        val detailLines = mutableListOf<String>()
+
+        detailLines.add(TuiColors.highlight("API Log Detail"))
+        detailLines.add(TuiColors.border("\u2500".repeat((width - 2).coerceAtLeast(10))))
 
         // Metadata
-        buf.addLine("  ${TuiColors.muted("Time:")}       ${log.timestamp}")
-        buf.addLine("  ${TuiColors.muted("Provider:")}   ${log.provider}")
-        buf.addLine("  ${TuiColors.muted("Model:")}      ${log.model}")
-        buf.addLine("  ${TuiColors.muted("Endpoint:")}   ${log.endpoint}")
-        buf.addLine("  ${TuiColors.muted("Source:")}     ${log.source ?: "-"}")
+        detailLines.add("  ${TuiColors.muted("Time:")}       ${log.timestamp}")
+        detailLines.add("  ${TuiColors.muted("Provider:")}   ${log.provider}")
+        detailLines.add("  ${TuiColors.muted("Model:")}      ${log.model}")
+        detailLines.add("  ${TuiColors.muted("Endpoint:")}   ${log.endpoint}")
+        detailLines.add("  ${TuiColors.muted("Source:")}     ${log.source ?: "-"}")
         val stColor = if (log.httpStatus != null && log.httpStatus >= 400) TuiColors.statusFailed else TuiColors.statusSuccess
-        buf.addLine("  ${TuiColors.muted("HTTP:")}       ${stColor((log.httpStatus?.toString() ?: "-"))}")
-        buf.addLine()
+        detailLines.add("  ${TuiColors.muted("HTTP:")}       ${stColor((log.httpStatus?.toString() ?: "-"))}")
+        detailLines.add("")
 
         // Metrics
-        buf.addLine("  ${TuiColors.highlight("Metrics")}")
-        buf.addLine("  ${TuiColors.muted("Tokens:")}     ${log.tokensIn} in / ${log.tokensOut} out (${log.tokensIn + log.tokensOut} total)")
-        buf.addLine("  ${TuiColors.muted("Cost:")}       \$${String.format("%.6f", log.costUsd)}")
-        buf.addLine("  ${TuiColors.muted("Latency:")}    ${log.latencyMs}ms")
-        if (log.taskId != null) buf.addLine("  ${TuiColors.muted("Task:")}       ${log.taskId}")
-        if (log.subtaskId != null) buf.addLine("  ${TuiColors.muted("Subtask:")}    ${log.subtaskId}")
-        buf.addLine()
+        detailLines.add("  ${TuiColors.highlight("Metrics")}")
+        detailLines.add("  ${TuiColors.muted("Tokens:")}     ${log.tokensIn} in / ${log.tokensOut} out (${log.tokensIn + log.tokensOut} total)")
+        detailLines.add("  ${TuiColors.muted("Cost:")}       \$${String.format("%.6f", log.costUsd)}")
+        detailLines.add("  ${TuiColors.muted("Latency:")}    ${log.latencyMs}ms")
+        if (log.taskId != null) detailLines.add("  ${TuiColors.muted("Task:")}       ${log.taskId}")
+        if (log.subtaskId != null) detailLines.add("  ${TuiColors.muted("Subtask:")}    ${log.subtaskId}")
+        detailLines.add("")
 
         // Error (if present)
         if (log.errorType != null || log.errorMessage != null) {
-            buf.addLine("  ${TuiColors.statusFailed("Error")}")
-            if (log.errorType != null) buf.addLine("  ${TuiColors.muted("Type:")}       ${TuiColors.statusFailed(log.errorType)}")
+            detailLines.add("  ${TuiColors.statusFailed("Error")}")
+            if (log.errorType != null) detailLines.add("  ${TuiColors.muted("Type:")}       ${TuiColors.statusFailed(log.errorType)}")
             if (log.errorMessage != null) {
-                for (line in log.errorMessage.take(300).lines().take(3)) {
-                    buf.addLine("  ${TuiColors.statusFailed(line)}")
+                for (line in log.errorMessage.take(500).lines().take(5)) {
+                    detailLines.add("  ${TuiColors.statusFailed(line)}")
                 }
             }
-            buf.addLine()
+            detailLines.add("")
         }
 
-        // Request payload preview
+        // Request payload with pretty JSON
         if (log.requestPayload.isNotBlank()) {
-            buf.addLine("  ${TuiColors.highlight("Request")} ${TuiColors.muted("(${log.requestPayload.length} chars)")}")
-            val preview = formatJsonPreview(log.requestPayload, width - 4, 6)
-            for (line in preview) {
-                if (buf.lineCount >= height - 3) break
-                buf.addLine("  $line")
+            detailLines.add("  ${TuiColors.highlight("Request")} ${TuiColors.muted("(${log.requestPayload.length} chars)")}")
+            val formatted = formatJsonPretty(log.requestPayload, width - 4)
+            for (line in formatted) {
+                detailLines.add("  $line")
             }
-            buf.addLine()
+            detailLines.add("")
         }
 
-        // Response payload preview
+        // Response payload with pretty JSON
         if (log.responsePayload.isNotBlank()) {
-            buf.addLine("  ${TuiColors.highlight("Response")} ${TuiColors.muted("(${log.responsePayload.length} chars)")}")
-            val preview = formatJsonPreview(log.responsePayload, width - 4, 6)
-            for (line in preview) {
-                if (buf.lineCount >= height - 2) break
-                buf.addLine("  $line")
+            detailLines.add("  ${TuiColors.highlight("Response")} ${TuiColors.muted("(${log.responsePayload.length} chars)")}")
+            val formatted = formatJsonPretty(log.responsePayload, width - 4)
+            for (line in formatted) {
+                detailLines.add("  $line")
             }
         }
 
-        buf.addLine()
-        buf.addLine(TuiColors.muted("  [Enter/Esc] Back to list  [↑↓] Navigate logs"))
+        // Apply scroll offset
+        val toolbarHeight = 2
+        val contentHeight = (height - toolbarHeight).coerceAtLeast(3)
+        val maxScroll = (detailLines.size - contentHeight).coerceAtLeast(0)
+        val scrollOffset = state.apiLogDetailScrollOffset.coerceIn(0, maxScroll)
+        val visible = detailLines.drop(scrollOffset).take(contentHeight)
+
+        for (line in visible) {
+            buf.addLine(line)
+        }
+
+        // Scroll indicator
+        if (detailLines.size > contentHeight) {
+            val scrollPercent = if (maxScroll > 0) ((scrollOffset.toDouble() / maxScroll) * 100).toInt() else 0
+            buf.addLine(TuiColors.muted("  --- scroll: $scrollPercent% (${detailLines.size} lines) ---"))
+        }
+
+        buf.addLine(TuiColors.muted("  [Enter/Esc] Back  [\u2191\u2193] Scroll  [c] Copy"))
     }
 
-    /** Format JSON/text for preview - show first N lines, truncated to width */
-    private fun formatJsonPreview(payload: String, maxWidth: Int, maxLines: Int): List<String> {
-        val lines = payload.lines().take(maxLines).map { line ->
-            val trimmed = line.take(maxWidth)
-            TuiColors.muted(trimmed)
+    /**
+     * Pretty-print JSON payload with ANSI color for keys, or fall back to raw text.
+     * Uses simple indentation-based formatting without external JSON library dependency.
+     */
+    private fun formatJsonPretty(payload: String, maxWidth: Int): List<String> {
+        val trimmed = payload.trim()
+        if (trimmed.isEmpty()) return emptyList()
+
+        // Attempt simple JSON pretty-printing by re-indenting
+        return try {
+            val formatted = simpleJsonPrettyPrint(trimmed)
+            formatted.lines().map { line ->
+                val truncated = line.take(maxWidth)
+                colorizeJsonLine(truncated)
+            }
+        } catch (_: Exception) {
+            // Not valid JSON or formatting failed, show as plain text
+            payload.lines().map { line ->
+                TuiColors.muted(line.take(maxWidth))
+            }
         }
-        if (payload.lines().size > maxLines) {
-            return lines + TuiColors.muted("... (${payload.lines().size} lines total)")
+    }
+
+    /** Simple JSON pretty-printer that re-indents JSON without external dependencies */
+    private fun simpleJsonPrettyPrint(json: String): String {
+        val sb = StringBuilder()
+        var indent = 0
+        var inString = false
+        var escaped = false
+        var i = 0
+
+        while (i < json.length) {
+            val c = json[i]
+
+            if (escaped) {
+                sb.append(c)
+                escaped = false
+                i++
+                continue
+            }
+
+            if (c == '\\' && inString) {
+                sb.append(c)
+                escaped = true
+                i++
+                continue
+            }
+
+            if (c == '"') {
+                inString = !inString
+                sb.append(c)
+                i++
+                continue
+            }
+
+            if (inString) {
+                sb.append(c)
+                i++
+                continue
+            }
+
+            when (c) {
+                '{', '[' -> {
+                    sb.append(c)
+                    // Check if empty object/array
+                    val next = json.substring(i + 1).trimStart()
+                    val closeChar = if (c == '{') '}' else ']'
+                    if (next.firstOrNull() == closeChar) {
+                        sb.append(closeChar)
+                        i = json.indexOf(closeChar, i + 1) + 1
+                        continue
+                    }
+                    indent++
+                    sb.append('\n')
+                    sb.append("  ".repeat(indent))
+                }
+                '}', ']' -> {
+                    indent = (indent - 1).coerceAtLeast(0)
+                    sb.append('\n')
+                    sb.append("  ".repeat(indent))
+                    sb.append(c)
+                }
+                ',' -> {
+                    sb.append(c)
+                    sb.append('\n')
+                    sb.append("  ".repeat(indent))
+                }
+                ':' -> {
+                    sb.append(": ")
+                }
+                ' ', '\n', '\r', '\t' -> {
+                    // Skip whitespace outside strings
+                }
+                else -> sb.append(c)
+            }
+            i++
         }
-        return lines
+        return sb.toString()
+    }
+
+    /** Colorize a single JSON line: keys in accent color, values in muted */
+    private fun colorizeJsonLine(line: String): String {
+        // Match JSON key pattern: "key":
+        val keyPattern = Regex("^(\\s*)(\"[^\"]+\")(\\s*:)(.*)")
+        val match = keyPattern.matchEntire(line)
+        return if (match != null) {
+            val (indent, key, colon, rest) = match.destructured
+            "$indent${TuiColors.accent(key)}${TuiColors.muted(colon)}${TuiColors.muted(rest)}"
+        } else {
+            TuiColors.muted(line)
+        }
     }
 
     fun render(terminal: Terminal, state: TuiState, contentHeight: Int) {

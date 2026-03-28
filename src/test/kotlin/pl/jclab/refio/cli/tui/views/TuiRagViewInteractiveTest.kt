@@ -19,7 +19,7 @@ class TuiRagViewInteractiveTest {
     @BeforeEach
     fun setup() {
         every { viewModel.stateFlow } returns mockk {
-            every { value } returns TuiState(activeTab = TuiTab.RAG)
+            every { value } returns TuiState(activeTab = TuiTab.RAG, panelFocused = true)
         }
     }
 

@@ -21,8 +21,10 @@ import pl.jclab.refio.cli.tui.state.TuiTab
  *   ←/→          → Settings tab switching (when on Settings screen)
  *
  * CHAT:
- *   Enter        → Send message
- *   Alt+M        → Cycle mode (Chat→Plan→Agent)
+ *   Enter        → Send message (when input has text) / Cycle mode (when input empty)
+ *   Ctrl+M       → Cycle mode (Chat→Plan→Agent) — same byte as Enter (code 13),
+ *                   so mode cycling triggers on Enter with empty input buffer
+ *   Tab (Ctrl+I) → Toggle panel/input focus
  *   Ctrl+C       → Cancel current operation
  *   Ctrl+Q       → Quit
  */
@@ -59,6 +61,7 @@ sealed class TuiAction {
     data object CycleAgentFilter : TuiAction()
     data object MessageSelectionUp : TuiAction()
     data object MessageSelectionDown : TuiAction()
+    data object TogglePanelFocus : TuiAction()
 }
 
 object TuiKeybindings {
@@ -151,6 +154,9 @@ object TuiKeybindings {
         keyMap.bind(TuiAction.SummarizeConversation, KeyMap.ctrl('D'))          // Ctrl+D
         keyMap.bind(TuiAction.ToggleExecutionMode, KeyMap.ctrl('E'))            // Ctrl+E
         keyMap.bind(TuiAction.CycleAgentFilter, KeyMap.ctrl('F'))               // Ctrl+F
+        // Ctrl+M (code 13) = same byte as Enter (\r). Mode cycling is handled
+        // in TuiInputHandler: Enter with empty input buffer = CycleMode.
+        keyMap.bind(TuiAction.TogglePanelFocus, KeyMap.ctrl('I'))               // Ctrl+I = Tab (toggle panel/input focus)
         keyMap.bind(TuiAction.ContinueConversation, KeyMap.ctrl('L'))           // Ctrl+L
         keyMap.bind(TuiAction.ToggleNoEgress, KeyMap.ctrl('N'))                 // Ctrl+N
         keyMap.bind(TuiAction.SelectModel, KeyMap.ctrl('O'))                    // Ctrl+O
@@ -162,8 +168,6 @@ object TuiKeybindings {
         keyMap.bind(TuiAction.CopyLastMessage, KeyMap.ctrl('Y'))                // Ctrl+Y
 
         // --- Alt combinations ---
-        keyMap.bind(TuiAction.CycleMode, KeyMap.alt('m'))                       // Alt+M
-        keyMap.bind(TuiAction.CycleMode, KeyMap.alt('M'))
         keyMap.bind(TuiAction.SwitchScreen(TuiScreen.HISTORY), KeyMap.alt('h')) // Alt+H
         keyMap.bind(TuiAction.SwitchScreen(TuiScreen.HISTORY), KeyMap.alt('H'))
 
@@ -216,7 +220,6 @@ object TuiKeybindings {
             "\u001b[D" -> TuiAction.ScrollLeft
             "\u001b[5~" -> TuiAction.PageUp
             "\u001b[6~" -> TuiAction.PageDown
-            "\u001bm", "\u001bM" -> TuiAction.CycleMode
             "\u001bh", "\u001bH" -> TuiAction.SwitchScreen(TuiScreen.HISTORY)
             else -> null
         }
@@ -230,6 +233,7 @@ object TuiKeybindings {
             5 -> TuiAction.ToggleExecutionMode
             6 -> TuiAction.CycleAgentFilter
             8 -> TuiAction.Backspace              // BS — Backspace on Windows (was Ctrl+H → History)
+            9 -> TuiAction.TogglePanelFocus       // Tab (Ctrl+I) — toggle panel/input focus
             10 -> TuiAction.SendMessage            // LF
             12 -> TuiAction.ContinueConversation
             13 -> TuiAction.SendMessage            // CR

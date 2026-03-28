@@ -2598,8 +2598,23 @@ class ContextService(
         messages: List<ChatMessage>
     ): List<ChatMessage> {
         return messages.filter { msg ->
-            val content = msg.content.trim()
-            content.length >= 10
+            when (msg.role) {
+                MessageRole.USER -> msg.content.isNotBlank()
+                MessageRole.ASSISTANT -> {
+                    msg.content.isNotBlank() &&
+                        msg.toolCalls.isNullOrEmpty() &&
+                        !looksLikeToolEnvelope(msg.content)
+                }
+                MessageRole.TOOL -> {
+                    msg.content.isNotBlank() || !msg.rawOutput.isNullOrBlank()
+                }
+                MessageRole.SYSTEM -> {
+                    isConversationSummary(msg) ||
+                        msg.metadata == "compaction" ||
+                        msg.content.contains("<conversation_summary>") ||
+                        msg.content.contains("<parent_working_memory>")
+                }
+            }
         }
     }
 
@@ -2617,6 +2632,16 @@ class ContextService(
     private fun isConversationSummary(message: ChatMessage): Boolean {
         val metadata = message.metadata ?: return false
         return metadata.contains("\"type\":\"$CONVERSATION_SUMMARY_METADATA_TYPE\"")
+    }
+
+    private fun looksLikeToolEnvelope(content: String): Boolean {
+        val trimmed = content.trim()
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return false
+
+        return trimmed.contains("\"actions\"") ||
+            trimmed.contains("\"tool_calls\"") ||
+            trimmed.contains("\"subtasks\"") ||
+            trimmed.contains("\"intent\"")
     }
 
     /**
@@ -3843,7 +3868,6 @@ data class AgentTurnMessagesResult(
     /** Size of conversation history before filtering */
     val historySize: Int
 )
-
 
 
 

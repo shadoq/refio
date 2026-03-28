@@ -10,7 +10,6 @@ import pl.jclab.refio.core.tools.security.FileLimits
 import pl.jclab.refio.core.tools.security.FileTooLargeException
 import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Files
-import java.nio.file.Paths
 import kotlin.io.path.fileSize
 import kotlin.io.path.isRegularFile
 import kotlin.io.path.isDirectory
@@ -18,10 +17,15 @@ import kotlin.io.path.isDirectory
 private val logger = dualLogger("ReadFileTool")
 
 /**
- * Read File Tool - reads contents of a file
+ * Read File Tool - reads contents of a file with optional line range.
  *
  * Parameters:
- * - path: Relative file path within project
+ * - path: Relative file path within project (required)
+ * - offset: 1-based line number to start reading from (optional, default: 1)
+ * - limit: Maximum number of lines to read (optional, default: all)
+ *
+ * When offset/limit are used, the output includes a header with line range info
+ * and the total line count, so the caller can paginate through the file.
  *
  * Security:
  * - Path sandbox prevents directory traversal
@@ -34,7 +38,10 @@ class ReadFileTool(
 ) : Tool {
 
     override val name = "read_file"
-    override val description = "Read contents of a text file within the project"
+    override val description = "Read contents of a text file within the project. " +
+        "Supports reading specific line ranges with 'offset' and 'limit' parameters — " +
+        "use these for large files or data files to read only the portion you need " +
+        "instead of loading the entire file into context."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
 
@@ -42,15 +49,25 @@ class ReadFileTool(
         if (params["path"] == null || (params["path"] as? String).isNullOrBlank()) {
             throw IllegalArgumentException("Parameter 'path' is required and cannot be empty")
         }
+        val offset = toIntOrNull(params["offset"])
+        if (offset != null && offset < 1) {
+            throw IllegalArgumentException("Parameter 'offset' must be >= 1 (1-based line number)")
+        }
+        val limit = toIntOrNull(params["limit"])
+        if (limit != null && limit < 1) {
+            throw IllegalArgumentException("Parameter 'limit' must be >= 1")
+        }
     }
 
     override suspend fun execute(params: Map<String, Any>): ToolResult {
         val startTime = System.currentTimeMillis()
 
         try {
-            // Extract parameters with safe casting
             val pathStr = params["path"] as? String
                 ?: return ToolResult.error("Missing required parameter: 'path'")
+
+            val offset = toIntOrNull(params["offset"])
+            val limit = toIntOrNull(params["limit"])
 
             // Normalize path for security (bare filenames → "./file.txt", backslash → forward slash)
             val normalizedPathStr = normalizePath(pathStr)
@@ -58,7 +75,10 @@ class ReadFileTool(
             // Resolve and validate path
             val path = sandbox.resolve(normalizedPathStr)
 
-            logger.info { "Reading file: relative='$pathStr', absolute='${path.toAbsolutePath()}', sandbox_root='${getSandboxRoot()}'" }
+            logger.info {
+                "Reading file: relative='$pathStr', absolute='${path.toAbsolutePath()}', " +
+                    "sandbox_root='${getSandboxRoot()}', offset=$offset, limit=$limit"
+            }
 
             // Check if file exists
             if (!Files.exists(path)) {
@@ -75,27 +95,66 @@ class ReadFileTool(
             // Check file size
             val fileSize = path.fileSize()
             val fileExtension = path.fileName.toString().substringAfterLast('.', "")
-            logger.debug { "File details: size=$fileSize bytes, extension='$fileExtension', absolute='${path.toAbsolutePath()}'" }
+            logger.debug { "File details: size=$fileSize bytes, extension='$fileExtension'" }
             if (fileSize > limits.maxFileSize) {
                 return ToolResult.error(
-                    "File too large: $fileSize bytes (max ${limits.maxFileSize} bytes)"
+                    "File too large: $fileSize bytes (max ${limits.maxFileSize} bytes). " +
+                        "Use 'offset' and 'limit' parameters to read a specific line range."
                 )
             }
 
             // Read file contents
-            val content = Files.readString(path)
+            val allLines = Files.readAllLines(path)
+            val totalLineCount = allLines.size
+
+            val outputContent: String
+            val readLineCount: Int
+            val startLine: Int
+            val endLine: Int
+
+            if (offset != null || limit != null) {
+                // Line-range reading (1-based offset)
+                val startIdx = ((offset ?: 1) - 1).coerceIn(0, totalLineCount)
+                val endIdx = if (limit != null) {
+                    (startIdx + limit).coerceAtMost(totalLineCount)
+                } else {
+                    totalLineCount
+                }
+
+                val selectedLines = allLines.subList(startIdx, endIdx)
+                readLineCount = selectedLines.size
+                startLine = startIdx + 1
+                endLine = startIdx + readLineCount
+
+                val header = "[Lines $startLine-$endLine of $totalLineCount total]"
+                outputContent = "$header\n${selectedLines.joinToString("\n")}"
+
+                logger.info {
+                    "Read file range: $pathStr lines $startLine-$endLine of $totalLineCount"
+                }
+            } else {
+                // Full file read
+                outputContent = allLines.joinToString("\n")
+                readLineCount = totalLineCount
+                startLine = 1
+                endLine = totalLineCount
+            }
+
             val duration = (System.currentTimeMillis() - startTime).toInt()
 
-            logger.info { "Successfully read file: $pathStr (${content.length} chars, ${duration}ms)" }
+            logger.info { "Successfully read file: $pathStr ($readLineCount lines, ${duration}ms)" }
 
             return ToolResult(
                 success = true,
-                output = content,
-                bytesRead = content.toByteArray().size,
+                output = outputContent,
+                bytesRead = outputContent.toByteArray().size,
                 durationMs = duration,
                 metadata = mapOf(
                     "file_size" to fileSize,
-                    "line_count" to content.lines().size,
+                    "total_lines" to totalLineCount,
+                    "lines_read" to readLineCount,
+                    "start_line" to startLine,
+                    "end_line" to endLine,
                     "path" to pathStr
                 )
             )
@@ -120,6 +179,20 @@ class ReadFileTool(
         return sandbox.getProjectRoot().toString()
     }
 
+    /**
+     * Safely convert a parameter value to Int.
+     * Handles String, Int, Long, Double from JSON parsing.
+     */
+    private fun toIntOrNull(value: Any?): Int? {
+        return when (value) {
+            is Int -> value
+            is Long -> value.toInt()
+            is Double -> value.toInt()
+            is String -> value.toIntOrNull()
+            else -> null
+        }
+    }
+
     override fun getParameterSchema(): Map<String, Any> {
         return mapOf(
             "type" to "object",
@@ -127,6 +200,17 @@ class ReadFileTool(
                 "path" to mapOf(
                     "type" to "string",
                     "description" to "Relative path to the file within the project"
+                ),
+                "offset" to mapOf(
+                    "type" to "integer",
+                    "description" to "Start reading from this line number (1-based). " +
+                        "Use with 'limit' to read a specific range. " +
+                        "Useful for large/data files to avoid loading everything into context."
+                ),
+                "limit" to mapOf(
+                    "type" to "integer",
+                    "description" to "Maximum number of lines to read from the offset. " +
+                        "When omitted, reads to end of file."
                 )
             ),
             "required" to listOf("path")

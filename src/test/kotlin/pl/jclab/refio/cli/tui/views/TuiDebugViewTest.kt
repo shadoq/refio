@@ -24,7 +24,7 @@ class TuiDebugViewTest {
                 model = "claude-3.5-sonnet",
                 status = "RUNNING",
                 connected = true,
-                dbPath = "/project/.refio/database.sqlite"
+                dbPath = "${System.getProperty("user.home")}/.refio/data/database.sqlite"
             )
         )
         TuiDebugView.render(terminal, state, 20)

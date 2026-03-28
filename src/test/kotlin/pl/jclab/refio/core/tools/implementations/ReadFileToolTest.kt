@@ -196,7 +196,8 @@ class ReadFileToolTest {
 
             // Then
             assertNotNull(result.metadata)
-            assertEquals(3, result.metadata!!["line_count"])
+            assertEquals(3, result.metadata!!["total_lines"])
+            assertEquals(3, result.metadata!!["lines_read"])
             assertEquals("meta.txt", result.metadata!!["path"])
         }
 

@@ -55,6 +55,8 @@ class ToolsSettingsPanel(
         ToolDefinition("multi_line_editor", "multi_line_editor", "Edit file parts using LLM-assisted generation", "Off", "On"),
         ToolDefinition("multi_edit", "multi_edit", "Edit multiple files in a single operation", "Off", "On"),
         ToolDefinition("run_terminal_command", "run_terminal_command", "Execute terminal commands", "Off", "On"),
+        ToolDefinition("http_request", "http_request", "Make HTTP requests to external APIs (GET, POST, PUT, DELETE)", "Off", "On"),
+        ToolDefinition("run_code", "run_code", "Execute inline code snippets (Python, JavaScript, Kotlin)", "Off", "On"),
         ToolDefinition("invoke_subagent", "subagent", "Invoke a specialized subagent to solve part of the task", "On", "On")
     )
 

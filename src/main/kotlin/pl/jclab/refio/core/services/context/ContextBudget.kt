@@ -116,8 +116,8 @@ data class ContextBudget(
             ContextSection.PROJECT_CONTEXT to 1500,
             ContextSection.RECENT_WORK to 8000,
             ContextSection.USER_CONTEXT to 5000,
-            ContextSection.RAG_FRAGMENTS to 3000,
-            ContextSection.CONVERSATION to 4000,
+            ContextSection.RAG_FRAGMENTS to 2000,
+            ContextSection.CONVERSATION to 8000,
             ContextSection.REFERENCE to 2500
         )
 

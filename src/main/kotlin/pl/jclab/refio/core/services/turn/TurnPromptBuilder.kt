@@ -3,6 +3,7 @@ package pl.jclab.refio.core.services.turn
 import pl.jclab.refio.api.models.ContextReference
 import pl.jclab.refio.core.api.TurnProfileOverrides
 import pl.jclab.refio.core.api.TurnRunProfile
+import pl.jclab.refio.core.db.ChatMessage
 import pl.jclab.refio.core.subagents.models.SubagentContextProfile
 import pl.jclab.refio.core.db.MessageRole
 import pl.jclab.refio.core.db.PromptType
@@ -33,6 +34,10 @@ class TurnPromptBuilder(
     private val tokenEstimator: PromptTokenEstimator = PromptTokenEstimator(),
     private val promptCache: PromptCache? = null
 ) {
+    companion object {
+        private const val STICKY_REQUIREMENTS_MAX_CHARS = 4_000
+        private const val REQUIREMENT_ENTRY_MAX_CHARS = 1_500
+    }
 
     /**
      * Build complete prompt for turn iteration.
@@ -64,10 +69,21 @@ class TurnPromptBuilder(
             profileOverrides?.contextProfile
         } else null
 
+        val history = chatMessageRepository.findByTaskId(taskId)
+        val stickyRequirements = buildStickyRequirementsBlock(history)
+        if (stickyRequirements.isNotBlank()) {
+            systemPrompt = """
+$systemPrompt
+
+<task_requirements>
+$stickyRequirements
+</task_requirements>
+            """.trimIndent()
+        }
+
         // Use ContextService for messages and project context (for PLAN and AGENT modes)
         if ((mode == TaskMode.PLAN || mode == TaskMode.AGENT) && contextService != null && projectRoot != null) {
             try {
-                val history = chatMessageRepository.findByTaskId(taskId)
                 val lastUserMessage = history.lastOrNull { it.role == MessageRole.USER }?.content ?: ""
 
                 val allContextRefs = contextService.collectAllUserContextRefs(taskId) + userContextRefs
@@ -147,8 +163,6 @@ $filteredContextPrompt
         }
 
         // Fallback: Direct message building for CHAT mode or when ContextService unavailable
-        val history = chatMessageRepository.findByTaskId(taskId)
-
         val messages = history.mapNotNull { msg ->
             when (msg.role) {
                 MessageRole.USER -> LLMMessage(
@@ -196,6 +210,45 @@ $filteredContextPrompt
             systemPrompt = systemPrompt,
             messages = messages
         )
+    }
+
+    private fun buildStickyRequirementsBlock(history: List<ChatMessage>): String {
+        val userMessages = history
+            .filter { it.role == MessageRole.USER }
+            .map { it.content.trim() }
+            .filter { it.isNotBlank() }
+
+        if (userMessages.isEmpty()) return ""
+
+        val entries = linkedSetOf<String>()
+
+        userMessages.firstOrNull()?.let {
+            entries += formatRequirementEntry("Original user request", it)
+        }
+
+        userMessages.lastOrNull()
+            ?.takeIf { it != userMessages.firstOrNull() }
+            ?.let { entries += formatRequirementEntry("Latest user clarification", it) }
+
+        userMessages
+            .drop(1)
+            .dropLast(if (userMessages.size > 1) 1 else 0)
+            .takeLast(2)
+            .forEachIndexed { index, message ->
+                entries += formatRequirementEntry("Additional user constraint ${index + 1}", message)
+            }
+
+        return entries.joinToString("\n\n").take(STICKY_REQUIREMENTS_MAX_CHARS)
+    }
+
+    private fun formatRequirementEntry(label: String, content: String): String {
+        val normalized = content.replace(Regex("\\s+"), " ").trim()
+        val clipped = if (normalized.length > REQUIREMENT_ENTRY_MAX_CHARS) {
+            normalized.take(REQUIREMENT_ENTRY_MAX_CHARS) + "..."
+        } else {
+            normalized
+        }
+        return "$label:\n$clipped"
     }
 
     /**
@@ -316,12 +369,12 @@ $iterationInfo
             appendLine()
             appendLine("<tool_call_contract>")
             appendLine("When using tools, respond ONLY with JSON object:")
-            appendLine("""{"actions":[{"tool":"exact_tool_name","arguments":{"param":"value"}}],"response":"","intent":"implementation|analysis"}""")
+            appendLine("""{"actions":[{"tool":"exact_tool_name","arguments":{"param":"value"}}],"response":"","intent":"implementation|analysis|response"}""")
             appendLine("Use only tool names from <available_tools> and exact parameter names from schemas.")
             appendLine("""Optional field: "thinking":"short reasoning" when it adds value.""")
             appendLine("""Never wrap calls in helper tools like {"tool":"run", ...}.""")
             appendLine("""Never nest tool payloads like {"tool":"some_tool","arguments":{"tool":"other","arguments":{...}}}.""")
-            appendLine("""If no tools are needed, respond with {"actions":[],"response":"final answer","intent":"analysis"}.""")
+            appendLine("""If no tools are needed, respond with {"actions":[],"response":"your answer","intent":"response"}.""")
             appendLine("</tool_call_contract>")
             if (iterationInfo.isNotBlank()) {
                 appendLine()

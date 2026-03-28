@@ -16,7 +16,7 @@ object DatabaseFactory {
 
     fun isInitialized(): Boolean = initialized
 
-    fun init(dbPath: String = "refio_poc.db") {
+    fun init(dbPath: String = "database.sqlite") {
         // Synchronized to prevent double initialization from concurrent callers
         synchronized(initLock) {
             if (initialized) {

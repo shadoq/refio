@@ -37,6 +37,52 @@ class TuiWorkflowListener(
         viewModel = vm
     }
 
+    companion object {
+        /**
+         * Extract display text from LLM JSON envelope.
+         * Handles: {"actions":[],"response":"text","intent":"..."}
+         * Returns the "response" or "content" field if present, otherwise the original content.
+         * This mirrors ToolCallParser.extractTextResponse without kotlinx.serialization/Gson dependency.
+         */
+        fun extractResponseFromJson(content: String): String {
+            val trimmed = content.trim()
+            if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return content
+
+            // Don't extract from plan/subtasks JSON — keep it for plan rendering
+            if ("\"plan\"" in trimmed || "\"subtasks\"" in trimmed) return content
+
+            return try {
+                // Extract "response" field value using simple pattern matching
+                val responseText = extractJsonStringField(trimmed, "response")
+                    ?: extractJsonStringField(trimmed, "content")
+
+                if (!responseText.isNullOrBlank()) {
+                    // Unescape JSON string escapes
+                    responseText
+                        .replace("\\n", "\n")
+                        .replace("\\t", "\t")
+                        .replace("\\\"", "\"")
+                        .replace("\\\\", "\\")
+                } else {
+                    content
+                }
+            } catch (_: Exception) {
+                content
+            }
+        }
+
+        /**
+         * Extract a string field value from a JSON object using regex.
+         * Handles escaped quotes within the value.
+         */
+        private fun extractJsonStringField(json: String, fieldName: String): String? {
+            // Match "fieldName":"value" with proper escape handling
+            val pattern = """"$fieldName"\s*:\s*"((?:[^"\\]|\\.)*)"""".toRegex()
+            val match = pattern.find(json) ?: return null
+            return match.groupValues[1]
+        }
+    }
+
     private val streamId = "$agentId-stream"
     private val accumulatedContent = StringBuilder()
     @Volatile private var completed = false
@@ -98,7 +144,9 @@ class TuiWorkflowListener(
             if (now - lastUiUpdate < UI_UPDATE_INTERVAL_MS) return
             lastUiUpdate = now
 
-            val content = accumulatedContent.toString()
+            val rawContent = accumulatedContent.toString()
+            // Try to extract text from JSON envelope during streaming for cleaner display
+            val content = extractResponseFromJson(rawContent)
             updateStreamMessage(content, isStreaming = true)
         }
     }
@@ -106,7 +154,10 @@ class TuiWorkflowListener(
     override fun onStreamComplete(content: String) {
         synchronized(accumulatedContent) {
             completed = true
-            val finalContent = content.ifBlank { accumulatedContent.toString() }
+            val rawContent = content.ifBlank { accumulatedContent.toString() }
+            // Extract text payload from JSON envelope (e.g., {"actions":[],"response":"...","intent":"analysis"})
+            // This mirrors what the plugin's MessageDispatcher/ToolCallContentSanitizer does.
+            val finalContent = extractResponseFromJson(rawContent)
 
             // Finalize: replace streaming message with final version (new ID, isStreaming=false)
             messagesState.update { messages ->

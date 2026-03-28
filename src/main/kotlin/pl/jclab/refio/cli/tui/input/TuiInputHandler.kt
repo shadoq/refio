@@ -168,6 +168,28 @@ class TuiInputHandler(private val terminal: Terminal) {
             }
         }
 
+        // File viewer overlay: intercept keys for scrolling and actions
+        if (state.fileViewerVisible) {
+            when (action) {
+                is TuiAction.ScrollUp -> { viewModel.fileViewerScrollUp(); return }
+                is TuiAction.ScrollDown -> { viewModel.fileViewerScrollDown(); return }
+                is TuiAction.PageUp -> { viewModel.fileViewerPageUp(); return }
+                is TuiAction.PageDown -> { viewModel.fileViewerPageDown(); return }
+                is TuiAction.BackToMain -> { viewModel.closeFileViewer(); return }
+                is TuiAction.SendMessage -> { viewModel.closeFileViewer(); return }
+                is TuiAction.TypeChar -> {
+                    when (action.char.lowercaseChar()) {
+                        'a' -> { if (state.fileViewerAllowAddContext) viewModel.fileViewerAddAsContext(); return }
+                        'c' -> { viewModel.fileViewerCopyToClipboard(); return }
+                    }
+                    return
+                }
+                is TuiAction.CancelOperation -> { viewModel.closeFileViewer(); return }
+                is TuiAction.Quit -> { viewModel.shutdown(); stop(); return }
+                else -> return // block other actions while viewer is open
+            }
+        }
+
         // Settings screen: intercept keys for interactive editing
         if (state.screen == TuiScreen.SETTINGS) {
             // If editing a text field, capture all input
@@ -316,23 +338,24 @@ class TuiInputHandler(private val terminal: Terminal) {
             }
         }
 
-        // RAG tab: intercept action keys
+        // RAG tab: intercept action keys (letter keys only when panel focused)
         if (state.activeTab == TuiTab.RAG && state.screen == TuiScreen.MAIN) {
             when (action) {
                 is TuiAction.ScrollUp -> { viewModel.ragFileUp(); return }
                 is TuiAction.ScrollDown -> { viewModel.ragFileDown(); return }
                 is TuiAction.SendMessage -> { viewModel.ragViewSelectedChunks(); return }
                 is TuiAction.TypeChar -> {
-                    when (action.char.lowercaseChar()) {
-                        'r' -> { viewModel.ragReindex(); return }
-                        'e' -> { viewModel.ragGenerateEmbeddings(); return }
-                        's' -> { viewModel.ragStopIndexing(); return }
-                        'c' -> { viewModel.ragClearIndex(); return }
-                        'v' -> { viewModel.ragViewSelectedChunks(); return }
-                        'q' -> {
-                            // Prompt user for search query via input buffer
-                            viewModel.addSystemMessage("Type search query in the chat input and press Enter, or use /rag-search <query>")
-                            return
+                    if (state.panelFocused) {
+                        when (action.char.lowercaseChar()) {
+                            'r' -> { viewModel.ragReindex(); return }
+                            'e' -> { viewModel.ragGenerateEmbeddings(); return }
+                            's' -> { viewModel.ragStopIndexing(); return }
+                            'c' -> { viewModel.ragClearIndex(); return }
+                            'v' -> { viewModel.ragViewSelectedChunks(); return }
+                            'q' -> {
+                                viewModel.addSystemMessage("Type search query in the chat input and press Enter, or use /rag-search <query>")
+                                return
+                            }
                         }
                     }
                 }
@@ -340,37 +363,59 @@ class TuiInputHandler(private val terminal: Terminal) {
             }
         }
 
-        // Context tab: navigate sections
+        // Context tab: navigate sections + detail view
         if (state.activeTab == TuiTab.CONTEXT && state.screen == TuiScreen.MAIN) {
+            if (state.contextDetailVisible) {
+                // Detail view mode: scroll content
+                when (action) {
+                    is TuiAction.ScrollUp -> { viewModel.contextDetailScrollUp(); return }
+                    is TuiAction.ScrollDown -> { viewModel.contextDetailScrollDown(); return }
+                    is TuiAction.SendMessage, is TuiAction.BackToMain -> { viewModel.toggleContextDetail(); return }
+                    is TuiAction.PageUp -> { repeat(10) { viewModel.contextDetailScrollUp() }; return }
+                    is TuiAction.PageDown -> { repeat(10) { viewModel.contextDetailScrollDown() }; return }
+                    else -> return // block other actions in detail view
+                }
+            }
             when (action) {
                 is TuiAction.ScrollUp -> { viewModel.contextSectionUp(); return }
                 is TuiAction.ScrollDown -> { viewModel.contextSectionDown(); return }
+                is TuiAction.SendMessage -> { viewModel.toggleContextDetail(); return }
+                is TuiAction.TypeChar -> {
+                    if (state.panelFocused && action.char.lowercaseChar() == 'i') { viewModel.toggleContextDetail(); return }
+                }
                 else -> {} // fall through
             }
         }
 
-        // API Logs tab: navigation, detail, filter
+        // Logs tab: navigate, pause, filter, detail (opens content viewer overlay)
+        if (state.activeTab == TuiTab.LOGS && state.screen == TuiScreen.MAIN) {
+            when (action) {
+                is TuiAction.ScrollUp -> { viewModel.logUp(); return }
+                is TuiAction.ScrollDown -> { viewModel.logDown(); return }
+                is TuiAction.SendMessage -> { viewModel.openLogDetailViewer(); return }
+                is TuiAction.TypeChar -> {
+                    if (state.panelFocused) {
+                        when (action.char.lowercaseChar()) {
+                            'p' -> { viewModel.toggleLogPause(); return }
+                            'f' -> { viewModel.cycleLogFilter(); return }
+                        }
+                    }
+                }
+                else -> {} // fall through
+            }
+        }
+
+        // API Logs tab: navigation, filter, detail via content viewer overlay
         if (state.activeTab == TuiTab.API_LOGS && state.screen == TuiScreen.MAIN) {
             when (action) {
                 is TuiAction.ScrollUp -> { viewModel.apiLogUp(); return }
                 is TuiAction.ScrollDown -> { viewModel.apiLogDown(); return }
                 is TuiAction.SendMessage -> {
-                    if (state.apiLogDetailVisible) {
-                        viewModel.toggleApiLogDetail() // back to list
-                    } else if (state.apiLogs.isNotEmpty()) {
-                        viewModel.toggleApiLogDetail() // show detail
-                    }
+                    if (state.apiLogs.isNotEmpty()) viewModel.openApiLogDetailViewer()
                     return
                 }
-                is TuiAction.BackToMain -> {
-                    if (state.apiLogDetailVisible) {
-                        viewModel.toggleApiLogDetail()
-                        return
-                    }
-                    // else fall through to normal BackToMain handling
-                }
                 is TuiAction.TypeChar -> {
-                    if (action.char.lowercaseChar() == 'f') {
+                    if (state.panelFocused && action.char.lowercaseChar() == 'f') {
                         viewModel.cycleApiLogsFilter()
                         return
                     }
@@ -379,20 +424,24 @@ class TuiInputHandler(private val terminal: Terminal) {
             }
         }
 
-        // Files tab: file browser navigation
+        // Files tab: file browser navigation (letter keys only when panel focused)
         if (state.activeTab == TuiTab.FILES && state.screen == TuiScreen.MAIN) {
             when (action) {
                 is TuiAction.ScrollUp -> { viewModel.fileBrowserUp(); return }
                 is TuiAction.ScrollDown -> { viewModel.fileBrowserDown(); return }
                 is TuiAction.SendMessage -> { viewModel.fileBrowserEnter(); return }
-                is TuiAction.Backspace -> { viewModel.fileBrowserGoUp(); return }
+                is TuiAction.Backspace -> {
+                    if (state.panelFocused) { viewModel.fileBrowserGoUp(); return }
+                }
                 is TuiAction.TypeChar -> {
-                    when (action.char.lowercaseChar()) {
-                        'h' -> { viewModel.fileBrowserToggleHidden(); return }
-                        'a' -> { viewModel.fileBrowserAddAsContext(); return }
-                        'o' -> { viewModel.fileBrowserOpenExternal(); return }
-                        'i' -> { viewModel.fileBrowserShowInfo(); return }
-                        'r' -> { viewModel.fileBrowserRefresh(); return }
+                    if (state.panelFocused) {
+                        when (action.char.lowercaseChar()) {
+                            'h' -> { viewModel.fileBrowserToggleHidden(); return }
+                            'a' -> { viewModel.fileBrowserAddAsContext(); return }
+                            'o' -> { viewModel.fileBrowserOpenExternal(); return }
+                            'i' -> { viewModel.fileBrowserShowInfo(); return }
+                            'r' -> { viewModel.fileBrowserRefresh(); return }
+                        }
                     }
                 }
                 is TuiAction.PageUp -> { repeat(10) { viewModel.fileBrowserUp() }; return }
@@ -401,26 +450,41 @@ class TuiInputHandler(private val terminal: Terminal) {
             }
         }
 
+        // Debug tab: scroll with arrow keys
+        if (state.activeTab == TuiTab.DEBUG && state.screen == TuiScreen.MAIN) {
+            when (action) {
+                is TuiAction.ScrollUp -> { viewModel.debugScrollUp(); return }
+                is TuiAction.ScrollDown -> { viewModel.debugScrollDown(); return }
+                is TuiAction.PageUp -> { repeat(10) { viewModel.debugScrollUp() }; return }
+                is TuiAction.PageDown -> { repeat(10) { viewModel.debugScrollDown() }; return }
+                else -> {} // fall through
+            }
+        }
+
         // Steps tab: intercept navigation and action keys when Steps tab is active
+        // Letter keys only intercepted when panel is focused (Tab to toggle)
         if (state.activeTab == TuiTab.STEPS && state.subtasks.isNotEmpty()) {
             when (action) {
                 is TuiAction.ScrollUp -> { viewModel.selectStepUp(); return }
                 is TuiAction.ScrollDown -> { viewModel.selectStepDown(); return }
                 is TuiAction.TypeChar -> {
-                    val idx = state.selectedStepIndex
-                    val subtask = state.subtasks.getOrNull(idx)
-                    when (action.char.lowercaseChar()) {
-                        'a' -> { subtask?.let { viewModel.approveSubtask(it.id) }; return }
-                        's' -> { subtask?.let { viewModel.skipSubtask(it.id) }; return }
-                        'd' -> { subtask?.let { viewModel.deleteSubtask(it.id) }; return }
-                        'u' -> { viewModel.moveStepUp(idx); return }
-                        'j' -> { viewModel.moveStepDown(idx); return }
-                        'p' -> { viewModel.togglePause(); return }
-                        'r' -> { viewModel.replanSteps(); return }
-                        else -> {} // fall through for other chars (typing in input)
+                    if (state.panelFocused) {
+                        val idx = state.selectedStepIndex
+                        val subtask = state.subtasks.getOrNull(idx)
+                        when (action.char.lowercaseChar()) {
+                            'a' -> { subtask?.let { viewModel.approveSubtask(it.id) }; return }
+                            's' -> { subtask?.let { viewModel.skipSubtask(it.id) }; return }
+                            'd' -> { subtask?.let { viewModel.deleteSubtask(it.id) }; return }
+                            'u' -> { viewModel.moveStepUp(idx); return }
+                            'j' -> { viewModel.moveStepDown(idx); return }
+                            'p' -> { viewModel.togglePause(); return }
+                            'r' -> { viewModel.replanSteps(); return }
+                            else -> {} // fall through for other chars (typing in input)
+                        }
+                        if (action.char == 'C') { viewModel.cancelAllPending(); return }
+                        if (action.char == 'R') { viewModel.executeStep(idx); return }
                     }
-                    if (action.char == 'C') { viewModel.cancelAllPending(); return }
-                    if (action.char == 'R') { viewModel.executeStep(idx); return }
+                    // When not panel-focused, fall through to input handling
                 }
                 else -> {} // fall through
             }
@@ -489,6 +553,11 @@ class TuiInputHandler(private val terminal: Terminal) {
                         viewModel.sendMessage(input)
                         true
                     }
+                } else {
+                    // Ctrl+M = Enter with empty input → cycle mode (Chat→Plan→Agent)
+                    // Ctrl+M and Enter produce the same byte (code 13) at the terminal level,
+                    // so mode cycling is triggered when Enter is pressed with no text in the buffer.
+                    viewModel.cycleMode()
                 }
             }
             is TuiAction.TypeChar -> {
@@ -577,6 +646,7 @@ class TuiInputHandler(private val terminal: Terminal) {
             is TuiAction.NewLine -> viewModel.updateInputBuffer(
                 state.inputBuffer + "\n"
             )
+            is TuiAction.TogglePanelFocus -> viewModel.togglePanelFocus()
             is TuiAction.AutocompleteNext -> { /* handled above */ }
             is TuiAction.AutocompletePrev -> { /* handled above */ }
             is TuiAction.AutocompleteAccept -> { /* handled above */ }

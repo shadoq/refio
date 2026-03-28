@@ -22,6 +22,7 @@ import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 import pl.jclab.refio.core.tools.base.Tool
+import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.tools.base.ToolResult
@@ -43,6 +44,15 @@ class TurnToolExecutor(
     private val workingMemoryIntegration: WorkingMemoryIntegration? = null
 ) {
     private val streamingToolNames = setOf("advance_code_editing", "multi_line_editor")
+    private val codingToolNames = setOf("advance_code_editing", "multi_line_editor")
+
+    companion object {
+        /** Max raw output size (chars) to preserve in-context for DATA_PRODUCING tools */
+        const val DATA_PRODUCING_RAW_OUTPUT_BUFFER = 32_000
+
+        /** Max tokens of working memory context to inject into coding tools */
+        const val CODING_TOOL_CONTEXT_TOKENS = 4_000
+    }
 
     /**
      * Execute list of tool calls with parallel support for READ_ONLY tools.
@@ -285,6 +295,21 @@ class TurnToolExecutor(
                 listener = listener
             )
 
+            // Inject conversation context for LLM-based coding tools
+            if (toolCall.name in codingToolNames && workingMemoryIntegration != null) {
+                val context = workingMemoryIntegration.buildWorkingMemorySection(
+                    taskId = taskId,
+                    _query = "",
+                    maxTokens = CODING_TOOL_CONTEXT_TOKENS
+                )
+                if (context.isNotBlank()) {
+                    argumentsMap["conversation_context"] = context
+                    logger.info {
+                        "[CODING_CONTEXT] Injected ${context.length} chars of working memory into ${toolCall.name}"
+                    }
+                }
+            }
+
             val toolCallRequest = CoreToolCall(
                 name = toolCall.name,
                 params = argumentsMap
@@ -372,10 +397,35 @@ class TurnToolExecutor(
                     iteration = iteration
                 )
 
+                // For DATA_PRODUCING tools (http_request, run_code, read_file, etc.):
+                // preserve raw output as content when it fits in the buffer,
+                // so the LLM sees full data in the next turn.
+                // Summary is always generated and stored in subtask for compressed fallback.
+                val toolDef = toolRegistry.getTool(toolCall.name)
+                val isDataProducing = toolDef?.category == ToolCategory.DATA_PRODUCING
+                val fitsInBuffer = rawOutput.length <= DATA_PRODUCING_RAW_OUTPUT_BUFFER
+
+                val effectiveContent: String
+                val effectivelySummarized: Boolean
+
+                if (isDataProducing && fitsInBuffer && summaryResult.wasSummarized) {
+                    // Raw data fits in buffer — keep full output as content
+                    // Mark as summarized=true to prevent 320-char truncation in fallback path
+                    effectiveContent = rawOutput
+                    effectivelySummarized = true
+                    logger.info {
+                        "[TOOL_DATA_PRESERVED] name=${toolCall.name}, rawChars=${rawOutput.length}, " +
+                        "summaryChars=${summaryResult.summary.length} (raw preserved, summary in subtask)"
+                    }
+                } else {
+                    effectiveContent = summaryResult.summary
+                    effectivelySummarized = summaryResult.wasSummarized
+                }
+
                 logger.info {
                     "[TOOL_EXECUTED] name=${toolCall.name}, " +
-                    "summarized=${summaryResult.wasSummarized}, " +
-                    "chars=${rawOutput.length}->${summaryResult.summary.length}"
+                    "summarized=${effectivelySummarized}, dataPreserved=${isDataProducing && fitsInBuffer}, " +
+                    "chars=${rawOutput.length}->${effectiveContent.length}"
                 }
 
                 val metadataMap = buildToolResultMetadata(toolCall.name, argumentsMap, toolResult.metadata)
@@ -383,13 +433,16 @@ class TurnToolExecutor(
 
                 return ToolResultData(
                     toolCallId = toolCall.id,
-                    content = summaryResult.summary,
-                    isSummarized = summaryResult.wasSummarized,
+                    content = effectiveContent,
+                    isSummarized = effectivelySummarized,
                     rawOutput = rawOutput,
                     metadata = metadataJson
                 )
             } else {
-                val errorText = "Error: ${toolResult.error ?: "Unknown error"}"
+                val errorDetail = toolResult.error
+                    ?: toolResult.output?.takeIf { it.isNotBlank() }
+                    ?: "Unknown error"
+                val errorText = "Error: $errorDetail"
                 listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
 
                 subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)

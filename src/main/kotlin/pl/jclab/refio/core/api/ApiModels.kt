@@ -422,6 +422,8 @@ data class ProjectContextResponse(
     val combinedEstimatedTokens: Int = 0,
     val semanticSummary: String? = null,
     val projectInstructions: String? = null,
+    // Actual TASK_REQUIREMENTS section content that will be sent to LLM
+    val taskRequirementsPrompt: String? = null,
     // Actual RECENT_WORK section content that will be sent to LLM (after compression)
     val recentWorkPrompt: String? = null,
     // Active LLM request preview (exact runtime shape for next call)

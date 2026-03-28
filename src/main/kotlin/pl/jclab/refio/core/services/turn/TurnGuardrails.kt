@@ -131,6 +131,7 @@ class TurnGuardrails {
     enum class AssistantIntent {
         IMPLEMENTATION,
         ANALYSIS,
+        RESPONSE,
         UNKNOWN
     }
 

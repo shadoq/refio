@@ -97,7 +97,13 @@ class ToolCallParser(
     fun shouldRequestRetry(content: String, mode: TaskMode): Boolean {
         if (mode == TaskMode.CHAT) return false
 
-        val jsonString = extractJsonFromContent(content) ?: return false
+        val jsonString = extractJsonFromContent(content)
+        if (jsonString == null) {
+            // JSON extraction failed entirely — check if content has tool-call patterns
+            // that suggest the LLM intended to call tools but produced malformed JSON
+            return hasLikelyMalformedToolCalls(content)
+        }
+
         return try {
             val element = json.parseToJsonElement(jsonString)
             val obj = element as? JsonObject ?: return false
@@ -117,8 +123,27 @@ class ToolCallParser(
 
             hasNonEmptyToolArrays
         } catch (e: Exception) {
-            false
+            // JSON parsed but structure check failed — fallback to pattern matching
+            hasLikelyMalformedToolCalls(content)
         }
+    }
+
+    /**
+     * Heuristic: content looks like it contains tool call JSON but parsing failed.
+     * Detects patterns like {"actions": [{"tool": "..."}]} in raw text.
+     */
+    fun hasLikelyMalformedToolCalls(content: String): Boolean {
+        // Must contain both "actions" and "tool" — strong signal of intended tool calls
+        val hasActionsPattern = content.contains("\"actions\"") || content.contains("\"tool_calls\"")
+        val hasToolPattern = content.contains("\"tool\"")
+        if (!hasActionsPattern || !hasToolPattern) return false
+
+        // Additional check: must have a JSON-like block (starts with {)
+        val hasBraceBlock = content.contains("{") && content.contains("}")
+        if (!hasBraceBlock) return false
+
+        logger.info { "[MALFORMED_TOOL_CALLS] Content has tool-call patterns but JSON extraction failed" }
+        return true
     }
 
     /**
@@ -257,6 +282,10 @@ class ToolCallParser(
                 "implement" -> TurnGuardrails.AssistantIntent.IMPLEMENTATION
                 "analysis",
                 "analyze" -> TurnGuardrails.AssistantIntent.ANALYSIS
+                "response",
+                "reply",
+                "answer" -> TurnGuardrails.AssistantIntent.RESPONSE
+                "unknown" -> TurnGuardrails.AssistantIntent.UNKNOWN
                 else -> TurnGuardrails.AssistantIntent.UNKNOWN
             }
         } catch (e: Exception) {

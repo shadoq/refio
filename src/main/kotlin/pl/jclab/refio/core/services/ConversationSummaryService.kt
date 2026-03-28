@@ -20,6 +20,10 @@ class ConversationSummaryService(
     private val configService: ConfigService,
     private val chatMessageRepository: ChatMessageRepository
 ) {
+    companion object {
+        private const val FALLBACK_SUMMARY_MAX_CHARS = 2_000
+    }
+
     fun shouldSummarize(messages: List<ChatMessage>, maxTokens: Int): Boolean {
         if (messages.isEmpty() || maxTokens <= 0) return false
         val totalTokens = messages.sumOf { ContextTokenEstimator.estimateTokens(it.content) }
@@ -77,6 +81,10 @@ class ConversationSummaryService(
             subtaskId = null
         )
 
+        val summaryBody = response.content.trim().ifBlank {
+            response.thinking?.trim().takeIf { !it.isNullOrBlank() } ?: buildDeterministicFallback(toSummarize)
+        }
+
         val summaryIndex = messages.count { isConversationSummary(it) } + 1
         val metadataJson = GsonInstance.gson.toJson(
             mapOf(
@@ -91,7 +99,7 @@ class ConversationSummaryService(
 
         val summaryContent = buildString {
             append("**Conversation summary (${toSummarize.size} messages):**\n\n")
-            append(response.content.trim())
+            append(summaryBody)
         }
 
         chatMessageRepository.create(
@@ -110,5 +118,20 @@ class ConversationSummaryService(
     private fun isConversationSummary(message: ChatMessage): Boolean {
         val metadata = message.metadata ?: return false
         return metadata.contains("\"type\":\"$CONVERSATION_SUMMARY_METADATA_TYPE\"")
+    }
+
+    private fun buildDeterministicFallback(messages: List<ChatMessage>): String {
+        val lines = messages.mapNotNull { msg ->
+            val body = msg.content.trim().ifBlank { return@mapNotNull null }
+            val normalized = body.replace(Regex("\\s+"), " ")
+            val clipped = if (normalized.length > 220) normalized.take(220) + "..." else normalized
+            "${msg.role.name.uppercase()}: $clipped"
+        }
+
+        if (lines.isEmpty()) {
+            return "No stable summary could be generated."
+        }
+
+        return lines.joinToString("\n").take(FALLBACK_SUMMARY_MAX_CHARS)
     }
 }

@@ -131,6 +131,11 @@ class TuiRenderer(
             applyModelSelectorOverlay(screen, state, layout)
         }
 
+        // File viewer overlay (full-screen, takes priority over autocomplete)
+        if (state.fileViewerVisible) {
+            applyFileViewerOverlay(screen, state, layout)
+        }
+
         // Approval dialog overlay (takes priority over autocomplete)
         if (state.pendingApprovals.isNotEmpty()) {
             applyApprovalOverlay(screen, state, layout)
@@ -140,7 +145,7 @@ class TuiRenderer(
         screen.flush(output, clearScreen = resized)
 
         // === 4. Position cursor ===
-        if (state.screen == TuiScreen.MAIN) {
+        if (state.screen == TuiScreen.MAIN && !state.fileViewerVisible) {
             // Calculate cursor position within multi-line input
             val prefixLen = 2 // "> "
             val editableWidth = (if (layout.isSplitMode) layout.leftPanelWidth else layout.contentWidth) - prefixLen
@@ -215,15 +220,26 @@ class TuiRenderer(
     // === Tab bar ===
 
     private fun buildTabBarLine(state: TuiState, layout: TuiLayoutRegions): String {
-        val sep = TuiColors.border("│")
+        val sep = TuiColors.border("\u2502")
         val helpLabel = if (state.screen == TuiScreen.HELP) TuiColors.tabActive(" F1:Help ") else TuiColors.tabInactive(" F1:Help ")
         val tabLabels = TuiTab.entries.filter { it != TuiTab.CHAT }.map { tab ->
             val fKeyNum = tab.fKey ?: (tab.ordinal + 1)
             val label = " F${fKeyNum}:${tab.label} "
-            if (tab == state.activeTab && state.screen == TuiScreen.MAIN) TuiColors.tabActive(label) else TuiColors.tabInactive(label)
+            if (tab == state.activeTab && state.screen == TuiScreen.MAIN) {
+                if (state.panelFocused) TuiColors.tabFocused(label) else TuiColors.tabActive(label)
+            } else {
+                TuiColors.tabInactive(label)
+            }
         }
         val settingsLabel = if (state.screen == TuiScreen.SETTINGS) TuiColors.tabActive(" F9:Set ") else TuiColors.tabInactive(" F9:Set ")
-        val tabsPart = helpLabel + sep + tabLabels.joinToString(sep) + sep + settingsLabel
+        val focusHint = if (state.activeTab != TuiTab.CHAT && state.screen == TuiScreen.MAIN) {
+            if (state.panelFocused) {
+                "  " + TuiColors.statusRunning("◆ PANEL") + TuiColors.muted(" [Tab]→input")
+            } else {
+                "  " + TuiColors.statusSuccess("◆ INPUT") + TuiColors.muted(" [Tab]→panel")
+            }
+        } else ""
+        val tabsPart = helpLabel + sep + tabLabels.joinToString(sep) + sep + settingsLabel + focusHint
         return tabsPart
     }
 
@@ -319,6 +335,16 @@ class TuiRenderer(
         val startCol = ((layout.width - boxWidth) / 2).coerceAtLeast(0)
 
         screen.overlay(startRow, startCol, lines)
+    }
+
+    /**
+     * Render file viewer as a full-screen overlay replacing the content area.
+     */
+    private fun applyFileViewerOverlay(screen: TuiScreenBuffer, state: TuiState, layout: TuiLayoutRegions) {
+        val contentStartRow = layout.tabBarHeight + layout.separatorHeight
+        val buf = TuiFileViewerOverlay.renderToBuffer(state, layout.width, layout.contentHeight)
+        val lines = buf.getLines()
+        screen.setRows(contentStartRow, lines)
     }
 
     /**

@@ -879,14 +879,23 @@ class SessionManager(private val project: Project) {
                     cs.launch {
                         subtaskTracker.loadSubtasks()
 
-                        // PHASE 2 FIX: Update temporary message status
+                        // PHASE 2 FIX: Update temporary message status and result
                         val messageId = toolCallMessageIds[toolCall.id]
                         if (messageId != null) {
+                            val resultSummary = if (result.isNotBlank()) {
+                                val trimmed = result.trim()
+                                if (trimmed.length <= 120) trimmed
+                                else "${trimmed.take(120)}..."
+                            } else null
                             stateManager.updateMessages { messages ->
                                 messages.map { msg ->
                                     if (msg.id == messageId) {
                                         val updatedToolInfo = msg.toolCallInfo?.copy(
-                                            status = if (success) ToolCallStatus.COMPLETED else ToolCallStatus.FAILED
+                                            status = if (success) ToolCallStatus.COMPLETED else ToolCallStatus.FAILED,
+                                            result = if (resultSummary != null) ToolCallResult(
+                                                success = success,
+                                                summary = resultSummary
+                                            ) else null
                                         )
                                         msg.copy(
                                             toolCallInfo = updatedToolInfo,
