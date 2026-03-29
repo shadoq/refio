@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "pl.jclab.refio"
-version = "0.0.1.4"
+version = providers.gradleProperty("refioVersion").get()
 
 repositories {
     mavenCentral()
@@ -19,29 +19,13 @@ java {
     }
 }
 
-// Source sets reference all existing code (core + plugin layers)
-sourceSets {
-    main {
-        kotlin {
-            srcDir("../src/main/kotlin")
-            exclude("pl/jclab/refio/cli/**")
-        }
-        resources {
-            srcDir("../src/main/resources")
-        }
-    }
-    test {
-        kotlin {
-            srcDir("../src/test/kotlin")
-            exclude("pl/jclab/refio/cli/**")
-        }
-        resources {
-            srcDir("../src/test/resources")
-        }
-    }
-}
+// Standard module layout — plugin-specific code in intellij-plugin/src/
+// Core logic comes from :core dependency.
 
 dependencies {
+    // Core module (pure Kotlin/JVM, no IntelliJ)
+    implementation(project(":core"))
+
     // Kotlin Coroutines are already provided by IntelliJ Platform
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("org.commonmark:commonmark:0.21.0")
@@ -201,7 +185,8 @@ tasks.register("detectSensitiveLogging") {
     description = "Detect potential API key logging in source code"
     group = "verification"
     doLast {
-        val sourceFiles = fileTree("../src") { include("**/*.kt") }
+        val sourceFiles = fileTree("src") { include("**/*.kt") } +
+            fileTree("../core/src") { include("**/*.kt") }
         val unsafePatterns = listOf(
             Regex("""logger\..*\$\{?config\.apiKey"""),
             Regex("""logger\..*apiKey\s*=\s*["']?[^"'\s]+"""),

@@ -58,10 +58,10 @@ Unlike tools that send entire codebases to LLMs, Refio uses **selective context 
 |  +-- PLAN/AGENT mode -> AgentTurnLoop (self-directing tool loop)        |
 +-------------------------------------------------------------------------+
 |  Core Layer (In-Process API)                                            |
-|  CoreApiRouter (facade + 9 domain routers)                              |
-|  +-- ChatRouter, TaskRouter, SubtaskRouter                              |
-|  +-- RagRouter, ToolRouter, PromptsRouter                               |
-|  +-- ContextService (dynamic context building)                          |
+|  CoreApiRouter (composition root, ~962 LOC)                             |
+|  +-- 12 Domain Routers (Chat, Task, Subtask, Agent, Config,             |
+|  +--   Prompts, Tool, RAG, ApiLogs, MultiAgent, ProjectContext, Subagent)|
+|  +-- ContextService (~2140 LOC) + 6 extracted sub-services              |
 +-------------------------------------------------------------------------+
 |  Infrastructure Layer                                                   |
 |  +-- LLMClient (unified) -> 6 provider adapters                        |
@@ -432,7 +432,7 @@ mcp:
 
 - **Language/Platform**: Kotlin 1.9.25, JVM target 17, IntelliJ Platform 2024.1.7 (IC)
 - **UI**: Native IntelliJ Swing components (no webview)
-- **Core/Transport**: In-process CoreApiRouter (optional Ktor server for CLI, planned v1.1+)
+- **Core/Transport**: CoreApiRouter (composition root) + 12 domain routers; Ktor server for HTTP transport
 - **LLM/HTTP**: Ktor Client 2.3.7 with 6 provider adapters
 - **Database**: SQLite (WAL) via Exposed 0.46.0 + sqlite-jdbc 3.44.1.0
 - **Serialization**: Gson 2.10.1, kotlinx-serialization-json 1.6.2, KAML 0.55.0
@@ -552,23 +552,39 @@ See [`docs/config.md`](config.md) for full configuration reference.
 ## Repository Structure
 
 ```
-src/main/kotlin/pl/jclab/refio/
-+-- core/                     # Embedded core (no IDE dependencies)
-|   +-- api/                  # Router layer (9 domain routers)
+core/src/main/kotlin/pl/jclab/refio/
++-- core/                     # IDE-independent core logic
+|   +-- api/                  # CoreApiRouter (composition root) + 12 domain routers
+|   +-- api/routers/          # Domain routers (Chat, Task, Agent, Config, RAG, etc.)
 |   +-- context/              # Context providers + MCP
 |   +-- db/                   # Database layer (Exposed ORM)
 |   +-- llm/                  # LLM integration (6 adapters)
-|   +-- services/             # Core services (RAG, context, analysis)
+|   +-- services/             # Core services (~35 services)
+|   +-- services/context/     # ContextService sub-components (6 extracted classes)
+|   +-- services/turn/        # AgentTurnLoop sub-components (13 files)
 |   +-- subagents/            # Subagent system
 |   +-- tools/                # Tool system (12 registered implementations)
 |   +-- prompts/              # Prompt templates
++-- api/                      # Shared API models (DTOs)
+
+intellij-plugin/src/main/kotlin/pl/jclab/refio/
 +-- services/                 # Plugin services (project-scoped)
 |   +-- session/              # SessionManager (6 components)
 |   +-- rag/                  # Background indexing
 +-- ui/                       # IntelliJ UI components
-    +-- toolwindow/           # Tool window factory
-    +-- components/           # Chat, toolbar, autocomplete
-    +-- settings/             # 12+ settings panels
+|   +-- components/           # Chat, toolbar, autocomplete
+|   +-- settings/             # 12+ settings panels
++-- actions/                  # IDE actions
++-- startup/                  # Plugin startup hooks
+
+cli/src/main/kotlin/pl/jclab/refio/cli/
++-- tui/                      # TUI application
+|   +-- state/                # TuiViewModel (coordinator) + 3 sub-ViewModels
+|   +-- input/                # Input handling (raw TTY / line mode)
+|   +-- rendering/            # Screen rendering (ANSI, buffers)
+|   +-- views/                # Tab views (Chat, Steps, RAG, Logs, etc.)
+|   +-- screens/              # Overlay screens (History, Settings)
+|   +-- components/           # Reusable TUI components
 ```
 
 ---

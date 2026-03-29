@@ -56,11 +56,11 @@ ollama pull qwen2.5-coder:7b    # Recommended coding model
 
 # 2. Build & install plugin
 git clone https://github.com/shadoq/refio.git && cd refio
-./gradlew buildPlugin           # Output: build/distributions/refio-*.zip
+./gradlew :intellij-plugin:buildPlugin   # Output: intellij-plugin/build/distributions/refio-*.zip
 # Install ZIP via: Settings -> Plugins -> Install from Disk
 
 # 3. Or run in sandbox IDE for development
-./gradlew runIde
+./gradlew :intellij-plugin:runIde
 ```
 
 Then open the **Refio** tool window (View -> Tool Windows -> Refio), select a mode, choose your model, and start.
@@ -97,9 +97,9 @@ The CLI provides a full-featured TUI that mirrors the IntelliJ plugin GUI — no
 
 - **14 context providers** — @file, @folder, @codebase, @grep, @diff, @url, @docs, @clipboard, and more
 - **RAG-powered semantic search** — automatic project indexing with 5 language analyzers
-- **12 tools** — 5 read-only + 6 write + invoke_subagent, with per-mode permissions
-- **6 LLM providers** — Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio
-- **MCP protocol support** — 18 built-in server presets (GitHub, PostgreSQL, Brave Search, etc.)
+- **14 tools** — 6 read-only + 8 write (incl. `http_request`, `run_code`, `invoke_subagent`), with per-mode permissions
+- **8 LLM providers** — Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio, Custom OpenAI, Z.AI
+- **MCP protocol support** — 17 built-in server presets (GitHub, PostgreSQL, Brave Search, etc.)
 - **21 built-in subagents** — specialized agents invocable with `!agent-name` prefix
 - **Project instructions** — auto-loads `AGENTS.md` and `.refio/agent.md` into LLM context; conditional rules via `.refio/rules/*.md` with glob-based activation
 - **Custom subagents** — define your own in `.refio/agents/*.md`
@@ -107,7 +107,7 @@ The CLI provides a full-featured TUI that mirrors the IntelliJ plugin GUI — no
 - **File snapshots** — automatic backup before every write operation
 - **Auto-compaction** — prevents context overflow during long agent sessions
 - **Parallel tool execution** — READ_ONLY tools run concurrently (~2-3x faster)
-- **Native Swing UI** — no WebView, no Electron, pure IntelliJ components
+- **Native Swing UI + TUI** — IntelliJ Swing components and standalone terminal interface, no WebView
 
 ---
 
@@ -118,7 +118,7 @@ Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ
 ### Layout
 
 ```
-┌─F1:Chat│F2:Steps│F3:Context│F4:RAG│F5:Logs│F6:Debug│F7:API│F8:Set  [CHAT|default] $0.02│5K tok [Ctrl+Q]─┐
+┌─F1:Help│F2:Steps│F3:Context│F4:RAG│F5:Logs│F6:Debug│F7:API│F8:Files  F9:Set  [CHAT|model] $0.02│5K tok─┐
 ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ ## Architektura                        │ Steps                                                            │
 │                                        │                                                                  │
@@ -136,10 +136,10 @@ Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ
 
 ### Features
 
-- **Split-pane layout** — Chat on the left (55%), active tab on the right (45%). Full-width when Chat tab is active.
-- **7 tabs + Settings** — F1-F7 for main tabs, F8 for settings. Tab bar shows mode, cost, and streaming status.
-- **Two input modes** — Raw TTY (real terminal: F-keys, Ctrl+Q, single-char dispatch) and line mode (IDE terminal, pipes: /commands, :tab shortcuts).
-- **@context autocomplete** — Type `@` for a popup with 14 context prefixes (file, folder, grep, diff, etc.).
+- **Split-pane layout** — Chat on the left (55%), active tab on the right (45%). Full-width when no tab is selected.
+- **8 tabs + 2 screens** — F1 Help, F2-F7 tabs (Steps, Context, RAG, Logs, Debug, API), F8 Files, F9 Settings. Tab bar shows mode, cost, and streaming status.
+- **Two input modes** — Raw TTY (real terminal: F-keys, Shift+Tab, single-char dispatch) and line mode (IDE terminal, pipes: /commands, :tab shortcuts).
+- **@context autocomplete** — Type `@` for a popup with context prefixes (file, folder, grep, diff, etc.). 9 of 14 providers available in CLI mode.
 - **Settings screen** — 11 sub-tabs covering providers, models, prompts, context/RAG, MCP, tools, subagents, and more.
 - **Resize-responsive** — UI adapts to terminal window size changes in real time.
 - **Multi-agent visualization** — 8 ANSI colors for agent messages, status badges, streaming indicators.
@@ -150,10 +150,13 @@ Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ
 
 | Key | Action |
 |-----|--------|
-| F1-F7 | Switch tabs (Chat, Steps, Context, RAG, Logs, Debug, API) |
-| F8 | Open Settings screen |
-| Ctrl+S | Settings |
-| Ctrl+H | Session history |
+| F1 | Help screen |
+| F2-F7 | Switch tabs (Steps, Context, RAG, Logs, Debug, API) |
+| F8 | Files tab |
+| F9 | Settings screen |
+| Ctrl+S | Settings (alternative) |
+| Alt+H | Session history |
+| Tab | Toggle panel/input focus |
 | Escape | Back to main screen / dismiss popup |
 | Ctrl+Q | Quit |
 | Arrow Up/Down | Scroll chat / navigate lists |
@@ -164,7 +167,7 @@ Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ
 | Key | Action |
 |-----|--------|
 | Ctrl+W | **New session** (start a fresh conversation) |
-| Ctrl+H | Browse session history (switch to previous sessions) |
+| Alt+H | Browse session history (switch to previous sessions) |
 | Ctrl+L | Continue conversation (resume after interruption) |
 | Ctrl+D | Summarize conversation (compact long history) |
 
@@ -173,7 +176,7 @@ Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ
 | Key | Action |
 |-----|--------|
 | Enter | Send message |
-| Alt+M | Cycle mode (Chat → Plan → Agent) |
+| Shift+Tab | Cycle mode (Chat → Plan → Agent) |
 | Ctrl+O | Select model (popup selector) |
 | Ctrl+T | Toggle thinking/reasoning mode |
 | Ctrl+E | Toggle execution mode (AUTO / INTERACTIVE) |
@@ -213,20 +216,22 @@ Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ
 
 The TUI is built with **Mordant 3.0.1** (ANSI terminal rendering) and **JLine3 3.26.3** (raw input handling), following an MVVM pattern:
 
-- **TuiViewModel** — 20 StateFlows merged into a single reactive `TuiState`. Any flow change triggers a re-render.
+- **TuiViewModel** — Coordinator with 3 sub-ViewModels. Each sub-VM owns its StateFlows; all merge into a single reactive `TuiState`. Any flow change triggers a re-render.
 - **TuiRenderer** — Compositor that builds the full screen from `TuiRenderBuffer` components. In-place overwrite with cursor positioning to avoid flicker.
 - **TuiRenderBuffer** — ANSI-aware line buffer that handles escape code measurement, truncation, padding, and side-by-side merging for the split-pane layout.
 - **TuiInputHandler** — Detects TTY vs dumb terminal and provides raw key dispatch or line-based input accordingly.
 
 ```
 TuiApp (entry point)
-├── TuiViewModel (state management, 20 StateFlows → merge → TuiState)
+├── TuiViewModel (coordinator, tabs/settings/lifecycle)
+│   ├── TuiChatViewModel (messages, input, autocomplete)
+│   ├── TuiSessionViewModel (sessions, execution, steps, model)
+│   ├── TuiObservabilityViewModel (RAG, logs, debug, file browser)
 │   ├── TuiWorkflowListener (streaming bridge)
 │   └── TuiChatMessageMapper (AgentEvent → TuiChatMessage)
 ├── TuiRenderer (full-screen compositor)
 │   ├── TuiRenderBuffer (ANSI-aware split-pane composition)
-│   ├── TuiChatView (messages + prompt)
-│   ├── TuiStepsView, TuiContextView, TuiRagView, TuiLogsView, ...
+│   ├── TuiChatView, TuiStepsView, TuiContextView, TuiRagView, TuiLogsView, ...
 │   └── TuiSettingsScreen (11 sub-tabs, live ConfigRouter read/write)
 ├── TuiInputHandler (raw TTY / line mode)
 │   └── TuiKeybindings (F-keys, Ctrl+combinations, escape sequences)
@@ -260,8 +265,8 @@ See [docs/config.md](docs/config.md) for full configuration reference.
 
 | | |
 |---|---|
-| **Version** | 0.0.1 |
-| **Status** | Early-stage, actively developed |
+| **Version** | 0.0.1.4 |
+| **Status** | Active development — CLI/TUI, multi-agent, multi-module architecture |
 | **License** | MIT |
 | **Focus** | Stability, deterministic behavior, local-first experience |
 
@@ -283,11 +288,12 @@ See [PRIVACY.md](PRIVACY.md) for details about local storage, cloud-provider beh
 ## Contributing
 
 ```bash
-./gradlew runIde              # Run in sandbox IDE
-./gradlew buildPlugin         # Build plugin ZIP
-./gradlew detekt              # Static analysis
-./gradlew ktlintCheck         # Lint check
-./gradlew test                # Run tests
+./gradlew :intellij-plugin:runIde       # Run in sandbox IDE
+./gradlew :intellij-plugin:buildPlugin  # Build plugin ZIP
+./gradlew :cli:installDist              # Build standalone CLI
+./gradlew test                          # Run all tests
+./gradlew detekt                        # Static analysis
+./gradlew ktlintCheck                   # Lint check
 ```
 
 **Prerequisites:** JDK 17, IntelliJ IDEA 2024.x, Ollama with `nomic-embed-text` model

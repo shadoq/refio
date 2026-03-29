@@ -1,7 +1,7 @@
 # Refio - Technical Architecture Overview
 
-> **Last Updated:** 2026-03-25
-> **Version:** 0.0.1
+> **Last Updated:** 2026-03-29
+> **Version:** 0.0.1.4
 > **Status:** Active Development
 
 This document provides a comprehensive technical overview of Refio - a local-first AI coding assistant for IntelliJ IDEA and the terminal.
@@ -92,7 +92,8 @@ Refio runs in two environments sharing the same `:core` module:
 │  │   └── 7 view renderers + Settings screen (11 sub-tabs)              │
 │  ├── TuiInputHandler (raw TTY / line mode dual input)                   │
 │  │   └── TuiKeybindings (F1-F8, Ctrl+combinations)                     │
-│  ├── TuiViewModel (20 StateFlows → merge → reactive TuiState)          │
+│  ├── TuiViewModel (coordinator ~1289 LOC, delegates to 3 sub-VMs)      │
+│  │   ├── TuiChatViewModel, TuiSessionViewModel, TuiObservabilityVM    │
 │  │   └── TuiWorkflowListener (streaming bridge)                        │
 │  └── TuiColors (ANSI palette: 8 agent colors, roles, status)           │
 │  StandaloneCoreBootstrap (initializes core without IntelliJ SDK)        │
@@ -108,17 +109,20 @@ Refio runs in two environments sharing the same `:core` module:
 │      └── ToolResultSummarizer (context optimization)                    │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  Core Layer (In-Process API) — :core module                             │
-│  ├── CoreApiRouter (facade + 9 domain routers)                          │
+│  ├── CoreApiRouter (thin composition root ~962 LOC, 12 domain routers)   │
 │  │   ├── ChatRouter → ChatService                                       │
 │  │   ├── TaskRouter, SubtaskRouter                                      │
 │  │   ├── RagRouter → RagSearchService                                   │
 │  │   ├── ToolRouter, PromptsRouter, ApiLogsRouter                       │
-│  │   └── ContextService (dynamic context building)                      │
+│  │   └── ContextService (delegates to 6 sub-services:                   │
+│  │       RagContextLoader, McpContextLoader, ContextReferenceResolver,  │
+│  │       ProjectContextSummarizer, ConversationContextBuilder,          │
+│  │       TaskContextExtractor)                                          │
 │  └── ContextProviderRegistry (14 providers + MCP dynamic)               │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  Infrastructure Layer                                                   │
-│  ├── LLMClient (unified) → 6 provider adapters                          │
-│  ├── ToolRegistry → 12 registered tools (6 read-only, 6 write)          │
+│  ├── LLMClient (unified) → 8 provider adapters                          │
+│  ├── ToolRegistry → 14 registered tools (6 read-only, 8 write)          │
 │  ├── MCPManager → MCP server lifecycle (STDIO/HTTP)                     │
 │  ├── EmbeddingsService → Ollama/OpenAI embeddings                       │
 │  └── DatabaseFactory → SQLite (WAL) + Exposed ORM                       │
@@ -128,14 +132,17 @@ Refio runs in two environments sharing the same `:core` module:
 ### Package Structure
 
 ```
-Gradle modules:
+Gradle modules (three separate source trees):
 ├── :core                     # Pure Kotlin/JVM — no IntelliJ SDK dependency
+│   └── core/src/main/kotlin/pl/jclab/refio/
 ├── :intellij-plugin          # IntelliJ IDEA plugin (depends on :core)
+│   └── intellij-plugin/src/main/kotlin/pl/jclab/refio/
 └── :cli                      # Standalone CLI + TUI (depends on :core)
+    └── cli/src/main/kotlin/pl/jclab/refio/
 
-src/main/kotlin/pl/jclab/refio/
+core/src/main/kotlin/pl/jclab/refio/
 ├── core/                     # Embedded core (:core module)
-│   ├── api/                  # Router layer (9 domain routers)
+│   ├── api/                  # Router layer (12 domain routers)
 │   ├── context/              # Context providers + MCP
 │   │   ├── providers/        # 14 built-in providers
 │   │   │   └── standalone/   # 7 CLI-compatible providers (no IDE)
@@ -151,20 +158,24 @@ src/main/kotlin/pl/jclab/refio/
 │   │   ├── implementations/
 │   │   └── security/
 │   └── prompts/              # Prompt templates
-├── cli/                      # Standalone CLI + TUI (:cli module)
-│   └── tui/                  # Terminal User Interface
-│       ├── rendering/        # TuiRenderer, TuiRenderBuffer, TuiLayout, TuiColors
-│       ├── views/            # 7 tab views (Chat, Steps, Context, RAG, Logs, Debug, API)
-│       ├── screens/          # Settings (11 sub-tabs), History
-│       ├── components/       # MessageBubble, PromptInput, ProgressBar, Table
-│       ├── input/            # TuiInputHandler, TuiKeybindings
-│       └── state/            # TuiViewModel, TuiState, TuiWorkflowListener
+└── api/                      # Shared API models
+
+intellij-plugin/src/main/kotlin/pl/jclab/refio/
 ├── services/                 # Plugin services (project-scoped)
 │   └── session/              # SessionManager (6 components)
 └── ui/                       # IntelliJ UI components
     ├── toolwindow/           # Tool window factory
     ├── components/           # Chat, toolbar, autocomplete
     └── settings/             # 12+ settings panels
+
+cli/src/main/kotlin/pl/jclab/refio/cli/
+└── tui/                      # Terminal User Interface
+    ├── rendering/            # TuiRenderer, TuiRenderBuffer, TuiLayout, TuiColors
+    ├── views/                # 7 tab views (Chat, Steps, Context, RAG, Logs, Debug, API)
+    ├── screens/              # Settings (11 sub-tabs), History
+    ├── components/           # MessageBubble, PromptInput, ProgressBar, Table
+    ├── input/                # TuiInputHandler, TuiKeybindings
+    └── state/                # TuiViewModel, TuiState, TuiWorkflowListener
 ```
 
 ### Prompt TPL Variables (PromptInputPanel)
@@ -206,7 +217,7 @@ Unknown placeholders remain unchanged.
 | **AGENT** | AgentTurnLoop | ALL (12) | Yes | Code generation, refactoring |
 | **SUBAGENT** | AgentTurnLoop (`runProfile=SUBAGENT`) | Profile-filtered | Yes | Specialized delegated tasks |
 
-`ToolRegistry` has 12 registered tools; `run_terminal_command` is enabled by default in AGENT mode and restricted by terminal whitelist rules.
+`ToolRegistry` has 14 registered tools; `run_terminal_command` is enabled by default in AGENT mode and restricted by terminal whitelist rules.
 `invoke_subagent` is enabled by default in PLAN and AGENT, and is displayed as `subagent` in Tools Settings.
 
 ### CHAT Mode Flow
@@ -447,14 +458,14 @@ Summarizes tool execution results to reduce context size:
 
 ```
 ContextService.buildProjectContext()
-    ├── 1. Load cached project analysis (architecture, dependencies)
-    ├── 2. Deduplicate user context refs
-    ├── 3. Extract conversation history (with summarization)
-    ├── 4. Build subtask summaries (completed steps)
-    ├── 5. Load RAG fragments (code + docs)
-    ├── 6. Load MCP resources
-    ├── 7. Resolve @mentions via ContextProviderRegistry
-    └── 8. Combine into ProjectContextDTO with token budgets
+    Delegates to 6 sub-services:
+    ├── ProjectContextSummarizer — cached project analysis (architecture, dependencies)
+    ├── ContextReferenceResolver — deduplicate + resolve @mentions via ContextProviderRegistry
+    ├── ConversationContextBuilder — extract conversation history (with summarization)
+    ├── TaskContextExtractor — build subtask summaries (completed steps)
+    ├── RagContextLoader — load RAG fragments (code + docs)
+    ├── McpContextLoader — load MCP resources
+    └── Combine into ProjectContextDTO with token budgets
 ```
 
 ### Provider Types
@@ -642,7 +653,7 @@ interface Tool {
 | `view_diff` | file1, file2/content2 | Line-by-line diff | - |
 | `invoke_subagent` | subagent_name, goal, context_refs? | Run nested child loop with a specialized subagent (dynamic description: active subagents + allowed tools/inherit) | Depth <= 3 |
 
-### WRITE Tools (6)
+### WRITE Tools (8)
 
 | Tool | Parameters | Description | Cost |
 |------|------------|-------------|------|
@@ -652,6 +663,8 @@ interface Tool {
 | `multi_line_editor` | path, edit_description | LLM identifies line ranges | ~$0.02 |
 | `advance_code_editing` | path, edit_description | Full file regeneration | ~$0.06 |
 | `run_terminal_command` | command | Shell execution (whitelist-protected) | **AGENT: ON (default)** |
+| `http_request` | url, method, headers, body, save_to_file | HTTP requests (GET/POST/PUT/DELETE), 5 MB limit, 60s timeout | Free |
+| `run_code` | language, code | Execute Python/JavaScript/Kotlin Script snippets, 120s timeout | **OFF by default** |
 
 ### Security Layers
 
@@ -700,7 +713,7 @@ suspend fun LLMClient.complete(
 ): LLMResponse
 ```
 
-### Provider Adapters (6)
+### Provider Adapters (8)
 
 | Provider | Models | Features |
 |----------|--------|----------|
@@ -710,6 +723,8 @@ suspend fun LLMClient.complete(
 | **Gemini** | 2.5 Flash/Pro | system_instruction, thinkingConfig |
 | **OpenRouter** | 100+ models | Unified gateway, dynamic pricing |
 | **LM Studio** | Local models | OpenAI-compatible, free |
+| **Custom OpenAI** | Any OpenAI-compatible API | Configurable base URL, API key |
+| **Z.AI** | Z.AI models | Rate-limited, OpenAI-compatible |
 
 ### Pricing (per 1M tokens, USD)
 
@@ -768,7 +783,7 @@ MCPManager (singleton)
 | **STDIO** | Subprocess with JSON-RPC over stdin/stdout |
 | **HTTP/SSE** | HTTP POST for requests, SSE for long-lived connections |
 
-### 16 Built-in Presets
+### 17 Built-in Presets
 
 | Category | Servers |
 |----------|---------|
@@ -778,9 +793,9 @@ MCPManager (singleton)
 | **Docs** | Context7 |
 | **DevOps** | Sentry, AWS |
 | **Storage** | Google Drive, Filesystem |
-| **Development** | Puppeteer, Sequential Thinking |
+| **Development** | Puppeteer, Sequential Thinking, Custom API |
 | **Collaboration** | Slack |
-| **Other** | Memory, Custom API |
+| **Memory** | Memory |
 
 ### Capabilities
 
@@ -1154,7 +1169,7 @@ Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ
 ### TUI Layout Design
 
 ```
-┌─F1:Chat│F2:Steps│F3:Context│F4:RAG│F5:Logs│F6:Debug│F7:API│F8:Set  [CHAT|model] $0.02│5K tok [Ctrl+Q]─┐
+┌─F1:Help│F2:Steps│F3:Context│F4:RAG│F5:Logs│F6:Debug│F7:API│F8:Files  F9:Set  [CHAT|model] $0.02│5K tok─┐
 ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ Chat messages (scrollable)             │ Right panel (active tab content)                                 │
 │                                        │                                                                  │
@@ -1174,7 +1189,7 @@ Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ
 
 **Key design decisions:**
 - **No separate status bar** — mode, cost, streaming indicator, and token count are displayed in the tab bar (right-aligned). The cursor always blinks at the input prompt, never at the bottom of the screen.
-- **Split-pane** when any tab other than Chat is active (55% left / 45% right). **Full-width** chat when F1:Chat is selected.
+- **Split-pane** when any tab is active (55% left / 45% right). **Full-width** chat when no tab is selected.
 - **Responsive** — layout adapts to terminal resize in real time (300ms polling).
 
 ### TUI Technology Stack
@@ -1200,8 +1215,12 @@ TuiApp (entry point — launchTuiApp())
 │   ├── Resize watcher — polls terminal.size every 300ms, forceRender on change
 │   └── Input loop — TuiInputHandler.startInputLoop(viewModel)
 │
-├── TuiViewModel (MVVM pattern)
-│   ├── 20 MutableStateFlows (messages, streaming, agents, input, tabs, etc.)
+├── TuiViewModel (coordinator ~1289 LOC, MVVM pattern)
+│   ├── Delegates to 3 sub-ViewModels:
+│   │   ├── TuiChatViewModel (messages, streaming, autocomplete)
+│   │   ├── TuiSessionViewModel (session lifecycle, history, settings)
+│   │   └── TuiObservabilityViewModel (logs, API logs, debug state)
+│   ├── 20 MutableStateFlows (merged from coordinator + sub-ViewModels)
 │   ├── All flows merged via merge().map { buildCurrentState() }
 │   ├── Any flow change triggers stateFlow emission → re-render
 │   ├── sendMessage() → WorkflowOrchestrator.execute(request, workflowListener)
@@ -1246,16 +1265,17 @@ TuiApp (entry point — launchTuiApp())
 
 ### TUI Tabs
 
-| Tab | Key | View | Content |
+| Tab/Screen | Key | View | Content |
 |-----|-----|------|---------|
-| Chat | F1 | TuiChatView | Message history + prompt input (full-width mode) |
+| Help | F1 | TuiHelpScreen | Keyboard shortcuts and command reference |
 | Steps | F2 | TuiStepsView | Subtask list with status icons and expand/collapse |
 | Context | F3 | TuiContextView | Context sections with token usage progress bars |
 | RAG | F4 | TuiRagView | RAG indexing status and search results |
 | Logs | F5 | TuiLogsView | Application log stream with level coloring |
 | Debug | F6 | TuiDebugView | Session info, core health, connection status |
 | API | F7 | TuiApiLogsView | API call table with provider, tokens, cost, totals |
-| Settings | F8 | TuiSettingsScreen | 11 sub-tabs (General, Providers, Models, Prompts, Context, MCP, Docs, Tools, Subagents, Advanced, Theme) |
+| Files | F8 | TuiFilesView | Project files browser with content viewer overlay |
+| Settings | F9 | TuiSettingsScreen | 11 sub-tabs (General, Providers, Models, Prompts, Context, MCP, Docs, Tools, Subagents, Advanced, Theme) |
 
 ### TUI Settings Screen
 
@@ -1283,10 +1303,13 @@ The Settings screen provides full configuration access via `ConfigRouter`, match
 
 | Key | Action |
 |-----|--------|
-| F1-F7 | Switch tabs: Chat, Steps, Context, RAG, Logs, Debug, API |
-| F8 | Settings screen (←/→ switch sub-tabs, ↑/↓ navigate fields) |
+| F1 | Help screen |
+| F2-F7 | Switch tabs: Steps, Context, RAG, Logs, Debug, API |
+| F8 | Files tab |
+| F9 | Settings screen (←/→ switch sub-tabs, ↑/↓ navigate fields) |
 | Ctrl+S | Settings (alternative) |
-| Ctrl+H | Session history browser |
+| Alt+H | Session history browser |
+| Tab | Toggle panel/input focus |
 | Escape | Back to main screen / dismiss popup |
 | Ctrl+Q | Quit |
 | Arrow Up/Down | Scroll chat messages / navigate lists |
@@ -1297,7 +1320,7 @@ The Settings screen provides full configuration access via `ConfigRouter`, match
 | Key | Action | Details |
 |-----|--------|---------|
 | Ctrl+W | **New session** | Starts a fresh conversation. Previous session is saved and can be restored from history. |
-| Ctrl+H | **History** | Browse all previous sessions. Select one and press Enter to switch. Shows mode, status, date, tokens, cost, and name. |
+| Alt+H | **History** | Browse all previous sessions. Select one and press Enter to switch. Shows mode, status, date, tokens, cost, and name. |
 | Ctrl+L | **Continue** | Resume current conversation after interruption (e.g. if agent stopped mid-task). |
 | Ctrl+D | **Summarize** | Compact long conversation history to save context window space. Uses LLM to generate a summary of older messages. |
 
@@ -1314,7 +1337,7 @@ You can also use slash commands for session management:
 
 | Key | Action | Details |
 |-----|--------|---------|
-| Alt+M | Cycle mode | CHAT → PLAN → AGENT → CHAT. Mode determines available tools. |
+| Shift+Tab | Cycle mode | CHAT → PLAN → AGENT → CHAT. Mode determines available tools. |
 | Ctrl+O | Select model | Opens popup with available models. Arrow keys to select, Enter to confirm. |
 | Ctrl+T | Toggle thinking | Enable/disable reasoning mode (extended thinking for supported models). |
 | Ctrl+E | Toggle execution | AUTO (agent runs autonomously) / INTERACTIVE (step-by-step approval). |
@@ -1436,14 +1459,14 @@ refio_poc.db                  # SQLite database (project root)
 | SessionManager | services/session/ | Session coordination facade |
 | AgentTurnLoop | core/services/ | Turn-based execution loop |
 | ToolResultSummarizer | core/services/ | Context reduction |
-| ContextService | core/services/ | Context building |
+| ContextService | core/services/ | Context building (delegates to 6 sub-services) |
 | RagSearchService | core/services/ | Semantic search |
 | LLMClient | core/llm/ | LLM provider abstraction |
 | ToolRegistry | core/tools/base/ | Tool catalog |
 | MCPManager | core/context/mcp/ | MCP server lifecycle |
 | SubagentRouter | core/subagents/ | Subagent operations |
 | TuiApp | cli/tui/ | TUI entry point (launchTuiApp) |
-| TuiViewModel | cli/tui/state/ | TUI state management (20 StateFlows) |
+| TuiViewModel | cli/tui/state/ | TUI coordinator (~1289 LOC, delegates to TuiChatViewModel, TuiSessionViewModel, TuiObservabilityViewModel) |
 | TuiRenderer | cli/tui/rendering/ | Full-screen split-pane compositor |
 | TuiRenderBuffer | cli/tui/rendering/ | ANSI-aware line buffer composition |
 | TuiInputHandler | cli/tui/input/ | Dual-mode input (raw TTY / line) |

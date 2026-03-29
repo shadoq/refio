@@ -11,111 +11,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-#### Multi-Agent Architecture
-- **AgentEventBus** — SharedFlow-based event bus for inter-agent communication with replay (200 events), filtered subscriptions (by session, agent, lifecycle, chat stream, approvals), and optional persistence
-- **AgentEvent** sealed interface — 12 event types: lifecycle (Started/Completed/Failed), data exchange (DataRequest/DataResponse), coordination (ArtifactProduced, SpawnAgentRequest, AgentSpawned), approval (ApprovalRequired/ApprovalDecision), progress (ProgressUpdate, StreamChunk)
-- **AgentEventHandler** — Per-agent event handler with CompletableDeferred for async DataRequest/Response and Approval flows with timeout support
-- **MultiAgentRunner** — Parallel agent orchestrator with DAG dependency resolution, event emission, per-agent metrics, and supervisor scope for failure isolation
-- **MultiAgentTaskParser** — YAML task definition parser for multi-agent sessions with agent specs, validation steps, and scoring metrics
-
-#### Multi-Agent API (CoreApiRouter)
-- `launchMultiAgentSession()` — Public API to launch multi-agent sessions from YAML definitions, creates DB session/instances, runs agents in parallel via turn-loop, returns aggregated results
-- `getMultiAgentSession()` — Query session status with per-agent metrics
-- `listMultiAgentSessions()` — List all sessions for current project
-- `MultiAgentSessionRequest/Response` and `MultiAgentInstanceResponse` DTOs
-- `agentEventBus` exposed on CoreApiRouter for GUI subscriptions
-- `multiAgentRunner` lazy val on CoreApiRouter for direct access
-
-#### Database (Multi-Agent)
-- `agent_sessions` table — Groups agent instances into multi-agent sessions
-- `agent_instances` table — Individual agent instances with profile, model, dependencies (JSON), status, and metrics
-- `agent_events` table — Persisted events with session/agent/type indexes
-- `AgentSessionRepository` and `AgentInstanceRepository` — CRUD repositories
-
-#### Standalone CLI + TUI (Terminal User Interface)
-- **Gradle multi-module** — 3 modules: `:core` (pure Kotlin/JVM), `:intellij-plugin`, `:cli` (Mordant+JLine3 TUI)
-- **StandaloneCoreBootstrap** — Initializes core without IntelliJ SDK
-- **TUI replaces Compose Desktop** — Full terminal UI mirroring the IntelliJ plugin GUI. Mordant 3.0.1 + JLine3 3.26.3. No desktop window required.
-- **Split-pane layout** — Chat panel (left, 55%) + active tab panel (right, 45%). Full-width when Chat tab is active. Responsive to terminal resize (300ms polling).
-- **7 main tabs** — Chat (F1), Steps (F2), Context (F3), RAG (F4), Logs (F5), Debug (F6), API Logs (F7). F8 opens Settings screen.
-- **Tab bar with inline status** — Mode, model, streaming indicator, cost, token count, and quit shortcut displayed in the tab bar. No separate status bar — cursor always blinks at the input prompt.
-- **Settings screen (11 sub-tabs)** — General, Providers (8 providers with masked API keys), Models, Prompts, Context/RAG, MCP, Docs, Tools (12 tools × Plan/Agent permissions), Subagents, Advanced (security + limits), Theme preview. All connected to ConfigRouter for live read/write.
-- **@context autocomplete** — Typing `@` in the input shows a popup overlay with 14 context prefixes. Arrow keys navigate, Enter accepts, Esc dismisses.
-- **History screen** — Browse, search, load, and delete previous sessions.
-- **ANSI color system** — 8 per-agent colors for multi-agent visualization, role-based message coloring (user=green, assistant=cyan, tool=yellow, system=red), status badges, log levels, context categories.
-- **TuiRenderBuffer** — ANSI-aware line buffer for split-pane composition. Handles escape code measurement, truncation, padding, and side-by-side merging.
-- **TuiViewModel** — Bridges core to TUI via 20 StateFlows merged into a single reactive state (no Compose deps). Any flow change triggers re-render.
-- **TuiWorkflowListener** — WorkflowEventListener impl for streaming with synchronized chunk accumulation, duplicate prevention, and per-request reset.
-- **TuiChatMessageMapper** — Maps 12 AgentEvent types to TuiChatMessage with 8 per-agent ANSI colors
-- **TuiInputHandler** — Dual-mode input: raw TTY (JLine3 F1-F8, Ctrl+Q, single-char dispatch) + line fallback (System.in, /commands, :tab shortcuts) for IDE/pipe/dumb terminals
-- **TuiRenderer** — Full-screen rendering with alternate screen buffer, in-place overwrite (no flicker), full clear only on resize. Cursor hidden during redraw, shown at input prompt.
-- **Clikt 5.0.2** — Upgraded from 4.2.1 for Mordant 3.x binary compatibility (`main()` is now extension function)
-- **CLI logback to file** — Separate `logback.xml` for CLI module, logs to `.refio/refio-cli.log` instead of console. Clean terminal output for TUI.
-- **Gradle stdin forwarding** — `standardInput = System.in` in CLI `run` task, fixes immediate exit when running via `./gradlew cli:run`
+- Multi-agent architecture with parallel agent orchestration, inter-agent event bus, dependency resolution, and YAML-based task definitions.
+- Multi-agent API: launch, query, and list multi-agent sessions with per-agent metrics.
+- Database tables for multi-agent sessions, instances, and event persistence.
+- Standalone CLI with full TUI (Mordant + JLine3) replacing Compose Desktop GUI.
+- Split-pane terminal layout: Chat (55%) + active tab (45%) with 7 tabs (F1–F7) and Settings (F8).
+- Tab bar with inline status (mode, model, streaming, cost, tokens).
+- Settings screen with 11 sub-tabs covering all configuration areas.
+- `@context` autocomplete popup and session history browser in TUI.
+- ANSI color system with per-agent colors and role-based message styling.
+- Dual-mode TUI input: raw TTY with F-keys for terminals, line-based fallback for pipes/IDEs.
+- `http_request` tool for external API calls (GET/POST/PUT/DELETE) with `save_to_file` for large responses.
+- `run_code` tool for executing Python, JavaScript, and Kotlin Script snippets inline.
+- TUI file viewer overlay, extended API Logs/Context/Debug/Logs/Steps views.
+- 7 standalone context providers for CLI mode (file, folder, git diff, git commit, grep, codebase, docs) — 9/14 providers now available outside IDE.
+- Platform-agnostic `ProjectHandle` interface replacing direct IntelliJ `Project` dependency in core.
+- Per-agent metrics tracking, mutex-based file locking for write tools, configurable Ollama request gating.
+- Expanded test coverage: multi-agent, standalone providers, core services, integration tests.
 
 ### Fixed
-- **Regex PatternSyntaxException** in `ContextService.compactDirectoryList()` — `{4,?}` → `{4,}?` (lazy quantifier must follow closing brace)
-- **JLine WARNING noise** — Suppressed `org.jline` java.util.logging output on dumb terminals
-- **Loading message in non-interactive mode** — `showLoading()` now conditional on TTY detection, prevents noise in piped/IDE environments
-- **TUI streaming duplicate messages** — Race condition in `onStreamChunk` fixed with `synchronized(accumulatedContent)`, `@Volatile completed` flag, and per-request `reset()`
-- **TUI input not rendering** — `_inputBuffer` and 15 other flows were not in `combine()` that produces `stateFlow`. Replaced with `merge()` of all 20 flows so any change triggers re-render.
-- **TUI cursor flicker** — Removed separate bottom status bar; all info merged into tab bar. Cursor always positioned at input prompt after each render cycle. Hidden during redraw to prevent ghost cursor.
+
+- `Ctrl+D` no longer crashes the prompt input panel.
+- Regex error in `ContextService.compactDirectoryList()`.
+- JLine warnings suppressed on dumb terminals.
+- TUI streaming no longer produces duplicate messages.
+- TUI input and cursor rendering issues resolved.
+- `PathSandbox` symlink resolution on macOS.
+- `resetAllSettingsToDefaults()` now actually resets config entries.
+- EventBus wiring for multi-agent UI visualization in CLI.
+- Cross-platform fixes for terminal command tests.
+- Help action now opens the project GitHub page.
 
 ### Removed
-- **Compose Desktop GUI** — Replaced by TUI. Removed: App.kt, ChatPanel.kt, StatusPanel.kt, RefioViewModel.kt, ComposeWorkflowListener.kt, ChatMessageMapper.kt, UIChatMessage.kt and their tests
-- **Compose dependencies** — `org.jetbrains.compose`, `compose.desktop.currentOs`, `compose.material3`, `compose.desktop.uiTestJUnit4`
-- **RefioViewModel** — Bridge between core and Compose state (messages, agents, metrics, approvals, streaming)
-- **AgentFlowPanel** — DAG visualization with dependency tracking, status icons, progress bars
-- **ApprovalPanel** — Approve/reject UI for agent actions requiring confirmation
-- **MetricsCard** — Aggregated token usage, cost, agent completion, and duration display
-- Clikt CLI with `--project`, `--mode`, `--model`, `--headless`, `--no-egress` options
 
-#### Standalone Context Providers
-- 7 standalone context providers in `core/context/providers/standalone/` (no IntelliJ dependency):
-  - **StandaloneFileContextProvider** — File search via `Files.walk()` (replaces `FilenameIndex`)
-  - **StandaloneFolderContextProvider** — Directory tree via filesystem API
-  - **StandaloneGitDiffContextProvider** — `git diff` CLI (replaces `ChangeListManager`)
-  - **StandaloneGitCommitContextProvider** — `git log/show` CLI
-  - **StandaloneGrepSearchContextProvider** — Java regex search (replaces `PsiSearchHelper`)
-  - **StandaloneCodebaseContextProvider** — RAG semantic search without IntelliJ `Project`
-  - **StandaloneDocsContextProvider** — Documentation search without IntelliJ `Project`
-- 5 IDE-only providers marked `ContextProviderEnvironment.IDE_ONLY` (auto-skipped in CLI): `@current`, `@open_files`, `@recent`, `@problems`, `@terminal`
-- CLI standalone mode: 9/14 context providers available (was 2/14)
-
-#### Platform Abstraction
-- **ProjectHandle** interface — Platform-agnostic project abstraction (replaces `com.intellij.openapi.project.Project` in core)
-- **StandaloneProjectHandle** — CLI/standalone implementation using filesystem path
-- `CoreApiRouter` now accepts optional `projectHandle` parameter (backward-compatible)
-- `BaseContextProvider` extras changed from `Project?` to `Any?` (IDE providers cast internally)
-
-#### Concurrency Support
-- **AgentMetrics** class — Per-agent operation state, cancellation flag, and token tracking via `GlobalMetrics.forAgent(agentId)` (backward-compatible)
-- **FileLockManager** — Mutex-per-path file locking for all 5 write tools (CodeEditing, CreateNewFile, AdvanceCodeEditing, MultiLineEditor, MultiEdit)
-- **OllamaRequestGate** — Now configurable (`maxConcurrentPerEndpoint`, default 1)
-
-#### Tests (Critical Gap Coverage)
-- LLMClientTest, ChatServiceTest, LLMRetryHandlerTest, ContextProviderRegistryTest, TurnGuardrailsTest
-- ProjectHandleTest, GlobalMetricsMultiAgentTest, FileLockManagerTest
-- AgentEventBusTest, AgentSessionRepositoryTest, AgentInstanceRepositoryTest
-- MultiAgentRunnerTest, MultiAgentTaskParserTest
-- StandaloneContextProvidersTest (15 tests for standalone providers)
-- Compose Desktop UI tests: ChatPanelTest, StatusPanelTest, AppTest (19 tests)
-- MultiAgentIntegrationTest (6 tests with real DB)
-- CoreApiRouterMultiAgentTest (6 tests)
-
-### Fixed
-
-- **PathSandbox symlink resolution** — `normalizedRoot` now uses `toRealPath()` to resolve macOS `/var` → `/private/var` symlink, fixing ~181 tool test failures
-- **ConfigRouter.resetAllSettingsToDefaults()** — Now actually deletes APP and PROJECT scope config entries and re-initializes defaults (was a no-op stub)
-- **CLI EventBus wiring** — `RefioViewModel` now bridges `CoreApiRouter.agentEventBus` events to the local event bus for multi-agent UI visualization
-- **MultiEditTool test** — Fixed assertion to match sequential (cumulative) edit behavior
-- **RunTerminalCommandTool test** — Cross-platform command selection (`ls` on Unix, `dir` on Windows)
-- **Help action** — `showHelp()` and toolbar help button now open project GitHub page via `BrowserUtil.browse()`
-- Removed 8 stale TODOs across IntelliJ UI components
+- Compose Desktop GUI and all related dependencies, replaced by TUI.
 
 ### Changed
 
-- Removing IntelliJ compile-time dependency from the core module.
+- Gradle multi-module structure: `:core`, `:intellij-plugin`, `:cli`.
+- Core module no longer has IntelliJ compile-time dependency.
+- Clikt upgraded to 5.0.2 for Mordant 3.x compatibility.
 
 ## [0.0.1.4] - 2025-03-22
 

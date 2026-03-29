@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "pl.jclab.refio"
-version = "0.0.1.4"
+version = providers.gradleProperty("refioVersion").get()
 
 repositories {
     mavenCentral()
@@ -18,21 +18,7 @@ java {
     }
 }
 
-// Source sets point to root project sources — NO file moves needed.
-sourceSets {
-    main {
-        kotlin {
-            srcDir("../src/main/kotlin")
-            include("pl/jclab/refio/cli/**")
-        }
-    }
-    test {
-        kotlin {
-            srcDir("../src/test/kotlin")
-            include("pl/jclab/refio/cli/**")
-        }
-    }
-}
+// Standard module layout — files physically in cli/src/
 
 dependencies {
     // Core module (pure Kotlin/JVM, no IntelliJ)

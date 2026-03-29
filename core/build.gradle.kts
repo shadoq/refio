@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "pl.jclab.refio"
-version = "0.0.1.4"
+version = providers.gradleProperty("refioVersion").get()
 
 repositories {
     mavenCentral()
@@ -17,51 +17,8 @@ java {
     }
 }
 
-// Source sets point to existing files — NO file moves needed.
-// Excludes IDE-dependent context providers and ProjectStartupActivity.
-sourceSets {
-    main {
-        kotlin {
-            srcDir("../src/main/kotlin")
-            include("pl/jclab/refio/core/**")
-            include("pl/jclab/refio/api/**")  // Shared API models (ContextReference, TaskMode, etc.)
-            // Exclude files that depend on plugin-layer services
-            exclude("pl/jclab/refio/api/CoreApiClient.kt")  // Depends on services.logging
-            // Exclude files with direct IntelliJ Platform API calls
-            exclude("pl/jclab/refio/core/context/providers/CurrentFileContextProvider.kt")
-            exclude("pl/jclab/refio/core/context/providers/OpenFilesContextProvider.kt")
-            exclude("pl/jclab/refio/core/context/providers/RecentFilesContextProvider.kt")
-            exclude("pl/jclab/refio/core/context/providers/FileContextProvider.kt")
-            exclude("pl/jclab/refio/core/context/providers/FolderContextProvider.kt")
-            exclude("pl/jclab/refio/core/context/providers/GrepSearchContextProvider.kt")
-            exclude("pl/jclab/refio/core/context/providers/ProblemsContextProvider.kt")
-            exclude("pl/jclab/refio/core/context/providers/TerminalContextProvider.kt")
-            exclude("pl/jclab/refio/core/context/providers/GitDiffContextProvider.kt")
-            exclude("pl/jclab/refio/core/context/providers/GitCommitContextProvider.kt")
-            exclude("pl/jclab/refio/core/context/providers/CodebaseContextProvider.kt")
-            exclude("pl/jclab/refio/core/context/providers/DocsContextProvider.kt")
-            // Standalone providers ARE included (no IntelliJ dependency)
-            // pl/jclab/refio/core/context/providers/standalone/*.kt
-            // ProjectStartupActivity implements IntelliJ ProjectActivity interface
-            exclude("pl/jclab/refio/core/services/ProjectStartupActivity.kt")
-        }
-        resources {
-            srcDir("../src/main/resources")
-            include("subagents/**")
-            include("logback.xml")
-        }
-    }
-    test {
-        kotlin {
-            srcDir("../src/test/kotlin")
-            include("pl/jclab/refio/core/**")
-            include("pl/jclab/refio/testutil/**")
-        }
-        resources {
-            srcDir("../src/test/resources")
-        }
-    }
-}
+// Standard module layout — files physically in core/src/
+// IDE-dependent context providers live in :intellij-plugin module.
 
 dependencies {
     // Coroutines — explicit (IntelliJ plugin provides these via platform, standalone needs them)
