@@ -8,6 +8,7 @@ import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.actionSystem.IdeActions
 import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Caret
 import com.intellij.openapi.editor.EditorModificationUtil
 import com.intellij.openapi.editor.actionSystem.EditorActionHandler
@@ -1328,7 +1329,9 @@ class PromptInputPanel(
     }
 
     private fun getPromptCaretOffset(): Int {
-        return promptEditor.editor?.caretModel?.offset ?: promptEditor.text.length
+        return promptEditor.editor?.let { editor ->
+            ReadAction.compute<Int, RuntimeException> { editor.caretModel.offset }
+        } ?: promptEditor.text.length
     }
 
     private fun setPromptEditorEnabled(isEnabled: Boolean, background: Color) {
