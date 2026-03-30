@@ -62,7 +62,7 @@ class AdvanceCodeEditingTool(
     override val description =
         "LLM-assisted full file regeneration. **Use this tool for:** creating new code files (html, js, ts, php, java, python, kotlin, css, etc.) OR major refactoring of existing files. Expensive (~3x cost of multi_line_editor) - use only when necessary. For simple text files (md, txt, json), use create_new_file instead. Automatically creates parent directories if needed."
     override val mode = ToolMode.WRITE
-    override val category = ToolCategory.FILE_MODIFYING
+    override val category = ToolCategory.FILE_PRODUCING
 
     override fun validateParams(params: Map<String, Any>) {
         // Validate path

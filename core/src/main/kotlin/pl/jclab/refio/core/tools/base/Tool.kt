@@ -96,6 +96,14 @@ enum class ToolCategory {
     FILE_MODIFYING,
 
     /**
+     * Tools that create/regenerate files and produce output data
+     * (e.g., advance_code_editing)
+     * Like FILE_MODIFYING but output (diff, content) should be preserved in context
+     * so the LLM doesn't need to re-read the file it just created.
+     */
+    FILE_PRODUCING,
+
+    /**
      * Tools that execute commands
      * (e.g., run_terminal_command)
      * Mixed behavior - may produce data or modify files

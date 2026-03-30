@@ -351,7 +351,8 @@ class OllamaAdapter(
             }
 
             // Process thinking field to extract actual content and thinking
-            val (finalContent, finalThinking) = processThinkingField(rawContent, rawThinking)
+            val thinkingWasRequested = requestBody["think"] as? Boolean ?: false
+            val (finalContent, finalThinking) = processThinkingField(rawContent, rawThinking, thinkingWasRequested)
 
             logger.info {
                 "$logPrefix [CONTENT_DEBUG] Final content length: ${finalContent.length}, " +
@@ -645,7 +646,8 @@ class OllamaAdapter(
                 "raw thinking length: ${rawThinking?.length ?: 0}"
             }
 
-            val (finalContent, finalThinking) = processThinkingField(rawContent, rawThinking)
+            val thinkingWasRequested = requestBody["think"] as? Boolean ?: false
+            val (finalContent, finalThinking) = processThinkingField(rawContent, rawThinking, thinkingWasRequested)
 
             logger.info {
                 "$logPrefix [STREAM_CONTENT_DEBUG] Final content length: ${finalContent.length}, " +
@@ -751,7 +753,7 @@ class OllamaAdapter(
      *
      * @return Pair of (content, thinking)
      */
-    private fun processThinkingField(rawContent: String, rawThinking: String?): Pair<String, String?> {
+    private fun processThinkingField(rawContent: String, rawThinking: String?, thinkingRequested: Boolean = true): Pair<String, String?> {
         // If we have content, use it directly and keep thinking separate
         if (rawContent.isNotBlank()) {
             return Pair(rawContent, rawThinking?.takeIf { it.isNotBlank() })
@@ -760,6 +762,14 @@ class OllamaAdapter(
         // Content is empty, keep thinking separate (don't duplicate it into content)
         if (rawThinking.isNullOrBlank()) {
             return Pair("", null)
+        }
+
+        // When thinking was NOT requested but model produced thinking with empty content,
+        // move thinking to content so the caller gets usable output.
+        // This handles models like qwen3.5 that generate thinking tokens even without think=true.
+        if (!thinkingRequested) {
+            logger.info { "[OLLAMA] Thinking not requested but model returned thinking with empty content — moving thinking to content" }
+            return Pair(rawThinking, null)
         }
 
         // Keep fields separate - content is empty, thinking has the value

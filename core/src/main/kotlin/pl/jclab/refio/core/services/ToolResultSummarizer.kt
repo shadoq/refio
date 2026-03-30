@@ -116,11 +116,14 @@ class ToolResultSummarizer(
 
         // Context-aware max tokens for better detail preservation
         val maxTokens = when (contextType) {
-            SummaryContextType.CODE_ANALYSIS -> 800    // Keep more details for code
-            SummaryContextType.SEARCH_RESULT -> 500    // Medium for search
-            SummaryContextType.GENERAL -> 300          // Standard for others
+            SummaryContextType.CODE_ANALYSIS -> 1000   // Keep more details for code
+            SummaryContextType.SEARCH_RESULT -> 800    // Medium for search
+            SummaryContextType.GENERAL -> 600          // Standard for others
         }
 
+        // Explicitly pass thinking=false to ensure all output goes to content.
+        // Models like qwen3.5 may generate thinking tokens even without think=true,
+        // which wastes tokens on reasoning instead of producing summary content.
         val response = llmClient.complete(
             provider = provider,
             model = model,
@@ -128,6 +131,7 @@ class ToolResultSummarizer(
             systemPrompt = buildSystemPrompt(toolName, contextType),
             maxTokens = maxTokens,
             temperature = 0.3,
+            thinking = false,
             source = "ToolResultSummarizer",
             taskId = taskId,
             subtaskId = null

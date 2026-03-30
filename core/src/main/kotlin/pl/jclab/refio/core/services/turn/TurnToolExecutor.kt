@@ -397,12 +397,15 @@ class TurnToolExecutor(
                     iteration = iteration
                 )
 
-                // For DATA_PRODUCING tools (http_request, run_code, read_file, etc.):
+                // For DATA_PRODUCING and FILE_PRODUCING tools:
                 // preserve raw output as content when it fits in the buffer,
                 // so the LLM sees full data in the next turn.
+                // FILE_PRODUCING (e.g. advance_code_editing) creates files and returns
+                // diffs/content that the LLM needs to avoid redundant re-reads.
                 // Summary is always generated and stored in subtask for compressed fallback.
                 val toolDef = toolRegistry.getTool(toolCall.name)
                 val isDataProducing = toolDef?.category == ToolCategory.DATA_PRODUCING
+                        || toolDef?.category == ToolCategory.FILE_PRODUCING
                 val fitsInBuffer = rawOutput.length <= DATA_PRODUCING_RAW_OUTPUT_BUFFER
 
                 val effectiveContent: String

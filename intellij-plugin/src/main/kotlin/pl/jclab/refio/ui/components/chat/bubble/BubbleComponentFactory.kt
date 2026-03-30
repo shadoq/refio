@@ -95,6 +95,7 @@ internal class BubbleComponentFactory(
     ): JPanel {
         val headerPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
             isOpaque = false
+            alignmentX = Component.LEFT_ALIGNMENT
         }
 
         headerPanel.add(JLabel(icon).apply {
@@ -173,44 +174,48 @@ internal class BubbleComponentFactory(
         return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 8, 0)).apply {
             isOpaque = false
 
-            if (message.role == "user") {
-                add(createSmallIconButton(AllIcons.Actions.Edit, "Edit and rewind conversation") {
-                    onEdit?.invoke()
-                })
-            }
-
             add(createSmallIconButton(AllIcons.Actions.Copy, "Copy message") {
                 deps.copyToClipboard(message.content)
             })
 
-            if (message.role == "assistant") {
-                add(createSmallIconButton(AllIcons.Actions.Refresh, "Regenerate (re-send previous user prompt)") {
-                    val prevUser = deps.findPreviousUserMessage(message.id)
-                        ?: throw IllegalStateException("No previous user message found to regenerate from")
+//----------------------------------------
+// ToDo: Test and fix working
+//----------------------------------------
 
-                    deps.launch {
-                        try {
-                            deps.rewindAndResend(prevUser.id, prevUser.content)
-                        } catch (e: Exception) {
-                            deps.showNotification(
-                                "Error",
-                                e.message ?: "Failed to regenerate response",
-                                NotificationType.ERROR
-                            )
-                        }
-                    }
-                })
-            }
+//            if (message.role == "user") {
+//                add(createSmallIconButton(AllIcons.Actions.Edit, "Edit and rewind conversation") {
+//                    onEdit?.invoke()
+//                })
+//            }
 
-            add(createSmallIconButton(AllIcons.Actions.GC, "Delete message") {
-                deps.launch {
-                    try {
-                        deps.deleteMessage(message.id)
-                    } catch (e: Exception) {
-                        deps.showNotification("Error", e.message ?: "Failed to delete message", NotificationType.ERROR)
-                    }
-                }
-            })
+//            if (message.role == "assistant") {
+//                add(createSmallIconButton(AllIcons.Actions.Refresh, "Regenerate (re-send previous user prompt)") {
+//                    val prevUser = deps.findPreviousUserMessage(message.id)
+//                        ?: throw IllegalStateException("No previous user message found to regenerate from")
+//
+//                    deps.launch {
+//                        try {
+//                            deps.rewindAndResend(prevUser.id, prevUser.content)
+//                        } catch (e: Exception) {
+//                            deps.showNotification(
+//                                "Error",
+//                                e.message ?: "Failed to regenerate response",
+//                                NotificationType.ERROR
+//                            )
+//                        }
+//                    }
+//                })
+//            }
+//
+//            add(createSmallIconButton(AllIcons.Actions.GC, "Delete message") {
+//                deps.launch {
+//                    try {
+//                        deps.deleteMessage(message.id)
+//                    } catch (e: Exception) {
+//                        deps.showNotification("Error", e.message ?: "Failed to delete message", NotificationType.ERROR)
+//                    }
+//                }
+//            })
         }
     }
 
@@ -632,6 +637,7 @@ internal class BubbleComponentFactory(
         val panel = JBPanel<JBPanel<*>>().apply {
             layout = BorderLayout()
             isOpaque = false
+            alignmentX = Component.LEFT_ALIGNMENT
             border = BorderFactory.createEmptyBorder(4, 0, 4, 0)
         }
 

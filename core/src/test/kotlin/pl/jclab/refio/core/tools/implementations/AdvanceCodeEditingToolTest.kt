@@ -80,7 +80,7 @@ class AdvanceCodeEditingToolTest {
 
         @Test
         fun `should have correct tool category`() {
-            assertEquals(ToolCategory.FILE_MODIFYING, tool.category)
+            assertEquals(ToolCategory.FILE_PRODUCING, tool.category)
         }
 
         @Test
