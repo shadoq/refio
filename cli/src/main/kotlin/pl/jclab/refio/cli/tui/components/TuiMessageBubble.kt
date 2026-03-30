@@ -255,11 +255,22 @@ object TuiMessageBubble {
         val result = mutableListOf<String>()
         val time = timeFormat.format(Date(msg.timestamp))
         val toolLabel = msg.toolName ?: "tool"
-        result.add(TuiColors.tool("  ⚙ [$toolLabel] ") + TuiColors.muted(time))
+        val statusIcon = when {
+            msg.isStreaming -> "⟳"
+            msg.metadata["success"] == true -> "✓"
+            msg.metadata["success"] == false -> "✗"
+            else -> "⚙"
+        }
+        val headerStyle = when {
+            msg.isStreaming -> TuiColors.tool
+            msg.metadata["success"] == false -> TuiColors.statusFailed
+            msg.metadata["success"] == true -> TuiColors.statusSuccess
+            else -> TuiColors.tool
+        }
+        result.add(headerStyle("  $statusIcon [$toolLabel] ") + TuiColors.muted(time))
 
         val content = msg.content.trim()
         if (content.isNotEmpty()) {
-            // Show truncated result (first 5 lines max)
             val lines = content.lines()
             val displayLines = if (lines.size > 5) lines.take(5) + listOf("... (${lines.size - 5} more lines)") else lines
             for (line in displayLines) {
