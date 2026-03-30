@@ -418,11 +418,18 @@ class TuiObservabilityViewModel(
         "technologies" to 2, "dependencies" to 2,
         "code_analysis" to 3, "framework_analysis" to 3,
         "current_task" to 4, "subtasks" to 4,
-        "conversation_history" to 5, "recent_work" to 5,
+        "conversation_history" to 5, "conversation" to 5, "recent_work" to 5,
         "rag_fragments" to 6, "rag_index" to 6,
         "user_context" to 7, "user_requirements" to 7, "task_requirements" to 7,
         "key_components" to 8, "domain_analysis" to 8,
         "working_memory" to 9, "mcp_resources" to 9,
+        "system_prompt" to 10, "system_messages" to 10,
+        "messages_assistant" to 11, "assistant_messages" to 11,
+        "messages_user" to 7, "messages_system" to 14, "messages_other" to 14,
+        "navigation_map" to 12, "patterns" to 12, "architecture" to 0,
+        "typescript_analysis" to 13, "html_analysis" to 13, "css_analysis" to 13,
+        "context_injection_overhead" to 14, "request_overhead" to 14, "free_space" to 14,
+        "tool_outputs" to 8,
     )
 
     private fun categorizeSection(key: String): String {
@@ -653,11 +660,29 @@ class TuiObservabilityViewModel(
     internal fun refreshDebugState(r: CoreApiRouter) {
         try {
             val stats = r.apiLogsRouter.getApiLogStatistics()
+            val taskId = getTaskId()
+            val task = taskId?.let {
+                try { r.taskRouter.getTask(it) } catch (_: Exception) { null }
+            }
+            val subtaskCount = taskId?.let {
+                try { r.subtaskRouter.getSubtasks(it).subtasks.size } catch (_: Exception) { 0 }
+            } ?: 0
+
             _debugInfo.update {
                 it.copy(
-                    tokensIn = stats.totalInputTokens,
-                    tokensOut = stats.totalOutputTokens,
-                    costUsd = stats.totalCost,
+                    tokensIn = task?.tokensIn?.toLong() ?: it.tokensIn,
+                    tokensOut = task?.tokensOut?.toLong() ?: it.tokensOut,
+                    costUsd = task?.costUsd ?: it.costUsd,
+                    subtaskCount = subtaskCount,
+                    projectRoot = projectPath.toAbsolutePath().toString(),
+                    sessionCreatedAt = task?.createdAt ?: 0,
+                    lastUpdate = System.currentTimeMillis(),
+                    totalApiCalls = stats.totalCalls,
+                    globalTokensIn = stats.totalInputTokens,
+                    globalTokensOut = stats.totalOutputTokens,
+                    globalCost = stats.totalCost,
+                    avgLatencyMs = stats.avgLatencyMs,
+                    errorCount = stats.errorCount,
                 )
             }
         } catch (e: Exception) {

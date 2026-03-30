@@ -293,21 +293,15 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
     }
 
     /**
-     * Scroll chat to bottom (show latest messages)
+     * Scroll chat to bottom (show latest messages).
+     * Forces synchronous layout via validate() before reading scroll sizes
+     * to prevent the visual "jump" caused by stale layout metrics.
      */
     private fun scrollChatToBottom() {
         javax.swing.SwingUtilities.invokeLater {
-            val viewport = chatScrollPane.viewport
-            val view = viewport.view ?: return@invokeLater
-
-            val contentHeight = view.preferredSize.height
-            val viewportHeight = viewport.extentSize.height
-            if (contentHeight <= viewportHeight) {
-                viewport.viewPosition = java.awt.Point(0, 0)
-                return@invokeLater
-            }
-
-            chatScrollPane.verticalScrollBar.value = chatScrollPane.verticalScrollBar.maximum
+            chatScrollPane.validate()
+            val scrollBar = chatScrollPane.verticalScrollBar
+            scrollBar.value = scrollBar.maximum
         }
     }
 

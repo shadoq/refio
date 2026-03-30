@@ -210,8 +210,20 @@ data class TuiDebugInfo(
     val tokensOut: Long = 0,
     val costUsd: Double = 0.0,
     val messageCount: Int = 0,
+    val subtaskCount: Int = 0,
+    val selectedModel: String = "auto",
     val connected: Boolean = false,
-    val dbPath: String = ""
+    val dbPath: String = "",
+    val projectRoot: String = "",
+    val sessionCreatedAt: Long = 0,
+    val lastUpdate: Long = 0,
+    // Global LLM statistics
+    val totalApiCalls: Long = 0,
+    val globalTokensIn: Long = 0,
+    val globalTokensOut: Long = 0,
+    val globalCost: Double = 0.0,
+    val avgLatencyMs: Int = 0,
+    val errorCount: Long = 0
 )
 
 data class TuiPendingApproval(

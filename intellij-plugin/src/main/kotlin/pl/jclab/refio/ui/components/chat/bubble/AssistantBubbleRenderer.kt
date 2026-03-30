@@ -3,6 +3,9 @@ package pl.jclab.refio.ui.components.chat.bubble
 import pl.jclab.refio.api.models.Message
 import pl.jclab.refio.api.models.ToolCallStatus
 import pl.jclab.refio.api.models.ToolDisplayType
+import pl.jclab.refio.ui.components.chat.CodeBlockPanel
+import pl.jclab.refio.ui.components.chat.ContentSegment
+import pl.jclab.refio.ui.components.chat.ContentSegmentParser
 import pl.jclab.refio.ui.components.chat.MetricsView
 import pl.jclab.refio.ui.components.chat.QuestionData
 import pl.jclab.refio.ui.theme.LCATheme
@@ -123,7 +126,9 @@ internal class AssistantBubbleRenderer(
     private fun createRegularAssistantBubble(message: Message): JPanel {
         val content = buildAssistantContent(message)
         val outerPanel = createOuterPanel()
-        val messageBlock = context.bubbleContentContext.createMessageBlock(LCATheme.assistantBubbleBackground).apply {
+        val backgroundColor = LCATheme.assistantBubbleBackground
+        val foregroundColor = LCATheme.assistantBubbleForeground
+        val messageBlock = context.bubbleContentContext.createMessageBlock(backgroundColor).apply {
             layout = GridBagLayout()
         }
         var row = 0
@@ -148,17 +153,58 @@ internal class AssistantBubbleRenderer(
             factory.createBubbleHeader(
                 icon = "\uD83E\uDD16",
                 title = headerTitle,
-                foregroundColor = LCATheme.assistantBubbleForeground
+                foregroundColor = foregroundColor
             )
         )
-        addRow(
-            factory.createBubbleContentPanel(
-                content = content,
-                backgroundColor = LCATheme.assistantBubbleBackground,
-                foregroundColor = LCATheme.assistantBubbleForeground,
-                isUser = false
+
+        val segments = ContentSegmentParser.parse(content, isStreaming = message.isStreaming)
+        val maxWidth = (context.bubbleContentContext.availableWidth - context.bubbleContentContext.scrollBarAndPadding).coerceAtLeast(200)
+
+        if (segments.isEmpty() && content.isNotBlank()) {
+            addRow(
+                factory.createBubbleContentPanel(
+                    content = content,
+                    backgroundColor = backgroundColor,
+                    foregroundColor = foregroundColor,
+                    isUser = false
+                )
             )
-        )
+        } else {
+            for (segment in segments) {
+                when (segment) {
+                    is ContentSegment.Thinking -> {
+                        addRow(factory.createThinkingPanel(segment.content, message.id))
+                    }
+                    is ContentSegment.Code -> {
+                        addRow(CodeBlockPanel(segment.codeBlock, context.bubbleContentContext.project).apply {
+                            alignmentX = Component.LEFT_ALIGNMENT
+                            border = LCATheme.paddedBorder(2, 0)
+                        })
+                    }
+                    is ContentSegment.Json -> {
+                        addRow(createCollapsibleCodePanel(
+                            content = segment.content,
+                            context = context.bubbleContentContext,
+                            language = "json"
+                        ))
+                    }
+                    is ContentSegment.Plan -> {
+                        val planWrapper = JPanel().apply {
+                            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                            isOpaque = false
+                        }
+                        factory.renderPlanSegment(segment, planWrapper, backgroundColor, foregroundColor, maxWidth)
+                        addRow(planWrapper)
+                    }
+                    is ContentSegment.Markdown -> {
+                        if (segment.content.isNotBlank()) {
+                            val normalized = context.bubbleContentContext.markdownService.normalizeMarkdownTablesForRendering(segment.content)
+                            addRow(factory.createMarkdownPanel(normalized, backgroundColor, foregroundColor, maxWidth))
+                        }
+                    }
+                }
+            }
+        }
 
         if (message.isStreaming) {
             addRow(

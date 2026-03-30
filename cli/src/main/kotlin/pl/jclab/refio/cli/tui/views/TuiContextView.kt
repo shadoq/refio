@@ -16,16 +16,21 @@ object TuiContextView {
 
     /** Color palette for context sections (matches plugin's ContextSectionColorPalette) */
     private val sectionColors: List<TextStyle> = listOf(
-        brightCyan,      // 0: project overview
-        brightBlue,      // 1: instructions
-        magenta,         // 2: technologies
-        brightMagenta,   // 3: code analysis
-        brightRed,       // 4: current task
-        brightYellow,    // 5: conversation
-        yellow,          // 6: RAG
-        brightGreen,     // 7: user context
-        cyan,            // 8: key components
-        green,           // 9: working memory
+        brightCyan,      // 0: project overview / semantic summary
+        brightBlue,      // 1: instructions / project structure
+        magenta,         // 2: technologies / dependencies
+        brightMagenta,   // 3: code analysis / framework analysis
+        brightRed,       // 4: current task / subtasks
+        brightYellow,    // 5: conversation / recent work
+        yellow,          // 6: RAG fragments
+        brightGreen,     // 7: user context / user requirements
+        cyan,            // 8: key components / domain analysis
+        green,           // 9: working memory / mcp resources
+        blue,            // 10: system prompt / system messages
+        red,             // 11: assistant messages
+        white,           // 12: navigation map / patterns
+        brightWhite,     // 13: html/css/ts analysis
+        gray,            // 14: context overhead / free space
     )
 
     fun renderToBuffer(state: TuiState, width: Int, height: Int): TuiRenderBuffer {
@@ -89,19 +94,33 @@ object TuiContextView {
 
         buf.addLine()
 
-        // === Legend (top sections with color indicators) ===
-        val maxLegend = 8.coerceAtMost(state.contextSections.size)
-        val legendSections = state.contextSections.take(maxLegend)
-        for (section in legendSections) {
+        // === Legend (all non-zero sections with color indicators, two-column) ===
+        val legendSections = state.contextSections.filter { it.tokensUsed > 0 }
+        val colWidth = ((width - 4) / 2).coerceAtLeast(30)
+        val pairs = legendSections.chunked(2)
+        for (pair in pairs) {
             if (buf.lineCount >= height - 2) break
-            val color = sectionColors[section.colorIndex % sectionColors.size]
-            val colorBlock = color("██")
-            val percent = if (section.percentage > 0) String.format("%.1f%%", section.percentage) else ""
-            val tokens = formatTokens(section.tokensUsed)
-            buf.addLine("  $colorBlock ${section.name}  ${TuiColors.muted("$tokens tok  $percent")}")
+            val sb = StringBuilder()
+            for ((i, section) in pair.withIndex()) {
+                val color = sectionColors[section.colorIndex % sectionColors.size]
+                val percent = if (section.percentage > 0) String.format("(%.1f%%)", section.percentage) else ""
+                val tokens = formatTokens(section.tokensUsed)
+                val entry = "${color("██")} ${section.name}: $tokens $percent"
+                // Pad first column
+                if (i == 0 && pair.size > 1) {
+                    // Approximate visible length (without ANSI) for padding
+                    val visibleLen = 4 + section.name.length + tokens.length + percent.length + 3
+                    val pad = (colWidth - visibleLen).coerceAtLeast(1)
+                    sb.append("  $entry${" ".repeat(pad)}")
+                } else {
+                    sb.append("  $entry")
+                }
+            }
+            buf.addLine(sb.toString())
         }
-        if (state.contextSections.size > maxLegend) {
-            buf.addLine(TuiColors.muted("  +${state.contextSections.size - maxLegend} more sections"))
+        val zeroSections = state.contextSections.count { it.tokensUsed == 0 }
+        if (zeroSections > 0) {
+            buf.addLine(TuiColors.muted("  ... +$zeroSections empty sections"))
         }
 
         buf.addLine()

@@ -43,7 +43,13 @@ object ContextSectionColorPalette {
         "working_memory" to Color(0xF39C12),
         "user_requirements" to Color(0x27AE60),
         "mcp_resources" to Color(0x16A085),
-        "free_space" to Color(0xD3D3D3)
+        "free_space" to Color(0xD3D3D3),
+        // ContextPanel sections without explicit tag parsing
+        "semantic_summary" to Color(0x5499C7),
+        "project_structure" to Color(0x5DADE2),
+        "task_requirements" to Color(0xE74C3C),
+        "context_stability" to Color(0x95A5A6),
+        "domain_analysis" to Color(0x2980B9)
     )
 
     fun colorFor(key: String): Color = sectionColors[key] ?: JBColor.GRAY

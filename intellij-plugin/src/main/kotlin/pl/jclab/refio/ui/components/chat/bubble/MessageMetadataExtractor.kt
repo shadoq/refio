@@ -218,7 +218,8 @@ internal object MessageMetadataExtractor {
             ) as? Map<*, *> ?: return false
 
             json.containsKey("plan") ||
-                    json.containsKey("subtasks")
+                    json.containsKey("subtasks") ||
+                    json.containsKey("actions")
         } catch (e: Exception) {
             false
         }

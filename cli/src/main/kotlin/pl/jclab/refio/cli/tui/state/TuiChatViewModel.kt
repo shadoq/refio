@@ -782,6 +782,9 @@ class TuiChatViewModel(
 
                 onUpdateDebugInfo(_messages.value.size)
 
+                // Auto-name session if still using default name
+                autoNameSessionIfNeeded(r, tid, processedInput)
+
                 // Refresh API logs from database
                 onRefreshApiLogs(r)
             } catch (e: Exception) {
@@ -816,6 +819,35 @@ class TuiChatViewModel(
         } else {
             // No provider prefix -- try to infer
             Pair(null, combined)
+        }
+    }
+
+    // --- Auto-naming ---
+
+    private fun autoNameSessionIfNeeded(router: CoreApiRouter, taskId: String, userInput: String) {
+        scope.launch {
+            try {
+                val task = router.taskRouter.getTask(taskId) ?: return@launch
+                if (task.name != "New Session") return@launch
+
+                val rawTitle = router.chatRouter.generateSessionTitle(taskId, userInput)
+                val name = rawTitle.trim()
+                    .trim('"', '\'', '\u201C', '\u201D')
+                    .replace(Regex("[\\r\\n]+"), " ")
+                    .replace(Regex("\\s+"), " ")
+                    .replace(Regex("[.!?:;]+$"), "")
+                    .take(60)
+                    .ifBlank { userInput.trim().replace(Regex("\\s+"), " ").take(50) }
+                    .ifBlank { "Chat" }
+                router.taskRouter.updateTask(taskId, pl.jclab.refio.core.api.UpdateTaskRequest(name = name))
+                logger.info { "Auto-named session: '$name'" }
+            } catch (e: Exception) {
+                logger.warn(e) { "Auto-naming failed, using fallback" }
+                try {
+                    val fallback = userInput.trim().replace(Regex("\\s+"), " ").take(50).ifBlank { "Chat" }
+                    router.taskRouter.updateTask(taskId, pl.jclab.refio.core.api.UpdateTaskRequest(name = fallback))
+                } catch (_: Exception) { }
+            }
         }
     }
 

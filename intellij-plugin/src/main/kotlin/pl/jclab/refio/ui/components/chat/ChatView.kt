@@ -558,7 +558,9 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
                 messagesPanel.add(bubble, createMessageConstraints(index, messages.lastIndex))
             }
         } else {
-            // Full rebuild when message order changed or messages were removed
+            // Full rebuild when message order changed or messages were removed.
+            // Hide panel during rebuild to prevent flash of empty/intermediate state.
+            messagesPanel.isVisible = false
             messagesPanel.removeAll()
             messagesPanel.layout = GridBagLayout()
 
@@ -566,6 +568,7 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
                 val bubble = resolveBubble(message)
                 messagesPanel.add(bubble, createMessageConstraints(index, messages.lastIndex))
             }
+            messagesPanel.isVisible = true
         }
 
         val toolbarRow = messages.size

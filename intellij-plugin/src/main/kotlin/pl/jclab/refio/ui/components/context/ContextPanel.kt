@@ -102,6 +102,17 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private val workingMemorySection = createSection("Working Memory", "working_memory")
     private val contextStabilitySection = createSection("Context Stability", "context_stability")
     private val domainAnalysisSection = createSection("Domain Analysis", "domain_analysis")
+    // Runtime sections (from ProjectContextRouter.buildActiveSectionTokens)
+    private val systemPromptSection = createSection("System Prompt", "system_prompt")
+    private val systemMessagesSection = createSection("System Messages", "system_messages")
+    private val messagesAssistantSection = createSection("Assistant Messages", "messages_assistant")
+    private val messagesUserSection = createSection("User Messages", "messages_user")
+    private val messagesSystemSection = createSection("System Role Messages", "messages_system")
+    private val messagesOtherSection = createSection("Other Role Messages", "messages_other")
+    private val contextOverheadSection = createSection("Context Injection Overhead", "context_injection_overhead")
+    private val architectureSection = createSection("Architecture", "architecture")
+    private val patternsSection = createSection("Patterns", "patterns")
+    private val navigationMapSection = createSection("Navigation Map", "navigation_map")
     private val llmPromptPreviewSection = createSection("LLM Context Prompt", "llm_prompt", collapsible = false)
     // Create buttons for LLM prompt controls
     private val copyPromptButton = JButton("Copy").apply {
@@ -204,7 +215,18 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         },
         SectionEntry("domain_analysis", 19, domainAnalysisSection) { context, _ ->
             updateDomainAnalysisSection(context)
-        }
+        },
+        // Runtime sections from buildActiveSectionTokens (token-only, no content detail)
+        SectionEntry("system_prompt", 20, systemPromptSection) { _, _ -> },
+        SectionEntry("system_messages", 21, systemMessagesSection) { _, _ -> },
+        SectionEntry("messages_assistant", 22, messagesAssistantSection) { _, _ -> },
+        SectionEntry("messages_user", 23, messagesUserSection) { _, _ -> },
+        SectionEntry("messages_system", 24, messagesSystemSection) { _, _ -> },
+        SectionEntry("messages_other", 25, messagesOtherSection) { _, _ -> },
+        SectionEntry("context_injection_overhead", 26, contextOverheadSection) { _, _ -> },
+        SectionEntry("architecture", 27, architectureSection) { _, _ -> },
+        SectionEntry("patterns", 28, patternsSection) { _, _ -> },
+        SectionEntry("navigation_map", 29, navigationMapSection) { _, _ -> }
     )
 
     init {

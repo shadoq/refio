@@ -466,7 +466,7 @@ class TuiViewModel(
                 var updated = info
                 if (sessionId != null) updated = updated.copy(sessionId = sessionId)
                 if (mode != null) updated = updated.copy(mode = mode)
-                updated
+                updated.copy(selectedModel = _model.value ?: "auto")
             }
         }
         session.setScreen = { screen -> _screen.value = screen }
@@ -536,7 +536,7 @@ class TuiViewModel(
     internal fun createNewTaskInDb(r: CoreApiRouter): String {
         val taskMode = try { CoreTaskMode.valueOf(_mode.value) } catch (_: Exception) { CoreTaskMode.CHAT }
         val task = r.taskRouter.createTask(CreateTaskRequest(
-            name = "TUI Session",
+            name = "New Session",
             mode = taskMode,
             projectId = projectId,
             projectPath = projectPath.toAbsolutePath().toString()

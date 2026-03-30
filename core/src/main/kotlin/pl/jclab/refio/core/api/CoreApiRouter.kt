@@ -15,10 +15,12 @@ import pl.jclab.refio.core.services.turn.*
 import pl.jclab.refio.core.services.analysis.FileAnalyzerService
 import pl.jclab.refio.core.services.analysis.CppLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.CssLanguageAnalyzer
+import pl.jclab.refio.core.services.analysis.GoLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.HtmlLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.JavaLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.KotlinLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.PythonLanguageAnalyzer
+import pl.jclab.refio.core.services.analysis.RustLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.TypeScriptLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.project.RichProjectAnalysisEngine
 import pl.jclab.refio.core.services.context.WorkingMemoryService
@@ -118,6 +120,8 @@ class CoreApiRouter(
         JavaLanguageAnalyzer(),
         PythonLanguageAnalyzer(),
         TypeScriptLanguageAnalyzer(),
+        GoLanguageAnalyzer(),
+        RustLanguageAnalyzer(),
         HtmlLanguageAnalyzer(),
         CppLanguageAnalyzer(),
         CssLanguageAnalyzer()
