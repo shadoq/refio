@@ -90,6 +90,20 @@ class SessionManager(private val project: Project) {
         stateManager.contextSectionTokens
     val totalEstimatedTokens: StateFlow<Int> = stateManager.totalEstimatedTokens
 
+    /**
+     * Turn execution state (phase, iteration, tokens, active tool).
+     * Null if AgentTurnLoop is not initialized.
+     */
+    val turnState: StateFlow<pl.jclab.refio.core.services.turn.TurnStateSnapshot>?
+        get() = projectRouter.turnState
+
+    /**
+     * Last prompt snapshot with context decision trace.
+     * Null if no prompt has been built yet.
+     */
+    val lastPromptSnapshot: StateFlow<pl.jclab.refio.core.services.turn.PromptSnapshot?>?
+        get() = projectRouter.lastPromptSnapshot
+
     private val statusBarIntegration = StatusBarIntegration()
     private lateinit var lifecycleService: SessionLifecycleService
     private lateinit var messageDispatcher: MessageDispatcher

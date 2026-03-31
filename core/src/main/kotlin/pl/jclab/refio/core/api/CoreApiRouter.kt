@@ -352,6 +352,21 @@ class CoreApiRouter(
         )
     } else null
 
+    /**
+     * Observable state of the current turn execution (phase, iteration, tokens, active tool).
+     * Null if AgentTurnLoop is not available (no toolRegistry).
+     */
+    val turnState: kotlinx.coroutines.flow.StateFlow<pl.jclab.refio.core.services.turn.TurnStateSnapshot>?
+        get() = agentTurnLoop?.turnState
+
+    /**
+     * Last prompt snapshot captured during turn execution.
+     * Contains context decision trace and token usage.
+     * Null if AgentTurnLoop is not available or no prompt has been built yet.
+     */
+    val lastPromptSnapshot: kotlinx.coroutines.flow.StateFlow<pl.jclab.refio.core.services.turn.PromptSnapshot?>?
+        get() = agentTurnLoop?.lastPromptSnapshot
+
     // ========== RAG Services ==========
 
     private val ragSearchService: RagSearchService? by lazy {

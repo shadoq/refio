@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.context.mcp
 
+import java.time.Instant
 import kotlin.jvm.Transient
 
 /**
@@ -180,11 +181,34 @@ data class MCPToolResult(
  * Connection status.
  */
 enum class MCPServerStatus {
-    CONNECTED,
-    CONNECTING,
+    DISABLED,
     DISCONNECTED,
-    ERROR
+    CONNECTING,
+    CONNECTED,
+    NEEDS_AUTH,
+    STALE,
+    ERROR;
+
+    val isUsable: Boolean
+        get() = this == CONNECTED || this == STALE
+
+    val isTerminal: Boolean
+        get() = this == DISABLED || this == ERROR || this == NEEDS_AUTH
 }
+
+/**
+ * Runtime metadata of an MCP connection for UI display and debugging.
+ */
+data class MCPConnectionInfo(
+    val serverId: String,
+    val displayName: String,
+    val status: MCPServerStatus,
+    val lastConnectedAt: Instant? = null,
+    val lastError: String? = null,
+    val toolCount: Int = 0,
+    val resourceCount: Int = 0,
+    val promptsEnabled: Boolean = false
+)
 
 class MCPAccessDeniedException(message: String) : Exception(message)
 class MCPTransportException(message: String, cause: Throwable? = null) : Exception(message, cause)

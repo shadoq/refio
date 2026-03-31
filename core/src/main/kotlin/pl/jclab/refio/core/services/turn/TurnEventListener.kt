@@ -23,6 +23,8 @@ interface TurnEventListener {
 
     fun onStreamChunk(taskId: String, delta: String, accumulated: String) {}
 
+    fun onToolBatchCompleted(taskId: String, summary: ToolBatchSummary.BatchSummary) {}
+
     fun onTurnCompleted(
         taskId: String,
         result: pl.jclab.refio.core.services.TurnResult,

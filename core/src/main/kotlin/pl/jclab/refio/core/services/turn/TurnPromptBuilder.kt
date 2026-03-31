@@ -32,11 +32,20 @@ class TurnPromptBuilder(
     private val workingMemoryService: pl.jclab.refio.core.services.context.WorkingMemoryService?,
     private val projectRoot: Path?,
     private val tokenEstimator: PromptTokenEstimator = PromptTokenEstimator(),
-    private val promptCache: PromptCache? = null
+    private val promptCache: PromptCache? = null,
+    private val sectionProviders: List<PromptSectionProvider> = emptyList()
 ) {
     companion object {
         private const val STICKY_REQUIREMENTS_MAX_CHARS = 4_000
         private const val REQUIREMENT_ENTRY_MAX_CHARS = 1_500
+    }
+
+    /**
+     * Get the last context decision trace from ContextService.
+     * Available after buildPrompt() has been called.
+     */
+    fun getLastContextTrace(): ContextDecisionTrace? {
+        return contextService?.lastContextTrace
     }
 
     /**
@@ -79,6 +88,24 @@ $systemPrompt
 $stickyRequirements
 </task_requirements>
             """.trimIndent()
+        }
+
+        // Append sections from providers
+        if (sectionProviders.isNotEmpty()) {
+            val buildContext = PromptBuildContext(
+                taskId = taskId,
+                mode = mode,
+                iteration = currentIteration,
+                maxIterations = maxIterations,
+                writeToolsExecutedInTurn = writeToolsExecutedInTurn,
+                profileOverrides = profileOverrides
+            )
+            for (provider in sectionProviders) {
+                val section = provider.build(buildContext)
+                if (!section.isNullOrBlank()) {
+                    systemPrompt += "\n\n$section"
+                }
+            }
         }
 
         // Use ContextService for messages and project context (for PLAN and AGENT modes)

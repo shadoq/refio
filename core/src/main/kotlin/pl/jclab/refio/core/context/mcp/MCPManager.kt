@@ -127,7 +127,27 @@ object MCPManager {
 
     fun getServerStatus(projectId: String?, serverId: String): MCPServerStatus {
         val connection = projectStates[mapKey(projectId)]?.connections?.get(serverId)
+        val config = projectStates[mapKey(projectId)]?.serverConfigs?.get(serverId)
+        if (config?.enabled == false) return MCPServerStatus.DISABLED
         return connection?.getStatus() ?: MCPServerStatus.DISCONNECTED
+    }
+
+    fun getConnectionInfo(projectId: String?): List<MCPConnectionInfo> {
+        val state = projectStates[mapKey(projectId)] ?: return emptyList()
+        return state.serverConfigs.map { (serverId, config) ->
+            val connection = state.connections[serverId]
+            MCPConnectionInfo(
+                serverId = serverId,
+                displayName = config.displayName ?: serverId,
+                status = if (!config.enabled) MCPServerStatus.DISABLED
+                         else connection?.getStatus() ?: MCPServerStatus.DISCONNECTED,
+                lastConnectedAt = connection?.lastConnectedAt,
+                lastError = connection?.lastError,
+                toolCount = state.registeredTools[serverId]?.size ?: 0,
+                resourceCount = 0,
+                promptsEnabled = config.promptsEnabled
+            )
+        }
     }
 
     fun shutdown(projectId: String? = null) {

@@ -188,6 +188,9 @@ class MCPSettingsPanel(private val project: Project) : JBPanel<MCPSettingsPanel>
             pl.jclab.refio.core.context.mcp.MCPServerStatus.CONNECTING -> "<font color='#FF9800'>● CONNECTING</font>"
             pl.jclab.refio.core.context.mcp.MCPServerStatus.DISCONNECTED -> "<font color='#9E9E9E'>● DISCONNECTED</font>"
             pl.jclab.refio.core.context.mcp.MCPServerStatus.ERROR -> "<font color='#F44336'>● ERROR</font>"
+            pl.jclab.refio.core.context.mcp.MCPServerStatus.DISABLED -> "<font color='#757575'>● DISABLED</font>"
+            pl.jclab.refio.core.context.mcp.MCPServerStatus.NEEDS_AUTH -> "<font color='#FF5722'>● NEEDS AUTH</font>"
+            pl.jclab.refio.core.context.mcp.MCPServerStatus.STALE -> "<font color='#FFC107'>● STALE</font>"
         }
 
         infoPanel.add(JBLabel("<html><b>@${config.id}</b> (${config.displayName ?: "Unnamed"}) $statusText</html>"))

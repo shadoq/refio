@@ -38,6 +38,11 @@ class MCPConnection(
     private val cachedTools = mutableListOf<MCPToolDefinition>()
     private var capabilities: MCPServerCapabilities? = null
 
+    var lastConnectedAt: java.time.Instant? = null
+        private set
+    var lastError: String? = null
+        private set
+
     suspend fun connect() {
         logger.info { "Connecting to MCP server: $serverId (${config.type})" }
         status = MCPServerStatus.CONNECTING
@@ -59,9 +64,12 @@ class MCPConnection(
             }
 
             status = MCPServerStatus.CONNECTED
+            lastConnectedAt = java.time.Instant.now()
+            lastError = null
             logger.info { "Connected to MCP server: $serverId" }
         } catch (e: Exception) {
             status = MCPServerStatus.ERROR
+            lastError = e.message
             logger.error(e) { "Failed to connect to MCP server: $serverId" }
             throw e
         }

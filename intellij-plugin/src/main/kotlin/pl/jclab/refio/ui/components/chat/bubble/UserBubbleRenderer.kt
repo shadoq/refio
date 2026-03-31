@@ -38,7 +38,7 @@ internal class UserBubbleRenderer(
                 icon = "\uD83D\uDC64",
                 title = "You",
                 foregroundColor = LCATheme.userBubbleForeground
-            )
+            ).apply { alignmentX = Component.LEFT_ALIGNMENT }
         )
 
         val contentPanel = factory.createBubbleContentPanel(
@@ -55,14 +55,14 @@ internal class UserBubbleRenderer(
             onSubmit = { newContent ->
                 context.rewindAndResendFromMessage(message.id, newContent)
             }
-        )
+        ).apply { alignmentX = Component.LEFT_ALIGNMENT }
 
         val userActions = factory.wrapRightAligned(
             factory.createMessageActionsPanel(
                 message = message,
                 onEdit = { editableBubble.beginEditing() }
             )
-        )
+        ).apply { alignmentX = Component.LEFT_ALIGNMENT }
 
         messageBlock.add(editableBubble)
         messageBlock.add(Box.createVerticalStrut(context.bubbleCompactGap))

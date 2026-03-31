@@ -6,18 +6,27 @@ import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.JBColor
+import com.intellij.ui.table.JBTable
 import com.intellij.openapi.ui.Messages
 import pl.jclab.refio.api.models.ContextReference
 import pl.jclab.refio.core.tools.PathSandbox
+import pl.jclab.refio.core.services.turn.PromptSnapshot
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.services.core.CoreConnectionManager
 import pl.jclab.refio.services.logging.dualLogger
 import pl.jclab.refio.services.notification.NotificationService
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
+import pl.jclab.refio.ui.context.ContextSectionsTableModel
+import pl.jclab.refio.ui.context.ContextSectionTableRow
+import pl.jclab.refio.ui.context.asDisplayName
 import pl.jclab.refio.ui.dialogs.LLMPromptViewerDialog
 import pl.jclab.refio.ui.theme.ContextSectionColorPalette
 import pl.jclab.refio.ui.theme.LCATheme
+import pl.jclab.refio.core.services.context.ContextPriority
+import pl.jclab.refio.core.services.context.ContextSection
+import pl.jclab.refio.core.services.turn.ContextDecisionTrace
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -33,6 +42,7 @@ import java.awt.RenderingHints
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.awt.Insets
+import java.awt.FlowLayout
 import java.nio.file.Path
 import java.nio.file.Paths
 import javax.swing.SwingUtilities
@@ -44,6 +54,7 @@ import javax.swing.Box
 import javax.swing.JFileChooser
 import javax.swing.filechooser.FileNameExtensionFilter
 import java.io.File
+import javax.swing.Scrollable
 
 private val logger = dualLogger("ContextPanel")
 
@@ -73,14 +84,52 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     // which debounces events and triggers refreshContext() only once per time window
     private val refreshTrigger = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
-    private val contentPanel = JPanel().apply {
-        layout = BoxLayout(this, BoxLayout.Y_AXIS)
+    private val contentPanel = object : JPanel(), Scrollable {
+        init {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+        }
+
+        override fun getPreferredScrollableViewportSize(): Dimension = preferredSize
+        override fun getScrollableUnitIncrement(visibleRect: java.awt.Rectangle?, orientation: Int, direction: Int): Int = 24
+        override fun getScrollableBlockIncrement(visibleRect: java.awt.Rectangle?, orientation: Int, direction: Int): Int =
+            visibleRect?.height?.coerceAtLeast(24) ?: 24
+        override fun getScrollableTracksViewportWidth(): Boolean = true
+        override fun getScrollableTracksViewportHeight(): Boolean = false
+    }.apply {
+        alignmentX = LEFT_ALIGNMENT
     }
     private val scrollPane = JBScrollPane(contentPanel)
 
     // Section panels
     private val headerPanel = JPanel(BorderLayout())
     private val tokenUsagePanel = TokenUsageVisualizationPanel()
+    private val promptTraceTableModel = ContextSectionsTableModel()
+    private val promptTraceTable = JBTable(promptTraceTableModel).apply {
+        setShowGrid(true)
+        rowHeight = 24
+        autoResizeMode = javax.swing.JTable.AUTO_RESIZE_ALL_COLUMNS
+    }
+    private val promptTraceTotalLabel = JBLabel("No prompt data yet")
+    private val promptTraceIncludedLabel = JBLabel("")
+    private val promptTraceDroppedLabel = JBLabel("")
+    private val promptTracePanel = JPanel(BorderLayout()).apply {
+        border = BorderFactory.createCompoundBorder(
+            BorderFactory.createEmptyBorder(0, 5, 8, 5),
+            BorderFactory.createTitledBorder("Prompt Context Trace")
+        )
+
+        val summaryPanel = JPanel(FlowLayout(FlowLayout.LEFT, 12, 4)).apply {
+            add(promptTraceTotalLabel)
+            add(promptTraceIncludedLabel)
+            add(promptTraceDroppedLabel)
+        }
+
+        add(summaryPanel, BorderLayout.NORTH)
+        add(JBScrollPane(promptTraceTable).apply {
+            preferredSize = Dimension(0, 180)
+            horizontalScrollBarPolicy = javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
+        }, BorderLayout.CENTER)
+    }
 
     private val projectOverviewSection = createSection("Project Overview", "project_overview")
     private val semanticSummarySection = createSection("Semantic Summary (for LLM)", "semantic_summary")
@@ -154,6 +203,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private var lastStreamingActive = false
     private var streamingSuppressStartMs: Long? = null
     private var pendingAutoRefreshAfterStreaming = false
+    private var latestPromptSnapshot: PromptSnapshot? = null
 
     private val sectionEntries = listOf(
         SectionEntry("project_overview", 1, projectOverviewSection) { context, _ ->
@@ -357,6 +407,17 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
             }
         }
 
+        sessionManager.lastPromptSnapshot?.let { snapshotFlow ->
+            cs.launch {
+                snapshotFlow.collectLatest { snapshot ->
+                    SwingUtilities.invokeLater {
+                        latestPromptSnapshot = snapshot
+                        updatePromptTrace(snapshot)
+                    }
+                }
+            }
+        }
+
         // Initial load
         showMessage("Select a session to view context")
     }
@@ -435,6 +496,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
 
                     updateSections(context, pendingRefs)
                     updateLLMPromptState(context)
+                    updatePromptTrace(latestPromptSnapshot)
                 }
 
                 logger.info { "Context refreshed successfully" }
@@ -1468,12 +1530,119 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
 
     private fun applySectionOrder(entries: List<SectionEntry>) {
         contentPanel.removeAll()
+        promptTracePanel.alignmentX = LEFT_ALIGNMENT
+        llmPromptPreviewSection.alignmentX = LEFT_ALIGNMENT
+        contentPanel.add(promptTracePanel)
         entries.forEach { entry ->
+            entry.section.alignmentX = LEFT_ALIGNMENT
             contentPanel.add(entry.section)
         }
         contentPanel.add(llmPromptPreviewSection)
         contentPanel.revalidate()
         contentPanel.repaint()
+    }
+
+    private fun updatePromptTrace(snapshot: PromptSnapshot?) {
+        if (snapshot == null) {
+            promptTraceTotalLabel.text = "No prompt data yet"
+            promptTraceIncludedLabel.text = ""
+            promptTraceDroppedLabel.text = ""
+            promptTraceTableModel.updateRows(emptyList())
+            return
+        }
+
+        val trace = snapshot.contextTrace
+        val sectionTokens = sessionManager.contextSectionTokens.value
+        val totalTokens = sessionManager.totalEstimatedTokens.value
+        val contextLimit = getSelectedModelContextLimit()
+        val rows = buildPromptTraceRows(sectionTokens, trace)
+        val includedCount = rows.count { it.status != "DROPPED" }
+        val droppedCount = rows.count { it.status == "DROPPED" }
+
+        promptTraceTotalLabel.text = "Tokens: $totalTokens / $contextLimit"
+        promptTraceIncludedLabel.text = "Included: $includedCount"
+        promptTraceDroppedLabel.text = "Dropped: $droppedCount"
+        promptTraceDroppedLabel.foreground =
+            if (rows.any { it.status == "DROPPED" }) JBColor.ORANGE else JBColor.foreground()
+
+        promptTraceTableModel.updateRows(rows)
+    }
+
+    private fun buildPromptTraceRows(
+        sectionTokens: Map<String, pl.jclab.refio.core.api.ContextSectionTokenInfo>,
+        trace: ContextDecisionTrace
+    ): List<ContextSectionTableRow> {
+        val traceBySection = trace.sections.associateBy { it.section }
+        val representedSections = mutableSetOf<ContextSection>()
+
+        val includedRows = sectionTokens.entries
+            .sortedByDescending { it.value.tokens }
+            .map { (key, info) ->
+                val logicalSection = mapUiSectionKeyToLogicalSection(key)
+                val traceRecord = logicalSection?.let(traceBySection::get)
+                if (logicalSection != null) {
+                    representedSections += logicalSection
+                }
+
+                ContextSectionTableRow(
+                    section = info.name,
+                    priority = (traceRecord?.priority ?: inferPriorityForUiSection(key)).asDisplayName(),
+                    tokens = info.tokens.toString(),
+                    status = when {
+                        traceRecord?.included == false -> "DROPPED"
+                        traceRecord?.dropReason != null -> traceRecord.dropReason?.name ?: ""
+                        else -> "INCLUDED"
+                    },
+                    reason = traceRecord?.dropReason?.name ?: ""
+                )
+            }
+
+        val droppedRows = trace.sections
+            .filter { !it.included && it.section !in representedSections }
+            .map { record ->
+                ContextSectionTableRow(
+                    section = record.section.name,
+                    priority = record.priority.asDisplayName(),
+                    tokens = (record.actualTokens ?: record.estimatedTokens).toString(),
+                    status = "DROPPED",
+                    reason = record.dropReason?.name ?: ""
+                )
+            }
+
+        return includedRows + droppedRows
+    }
+
+    private fun mapUiSectionKeyToLogicalSection(key: String): ContextSection? {
+        return when (key) {
+            "system_prompt" -> ContextSection.SYSTEM_PROMPT
+            "project_overview", "current_task", "user_requirements" -> ContextSection.PROJECT_CONTEXT
+            "project_instructions" -> ContextSection.PROJECT_INSTRUCTIONS
+            "working_memory" -> ContextSection.WORKING_MEMORY
+            "recent_work" -> ContextSection.RECENT_WORK
+            "user_context", "mcp_resources" -> ContextSection.USER_CONTEXT
+            "rag_fragments" -> ContextSection.RAG_FRAGMENTS
+            "conversation", "messages_user", "messages_assistant", "messages_system", "messages_other" -> ContextSection.CONVERSATION
+            "key_components",
+            "dependencies",
+            "subtasks",
+            "architecture",
+            "framework_analysis",
+            "html_analysis",
+            "typescript_analysis",
+            "css_analysis",
+            "patterns",
+            "navigation_map",
+            "code_analysis" -> ContextSection.REFERENCE
+            else -> null
+        }
+    }
+
+    private fun inferPriorityForUiSection(key: String): ContextPriority {
+        return when (key) {
+            "system_prompt", "system_messages", "context_injection_overhead", "request_overhead" -> ContextPriority.CRITICAL
+            "messages_user", "messages_assistant", "messages_system", "messages_other" -> ContextPriority.NORMAL
+            else -> mapUiSectionKeyToLogicalSection(key)?.defaultPriority ?: ContextPriority.NORMAL
+        }
     }
 
     private fun updateStructureSection(context: pl.jclab.refio.core.api.ProjectContextResponse) {
@@ -1688,6 +1857,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                 .filter { it != currentTaskSection }
                 .forEach { it.clearContent() }
             llmPromptPreviewSection.clearContent()
+            updatePromptTrace(null)
         }
     }
 
@@ -1975,4 +2145,3 @@ class TokenUsageVisualizationPanel : JBPanel<TokenUsageVisualizationPanel>(Borde
         }
     }
 }
-

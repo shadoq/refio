@@ -33,6 +33,12 @@ interface Tool {
     val category: ToolCategory
 
     /**
+     * Origin of this tool (builtin, MCP, or plugin).
+     */
+    val origin: ToolOrigin
+        get() = ToolOrigin.BUILTIN
+
+    /**
      * Execute the tool with given parameters.
      *
      * @param params Tool-specific parameters as key-value map
@@ -60,6 +66,15 @@ interface Tool {
     fun getParameterSchema(): Map<String, Any> {
         return emptyMap()
     }
+}
+
+/**
+ * Origin of a tool — where it was registered from.
+ */
+enum class ToolOrigin {
+    BUILTIN,
+    MCP,
+    PLUGIN
 }
 
 /**

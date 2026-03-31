@@ -18,6 +18,7 @@ import pl.jclab.refio.ui.components.debug.DebugPanel
 import pl.jclab.refio.ui.components.context.ContextPanel
 import pl.jclab.refio.ui.components.history.HistoryPanel
 import pl.jclab.refio.ui.components.rag.RagViewPanel
+import pl.jclab.refio.ui.execution.TurnStateStatusBar
 import pl.jclab.refio.ui.settings.ApiLogsPanel
 import pl.jclab.refio.ui.settings.SettingsView
 import pl.jclab.refio.api.CoreApiClient
@@ -26,6 +27,7 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.actionSystem.Separator
 import com.intellij.ui.awt.RelativePoint
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -70,6 +72,8 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
     private val apiLogsPanel: ApiLogsPanel
     private val historyPanel: HistoryPanel
     private val ragViewPanel: RagViewPanel
+
+    private val turnStateStatusBar: TurnStateStatusBar
 
     private val tabbedPane: JTabbedPane
     private val middlePanel: JPanel
@@ -119,6 +123,17 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
         apiLogsPanel = ApiLogsPanel(coreApiClient, autoLoadOnInit = false)
         historyPanel = HistoryPanel(project, autoLoadOnInit = false)
         ragViewPanel = RagViewPanel(project)
+        turnStateStatusBar = TurnStateStatusBar()
+
+        // Observe turn state for status bar
+        val turnStateFlow = sessionManager.turnState
+        if (turnStateFlow != null) {
+            cs.launch {
+                turnStateFlow.collect { snapshot ->
+                    SwingUtilities.invokeLater { turnStateStatusBar.update(snapshot) }
+                }
+            }
+        }
 
         // Scroll pane for chat messages only
         chatScrollPane = JBScrollPane(chatView).apply {
@@ -139,10 +154,16 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
             add(promptInputPanel, BorderLayout.SOUTH)
         }
 
+        // Steps panel with turn state status bar at top
+        val stepsPanel = JPanel(BorderLayout()).apply {
+            add(turnStateStatusBar, BorderLayout.NORTH)
+            add(JBScrollPane(stepsQueueView), BorderLayout.CENTER)
+        }
+
         // Create tabbed pane
         tabbedPane = JTabbedPane().apply {
             addTab("Chat", chatPanel)
-            addTab("Steps", JBScrollPane(stepsQueueView))
+            addTab("Execution", stepsPanel)
             addTab("Context", contextPanel)
             addTab("RAG", ragViewPanel)
             addTab("Logs", logsPanel)

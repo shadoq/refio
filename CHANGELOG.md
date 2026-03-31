@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Platform-agnostic `ProjectHandle` interface replacing direct IntelliJ `Project` dependency in core.
 - Per-agent metrics tracking, mutex-based file locking for write tools, configurable Ollama request gating.
 - Expanded test coverage: multi-agent, standalone providers, core services, integration tests.
+- Prompt snapshot and turn-state tracking exposed from core to the IntelliJ plugin, including context inclusion/drop traces, token usage, and tool-batch summaries.
+- IntelliJ context panel now shows a prompt-context trace table and a dedicated context inspector view for prompt debugging.
+- Modular prompt-building extension points with dedicated prompt section providers and extracted context pruning services.
 
 ### Fixed
 
@@ -41,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - EventBus wiring for multi-agent UI visualization in CLI.
 - Cross-platform fixes for terminal command tests.
 - Help action now opens the project GitHub page.
+- Model visibility defaults now initialize only once and preserve existing user-configured dropdown visibility.
+- MCP settings now distinguish disabled, stale, and auth-required server states and retain last connection/error metadata for diagnostics.
 
 ### Removed
 
@@ -51,6 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Gradle multi-module structure: `:core`, `:intellij-plugin`, `:cli`.
 - Core module no longer has IntelliJ compile-time dependency.
 - Clikt upgraded to 5.0.2 for Mordant 3.x compatibility.
+- `ContextService` was split into formatter/pruner responsibilities and now records structured context-budget decisions for each prompt section.
+- Agent turn execution now publishes observable phase changes for prompt building, model calls, tool execution, and finalization.
 
 ## [0.0.1.4] - 2025-03-22
 

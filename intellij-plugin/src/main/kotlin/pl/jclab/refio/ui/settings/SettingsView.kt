@@ -53,6 +53,8 @@ class SettingsView(
     init {
         border = LCATheme.emptyBorder()
 
+        providersPanel.setOnModelsRefreshedCallback(modelsPanel::onProviderModelsRefreshed)
+
         // Header
         add(createHeader(), BorderLayout.NORTH)
 

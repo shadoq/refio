@@ -1,6 +1,9 @@
 ﻿package pl.jclab.refio.core.services
 
 // Import TurnLoopConfigs from core.services (not turn/ package)
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.Json
 import pl.jclab.refio.core.api.StreamCallback
 import pl.jclab.refio.core.api.TurnProfileOverrides
@@ -26,6 +29,13 @@ import pl.jclab.refio.core.services.turn.TurnLLMCaller
 import pl.jclab.refio.core.services.turn.TurnNudgeBuilder
 import pl.jclab.refio.core.services.turn.TurnPromptBuilder
 import pl.jclab.refio.core.services.turn.TurnResponseProcessor
+import pl.jclab.refio.core.services.turn.ContextDecisionTrace
+import pl.jclab.refio.core.services.turn.ContextSectionRecord
+import pl.jclab.refio.core.services.turn.PromptSnapshot
+import pl.jclab.refio.core.services.turn.ToolBatchSummary
+import pl.jclab.refio.core.services.turn.ToolCallWithResult
+import pl.jclab.refio.core.services.turn.TurnPhase
+import pl.jclab.refio.core.services.turn.TurnStateSnapshot
 import pl.jclab.refio.core.services.turn.TurnSubagentValidator
 import pl.jclab.refio.core.services.turn.TurnToolExecutor
 import pl.jclab.refio.core.tools.base.ToolRegistry
@@ -103,6 +113,16 @@ class AgentTurnLoop(
     private val workingMemoryIntegration: WorkingMemoryIntegration? = null
 ) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
+
+    private val _turnState = MutableStateFlow(TurnStateSnapshot())
+    val turnState: StateFlow<TurnStateSnapshot> = _turnState.asStateFlow()
+
+    private val _lastPromptSnapshot = MutableStateFlow<PromptSnapshot?>(null)
+    val lastPromptSnapshot: StateFlow<PromptSnapshot?> = _lastPromptSnapshot.asStateFlow()
+
+    private fun updateTurnState(update: TurnStateSnapshot.() -> TurnStateSnapshot) {
+        _turnState.value = _turnState.value.update()
+    }
 
     /**
      * Listener for turn events (tool execution, streaming, etc.).
@@ -416,6 +436,7 @@ class AgentTurnLoop(
 
                 try {
                     // Build prompt from conversation history
+                    updateTurnState { copy(phase = TurnPhase.BUILDING_PROMPT, iteration = iteration, maxIterations = maxIterations, taskId = taskId) }
                     GlobalMetrics.setCurrentOperation(
                         OperationInfo.TurnBuildingPrompt(iteration, turnPromptBuilder.getHistorySize(taskId))
                     )
@@ -447,6 +468,7 @@ class AgentTurnLoop(
                     )
 
                     // Call LLM
+                    updateTurnState { copy(phase = TurnPhase.CALLING_MODEL) }
                     GlobalMetrics.setCurrentOperation(OperationInfo.TurnLLMCall(iteration, mode.name))
 
                     val llmPrompt = TurnPromptAdapter.toLLMCallPrompt(prompt)
@@ -614,6 +636,11 @@ class AgentTurnLoop(
                         }
 
                         // Execute tools
+                        updateTurnState { copy(
+                            phase = TurnPhase.EXECUTING_TOOLS,
+                            activeToolName = toolCalls.firstOrNull()?.name,
+                            activeToolCount = toolCalls.size
+                        ) }
                         val toolResults = turnToolExecutor.executeToolCalls(
                             taskId = taskId,
                             toolCalls = toolCalls,
@@ -654,6 +681,18 @@ class AgentTurnLoop(
                                 }
                             }
                         }
+
+                        // Generate batch summary for UI
+                        val batchInput = toolResults.map { (call, resultData) ->
+                            ToolCallWithResult(
+                                toolName = call.name,
+                                params = TurnJsonUtils.parseJsonToMap(call.arguments),
+                                success = !resultData.content.startsWith("Error:"),
+                                resultPreview = resultData.content.take(100)
+                            )
+                        }
+                        val batchSummary = ToolBatchSummary.summarize(batchInput)
+                        listener?.toTurnEventListener()?.onToolBatchCompleted(taskId, batchSummary)
 
                         // Track error rate
                         for ((_, result) in toolResults) {
@@ -814,6 +853,7 @@ class AgentTurnLoop(
                         }
 
                         // Model responded with text - save and complete turn
+                        updateTurnState { copy(phase = TurnPhase.FINALIZING) }
                         logger.info { "[TURN_COMPLETE] taskId=$taskId, iterations=$iteration" }
 
                         val textResponse = toolCallParser.extractTextResponse(llmResponse.content)
@@ -840,13 +880,17 @@ class AgentTurnLoop(
                             toolsUsed = usedTools.distinct()
                         )
 
-                        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = false, metadata = subagentMetadata)
+                        updateTurnState { copy(phase = TurnPhase.COMPLETED, tokensUsed = totalTokensIn + totalTokensOut) }
+                        val finalResult = turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = false, metadata = subagentMetadata)
+                        updateTurnState { TurnStateSnapshot() }
+                        return finalResult
                     }
                 } finally {
                     GlobalMetrics.endOperation(iterationToken)
                 }
             }
         } catch (e: CancellationException) {
+            updateTurnState { copy(phase = TurnPhase.FAILED) }
             val result = TurnResult(
                 success = false,
                 response = "Operation cancelled by user.",
@@ -856,10 +900,13 @@ class AgentTurnLoop(
                 cost = totalCost,
                 toolsUsed = usedTools.distinct()
             )
-            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
+            val finalResult = turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
+            updateTurnState { TurnStateSnapshot() }
+            return finalResult
         }
 
         // Max iterations exceeded
+        updateTurnState { copy(phase = TurnPhase.FAILED) }
         logger.warn { "[TURN_MAX_ITERATIONS] taskId=$taskId, exceeded $maxIterations iterations" }
         val result = TurnResult(
             success = false,
@@ -870,7 +917,9 @@ class AgentTurnLoop(
             cost = totalCost,
             toolsUsed = usedTools.distinct()
         )
-        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
+        val finalResult = turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
+        updateTurnState { TurnStateSnapshot() }
+        return finalResult
     }
 
     /**
@@ -908,6 +957,26 @@ class AgentTurnLoop(
             profileOverrides = profileOverrides,
             writeToolsExecutedInTurn = writeToolsExecutedInTurn
         )
+
+        // Build PromptSnapshot for UI inspection
+        val contextTrace = turnPromptBuilder.getLastContextTrace()
+        if (contextTrace != null) {
+            val systemTokens = tokenEstimator.estimateString(turnPrompt.systemPrompt)
+            val messagesTokens = turnPrompt.messages.sumOf { tokenEstimator.estimateString(it.content) }
+            val toolNames = toolRegistry.getAllTools().map { it.name }
+            _lastPromptSnapshot.value = PromptSnapshot(
+                taskId = taskId,
+                iteration = currentIteration,
+                systemPromptTokens = systemTokens,
+                messagesTokens = messagesTokens,
+                totalTokens = systemTokens + messagesTokens,
+                toolCount = toolNames.size,
+                toolNames = toolNames,
+                contextTrace = contextTrace,
+                systemPromptPreview = turnPrompt.systemPrompt.take(500)
+            )
+        }
+
         return TurnPrompt(
             systemPrompt = turnPrompt.systemPrompt,
             messages = turnPrompt.messages

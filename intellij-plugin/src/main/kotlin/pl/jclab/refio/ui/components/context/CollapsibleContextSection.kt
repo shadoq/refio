@@ -20,6 +20,7 @@ import javax.swing.Box
 import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JPanel
+import javax.swing.JTextPane
 
 private val logger = dualLogger("CollapsibleContextSection")
 
@@ -55,7 +56,11 @@ class CollapsibleContextSection(
         addActionListener { copySectionToClipboard() }
     }
 
-    private val contentLabel = JBLabel("").apply {
+    private val contentLabel = JTextPane().apply {
+        contentType = "text/html"
+        isEditable = false
+        isOpaque = false
+        putClientProperty(javax.swing.JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
         border = BorderFactory.createEmptyBorder(6, 10, 8, 10)
     }
 
@@ -89,6 +94,7 @@ class CollapsibleContextSection(
     }
 
     init {
+        alignmentX = LEFT_ALIGNMENT
         border = BorderFactory.createCompoundBorder(
             BorderFactory.createMatteBorder(0, 0, 1, 0, LCATheme.borderColor),
             BorderFactory.createEmptyBorder(0, 0, 0, 0)
@@ -176,5 +182,10 @@ class CollapsibleContextSection(
             tokens >= 1_000 -> String.format("%.1fk", tokens / 1_000.0)
             else -> tokens.toString()
         }
+    }
+
+    override fun getMaximumSize(): Dimension {
+        val preferred = preferredSize
+        return Dimension(Int.MAX_VALUE, preferred.height)
     }
 }

@@ -3,6 +3,7 @@ package pl.jclab.refio.core.context.mcp
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
+import pl.jclab.refio.core.tools.base.ToolOrigin
 import pl.jclab.refio.core.tools.base.ToolResult
 
 /**
@@ -21,6 +22,8 @@ class MCPToolWrapper(
     override val mode: ToolMode = toolMode
 
     override val category: ToolCategory = ToolCategory.EXECUTION
+
+    override val origin: ToolOrigin = ToolOrigin.MCP
 
     override suspend fun execute(params: Map<String, Any>): ToolResult {
         return try {

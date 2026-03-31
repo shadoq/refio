@@ -179,6 +179,10 @@ class ModelsSettingsPanel(
     private val coreApiClient: CoreApiClient?
 ) : JBPanel<ModelsSettingsPanel>(BorderLayout()) {
 
+    companion object {
+        private const val MODEL_VISIBILITY_INITIALIZED_KEY = "model_visibility_initialized"
+    }
+
     private val logger = dualLogger("ModelsSettingsPanel")
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -446,6 +450,7 @@ class ModelsSettingsPanel(
                 }
 
                 val visibilityMap = buildVisibilityMap(allModels, visibleModelIds)
+                markModelVisibilityInitialized()
                 coreApiClient?.updateModelsVisibility(visibilityMap)
 
                 // Step 3: Set default models for each operation
@@ -707,6 +712,7 @@ class ModelsSettingsPanel(
         coroutineScope.launch {
             try {
                 val visibilityMap = buildVisibilityMapFromTable(showInDropdown = true)
+                markModelVisibilityInitialized()
                 coreApiClient?.updateModelsVisibility(visibilityMap)
 
                 // Reload models from database and update UI
@@ -743,6 +749,7 @@ class ModelsSettingsPanel(
         coroutineScope.launch {
             try {
                 val visibilityMap = buildVisibilityMapFromTable(showInDropdown = false)
+                markModelVisibilityInitialized()
                 coreApiClient?.updateModelsVisibility(visibilityMap)
 
                 // Reload models from database and update UI
@@ -803,16 +810,23 @@ class ModelsSettingsPanel(
      * - Preserve existing visibility settings from DB
      */
     private suspend fun applySmartDefaults(models: List<pl.jclab.refio.core.api.ModelInfo>): List<pl.jclab.refio.core.api.ModelInfo> {
-        // Check if we have any visibility settings already (i.e., user has configured before)
-        val hasExistingSettings = models.any { model ->
-            // If visibility differs from our default, it means user has set it
-            val defaultVisibility = getDefaultVisibility(model)
-            model.showInDropdown != defaultVisibility
+        if (models.isEmpty() || coreApiClient == null) {
+            return models
         }
 
-        // If user has existing settings, preserve them
-        if (hasExistingSettings) {
-            logger.info { "Found existing visibility settings, preserving them" }
+        val visibilityInitialized =
+            coreApiClient.getConfigValue("ui", MODEL_VISIBILITY_INITIALIZED_KEY)?.toBooleanStrictOrNull() == true
+        val hasAnyVisibleModels = models.any { it.showInDropdown }
+
+        // Older installs may not have the flag set yet. If at least one model is already visible,
+        // treat the current state as an existing user configuration and only backfill the flag.
+        if (visibilityInitialized || hasAnyVisibleModels) {
+            if (!visibilityInitialized && hasAnyVisibleModels) {
+                markModelVisibilityInitialized()
+            }
+            logger.info {
+                "Preserving model visibility settings: initialized=$visibilityInitialized, visibleModels=$hasAnyVisibleModels"
+            }
             return models
         }
 
@@ -838,8 +852,17 @@ class ModelsSettingsPanel(
             }
         }
 
+        markModelVisibilityInitialized()
         logger.info { "Applied smart defaults to ${modelsWithDefaults.count { it.showInDropdown }} models" }
         return modelsWithDefaults
+    }
+
+    private fun markModelVisibilityInitialized() {
+        try {
+            coreApiClient?.setConfigValue("ui", MODEL_VISIBILITY_INITIALIZED_KEY, "true")
+        } catch (e: Exception) {
+            logger.warn(e) { "Failed to mark model visibility initialization" }
+        }
     }
 
     /**
@@ -995,6 +1018,7 @@ class ModelsSettingsPanel(
 
         coroutineScope.launch {
             try {
+                markModelVisibilityInitialized()
                 coreApiClient?.updateModelVisibility(
                     modelId = modelId,
                     showInDropdown = showInDropdown
