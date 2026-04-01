@@ -722,7 +722,9 @@ internal class BubbleComponentFactory(
     ) {
         val hasSubtasks = plan.subtasks.isNotEmpty()
         if (!plan.description.isNullOrBlank()) {
-            container.add(deps.markdownService.createMarkdownEditorPane(plan.description, backgroundColor, foregroundColor, maxWidth))
+            container.add(deps.markdownService.createMarkdownEditorPane(plan.description, backgroundColor, foregroundColor, maxWidth).apply {
+                alignmentX = Component.LEFT_ALIGNMENT
+            })
             if (hasSubtasks) {
                 container.add(Box.createVerticalStrut(BUBBLE_COMPACT_GAP))
             }
@@ -749,6 +751,7 @@ internal class BubbleComponentFactory(
 
             val stepPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
                 isOpaque = false
+                alignmentX = Component.LEFT_ALIGNMENT
                 border = LCATheme.paddedBorder(4, 8, if (hasToolArgs && index < plan.subtasks.lastIndex) 4 else 0, 8)
             }
 

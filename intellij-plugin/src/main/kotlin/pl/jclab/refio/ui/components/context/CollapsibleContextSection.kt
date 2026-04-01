@@ -109,7 +109,16 @@ class CollapsibleContextSection(
 
     fun setContent(raw: String, html: String) {
         rawContent = raw.trim()
-        contentLabel.text = html
+        try {
+            // Reset document before setting new HTML to avoid EmptyStackException
+            // in HTMLDocument's internal ElementBuffer (JDK bug with nested elements)
+            contentLabel.document = contentLabel.editorKit.createDefaultDocument()
+            contentLabel.text = html
+        } catch (e: Exception) {
+            logger.warn { "Failed to set HTML content for section '$title': ${e.message}" }
+            contentLabel.document = contentLabel.editorKit.createDefaultDocument()
+            contentLabel.text = "<html><body>${raw.trim()}</body></html>"
+        }
         copyButton.isEnabled = rawContent.isNotBlank()
     }
 
