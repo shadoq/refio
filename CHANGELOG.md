@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.1.5] - 2025-04-02
+
 ### Added
 
 - **Standalone CLI** with full TUI (Mordant + JLine3): split-pane layout, 7 tabs (F1–F7), settings (F8), `@context` autocomplete, session history, dual-mode input (raw TTY / line-based fallback).
