@@ -11,41 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Multi-agent architecture with parallel agent orchestration, inter-agent event bus, dependency resolution, and YAML-based task definitions.
-- Multi-agent API: launch, query, and list multi-agent sessions with per-agent metrics.
-- Database tables for multi-agent sessions, instances, and event persistence.
-- Standalone CLI with full TUI (Mordant + JLine3) replacing Compose Desktop GUI.
-- Split-pane terminal layout: Chat (55%) + active tab (45%) with 7 tabs (F1–F7) and Settings (F8).
-- Tab bar with inline status (mode, model, streaming, cost, tokens).
-- Settings screen with 11 sub-tabs covering all configuration areas.
-- `@context` autocomplete popup and session history browser in TUI.
-- ANSI color system with per-agent colors and role-based message styling.
-- Dual-mode TUI input: raw TTY with F-keys for terminals, line-based fallback for pipes/IDEs.
-- `http_request` tool for external API calls (GET/POST/PUT/DELETE) with `save_to_file` for large responses.
-- `run_code` tool for executing Python, JavaScript, and Kotlin Script snippets inline.
-- TUI file viewer overlay, extended API Logs/Context/Debug/Logs/Steps views.
-- 7 standalone context providers for CLI mode (file, folder, git diff, git commit, grep, codebase, docs) — 9/14 providers now available outside IDE.
-- Platform-agnostic `ProjectHandle` interface replacing direct IntelliJ `Project` dependency in core.
-- Per-agent metrics tracking, mutex-based file locking for write tools, configurable Ollama request gating.
-- Expanded test coverage: multi-agent, standalone providers, core services, integration tests.
-- Prompt snapshot and turn-state tracking exposed from core to the IntelliJ plugin, including context inclusion/drop traces, token usage, and tool-batch summaries.
-- IntelliJ context panel now shows a prompt-context trace table and a dedicated context inspector view for prompt debugging.
-- Modular prompt-building extension points with dedicated prompt section providers and extracted context pruning services.
+- **Standalone CLI** with full TUI (Mordant + JLine3): split-pane layout, 7 tabs (F1–F7), settings (F8), `@context` autocomplete, session history, dual-mode input (raw TTY / line-based fallback).
+- **Multi-agent architecture**: parallel orchestration, event bus, dependency resolution, YAML task definitions, per-agent metrics, and dedicated API/DB support.
+- **New tools**: `http_request` (GET/POST/PUT/DELETE with `save_to_file`), `run_code` (Python, JS, Kotlin Script).
+- **7 standalone context providers** for CLI mode — 9/14 providers now available outside IDE.
+- **Prompt registry**: file-based layered system (project/user/built-in) with Markdown definitions, shared `FileBasedRegistry` / `DefinitionScope` infrastructure for prompts and subagents.
+- **Turn-state inspector**: prompt snapshots, context inclusion/drop traces, token usage, and tool-batch summaries exposed to IntelliJ plugin.
+- Platform-agnostic `ProjectHandle` replacing direct IntelliJ `Project` dependency in core.
+- Expanded test coverage: conversation compaction, working-memory decay, tool-result persistence.
 
 ### Fixed
 
-- `Ctrl+D` no longer crashes the prompt input panel.
-- Regex error in `ContextService.compactDirectoryList()`.
-- JLine warnings suppressed on dumb terminals.
-- TUI streaming no longer produces duplicate messages.
-- TUI input and cursor rendering issues resolved.
+- TUI: `Ctrl+D` crash, duplicate streaming messages, input/cursor rendering, JLine dumb-terminal warnings.
 - `PathSandbox` symlink resolution on macOS.
 - `resetAllSettingsToDefaults()` now actually resets config entries.
-- EventBus wiring for multi-agent UI visualization in CLI.
-- Cross-platform fixes for terminal command tests.
-- Help action now opens the project GitHub page.
-- Model visibility defaults now initialize only once and preserve existing user-configured dropdown visibility.
-- MCP settings now distinguish disabled, stale, and auth-required server states and retain last connection/error metadata for diagnostics.
+- Multi-agent EventBus wiring, cross-platform terminal command tests.
+- Model visibility defaults initialize once and preserve user config.
+- MCP settings: proper disabled/stale/auth-required state tracking.
+- Plan bubbles: show real tool calls, recover inline tool arguments.
+- Tool-result summaries: correct multi-line wrapping in chat bubbles.
+- Conversation compaction: preserves structured summaries across passes, caps summarized tool results.
 
 ### Removed
 
@@ -53,11 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Gradle multi-module structure: `:core`, `:intellij-plugin`, `:cli`.
-- Core module no longer has IntelliJ compile-time dependency.
-- Clikt upgraded to 5.0.2 for Mordant 3.x compatibility.
-- `ContextService` was split into formatter/pruner responsibilities and now records structured context-budget decisions for each prompt section.
-- Agent turn execution now publishes observable phase changes for prompt building, model calls, tool execution, and finalization.
+- Gradle multi-module structure: `:core`, `:intellij-plugin`, `:cli`. Core no longer depends on IntelliJ at compile time.
+- `ContextService` split into formatter/pruner with structured budget decisions.
+- `PromptsService` resolves from layered registry; DB keeps only slash commands and custom overrides.
+- `SubagentRegistry` refactored onto shared layered registry model.
+- Conversation compaction uses structured `<compacted_summary>` format with merged summaries and larger budget.
+- Working memory decays stale entries; tool-result persistence keeps raw output up to 16 KB before summarizing.
+- Agent turn execution publishes observable phase changes.
+- IntelliJ context panel focuses on prompt trace/inspector instead of raw prompt preview.
 
 ## [0.0.1.4] - 2025-03-22
 

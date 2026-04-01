@@ -88,6 +88,9 @@ internal class AssistantBubbleRenderer(
     }
 
     private fun tryCreatePlanBubble(message: Message): JPanel? {
+        // Skip plan bubble when actual tool calls exist — they are rendered
+        // individually as tool-call bubbles with the real parameters.
+        if (message.toolCallInfo != null) return null
         if (message.content.isBlank() || !MessageMetadataExtractor.isPlanJson(message.content)) return null
         val planData = MessageMetadataExtractor.parsePlanJson(message.content)
         val subtasks = planData["subtasks"] as? List<*> ?: emptyList<Any>()
@@ -406,12 +409,15 @@ internal class AssistantBubbleRenderer(
         info.result?.summary?.let { summary ->
             if (summary.isNotBlank()) {
                 addRow(
-                    JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+                    javax.swing.JTextArea(summary).apply {
+                        foreground = LCATheme.descriptionForeground
+                        font = LCATheme.smallFont
+                        isEditable = false
                         isOpaque = false
-                        add(JLabel(summary).apply {
-                            foreground = LCATheme.descriptionForeground
-                            font = LCATheme.smallFont
-                        })
+                        lineWrap = true
+                        wrapStyleWord = true
+                        border = LCATheme.paddedBorder(0, 4, 0, 4)
+                        rows = summary.length.coerceAtMost(200) / 80 + 1
                     },
                     topInset = context.bubbleCompactGap
                 )

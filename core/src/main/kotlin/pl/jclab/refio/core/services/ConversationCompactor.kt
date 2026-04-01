@@ -99,6 +99,9 @@ class ConversationCompactor(
                 return@withContext false
             }
 
+            // Merge with previous compacted summary to prevent summary-of-summary degradation
+            val mergedSummary = mergeWithPreviousSummary(toSummarize, summary)
+
             // Replace old messages with summary
             transaction {
                 // Delete old messages
@@ -110,13 +113,7 @@ class ConversationCompactor(
                 chatMessageRepository.create(
                     taskId = taskId,
                     role = MessageRole.SYSTEM,
-                    content = """
-                        |<conversation_summary>
-                        |$summary
-                        |</conversation_summary>
-                        |
-                        |[Previous ${toSummarize.size} messages were compacted to save context space]
-                    """.trimMargin(),
+                    content = "$mergedSummary\n\n[Previous ${toSummarize.size} messages were compacted to save context space]",
                     metadata = "compaction"
                 )
             }
@@ -143,13 +140,32 @@ class ConversationCompactor(
         taskId: String,
         messages: List<pl.jclab.refio.core.db.ChatMessage>
     ): String {
-        val conversationText = messages.joinToString("\n\n") { msg ->
-            val role = msg.role.name.uppercase()
-            val toolInfo = if (!msg.toolCalls.isNullOrEmpty()) {
-                "\n[Tools: ${msg.toolCalls.joinToString(", ") { it.name }}]"
-            } else ""
-            "$role: ${msg.content.take(1000)}$toolInfo"
-        }
+        // Extract previous compacted summaries from messages (cascade handling)
+        val previousSummaries = messages
+            .filter { it.role == MessageRole.SYSTEM }
+            .mapNotNull { extractCompactedSummary(it.content) }
+
+        // Format non-summary messages for LLM — skip pure compaction summary messages
+        val conversationText = messages
+            .filter { msg ->
+                msg.role != MessageRole.SYSTEM ||
+                    extractCompactedSummary(msg.content) == null
+            }
+            .joinToString("\n\n") { msg ->
+                val role = msg.role.name.uppercase()
+                val toolInfo = if (!msg.toolCalls.isNullOrEmpty()) {
+                    "\n[Tools: ${msg.toolCalls.joinToString(", ") { it.name }}]"
+                } else ""
+                "$role: ${msg.content.take(1000)}$toolInfo"
+            }
+
+        // If previous summaries exist, include them as structured context for merging
+        val previousContext = if (previousSummaries.isNotEmpty()) {
+            "\n\nPREVIOUS SESSION CONTEXT (merge into your summary, do not re-summarize):\n" +
+                previousSummaries.joinToString("\n---\n")
+        } else ""
+
+        val userMessage = conversationText + previousContext
 
         val (model, provider) = configService.getModel(ModelOperation.WEAK, taskId)
 
@@ -157,12 +173,12 @@ class ConversationCompactor(
             provider = provider,
             model = model,
             messages = listOf(
-                LLMMessage(role = "user", content = conversationText)
+                LLMMessage(role = "user", content = userMessage)
             ),
             systemPrompt = COMPACTION_SYSTEM_PROMPT,
             taskId = taskId,
             source = "ConversationCompactor",
-            maxTokens = 800
+            maxTokens = 1200
         )
 
         return response.content.trim()
@@ -173,22 +189,151 @@ class ConversationCompactor(
      */
     fun getCompactionCount(): Int = totalCompactions
 
+    /**
+     * If old messages contain a previous compacted_summary, merge its sections
+     * with the new summary to prevent summary-of-summary degradation.
+     */
+    private fun mergeWithPreviousSummary(
+        oldMessages: List<pl.jclab.refio.core.db.ChatMessage>,
+        newSummary: String
+    ): String {
+        val previousSummary = oldMessages
+            .filter { it.role == MessageRole.SYSTEM }
+            .mapNotNull { extractCompactedSummary(it.content) }
+            .lastOrNull()
+            ?: return newSummary
+
+        if (!newSummary.contains("<compacted_summary>")) return newSummary
+
+        val previousSections = parseSummarySections(previousSummary)
+        val newSections = parseSummarySections(newSummary)
+        val merged = mergeSections(previousSections, newSections)
+        return renderMergedSummary(merged)
+    }
+
+    private fun extractCompactedSummary(content: String): String? {
+        val regex = Regex("<compacted_summary>([\\s\\S]*?)</compacted_summary>")
+        return regex.find(content)?.groupValues?.get(1)?.trim()
+    }
+
+    private data class SummarySections(
+        val decisions: List<String> = emptyList(),
+        val filesModified: List<String> = emptyList(),
+        val findings: List<String> = emptyList(),
+        val currentState: List<String> = emptyList(),
+        val nextSteps: List<String> = emptyList()
+    )
+
+    private fun parseSummarySections(summary: String): SummarySections {
+        fun extractSection(tag: String): List<String> {
+            val regex = Regex("<$tag>([\\s\\S]*?)</$tag>")
+            val content = regex.find(summary)?.groupValues?.get(1) ?: return emptyList()
+            return content.lines()
+                .map { it.trim() }
+                .filter { it.startsWith("- ") }
+                .map { it.removePrefix("- ").trim() }
+                .filter { it.isNotBlank() && it != "None" }
+        }
+        return SummarySections(
+            decisions = extractSection("decisions"),
+            filesModified = extractSection("files_modified"),
+            findings = extractSection("findings"),
+            currentState = extractSection("current_state"),
+            nextSteps = extractSection("next_steps")
+        )
+    }
+
+    private fun mergeSections(
+        previous: SummarySections,
+        current: SummarySections
+    ): SummarySections {
+        fun merge(prev: List<String>, curr: List<String>, maxItems: Int = 7): List<String> {
+            val currentLower = curr.map { it.lowercase() }.toSet()
+            val unique = prev.filter { it.lowercase() !in currentLower }
+            return (curr + unique).take(maxItems)
+        }
+        return SummarySections(
+            decisions = merge(previous.decisions, current.decisions),
+            filesModified = merge(previous.filesModified, current.filesModified),
+            findings = merge(previous.findings, current.findings),
+            currentState = current.currentState,
+            nextSteps = current.nextSteps
+        )
+    }
+
+    private fun renderMergedSummary(sections: SummarySections): String {
+        fun renderSection(items: List<String>): String =
+            if (items.isEmpty()) "- None" else items.joinToString("\n") { "- $it" }
+
+        return """
+<compacted_summary>
+<decisions>
+${renderSection(sections.decisions)}
+</decisions>
+
+<files_modified>
+${renderSection(sections.filesModified)}
+</files_modified>
+
+<findings>
+${renderSection(sections.findings)}
+</findings>
+
+<current_state>
+${renderSection(sections.currentState)}
+</current_state>
+
+<next_steps>
+${renderSection(sections.nextSteps)}
+</next_steps>
+</compacted_summary>""".trimIndent()
+    }
+
     companion object {
         /**
          * System prompt for conversation compaction.
+         * Uses structured output format to prevent summary-of-summary degradation.
          */
         private val COMPACTION_SYSTEM_PROMPT = """
-            You are a conversation summarizer for an AI coding assistant.
+            You are a conversation compactor for an AI coding assistant.
 
-            Summarize the following conversation, preserving:
-            1. Key decisions and conclusions
-            2. Files that were read or modified
-            3. Important code changes or findings
-            4. Current task status and next steps
-            5. Any errors or issues encountered
+            Summarize the following conversation into EXACTLY this structured format.
+            Each section is REQUIRED — if nothing fits a section, write "None".
 
-            Format as a concise bullet-point summary (max 500 words).
-            Focus on actionable information the agent needs to continue working.
+            <compacted_summary>
+            <decisions>
+            - [Each key decision made by the user or agent, one per line]
+            - [Include: architectural choices, tool preferences, approach selections]
+            </decisions>
+
+            <files_modified>
+            - [Each file path that was created, edited, or deleted]
+            - [Format: path — what was changed]
+            </files_modified>
+
+            <findings>
+            - [Key discoveries: bugs found, patterns identified, errors encountered]
+            - [Include: test results, build outputs, analysis conclusions]
+            </findings>
+
+            <current_state>
+            - [What is the current status of the task]
+            - [What was the last action taken]
+            - [What is partially complete or in progress]
+            </current_state>
+
+            <next_steps>
+            - [What still needs to be done]
+            - [Any blockers or open questions]
+            </next_steps>
+            </compacted_summary>
+
+            RULES:
+            - Use bullet points (- ) for each item
+            - Be specific: include file paths, function names, error messages
+            - Max 3-5 items per section
+            - Total max 600 words
+            - If the conversation already contains a <compacted_summary>, merge its content with new information — do NOT nest summaries
 
             CONVERSATION:
         """.trimIndent()

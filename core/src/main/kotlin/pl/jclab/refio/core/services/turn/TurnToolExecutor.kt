@@ -5,12 +5,15 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import pl.jclab.refio.core.api.TurnProfileOverrides
 import pl.jclab.refio.core.db.ExecutionMode
+import pl.jclab.refio.core.db.MessageRole
 import pl.jclab.refio.core.db.Subtask
 import pl.jclab.refio.core.services.TurnLoopConfig
 import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.db.TaskStatus
 import pl.jclab.refio.core.db.ToolCallData
+import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.db.repositories.SubtaskRepository
+import pl.jclab.refio.core.db.repositories.TaskRepository
 import pl.jclab.refio.core.services.SnapshotService
 import pl.jclab.refio.core.services.ToolResultData
 import pl.jclab.refio.core.services.ToolResultSummary
@@ -18,6 +21,7 @@ import pl.jclab.refio.core.services.ToolExecutor
 import pl.jclab.refio.core.services.ToolResultSummarizer
 import pl.jclab.refio.core.services.WorkingMemoryIntegration
 import pl.jclab.refio.core.services.ToolCall as CoreToolCall
+import pl.jclab.refio.core.services.context.ContextTokenEstimator
 import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
@@ -28,6 +32,7 @@ import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.tools.base.ToolResult
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.utils.GsonInstance.gson
+import org.jetbrains.exposed.sql.transactions.transaction
 
 private val logger = dualLogger("TurnToolExecutor")
 
@@ -41,17 +46,43 @@ class TurnToolExecutor(
     private val subtaskRepository: SubtaskRepository,
     private val toolResultSummarizer: ToolResultSummarizer,
     private val snapshotService: SnapshotService? = null,
-    private val workingMemoryIntegration: WorkingMemoryIntegration? = null
+    private val workingMemoryIntegration: WorkingMemoryIntegration? = null,
+    private val taskRepository: TaskRepository? = null,
+    private val chatMessageRepository: ChatMessageRepository? = null
 ) {
     private val streamingToolNames = setOf("advance_code_editing", "multi_line_editor")
     private val codingToolNames = setOf("advance_code_editing", "multi_line_editor")
 
     companion object {
         /** Max raw output size (chars) to preserve in-context for DATA_PRODUCING tools */
-        const val DATA_PRODUCING_RAW_OUTPUT_BUFFER = 32_000
+        const val DATA_PRODUCING_RAW_OUTPUT_BUFFER = 16_000
 
-        /** Max tokens of working memory context to inject into coding tools */
-        const val CODING_TOOL_CONTEXT_TOKENS = 4_000
+        /** Max tokens of enriched context to inject into coding tools */
+        const val CODING_TOOL_CONTEXT_TOKENS = 8_000
+
+        /**
+         * Decide what content to store in conversation history for a tool result.
+         * Returns (effectiveContent, isSummarized).
+         */
+        internal fun resolveEffectiveContent(
+            rawOutput: String,
+            summaryText: String,
+            wasSummarized: Boolean,
+            isDataProducing: Boolean
+        ): Pair<String, Boolean> {
+            val rawLen = rawOutput.length
+            return when {
+                rawLen <= 500 -> rawOutput to false
+                isDataProducing && rawLen <= DATA_PRODUCING_RAW_OUTPUT_BUFFER && wasSummarized ->
+                    rawOutput to true
+                isDataProducing && wasSummarized ->
+                    summaryText to true
+                wasSummarized ->
+                    summaryText to true
+                else ->
+                    rawOutput.take(2000) to false
+            }
+        }
     }
 
     /**
@@ -295,17 +326,13 @@ class TurnToolExecutor(
                 listener = listener
             )
 
-            // Inject conversation context for LLM-based coding tools
-            if (toolCall.name in codingToolNames && workingMemoryIntegration != null) {
-                val context = workingMemoryIntegration.buildWorkingMemorySection(
-                    taskId = taskId,
-                    _query = "",
-                    maxTokens = CODING_TOOL_CONTEXT_TOKENS
-                )
+            // Inject enriched conversation context for LLM-based coding tools
+            if (toolCall.name in codingToolNames) {
+                val context = buildCodingToolContext(taskId, CODING_TOOL_CONTEXT_TOKENS)
                 if (context.isNotBlank()) {
                     argumentsMap["conversation_context"] = context
                     logger.info {
-                        "[CODING_CONTEXT] Injected ${context.length} chars of working memory into ${toolCall.name}"
+                        "[CODING_CONTEXT] Injected ${context.length} chars (${ContextTokenEstimator.estimateTokens(context)} tokens) into ${toolCall.name}"
                     }
                 }
             }
@@ -397,37 +424,28 @@ class TurnToolExecutor(
                     iteration = iteration
                 )
 
-                // For DATA_PRODUCING and FILE_PRODUCING tools:
-                // preserve raw output as content when it fits in the buffer,
-                // so the LLM sees full data in the next turn.
-                // FILE_PRODUCING (e.g. advance_code_editing) creates files and returns
-                // diffs/content that the LLM needs to avoid redundant re-reads.
-                // Summary is always generated and stored in subtask for compressed fallback.
+                // Decide what content to store in conversation history.
+                // Raw output is always preserved in subtask for reference.
                 val toolDef = toolRegistry.getTool(toolCall.name)
                 val isDataProducing = toolDef?.category == ToolCategory.DATA_PRODUCING
                         || toolDef?.category == ToolCategory.FILE_PRODUCING
-                val fitsInBuffer = rawOutput.length <= DATA_PRODUCING_RAW_OUTPUT_BUFFER
 
-                val effectiveContent: String
-                val effectivelySummarized: Boolean
-
-                if (isDataProducing && fitsInBuffer && summaryResult.wasSummarized) {
-                    // Raw data fits in buffer — keep full output as content
-                    // Mark as summarized=true to prevent 320-char truncation in fallback path
-                    effectiveContent = rawOutput
-                    effectivelySummarized = true
+                val (effectiveContent, effectivelySummarized) = resolveEffectiveContent(
+                    rawOutput = rawOutput,
+                    summaryText = summaryResult.summary,
+                    wasSummarized = summaryResult.wasSummarized,
+                    isDataProducing = isDataProducing
+                )
+                if (isDataProducing && rawOutput.length <= DATA_PRODUCING_RAW_OUTPUT_BUFFER && summaryResult.wasSummarized) {
                     logger.info {
                         "[TOOL_DATA_PRESERVED] name=${toolCall.name}, rawChars=${rawOutput.length}, " +
                         "summaryChars=${summaryResult.summary.length} (raw preserved, summary in subtask)"
                     }
-                } else {
-                    effectiveContent = summaryResult.summary
-                    effectivelySummarized = summaryResult.wasSummarized
                 }
 
                 logger.info {
                     "[TOOL_EXECUTED] name=${toolCall.name}, " +
-                    "summarized=${effectivelySummarized}, dataPreserved=${isDataProducing && fitsInBuffer}, " +
+                    "summarized=${effectivelySummarized}, dataProducing=$isDataProducing, " +
                     "chars=${rawOutput.length}->${effectiveContent.length}"
                 }
 
@@ -577,6 +595,105 @@ class TurnToolExecutor(
         if (listener != null && !args.containsKey("_turn_event_listener")) {
             args["_turn_event_listener"] = listener
         }
+    }
+
+    /**
+     * Build enriched context for coding tools (advance_code_editing, multi_line_editor).
+     *
+     * Combines multiple context sources to give the coding LLM a fuller picture:
+     * 1. Task description (what the user asked for)
+     * 2. Recent conversation messages (user requests + assistant reasoning, no tool outputs)
+     * 3. Working memory (facts from previous tool executions)
+     */
+    private fun buildCodingToolContext(taskId: String, maxTokens: Int): String {
+        val sb = StringBuilder()
+        var tokensUsed = 0
+
+        // 1. Task description — gives the coding LLM the "big picture"
+        val taskDescBudget = maxTokens / 4  // ~25% for task description
+        if (taskRepository != null) {
+            try {
+                val task = transaction { taskRepository.findById(taskId) }
+                if (task != null && task.name.isNotBlank()) {
+                    val taskSection = "<TASK_DESCRIPTION>\n${task.name}\n</TASK_DESCRIPTION>\n\n"
+                    val truncated = ContextTokenEstimator.truncateToTokens(taskSection, taskDescBudget)
+                    sb.append(truncated)
+                    tokensUsed += ContextTokenEstimator.estimateTokens(truncated)
+                }
+            } catch (e: Exception) {
+                logger.warn { "[CODING_CONTEXT] Failed to fetch task description: ${e.message}" }
+            }
+        }
+
+        // 2. Recent conversation messages — user intent + assistant reasoning
+        val conversationBudget = maxTokens / 2  // ~50% for conversation
+        if (chatMessageRepository != null) {
+            try {
+                val messages = transaction { chatMessageRepository.findByTaskId(taskId) }
+                // Filter: only USER and ASSISTANT messages with text content (skip tool results)
+                val relevantMessages = messages.filter { msg ->
+                    msg.role in setOf(MessageRole.USER, MessageRole.ASSISTANT) &&
+                        msg.content.isNotBlank() &&
+                        msg.toolCallId == null  // skip tool result messages
+                }
+
+                if (relevantMessages.isNotEmpty()) {
+                    val conversationSb = StringBuilder("<CONVERSATION_HISTORY>\n")
+                    // Take last N messages that fit in budget, newest first then reverse
+                    val selected = mutableListOf<String>()
+                    var conversationTokens = ContextTokenEstimator.estimateTokens(conversationSb.toString())
+
+                    for (msg in relevantMessages.asReversed()) {
+                        val roleLabel = when (msg.role) {
+                            MessageRole.USER -> "User"
+                            MessageRole.ASSISTANT -> "Assistant"
+                            else -> continue
+                        }
+                        // For assistant messages, skip tool-call-only messages (no readable content)
+                        val content = msg.content.trim()
+                        if (content.isEmpty()) continue
+
+                        // Truncate long assistant messages (they may contain verbose reasoning)
+                        val maxMsgTokens = if (msg.role == MessageRole.ASSISTANT) 400 else 600
+                        val truncatedContent = ContextTokenEstimator.truncateToTokens(content, maxMsgTokens)
+
+                        val line = "$roleLabel: $truncatedContent"
+                        val lineTokens = ContextTokenEstimator.estimateTokens(line)
+                        if (conversationTokens + lineTokens > conversationBudget) break
+
+                        selected.add(line)
+                        conversationTokens += lineTokens
+                    }
+
+                    if (selected.isNotEmpty()) {
+                        selected.reverse()  // chronological order
+                        for (line in selected) {
+                            conversationSb.appendLine(line)
+                        }
+                        conversationSb.append("</CONVERSATION_HISTORY>\n\n")
+                        sb.append(conversationSb)
+                        tokensUsed += conversationTokens
+                    }
+                }
+            } catch (e: Exception) {
+                logger.warn { "[CODING_CONTEXT] Failed to fetch conversation: ${e.message}" }
+            }
+        }
+
+        // 3. Working memory — facts from tool executions (files read, changes made, search results)
+        val workingMemoryBudget = maxTokens - tokensUsed
+        if (workingMemoryIntegration != null && workingMemoryBudget > 100) {
+            val wmSection = workingMemoryIntegration.buildWorkingMemorySection(
+                taskId = taskId,
+                _query = "",
+                maxTokens = workingMemoryBudget
+            )
+            if (wmSection.isNotBlank()) {
+                sb.append(wmSection)
+            }
+        }
+
+        return sb.toString().trim()
     }
 
     private fun buildToolResultMetadata(

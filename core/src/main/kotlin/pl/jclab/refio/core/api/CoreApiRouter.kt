@@ -85,10 +85,12 @@ class CoreApiRouter(
         configRepository = configRepository,
         defaultProjectId = routerProjectId
     )
-    val promptsService = PromptsService(promptsRepository)
+    private val promptRegistry = pl.jclab.refio.core.prompts.PromptRegistry(projectRoot)
+    val promptsService = PromptsService(promptsRepository, promptRegistry)
     val toolPermissionsService = ToolPermissionsService(configRepository)
     val llmClient = llmClientOverride ?: LLMClient(configService)
     private val workingMemoryService = WorkingMemoryService()
+    private val workingMemoryIntegration = WorkingMemoryIntegration(workingMemoryService)
     private val conversationSummaryService = ConversationSummaryService(
         llmClient = llmClient,
         promptsService = promptsService,
@@ -304,7 +306,9 @@ class CoreApiRouter(
             subtaskRepository = subtaskRepository,
             toolResultSummarizer = toolResultSummarizer,
             snapshotService = snapshotService,
-            workingMemoryIntegration = null  // Could be added later if needed
+            workingMemoryIntegration = workingMemoryIntegration,
+            taskRepository = taskRepository,
+            chatMessageRepository = chatMessageRepository
         )
 
         val turnLLMCaller = TurnLLMCaller(
@@ -348,7 +352,7 @@ class CoreApiRouter(
             tokenEstimator = tokenEstimator,
             conversationCompactor = null,
             llmRetryHandler = null,
-            workingMemoryIntegration = null
+            workingMemoryIntegration = workingMemoryIntegration
         )
     } else null
 

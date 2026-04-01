@@ -162,7 +162,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private val architectureSection = createSection("Architecture", "architecture")
     private val patternsSection = createSection("Patterns", "patterns")
     private val navigationMapSection = createSection("Navigation Map", "navigation_map")
-    private val llmPromptPreviewSection = createSection("LLM Context Prompt", "llm_prompt", collapsible = false)
+
     // Create buttons for LLM prompt controls
     private val copyPromptButton = JButton("Copy").apply {
         toolTipText = "Copy LLM Context Prompt to clipboard"
@@ -1434,7 +1434,6 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                 No LLM prompt available.
                 </body></html>
             """.trimIndent()
-            llmPromptPreviewSection.setContent("No LLM prompt available.", html)
             return
         }
         val promptText = prompt ?: return
@@ -1460,7 +1459,6 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
             <div style='white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;'>$escaped</div>
             </body></html>
         """.trimIndent()
-        llmPromptPreviewSection.setContent(promptText, html)
     }
     /**
      * Build HTML overview of context structure with section sizes
@@ -1531,13 +1529,11 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private fun applySectionOrder(entries: List<SectionEntry>) {
         contentPanel.removeAll()
         promptTracePanel.alignmentX = LEFT_ALIGNMENT
-        llmPromptPreviewSection.alignmentX = LEFT_ALIGNMENT
         contentPanel.add(promptTracePanel)
         entries.forEach { entry ->
             entry.section.alignmentX = LEFT_ALIGNMENT
             contentPanel.add(entry.section)
         }
-        contentPanel.add(llmPromptPreviewSection)
         contentPanel.revalidate()
         contentPanel.repaint()
     }
@@ -1856,7 +1852,6 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                 .map { it.section }
                 .filter { it != currentTaskSection }
                 .forEach { it.clearContent() }
-            llmPromptPreviewSection.clearContent()
             updatePromptTrace(null)
         }
     }

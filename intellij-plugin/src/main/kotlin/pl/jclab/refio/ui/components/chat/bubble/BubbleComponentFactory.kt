@@ -293,8 +293,8 @@ internal class BubbleComponentFactory(
         return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
             isOpaque = false
             alignmentX = Component.LEFT_ALIGNMENT
-            maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
             add(createClickableFileNameLabel(path))
+            maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
         }
     }
 
@@ -316,13 +316,17 @@ internal class BubbleComponentFactory(
     }
 
     fun createToolResultPanel(summary: String): JPanel {
-        return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+        return JBPanel<JBPanel<*>>(BorderLayout()).apply {
             isOpaque = false
             border = LCATheme.paddedBorder(0, 4, 2, 4)
-            add(JLabel(summary).apply {
+            add(javax.swing.JTextArea(summary).apply {
                 foreground = LCATheme.descriptionForeground
                 font = LCATheme.italicFont
-            })
+                isEditable = false
+                isOpaque = false
+                lineWrap = true
+                wrapStyleWord = true
+            }, BorderLayout.CENTER)
         }
     }
 
@@ -731,6 +735,7 @@ internal class BubbleComponentFactory(
             val rawToolArgs = stepMap["tool_args"] as? Map<*, *>
                 ?: stepMap["args"] as? Map<*, *>
                 ?: stepMap["arguments"] as? Map<*, *>
+                ?: extractInlineToolArgs(stepMap)
             val normalizedStep = normalizePlanStepForDisplay(rawKind, rawToolArgs)
             val kind = normalizedStep.kind
             val toolArgs = normalizedStep.toolArgs
@@ -821,6 +826,18 @@ internal class BubbleComponentFactory(
         val kind: String,
         val toolArgs: Map<*, *>?
     )
+
+    private val PLAN_STEP_META_KEYS = setOf("kind", "tool", "name", "description", "tool_args", "args", "arguments")
+
+    /**
+     * Extract tool parameters placed directly at the step level (not nested under tool_args/args/arguments).
+     * Some LLMs produce: {"tool": "read_file", "path": "build.gradle"} instead of nesting args.
+     * Returns null if no known parameter keys are found.
+     */
+    private fun extractInlineToolArgs(stepMap: Map<String, Any?>): Map<String, Any?>? {
+        val inlineArgs = stepMap.filterKeys { it !in PLAN_STEP_META_KEYS }
+        return inlineArgs.takeIf { it.isNotEmpty() }
+    }
 
     fun createContextBadge(metadata: UserContextMetadata): JComponent {
         val card = FlatMessageBlock(LCATheme.systemBubbleBackground).apply {

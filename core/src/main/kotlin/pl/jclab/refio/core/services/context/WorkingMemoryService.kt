@@ -57,9 +57,10 @@ class WorkingMemoryService(
         val taskEntries = entriesByTask[taskId] ?: return ""
         if (taskEntries.isEmpty()) return ""
 
+        val maxIteration = taskEntries.values.maxOf { it.iteration }
         val grouped = taskEntries.values.groupBy { it.key }
         val sortedKeys = grouped.keys.sortedByDescending { key ->
-            grouped[key]?.maxOfOrNull { it.importance } ?: 0
+            grouped[key]?.maxOfOrNull { effectiveImportance(it, maxIteration) } ?: 0
         }
 
         val sb = StringBuilder()
@@ -68,7 +69,7 @@ class WorkingMemoryService(
 
         for (key in sortedKeys) {
             val entries = grouped[key].orEmpty().sortedWith(
-                compareByDescending<WorkingMemoryEntry> { it.importance }.thenByDescending { it.lastAccessedAt }
+                compareByDescending<WorkingMemoryEntry> { effectiveImportance(it, maxIteration) }.thenByDescending { it.lastAccessedAt }
             )
 
             val header = "## $key"
@@ -362,12 +363,24 @@ class WorkingMemoryService(
 
     private fun trimEntries(taskEntries: ConcurrentHashMap<String, WorkingMemoryEntry>) {
         if (taskEntries.size <= maxEntriesPerTask) return
+        val maxIteration = taskEntries.values.maxOfOrNull { it.iteration } ?: 0
         val sorted = taskEntries.values.sortedWith(
-            compareByDescending<WorkingMemoryEntry> { it.importance }.thenByDescending { it.lastAccessedAt }
+            compareByDescending<WorkingMemoryEntry> { effectiveImportance(it, maxIteration) }.thenByDescending { it.lastAccessedAt }
         )
         val toKeep = sorted.take(maxEntriesPerTask)
         val keepIds = toKeep.map { buildEntryId(it) }.toSet()
 
         taskEntries.keys.filterNot { keepIds.contains(it) }.forEach { taskEntries.remove(it) }
+    }
+
+    /**
+     * Calculate effective importance with age-based decay.
+     * Importance decays by 1 for every 5 iterations since the entry was created.
+     * Minimum effective importance is 1.
+     */
+    private fun effectiveImportance(entry: WorkingMemoryEntry, maxIterationInCollection: Int): Int {
+        val iterationsSinceCreated = (maxIterationInCollection - entry.iteration).coerceAtLeast(0)
+        val decay = iterationsSinceCreated / 5
+        return (entry.importance - decay).coerceAtLeast(1)
     }
 }

@@ -2,21 +2,25 @@ package pl.jclab.refio.core.services
 
 import io.mockk.*
 import kotlinx.coroutines.test.runTest
+import org.jetbrains.exposed.sql.transactions.transaction
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import pl.jclab.refio.core.api.ModelOperation
-import pl.jclab.refio.core.db.ChatMessage
 import pl.jclab.refio.core.db.MessageRole
+import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.db.repositories.TaskRepository
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
+import pl.jclab.refio.testutil.TestDatabase
 import kotlin.test.*
 
 class ConversationCompactorTest {
 
+    private lateinit var db: TestDatabase.SharedInMemoryDb
     private lateinit var llmClient: LLMClient
     private lateinit var chatMessageRepository: ChatMessageRepository
     private lateinit var taskRepository: TaskRepository
@@ -26,9 +30,10 @@ class ConversationCompactorTest {
 
     @BeforeEach
     fun setup() {
+        db = TestDatabase.createSharedInMemory()
         llmClient = mockk(relaxed = true)
-        chatMessageRepository = mockk(relaxed = true)
-        taskRepository = mockk(relaxed = true)
+        chatMessageRepository = ChatMessageRepository()
+        taskRepository = TaskRepository()
         configService = mockk(relaxed = true)
         tokenEstimator = PromptTokenEstimator()
 
@@ -39,6 +44,11 @@ class ConversationCompactorTest {
         )
     }
 
+    @AfterEach
+    fun tearDown() {
+        db.keepAlive.close()
+    }
+
     private fun makeLLMResponse(content: String) = LLMResponse(
         content = content,
         usage = LLMUsage(inputTokens = 100, outputTokens = 50, totalTokens = 150),
@@ -47,23 +57,19 @@ class ConversationCompactorTest {
         cost = 0.001
     )
 
-    private fun makeMessage(
-        id: String,
-        role: MessageRole = MessageRole.USER,
-        content: String = "Message $id"
-    ) = ChatMessage(
-        id = id,
-        taskId = "task-1",
-        role = role,
-        content = content,
-        metadata = null,
-        toolCalls = null,
-        toolCallId = null,
-        tokensIn = null,
-        tokensOut = null,
-        cost = null,
-        createdAt = System.currentTimeMillis()
-    )
+    private fun createTaskWithMessages(taskId: String, count: Int) {
+        transaction {
+            taskRepository.create(
+                name = "Test Task", mode = TaskMode.AGENT,
+                projectId = "proj-1", projectPath = "/test", id = taskId
+            )
+            (1..count).forEach { i ->
+                chatMessageRepository.create(
+                    taskId = taskId, role = MessageRole.USER, content = "Message $i"
+                )
+            }
+        }
+    }
 
     @Nested
     inner class MaybeCompact {
@@ -72,13 +78,11 @@ class ConversationCompactorTest {
         fun `should not compact when below threshold`() = runTest {
             val result = compactor.maybeCompact("task-1", 5000, 10000, 0.85)
             assertFalse(result)
-            verify(exactly = 0) { chatMessageRepository.findByTaskId(any()) }
         }
 
         @Test
         fun `should compact when at threshold`() = runTest {
-            every { chatMessageRepository.findByTaskId("task-1") } returns
-                (1..8).map { makeMessage("$it") }
+            createTaskWithMessages("task-1", 8)
 
             coEvery { llmClient.complete(provider = any(), model = any(), messages = any(), systemPrompt = any(), taskId = any(), source = any(), maxTokens = any()) } returns
                 makeLLMResponse("Summary of conversation")
@@ -89,8 +93,7 @@ class ConversationCompactorTest {
 
         @Test
         fun `should compact when above threshold`() = runTest {
-            every { chatMessageRepository.findByTaskId("task-1") } returns
-                (1..6).map { makeMessage("$it") }
+            createTaskWithMessages("task-1", 6)
 
             coEvery { llmClient.complete(provider = any(), model = any(), messages = any(), systemPrompt = any(), taskId = any(), source = any(), maxTokens = any()) } returns
                 makeLLMResponse("Summary")
@@ -105,8 +108,7 @@ class ConversationCompactorTest {
 
         @Test
         fun `should not compact with fewer than 4 messages`() = runTest {
-            every { chatMessageRepository.findByTaskId("task-1") } returns
-                (1..3).map { makeMessage("$it") }
+            createTaskWithMessages("task-1", 3)
 
             val result = compactor.compact("task-1", 5000)
             assertFalse(result)
@@ -114,8 +116,7 @@ class ConversationCompactorTest {
 
         @Test
         fun `should summarize older messages and keep last 4`() = runTest {
-            val messages = (1..8).map { makeMessage("msg-$it") }
-            every { chatMessageRepository.findByTaskId("task-1") } returns messages
+            createTaskWithMessages("task-1", 8)
 
             coEvery { llmClient.complete(provider = any(), model = any(), messages = any(), systemPrompt = any(), taskId = any(), source = any(), maxTokens = any()) } returns
                 makeLLMResponse("Concise summary")
@@ -124,20 +125,17 @@ class ConversationCompactorTest {
 
             assertTrue(result)
 
-            // Should delete old messages (first 4 of 8)
-            verify(exactly = 4) { chatMessageRepository.delete(any()) }
-            verify { chatMessageRepository.delete("msg-1") }
-            verify { chatMessageRepository.delete("msg-2") }
-            verify { chatMessageRepository.delete("msg-3") }
-            verify { chatMessageRepository.delete("msg-4") }
+            // After compaction: 1 system summary + 4 kept raw = 5 messages
+            val remaining = chatMessageRepository.findByTaskId("task-1")
+            assertEquals(5, remaining.size, "Should have 5 messages after compaction (1 summary + 4 kept)")
+            assertEquals(1, remaining.count { it.role == MessageRole.SYSTEM }, "Should have exactly 1 system summary")
         }
 
         @Test
         fun `should increment compaction count`() = runTest {
             assertEquals(0, compactor.getCompactionCount())
 
-            every { chatMessageRepository.findByTaskId("task-1") } returns
-                (1..6).map { makeMessage("msg-$it") }
+            createTaskWithMessages("task-1", 6)
 
             coEvery { llmClient.complete(provider = any(), model = any(), messages = any(), systemPrompt = any(), taskId = any(), source = any(), maxTokens = any()) } returns
                 makeLLMResponse("Summary")
@@ -149,8 +147,7 @@ class ConversationCompactorTest {
 
         @Test
         fun `should use WEAK model for summarization`() = runTest {
-            every { chatMessageRepository.findByTaskId("task-1") } returns
-                (1..6).map { makeMessage("msg-$it") }
+            createTaskWithMessages("task-1", 6)
 
             coEvery { llmClient.complete(provider = any(), model = any(), messages = any(), systemPrompt = any(), taskId = any(), source = any(), maxTokens = any()) } returns
                 makeLLMResponse("Summary")
@@ -166,15 +163,14 @@ class ConversationCompactorTest {
                     systemPrompt = any(),
                     taskId = "task-1",
                     source = "ConversationCompactor",
-                    maxTokens = 800
+                    maxTokens = 1200
                 )
             }
         }
 
         @Test
         fun `should not compact when all messages are in keepRaw window`() = runTest {
-            every { chatMessageRepository.findByTaskId("task-1") } returns
-                (1..4).map { makeMessage("msg-$it") }
+            createTaskWithMessages("task-1", 4)
 
             val result = compactor.compact("task-1", 5000)
             assertFalse(result)

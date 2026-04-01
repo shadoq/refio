@@ -1,18 +1,13 @@
 package pl.jclab.refio.core.subagents
 
+import pl.jclab.refio.core.registry.DefinitionScope
+import pl.jclab.refio.core.registry.FileBasedRegistry
 import pl.jclab.refio.core.subagents.models.SubagentDefinition
+import pl.jclab.refio.core.subagents.models.SubagentExecutionMode
 import pl.jclab.refio.core.subagents.models.SubagentScope
-import pl.jclab.refio.core.logging.dualLogger
-import java.net.JarURLConnection
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.exists
-import kotlin.io.path.extension
-import kotlin.io.path.isRegularFile
-import kotlin.io.path.readText
-
-private val logger = dualLogger("SubagentRegistry")
 
 /**
  * Rejestr subagentów z lazy loading i cache.
@@ -25,24 +20,96 @@ private val logger = dualLogger("SubagentRegistry")
  * Przy konflikcie nazw, subagent z wyższego poziomu nadpisuje niższy.
  */
 class SubagentRegistry(
-    private val projectRoot: Path,
+    private val projectRootPath: Path,
     private val parser: SubagentParser = SubagentParser()
-) {
-    private val cache = ConcurrentHashMap<String, SubagentDefinition>()
-    private var lastScanTime: Long = 0
-    private val cacheTtlMs = 60_000L // 1 minuta
+) : FileBasedRegistry<SubagentDefinition>("subagents", projectRootPath) {
 
     /**
      * Katalog subagentów w projekcie.
      */
     val projectAgentsDir: Path
-        get() = projectRoot.resolve(".refio/agents")
+        get() = projectRootPath.resolve(".refio/agents")
 
     /**
      * Katalog subagentów użytkownika.
      */
     val userAgentsDir: Path
         get() = Path.of(System.getProperty("user.home"), ".refio", "agents")
+
+    // ==========================================
+    // FileBasedRegistry overrides
+    // ==========================================
+
+    override fun parseFile(content: String, sourcePath: Path?, scope: DefinitionScope): SubagentDefinition {
+        val subagentScope = when (scope) {
+            DefinitionScope.BUILTIN -> SubagentScope.BUILTIN
+            DefinitionScope.USER -> SubagentScope.USER
+            DefinitionScope.PROJECT -> SubagentScope.PROJECT
+        }
+        return parser.parse(content, sourcePath, subagentScope)
+    }
+
+    override fun getName(item: SubagentDefinition): String = item.name
+
+    override fun isEnabled(item: SubagentDefinition): Boolean = item.enabled
+
+    /**
+     * Override to add legacy fallback when classpath discovery finds nothing.
+     */
+    override fun discoverBuiltinResources(): List<String> {
+        val discovered = super.discoverBuiltinResources()
+        if (discovered.isNotEmpty()) return discovered
+
+        // Legacy fallback to keep backward compatibility if discovery fails in uncommon environments.
+        logger.warn { "Builtin discovery failed, using legacy fallback list" }
+        return listOf("subagents/security-engineer.md", "subagents/code-reviewer.md")
+    }
+
+    /**
+     * Override loadAll to use subagent-specific directories.
+     * Subagents use "subagents/" for builtin resources but "agents/" for user/project directories.
+     */
+    override fun loadAll() {
+        builtinItems.clear()
+        userFileItems.clear()
+        projectFileItems.clear()
+
+        // Layer 1: Builtin (from resources/subagents/)
+        // Handled by base class discoverBuiltinResources() which scans "subagents/" resourceDir
+        loadBuiltinResourcesInternal()
+
+        // Layer 2: User files (~/.refio/agents/)
+        loadFromDirectory(userAgentsDir, DefinitionScope.USER, userFileItems)
+
+        // Layer 3: Project files (.refio/agents/)
+        loadFromDirectory(projectAgentsDir, DefinitionScope.PROJECT, projectFileItems)
+    }
+
+    private fun loadBuiltinResourcesInternal() {
+        val resourcePaths = discoverBuiltinResources()
+
+        logger.info { "Loading builtin subagents (${resourcePaths.size}): ${resourcePaths.joinToString()}" }
+
+        for (resourcePath in resourcePaths) {
+            try {
+                val content = readResourceContent(resourcePath)
+                if (content != null) {
+                    val definition = parseFile(content, null, DefinitionScope.BUILTIN)
+                    builtinItems[getName(definition).lowercase()] = definition
+                } else {
+                    logger.warn { "Resource not found: $resourcePath" }
+                }
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to load builtin subagent: $resourcePath" }
+            }
+        }
+
+        logger.info { "Finished loading builtin subagents: ${builtinItems.size} total" }
+    }
+
+    // ==========================================
+    // PUBLIC API — subagent-specific
+    // ==========================================
 
     /**
      * Pobiera wszystkie dostępne subagenty.
@@ -52,10 +119,7 @@ class SubagentRegistry(
      * @return Lista subagentów posortowana wg priorytetu (malejąco)
      */
     fun getAllSubagents(includeDisabled: Boolean = false): List<SubagentDefinition> {
-        refreshCacheIfNeeded()
-        return cache.values
-            .let { if (includeDisabled) it else it.filter { agent -> agent.enabled } }
-            .sortedByDescending { it.priority }
+        return getAll(includeDisabled).sortedByDescending { it.priority }
     }
 
     /**
@@ -65,42 +129,14 @@ class SubagentRegistry(
      * @return Definicja subagenta lub null jeśli nie znaleziono
      */
     fun getSubagent(name: String): SubagentDefinition? {
-        refreshCacheIfNeeded()
-        return cache[name.lowercase()]
+        return get(name)
     }
 
     /**
      * Sprawdza czy subagent istnieje.
      */
     fun exists(name: String): Boolean {
-        return getSubagent(name) != null
-    }
-
-    /**
-     * Wymusza odświeżenie cache.
-     */
-    fun refresh() {
-        logger.info { "[SubagentRegistry] Refreshing cache..." }
-        cache.clear()
-        loadSubagents()
-        lastScanTime = System.currentTimeMillis()
-        logger.info { "[SubagentRegistry] Loaded ${cache.size} subagents" }
-    }
-
-    /**
-     * Czyści cache (dla testów).
-     */
-    fun clear() {
-        cache.clear()
-        lastScanTime = 0
-    }
-
-    /**
-     * Liczba subagentów w cache.
-     */
-    fun size(): Int {
-        refreshCacheIfNeeded()
-        return cache.size
+        return get(name) != null
     }
 
     /**
@@ -121,211 +157,9 @@ class SubagentRegistry(
         }
     }
 
-    /**
-     * Odświeża cache jeśli minął TTL.
-     */
-    private fun refreshCacheIfNeeded() {
-        if (System.currentTimeMillis() - lastScanTime > cacheTtlMs) {
-            refresh()
-        }
-    }
-
-    /**
-     * Ładuje subagentów z wszystkich źródeł.
-     * Kolejność jest ważna - późniejsze źródła nadpisują wcześniejsze.
-     */
-    private fun loadSubagents() {
-        // 1. Ładuj wbudowane (najniższy priorytet)
-        loadBuiltinSubagents()
-
-        // 2. Ładuj user-level
-        loadFromDirectory(userAgentsDir, SubagentScope.USER)
-
-        // 3. Ładuj project-level (najwyższy priorytet - nadpisuje poprzednie)
-        loadFromDirectory(projectAgentsDir, SubagentScope.PROJECT)
-    }
-
-    /**
-     * Ładuje wbudowane subagenty z resources.
-     */
-    private fun loadBuiltinSubagents() {
-        val builtinResources = discoverBuiltinSubagentResources()
-
-        logger.info {
-            "[SubagentRegistry] Loading builtin subagents (${builtinResources.size}): ${
-                builtinResources.joinToString()
-            }"
-        }
-
-        for (resourcePath in builtinResources) {
-            try {
-                val content = readResourceContent(resourcePath)
-
-                if (content != null) {
-                    val definition = parser.parse(content, null, SubagentScope.BUILTIN)
-                    cache[definition.name.lowercase()] = definition
-                    logger.debug {
-                        "[SubagentRegistry] Loaded builtin subagent: ${definition.name} " +
-                            "(scope=${definition.scope}, enabled=${definition.enabled}, priority=${definition.priority})"
-                    }
-                } else {
-                    logger.warn { "[SubagentRegistry] Resource not found: $resourcePath" }
-                }
-            } catch (e: Exception) {
-                logger.error(e) { "[SubagentRegistry] Failed to load builtin subagent from '$resourcePath'" }
-            }
-        }
-
-        logger.info { "[SubagentRegistry] Finished loading builtin subagents: ${cache.size} total in cache" }
-    }
-
-    private fun discoverBuiltinSubagentResources(): List<String> {
-        val discovered = linkedSetOf<String>()
-        val classLoaders = listOfNotNull(
-            SubagentRegistry::class.java.classLoader,
-            javaClass.classLoader,
-            Thread.currentThread().contextClassLoader
-        ).distinct()
-
-        for (classLoader in classLoaders) {
-            try {
-                val urls = classLoader.getResources("subagents")
-                while (urls.hasMoreElements()) {
-                    val url = urls.nextElement()
-                    when (url.protocol) {
-                        "file" -> discovered.addAll(discoverBuiltinSubagentsFromFilesystem(url.toURI()))
-                        "jar" -> discovered.addAll(discoverBuiltinSubagentsFromJar(url.openConnection() as JarURLConnection))
-                        else -> logger.debug {
-                            "[SubagentRegistry] Unsupported subagents resource protocol: ${url.protocol} ($url)"
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                logger.debug { "[SubagentRegistry] Failed to scan classpath for builtin subagents: ${e.message}" }
-            }
-        }
-
-        if (discovered.isEmpty()) {
-            discovered.addAll(discoverBuiltinSubagentsFromFilesystem(Path.of("src", "main", "resources", "subagents").toUri()))
-        }
-
-        if (discovered.isEmpty()) {
-            // Legacy fallback to keep backward compatibility if discovery fails in uncommon environments.
-            discovered.add("subagents/security-engineer.md")
-            discovered.add("subagents/code-reviewer.md")
-            logger.warn { "[SubagentRegistry] Builtin discovery failed, using legacy fallback list" }
-        }
-
-        return discovered.sorted()
-    }
-
-    private fun discoverBuiltinSubagentsFromFilesystem(directoryUri: java.net.URI): List<String> {
-        val directory = try {
-            Path.of(directoryUri)
-        } catch (_: Exception) {
-            return emptyList()
-        }
-
-        if (!directory.exists()) {
-            return emptyList()
-        }
-
-        val result = mutableListOf<String>()
-        Files.list(directory).use { stream ->
-            stream
-                .filter { it.isRegularFile() && it.extension == "md" }
-                .forEach { result.add("subagents/${it.fileName}") }
-        }
-
-        return result.sorted()
-    }
-
-    private fun discoverBuiltinSubagentsFromJar(connection: JarURLConnection): List<String> {
-        val entryPrefix = connection.entryName?.let { "$it/" } ?: "subagents/"
-        val result = mutableListOf<String>()
-        val entries = connection.jarFile.entries()
-
-        while (entries.hasMoreElements()) {
-            val entry = entries.nextElement()
-            if (entry.isDirectory || !entry.name.endsWith(".md")) {
-                continue
-            }
-
-            if (entry.name.startsWith(entryPrefix)) {
-                val relativePath = entry.name.removePrefix(entryPrefix)
-                if (!relativePath.contains('/')) {
-                    result.add(entry.name)
-                }
-            }
-        }
-
-        return result.sorted()
-    }
-
-    private fun readResourceContent(resourcePath: String): String? {
-        val classLoaders = listOfNotNull(
-            SubagentRegistry::class.java.classLoader,
-            javaClass.classLoader,
-            Thread.currentThread().contextClassLoader
-        ).distinct()
-
-        for (classLoader in classLoaders) {
-            classLoader.getResourceAsStream(resourcePath)?.use { input ->
-                return input.bufferedReader().readText()
-            }
-        }
-
-        return javaClass.getResourceAsStream("/$resourcePath")?.use { input ->
-            input.bufferedReader().readText()
-        }
-    }
-
-    /**
-     * Ładuje subagentów z katalogu.
-     */
-    private fun loadFromDirectory(dir: Path, scope: SubagentScope) {
-        if (!dir.exists()) {
-            logger.debug { "[SubagentRegistry] Directory does not exist: $dir" }
-            return
-        }
-
-        try {
-            Files.list(dir)
-                .filter { it.isRegularFile() && it.extension == "md" }
-                .forEach { file ->
-                    loadFromFile(file, scope)
-                }
-        } catch (e: Exception) {
-            logger.warn { "[SubagentRegistry] Failed to list directory $dir: ${e.message}" }
-        }
-    }
-
-    /**
-     * Ładuje pojedynczego subagenta z pliku.
-     */
-    private fun loadFromFile(file: Path, scope: SubagentScope) {
-        try {
-            val content = file.readText()
-            val definition = parser.parse(content, file, scope)
-            val key = definition.name.lowercase()
-
-            // Sprawdź czy nadpisujemy
-            val existing = cache[key]
-            if (existing != null && existing.scope != scope) {
-                logger.info {
-                    "[SubagentRegistry] Overriding ${existing.scope} subagent '${existing.name}' with $scope version"
-                }
-            }
-
-            cache[key] = definition
-            logger.debug { "[SubagentRegistry] Loaded $scope: ${definition.name} from $file" }
-
-        } catch (e: SubagentParseException) {
-            logger.warn { "[SubagentRegistry] Failed to parse $file: ${e.message}" }
-        } catch (e: Exception) {
-            logger.error(e) { "[SubagentRegistry] Unexpected error loading $file" }
-        }
-    }
+    // ==========================================
+    // CRUD — subagent-specific
+    // ==========================================
 
     /**
      * Tworzy nowego subagenta (zapisuje do pliku).
@@ -354,9 +188,14 @@ class SubagentRegistry(
         Files.writeString(targetFile, content)
 
         val saved = definition.copy(sourcePath = targetFile, scope = targetScope)
-        cache[saved.name.lowercase()] = saved
+        val targetMap = when (targetScope) {
+            SubagentScope.PROJECT -> projectFileItems
+            SubagentScope.USER -> userFileItems
+            else -> builtinItems
+        }
+        targetMap[saved.name.lowercase()] = saved
 
-        logger.info { "[SubagentRegistry] Created subagent: ${saved.name} at $targetFile" }
+        logger.info { "Created subagent: ${saved.name} at $targetFile" }
         return saved
     }
 
@@ -374,9 +213,14 @@ class SubagentRegistry(
         val content = buildSubagentFileContent(definition)
         Files.writeString(sourcePath, content)
 
-        cache[definition.name.lowercase()] = definition
+        val targetMap = when (definition.scope) {
+            SubagentScope.PROJECT -> projectFileItems
+            SubagentScope.USER -> userFileItems
+            SubagentScope.BUILTIN -> builtinItems
+        }
+        targetMap[definition.name.lowercase()] = definition
 
-        logger.info { "[SubagentRegistry] Updated subagent: ${definition.name}" }
+        logger.info { "Updated subagent: ${definition.name}" }
         return definition
     }
 
@@ -396,8 +240,13 @@ class SubagentRegistry(
 
         val deleted = Files.deleteIfExists(sourcePath)
         if (deleted) {
-            cache.remove(name.lowercase())
-            logger.info { "[SubagentRegistry] Deleted subagent: $name" }
+            val targetMap = when (definition.scope) {
+                SubagentScope.PROJECT -> projectFileItems
+                SubagentScope.USER -> userFileItems
+                SubagentScope.BUILTIN -> builtinItems
+            }
+            targetMap.remove(name.lowercase())
+            logger.info { "Deleted subagent: $name" }
         }
 
         return deleted
@@ -440,7 +289,7 @@ class SubagentRegistry(
             sb.appendLine("priority: ${definition.priority}")
         }
 
-        if (definition.executionMode != pl.jclab.refio.core.subagents.models.SubagentExecutionMode.SINGLE_SHOT) {
+        if (definition.executionMode != SubagentExecutionMode.SINGLE_SHOT) {
             sb.appendLine("executionMode: multi_step")
             sb.appendLine("maxSteps: ${definition.maxSteps}")
         }

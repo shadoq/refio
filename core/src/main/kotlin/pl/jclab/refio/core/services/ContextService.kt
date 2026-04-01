@@ -762,8 +762,9 @@ class ContextService(
 
         // Keep RECENT_WORK untouched; this is only for conversation history/messages.
         // If result was not summarized by tool pipeline, keep a compact fallback summary.
+        // Even summarized results are capped at 2000 chars to prevent context bloat in long sessions.
         return if (msg.isSummarized) {
-            preferred
+            preferred.take(2000)
         } else {
             truncate(preferred, 320)
         }
