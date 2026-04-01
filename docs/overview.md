@@ -1,10 +1,10 @@
 # Refio - Technical Architecture Overview
 
-> **Last Updated:** 2026-02-11
-> **Version:** 0.0.1
+> **Last Updated:** 2026-03-29
+> **Version:** 0.0.1.4
 > **Status:** Active Development
 
-This document provides a comprehensive technical overview of Refio - a local-first AI coding assistant for IntelliJ IDEA.
+This document provides a comprehensive technical overview of Refio - a local-first AI coding assistant for IntelliJ IDEA and the terminal.
 
 ---
 
@@ -24,6 +24,7 @@ This document provides a comprehensive technical overview of Refio - a local-fir
 12. [Database Schema](#12-database-schema)
 13. [Security Model](#13-security-model)
 14. [Key Data Flows](#14-key-data-flows)
+15. [Terminal User Interface (TUI)](#15-terminal-user-interface-tui)
 
 ---
 
@@ -62,6 +63,8 @@ Traditional Approach:          Refio Approach:
 
 ## 2. High-Level Architecture
 
+Refio runs in two environments sharing the same `:core` module:
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         IntelliJ IDEA Plugin                            │
@@ -78,7 +81,25 @@ Traditional Approach:          Refio Approach:
 │  │   ├── MessageDispatcher (mode-specific routing)                      │
 │  │   └── SubtaskTracker (subtask CRUD)                                  │
 │  └── CoreConnectionManager (router factory)                             │
+└──────────────────────────────┬──────────────────────────────────────────┘
+                               │
+┌──────────────────────────────┼──────────────────────────────────────────┐
+│                  Standalone CLI + TUI                                    │
 ├─────────────────────────────────────────────────────────────────────────┤
+│  TUI Layer (Mordant 3.0.1 + JLine3 3.26.3)                             │
+│  ├── TuiRenderer (full-screen compositor, split-pane layout)            │
+│  │   ├── TuiRenderBuffer (ANSI-aware line buffers)                      │
+│  │   └── 7 view renderers + Settings screen (11 sub-tabs)              │
+│  ├── TuiInputHandler (raw TTY / line mode dual input)                   │
+│  │   └── TuiKeybindings (F1-F8, Ctrl+combinations)                     │
+│  ├── TuiViewModel (coordinator ~1289 LOC, delegates to 3 sub-VMs)      │
+│  │   ├── TuiChatViewModel, TuiSessionViewModel, TuiObservabilityVM    │
+│  │   └── TuiWorkflowListener (streaming bridge)                        │
+│  └── TuiColors (ANSI palette: 8 agent colors, roles, status)           │
+│  StandaloneCoreBootstrap (initializes core without IntelliJ SDK)        │
+└──────────────────────────────┬──────────────────────────────────────────┘
+                               │ shared
+┌──────────────────────────────┴──────────────────────────────────────────┐
 │  Execution Layer                                                        │
 │  ├── CHAT mode → WorkflowOrchestrator → ChatExecutor                    │
 │  │   ├── IntentRouter (fast paths: subagent, answer question)           │
@@ -87,18 +108,21 @@ Traditional Approach:          Refio Approach:
 │      ├── TurnEventListener (progress callbacks)                         │
 │      └── ToolResultSummarizer (context optimization)                    │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  Core Layer (In-Process API)                                            │
-│  ├── CoreApiRouter (facade + 9 domain routers)                          │
+│  Core Layer (In-Process API) — :core module                             │
+│  ├── CoreApiRouter (thin composition root ~962 LOC, 12 domain routers)   │
 │  │   ├── ChatRouter → ChatService                                       │
 │  │   ├── TaskRouter, SubtaskRouter                                      │
 │  │   ├── RagRouter → RagSearchService                                   │
 │  │   ├── ToolRouter, PromptsRouter, ApiLogsRouter                       │
-│  │   └── ContextService (dynamic context building)                      │
+│  │   └── ContextService (delegates to 6 sub-services:                   │
+│  │       RagContextLoader, McpContextLoader, ContextReferenceResolver,  │
+│  │       ProjectContextSummarizer, ConversationContextBuilder,          │
+│  │       TaskContextExtractor)                                          │
 │  └── ContextProviderRegistry (14 providers + MCP dynamic)               │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  Infrastructure Layer                                                   │
-│  ├── LLMClient (unified) → 6 provider adapters                          │
-│  ├── ToolRegistry → 12 registered tools (6 read-only, 6 write)          │
+│  ├── LLMClient (unified) → 8 provider adapters                          │
+│  ├── ToolRegistry → 14 registered tools (6 read-only, 8 write)          │
 │  ├── MCPManager → MCP server lifecycle (STDIO/HTTP)                     │
 │  ├── EmbeddingsService → Ollama/OpenAI embeddings                       │
 │  └── DatabaseFactory → SQLite (WAL) + Exposed ORM                       │
@@ -108,27 +132,50 @@ Traditional Approach:          Refio Approach:
 ### Package Structure
 
 ```
-src/main/kotlin/pl/jclab/refio/
-├── core/                     # Embedded core (no IDE dependencies)
-│   ├── api/                  # Router layer (9 domain routers)
+Gradle modules (three separate source trees):
+├── :core                     # Pure Kotlin/JVM — no IntelliJ SDK dependency
+│   └── core/src/main/kotlin/pl/jclab/refio/
+├── :intellij-plugin          # IntelliJ IDEA plugin (depends on :core)
+│   └── intellij-plugin/src/main/kotlin/pl/jclab/refio/
+└── :cli                      # Standalone CLI + TUI (depends on :core)
+    └── cli/src/main/kotlin/pl/jclab/refio/
+
+core/src/main/kotlin/pl/jclab/refio/
+├── core/                     # Embedded core (:core module)
+│   ├── api/                  # Router layer (12 domain routers)
 │   ├── context/              # Context providers + MCP
 │   │   ├── providers/        # 14 built-in providers
+│   │   │   └── standalone/   # 7 CLI-compatible providers (no IDE)
 │   │   └── mcp/              # Model Context Protocol
 │   ├── db/                   # Database tables & repositories
 │   ├── llm/                  # LLM integration (6 adapters)
 │   ├── services/             # Core services (RAG, context, analysis)
 │   │   └── analysis/         # Language analyzers
-│   ├── subagents/            # Subagent system
+│   ├── agents/               # Multi-agent system
+│   │   └── events/           # AgentEventBus, AgentEvent sealed interface
+│   ├── subagents/            # Subagent system (21 built-in)
 │   ├── tools/                # Tool system (12 registered implementations)
 │   │   ├── implementations/
 │   │   └── security/
 │   └── prompts/              # Prompt templates
+└── api/                      # Shared API models
+
+intellij-plugin/src/main/kotlin/pl/jclab/refio/
 ├── services/                 # Plugin services (project-scoped)
 │   └── session/              # SessionManager (6 components)
 └── ui/                       # IntelliJ UI components
     ├── toolwindow/           # Tool window factory
     ├── components/           # Chat, toolbar, autocomplete
     └── settings/             # 12+ settings panels
+
+cli/src/main/kotlin/pl/jclab/refio/cli/
+└── tui/                      # Terminal User Interface
+    ├── rendering/            # TuiRenderer, TuiRenderBuffer, TuiLayout, TuiColors
+    ├── views/                # 7 tab views (Chat, Steps, Context, RAG, Logs, Debug, API)
+    ├── screens/              # Settings (11 sub-tabs), History
+    ├── components/           # MessageBubble, PromptInput, ProgressBar, Table
+    ├── input/                # TuiInputHandler, TuiKeybindings
+    └── state/                # TuiViewModel, TuiState, TuiWorkflowListener
 ```
 
 ### Prompt TPL Variables (PromptInputPanel)
@@ -170,7 +217,7 @@ Unknown placeholders remain unchanged.
 | **AGENT** | AgentTurnLoop | ALL (12) | Yes | Code generation, refactoring |
 | **SUBAGENT** | AgentTurnLoop (`runProfile=SUBAGENT`) | Profile-filtered | Yes | Specialized delegated tasks |
 
-`ToolRegistry` has 12 registered tools; `run_terminal_command` is enabled by default in AGENT mode and restricted by terminal whitelist rules.
+`ToolRegistry` has 14 registered tools; `run_terminal_command` is enabled by default in AGENT mode and restricted by terminal whitelist rules.
 `invoke_subagent` is enabled by default in PLAN and AGENT, and is displayed as `subagent` in Tools Settings.
 
 ### CHAT Mode Flow
@@ -411,14 +458,14 @@ Summarizes tool execution results to reduce context size:
 
 ```
 ContextService.buildProjectContext()
-    ├── 1. Load cached project analysis (architecture, dependencies)
-    ├── 2. Deduplicate user context refs
-    ├── 3. Extract conversation history (with summarization)
-    ├── 4. Build subtask summaries (completed steps)
-    ├── 5. Load RAG fragments (code + docs)
-    ├── 6. Load MCP resources
-    ├── 7. Resolve @mentions via ContextProviderRegistry
-    └── 8. Combine into ProjectContextDTO with token budgets
+    Delegates to 6 sub-services:
+    ├── ProjectContextSummarizer — cached project analysis (architecture, dependencies)
+    ├── ContextReferenceResolver — deduplicate + resolve @mentions via ContextProviderRegistry
+    ├── ConversationContextBuilder — extract conversation history (with summarization)
+    ├── TaskContextExtractor — build subtask summaries (completed steps)
+    ├── RagContextLoader — load RAG fragments (code + docs)
+    ├── McpContextLoader — load MCP resources
+    └── Combine into ProjectContextDTO with token budgets
 ```
 
 ### Provider Types
@@ -606,7 +653,7 @@ interface Tool {
 | `view_diff` | file1, file2/content2 | Line-by-line diff | - |
 | `invoke_subagent` | subagent_name, goal, context_refs? | Run nested child loop with a specialized subagent (dynamic description: active subagents + allowed tools/inherit) | Depth <= 3 |
 
-### WRITE Tools (6)
+### WRITE Tools (8)
 
 | Tool | Parameters | Description | Cost |
 |------|------------|-------------|------|
@@ -616,6 +663,8 @@ interface Tool {
 | `multi_line_editor` | path, edit_description | LLM identifies line ranges | ~$0.02 |
 | `advance_code_editing` | path, edit_description | Full file regeneration | ~$0.06 |
 | `run_terminal_command` | command | Shell execution (whitelist-protected) | **AGENT: ON (default)** |
+| `http_request` | url, method, headers, body, save_to_file | HTTP requests (GET/POST/PUT/DELETE), 5 MB limit, 60s timeout | Free |
+| `run_code` | language, code | Execute Python/JavaScript/Kotlin Script snippets, 120s timeout | **OFF by default** |
 
 ### Security Layers
 
@@ -664,7 +713,7 @@ suspend fun LLMClient.complete(
 ): LLMResponse
 ```
 
-### Provider Adapters (6)
+### Provider Adapters (8)
 
 | Provider | Models | Features |
 |----------|--------|----------|
@@ -674,6 +723,8 @@ suspend fun LLMClient.complete(
 | **Gemini** | 2.5 Flash/Pro | system_instruction, thinkingConfig |
 | **OpenRouter** | 100+ models | Unified gateway, dynamic pricing |
 | **LM Studio** | Local models | OpenAI-compatible, free |
+| **Custom OpenAI** | Any OpenAI-compatible API | Configurable base URL, API key |
+| **Z.AI** | Z.AI models | Rate-limited, OpenAI-compatible |
 
 ### Pricing (per 1M tokens, USD)
 
@@ -732,7 +783,7 @@ MCPManager (singleton)
 | **STDIO** | Subprocess with JSON-RPC over stdin/stdout |
 | **HTTP/SSE** | HTTP POST for requests, SSE for long-lived connections |
 
-### 16 Built-in Presets
+### 17 Built-in Presets
 
 | Category | Servers |
 |----------|---------|
@@ -742,9 +793,9 @@ MCPManager (singleton)
 | **Docs** | Context7 |
 | **DevOps** | Sentry, AWS |
 | **Storage** | Google Drive, Filesystem |
-| **Development** | Puppeteer, Sequential Thinking |
+| **Development** | Puppeteer, Sequential Thinking, Custom API |
 | **Collaboration** | Slack |
-| **Other** | Memory, Custom API |
+| **Memory** | Memory |
 
 ### Capabilities
 
@@ -1111,6 +1162,273 @@ IndexingProgress via Flow
 
 ---
 
+## 15. Terminal User Interface (TUI)
+
+Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ plugin GUI. The CLI uses the same `:core` module as the IntelliJ plugin — all execution modes, tools, context providers, and RAG capabilities are available.
+
+### TUI Layout Design
+
+```
+┌─F1:Help│F2:Steps│F3:Context│F4:RAG│F5:Logs│F6:Debug│F7:API│F8:Files  F9:Set  [CHAT|model] $0.02│5K tok─┐
+├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Chat messages (scrollable)             │ Right panel (active tab content)                                 │
+│                                        │                                                                  │
+│ [user] describe the architecture       │ Steps:                                                           │
+│                                        │   [OK] analyze_structure                                         │
+│ [assistant] The project uses a         │   [>>] generate_report      (streaming)                         │
+│ layered architecture with:             │   [ ] review_output                                              │
+│  1. API Layer (routers)                │                                                                  │
+│  2. Service Layer                      │ Context sections with token progress bars:                       │
+│  3. Domain Layer                       │   [project] 2,400/4,000 tok ████████░░░                         │
+│                                        │   [rag]     1,200/4,000 tok ████░░░░░░░                         │
+│────────────────────────────────────────│                                                                  │
+│ [CHAT] [ollama/qwen2.5-coder:7b]      │                                                                  │
+│ > your message here_                   │                                                                  │
+└────────────────────────────────────────┴──────────────────────────────────────────────────────────────────┘
+```
+
+**Key design decisions:**
+- **No separate status bar** — mode, cost, streaming indicator, and token count are displayed in the tab bar (right-aligned). The cursor always blinks at the input prompt, never at the bottom of the screen.
+- **Split-pane** when any tab is active (55% left / 45% right). **Full-width** chat when no tab is selected.
+- **Responsive** — layout adapts to terminal resize in real time (300ms polling).
+
+### TUI Technology Stack
+
+| Component | Library | Purpose |
+|-----------|---------|---------|
+| Terminal rendering | Mordant 3.0.1 | ANSI colors, styled text, terminal size detection |
+| Raw input | JLine3 3.26.3 | F-keys, Ctrl+combinations, escape sequence parsing |
+| CLI arguments | Clikt 5.0.2 | `--project`, `--mode`, `--model`, `--no-egress` |
+| State management | Kotlin Coroutines Flow | 20 StateFlows → merge → reactive TuiState |
+
+### TUI Architecture
+
+```
+TuiApp (entry point — launchTuiApp())
+│
+├── Detects interactive mode: System.console() != null
+│   ├── Interactive: alternate screen buffer, raw JLine3 input, F-key navigation
+│   └── Non-interactive: inline rendering, line-based input (/commands, :shortcuts)
+│
+├── Three concurrent coroutines:
+│   ├── Render loop — stateFlow.collect { renderer.render(state) }
+│   ├── Resize watcher — polls terminal.size every 300ms, forceRender on change
+│   └── Input loop — TuiInputHandler.startInputLoop(viewModel)
+│
+├── TuiViewModel (coordinator ~1289 LOC, MVVM pattern)
+│   ├── Delegates to 3 sub-ViewModels:
+│   │   ├── TuiChatViewModel (messages, streaming, autocomplete)
+│   │   ├── TuiSessionViewModel (session lifecycle, history, settings)
+│   │   └── TuiObservabilityViewModel (logs, API logs, debug state)
+│   ├── 20 MutableStateFlows (merged from coordinator + sub-ViewModels)
+│   ├── All flows merged via merge().map { buildCurrentState() }
+│   ├── Any flow change triggers stateFlow emission → re-render
+│   ├── sendMessage() → WorkflowOrchestrator.execute(request, workflowListener)
+│   ├── Settings: getConfigSection(), updateConfig() via ConfigRouter
+│   └── Autocomplete: triggerAutocomplete(), updateAutocompleteFilter()
+│
+├── TuiRenderer (full-screen compositor)
+│   ├── Hash-based skip: only re-renders when state.hashCode() changes or terminal resizes
+│   ├── Cursor hidden during redraw (\u001b[?25l), shown at input after (\u001b[?25h)
+│   ├── In-place overwrite (\u001b[H) — no flicker. Full clear (\u001b[2J) only on resize.
+│   ├── renderTabBar() — tabs + right-aligned status info (mode, cost, streaming)
+│   ├── renderFullWidthChat() — chat messages buffer + prompt buffer (no split)
+│   ├── renderSplitPane() — left (chat+prompt) + right (tab view), merged side-by-side
+│   ├── renderAutocompletePopup() — ANSI cursor-positioned overlay above prompt
+│   └── positionCursorAtInput() — places cursor at "> {input}_" position
+│
+├── TuiRenderBuffer (ANSI-aware line composition)
+│   ├── visibleLength() — measures string width ignoring ANSI escape codes
+│   ├── fitToWidth() — pads or truncates preserving ANSI state
+│   ├── mergeSideBySide() — combines left + right buffers with separator column
+│   └── Each view renders into a TuiRenderBuffer → compositor merges them
+│
+├── TuiInputHandler (dual-mode input)
+│   ├── Raw mode (real TTY): JLine3 reader, single-char dispatch, escape sequence parsing
+│   ├── Line mode (IDE/pipe): BufferedReader from System.in, /commands, :tab shortcuts
+│   ├── dispatchAction() handles: tab switching, typing, backspace, send, autocomplete
+│   └── Slash commands: /quit, /clear, /help, /mode, /history, /settings, /set section.key value
+│
+├── TuiWorkflowListener (streaming bridge)
+│   ├── synchronized(accumulatedContent) on all methods — no race conditions
+│   ├── @Volatile completed flag — prevents late chunks after onStreamComplete
+│   ├── reset() called before each new request — clears accumulated content
+│   └── Stream message identified by streamId, replaced in-place, gets UUID on completion
+│
+└── TuiColors (ANSI color palette)
+    ├── Message roles: user (bright green), assistant (bright cyan), tool (yellow), system (red)
+    ├── Agent colors: 8-color cycle (cyan, green, magenta, yellow, blue, white, red, bright cyan)
+    ├── Status: new (white), pending (yellow), running (blue), success (green), failed (red)
+    ├── Log levels: debug (gray), info (white), warn (yellow), error (red)
+    └── Context categories: project (cyan), user (green), rag (magenta), conversation (yellow)
+```
+
+### TUI Tabs
+
+| Tab/Screen | Key | View | Content |
+|-----|-----|------|---------|
+| Help | F1 | TuiHelpScreen | Keyboard shortcuts and command reference |
+| Steps | F2 | TuiStepsView | Subtask list with status icons and expand/collapse |
+| Context | F3 | TuiContextView | Context sections with token usage progress bars |
+| RAG | F4 | TuiRagView | RAG indexing status and search results |
+| Logs | F5 | TuiLogsView | Application log stream with level coloring |
+| Debug | F6 | TuiDebugView | Session info, core health, connection status |
+| API | F7 | TuiApiLogsView | API call table with provider, tokens, cost, totals |
+| Files | F8 | TuiFilesView | Project files browser with content viewer overlay |
+| Settings | F9 | TuiSettingsScreen | 11 sub-tabs (General, Providers, Models, Prompts, Context, MCP, Docs, Tools, Subagents, Advanced, Theme) |
+
+### TUI Settings Screen
+
+The Settings screen provides full configuration access via `ConfigRouter`, matching the IntelliJ plugin's settings panels:
+
+| Sub-tab | Section | Content |
+|---------|---------|---------|
+| General | `general` | Markdown rendering, streaming, advanced view toggles |
+| Providers | `providers` | 8 providers (Ollama, Anthropic, OpenAI, OpenRouter, Gemini, LM Studio, Custom OpenAI, Z.AI) with masked API keys and status indicators |
+| Models | `models` | Model assignments: default, planning, coding, auxiliary, embeddings |
+| Prompts | `prompts` | Custom system prompts and slash commands |
+| Context | `index` | RAG search tuning (similarity threshold, top-k, hybrid search) and indexing settings |
+| MCP | `mcp` | MCP server list with enable/disable and type |
+| Docs | `docs` | Documentation sources for @docs context provider |
+| Tools | `tools` | 12 tools × Plan/Agent mode permission matrix |
+| Subagents | `subagents` | Enable/disable individual subagent profiles |
+| Advanced | `advanced`+`limits` | Security (no-egress, read-only), timeouts, limits, performance |
+| Theme | — | ANSI color preview (roles, status, agents, log levels) |
+
+---
+
+### TUI Keyboard Reference
+
+#### Navigation & Tabs
+
+| Key | Action |
+|-----|--------|
+| F1 | Help screen |
+| F2-F7 | Switch tabs: Steps, Context, RAG, Logs, Debug, API |
+| F8 | Files tab |
+| F9 | Settings screen (←/→ switch sub-tabs, ↑/↓ navigate fields) |
+| Ctrl+S | Settings (alternative) |
+| Alt+H | Session history browser |
+| Tab | Toggle panel/input focus |
+| Escape | Back to main screen / dismiss popup |
+| Ctrl+Q | Quit |
+| Arrow Up/Down | Scroll chat messages / navigate lists |
+| Page Up/Down | Scroll chat (10 lines at a time) |
+
+#### Session Management
+
+| Key | Action | Details |
+|-----|--------|---------|
+| Ctrl+W | **New session** | Starts a fresh conversation. Previous session is saved and can be restored from history. |
+| Alt+H | **History** | Browse all previous sessions. Select one and press Enter to switch. Shows mode, status, date, tokens, cost, and name. |
+| Ctrl+L | **Continue** | Resume current conversation after interruption (e.g. if agent stopped mid-task). |
+| Ctrl+D | **Summarize** | Compact long conversation history to save context window space. Uses LLM to generate a summary of older messages. |
+
+You can also use slash commands for session management:
+- `/history` — Open session history
+- `/export <path>` — Export conversation to Markdown file
+- `/resend` — Resend last user message
+- `/rewind [N]` — Rewind to message N and resend
+- `/edit [N]` — Edit user message N (loads into input for re-editing)
+- `/copyall` — Copy entire conversation to clipboard
+- `/rate +/-` — Rate conversation quality
+
+#### Mode, Model & Toggles
+
+| Key | Action | Details |
+|-----|--------|---------|
+| Shift+Tab | Cycle mode | CHAT → PLAN → AGENT → CHAT. Mode determines available tools. |
+| Ctrl+O | Select model | Opens popup with available models. Arrow keys to select, Enter to confirm. |
+| Ctrl+T | Toggle thinking | Enable/disable reasoning mode (extended thinking for supported models). |
+| Ctrl+E | Toggle execution | AUTO (agent runs autonomously) / INTERACTIVE (step-by-step approval). |
+| Ctrl+N | Toggle no-egress | Local-only mode — blocks all cloud provider API calls. |
+
+#### Chat & Input
+
+| Key | Action |
+|-----|--------|
+| Enter | Send message |
+| Ctrl+C | Cancel current operation (streaming/agent execution) |
+| Arrow Left/Right | Move cursor within input |
+| Backspace | Delete character before cursor |
+
+**Multi-line input:** The input area expands from 1 to 4 lines as you type. Long lines wrap automatically. An overflow indicator shows when content exceeds 4 lines.
+
+**Paste support:** Large pastes (>200 characters) display a preview marker showing character count and first 30 characters. The full content is sent when you press Enter.
+
+#### Message Selection & Clipboard
+
+| Key | Action |
+|-----|--------|
+| Ctrl+P | Select previous message (move selection up) |
+| Ctrl+B | Select next message (move selection down) |
+| Ctrl+Y | Copy selected (or last) message to clipboard |
+| Ctrl+F | Cycle agent filter (multi-agent mode — filter chat by agent) |
+
+#### Autocomplete
+
+| Trigger | Action | Candidates |
+|---------|--------|------------|
+| `@` | Context autocomplete | @file, @folder, @codebase, @grep, @diff, @url, @docs, @clipboard, etc. |
+| `!` | Subagent autocomplete | !review, !security, !architect, !docs, and custom subagents |
+| `/` | Slash command autocomplete | /explain, /refactor, /test, /fix, /implement, /optimize, /security-review, etc. |
+
+When the autocomplete popup is visible:
+- **Arrow Down / Tab** — Next candidate
+- **Arrow Up** — Previous candidate
+- **Enter** — Accept selection
+- **Escape** — Dismiss
+- **Keep typing** — Filters candidates in real-time
+
+#### Slash Commands Reference
+
+**Prompt templates** (sent to LLM with your input as context):
+
+| Command | Description |
+|---------|-------------|
+| /explain | Explain what this code does |
+| /refactor | Suggest focused refactoring |
+| /test | Generate unit tests |
+| /fix | Fix a bug with root cause analysis |
+| /implement | Implement a change with plan |
+| /optimize | Analyze performance, propose optimizations |
+| /simplify | Simplify complex code |
+| /document | Generate documentation |
+| /security-review | Security vulnerability analysis |
+| /translate | Translate code to another language |
+
+**System commands** (executed locally, not sent to LLM):
+
+| Command | Description |
+|---------|-------------|
+| /help, /? | Show help with all commands and shortcuts |
+| /quit, /q | Exit Refio |
+| /clear | Clear input buffer |
+| /history | Browse session history |
+| /history-delete \<id\> | Delete a session |
+| /export \<path\> | Export conversation to Markdown |
+| /resend | Resend last user message |
+| /rewind [N] | Rewind to message N and resend |
+| /edit [N] | Edit user message N |
+| /copyall | Copy entire conversation to clipboard |
+| /rate +/- | Rate conversation quality |
+| /prompt | Show current system prompt |
+| /add-step \<desc\> | Add a new step to the plan |
+| /snippet \<file\> [start] [end] | Add file snippet as context |
+| /open \<file\> | Open file in external editor |
+| /clearctx | Remove all @context references from input |
+| /removectx \<name\> | Remove specific @context reference |
+| /docs-add \<url\> [depth] | Add documentation source for indexing |
+| /docs-delete \<id\> | Delete documentation source |
+| /docs-reindex \<id\> | Reindex documentation source |
+| /rag-search \<query\> | Search RAG index |
+| /mcp-add \<type\> \<name\> \<cmd\> | Add MCP server (stdio/http) |
+| /mcp-edit \<id\> \<field\> \<value\> | Edit MCP server field |
+| /mcp-remove \<id\> | Remove MCP server |
+| /mcp-list | List MCP servers with status |
+
+---
+
 ## Quick Reference
 
 ### Build Commands
@@ -1118,6 +1436,7 @@ IndexingProgress via Flow
 ```bash
 ./gradlew runIde              # Run in sandbox IDE
 ./gradlew buildPlugin         # Build ZIP distribution
+./gradlew :cli:installDist    # Build standalone CLI
 ./gradlew test                # Run tests
 ./gradlew detekt              # Static analysis
 ./gradlew ktlintCheck         # Lint check
@@ -1140,12 +1459,18 @@ refio_poc.db                  # SQLite database (project root)
 | SessionManager | services/session/ | Session coordination facade |
 | AgentTurnLoop | core/services/ | Turn-based execution loop |
 | ToolResultSummarizer | core/services/ | Context reduction |
-| ContextService | core/services/ | Context building |
+| ContextService | core/services/ | Context building (delegates to 6 sub-services) |
 | RagSearchService | core/services/ | Semantic search |
 | LLMClient | core/llm/ | LLM provider abstraction |
 | ToolRegistry | core/tools/base/ | Tool catalog |
 | MCPManager | core/context/mcp/ | MCP server lifecycle |
 | SubagentRouter | core/subagents/ | Subagent operations |
+| TuiApp | cli/tui/ | TUI entry point (launchTuiApp) |
+| TuiViewModel | cli/tui/state/ | TUI coordinator (~1289 LOC, delegates to TuiChatViewModel, TuiSessionViewModel, TuiObservabilityViewModel) |
+| TuiRenderer | cli/tui/rendering/ | Full-screen split-pane compositor |
+| TuiRenderBuffer | cli/tui/rendering/ | ANSI-aware line buffer composition |
+| TuiInputHandler | cli/tui/input/ | Dual-mode input (raw TTY / line) |
+| StandaloneCoreBootstrap | cli/ | Core initialization without IntelliJ SDK |
 
 ### Environment Variables
 

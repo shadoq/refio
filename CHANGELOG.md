@@ -9,9 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Standalone CLI** with full TUI (Mordant + JLine3): split-pane layout, 7 tabs (F1–F7), settings (F8), `@context` autocomplete, session history, dual-mode input (raw TTY / line-based fallback).
+- **Multi-agent architecture**: parallel orchestration, event bus, dependency resolution, YAML task definitions, per-agent metrics, and dedicated API/DB support.
+- **New tools**: `http_request` (GET/POST/PUT/DELETE with `save_to_file`), `run_code` (Python, JS, Kotlin Script).
+- **7 standalone context providers** for CLI mode — 9/14 providers now available outside IDE.
+- **Prompt registry**: file-based layered system (project/user/built-in) with Markdown definitions, shared `FileBasedRegistry` / `DefinitionScope` infrastructure for prompts and subagents.
+- **Turn-state inspector**: prompt snapshots, context inclusion/drop traces, token usage, and tool-batch summaries exposed to IntelliJ plugin.
+- Platform-agnostic `ProjectHandle` replacing direct IntelliJ `Project` dependency in core.
+- Expanded test coverage: conversation compaction, working-memory decay, tool-result persistence.
+
+### Fixed
+
+- TUI: `Ctrl+D` crash, duplicate streaming messages, input/cursor rendering, JLine dumb-terminal warnings.
+- `PathSandbox` symlink resolution on macOS.
+- `resetAllSettingsToDefaults()` now actually resets config entries.
+- Multi-agent EventBus wiring, cross-platform terminal command tests.
+- Model visibility defaults initialize once and preserve user config.
+- MCP settings: proper disabled/stale/auth-required state tracking.
+- Plan bubbles: show real tool calls, recover inline tool arguments.
+- Tool-result summaries: correct multi-line wrapping in chat bubbles.
+- Conversation compaction: preserves structured summaries across passes, caps summarized tool results.
+
+### Removed
+
+- Compose Desktop GUI and all related dependencies, replaced by TUI.
+
 ### Changed
 
-- Removing IntelliJ compile-time dependency from the core module.
+- Gradle multi-module structure: `:core`, `:intellij-plugin`, `:cli`. Core no longer depends on IntelliJ at compile time.
+- `ContextService` split into formatter/pruner with structured budget decisions.
+- `PromptsService` resolves from layered registry; DB keeps only slash commands and custom overrides.
+- `SubagentRegistry` refactored onto shared layered registry model.
+- Conversation compaction uses structured `<compacted_summary>` format with merged summaries and larger budget.
+- Working memory decays stale entries; tool-result persistence keeps raw output up to 16 KB before summarizing.
+- Agent turn execution publishes observable phase changes.
+- IntelliJ context panel focuses on prompt trace/inspector instead of raw prompt preview.
 
 ## [0.0.1.4] - 2025-03-22
 

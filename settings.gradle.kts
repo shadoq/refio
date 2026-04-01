@@ -2,6 +2,7 @@ pluginManagement {
     repositories {
         mavenCentral()
         gradlePluginPortal()
+        google()  // For Compose
     }
 }
 
@@ -11,3 +12,7 @@ plugins {
 }
 
 rootProject.name = "refio"
+
+include(":core")
+include(":intellij-plugin")
+include(":cli")

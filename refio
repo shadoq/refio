@@ -1,0 +1,15 @@
+#!/bin/sh
+
+# Resolve script location
+app_path=$0
+while [ -h "$app_path" ]; do
+    ls=$( ls -ld "$app_path" )
+    link=${ls#*' -> '}
+    case $link in
+      /*)   app_path=$link ;;
+      *)    app_path="${app_path%/*}/$link" ;;
+    esac
+done
+SCRIPT_DIR=$( cd -P "${app_path%/*}" > /dev/null && pwd )
+
+exec "$SCRIPT_DIR/cli/build/install/cli/bin/cli" "$@"
