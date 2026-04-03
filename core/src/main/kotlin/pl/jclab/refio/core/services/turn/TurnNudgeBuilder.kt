@@ -31,6 +31,15 @@ object TurnNudgeBuilder {
     }
 
     /**
+     * Build nudge message when agent gives up after a tool error instead of retrying or working around it.
+     */
+    fun buildToolErrorGiveUpNudgeMessage(): String {
+        return "A tool returned an error but you stopped instead of continuing. Do NOT give up on the task. " +
+            "Analyze the error and decide how to proceed: retry after a delay (use run_terminal_command with 'sleep N'), " +
+            "try a different approach, or adjust your parameters. Continue working until the task is complete."
+    }
+
+    /**
      * Build nudge message for invalid tool call format.
      */
     fun buildInvalidFormatMessage(mode: String): String {

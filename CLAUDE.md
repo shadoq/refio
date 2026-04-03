@@ -15,7 +15,7 @@ Local-first AI coding assistant for IntelliJ IDEA and the terminal. Kotlin/JVM p
 ./gradlew :cli:installDist                 # Build CLI → cli/build/install/cli/bin/cli
 
 # Run CLI
-./cli/build/install/cli/bin/cli --project /path/to/project --mode AGENT --model ollama/qwen2.5-coder:7b
+./cli/build/install/cli/bin/cli --project /path/to/project --mode AGENT --model ollama/qwen3.5:9b
 
 # Testing
 ./gradlew test                             # All modules
@@ -46,7 +46,7 @@ UI (IntelliJ Swing / TUI Mordant)
     → Domain Routers (12 routers: Task, Chat, Agent, Subtask, Config, Prompts, Tool, RAG, ApiLogs, MultiAgent, ProjectContext, Subagent)
     → CoreApiRouter (composition root — creates dependencies, exposes routers, no business logic)
       → Execution (WorkflowOrchestrator → ChatService for CHAT | AgentTurnLoop for PLAN/AGENT)
-        → LLMClient (6 provider adapters) + ToolRegistry (12 tools) + ContextService (14 providers)
+        → LLMClient (8 provider adapters) + ToolRegistry (14 tools) + ContextService (14 providers)
           → Infrastructure (SQLite via Exposed ORM, Ktor HTTP, Caffeine cache)
 ```
 
@@ -55,8 +55,8 @@ Callers access domain routers directly via `coreApiRouter.taskRouter`, `coreApiR
 ## Three Execution Modes
 
 - **CHAT** — No tools. Conversation-only via WorkflowOrchestrator → ChatService.
-- **PLAN** — Read-only tools (6). AgentTurnLoop with max 15 iterations.
-- **AGENT** — Full read/write tools (12). AgentTurnLoop with max 25 iterations. File snapshots before edits.
+- **PLAN** — Read-only tools (6). AgentTurnLoop with max 25 iterations.
+- **AGENT** — Full read/write tools (14). AgentTurnLoop with max 50 iterations. File snapshots before edits.
 
 Subagents use a nested invocation model (max depth 3) with custom system prompts and tool filtering.
 
@@ -69,14 +69,14 @@ Each module has its own source tree:
 
 ### Core module (`core/src/main/kotlin/pl/jclab/refio/`)
 
-- `core/llm/adapters/` — LLM provider implementations (Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio)
+- `core/llm/adapters/` — LLM provider implementations (Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio, Custom OpenAI, Z.AI)
 - `core/tools/` — Tool implementations (read_file, grep_search, code_editing, run_terminal_command, etc.)
 - `core/services/` — ~35 services (AgentTurnLoop, ContextService, RagIndexingService, ConfigService, etc.)
-- `core/services/turn/` — AgentTurnLoop sub-components (TurnLLMCaller, TurnPromptBuilder, TurnToolExecutor, TurnResponseProcessor, TurnGuardrails, ToolCallParser, TurnFinalizer, TurnNudgeBuilder, etc.)
+- `core/services/turn/` — AgentTurnLoop sub-components (TurnLLMCaller, TurnPromptBuilder, TurnToolExecutor, TurnResponseProcessor, TurnGuardrails, ToolCallParser, TurnFinalizer, TurnNudgeBuilder, ToolApprovalService, etc.)
 - `core/services/context/` — Context building helpers (ContextBudget, ContextSection, WorkingMemoryService, ProjectInstructionsLoader, ToolResultCompression, ContextTokenEstimator)
 - `core/context/providers/` — IntelliJ-dependent context providers (excluded from `:core` module)
 - `core/context/providers/standalone/` — IDE-independent context providers (included in `:core`)
-- `core/security/` — PathSandbox, CommandWhitelist, FileLimits
+- `core/security/` — PathSandbox, CommandWhitelist, CommandRule, FileLimits
 - `core/db/` — Exposed ORM tables + repositories + migration system
 - `core/subagents/` — Subagent parser, router, profiles; definitions in `src/main/resources/subagents/*.md`
 - `core/agents/` — Multi-agent orchestration (events, runner, cycle detection)
@@ -103,15 +103,16 @@ JUnit 5 + MockK + Turbine (Flow testing). Tests mirror source structure under `s
 - **Thin router pattern**: CoreApiRouter is a composition root (~987 LOC) that creates dependencies and exposes 12 domain routers. Callers use domain routers directly (e.g., `coreApiRouter.taskRouter.createTask()`). No facade methods — zero business logic in CoreApiRouter.
 - **StateFlow reactivity**: SessionManager exposes 11 StateFlows; UI observes via `Flow.collect`.
 - **Separate source trees**: Each module has its own `src/main/kotlin`. When adding new core files, ensure they don't depend on IntelliJ Platform APIs — the `:core` module has no IntelliJ dependency.
-- **Security layers**: PathSandbox restricts file ops to project root; CommandWhitelist filters terminal commands; FileLimits enforces size/extension restrictions. All tools go through ToolPermissionsService for mode-based access control.
+- **Security layers**: PathSandbox restricts file ops to project root; CommandRule (regex-based ALLOW/BLOCK/ASK) replaces legacy CommandWhitelist for terminal commands; FileLimits enforces size/extension restrictions. ToolPermissionsService provides 3-level (ON/ASK/OFF) per-mode access control. ToolApprovalService handles user approval flow with session trust rules.
 
 ---
 
 ## Documentation
 
-- [docs/files.md](docs/files.md) — Per-package file reference (~410 Kotlin files with 1-2 sentence descriptions)
+- [docs/onboarding.md](docs/onboarding.md) — Onboarding guide for new team members
+- [docs/files.md](docs/files.md) — Per-package file reference (~590 Kotlin files with 1-2 sentence descriptions)
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Architecture overview
-- [docs/overview.md](docs/overview.md) — Project overview
+- [docs/overview.md](docs/overview.md) — Technical architecture overview (~1500 lines)
 - [docs/config.md](docs/config.md) — Configuration reference
 - [docs/planning/prd.md](docs/planning/prd.md) — Product Requirements Document
 - [docs/planning/prd-session.md](docs/planning/prd-session.md) — Session PRD
@@ -164,7 +165,7 @@ See [docs/files.md](docs/files.md) for the full per-package file reference.
 
 ### Security Patterns
 - **Sandbox** — `PathSandbox` restricts all file ops to project root with symlink detection.
-- **Whitelist/Denylist** — `CommandWhitelist` (100+ programs), `CommandDenylist` (destructive commands), `SupportedModels` (tested models only).
+- **Whitelist/Denylist** — `CommandRule` (regex-based ALLOW/BLOCK/ASK), `CommandWhitelist` (legacy, 100+ programs), `CommandDenylist` (destructive commands), `SupportedModels` (tested models only).
 - **Secret Redaction** — `SecureLogger` regex-based redaction in all logs; `detectSensitiveLogging` Gradle task.
 - **Defense-in-Depth** — `PathSandbox` (path normalization + symlink parent chain + real path resolution); tool permissions (mode-based + per-tool + security override).
 

@@ -147,16 +147,16 @@ Configure default models and visibility.
 models:
   # Default models per operation mode (format: "provider/model-id")
   defaults:
-    chat: "ollama/qwen2.5:7b"           # Chat/conversation model
-    plan: "ollama/qwen2.5:7b"           # Planning operations
-    coding: "ollama/qwen2.5-coder:7b"   # Coding/agent tasks
-    weak: "ollama/qwen2.5:3b"           # Auxiliary operations (summaries)
+    chat: "ollama/qwen3.5:9b"           # Chat/conversation model
+    plan: "ollama/qwen3.5:9b"           # Planning operations
+    coding: "ollama/qwen3.5:9b"   # Coding/agent tasks
+    weak: "ollama/qwen3.5:4b"           # Auxiliary operations (summaries)
     embedding: "ollama/nomic-embed-text" # RAG embeddings
 
   # Control which models appear in the dropdown
   visibility:
-    "ollama/qwen2.5:7b": true
-    "ollama/qwen2.5:14b": true
+    "ollama/qwen3.5:9b": true
+    "ollama/qwen3.5:14b": true
     "openai/gpt-4o-mini": true
     "openai/gpt-4o": false              # Hidden (expensive)
     "anthropic/claude-3-opus-20240229": false  # Hidden (expensive)
@@ -376,10 +376,10 @@ mcp:
 | `providers.openrouter.apiKey` | `openrouter_api_key` | - |
 | `providers.gemini.apiKey` | `gemini_api_key` | - |
 | `providers.lmstudio.baseUrl` | `lmstudio_base_url` | `http://localhost:1234/v1` |
-| `models.defaults.chat` | `default_model.chat` | `qwen2.5:7b` |
-| `models.defaults.plan` | `default_model.plan` | `qwen2.5:7b` |
-| `models.defaults.coding` | `default_model.agent` | `qwen2.5:7b` |
-| `models.defaults.weak` | `default_model.weak` | `qwen2.5:7b` |
+| `models.defaults.chat` | `default_model.chat` | `qwen3.5:9b` |
+| `models.defaults.plan` | `default_model.plan` | `qwen3.5:9b` |
+| `models.defaults.coding` | `default_model.agent` | `qwen3.5:9b` |
+| `models.defaults.weak` | `default_model.weak` | `qwen3.5:9b` |
 | `models.defaults.embedding` | `models.embedding_model` | `nomic-embed-text` |
 | `limits.apiCallTimeout` | `limits.api_call_timeout` | `240` |
 | `limits.toolExecutionTimeout` | `limits.tool_execution_timeout` | `240` |
@@ -419,7 +419,7 @@ providers:
 
 models:
   defaults:
-    chat: "ollama/qwen2.5:7b"
+    chat: "ollama/qwen3.5:9b"
 ```
 
 ### Full User Config
@@ -447,12 +447,12 @@ models:
     chat: "anthropic/claude-3-5-sonnet-20241022"
     plan: "anthropic/claude-3-5-sonnet-20241022"
     coding: "anthropic/claude-3-5-sonnet-20241022"
-    weak: "ollama/qwen2.5:3b"
+    weak: "ollama/qwen3.5:4b"
     embedding: "ollama/nomic-embed-text"
 
   visibility:
-    "ollama/qwen2.5:7b": true
-    "ollama/qwen2.5:14b": true
+    "ollama/qwen3.5:9b": true
+    "ollama/qwen3.5:14b": true
     "anthropic/claude-3-5-sonnet-20241022": true
     "openai/gpt-4o": true
 
@@ -520,7 +520,7 @@ mcp:
 
 1. **Check visibility settings**: Ensure the model is set to `true` in visibility
 2. **Check provider connection**: Verify the provider (e.g., Ollama) is running
-3. **Check model format**: Use `provider/model-id` format (e.g., `ollama/qwen2.5:7b`)
+3. **Check model format**: Use `provider/model-id` format (e.g., `ollama/qwen3.5:9b`)
 
 ### Debugging Config Loading
 
@@ -534,7 +534,7 @@ Check the IDE log for messages like:
 ```
 INFO: Loaded user config from ~/.refio/config.yaml
 INFO: Loaded project config from /path/to/project/.refio/config.yaml
-INFO: Using chat model from YAML: qwen2.5:7b
+INFO: Using chat model from YAML: qwen3.5:9b
 ```
 
 ---

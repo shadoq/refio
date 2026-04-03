@@ -10,7 +10,7 @@
 2. **Download required models**:
    ```bash
    ollama pull nomic-embed-text:latest
-   ollama pull qwen2.5-coder:7b
+   ollama pull qwen3.5:9b
    ```
 3. **Set Ollama context** to minimum 32k tokens (preferably 64k)
 
@@ -86,7 +86,7 @@ Write a snake game in javascript, css, html in one file. Build a classic Snake g
 - Default endpoint: `http://localhost:11434`
 
 **Out of context errors?**
-- Increase Ollama context: `ollama run qwen2.5-coder:7b` then `/set parameter num_ctx 65536`
+- Increase Ollama context: `ollama run qwen3.5:9b` then `/set parameter num_ctx 65536`
 - Use more specific `@file` instead of `@codebase`
 
 ## 📚 Next Steps

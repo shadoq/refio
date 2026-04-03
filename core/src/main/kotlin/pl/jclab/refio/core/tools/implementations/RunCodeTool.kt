@@ -3,6 +3,7 @@ package pl.jclab.refio.core.tools.implementations
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
@@ -74,6 +75,11 @@ class RunCodeTool(
         val langConfig = SUPPORTED_LANGUAGES[language]
             ?: return@withContext ToolResult.error("Unsupported language: $language")
 
+        // Optional timeout override from LLM (clamped to safe bounds)
+        val effectiveTimeout = (params["timeout_seconds"] as? Number)?.toLong()
+            ?.coerceIn(MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS)
+            ?: timeoutSeconds
+
         var tempFile: java.nio.file.Path? = null
 
         try {
@@ -100,15 +106,43 @@ class RunCodeTool(
                 process.inputStream.bufferedReader().use { it.readText() }
             }
 
-            val completed = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+            val completed = process.waitFor(effectiveTimeout, TimeUnit.SECONDS)
 
             if (!completed) {
                 process.destroyForcibly()
-                runCatching { process.inputStream.close() }
-                outputDeferred.cancel()
-                logger.warn { "Code execution timed out after ${timeoutSeconds}s" }
-                return@withContext ToolResult.error(
-                    "Code execution timed out after $timeoutSeconds seconds"
+                // Capture partial output instead of discarding it
+                val partialOutput = withTimeoutOrNull(3000L) {
+                    runCatching { outputDeferred.await() }.getOrDefault("")
+                } ?: ""
+                val duration = (System.currentTimeMillis() - startTime).toInt()
+
+                logger.warn { "Code execution timed out after ${effectiveTimeout}s, partial output=${partialOutput.length} chars" }
+
+                val truncatedPartial = if (partialOutput.length > maxOutputSize) {
+                    partialOutput.take(maxOutputSize) + "\n\n... (output truncated)"
+                } else {
+                    partialOutput
+                }
+
+                val message = buildString {
+                    append("Code execution timed out after $effectiveTimeout seconds.")
+                    if (truncatedPartial.isNotBlank()) {
+                        append("\n\nPartial output before timeout:\n")
+                        append(truncatedPartial)
+                    }
+                }
+
+                return@withContext ToolResult(
+                    success = false,
+                    output = message,
+                    exitCode = -1,
+                    durationMs = duration,
+                    metadata = mapOf(
+                        "language" to language,
+                        "timed_out" to true,
+                        "timeout_seconds" to effectiveTimeout,
+                        "partial_output_length" to partialOutput.length
+                    )
                 )
             }
 
@@ -183,6 +217,11 @@ class RunCodeTool(
                 "code" to mapOf(
                     "type" to "string",
                     "description" to "Source code to execute. Has access to files in the project directory."
+                ),
+                "timeout_seconds" to mapOf(
+                    "type" to "integer",
+                    "description" to "Optional execution timeout in seconds (default: $DEFAULT_TIMEOUT_SECONDS, max: $MAX_TIMEOUT_SECONDS). " +
+                        "Increase for long-running scripts (e.g., API calls with retries/rate-limit waits)."
                 )
             ),
             "required" to listOf("language", "code")
@@ -197,6 +236,8 @@ class RunCodeTool(
 
     companion object {
         const val DEFAULT_TIMEOUT_SECONDS = 120L
+        const val MIN_TIMEOUT_SECONDS = 30L
+        const val MAX_TIMEOUT_SECONDS = 600L
         const val DEFAULT_MAX_OUTPUT_SIZE = 200 * 1024 // 200KB
         const val LARGE_OUTPUT_WARNING_THRESHOLD = 16_000 // 16KB - warn about saving to file
 

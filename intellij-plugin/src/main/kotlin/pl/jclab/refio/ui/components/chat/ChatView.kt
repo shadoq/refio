@@ -288,6 +288,7 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     // Width for bubble calculations (updated on resize)
     private var availableWidth: Int = 400
 
+    private val toolApprovalPanel: ToolApprovalPanel
     private val busyIndicatorPanel: JPanel
     private val busyIndicatorLabel: JLabel
     private val busyIndicatorFrames = arrayOf("|", " ")
@@ -345,6 +346,8 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
 
         add(messagesPanel, BorderLayout.CENTER)
 
+        toolApprovalPanel = ToolApprovalPanel(sessionManager.toolApprovalService)
+
         busyIndicatorLabel = JLabel("Working ${busyIndicatorFrames[0]}").apply {
             font = LCATheme.smallFont.deriveFont(Font.ITALIC)
             foreground = LCATheme.descriptionForeground
@@ -356,7 +359,13 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
             isVisible = false
             add(busyIndicatorLabel)
         }
-        add(busyIndicatorPanel, BorderLayout.SOUTH)
+
+        val southPanel = JPanel(BorderLayout()).apply {
+            isOpaque = false
+            add(toolApprovalPanel, BorderLayout.NORTH)
+            add(busyIndicatorPanel, BorderLayout.SOUTH)
+        }
+        add(southPanel, BorderLayout.SOUTH)
 
         cs.launch {
             sessionManager.activeSession.collect { session ->
@@ -421,6 +430,20 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
         cs.launch {
             immediateMessageUpdateFlow
                 .collect { messages -> updateMessages(messages) }
+        }
+
+        // Observe tool approval requests
+        cs.launch {
+            sessionManager.toolApprovalService.pendingRequests.collect { requests ->
+                SwingUtilities.invokeLater {
+                    val first = requests.firstOrNull()
+                    if (first != null) {
+                        toolApprovalPanel.showRequest(first)
+                    } else {
+                        toolApprovalPanel.hidePanel()
+                    }
+                }
+            }
         }
     }
 

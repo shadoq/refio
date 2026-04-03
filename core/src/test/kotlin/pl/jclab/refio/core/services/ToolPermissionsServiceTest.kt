@@ -132,13 +132,13 @@ class ToolPermissionsServiceTest {
         }
 
         @Test
-        fun `should return OFF for terminal in PLAN and ON in AGENT by default`() {
+        fun `should return OFF for terminal in PLAN and ASK in AGENT by default`() {
             // Given
             every { configRepository.getWithPrecedence(any(), any()) } returns null
 
             // When/Then
             assertEquals(PermissionLevel.OFF, service.getPermission("run_terminal_command", TaskMode.PLAN))
-            assertEquals(PermissionLevel.ON, service.getPermission("run_terminal_command", TaskMode.AGENT))
+            assertEquals(PermissionLevel.ASK, service.getPermission("run_terminal_command", TaskMode.AGENT))
         }
 
         @Test

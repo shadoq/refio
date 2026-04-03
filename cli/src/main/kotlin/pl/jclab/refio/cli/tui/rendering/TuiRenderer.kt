@@ -141,6 +141,11 @@ class TuiRenderer(
             applyApprovalOverlay(screen, state, layout)
         }
 
+        // Tool approval overlay (PermissionLevel.ASK)
+        if (state.pendingToolApproval != null && state.pendingApprovals.isEmpty()) {
+            applyToolApprovalOverlay(screen, state, layout)
+        }
+
         // === 3. Flush to terminal (through JLine writer) ===
         screen.flush(output, clearScreen = resized)
 
@@ -331,6 +336,37 @@ class TuiRenderer(
         lines.add(TuiColors.border("└") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┘"))
 
         // Center the dialog
+        val startRow = ((layout.height - lines.size) / 2).coerceAtLeast(2)
+        val startCol = ((layout.width - boxWidth) / 2).coerceAtLeast(0)
+
+        screen.overlay(startRow, startCol, lines)
+    }
+
+    /**
+     * Render tool approval dialog for PermissionLevel.ASK.
+     */
+    private fun applyToolApprovalOverlay(screen: TuiScreenBuffer, state: TuiState, layout: TuiLayoutRegions) {
+        val req = state.pendingToolApproval ?: return
+        val boxWidth = 60.coerceAtMost(layout.width - 4)
+        val innerWidth = boxWidth - 4
+
+        val lines = mutableListOf<String>()
+
+        lines.add(TuiColors.border("┌") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┐"))
+        lines.add(TuiColors.border("│") + TuiColors.highlight(" Tool Approval Required".padEnd(boxWidth - 2)) + TuiColors.border("│"))
+        lines.add(TuiColors.border("├") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┤"))
+
+        val toolLine = " Tool: ${req.toolName}".take(innerWidth).padEnd(innerWidth)
+        lines.add(TuiColors.border("│") + " $toolLine " + TuiColors.border("│"))
+
+        val descLine = " ${req.description}".take(innerWidth).padEnd(innerWidth)
+        lines.add(TuiColors.border("│") + " $descLine " + TuiColors.border("│"))
+
+        lines.add(TuiColors.border("├") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┤"))
+        val promptText = " [y] Approve  [t] Trust  [n] Reject"
+        lines.add(TuiColors.border("│") + TuiColors.accent(promptText.padEnd(boxWidth - 2)) + TuiColors.border("│"))
+        lines.add(TuiColors.border("└") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┘"))
+
         val startRow = ((layout.height - lines.size) / 2).coerceAtLeast(2)
         val startCol = ((layout.width - boxWidth) / 2).coerceAtLeast(0)
 

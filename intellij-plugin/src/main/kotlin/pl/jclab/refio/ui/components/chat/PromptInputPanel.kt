@@ -104,6 +104,7 @@ class PromptInputPanel(
     private val inputContainer: InputPanelContainer
     private val promptEditor: EditorTextField
     private val sendButton: JButton
+    private val stopButton: JButton
     private var isOperationRunning = false
     private var lastPreferredEditorHeight: Int = -1
     private val editorShortcutsDisposable = Disposer.newDisposable(project, "refio.promptInputPanel.editorShortcuts")
@@ -438,20 +439,27 @@ class PromptInputPanel(
 
         // Send/Stop button (right side of row 1)
         // Transforms: Send → Stop during operation, Stop → Send when idle
+        stopButton = JButton("🔴 Stop").apply {
+            toolTipText = "Stop current operation"
+            minimumSize = Dimension(80, 28)
+            preferredSize = Dimension(80, 28)
+            maximumSize = Dimension(80, 28)
+            isVisible = false
+            addActionListener { handleStopOperation() }
+        }
+        gbc.gridx = 5
+        gbc.weightx = 0.0
+        gbc.insets = LCATheme.insetsNone
+        add(stopButton, gbc)
+
         sendButton = JButton("🚀 Send").apply {
             toolTipText = "Send prompt (Enter)"
             minimumSize = Dimension(90, 28)
             preferredSize = Dimension(90, 28)
             maximumSize = Dimension(90, 28)
-            addActionListener {
-                if (isOperationRunning) {
-                    handleStopOperation()
-                } else {
-                    handleSendMessage()
-                }
-            }
+            addActionListener { handleSendMessage() }
         }
-        gbc.gridx = 5
+        gbc.gridx = 6
         gbc.weightx = 0.0
         gbc.insets = LCATheme.insetsNone
         add(sendButton, gbc)
@@ -571,7 +579,20 @@ class PromptInputPanel(
         if (text.isEmpty()) return
 
         if (isOperationRunning) {
-            logger.warn { "Operation already running, ignoring duplicate send" }
+            // Agent is running — queue message for next iteration
+            val activeSession = sessionManager.activeSession.value
+            if (activeSession != null) {
+                val snippetRefs = snippetsContainer.getSnippets().map { it.toContextReference() }
+                val allRefs = contextReferences + snippetRefs
+                val messageText = buildMidExecutionMessage(text, allRefs)
+                sessionManager.pendingUserMessageQueue.enqueue(activeSession.id, messageText)
+                promptEditor.text = ""
+                clearContext()
+                sessionManager.notifyMidExecutionMessage(activeSession.id, messageText)
+                logger.info { "Queued mid-execution message for taskId=${activeSession.id} (${allRefs.size} context refs)" }
+            } else {
+                logger.warn { "Operation running but no active session, ignoring send" }
+            }
             return
         }
 
@@ -695,6 +716,28 @@ class PromptInputPanel(
      *
      * @return Processed text with all commands replaced
      */
+    /**
+     * Build message text with inlined context refs for mid-execution messages.
+     * Since context refs can't be passed through TurnRequest (already running),
+     * we inline file contents directly into the message text.
+     */
+    private fun buildMidExecutionMessage(text: String, refs: List<ContextReference>): String {
+        if (refs.isEmpty()) return text
+        val sb = StringBuilder(text)
+        for (ref in refs) {
+            val content = ref.content ?: try {
+                java.io.File(ref.path).takeIf { it.isFile && it.length() < 512_000 }?.readText()
+            } catch (_: Exception) { null }
+            if (content != null) {
+                sb.append("\n\n--- ${ref.displayName} ---\n")
+                sb.append(content)
+            } else {
+                sb.append("\n\n[Referenced: ${ref.displayName} (${ref.path})]")
+            }
+        }
+        return sb.toString()
+    }
+
     private fun processSlashCommand(text: String): String? {
         // Find all slash commands using regex
         // Only match /command after whitespace or at start of text (not in URLs like https://example.com/path)
@@ -1978,14 +2021,14 @@ class PromptInputPanel(
         inputBorderPanel.isLoading = isRunning
 
         if (isRunning) {
-            // Operation started → Send becomes Stop
-            sendButton.text = "🛑 Stop"
-            sendButton.toolTipText = "Stop current operation"
+            // Operation started — prompt stays active for mid-execution input (Enter sends)
+            sendButton.isVisible = false
+            stopButton.isVisible = true
 
-            // Disable prompt input
-            setPromptEditorEnabled(false, LCATheme.inactiveTextFieldBackground)
+            // Keep prompt editor enabled for mid-execution messages
+            setPromptEditorEnabled(true, LCATheme.editorBackground)
 
-            // Disable all controls (mode, model, toggles)
+            // Disable mode/model selectors (can't change mid-execution)
             addContextButton.isEnabled = false
             modeSelector.isEnabled = false
             modelSelector.isEnabled = false
@@ -1993,11 +2036,13 @@ class PromptInputPanel(
             thinkingToggle.isEnabled = false
             noEgressToggle.isEnabled = false
 
-            logger.info { "Operation started - Send → Stop, all controls disabled" }
+            logger.info { "Operation started - prompt stays active for mid-execution input" }
         } else {
-            // Operation finished → Stop becomes Send
+            // Operation finished
             sendButton.text = "🚀 Send"
             sendButton.toolTipText = "Send prompt (Enter)"
+            sendButton.isVisible = true
+            stopButton.isVisible = false
 
             // Re-enable prompt input
             setPromptEditorEnabled(true, LCATheme.editorBackground)
@@ -2010,13 +2055,11 @@ class PromptInputPanel(
             thinkingToggle.isEnabled = true
             noEgressToggle.isEnabled = true
 
-            logger.info { "Operation finished - Stop → Send, all controls enabled" }
+            logger.info { "Operation finished - all controls enabled" }
         }
 
-        sendButton.revalidate()
-        sendButton.repaint()
-        promptEditor.revalidate()
-        promptEditor.repaint()
+        revalidate()
+        repaint()
     }
 
     /**

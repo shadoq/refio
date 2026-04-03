@@ -38,6 +38,7 @@ import pl.jclab.refio.core.services.turn.TurnPhase
 import pl.jclab.refio.core.services.turn.TurnStateSnapshot
 import pl.jclab.refio.core.services.turn.TurnSubagentValidator
 import pl.jclab.refio.core.services.turn.TurnToolExecutor
+import pl.jclab.refio.core.services.turn.ToolRejectedException
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.logging.dualLogger
 import java.util.*
@@ -53,6 +54,7 @@ private val logger = dualLogger("AgentTurnLoop")
 
 /** Tool names that are read-only — used by read-only budget guard (ADR-0044). */
 private val READ_ONLY_TOOL_NAMES = setOf("read_file", "read_directory", "file_search", "grep_search", "view_diff")
+
 
 /**
  * Adapter to convert between TurnPrompt and LLMCallPrompt.
@@ -110,7 +112,8 @@ class AgentTurnLoop(
     private val tokenEstimator: PromptTokenEstimator = PromptTokenEstimator(),
     private val conversationCompactor: ConversationCompactor? = null,
     private val llmRetryHandler: LLMRetryHandler? = null,
-    private val workingMemoryIntegration: WorkingMemoryIntegration? = null
+    private val workingMemoryIntegration: WorkingMemoryIntegration? = null,
+    private val pendingUserMessageQueue: PendingUserMessageQueue? = null
 ) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
 
@@ -396,12 +399,19 @@ class AgentTurnLoop(
         val config = TurnLoopConfigs.forMode(mode)
         val maxIterations = turnLLMCaller.resolveMaxIterations(config, profileOverrides)
         val errorTracker = ToolErrorTracker(windowSize = config.errorWindowSize)
-        val loopDetector = LoopDetector(maxConsecutiveRepeats = 3, maxSameToolCallsTotal = 5)
+        val loopDetector = LoopDetector(
+            maxConsecutiveRepeats = config.loopMaxConsecutiveRepeats,
+            maxSameToolTotal = config.loopMaxSameToolTotal,
+            warnConsecutiveThreshold = config.loopWarnConsecutiveThreshold,
+            warnTotalThreshold = config.loopWarnTotalThreshold
+        )
         var formatRetryCount = 0
         var writeToolsExecutedInTurn = 0
         var consecutiveReadOnlyIterations = 0
         var consecutiveToolErrors = 0
         var intentNudgeCount = 0
+        var toolErrorNudgeCount = 0
+        var lastIterationHadToolErrors = false
         var totalTokensIn = 0
         var totalTokensOut = 0
         var totalCost = 0.0
@@ -419,6 +429,11 @@ class AgentTurnLoop(
             profileOverrides = profileOverrides
         )
         val responseFormat = turnLLMCaller.resolveResponseFormat(mode, effectiveProvider)
+
+        // Wire turn state updater so TurnToolExecutor can set WAITING_FOR_PERMISSION
+        turnToolExecutor.turnStateUpdater = { phase ->
+            updateTurnState { copy(phase = phase) }
+        }
 
         try {
             while (iteration < maxIterations) {
@@ -641,18 +656,45 @@ class AgentTurnLoop(
                             activeToolName = toolCalls.firstOrNull()?.name,
                             activeToolCount = toolCalls.size
                         ) }
-                        val toolResults = turnToolExecutor.executeToolCalls(
-                            taskId = taskId,
-                            toolCalls = toolCalls,
-                            mode = mode,
-                            executionMode = executionMode,
-                            listener = listener?.toTurnEventListener(),
-                            iteration = iteration,
-                            config = config,
-                            profileOverrides = profileOverrides,
-                            runId = runId,
-                            depth = depth
-                        )
+
+                        val toolResults = try {
+                            turnToolExecutor.executeToolCalls(
+                                taskId = taskId,
+                                toolCalls = toolCalls,
+                                mode = mode,
+                                executionMode = executionMode,
+                                listener = listener?.toTurnEventListener(),
+                                iteration = iteration,
+                                config = config,
+                                profileOverrides = profileOverrides,
+                                runId = runId,
+                                depth = depth
+                            )
+                        } catch (e: ToolRejectedException) {
+                            logger.info { "[REJECTED] User rejected tool '${e.toolName}': ${e.reason ?: "no reason"}" }
+                            chatMessageRepository.create(
+                                taskId = taskId,
+                                role = MessageRole.SYSTEM,
+                                content = "User rejected tool '${e.toolName}'. Reason: ${e.reason ?: "not specified"}"
+                            )
+                            updateTurnState { copy(phase = TurnPhase.IDLE) }
+                            val result = TurnResult(
+                                success = false,
+                                response = "User rejected tool '${e.toolName}'",
+                                iterations = iteration,
+                                tokensIn = totalTokensIn,
+                                tokensOut = totalTokensOut,
+                                cost = totalCost,
+                                toolsUsed = usedTools.toList(),
+                                rejectedByUser = true,
+                                rejectedToolName = e.toolName,
+                                rejectionReason = e.reason
+                            )
+                            return turnFinalizer.completeTurn(
+                                taskId, result, listener, runId, parentRunId, depth,
+                                persistAssistantMessage = false, metadata = subagentMetadata
+                            )
+                        }
 
                         // Save tool results
                         for ((toolCall, resultData) in toolResults) {
@@ -703,6 +745,11 @@ class AgentTurnLoop(
 
                         writeToolsExecutedInTurn += turnToolExecutor.countWriteToolCalls(toolCalls)
 
+                        // Track transient HTTP errors for retry nudge
+                        lastToolResultsHadTransientHttpError = toolResults.any { (call, result) ->
+                            call.name == "http_request" && TRANSIENT_HTTP_PATTERN.containsMatchIn(result.content)
+                        }
+
                         // Read-only budget guard (ADR-0044): track consecutive read-only iterations
                         val hasOnlyReadTools = toolCalls.all { it.name in READ_ONLY_TOOL_NAMES }
                         if (hasOnlyReadTools) {
@@ -751,9 +798,73 @@ class AgentTurnLoop(
                             return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
                         }
 
+                        // Check for mid-execution user messages after tool execution
+                        if (pendingUserMessageQueue?.consumePending(taskId) == true) {
+                            logger.info { "[MID_EXEC_INPUT] New user message detected after tool execution, nudging LLM (iteration=$iteration)" }
+                            chatMessageRepository.create(
+                                taskId = taskId,
+                                role = MessageRole.SYSTEM,
+                                content = "[New user message above — address it next]",
+                                toolCalls = null
+                            )
+                        }
+
                         // Continue loop - model will see the results
                     } else {
                         // No tool calls - model responded with text
+
+                        // Before exiting, check if user sent new messages during execution
+                        if (pendingUserMessageQueue?.consumePending(taskId) == true) {
+                            logger.info { "[MID_EXEC_INPUT] New user message detected before turn completion, continuing loop (iteration=$iteration)" }
+                            chatMessageRepository.create(
+                                taskId = taskId,
+                                role = MessageRole.SYSTEM,
+                                content = "[New user message above — address it before finishing]",
+                                toolCalls = null
+                            )
+                            // Save the current assistant response before continuing
+                            val textResponse = toolCallParser.extractTextResponse(llmResponse.content)
+                            chatMessageRepository.create(
+                                taskId = taskId,
+                                role = MessageRole.ASSISTANT,
+                                content = textResponse.ifEmpty { llmResponse.content },
+                                thinking = turnResponseProcessor.resolveAssistantThinking(llmResponse),
+                                toolCalls = null,
+                                tokensIn = llmResponse.usage.inputTokens,
+                                tokensOut = llmResponse.usage.outputTokens,
+                                cost = llmResponse.cost
+                            )
+                            continue
+                        }
+
+                        // Nudge agent to retry after transient HTTP error instead of giving up
+                        if (mode == TaskMode.AGENT && lastToolResultsHadTransientHttpError && transientErrorNudgeCount < 1) {
+                            transientErrorNudgeCount++
+                            lastToolResultsHadTransientHttpError = false
+                            logger.info {
+                                "[TRANSIENT_ERROR_NUDGE] taskId=$taskId, iteration=$iteration: " +
+                                    "Agent gave up after transient HTTP error, nudging to retry"
+                            }
+                            // Save the current assistant response before nudging
+                            val textResponse = toolCallParser.extractTextResponse(llmResponse.content)
+                            chatMessageRepository.create(
+                                taskId = taskId,
+                                role = MessageRole.ASSISTANT,
+                                content = textResponse.ifEmpty { llmResponse.content },
+                                thinking = turnResponseProcessor.resolveAssistantThinking(llmResponse),
+                                toolCalls = null,
+                                tokensIn = llmResponse.usage.inputTokens,
+                                tokensOut = llmResponse.usage.outputTokens,
+                                cost = llmResponse.cost
+                            )
+                            chatMessageRepository.create(
+                                taskId = taskId,
+                                role = MessageRole.SYSTEM,
+                                content = TurnNudgeBuilder.buildTransientHttpErrorNudgeMessage(),
+                                toolCalls = null
+                            )
+                            continue
+                        }
 
                         if (mode != TaskMode.CHAT && toolCallParser.isMeaninglessJson(contentForExtraction)) {
                             if (formatRetryCount < config.maxFormatRetries) {
@@ -1053,5 +1164,8 @@ data class TurnResult(
     val tokensIn: Int,
     val tokensOut: Int,
     val cost: Double,
-    val toolsUsed: List<String> = emptyList()
+    val toolsUsed: List<String> = emptyList(),
+    val rejectedByUser: Boolean = false,
+    val rejectedToolName: String? = null,
+    val rejectionReason: String? = null
 )

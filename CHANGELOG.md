@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Tool approval flow for `ASK` permissions, including session trust and dedicated IntelliJ/CLI prompts.
+- Mid-execution user message handling, so follow-up input can be queued while the agent is running.
+- Regex-based terminal `CommandRule` system with `ALLOW` / `BLOCK` / `ASK` actions.
+- New onboarding documentation in `docs/onboarding.md`.
+- Expanded test coverage for tool approvals, command rules, and mid-execution user input.
+
+### Changed
+
+- Tool permissions now support full `ON` / `ASK` / `OFF` states, with `run_terminal_command` defaulting to `ASK` in AGENT mode.
+- Agent turn execution now better handles tool rejection, mid-run user feedback, transient HTTP failures, and repeated tool loops.
+- `run_terminal_command`, `run_code`, and `http_request` now provide better timeout, retry, and response handling.
+- IntelliJ and CLI/TUI workflows were updated to support tool approvals, queued follow-up input, and project-based session restore.
+- Documentation was refreshed to reflect the current architecture, defaults, and security model.
+
 ## [0.0.1.5] - 2025-04-02
 
 ### Added

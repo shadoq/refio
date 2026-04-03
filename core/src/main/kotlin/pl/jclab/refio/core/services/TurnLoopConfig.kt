@@ -33,6 +33,10 @@ import java.time.Duration
  * @property enableVerification Enable optional verification step
  * @property verificationIterationThreshold Iteration count to trigger verification
  * @property maxConsecutiveReadOnlyIterations Max consecutive read-only iterations before nudging agent to write
+ * @property loopMaxConsecutiveRepeats Max consecutive calls to the same tool before aborting
+ * @property loopMaxSameToolTotal Max total calls to the same tool before aborting
+ * @property loopWarnConsecutiveThreshold Warn after this many consecutive same-tool calls
+ * @property loopWarnTotalThreshold Warn after this many total same-tool calls
  */
 data class TurnLoopConfig(
     // Iteration limits
@@ -69,7 +73,13 @@ data class TurnLoopConfig(
     val verificationIterationThreshold: Int,
 
     // Read-only budget guard (ADR-0044)
-    val maxConsecutiveReadOnlyIterations: Int
+    val maxConsecutiveReadOnlyIterations: Int,
+
+    // Loop detection
+    val loopMaxConsecutiveRepeats: Int,
+    val loopMaxSameToolTotal: Int,
+    val loopWarnConsecutiveThreshold: Int,
+    val loopWarnTotalThreshold: Int
 ) {
     companion object {
         /**
@@ -97,7 +107,11 @@ data class TurnLoopConfig(
             workingMemoryMaxEntries = 20,
             enableVerification = false,
             verificationIterationThreshold = 0,
-            maxConsecutiveReadOnlyIterations = 15 // PLAN mode is read-only by design
+            maxConsecutiveReadOnlyIterations = 15, // PLAN mode is read-only by design
+            loopMaxConsecutiveRepeats = 10,
+            loopMaxSameToolTotal = 20,
+            loopWarnConsecutiveThreshold = 6,
+            loopWarnTotalThreshold = 12
         )
 
         /**
@@ -125,7 +139,11 @@ data class TurnLoopConfig(
             workingMemoryMaxEntries = 50,
             enableVerification = true,
             verificationIterationThreshold = 10,
-            maxConsecutiveReadOnlyIterations = 15 // Allow deeper analysis before nudging agent to write
+            maxConsecutiveReadOnlyIterations = 15, // Allow deeper analysis before nudging agent to write
+            loopMaxConsecutiveRepeats = 10,
+            loopMaxSameToolTotal = 30,
+            loopWarnConsecutiveThreshold = 6,
+            loopWarnTotalThreshold = 16
         )
 
         /**

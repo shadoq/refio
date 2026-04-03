@@ -14,7 +14,9 @@ import pl.jclab.refio.core.db.ToolCallData
 import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.db.repositories.SubtaskRepository
 import pl.jclab.refio.core.db.repositories.TaskRepository
+import pl.jclab.refio.core.services.PermissionLevel
 import pl.jclab.refio.core.services.SnapshotService
+import pl.jclab.refio.core.services.ToolPermissionsService
 import pl.jclab.refio.core.services.ToolResultData
 import pl.jclab.refio.core.services.ToolResultSummary
 import pl.jclab.refio.core.services.ToolExecutor
@@ -48,8 +50,13 @@ class TurnToolExecutor(
     private val snapshotService: SnapshotService? = null,
     private val workingMemoryIntegration: WorkingMemoryIntegration? = null,
     private val taskRepository: TaskRepository? = null,
-    private val chatMessageRepository: ChatMessageRepository? = null
+    private val chatMessageRepository: ChatMessageRepository? = null,
+    private val approvalService: ToolApprovalService? = null,
+    private val permissionsService: ToolPermissionsService? = null
 ) {
+    /** Callback to update turn phase (set by AgentTurnLoop before each turn) */
+    var turnStateUpdater: ((TurnPhase) -> Unit)? = null
+
     private val streamingToolNames = setOf("advance_code_editing", "multi_line_editor")
     private val codingToolNames = setOf("advance_code_editing", "multi_line_editor")
 
@@ -157,7 +164,12 @@ class TurnToolExecutor(
             toolCall.name.equals("invoke_subagent", ignoreCase = true)
         }
         val isSubagentRun = !profileOverrides?.subagentName.isNullOrBlank()
-        val shouldDisableParallel = containsInvokeSubagent || isSubagentRun
+        // If any tool requires ASK approval, run sequentially to avoid multiple simultaneous dialogs
+        val containsAskTool = permissionsService != null && approvalService != null &&
+            allowedIndexed.any { (_, toolCall) ->
+                permissionsService.getPermission(toolCall.name, mode) == PermissionLevel.ASK
+            }
+        val shouldDisableParallel = containsInvokeSubagent || isSubagentRun || containsAskTool
 
         // Parallel execution for READ_ONLY tools
         if (config.parallelReadTools && allowedIndexed.size > 1 && !shouldDisableParallel) {
@@ -237,7 +249,7 @@ class TurnToolExecutor(
         if (config.parallelReadTools && shouldDisableParallel) {
             logger.info {
                 "[PARALLEL] Disabled for this batch: invoke_subagent=$containsInvokeSubagent, " +
-                    "subagentRun=$isSubagentRun"
+                    "subagentRun=$isSubagentRun, containsAskTool=$containsAskTool"
             }
         }
 
@@ -302,6 +314,44 @@ class TurnToolExecutor(
                 metadata = null
             )
         }
+
+        // --- ASK permission check ---
+        if (approvalService != null && permissionsService != null) {
+            val permissionLevel = permissionsService.getPermission(toolCall.name, mode)
+            if (permissionLevel == PermissionLevel.ASK) {
+                val argumentsMap = TurnJsonUtils.parseJsonToMap(toolCall.arguments)
+                turnStateUpdater?.invoke(TurnPhase.WAITING_FOR_PERMISSION)
+
+                val request = ToolApprovalService.ApprovalRequest(
+                    requestId = "${taskId}_${toolCall.id}",
+                    taskId = taskId,
+                    toolName = toolCall.name,
+                    arguments = argumentsMap,
+                    description = buildToolDescription(toolCall)
+                )
+
+                val decision = approvalService.requestApproval(request)
+
+                turnStateUpdater?.invoke(TurnPhase.EXECUTING_TOOLS)
+
+                when (decision) {
+                    is ToolApprovalService.ApprovalDecision.Approved -> { /* continue */ }
+                    is ToolApprovalService.ApprovalDecision.Trusted -> { /* continue, pattern saved */ }
+                    is ToolApprovalService.ApprovalDecision.Rejected -> {
+                        subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
+                        subtaskRepository.updateResult(
+                            subtaskId, result = null,
+                            errorMessage = "User rejected: ${decision.reason ?: "no reason"}"
+                        )
+                        throw ToolRejectedException(
+                            toolName = toolCall.name,
+                            reason = decision.reason
+                        )
+                    }
+                }
+            }
+        }
+        // --- end ASK permission check ---
 
         val toolToken = GlobalMetrics.beginOperation(
             OperationInfo.TurnToolExecution(toolCall.name, iteration)

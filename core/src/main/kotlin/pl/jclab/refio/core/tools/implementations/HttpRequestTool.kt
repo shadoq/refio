@@ -130,12 +130,15 @@ class HttpRequestTool(
                         "HTTP $method $url -> $statusCode (${responseBody.length} chars, ${duration}ms)"
                     }
 
+                    // Build header summary for LLM context (only useful headers)
+                    val headerSummary = buildHeaderSummary(statusCode, responseHeaders)
+
                     // If save_to_file is specified, save to disk and return summary
                     if (saveToFile != null && statusCode in 200..399) {
                         val savedOutput = saveResponseToFile(saveToFile, responseBody, url)
                         ToolResult(
                             success = true,
-                            output = savedOutput,
+                            output = headerSummary + savedOutput,
                             exitCode = statusCode,
                             durationMs = duration,
                             bytesRead = responseBody.toByteArray().size,
@@ -158,7 +161,7 @@ class HttpRequestTool(
 
                         ToolResult(
                             success = statusCode in 200..399,
-                            output = truncatedBody,
+                            output = headerSummary + truncatedBody,
                             exitCode = statusCode,
                             durationMs = duration,
                             bytesRead = responseBody.toByteArray().size,
@@ -401,10 +404,46 @@ class HttpRequestTool(
         )
     }
 
+    /**
+     * Build a compact header summary for LLM context.
+     * Only includes status line and headers useful for API interaction
+     * (rate limits, retry, location, auth errors, content info).
+     */
+    private fun buildHeaderSummary(statusCode: Int, headers: Map<String, String>): String {
+        val sb = StringBuilder()
+        sb.appendLine("HTTP $statusCode")
+
+        val importantHeaders = headers.filter { (key, _) ->
+            val lower = key.lowercase()
+            IMPORTANT_HEADER_PREFIXES.any { lower.startsWith(it) }
+        }
+
+        if (importantHeaders.isNotEmpty()) {
+            for ((key, value) in importantHeaders) {
+                sb.appendLine("$key: $value")
+            }
+        }
+
+        sb.appendLine()
+        return sb.toString()
+    }
+
     companion object {
         val ALLOWED_METHODS = listOf("GET", "POST", "PUT", "DELETE", "PATCH")
         const val MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB
         const val TIMEOUT_MS = 60_000L // 60 seconds
         const val PREVIEW_CHARS = 500
+
+        /** Header prefixes relevant for LLM decision-making (lowercase). */
+        private val IMPORTANT_HEADER_PREFIXES = listOf(
+            "retry-after",
+            "x-ratelimit",
+            "x-rate-limit",
+            "ratelimit",
+            "location",
+            "www-authenticate",
+            "content-type",
+            "x-request-id",
+        )
     }
 }

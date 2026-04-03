@@ -6,8 +6,11 @@ import com.intellij.ui.table.JBTable
 import pl.jclab.refio.api.CoreApiClient
 import pl.jclab.refio.core.api.ToolDefinitionInfo
 import pl.jclab.refio.core.tools.security.AllowedCommand
+import pl.jclab.refio.core.tools.security.CommandRule
+import pl.jclab.refio.core.tools.security.CommandRuleDefaults
 import pl.jclab.refio.core.tools.security.CommandWhitelistConfig
 import pl.jclab.refio.core.tools.security.CommandWhitelistDefaults
+import pl.jclab.refio.core.tools.security.RuleAction
 import pl.jclab.refio.core.tools.security.WhitelistMode
 import pl.jclab.refio.services.logging.dualLogger
 import pl.jclab.refio.ui.theme.LCATheme
@@ -36,6 +39,7 @@ class ToolsSettingsPanel(
     private lateinit var whitelistEnabledCheckbox: JCheckBox
     private lateinit var whitelistModeCombo: JComboBox<String>
     private lateinit var whitelistTable: JBTable
+    private lateinit var commandRulesTable: JBTable
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     // Flaga blokująca auto-save podczas ładowania
@@ -69,14 +73,22 @@ class ToolsSettingsPanel(
             LCATheme.paddedBorder(16)
         )
 
-        // Main content
-        val contentPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+        // Main content — vertical stack inside scroll pane (like ProvidersSettingsPanel)
+        val contentPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
             border = LCATheme.paddedBorder(8, 0, 0, 0)
-            add(createToolsTable(), BorderLayout.CENTER)
-            add(createTerminalWhitelistPanel(), BorderLayout.SOUTH)
+            add(createToolsTable())
+            add(Box.createVerticalStrut(12))
+            add(createCommandRulesPanel())
         }
 
-        add(contentPanel, BorderLayout.CENTER)
+        val scrollPane = com.intellij.ui.components.JBScrollPane(contentPanel).apply {
+            border = LCATheme.emptyBorder()
+            verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
+            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
+        }
+
+        add(scrollPane, BorderLayout.CENTER)
 
         // Załaduj aktualne ustawienia z DB
         loadToolDefinitions()
@@ -113,12 +125,12 @@ class ToolsSettingsPanel(
 
         // Set up Plan Mode column with combo box editor
         val planModeColumn = toolsTable.columnModel.getColumn(2)
-        val planModeCombo = JComboBox(arrayOf("On", "Off"))
+        val planModeCombo = JComboBox(arrayOf("On", "Ask", "Off"))
         planModeColumn.cellEditor = DefaultCellEditor(planModeCombo)
 
         // Set up Agent Mode column with combo box editor
         val agentModeColumn = toolsTable.columnModel.getColumn(3)
-        val agentModeCombo = JComboBox(arrayOf("On", "Off"))
+        val agentModeCombo = JComboBox(arrayOf("On", "Ask", "Off"))
         agentModeColumn.cellEditor = DefaultCellEditor(agentModeCombo)
 
         // Set column widths
@@ -142,7 +154,8 @@ class ToolsSettingsPanel(
                 val displayValue = value?.toString()?.trim()?.lowercase()
                 when (displayValue) {
                     "off" -> foreground = JBColor.RED
-                    "ask", "on" -> foreground = Color(0, 150, 0)
+                    "ask" -> foreground = JBColor.ORANGE
+                    "on" -> foreground = Color(0, 150, 0)
                 }
 
                 return component
@@ -157,7 +170,8 @@ class ToolsSettingsPanel(
 
         return JScrollPane(toolsTable).apply {
             border = LCATheme.customLineBorder(LCATheme.grayColor, 1)
-            preferredSize = Dimension(700, 350)
+            preferredSize = Dimension(700, 250)
+            minimumSize = Dimension(300, 150)
         }
     }
 
@@ -254,6 +268,97 @@ class ToolsSettingsPanel(
         panel.add(centerPanel, BorderLayout.CENTER)
 
         return panel
+    }
+
+    private fun createCommandRulesPanel(): JComponent {
+        val panel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            border = BorderFactory.createCompoundBorder(
+                BorderFactory.createTitledBorder(
+                    LCATheme.customLineBorder(LCATheme.borderColor, 1),
+                    "Terminal Command Rules"
+                ),
+                LCATheme.paddedBorder(8)
+            )
+            preferredSize = Dimension(700, 310)
+        }
+
+        val columns = arrayOf("Pattern (regex)", "Action", "Description")
+        commandRulesTable = JBTable(object : DefaultTableModel(columns, 0) {
+            override fun isCellEditable(row: Int, column: Int): Boolean = true
+        }).apply {
+            rowHeight = 26
+            setShowGrid(true)
+            gridColor = JBColor.LIGHT_GRAY
+        }
+
+        commandRulesTable.columnModel.getColumn(0).preferredWidth = 300
+        commandRulesTable.columnModel.getColumn(1).preferredWidth = 100
+        commandRulesTable.columnModel.getColumn(2).preferredWidth = 200
+
+        // Action column dropdown
+        val actionCombo = JComboBox(arrayOf("ALLOW", "BLOCK", "ASK"))
+        commandRulesTable.columnModel.getColumn(1).cellEditor = DefaultCellEditor(actionCombo)
+
+        // Color renderer for action column
+        val actionRenderer = object : DefaultTableCellRenderer() {
+            override fun getTableCellRendererComponent(
+                table: JTable?, value: Any?, isSelected: Boolean, hasFocus: Boolean, row: Int, column: Int
+            ): Component {
+                val c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column)
+                when (value?.toString()?.uppercase()) {
+                    "BLOCK" -> foreground = JBColor.RED
+                    "ASK" -> foreground = JBColor.ORANGE
+                    "ALLOW" -> foreground = Color(0, 150, 0)
+                }
+                return c
+            }
+        }
+        commandRulesTable.columnModel.getColumn(1).cellRenderer = actionRenderer
+
+        populateCommandRulesTable(CommandRuleDefaults.DEFAULT_RULES)
+
+        val addButton = JButton("Add Rule").apply {
+            addActionListener {
+                val model = commandRulesTable.model as DefaultTableModel
+                model.addRow(arrayOf("^new_command(\\s+.*)?$", "ASK", "New rule"))
+                commandRulesTable.changeSelection(model.rowCount - 1, 0, false, false)
+            }
+        }
+        val removeButton = JButton("Remove Selected").apply {
+            addActionListener {
+                val model = commandRulesTable.model as DefaultTableModel
+                commandRulesTable.selectedRows.sortedDescending().forEach { row ->
+                    if (row in 0 until model.rowCount) model.removeRow(row)
+                }
+            }
+        }
+        val resetButton = JButton("Reset Defaults").apply {
+            addActionListener { populateCommandRulesTable(CommandRuleDefaults.DEFAULT_RULES) }
+        }
+
+        val actions = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+            add(addButton)
+            add(removeButton)
+            add(resetButton)
+        }
+
+        val centerPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            add(JScrollPane(commandRulesTable).apply {
+                border = LCATheme.customLineBorder(LCATheme.grayColor, 1)
+            }, BorderLayout.CENTER)
+            add(actions, BorderLayout.SOUTH)
+        }
+        panel.add(centerPanel, BorderLayout.CENTER)
+
+        return panel
+    }
+
+    private fun populateCommandRulesTable(rules: List<CommandRule>) {
+        val model = commandRulesTable.model as DefaultTableModel
+        model.rowCount = 0
+        rules.forEach { rule ->
+            model.addRow(arrayOf(rule.pattern, rule.action.name, rule.description))
+        }
     }
 
     private fun populateWhitelistTable(commands: List<AllowedCommand>) {
@@ -608,7 +713,8 @@ class ToolsSettingsPanel(
     private fun normalizePermissionValue(value: String?): String {
         val normalized = value?.trim()?.uppercase() ?: return "Off"
         return when (normalized) {
-            "ON", "ASK" -> "On"
+            "ON" -> "On"
+            "ASK" -> "Ask"
             "OFF" -> "Off"
             else -> {
                 logger.warn { "Unknown permission value: $value, defaulting to Off" }

@@ -6,10 +6,13 @@ import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
 import pl.jclab.refio.core.tools.security.CommandLimits
+import pl.jclab.refio.core.tools.security.CommandRuleMatcher
 import pl.jclab.refio.core.tools.security.CommandWhitelist
+import pl.jclab.refio.core.tools.security.RuleAction
 import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import pl.jclab.refio.core.logging.dualLogger
 import java.util.concurrent.TimeUnit
 
@@ -30,7 +33,8 @@ private val logger = dualLogger("RunTerminalCommandTool")
 class RunTerminalCommandTool(
     private val sandbox: PathSandbox,
     private val whitelist: CommandWhitelist,
-    private val limits: CommandLimits
+    private val limits: CommandLimits,
+    private val commandRuleMatcher: CommandRuleMatcher? = null
 ) : Tool {
 
     override val name = "run_terminal_command"
@@ -52,19 +56,46 @@ class RunTerminalCommandTool(
             val command = params["command"] as? String
                 ?: return@withContext ToolResult.error("Missing required parameter: 'command'")
 
-            val validation = whitelist.validate(command)
-            if (!validation.allowed) {
-                logger.warn { "Blocked command by whitelist: reason='${validation.reason}', command='$command'" }
-                return@withContext ToolResult.error(
-                    "Command not allowed: ${validation.reason ?: "blocked"}"
-                )
-            }
+            // Optional timeout override from LLM (clamped to safe bounds)
+            val effectiveTimeout = (params["timeout_seconds"] as? Number)?.toLong()
+                ?.coerceIn(MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS)
+                ?: limits.timeoutSeconds
 
-            if (validation.requiresConfirmation) {
-                logger.warn { "Command requires user confirmation: $command" }
-                return@withContext ToolResult.error(
-                    "Command requires user confirmation: $command"
-                )
+            // Check command rules (new regex-based system)
+            if (commandRuleMatcher != null) {
+                val ruleResult = commandRuleMatcher.match(command)
+                when (ruleResult.action) {
+                    RuleAction.BLOCK -> {
+                        val desc = ruleResult.matchedRule?.description ?: "blocked by security policy"
+                        logger.warn { "Blocked command by rule: reason='$desc', command='$command'" }
+                        return@withContext ToolResult.error("Command blocked: $desc")
+                    }
+                    RuleAction.ALLOW -> {
+                        logger.debug { "Command allowed by rule: ${ruleResult.matchedRule?.description}, command='$command'" }
+                        // Continue to execution
+                    }
+                    RuleAction.ASK -> {
+                        // ASK is handled at TurnToolExecutor level (PermissionLevel.ASK).
+                        // At tool level, we allow execution — the approval already happened.
+                        logger.debug { "Command ASK rule (pre-approved): ${ruleResult.matchedRule?.description}, command='$command'" }
+                    }
+                }
+            } else {
+                // Fallback: legacy whitelist
+                val validation = whitelist.validate(command)
+                if (!validation.allowed) {
+                    logger.warn { "Blocked command by whitelist: reason='${validation.reason}', command='$command'" }
+                    return@withContext ToolResult.error(
+                        "Command not allowed: ${validation.reason ?: "blocked"}"
+                    )
+                }
+
+                if (validation.requiresConfirmation) {
+                    logger.warn { "Command requires user confirmation: $command" }
+                    return@withContext ToolResult.error(
+                        "Command requires user confirmation: $command"
+                    )
+                }
             }
 
             // Prepare shell command
@@ -86,15 +117,43 @@ class RunTerminalCommandTool(
             }
 
             // Wait with timeout
-            val completed = process.waitFor(limits.timeoutSeconds, TimeUnit.SECONDS)
+            val completed = process.waitFor(effectiveTimeout, TimeUnit.SECONDS)
 
             if (!completed) {
                 process.destroyForcibly()
-                runCatching { process.inputStream.close() }
-                outputDeferred.cancel()
-                logger.warn { "Command timed out after ${limits.timeoutSeconds}s: $command" }
-                return@withContext ToolResult.error(
-                    "Command timed out after ${limits.timeoutSeconds} seconds"
+                // Capture partial output instead of discarding it
+                val partialOutput = withTimeoutOrNull(3000L) {
+                    runCatching { outputDeferred.await() }.getOrDefault("")
+                } ?: ""
+                val duration = (System.currentTimeMillis() - startTime).toInt()
+
+                logger.warn { "Command timed out after ${effectiveTimeout}s: $command, partial output=${partialOutput.length} chars" }
+
+                val truncatedPartial = if (partialOutput.length > limits.maxOutputSize) {
+                    partialOutput.take(limits.maxOutputSize) + "\n\n... (output truncated)"
+                } else {
+                    partialOutput
+                }
+
+                val message = buildString {
+                    append("Command timed out after $effectiveTimeout seconds.")
+                    if (truncatedPartial.isNotBlank()) {
+                        append("\n\nPartial output before timeout:\n")
+                        append(truncatedPartial)
+                    }
+                }
+
+                return@withContext ToolResult(
+                    success = false,
+                    output = message,
+                    exitCode = -1,
+                    durationMs = duration,
+                    metadata = mapOf(
+                        "command" to command,
+                        "timed_out" to true,
+                        "timeout_seconds" to effectiveTimeout,
+                        "partial_output_length" to partialOutput.length
+                    )
                 )
             }
 
@@ -157,9 +216,19 @@ class RunTerminalCommandTool(
                 "command" to mapOf(
                     "type" to "string",
                     "description" to "Shell command to execute (runs in project root directory)"
+                ),
+                "timeout_seconds" to mapOf(
+                    "type" to "integer",
+                    "description" to "Optional execution timeout in seconds (default: ${limits.timeoutSeconds}, max: $MAX_TIMEOUT_SECONDS). " +
+                        "Increase for long-running commands (e.g., scripts with retries/sleeps)."
                 )
             ),
             "required" to listOf("command")
         )
+    }
+
+    companion object {
+        const val MIN_TIMEOUT_SECONDS = 30L
+        const val MAX_TIMEOUT_SECONDS = 600L
     }
 }

@@ -232,3 +232,7 @@ Your conversation context is limited. Large tool outputs (data files, API respon
 
 **Principle:** Large data lives on disk, not in context. Keep tool outputs small. Use files as intermediate storage between processing steps.
 </context_management>
+
+<api_resilience>
+**HTTP errors 429/503:** Use `run_terminal_command` with `sleep N` (check `Retry-After` header) then retry. Never abandon a workflow due to transient errors.
+</api_resilience>

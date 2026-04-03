@@ -1,6 +1,5 @@
 package pl.jclab.refio.services.session
 
-import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.project.Project
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,55 +46,49 @@ class SessionLifecycleService(
         loadUIState()
 
         scope.launchSafe {
-            val lastSessionId = PropertiesComponent.getInstance(project)
-                .getValue("refio.lastSession")
-            logger.info { "Initializing SessionLifecycleService: lastSessionId=${lastSessionId ?: "none"}" }
+            try {
+                val taskResponse = projectRouter.taskRouter.getLastSessionForProject(projectId)
+                if (taskResponse != null) {
+                    logger.info { "Found last session for project: ${taskResponse.id}" }
 
-            if (lastSessionId != null) {
-                try {
-                    val taskResponse = projectRouter.taskRouter.getTask(lastSessionId)
-                    if (taskResponse != null) {
-                        val executionModeStr = runBlocking(Dispatchers.IO) {
-                            transaction {
-                                configService.get(ConfigService.KEY_UI_EXECUTION_MODE)
-                            }
+                    val executionModeStr = runBlocking(Dispatchers.IO) {
+                        transaction {
+                            configService.get(ConfigService.KEY_UI_EXECUTION_MODE)
                         }
-                        val executionMode = try {
-                            ExecutionMode.valueOf(executionModeStr ?: "INTERACTIVE")
-                        } catch (e: Exception) {
-                            ExecutionMode.INTERACTIVE
-                        }
-
-                        val session = Session(
-                            id = taskResponse.id,
-                            name = taskResponse.name,
-                            mode = TaskMode.valueOf(taskResponse.mode),
-                            status = TaskStatus.valueOf(taskResponse.status),
-                            createdAt = taskResponse.createdAt,
-                            updatedAt = taskResponse.updatedAt,
-                            tokensIn = taskResponse.tokensIn,
-                            tokensOut = taskResponse.tokensOut,
-                            costUsd = taskResponse.costUsd,
-                            executionMode = executionMode,
-                            thinkingEnabled = stateManager.getThinkingEnabled(),
-                            noEgressEnabled = stateManager.getNoEgressEnabled()
-                        )
-
-                        stateManager.setActiveSession(session)
-                        selectedMode = TaskMode.valueOf(taskResponse.mode)
-
-                        messageDispatcher.loadMessages()
-                        subtaskTracker.loadSubtasks()
-
-                        logger.info { "Restored last session: $lastSessionId" }
-                    } else {
-                        logger.info { "Last session not found, will create new session on first prompt" }
                     }
-                } catch (e: Exception) {
-                    logger.warn(e) { "Failed to load last session, will create new session on first prompt" }
+                    val executionMode = try {
+                        ExecutionMode.valueOf(executionModeStr ?: "INTERACTIVE")
+                    } catch (e: Exception) {
+                        ExecutionMode.INTERACTIVE
+                    }
+
+                    val session = Session(
+                        id = taskResponse.id,
+                        name = taskResponse.name,
+                        mode = TaskMode.valueOf(taskResponse.mode),
+                        status = TaskStatus.valueOf(taskResponse.status),
+                        createdAt = taskResponse.createdAt,
+                        updatedAt = taskResponse.updatedAt,
+                        tokensIn = taskResponse.tokensIn,
+                        tokensOut = taskResponse.tokensOut,
+                        costUsd = taskResponse.costUsd,
+                        executionMode = executionMode,
+                        thinkingEnabled = stateManager.getThinkingEnabled(),
+                        noEgressEnabled = stateManager.getNoEgressEnabled()
+                    )
+
+                    stateManager.setActiveSession(session)
+                    selectedMode = TaskMode.valueOf(taskResponse.mode)
+
+                    messageDispatcher.loadMessages()
+                    subtaskTracker.loadSubtasks()
+
+                    logger.info { "Restored last session: ${taskResponse.id}" }
+                } else {
+                    logger.info { "No previous session for project, will create new session on first prompt" }
                 }
-            } else {
-                logger.info { "No last session, will create new session on first prompt" }
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to load last session, will create new session on first prompt" }
             }
 
             refreshSelectedModelFromDB()
@@ -172,9 +165,6 @@ class SessionLifecycleService(
 
         selectedMode = mode
 
-        PropertiesComponent.getInstance(project)
-            .setValue("refio.lastSession", session.id)
-
         // Step 7: Persist settings (optimized - only save uiState to task, not APP scope)
         val step7Start = System.currentTimeMillis()
         // Only save uiState to task (APP scope settings are already available in memory or config)
@@ -220,9 +210,6 @@ class SessionLifecycleService(
 
             stateManager.setActiveSession(loadedSession)
             selectedMode = TaskMode.valueOf(taskResponse.mode)
-
-            PropertiesComponent.getInstance(project)
-                .setValue("refio.lastSession", sessionId)
 
             saveCurrentSessionState()
 

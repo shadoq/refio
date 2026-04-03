@@ -57,6 +57,7 @@ class TuiChatViewModel(
     val _pendingQuestionId = MutableStateFlow<String?>(null)
     val _pendingQuestionOptions = MutableStateFlow<List<String>>(emptyList())
     val _pendingApprovals = MutableStateFlow<List<TuiPendingApproval>>(emptyList())
+    val _pendingToolApproval = MutableStateFlow<TuiToolApprovalRequest?>(null)
     val _agentFilter = MutableStateFlow<String?>(null)
     val _agents = MutableStateFlow<List<TuiAgentState>>(emptyList())
     val _panelFocused = MutableStateFlow(false)
@@ -559,7 +560,20 @@ class TuiChatViewModel(
     // --- Send message (main method) ---
 
     fun sendMessage(input: String) {
-        if (input.isBlank() || _isStreaming.value) return
+        if (input.isBlank()) return
+
+        if (_isStreaming.value) {
+            // Agent is running — queue message for next iteration
+            val router = getRouter()
+            val taskId = getTaskId()
+            if (router != null && taskId != null) {
+                router.pendingUserMessageQueue.enqueue(taskId, input)
+                _inputBuffer.value = ""
+                addSystemMessage("Message queued for next iteration")
+            }
+            return
+        }
+
         _scrollOffset.value = 0 // auto-scroll to bottom on new message
 
         // If orchestrator is waiting for a question response, route as answer

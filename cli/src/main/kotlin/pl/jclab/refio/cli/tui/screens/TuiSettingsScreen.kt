@@ -438,7 +438,7 @@ object TuiSettingsScreen {
     // ── Tools ────────────────────────────────────────────────────────────
 
     private fun renderTools(buf: TuiRenderBuffer, config: Map<String, String>) {
-        buf.addLine("  ${TuiColors.highlight("Tool Permissions (Enter to toggle)")}")
+        buf.addLine("  ${TuiColors.highlight("Tool Permissions (Enter to cycle: ON → ASK → OFF)")}")
         val tools = listOf(
             "read_file", "read_directory", "file_search", "grep_search", "view_diff",
             "create_new_file", "code_editing", "advance_code_editing",
@@ -450,17 +450,25 @@ object TuiSettingsScreen {
         for (tool in tools) {
             val planKey = "permission_${tool}_plan_mode"
             val agentKey = "permission_${tool}_agent_mode"
-            val planEnabled = config[planKey]?.let { it == "true" } ?: true
-            val agentEnabled = config[agentKey]?.let { it == "true" } ?: true
+            val planValue = config[planKey]?.uppercase() ?: "ON"
+            val agentValue = config[agentKey]?.uppercase() ?: "ON"
             val fieldIdx = currentFields.size
             currentFields = currentFields + SettingsField("tools.$planKey", "$tool (plan)", FieldType.BOOL)
             currentFields = currentFields + SettingsField("tools.$agentKey", "$tool (agent)", FieldType.BOOL)
-            val planIcon = if (planEnabled) TuiColors.statusSuccess("✓") else TuiColors.statusFailed("✗")
-            val agentIcon = if (agentEnabled) TuiColors.statusSuccess("✓") else TuiColors.statusFailed("✗")
+            val planIcon = when (planValue) {
+                "ON", "TRUE" -> TuiColors.statusSuccess("ON ")
+                "ASK" -> TuiColors.statusPending("ASK")
+                else -> TuiColors.statusFailed("OFF")
+            }
+            val agentIcon = when (agentValue) {
+                "ON", "TRUE" -> TuiColors.statusSuccess("ON ")
+                "ASK" -> TuiColors.statusPending("ASK")
+                else -> TuiColors.statusFailed("OFF")
+            }
             val selected = viewModel?.stateFlow?.value?.settingsSelectedField
             val cursorPlan = if (selected == fieldIdx) ">" else " "
             val cursorAgent = if (selected == fieldIdx + 1) ">" else " "
-            buf.addLine("  ${cursorPlan} ${tool.padEnd(26)} $planIcon${cursorAgent.padStart(6)} $agentIcon")
+            buf.addLine("  ${cursorPlan} ${tool.padEnd(26)} $planIcon${cursorAgent.padStart(5)} $agentIcon")
         }
     }
 

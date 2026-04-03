@@ -108,9 +108,6 @@ class TuiSessionViewModel(
     /** Callback to create a new task in DB, returns the new task ID */
     var createNewTaskInDb: (CoreApiRouter) -> String = { "" }
 
-    /** Callback to persist the last session ID */
-    var persistLastSessionId: (String) -> Unit = {}
-
     /** Callback to refresh API logs */
     var refreshApiLogs: (CoreApiRouter) -> Unit = {}
 
@@ -271,7 +268,6 @@ class TuiSessionViewModel(
                 }
                 setTaskId(task.id)
                 mode.value = task.mode
-                persistLastSessionId(task.id)
 
                 // Load messages and subtasks from DB
                 loadMessagesFromDb(r, task.id)

@@ -1,7 +1,7 @@
 # Refio - Technical Architecture Overview
 
 > **Last Updated:** 2026-03-29
-> **Version:** 0.0.1.4
+> **Version:** 0.0.1.5
 > **Status:** Active Development
 
 This document provides a comprehensive technical overview of Refio - a local-first AI coding assistant for IntelliJ IDEA and the terminal.
@@ -148,13 +148,13 @@ core/src/main/kotlin/pl/jclab/refio/
 │   │   │   └── standalone/   # 7 CLI-compatible providers (no IDE)
 │   │   └── mcp/              # Model Context Protocol
 │   ├── db/                   # Database tables & repositories
-│   ├── llm/                  # LLM integration (6 adapters)
+│   ├── llm/                  # LLM integration (8 adapters)
 │   ├── services/             # Core services (RAG, context, analysis)
 │   │   └── analysis/         # Language analyzers
 │   ├── agents/               # Multi-agent system
 │   │   └── events/           # AgentEventBus, AgentEvent sealed interface
 │   ├── subagents/            # Subagent system (21 built-in)
-│   ├── tools/                # Tool system (12 registered implementations)
+│   ├── tools/                # Tool system (14 registered implementations)
 │   │   ├── implementations/
 │   │   └── security/
 │   └── prompts/              # Prompt templates
@@ -214,7 +214,7 @@ Unknown placeholders remain unchanged.
 |------|----------|-----------------|----------|----------|
 | **CHAT** | ChatExecutor | None | No | Conversation, explanations |
 | **PLAN** | AgentTurnLoop | READ_ONLY (6) | Yes | Code review, analysis |
-| **AGENT** | AgentTurnLoop | ALL (12) | Yes | Code generation, refactoring |
+| **AGENT** | AgentTurnLoop | ALL (14) | Yes | Code generation, refactoring |
 | **SUBAGENT** | AgentTurnLoop (`runProfile=SUBAGENT`) | Profile-filtered | Yes | Specialized delegated tasks |
 
 `ToolRegistry` has 14 registered tools; `run_terminal_command` is enabled by default in AGENT mode and restricted by terminal whitelist rules.
@@ -411,7 +411,7 @@ Next Prompt → Build Working Memory Section → Inject as Reminder
 
 | Parameter | PLAN | AGENT | Description |
 |-----------|------|-------|-------------|
-| maxIterations | 15 | 25 | Max LLM calls per turn |
+| maxIterations | 25 | 50 | Max LLM calls per turn |
 | compactionThreshold | 0.85 | 0.80 | Trigger at % of context |
 | parallelReadTools | true | true | Concurrent READ_ONLY |
 | enableSnapshots | false | true | File backups before write |
@@ -447,7 +447,7 @@ Summarizes tool execution results to reduce context size:
 |-----------|-------------|
 | **Loop Detection** | Prevents same tool call 3+ consecutive times or 5+ total |
 | **Error Rate Monitoring** | Aborts if >70% failure rate AND >= 5 operations |
-| **Max Iterations** | Hard limit of 25 LLM calls per turn |
+| **Max Iterations** | Hard limit per turn (PLAN: 25, AGENT: 50) |
 | **Timeout** | Configurable per-tool execution timeout |
 
 ---
@@ -1067,20 +1067,28 @@ Layer 2: FileLimits
 ├── Excluded directories (24)
 └── Excluded extensions (34)
 
-Layer 3: Terminal Whitelist + Filters
-├── Program/subcommand/flag policy
-├── Global blocked pattern checks
-└── Optional denylist fallback mode
+Layer 3: CommandRule System (regex-based)
+├── 22 BLOCK rules (destructive: rm -r, mkfs, dd, git reset --hard, npm publish, fork bombs)
+├── ALLOW rules (auto-generated from legacy whitelist, 154 safe commands)
+├── ASK rules (docker, kubectl, ssh, sudo, unknown commands)
+└── Priority: BLOCK > ALLOW > ASK > default ASK
 
-Layer 4: ToolPermissions
-├── Per-mode permissions
-└── Per-task overrides
+Layer 4: ToolPermissions (3-level)
+├── Per-mode permissions: ON / ASK / OFF
+├── Per-task overrides via ConfigRouter
+├── Smart defaults (run_terminal_command = ASK in AGENT, run_code = OFF by default)
+└── ToolApprovalService: user approval flow with session trust rules and 5-min timeout
 
-Layer 5: No-Egress Mode
+Layer 5: Mid-Execution Control
+├── PendingUserMessageQueue: user can send messages while agent runs
+├── ToolRejectedException: user rejection breaks loop and returns to prompt
+└── ExecutionMode: AUTO (autonomous) / INTERACTIVE (step-by-step approval)
+
+Layer 6: No-Egress Mode
 ├── Blocks cloud providers
 └── Allows only local (Ollama, LM Studio)
 
-Layer 6: Secret Redaction
+Layer 7: Secret Redaction
 ├── API keys masked in logs
 └── Sensitive config values hidden
 ```
@@ -1182,7 +1190,7 @@ Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ
 │  3. Domain Layer                       │   [project] 2,400/4,000 tok ████████░░░                         │
 │                                        │   [rag]     1,200/4,000 tok ████░░░░░░░                         │
 │────────────────────────────────────────│                                                                  │
-│ [CHAT] [ollama/qwen2.5-coder:7b]      │                                                                  │
+│ [CHAT] [ollama/qwen3.5:9b]      │                                                                  │
 │ > your message here_                   │                                                                  │
 └────────────────────────────────────────┴──────────────────────────────────────────────────────────────────┘
 ```
@@ -1290,7 +1298,7 @@ The Settings screen provides full configuration access via `ConfigRouter`, match
 | Context | `index` | RAG search tuning (similarity threshold, top-k, hybrid search) and indexing settings |
 | MCP | `mcp` | MCP server list with enable/disable and type |
 | Docs | `docs` | Documentation sources for @docs context provider |
-| Tools | `tools` | 12 tools × Plan/Agent mode permission matrix |
+| Tools | `tools` | 14 tools × Plan/Agent mode permission matrix (ON/ASK/OFF) |
 | Subagents | `subagents` | Enable/disable individual subagent profiles |
 | Advanced | `advanced`+`limits` | Security (no-egress, read-only), timeouts, limits, performance |
 | Theme | — | ANSI color preview (roles, status, agents, log levels) |
@@ -1449,7 +1457,7 @@ When the autocomplete popup is visible:
 %USERPROFILE%\.refio\config.yaml  # User config (Windows)
 <project>/.refio/config.yaml  # Project config
 <project>/.aiignore           # RAG ignore patterns
-refio_poc.db                  # SQLite database (project root)
+~/.refio/data/database.sqlite # SQLite database (shared across projects)
 ```
 
 ### Key Classes

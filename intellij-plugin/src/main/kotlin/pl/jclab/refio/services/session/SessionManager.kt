@@ -104,6 +104,36 @@ class SessionManager(private val project: Project) {
     val lastPromptSnapshot: StateFlow<pl.jclab.refio.core.services.turn.PromptSnapshot?>?
         get() = projectRouter.lastPromptSnapshot
 
+    /**
+     * Tool approval service for ASK permission level.
+     * UI observes pendingRequests and calls resolveApproval.
+     */
+    val toolApprovalService: pl.jclab.refio.core.services.turn.ToolApprovalService
+        get() = projectRouter.toolApprovalService
+
+    val pendingUserMessageQueue: pl.jclab.refio.core.services.PendingUserMessageQueue
+        get() = projectRouter.pendingUserMessageQueue
+
+    /**
+     * Append a mid-execution user message to the in-memory message list for immediate UI display.
+     * Does NOT call loadMessages() — that would wipe in-flight streaming/tool messages.
+     * The next loadMessages() (after turn completes) will reconcile with the DB version.
+     */
+    fun notifyMidExecutionMessage(taskId: String, content: String) {
+        cs.launch {
+            stateManager.appendMessage(
+                pl.jclab.refio.api.models.Message(
+                    id = "mid-exec-${System.currentTimeMillis()}",
+                    taskId = taskId,
+                    role = "user",
+                    content = content,
+                    metadata = """{"type":"mid_execution_input"}""",
+                    createdAt = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
     private val statusBarIntegration = StatusBarIntegration()
     private lateinit var lifecycleService: SessionLifecycleService
     private lateinit var messageDispatcher: MessageDispatcher
@@ -1166,8 +1196,6 @@ class SessionManager(private val project: Project) {
                     uiAdapter.log("INFO", "Session ID changed: ${session.id} -> ${response.taskId}")
                     val newSession = session.copy(id = response.taskId)
                     stateManager.setActiveSession(newSession)
-                    com.intellij.ide.util.PropertiesComponent.getInstance(project)
-                        .setValue("refio.lastSession", response.taskId)
                 }
                 updateSessionCosts(stateManager.getActiveSession() ?: session)
                 autoNameSessionIfNeeded(stateManager.getActiveSession() ?: session, input)

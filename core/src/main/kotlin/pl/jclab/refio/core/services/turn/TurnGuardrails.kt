@@ -42,34 +42,46 @@ class TurnGuardrails {
 
     /**
      * Loop detector to prevent infinite loops when model repeatedly calls same tools.
+     *
+     * Uses tool name as the signature — different arguments to the same tool are
+     * treated as repeated calls. This catches loops where the model retries the same
+     * operation regardless of parameter changes, while still allowing legitimate
+     * multi-call workflows (e.g. reading different files) since different tool names
+     * won't collide.
+     *
+     * @param maxConsecutiveRepeats Abort after N consecutive calls to the same tool
+     * @param maxSameToolTotal Abort after N total calls to the same tool
+     * @param warnConsecutiveThreshold Warn after this many consecutive same-tool calls
+     * @param warnTotalThreshold Warn after this many total same-tool calls
      */
     class LoopDetector(
-        private val maxConsecutiveRepeats: Int = 3,
-        private val maxSameToolCallsTotal: Int = 5
+        private val maxConsecutiveRepeats: Int = 5,
+        private val maxSameToolTotal: Int = 15,
+        private val warnConsecutiveThreshold: Int = 3,
+        private val warnTotalThreshold: Int = 8
     ) {
-        private val toolCallHistory = mutableListOf<String>()  // List of signatures
-        private val toolCallCounts = mutableMapOf<String, Int>()  // Signature -> count
+        private val toolCallHistory = mutableListOf<String>()  // List of tool names
+        private val toolCallCounts = mutableMapOf<String, Int>()  // toolName -> count
 
         /**
          * Record a tool call and check if it indicates a loop.
          * @return LoopStatus indicating if we should continue, warn, or abort
          */
         fun recordToolCall(toolName: String, arguments: String): LoopStatus {
-            val signature = createSignature(toolName, arguments)
-            toolCallHistory.add(signature)
-            toolCallCounts[signature] = (toolCallCounts[signature] ?: 0) + 1
+            toolCallHistory.add(toolName)
+            toolCallCounts[toolName] = (toolCallCounts[toolName] ?: 0) + 1
 
-            val totalCount = toolCallCounts[signature] ?: 0
-            val consecutiveCount = countConsecutiveRepeats(signature)
+            val totalCount = toolCallCounts[toolName] ?: 0
+            val consecutiveCount = countConsecutiveRepeats(toolName)
 
             return when {
                 consecutiveCount >= maxConsecutiveRepeats -> {
-                    LoopStatus.ABORT("Same tool call repeated $consecutiveCount times consecutively: $toolName")
+                    LoopStatus.ABORT("Tool $toolName called $consecutiveCount times consecutively — agent may be stuck")
                 }
-                totalCount >= maxSameToolCallsTotal -> {
-                    LoopStatus.ABORT("Same tool call made $totalCount times total: $toolName")
+                totalCount >= maxSameToolTotal -> {
+                    LoopStatus.ABORT("Tool $toolName called $totalCount times total — agent may be stuck")
                 }
-                consecutiveCount >= 2 || totalCount >= 3 -> {
+                consecutiveCount >= warnConsecutiveThreshold || totalCount >= warnTotalThreshold -> {
                     LoopStatus.WARN("Tool $toolName called $totalCount times (consecutive: $consecutiveCount)")
                 }
                 else -> LoopStatus.OK
@@ -80,11 +92,11 @@ class TurnGuardrails {
          * Check if model is stuck producing empty tool calls.
          */
         fun recordEmptyToolCalls(): LoopStatus {
-            val signature = "__EMPTY_TOOL_CALLS__"
-            toolCallHistory.add(signature)
-            toolCallCounts[signature] = (toolCallCounts[signature] ?: 0) + 1
+            val name = "__EMPTY_TOOL_CALLS__"
+            toolCallHistory.add(name)
+            toolCallCounts[name] = (toolCallCounts[name] ?: 0) + 1
 
-            val count = toolCallCounts[signature] ?: 0
+            val count = toolCallCounts[name] ?: 0
             return when {
                 count >= 3 -> LoopStatus.ABORT("Model returned empty tool calls $count times - may be stuck")
                 count >= 2 -> LoopStatus.WARN("Model returned empty tool calls twice")
@@ -92,20 +104,10 @@ class TurnGuardrails {
             }
         }
 
-        private fun createSignature(toolName: String, arguments: String): String {
-            // Normalize arguments by removing whitespace and sorting keys
-            val normalizedArgs = try {
-                arguments.trim().replace(Regex("\\s+"), "")
-            } catch (e: Exception) {
-                arguments
-            }
-            return "$toolName:$normalizedArgs"
-        }
-
-        private fun countConsecutiveRepeats(signature: String): Int {
+        private fun countConsecutiveRepeats(toolName: String): Int {
             var count = 0
             for (i in toolCallHistory.indices.reversed()) {
-                if (toolCallHistory[i] == signature) {
+                if (toolCallHistory[i] == toolName) {
                     count++
                 } else {
                     break

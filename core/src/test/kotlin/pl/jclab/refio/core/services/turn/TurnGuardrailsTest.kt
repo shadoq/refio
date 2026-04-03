@@ -95,55 +95,77 @@ class TurnGuardrailsTest {
         }
 
         @Test
-        fun `should return WARN for second consecutive same tool call`() {
-            val detector = TurnGuardrails.LoopDetector()
+        fun `should track by tool name not arguments`() {
+            // Different arguments to same tool still count as same tool
+            val detector = TurnGuardrails.LoopDetector(
+                maxConsecutiveRepeats = 3,
+                warnConsecutiveThreshold = 2,
+                warnTotalThreshold = 100
+            )
             detector.recordToolCall("read_file", """{"path": "a.kt"}""")
-            val status = detector.recordToolCall("read_file", """{"path": "a.kt"}""")
+            val status = detector.recordToolCall("read_file", """{"path": "b.kt"}""")
             assertIs<TurnGuardrails.LoopStatus.WARN>(status)
         }
 
         @Test
-        fun `should return ABORT after max consecutive repeats`() {
-            val detector = TurnGuardrails.LoopDetector(maxConsecutiveRepeats = 3)
-            detector.recordToolCall("read_file", """{"path": "same.kt"}""")
-            detector.recordToolCall("read_file", """{"path": "same.kt"}""")
-            val status = detector.recordToolCall("read_file", """{"path": "same.kt"}""")
-            assertIs<TurnGuardrails.LoopStatus.ABORT>(status)
-        }
-
-        @Test
-        fun `should return ABORT when total count exceeds max`() {
-            val detector = TurnGuardrails.LoopDetector(maxConsecutiveRepeats = 10, maxSameToolCallsTotal = 5)
-            // Interleave with different calls to avoid consecutive abort
-            for (i in 1..5) {
-                detector.recordToolCall("read_file", """{"path": "same.kt"}""")
-                if (i < 5) {
-                    detector.recordToolCall("grep_search", """{"pattern": "foo$i"}""")
-                }
-            }
-            // Last call should be ABORT due to total count = 5
-            // Actually the 5th call of read_file will trigger total >= 5
-        }
-
-        @Test
-        fun `should not flag different tool calls`() {
+        fun `should not flag different tools`() {
             val detector = TurnGuardrails.LoopDetector()
             val s1 = detector.recordToolCall("read_file", """{"path": "a.kt"}""")
-            val s2 = detector.recordToolCall("read_file", """{"path": "b.kt"}""")
-            val s3 = detector.recordToolCall("grep_search", """{"pattern": "foo"}""")
+            val s2 = detector.recordToolCall("grep_search", """{"pattern": "foo"}""")
+            val s3 = detector.recordToolCall("http_request", """{"url": "https://example.com"}""")
             assertIs<TurnGuardrails.LoopStatus.OK>(s1)
             assertIs<TurnGuardrails.LoopStatus.OK>(s2)
             assertIs<TurnGuardrails.LoopStatus.OK>(s3)
         }
 
         @Test
-        fun `should normalize arguments by removing whitespace`() {
+        fun `should return ABORT after max consecutive repeats`() {
             val detector = TurnGuardrails.LoopDetector(maxConsecutiveRepeats = 3)
-            detector.recordToolCall("read_file", """{ "path" : "a.kt" }""")
-            detector.recordToolCall("read_file", """{"path":"a.kt"}""")
-            val status = detector.recordToolCall("read_file", """{"path":  "a.kt"}""")
-            // All three are same after normalization
+            detector.recordToolCall("read_file", """{"path": "a.kt"}""")
+            detector.recordToolCall("read_file", """{"path": "b.kt"}""")
+            val status = detector.recordToolCall("read_file", """{"path": "c.kt"}""")
             assertIs<TurnGuardrails.LoopStatus.ABORT>(status)
+        }
+
+        @Test
+        fun `should return ABORT when total count exceeds max`() {
+            val detector = TurnGuardrails.LoopDetector(maxConsecutiveRepeats = 100, maxSameToolTotal = 5)
+            // Interleave with different calls to avoid consecutive abort
+            for (i in 1..5) {
+                val status = detector.recordToolCall("read_file", """{"path": "file$i.kt"}""")
+                if (i >= 5) {
+                    assertIs<TurnGuardrails.LoopStatus.ABORT>(status)
+                }
+                if (i < 5) {
+                    detector.recordToolCall("grep_search", """{"pattern": "foo$i"}""")
+                }
+            }
+        }
+
+        @Test
+        fun `should break consecutive count when different tool is called`() {
+            val detector = TurnGuardrails.LoopDetector(maxConsecutiveRepeats = 3)
+            detector.recordToolCall("read_file", """{"path": "a.kt"}""")
+            detector.recordToolCall("read_file", """{"path": "b.kt"}""")
+            // Break the streak
+            detector.recordToolCall("grep_search", """{"pattern": "foo"}""")
+            // Start new streak
+            val status = detector.recordToolCall("read_file", """{"path": "c.kt"}""")
+            // Only 1 consecutive now, should be OK or WARN depending on total
+            assertFalse(status is TurnGuardrails.LoopStatus.ABORT)
+        }
+
+        @Test
+        fun `should use configurable warn thresholds`() {
+            val detector = TurnGuardrails.LoopDetector(
+                maxConsecutiveRepeats = 10,
+                maxSameToolTotal = 20,
+                warnConsecutiveThreshold = 2,
+                warnTotalThreshold = 4
+            )
+            detector.recordToolCall("http_request", """{"url": "a"}""")
+            val s2 = detector.recordToolCall("http_request", """{"url": "b"}""")
+            assertIs<TurnGuardrails.LoopStatus.WARN>(s2) // consecutive = 2 >= warnConsecutiveThreshold
         }
 
         @Test
@@ -167,6 +189,24 @@ class TurnGuardrailsTest {
             val stats = detector.getStats()
             assertTrue(stats.contains("unique=2"))
             assertTrue(stats.contains("total=2"))
+        }
+
+        @Test
+        fun `agent mode defaults allow reasonable http retry workflow`() {
+            // Simulates: agent retries an API call 4 times (e.g. 503 errors) — should not abort
+            val detector = TurnGuardrails.LoopDetector(
+                maxConsecutiveRepeats = 5,
+                maxSameToolTotal = 15,
+                warnConsecutiveThreshold = 3,
+                warnTotalThreshold = 8
+            )
+            for (i in 1..4) {
+                val status = detector.recordToolCall("http_request", """{"url": "https://api.example.com", "body": "same"}""")
+                assertFalse(status is TurnGuardrails.LoopStatus.ABORT, "Should not abort on retry $i")
+            }
+            // 5th consecutive should abort
+            val s5 = detector.recordToolCall("http_request", """{"url": "https://api.example.com"}""")
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(s5)
         }
     }
 

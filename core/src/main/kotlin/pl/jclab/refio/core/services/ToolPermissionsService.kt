@@ -15,6 +15,7 @@ private val logger = dualLogger("ToolPermissionsService")
  */
 enum class PermissionLevel {
     ON,      // Zawsze dozwolone
+    ASK,     // Wymaga zatwierdzenia użytkownika
     OFF      // Wyłączone
 }
 
@@ -67,7 +68,7 @@ class ToolPermissionsService(
             "advance_code_editing" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ON),
             "multi_line_editor" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ON),
             "multi_edit" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ON),
-            "run_terminal_command" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ON),
+            "run_terminal_command" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ASK),
             "http_request" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ON),
             "run_code" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.OFF)
         )

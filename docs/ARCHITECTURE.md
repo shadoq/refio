@@ -27,9 +27,9 @@ Unlike tools that send entire codebases to LLMs, Refio uses **selective context 
 | **Enhanced AgentTurnLoop** | AgentTurnLoop execution + ADR-0028/ADR-0029 profile support, caching, parallel tools |
 | **14 Context Providers** | @file, @folder, @codebase, @grep, @url, @docs, @commit, and more                     |
 | **RAG Indexing** | Automatic project indexing with language-specific analyzers                          |
-| **12 Registered Tools** | 6 read-only + 6 write tools (AGENT enables full toolset by default)                |
-| **6 LLM Adapters** | Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio                             |
-| **MCP Protocol** | Full Model Context Protocol with 16 built-in presets                                 |
+| **14 Registered Tools** | 6 read-only + 8 write tools (AGENT enables full toolset by default)                |
+| **8 LLM Adapters** | Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio, Custom OpenAI, Z.AI        |
+| **MCP Protocol** | Full Model Context Protocol with 17 built-in presets                                 |
 | **21 Built-in Subagents** | Specialized agents for code review, security, architecture, docs, business analysis, and coordination |
 | **Performance Optimizations** | Token estimation, retry logic, working memory integration                            |
 | **No-Egress Mode** | Block cloud providers, use only local models                                         |
@@ -64,8 +64,8 @@ Unlike tools that send entire codebases to LLMs, Refio uses **selective context 
 |  +-- ContextService (~2140 LOC) + 6 extracted sub-services              |
 +-------------------------------------------------------------------------+
 |  Infrastructure Layer                                                   |
-|  +-- LLMClient (unified) -> 6 provider adapters                        |
-|  +-- ToolRegistry -> 12 registered tools with security layers           |
+|  +-- LLMClient (unified) -> 8 provider adapters                        |
+|  +-- ToolRegistry -> 14 registered tools with security layers           |
 |  +-- MCPManager -> MCP server lifecycle (STDIO/HTTP)                    |
 |  +-- EmbeddingsService -> Ollama/OpenAI embeddings                      |
 |  +-- DatabaseFactory -> SQLite (WAL) + Exposed ORM                      |
@@ -155,7 +155,7 @@ AgentTurnLoop includes production-grade enhancements:
 | **Token Estimation** | Pre-flight counting prevents unexpected API errors |
 | **Working Memory** | Auto-extracts knowledge from tool results for context continuity |
 
-**Configuration:** Mode/profile settings (PLAN: 15 iterations, AGENT: 25 iterations, SUBAGENT depth limit: 3)
+**Configuration:** Mode/profile settings (PLAN: 25 iterations, AGENT: 50 iterations, SUBAGENT depth limit: 3)
 
 ---
 
@@ -287,7 +287,7 @@ RagSearchResult[]
 | `view_diff` | file1, file2 OR content2 | Line-by-line comparison |
 | `invoke_subagent` | subagent_name, goal, context_refs? | Run nested child loop via subagent profile |
 
-### WRITE Tools (6)
+### WRITE Tools (8)
 
 | Tool | Parameters | Description | Cost |
 |------|------------|-------------|------|
@@ -296,7 +296,9 @@ RagSearchResult[]
 | `multi_edit` | edits[] | Atomic multi-file edit | Free |
 | `multi_line_editor` | path, edit_description | LLM identifies line ranges | ~$0.02 |
 | `advance_code_editing` | path, edit_description | Full file regeneration | ~$0.06 |
-| `run_terminal_command` | command | Shell execution (AGENT default: ON, whitelist-protected) | Free |
+| `run_terminal_command` | command | Shell execution (ASK in AGENT, CommandRule-protected) | Free |
+| `http_request` | url, method, headers, body, save_to_file | HTTP requests (GET/POST/PUT/DELETE), 5 MB limit, 60s timeout | Free |
+| `run_code` | language, code | Execute Python/JavaScript/Kotlin Script, 120s timeout | Free |
 
 ### Tool Availability by Mode
 
@@ -371,19 +373,19 @@ You are a specialized assistant for...
 
 Full Model Context Protocol implementation with STDIO and HTTP/SSE transports.
 
-### 16 Built-in Presets
+### 17 Built-in Presets
 
 | Category | Servers |
 |----------|---------|
 | **VCS** | GitHub, GitLab |
-| **Databases** | PostgreSQL, SQLite |
+| **Databases** | PostgreSQL, SQLite, Database (HTTP Streamable) |
 | **Search** | Brave Search, Exa |
 | **Docs** | Context7 |
 | **DevOps** | Sentry, AWS |
 | **Storage** | Google Drive, Filesystem |
-| **Development** | Puppeteer, Sequential Thinking |
+| **Development** | Puppeteer, Sequential Thinking, Custom API |
 | **Collaboration** | Slack |
-| **Other** | Memory, Custom API |
+| **Memory** | Memory |
 
 ### Configuration
 
@@ -409,12 +411,14 @@ mcp:
 
 | Provider | Models | Features |
 |----------|--------|----------|
-| **Ollama** | Local models | Free, JSON mode, local privacy |
+| **Ollama** | Local models (qwen3.5, llama, etc.) | Free, JSON mode, local privacy |
 | **OpenAI** | GPT-4o, GPT-4o-mini, o1, o3, GPT-5 | Responses API, reasoning models |
 | **Anthropic** | Claude 3.5/3.7, Opus 4.1 | Thinking mode, top-level system |
 | **Gemini** | 2.5 Flash/Pro | system_instruction, thinkingConfig |
 | **OpenRouter** | All providers | Unified gateway, dynamic pricing |
 | **LM Studio** | Local models | OpenAI-compatible, free |
+| **Custom OpenAI** | Any OpenAI-compatible API | Configurable base URL, API key |
+| **Z.AI** | Z.AI models | Rate-limited, OpenAI-compatible |
 
 ### Pricing (per 1M tokens, USD)
 
@@ -433,7 +437,7 @@ mcp:
 - **Language/Platform**: Kotlin 1.9.25, JVM target 17, IntelliJ Platform 2024.1.7 (IC)
 - **UI**: Native IntelliJ Swing components (no webview)
 - **Core/Transport**: CoreApiRouter (composition root) + 12 domain routers; Ktor server for HTTP transport
-- **LLM/HTTP**: Ktor Client 2.3.7 with 6 provider adapters
+- **LLM/HTTP**: Ktor Client 2.3.7 with 8 provider adapters
 - **Database**: SQLite (WAL) via Exposed 0.46.0 + sqlite-jdbc 3.44.1.0
 - **Serialization**: Gson 2.10.1, kotlinx-serialization-json 1.6.2, KAML 0.55.0
 - **Markdown**: commonmark 0.21.0
@@ -451,7 +455,7 @@ mcp:
 3. Required models:
    ```bash
    ollama pull nomic-embed-text:latest  # Embeddings
-   ollama pull qwen2.5-coder:14b        # Coding
+   ollama pull qwen3.5:9b        # Coding
    ```
 
 ### Build & Run
@@ -514,12 +518,12 @@ providers:
 
 models:
   defaults:
-    chat: "ollama/qwen2.5:7b"
-    coding: "ollama/qwen2.5-coder:7b"
+    chat: "ollama/qwen3.5:9b"
+    coding: "ollama/qwen3.5:9b"
     embedding: "ollama/nomic-embed-text"
 
   visibility:
-    "ollama/qwen2.5:7b": true
+    "ollama/qwen3.5:9b": true
     "anthropic/claude-3-5-sonnet-20241022": true
 ```
 
@@ -535,8 +539,8 @@ See [`docs/config.md`](config.md) for full configuration reference.
 |-------|------------|
 | **PathSandbox** | All file ops restricted to project root |
 | **FileLimits** | Size limits (2MB), excluded directories (24), extensions (34) |
-| **Terminal Whitelist** | Allowlist + argument filtering + global blocked patterns (denylist fallback optional) |
-| **ToolPermissions** | Per-mode access control (PLAN=read-only, AGENT=read-write) |
+| **CommandRule System** | Regex-based rules with ALLOW/BLOCK/ASK levels replacing legacy whitelist |
+| **ToolPermissions** | 3-level access control: ON/ASK/OFF per mode (PLAN=read-only, AGENT=read-write) |
 | **No-Egress Mode** | Blocks cloud providers, allows only Ollama/LM Studio |
 | **Secret Redaction** | API keys masked in all logs |
 
@@ -558,12 +562,12 @@ core/src/main/kotlin/pl/jclab/refio/
 |   +-- api/routers/          # Domain routers (Chat, Task, Agent, Config, RAG, etc.)
 |   +-- context/              # Context providers + MCP
 |   +-- db/                   # Database layer (Exposed ORM)
-|   +-- llm/                  # LLM integration (6 adapters)
+|   +-- llm/                  # LLM integration (8 adapters)
 |   +-- services/             # Core services (~35 services)
 |   +-- services/context/     # ContextService sub-components (6 extracted classes)
 |   +-- services/turn/        # AgentTurnLoop sub-components (13 files)
 |   +-- subagents/            # Subagent system
-|   +-- tools/                # Tool system (12 registered implementations)
+|   +-- tools/                # Tool system (14 registered implementations)
 |   +-- prompts/              # Prompt templates
 +-- api/                      # Shared API models (DTOs)
 

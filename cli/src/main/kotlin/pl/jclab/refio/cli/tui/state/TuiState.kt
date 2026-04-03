@@ -21,6 +21,7 @@ data class TuiState(
     val apiLogs: List<TuiApiLogEntry> = emptyList(),
     val debugInfo: TuiDebugInfo = TuiDebugInfo(),
     val pendingApprovals: List<TuiPendingApproval> = emptyList(),
+    val pendingToolApproval: TuiToolApprovalRequest? = null,
     val sessions: List<TuiSessionEntry> = emptyList(),
     val activeSessionId: String? = null,
     val selectedHistoryIndex: Int = 0,
@@ -233,6 +234,17 @@ data class TuiPendingApproval(
     val action: String,
     val risk: String,
     val details: Map<String, String> = emptyMap()
+)
+
+/**
+ * Pending tool approval request (from PermissionLevel.ASK).
+ * Displayed as inline Y/T/N prompt in TUI.
+ */
+data class TuiToolApprovalRequest(
+    val requestId: String,
+    val toolName: String,
+    val description: String,
+    val arguments: Map<String, Any>
 )
 
 data class TuiSessionEntry(

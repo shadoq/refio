@@ -74,10 +74,6 @@ class TuiViewModel(
         ProjectIdGenerator.generate(projectPath.toAbsolutePath().normalize())
     }
 
-    private val lastSessionFile: File by lazy {
-        projectPath.resolve(".refio/last-session").toFile()
-    }
-
     // --- Sub-ViewModels ---
     // Created eagerly; wired to router/taskId lazily in initialize().
     // Order: session -> chat -> workflowListener -> obs (no circular deps).
@@ -157,6 +153,7 @@ class TuiViewModel(
         chat._pendingQuestionId.map { Unit },
         chat._pendingQuestionOptions.map { Unit },
         chat._pendingApprovals.map { Unit },
+        chat._pendingToolApproval.map { Unit },
         chat._agentFilter.map { Unit },
         chat._agents.map { Unit },
         chat._panelFocused.map { Unit },
@@ -244,6 +241,7 @@ class TuiViewModel(
         pendingQuestionId = chat._pendingQuestionId.value,
         pendingQuestionOptions = chat._pendingQuestionOptions.value,
         pendingApprovals = chat._pendingApprovals.value,
+        pendingToolApproval = chat._pendingToolApproval.value,
         agentFilter = chat._agentFilter.value,
         agents = chat._agents.value,
         panelFocused = chat._panelFocused.value,
@@ -421,6 +419,7 @@ class TuiViewModel(
             bridgeBackendEventBus(r)
             subscribeToAgentEvents()
             subscribeToUserInteraction(r)
+            subscribeToToolApprovals(r)
             obs.startAutoRefresh(r)
             obs.refreshRagStats(r)
 
@@ -452,7 +451,6 @@ class TuiViewModel(
         session.loadMessagesFromDb = { r, tid -> loadMessagesFromDb(r, tid) }
         session.loadSubtasksFromDb = { r, tid -> loadSubtasksFromDb(r, tid) }
         session.createNewTaskInDb = { r -> createNewTaskInDb(r) }
-        session.persistLastSessionId = { id -> persistLastSessionId(id) }
         session.refreshApiLogs = { r -> obs.refreshApiLogs(r) }
         session.onStreamChunk = { delta -> workflowListener.onStreamChunk(delta) }
         session.onStreamComplete = { response -> workflowListener.onStreamComplete(response) }
@@ -503,27 +501,10 @@ class TuiViewModel(
 
     private fun restoreOrCreateSession(r: CoreApiRouter): String {
         try {
-            if (lastSessionFile.exists()) {
-                val savedId = lastSessionFile.readText().trim()
-                if (savedId.isNotBlank()) {
-                    val task = r.taskRouter.getTask(savedId)
-                    if (task != null) {
-                        _mode.value = task.mode
-                        logger.info { "Restored session: $savedId (mode=${task.mode})" }
-                        return savedId
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            logger.debug(e) { "Failed to restore last session" }
-        }
-
-        try {
             val lastTask = r.taskRouter.getLastSessionForProject(projectId)
             if (lastTask != null) {
-                persistLastSessionId(lastTask.id)
                 _mode.value = lastTask.mode
-                logger.info { "Found last project session: ${lastTask.id}" }
+                logger.info { "Restored last project session: ${lastTask.id} (mode=${lastTask.mode})" }
                 return lastTask.id
             }
         } catch (e: Exception) {
@@ -541,18 +522,8 @@ class TuiViewModel(
             projectId = projectId,
             projectPath = projectPath.toAbsolutePath().toString()
         ))
-        persistLastSessionId(task.id)
         logger.info { "Created new session: ${task.id} (mode=${taskMode})" }
         return task.id
-    }
-
-    private fun persistLastSessionId(id: String) {
-        try {
-            lastSessionFile.parentFile?.mkdirs()
-            lastSessionFile.writeText(id)
-        } catch (e: Exception) {
-            logger.debug(e) { "Failed to persist session ID" }
-        }
     }
 
     internal fun loadMessagesFromDb(r: CoreApiRouter, tid: String) {
@@ -661,6 +632,22 @@ class TuiViewModel(
                 if (questionId == null) {
                     chat._pendingQuestionOptions.value = emptyList()
                 }
+            }
+        }
+    }
+
+    private fun subscribeToToolApprovals(r: CoreApiRouter) {
+        scope.launch {
+            r.toolApprovalService.pendingRequests.collect { requests ->
+                val first = requests.firstOrNull()
+                chat._pendingToolApproval.value = if (first != null) {
+                    TuiToolApprovalRequest(
+                        requestId = first.requestId,
+                        toolName = first.toolName,
+                        description = first.description,
+                        arguments = first.arguments
+                    )
+                } else null
             }
         }
     }
@@ -996,6 +983,26 @@ class TuiViewModel(
     fun reject(approvalId: String) = chat.reject(approvalId)
     fun trustAgent(agentId: String) = chat.trustAgent(agentId)
     fun isAgentTrusted(agentId: String) = chat.isAgentTrusted(agentId)
+
+    // Tool approval (PermissionLevel.ASK)
+    fun approveToolExecution(requestId: String) {
+        router?.toolApprovalService?.resolveApproval(
+            requestId,
+            pl.jclab.refio.core.services.turn.ToolApprovalService.ApprovalDecision.Approved
+        )
+    }
+    fun trustToolExecution(requestId: String, toolName: String) {
+        router?.toolApprovalService?.resolveApproval(
+            requestId,
+            pl.jclab.refio.core.services.turn.ToolApprovalService.ApprovalDecision.Trusted(toolName)
+        )
+    }
+    fun rejectToolExecution(requestId: String) {
+        router?.toolApprovalService?.resolveApproval(
+            requestId,
+            pl.jclab.refio.core.services.turn.ToolApprovalService.ApprovalDecision.Rejected()
+        )
+    }
     fun cycleAgentFilter() = chat.cycleAgentFilter()
     fun togglePanelFocus() = chat.togglePanelFocus()
     fun copyLastMessageToClipboard() = chat.copyLastMessageToClipboard()

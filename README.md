@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![IntelliJ](https://img.shields.io/badge/IntelliJ-2024.x-orange.svg)](https://www.jetbrains.com/idea/)
-[![Version](https://img.shields.io/badge/version-0.0.1-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.0.1.5-green.svg)](CHANGELOG.md)
 
 **Local-first AI coding assistant for IntelliJ IDEA and the terminal.**
 Built for developers who want control over context, tools, and execution.
@@ -52,7 +52,7 @@ Plus **21 built-in subagents** for specialized tasks: code review, security audi
 ```bash
 # 1. Install Ollama + models
 ollama pull nomic-embed-text    # Required for RAG embeddings
-ollama pull qwen2.5-coder:7b    # Recommended coding model
+ollama pull qwen3.5:9b           # Recommended coding model
 
 # 2. Build & install plugin
 git clone https://github.com/shadoq/refio.git && cd refio
@@ -75,7 +75,7 @@ Then open the **Refio** tool window (View -> Tool Windows -> Refio), select a mo
 ./cli/build/install/cli/bin/cli --project /path/to/your/project
 
 # Options
-./cli/build/install/cli/bin/cli --project . --mode AGENT --model ollama/qwen2.5-coder:7b --no-egress
+./cli/build/install/cli/bin/cli --project . --mode AGENT --model ollama/qwen3.5:9b --no-egress
 ```
 
 The CLI provides a full-featured TUI that mirrors the IntelliJ plugin GUI — no IDE required.
@@ -99,7 +99,7 @@ The CLI provides a full-featured TUI that mirrors the IntelliJ plugin GUI — no
 - **RAG-powered semantic search** — automatic project indexing with 5 language analyzers
 - **14 tools** — 6 read-only + 8 write (incl. `http_request`, `run_code`, `invoke_subagent`), with per-mode permissions
 - **8 LLM providers** — Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio, Custom OpenAI, Z.AI
-- **MCP protocol support** — 17 built-in server presets (GitHub, PostgreSQL, Brave Search, etc.)
+- **MCP protocol support** — 17 built-in server presets + custom (GitHub, PostgreSQL, Brave Search, etc.)
 - **21 built-in subagents** — specialized agents invocable with `!agent-name` prefix
 - **Project instructions** — auto-loads `AGENTS.md` and `.refio/agent.md` into LLM context; conditional rules via `.refio/rules/*.md` with glob-based activation
 - **Custom subagents** — define your own in `.refio/agents/*.md`
@@ -252,8 +252,8 @@ providers:
 
 models:
   defaults:
-    chat: "ollama/qwen2.5:7b"
-    coding: "ollama/qwen2.5-coder:7b"
+    chat: "ollama/qwen3.5:9b"
+    coding: "ollama/qwen3.5:9b"
     embedding: "ollama/nomic-embed-text"
 ```
 
@@ -265,7 +265,7 @@ See [docs/config.md](docs/config.md) for full configuration reference.
 
 | | |
 |---|---|
-| **Version** | 0.0.1.4 |
+| **Version** | 0.0.1.5 |
 | **Status** | Active development — CLI/TUI, multi-agent, multi-module architecture |
 | **License** | MIT |
 | **Focus** | Stability, deterministic behavior, local-first experience |

@@ -142,7 +142,7 @@
 
 - **MCPProtocol.kt** — JSON-RPC 2.0 request/response data classes and MCP method constants (initialize, resources/list, tools/list, tools/call).
 - **MCPModels.kt** — Config data classes: `MCPServerConfig`, auth (bearer/OAuth), transport (stdio/HTTP), workflow config.
-- **MCPServerPresets.kt** — 15+ built-in MCP server presets by category (Documentation, VCS, Database, Search, Filesystem, Communication, Cloud).
+- **MCPServerPresets.kt** — 17 built-in MCP server presets by category (Documentation, VCS, Database, Search, Filesystem, Communication, Cloud, Memory, Development).
 - **MCPManager.kt** — Singleton managing MCP server connections per project; loads configs from DB, registers tools and context providers dynamically.
 - **MCPConnection.kt** — Connection lifecycle and communication: connect, initialize, refresh resources/tools, call tools; async with request/response tracking.
 - **MCPHttpTransport.kt** — Ktor-based HTTP/SSE transport; bearer auth, custom headers, OAuth, env var resolution.
@@ -165,6 +165,8 @@
 - **CommandWhitelist.kt** — Two-mode command validation (WHITELIST_ONLY / WHITELIST_PLUS_DENY); parses commands into program/subcommand/args with shell operator support.
 - **CommandWhitelistConfig.kt** — Config data classes for command whitelist: `AllowedCommand` with blocked flags/subcommands/patterns, max args, confirmation requirement.
 - **CommandWhitelistDefaults.kt** — ~780 lines with 100+ whitelisted programs across ecosystems (build, package managers, VCS, testing, databases, cloud CLIs).
+- **CommandRule.kt** — Regex-based command validation with `RuleAction` enum (ALLOW/BLOCK/ASK); `CommandRuleMatcher` evaluates rules in priority order (BLOCK > ALLOW > ASK); lazy regex compilation with graceful error handling; default action is ASK.
+- **CommandRuleDefaults.kt** — Default command rules: 22 BLOCK rules (rm -r, mkfs, dd, git reset --hard, npm publish, fork bombs), auto-generated ALLOW rules from legacy AllowedCommand (154 commands), ASK rules for docker, kubectl, ssh, sudo, and catch-all unknown commands.
 - **CommandDenylist.kt** — Blocks destructive commands: filesystem destruction, privilege escalation, download-and-execute patterns, fork bombs.
 - **FileLockManager.kt** — Coroutine-safe mutual exclusion via `ConcurrentHashMap<String, Mutex>` keyed by normalized paths; `withFileLock(path) { block }`.
 - **FileOperations.kt** — Safe file ops with sandbox and snapshot support; SHA-256 hashing for snapshots; `normalizePath()` utility.
@@ -182,7 +184,9 @@
 - **MultiEditTool.kt** — Atomic multi-file search-and-replace; validates all edits before applying any; per-edit error messages.
 - **MultiLineEditorTool.kt** — LLM-assisted editor for 3-10 code locations (~$0.02 cost); parses JSON edits with `EditChange`, validates bounds/overlaps, applies in reverse order; LCS diff generation; streaming support.
 - **AdvanceCodeEditingTool.kt** — Full file regeneration via LLM (~$0.06 cost); extracts code from markdown fences; LCS diff; temperature 0.2; streaming support.
-- **RunTerminalCommandTool.kt** — Shell execution with whitelist validation; 120s timeout, 200KB output limit; async I/O to prevent deadlocks; cross-platform shell selection.
+- **RunTerminalCommandTool.kt** — Shell execution with CommandRule-based validation (ALLOW/BLOCK/ASK); legacy whitelist fallback; 120s timeout, 200KB output limit; async I/O to prevent deadlocks; cross-platform shell selection.
+- **HttpRequestTool.kt** — HTTP requests (GET/POST/PUT/DELETE) with optional `save_to_file` for large responses; 5MB response limit, 60s timeout; auto-detects format (CSV, JSON, text) for saved files; header filtering for relevant response headers.
+- **RunCodeTool.kt** — Inline code execution for Python, JavaScript, and Kotlin Script; 120s timeout; sandbox via temporary files; captures stdout/stderr; OFF by default (requires explicit enabling).
 
 ### Subagent Integration
 - **InvokeSubagentTool.kt** — Enables agent-to-subagent delegation; validates availability, detects recursion; builds `TurnRequest` with overrides for system prompt, tools, depth.
@@ -191,7 +195,7 @@
 
 - **AgentExecutor.kt** — Orchestrates step-by-step execution: planning → execution → summarization with subtask lifecycle management.
 - **AgentTurnLoop.kt** — Self-directing tool loop for PLAN/AGENT modes (~988 LOC); delegates to `turn/` sub-components for LLM calls, prompt building, tool execution, response processing, guardrails.
-- **TurnLoopConfig.kt** — Configuration for AgentTurnLoop with factory methods for PLAN (15 iterations) and AGENT (25 iterations) presets.
+- **TurnLoopConfig.kt** — Configuration for AgentTurnLoop with factory methods for PLAN (25 iterations) and AGENT (50 iterations) presets; includes auto-compaction thresholds, parallel tools, snapshots, retry config, working memory, read-only budget guard (ADR-0044).
 - **ChatService.kt** — Chat interactions with auto-optimization (conversation summarization on token threshold); builds project context via ContextService.
 - **PlanningService.kt** — Creates execution plans from LLM JSON; validates tools per mode, respects permissions, stores tool_args as suggestions.
 - **StepPlanner.kt** — Generates execution plans for subtasks with dynamic parameters based on runtime state; loads context from previous results.
@@ -203,7 +207,7 @@
 - **PromptsService.kt** — Prompt templates with `{{variable}}` substitution for CHAT/PLAN/AGENT modes; manages user-defined rules and commands.
 - **ToolExecutor.kt** — Sequential tool execution with validation, error handling, streaming for code generation tools; snapshot creation.
 - **ParallelToolExecutor.kt** — Parallel execution for READ_ONLY tools, sequential for WRITE; maintains order, creates snapshots, tracks parallelism stats.
-- **ToolPermissionsService.kt** — Per-mode tool permissions (PLAN=read-only, AGENT=all) with smart defaults; task-level overrides.
+- **ToolPermissionsService.kt** — 3-level tool permissions (ON/ASK/OFF) per mode (PLAN=read-only, AGENT=read-write) with smart defaults; `run_terminal_command`=ASK in AGENT, `run_code`=OFF by default; task-level overrides via ConfigRouter; `filterAvailableTools()` includes ASK tools.
 - **ToolResultSummarizer.kt** — Summarizes tool outputs using WEAK model; short outputs (<500 chars) skip; deterministic compression fallback.
 - **ToolResultData.kt** — DTO for tool result with summarization info (content, isSummarized, rawOutput, metadata).
 - **SnapshotService.kt** — File versioning and rollback with compression, SHA-256 hashing, snapshot grouping by subtask; keeps N most recent.
@@ -220,6 +224,7 @@
 - **OllamaRequestGate.kt** — Semaphore-based rate limiting for Ollama (default 1 concurrent request per endpoint).
 - **DocumentFetcher.kt** — HTML fetcher with optional JS rendering via HtmlUnit; configurable timeouts, best-effort error handling.
 - **DocumentationIndexingService.kt** — Web crawling and local file indexing; depth-limited, same-domain following, robots.txt respect, Flow-based progress.
+- **PendingUserMessageQueue.kt** — Handles mid-execution user input (messages sent while agent is running); saves to ChatMessageRepository with `"mid_execution_input"` metadata; `enqueue()` is non-blocking, `consumePending()` called between AgentTurnLoop iterations; enables user feedback/correction without explicit approve/reject dialog.
 
 ## `core/services/turn/` — AgentTurnLoop Sub-Components
 
@@ -236,6 +241,8 @@
 - **TurnEventListener.kt** — Event listener interface for turn lifecycle events.
 - **TurnLoopConfigAliases.kt** — Type aliases for turn loop configuration.
 - **TurnPromptAliases.kt** — Type aliases for prompt building.
+- **ToolApprovalService.kt** — Manages user approval flow for tools with `PermissionLevel.ASK`; `ApprovalDecision` sealed class (Approved/Trusted/Rejected); session trust rules via `ConcurrentHashMap` with regex pattern matching; 5-minute approval timeout; `pendingRequests` StateFlow for UI observation.
+- **ToolRejectedException.kt** — Exception thrown when user rejects tool execution; caught in AgentTurnLoop to record rejection, set `TurnResult(rejectedByUser=true)`, and break the loop returning control to user prompt.
 
 ## `core/services/context/` — Context Building Helpers & Extracted Sub-Services
 

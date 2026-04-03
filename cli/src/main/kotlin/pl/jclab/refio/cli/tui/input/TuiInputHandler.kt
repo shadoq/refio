@@ -168,6 +168,22 @@ class TuiInputHandler(private val terminal: Terminal) {
             }
         }
 
+        // If tool approval is pending (PermissionLevel.ASK), intercept y/t/n keys
+        if (state.pendingToolApproval != null) {
+            val req = state.pendingToolApproval
+            when (action) {
+                is TuiAction.TypeChar -> when (action.char.lowercaseChar()) {
+                    'y' -> { viewModel.approveToolExecution(req.requestId); return }
+                    't' -> { viewModel.trustToolExecution(req.requestId, req.toolName); return }
+                    'n' -> { viewModel.rejectToolExecution(req.requestId); return }
+                    else -> return
+                }
+                is TuiAction.BackToMain -> { viewModel.rejectToolExecution(req.requestId); return }
+                is TuiAction.SendMessage -> { viewModel.approveToolExecution(req.requestId); return }
+                else -> return
+            }
+        }
+
         // File viewer overlay: intercept keys for scrolling and actions
         if (state.fileViewerVisible) {
             when (action) {

@@ -372,9 +372,10 @@ class ToolExecutor(
             PermissionLevel.OFF -> {
                 throw SecurityException("Tool $toolName is disabled for ${task.mode} mode")
             }
-            PermissionLevel.ON -> {
-                // Dozwolone, kontynuuj
-                logger.debug { "Tool $toolName allowed (permission=ON)" }
+            PermissionLevel.ON, PermissionLevel.ASK -> {
+                // ASK is handled at TurnToolExecutor level (approval flow).
+                // At ToolExecutor level, ASK tools are allowed to execute.
+                logger.debug { "Tool $toolName allowed (permission=$permission)" }
             }
         }
     }

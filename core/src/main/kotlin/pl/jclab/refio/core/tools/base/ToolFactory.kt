@@ -7,6 +7,7 @@ import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.implementations.*
 import pl.jclab.refio.core.tools.security.CommandDenylist
 import pl.jclab.refio.core.tools.security.CommandLimits
+import pl.jclab.refio.core.tools.security.CommandRuleDefaults
 import pl.jclab.refio.core.tools.security.CommandWhitelist
 import pl.jclab.refio.core.tools.security.FileLimits
 import pl.jclab.refio.core.logging.dualLogger
@@ -109,7 +110,7 @@ class ToolFactory(
             MultiEditTool(sandbox, fileLimits),
 
             // Terminal operations
-            RunTerminalCommandTool(sandbox, whitelist, commandLimits),
+            RunTerminalCommandTool(sandbox, whitelist, commandLimits, CommandRuleDefaults.createDefaultMatcher()),
 
             // Network operations
             HttpRequestTool(sandbox),
