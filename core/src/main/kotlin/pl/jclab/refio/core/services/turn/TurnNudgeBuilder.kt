@@ -33,6 +33,15 @@ object TurnNudgeBuilder {
     /**
      * Build nudge message when agent gives up after a tool error instead of retrying or working around it.
      */
+    /**
+     * Build nudge message when agent stops after a transient HTTP error (timeout, 5xx, 429).
+     */
+    fun buildTransientHttpErrorNudgeMessage(): String {
+        return "The HTTP request failed with a transient error (timeout, 5xx, or rate limit). " +
+            "This is likely temporary. Retry the request after a short delay (use run_terminal_command with 'sleep 2'). " +
+            "Do NOT give up on the task due to a transient network error."
+    }
+
     fun buildToolErrorGiveUpNudgeMessage(): String {
         return "A tool returned an error but you stopped instead of continuing. Do NOT give up on the task. " +
             "Analyze the error and decide how to proceed: retry after a delay (use run_terminal_command with 'sleep N'), " +

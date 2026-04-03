@@ -54,6 +54,7 @@ private val logger = dualLogger("AgentTurnLoop")
 
 /** Tool names that are read-only — used by read-only budget guard (ADR-0044). */
 private val READ_ONLY_TOOL_NAMES = setOf("read_file", "read_directory", "file_search", "grep_search", "view_diff")
+private val TRANSIENT_HTTP_PATTERN = Regex("(?i)(timeout|timed out|503|502|429|connection refused|ECONNRESET|ECONNREFUSED)")
 
 
 /**
@@ -409,6 +410,8 @@ class AgentTurnLoop(
         var writeToolsExecutedInTurn = 0
         var consecutiveReadOnlyIterations = 0
         var consecutiveToolErrors = 0
+        var lastToolResultsHadTransientHttpError = false
+        var transientErrorNudgeCount = 0
         var intentNudgeCount = 0
         var toolErrorNudgeCount = 0
         var lastIterationHadToolErrors = false
