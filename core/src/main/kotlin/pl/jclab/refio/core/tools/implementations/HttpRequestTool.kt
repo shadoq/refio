@@ -15,6 +15,7 @@ import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
 import java.nio.file.Files
+import java.util.Base64
 
 private val logger = dualLogger("HttpRequestTool")
 
@@ -46,10 +47,11 @@ class HttpRequestTool(
     override val name = "http_request"
     override val description = "Make HTTP requests to external APIs and web services. " +
         "Supports GET, POST, PUT, DELETE methods with custom headers and body. " +
-        "Use for downloading data (CSV, JSON), calling REST APIs, and submitting results. " +
-        "IMPORTANT: For large responses (CSV files, big JSON datasets), use the 'save_to_file' " +
-        "parameter to save the response to disk. This returns only a summary with file path, " +
-        "size, and preview — then use run_code to process the saved file. " +
+        "Handles both text (JSON, CSV, HTML) and binary (PNG, JPEG, PDF, ZIP) responses automatically. " +
+        "Use for downloading data, images, calling REST APIs, and submitting results. " +
+        "IMPORTANT: For large or binary responses (images, CSV files, JSON datasets), use the 'save_to_file' " +
+        "parameter to save the response to disk. Binary content (images etc.) is saved as raw bytes. " +
+        "Text content returns only a summary with file path, size, and preview — then use run_code to process. " +
         "This prevents large data from filling the context window."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.DATA_PRODUCING
@@ -120,60 +122,116 @@ class HttpRequestTool(
                     }
 
                     val statusCode = response.status.value
-                    val responseBody = response.bodyAsText()
                     val duration = (System.currentTimeMillis() - startTime).toInt()
 
                     val responseHeaders = response.headers.entries()
                         .associate { (key, values) -> key to values.joinToString(", ") }
 
+                    val responseContentType = responseHeaders["content-type"]
+                        ?: responseHeaders["Content-Type"] ?: ""
+                    val isBinary = isBinaryContentType(responseContentType)
+
                     logger.info {
-                        "HTTP $method $url -> $statusCode (${responseBody.length} chars, ${duration}ms)"
+                        "HTTP $method $url -> $statusCode (binary=$isBinary, ${duration}ms)"
                     }
 
                     // Build header summary for LLM context (only useful headers)
                     val headerSummary = buildHeaderSummary(statusCode, responseHeaders)
 
-                    // If save_to_file is specified, save to disk and return summary
-                    if (saveToFile != null && statusCode in 200..399) {
-                        val savedOutput = saveResponseToFile(saveToFile, responseBody, url)
-                        ToolResult(
-                            success = true,
-                            output = headerSummary + savedOutput,
-                            exitCode = statusCode,
-                            durationMs = duration,
-                            bytesRead = responseBody.toByteArray().size,
-                            metadata = mapOf(
-                                "url" to url,
-                                "method" to method,
-                                "status_code" to statusCode,
-                                "response_length" to responseBody.length,
-                                "saved_to_file" to saveToFile,
-                                "response_headers" to responseHeaders
+                    if (isBinary) {
+                        val bytes = response.readBytes()
+                        if (saveToFile != null && statusCode in 200..399) {
+                            val savedOutput = saveBinaryResponseToFile(saveToFile, bytes, url, responseContentType)
+                            ToolResult(
+                                success = true,
+                                output = headerSummary + savedOutput,
+                                exitCode = statusCode,
+                                durationMs = duration,
+                                bytesRead = bytes.size,
+                                metadata = mapOf(
+                                    "url" to url,
+                                    "method" to method,
+                                    "status_code" to statusCode,
+                                    "response_length" to bytes.size,
+                                    "saved_to_file" to saveToFile,
+                                    "binary" to true,
+                                    "response_headers" to responseHeaders
+                                )
                             )
-                        )
-                    } else {
-                        val truncatedBody = if (responseBody.length > maxResponseSize) {
-                            responseBody.take(maxResponseSize) +
-                                "\n\n... (response truncated to $maxResponseSize characters)"
                         } else {
-                            responseBody
-                        }
-
-                        ToolResult(
-                            success = statusCode in 200..399,
-                            output = headerSummary + truncatedBody,
-                            exitCode = statusCode,
-                            durationMs = duration,
-                            bytesRead = responseBody.toByteArray().size,
-                            metadata = mapOf(
-                                "url" to url,
-                                "method" to method,
-                                "status_code" to statusCode,
-                                "response_length" to responseBody.length,
-                                "truncated" to (responseBody.length > maxResponseSize),
-                                "response_headers" to responseHeaders
+                            // Binary without save_to_file: return base64 (capped at 1MB)
+                            val cap = minOf(bytes.size, MAX_BINARY_INLINE_BYTES)
+                            val b64 = Base64.getEncoder().encodeToString(bytes.take(cap).toByteArray())
+                            val truncated = bytes.size > MAX_BINARY_INLINE_BYTES
+                            val output = buildString {
+                                appendLine("Binary response (${bytes.size} bytes, content-type: $responseContentType)")
+                                if (truncated) appendLine("WARNING: truncated to $MAX_BINARY_INLINE_BYTES bytes")
+                                appendLine("Use 'save_to_file' parameter to save binary content to disk.")
+                                appendLine()
+                                appendLine("Base64:")
+                                append(b64)
+                            }
+                            ToolResult(
+                                success = statusCode in 200..399,
+                                output = headerSummary + output,
+                                exitCode = statusCode,
+                                durationMs = duration,
+                                bytesRead = bytes.size,
+                                metadata = mapOf(
+                                    "url" to url,
+                                    "method" to method,
+                                    "status_code" to statusCode,
+                                    "response_length" to bytes.size,
+                                    "binary" to true,
+                                    "truncated" to truncated,
+                                    "response_headers" to responseHeaders
+                                )
                             )
-                        )
+                        }
+                    } else {
+                        val responseBody = response.bodyAsText()
+                        // If save_to_file is specified, save to disk and return summary
+                        if (saveToFile != null && statusCode in 200..399) {
+                            val savedOutput = saveResponseToFile(saveToFile, responseBody, url)
+                            ToolResult(
+                                success = true,
+                                output = headerSummary + savedOutput,
+                                exitCode = statusCode,
+                                durationMs = duration,
+                                bytesRead = responseBody.toByteArray().size,
+                                metadata = mapOf(
+                                    "url" to url,
+                                    "method" to method,
+                                    "status_code" to statusCode,
+                                    "response_length" to responseBody.length,
+                                    "saved_to_file" to saveToFile,
+                                    "response_headers" to responseHeaders
+                                )
+                            )
+                        } else {
+                            val truncatedBody = if (responseBody.length > maxResponseSize) {
+                                responseBody.take(maxResponseSize) +
+                                    "\n\n... (response truncated to $maxResponseSize characters)"
+                            } else {
+                                responseBody
+                            }
+
+                            ToolResult(
+                                success = statusCode in 200..399,
+                                output = headerSummary + truncatedBody,
+                                exitCode = statusCode,
+                                durationMs = duration,
+                                bytesRead = responseBody.toByteArray().size,
+                                metadata = mapOf(
+                                    "url" to url,
+                                    "method" to method,
+                                    "status_code" to statusCode,
+                                    "response_length" to responseBody.length,
+                                    "truncated" to (responseBody.length > maxResponseSize),
+                                    "response_headers" to responseHeaders
+                                )
+                            )
+                        }
                     }
                 }
             }
@@ -190,6 +248,36 @@ class HttpRequestTool(
         } catch (e: Exception) {
             logger.error(e) { "HTTP request failed" }
             ToolResult.error("HTTP request failed: ${e.message}")
+        }
+    }
+
+    private fun isBinaryContentType(contentType: String): Boolean {
+        val lower = contentType.lowercase()
+        return BINARY_CONTENT_TYPE_PREFIXES.any { lower.startsWith(it) }
+    }
+
+    private fun saveBinaryResponseToFile(filePath: String, bytes: ByteArray, url: String, contentType: String): String {
+        val resolvedPath = if (sandbox != null) {
+            sandbox.resolve(filePath)
+        } else {
+            java.nio.file.Paths.get(filePath)
+        }
+
+        resolvedPath.parent?.let { parentDir ->
+            if (!Files.exists(parentDir)) {
+                Files.createDirectories(parentDir)
+            }
+        }
+
+        Files.write(resolvedPath, bytes)
+
+        logger.info { "Saved binary HTTP response to $resolvedPath (${bytes.size} bytes, $contentType)" }
+
+        return buildString {
+            appendLine("Binary response saved to file: $resolvedPath")
+            appendLine("Source URL: $url")
+            appendLine("Size: ${bytes.size} bytes")
+            appendLine("Content-Type: $contentType")
         }
     }
 
@@ -433,6 +521,17 @@ class HttpRequestTool(
         const val MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB
         const val TIMEOUT_MS = 60_000L // 60 seconds
         const val PREVIEW_CHARS = 500
+        const val MAX_BINARY_INLINE_BYTES = 1 * 1024 * 1024 // 1MB base64 inline cap
+
+        private val BINARY_CONTENT_TYPE_PREFIXES = listOf(
+            "image/",
+            "audio/",
+            "video/",
+            "application/octet-stream",
+            "application/pdf",
+            "application/zip",
+            "application/gzip",
+        )
 
         /** Header prefixes relevant for LLM decision-making (lowercase). */
         private val IMPORTANT_HEADER_PREFIXES = listOf(

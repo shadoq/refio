@@ -413,6 +413,7 @@ class AgentTurnLoop(
         var lastToolResultsHadTransientHttpError = false
         var transientErrorNudgeCount = 0
         var intentNudgeCount = 0
+        var plainTextNudgeCount = 0
         var toolErrorNudgeCount = 0
         var lastIterationHadToolErrors = false
         var totalTokensIn = 0
@@ -957,6 +958,40 @@ class AgentTurnLoop(
                                 toolsUsed = usedTools.distinct()
                             )
                             return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
+                        }
+
+                        // Nudge when LLM returns plain text without any JSON structure
+                        // (common with weaker models that "forget" the required format mid-task)
+                        if (mode == TaskMode.AGENT &&
+                            !contentForExtraction.trim().let { it.startsWith("{") || it.startsWith("[") } &&
+                            contentForExtraction.isNotBlank() &&
+                            plainTextNudgeCount < 2
+                        ) {
+                            plainTextNudgeCount++
+                            logger.warn {
+                                "[PLAIN_TEXT_NUDGE] taskId=$taskId, iteration=$iteration: " +
+                                    "LLM returned plain text without JSON structure. " +
+                                    "Nudge=$plainTextNudgeCount/2, content='${contentForExtraction.take(80)}'"
+                            }
+                            // Save the current assistant response before nudging
+                            val textResponse = toolCallParser.extractTextResponse(llmResponse.content)
+                            chatMessageRepository.create(
+                                taskId = taskId,
+                                role = MessageRole.ASSISTANT,
+                                content = textResponse.ifEmpty { llmResponse.content },
+                                thinking = turnResponseProcessor.resolveAssistantThinking(llmResponse),
+                                toolCalls = null,
+                                tokensIn = llmResponse.usage.inputTokens,
+                                tokensOut = llmResponse.usage.outputTokens,
+                                cost = llmResponse.cost
+                            )
+                            chatMessageRepository.create(
+                                taskId = taskId,
+                                role = MessageRole.SYSTEM,
+                                content = TurnNudgeBuilder.buildPlainTextNudgeMessage(),
+                                toolCalls = null
+                            )
+                            continue
                         }
 
                         // NO_CHANGES_NEEDED reconfirmation: let LLM reconsider once

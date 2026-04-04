@@ -284,17 +284,17 @@ class ConfigService(
         const val DEFAULT_CONTEXT_BUDGET_INPUT_RATIO = 0.85
         const val DEFAULT_WORKING_MEMORY_MAX_FACTS = 20
 
-        // Agent flow defaults (ADR 0019)
-        const val DEFAULT_TASK_VERIFICATION_ENABLED = false
-        const val DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS = 5
-        const val DEFAULT_MAX_ITERATIONS = 50
-        const val DEFAULT_JSON_THINKING_XML_TAGS = "thinking,think"
+        // Agent flow defaults (ADR 0019) — single source of truth is ConfigKeys
+        val DEFAULT_TASK_VERIFICATION_ENABLED get() = ConfigKeys.TASK_VERIFICATION_ENABLED.default
+        val DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS get() = ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.default
+        val DEFAULT_MAX_ITERATIONS get() = ConfigKeys.MAX_ITERATIONS.default
+        val DEFAULT_JSON_THINKING_XML_TAGS get() = ConfigKeys.JSON_THINKING_XML_TAGS.default.joinToString(",")
 
-        // Agent flow configuration keys (ADR 0019)
-        const val KEY_TASK_VERIFICATION_ENABLED = "agent.task_verification_enabled"
-        const val KEY_MAX_CONSECUTIVE_TOOL_ERRORS = "agent.max_consecutive_tool_errors"
-        const val KEY_MAX_ITERATIONS = "agent.max_iterations"
-        const val KEY_JSON_THINKING_XML_TAGS = "agent.json_thinking_xml_tags"
+        // Agent flow configuration keys (ADR 0019) — single source of truth is ConfigKeys
+        val KEY_TASK_VERIFICATION_ENABLED get() = ConfigKeys.TASK_VERIFICATION_ENABLED.key
+        val KEY_MAX_CONSECUTIVE_TOOL_ERRORS get() = ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.key
+        val KEY_MAX_ITERATIONS get() = ConfigKeys.MAX_ITERATIONS.key
+        val KEY_JSON_THINKING_XML_TAGS get() = ConfigKeys.JSON_THINKING_XML_TAGS.key
     }
 
     /**

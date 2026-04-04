@@ -1856,6 +1856,32 @@ object ModelDefinitions {
      * - https://docs.z.ai/guides/overview/overview
      */
     val ZAI_MODELS = mapOf(
+        "glm-5.1" to ModelDefinition(
+            id = "glm-5.1",
+            name = "GLM-5.1",
+            provider = "zai",
+            description = "New-generation flagship foundation model for agentic engineering, complex system work, and long-horizon coding tasks.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 200_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 1.0,
+            costPer1MOutput = 3.2,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
         "glm-5" to ModelDefinition(
             id = "glm-5",
             name = "GLM-5",

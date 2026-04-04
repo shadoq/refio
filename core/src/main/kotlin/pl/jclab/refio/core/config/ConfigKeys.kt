@@ -638,7 +638,7 @@ object ConfigKeys {
     val MAX_CONSECUTIVE_TOOL_ERRORS = ConfigKey(
         key = "agent.max_consecutive_tool_errors",
         parser = String::toIntOrNull,
-        default = 5
+        default = 10
     )
 
     val MAX_ITERATIONS = ConfigKey(

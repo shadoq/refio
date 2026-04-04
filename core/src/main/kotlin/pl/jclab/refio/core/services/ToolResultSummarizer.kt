@@ -114,11 +114,13 @@ class ToolResultSummarizer(
             taskId = taskId
         )
 
-        // Context-aware max tokens for better detail preservation
+        // Context-aware max tokens for better detail preservation.
+        // Higher limits reduce finishReason=length failures with weaker/larger models
+        // that tend to be verbose (e.g. qwen3.5, glm-5).
         val maxTokens = when (contextType) {
-            SummaryContextType.CODE_ANALYSIS -> 1000   // Keep more details for code
-            SummaryContextType.SEARCH_RESULT -> 800    // Medium for search
-            SummaryContextType.GENERAL -> 600          // Standard for others
+            SummaryContextType.CODE_ANALYSIS -> 4096   // Keep more details for code
+            SummaryContextType.SEARCH_RESULT -> 2048   // Medium for search
+            SummaryContextType.GENERAL -> 1536         // Standard for others
         }
 
         // Explicitly pass thinking=false to ensure all output goes to content.
@@ -140,14 +142,14 @@ class ToolResultSummarizer(
         val summary = response.content.trim().ifBlank {
             logger.warn {
                 "[SUMMARIZER_EMPTY] Empty summary from $provider/$model for tool=$toolName, " +
-                    "finishReason=${response.finishReason}. Using deterministic compression."
+                        "finishReason=${response.finishReason}. Using deterministic compression."
             }
             compressToolResult(rawOutput, null, CompressionLevel.SUMMARY)
         }
 
         logger.info {
             "[SUMMARIZER] Summary generated: ${rawOutput.length} -> ${summary.length} chars, " +
-            "tokens: ${response.usage.inputTokens}/${response.usage.outputTokens}, cost: $${response.cost}"
+                    "tokens: ${response.usage.inputTokens}/${response.usage.outputTokens}, cost: $${response.cost}"
         }
 
         // Update task metrics

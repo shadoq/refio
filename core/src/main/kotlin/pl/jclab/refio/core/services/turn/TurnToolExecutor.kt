@@ -456,6 +456,18 @@ class TurnToolExecutor(
                     } else {
                         ToolResultSummary(rawOutput, wasSummarized = false, 0, 0, 0.0)
                     }
+                } catch (e: Exception) {
+                    // Summarizer LLM failure should NOT propagate as a tool execution error.
+                    // The tool itself succeeded — fall back to deterministic compression.
+                    logger.warn(e) {
+                        "[SUMMARIZER_FALLBACK] Summarizer failed for tool=${toolCall.name}, " +
+                            "falling back to deterministic compression: ${e.message}"
+                    }
+                    val compressed = toolResultSummarizer.compressToolResult(
+                        rawOutput, null,
+                        pl.jclab.refio.core.services.context.CompressionLevel.SUMMARY
+                    )
+                    ToolResultSummary(compressed, wasSummarized = true, 0, 0, 0.0)
                 } finally {
                     GlobalMetrics.endOperation(summaryToken)
                 }

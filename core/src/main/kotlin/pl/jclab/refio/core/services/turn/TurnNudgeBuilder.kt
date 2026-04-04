@@ -42,6 +42,19 @@ object TurnNudgeBuilder {
             "Do NOT give up on the task due to a transient network error."
     }
 
+    /**
+     * Build nudge message when agent returns plain text without any JSON structure.
+     * This happens when weaker models "forget" the required output format mid-task.
+     */
+    fun buildPlainTextNudgeMessage(): String {
+        return "Your previous response was plain text without any JSON structure. " +
+            "You MUST respond with valid JSON in the required format: " +
+            "{\"actions\":[{\"tool\":\"...\",\"arguments\":{...}}],\"response\":\"your status\",\"intent\":\"implementation|analysis|response\"}. " +
+            "If you need to use tools, include them in 'actions'. If the task is truly complete, " +
+            "use {\"actions\":[],\"response\":\"final answer\",\"intent\":\"response\"}. " +
+            "NEVER respond with plain text — always use the JSON envelope."
+    }
+
     fun buildToolErrorGiveUpNudgeMessage(): String {
         return "A tool returned an error but you stopped instead of continuing. Do NOT give up on the task. " +
             "Analyze the error and decide how to proceed: retry after a delay (use run_terminal_command with 'sleep N'), " +
