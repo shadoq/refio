@@ -54,6 +54,9 @@ class HistoryPanel(
     @Volatile
     private var isLoading = false
 
+    /** Callback invoked on EDT when the panel wants to navigate back to chat view. */
+    var onNavigateToChat: (() -> Unit)? = null
+
     // Test data projectId - always included in results for demo purposes
     private val TEST_DATA_PROJECT_ID = "legacy_unknown"
 
@@ -180,6 +183,8 @@ class HistoryPanel(
                 val tasks = (currentProjectTasks + testDataTasks)
                     // Deduplicate by ID (in case same session exists in both)
                     .distinctBy { it.id }
+                    // Filter out empty sessions (no LLM calls made), keep pinned
+                    .filter { it.pinned || it.tokensIn > 0 || it.tokensOut > 0 }
 
                 logger.debug {
                     "Converting ${tasks.size} tasks to Session models (project=${currentProjectTasks.size}, testData=${testDataTasks.size})"
@@ -450,8 +455,9 @@ class HistoryPanel(
 
                 logger.info { "Session loaded successfully: ${session.id}" }
 
-                // Notify RefioMainPanel to switch to Chat view
+                // Navigate back to chat view
                 SwingUtilities.invokeLater {
+                    onNavigateToChat?.invoke()
                     firePropertyChange("sessionLoaded", false, true)
                 }
             } catch (e: Exception) {
@@ -506,7 +512,9 @@ class HistoryPanel(
                     loadSessions()
                 } catch (e: Exception) {
                     logger.error(e) { "Failed to delete session" }
-                    showError("Failed to delete session: ${e.message}")
+                    SwingUtilities.invokeLater {
+                        showError("Failed to delete session: ${e.message}")
+                    }
                 }
             }
         }
@@ -542,8 +550,9 @@ class HistoryPanel(
     private fun onBackToChat() {
         logger.info { "Back to Chat clicked" }
 
-        // Notify RefioMainPanel to switch to Chat view
+        // Navigate back to chat view
         SwingUtilities.invokeLater {
+            onNavigateToChat?.invoke()
             firePropertyChange("backToChat", false, true)
         }
     }

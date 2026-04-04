@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withTimeout
 import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.core.security.RegexSafetyValidator
 import java.util.concurrent.ConcurrentHashMap
 
 private val logger = dualLogger("ToolApprovalService")
@@ -52,9 +53,11 @@ class ToolApprovalService(
 
     /** Pending requests: requestId → (request + deferred) */
     private val pending = ConcurrentHashMap<String, PendingEntry>()
+    private val pendingLock = Any()
 
     /** Session-level trust rules: toolName → list of Regex patterns (null = unconditional trust) */
     private val sessionTrustRules = ConcurrentHashMap<String, MutableList<Regex?>>()
+    private val sessionTrustRulesLock = Any()
 
     private val _pendingRequests = MutableStateFlow<List<ApprovalRequest>>(emptyList())
     val pendingRequests: StateFlow<List<ApprovalRequest>> = _pendingRequests.asStateFlow()
@@ -64,8 +67,10 @@ class ToolApprovalService(
      * If the tool is already trusted in this session, returns Approved immediately.
      */
     suspend fun requestApproval(request: ApprovalRequest): ApprovalDecision {
-        val trustPatterns = sessionTrustRules[request.toolName]
-        if (trustPatterns != null) {
+        val trustPatterns = synchronized(sessionTrustRulesLock) {
+            sessionTrustRules[request.toolName]?.toList().orEmpty()
+        }
+        if (trustPatterns.isNotEmpty()) {
             val argsString = serializeArgs(request.arguments)
             val isTrusted = trustPatterns.any { pattern ->
                 pattern == null || pattern.containsMatchIn(argsString)
@@ -77,8 +82,10 @@ class ToolApprovalService(
         }
 
         val deferred = CompletableDeferred<ApprovalDecision>()
-        pending[request.requestId] = PendingEntry(request, deferred)
-        _pendingRequests.value = pending.values.map { it.request }
+        synchronized(pendingLock) {
+            pending[request.requestId] = PendingEntry(request, deferred)
+            _pendingRequests.value = pending.values.map { it.request }
+        }
 
         logger.info { "[APPROVAL] Waiting for user decision on ${request.toolName} (requestId=${request.requestId})" }
 
@@ -92,8 +99,10 @@ class ToolApprovalService(
             logger.warn { "[APPROVAL] Timeout after ${approvalTimeoutMs}ms for ${request.toolName}" }
             ApprovalDecision.Rejected("Approval timeout (${approvalTimeoutMs / 1000}s)")
         } finally {
-            pending.remove(request.requestId)
-            _pendingRequests.value = pending.values.map { it.request }
+            synchronized(pendingLock) {
+                pending.remove(request.requestId)
+                _pendingRequests.value = pending.values.map { it.request }
+            }
         }
     }
 
@@ -102,13 +111,20 @@ class ToolApprovalService(
      */
     fun resolveApproval(requestId: String, decision: ApprovalDecision) {
         if (decision is ApprovalDecision.Trusted) {
-            sessionTrustRules
-                .getOrPut(decision.toolName) { mutableListOf() }
-                .add(decision.argsPattern)
+            decision.argsPattern?.pattern?.let { RegexSafetyValidator.validate(it) }
+            synchronized(sessionTrustRulesLock) {
+                sessionTrustRules
+                    .getOrPut(decision.toolName) { mutableListOf() }
+                    .add(decision.argsPattern)
+            }
             logger.info { "[APPROVAL] Trusted ${decision.toolName} pattern=${decision.argsPattern?.pattern ?: "*"}" }
         }
 
-        val entry = pending[requestId]
+        val entry = synchronized(pendingLock) {
+            val removed = pending.remove(requestId)
+            _pendingRequests.value = pending.values.map { it.request }
+            removed
+        }
         if (entry != null) {
             entry.deferred.complete(decision)
             logger.info { "[APPROVAL] Resolved requestId=$requestId decision=${decision::class.simpleName}" }
@@ -121,9 +137,11 @@ class ToolApprovalService(
      * Cancel all pending approvals (e.g. on task cancellation).
      */
     fun cancelAll() {
-        pending.values.forEach { it.deferred.cancel() }
-        pending.clear()
-        _pendingRequests.value = emptyList()
+        synchronized(pendingLock) {
+            pending.values.forEach { it.deferred.cancel() }
+            pending.clear()
+            _pendingRequests.value = emptyList()
+        }
         logger.info { "[APPROVAL] Cancelled all pending approvals" }
     }
 
@@ -131,8 +149,14 @@ class ToolApprovalService(
      * Reset session trust rules (e.g. on session end).
      */
     fun resetSessionTrustRules() {
-        sessionTrustRules.clear()
+        synchronized(sessionTrustRulesLock) {
+            sessionTrustRules.clear()
+        }
         logger.info { "[APPROVAL] Reset session trust rules" }
+    }
+
+    fun onSessionEnd() {
+        resetSessionTrustRules()
     }
 
     private fun serializeArgs(args: Map<String, Any>): String {

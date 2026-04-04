@@ -34,7 +34,7 @@ class CreateNewFileTool(
 ) : Tool {
 
     override val name = "create_new_file"
-    override val description = "Create a new file with simple text content. **Use this tool for:** configuration files (json, yaml, xml), documentation (md, txt), data files (csv), and other non-code files. **For code files** (html, js, ts, php, java, python, kotlin, etc.), prefer advance_code_editing which uses LLM for better code generation."
+    override val description = "Create a new file with given content. FREE."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_MODIFYING
 
@@ -142,11 +142,11 @@ class CreateNewFileTool(
             "properties" to mapOf(
                 "path" to mapOf(
                     "type" to "string",
-                    "description" to "Relative path for the new file (prefer this tool for .md, .txt, .json, .yaml, .xml, .csv files)"
+                    "description" to "Relative path for the new file."
                 ),
                 "content" to mapOf(
                     "type" to "string",
-                    "description" to "Content to write to the file. For code files (html, js, ts, php, java, python, etc.), use advance_code_editing instead for better LLM-generated code quality."
+                    "description" to "File content."
                 )
             ),
             "required" to listOf("path", "content")

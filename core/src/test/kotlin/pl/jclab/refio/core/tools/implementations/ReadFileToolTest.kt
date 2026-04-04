@@ -10,6 +10,7 @@ import org.junit.jupiter.api.io.TempDir
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolCategory
+import pl.jclab.refio.core.services.ImagePreparationService
 import pl.jclab.refio.core.tools.security.FileLimits
 import java.nio.file.Files
 import java.nio.file.Path
@@ -226,6 +227,27 @@ class ReadFileToolTest {
             // Then
             assertNotNull(result.durationMs)
             assertTrue(result.durationMs!! >= 0)
+        }
+
+        @Test
+        fun `should read image file and return multimodal metadata`() = runBlocking {
+            val imageService = mockk<ImagePreparationService>()
+            every { imageService.prepare(any(), "image/png") } returns ImagePreparationService.PreparedImage(
+                mediaType = "image/png",
+                base64Data = "aW1hZ2U=",
+                originalSizeBytes = 16,
+                preparedSizeBytes = 24
+            )
+            val imageTool = ReadFileTool(sandbox, FileLimits.DEFAULT, imagePreparationService = imageService)
+            Files.write(tempDir.resolve("diagram.png"), byteArrayOf(1, 2, 3, 4))
+
+            val result = imageTool.execute(mapOf("path" to "diagram.png"))
+
+            assertTrue(result.success)
+            assertTrue(result.output!!.contains("[Image: diagram.png"))
+            assertEquals("image", result.metadata!!["type"])
+            assertEquals("image/png", result.metadata!!["media_type"])
+            assertEquals("aW1hZ2U=", result.metadata!!["base64"])
         }
     }
 

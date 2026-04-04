@@ -130,7 +130,8 @@ data class MCPToolWorkflowStep(
 data class MCPServerCapabilities(
     val resources: Boolean = false,
     val tools: Boolean = false,
-    val prompts: Boolean = false
+    val prompts: Boolean = false,
+    val resourceSubscriptions: Boolean = false
 )
 
 /**
@@ -149,7 +150,31 @@ data class MCPResource(
 data class MCPResourceContent(
     val uri: String,
     val mimeType: String? = null,
-    val text: String? = null
+    val text: String? = null,
+    val blob: String? = null
+)
+
+data class MCPPromptArgument(
+    val name: String,
+    val description: String? = null,
+    val required: Boolean = false
+)
+
+data class MCPPrompt(
+    val name: String,
+    val description: String? = null,
+    val arguments: List<MCPPromptArgument> = emptyList()
+)
+
+data class MCPPromptMessage(
+    val role: String = "user",
+    val content: List<MCPContentPart> = emptyList()
+)
+
+data class MCPPromptResult(
+    val name: String,
+    val description: String? = null,
+    val messages: List<MCPPromptMessage> = emptyList()
 )
 
 /**
@@ -166,7 +191,9 @@ data class MCPToolDefinition(
  */
 data class MCPContentPart(
     val type: String = "text",
-    val text: String? = null
+    val text: String? = null,
+    val blob: String? = null,
+    val mimeType: String? = null
 )
 
 /**

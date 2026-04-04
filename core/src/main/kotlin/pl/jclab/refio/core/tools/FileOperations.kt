@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.tools
 
 import pl.jclab.refio.core.logging.dualLogger
+import kotlinx.coroutines.runBlocking
 import java.nio.file.Path
 import java.security.MessageDigest
 import kotlin.io.path.*
@@ -60,11 +61,12 @@ class FileOperations(private val sandbox: PathSandbox) {
                 )
             }
 
-            // Ensure parent directory exists
-            path.parent?.createDirectories()
-
-            // Write new content
-            path.writeText(content)
+            runBlocking {
+                FileLockManager.withFileLock(path.toAbsolutePath().toString()) {
+                    path.parent?.createDirectories()
+                    path.writeText(content)
+                }
+            }
             logger.info { "Wrote file: $relativePath (${content.length} chars)" }
 
             snapshot

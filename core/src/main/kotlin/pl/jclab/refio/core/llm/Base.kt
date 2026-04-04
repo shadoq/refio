@@ -13,10 +13,39 @@ import pl.jclab.refio.core.services.ConfigService
 /**
  * Single message in conversation
  */
+sealed interface LLMContentPart {
+    data class Text(val text: String) : LLMContentPart
+    data class Image(
+        val mediaType: String,
+        val base64Data: String,
+        val detail: String? = null
+    ) : LLMContentPart
+}
+
 data class LLMMessage(
     val role: String,  // "user", "assistant", "system"
-    val content: String
-)
+    val content: String,
+    val parts: List<LLMContentPart> = if (content.isNotBlank()) {
+        listOf(LLMContentPart.Text(content))
+    } else {
+        emptyList()
+    }
+) {
+    fun textOnlyContent(): String {
+        if (parts.isEmpty()) return content
+
+        val text = parts.mapNotNull { part ->
+            when (part) {
+                is LLMContentPart.Text -> part.text
+                is LLMContentPart.Image -> null
+            }
+        }.joinToString("")
+
+        return if (text.isNotBlank()) text else content
+    }
+
+    fun hasImageParts(): Boolean = parts.any { it is LLMContentPart.Image }
+}
 
 /**
  * Token usage statistics
@@ -62,6 +91,80 @@ abstract class BaseLLMAdapter(
     val model: String,
     val provider: String
 ) {
+    protected fun toOpenAiMessageContent(message: LLMMessage): Any {
+        val normalizedParts = normalizeMessageParts(message)
+        if (normalizedParts.size == 1 && normalizedParts.first() is LLMContentPart.Text) {
+            return (normalizedParts.first() as LLMContentPart.Text).text
+        }
+
+        return normalizedParts.map { part ->
+            when (part) {
+                is LLMContentPart.Text -> mapOf(
+                    "type" to "text",
+                    "text" to part.text
+                )
+
+                is LLMContentPart.Image -> mapOf(
+                    "type" to "image_url",
+                    "image_url" to mapOf(
+                        "url" to "data:${part.mediaType};base64,${part.base64Data}",
+                        "detail" to (part.detail ?: "auto")
+                    )
+                )
+            }
+        }
+    }
+
+    protected fun toAnthropicMessageContent(message: LLMMessage): Any {
+        val normalizedParts = normalizeMessageParts(message)
+        if (normalizedParts.size == 1 && normalizedParts.first() is LLMContentPart.Text) {
+            return (normalizedParts.first() as LLMContentPart.Text).text
+        }
+
+        return normalizedParts.map { part ->
+            when (part) {
+                is LLMContentPart.Text -> mapOf(
+                    "type" to "text",
+                    "text" to part.text
+                )
+
+                is LLMContentPart.Image -> mapOf(
+                    "type" to "image",
+                    "source" to mapOf(
+                        "type" to "base64",
+                        "media_type" to part.mediaType,
+                        "data" to part.base64Data
+                    )
+                )
+            }
+        }
+    }
+
+    protected fun toGeminiParts(message: LLMMessage): List<Map<String, Any>> {
+        return normalizeMessageParts(message).map { part ->
+            when (part) {
+                is LLMContentPart.Text -> mapOf("text" to part.text)
+                is LLMContentPart.Image -> mapOf(
+                    "inlineData" to mapOf(
+                        "mimeType" to part.mediaType,
+                        "data" to part.base64Data
+                    )
+                )
+            }
+        }
+    }
+
+    protected fun normalizeMessageParts(message: LLMMessage): List<LLMContentPart> {
+        if (message.parts.isNotEmpty()) {
+            return message.parts
+        }
+        return if (message.content.isNotBlank()) {
+            listOf(LLMContentPart.Text(message.content))
+        } else {
+            emptyList()
+        }
+    }
+
     /**
      * Send chat request to LLM provider (unified method for streaming and non-streaming).
      *

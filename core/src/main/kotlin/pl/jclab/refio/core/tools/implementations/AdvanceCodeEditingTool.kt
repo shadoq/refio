@@ -60,7 +60,7 @@ class AdvanceCodeEditingTool(
 
     override val name = "advance_code_editing"
     override val description =
-        "LLM-assisted full file regeneration. **Use this tool for:** creating new code files (html, js, ts, php, java, python, kotlin, css, etc.) OR major refactoring of existing files. Expensive (~3x cost of multi_line_editor) - use only when necessary. For simple text files (md, txt, json), use create_new_file instead. Automatically creates parent directories if needed."
+        "LLM-assisted full file regeneration or creation. EXPENSIVE (~\$0.06) — use for major rewrites or new code files."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_PRODUCING
 
@@ -708,10 +708,7 @@ class AdvanceCodeEditingTool(
                 ),
                 "edit_description" to mapOf(
                     "type" to "string",
-                    "description" to "Natural language description of the edit to perform (e.g., 'Add error handling for null values') " +
-                            "or code file to create (e.g., 'Create a utility class for string manipulation', 'Create a React component for user profile'). " +
-                            "**Preferred for creating new code files** (html, js, ts, php, java, python, kotlin, css, etc.). " +
-                            "Use this parameter for LLM-assisted editing/creation. File and parent directories will be created if they don't exist."
+                    "description" to "What to edit or create, in natural language."
                 ),
             ),
             "required" to listOf("path"),

@@ -15,6 +15,12 @@ fun interface PromptSectionProvider {
     suspend fun build(context: PromptBuildContext): String?
 }
 
+data class PromptSection(
+    val id: String,
+    val content: String,
+    val stable: Boolean
+)
+
 /**
  * Context available to prompt section providers during build.
  */

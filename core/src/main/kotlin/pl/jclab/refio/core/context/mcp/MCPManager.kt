@@ -13,13 +13,24 @@ import java.util.concurrent.ConcurrentHashMap
 private val logger = dualLogger("MCPManager")
 private const val GLOBAL_PROJECT_KEY = "_global"
 private fun mapKey(projectId: String?) = projectId ?: GLOBAL_PROJECT_KEY
+private const val RESOURCE_CACHE_TTL_MS = 5 * 60 * 1000L
+private const val TOOL_CACHE_TTL_MS = 5 * 60 * 1000L
+
+private data class CachedValue<T>(
+    val value: T,
+    val cachedAt: Long
+) {
+    fun isFresh(ttlMs: Long): Boolean = System.currentTimeMillis() - cachedAt < ttlMs
+}
 
 private data class MCPProjectState(
     val projectId: String?,
     var toolRegistry: ToolRegistry? = null,
     val connections: ConcurrentHashMap<String, MCPConnection> = ConcurrentHashMap(),
     val serverConfigs: ConcurrentHashMap<String, MCPServerConfig> = ConcurrentHashMap(),
-    val registeredTools: ConcurrentHashMap<String, List<String>> = ConcurrentHashMap()
+    val registeredTools: ConcurrentHashMap<String, List<String>> = ConcurrentHashMap(),
+    val resourceCache: ConcurrentHashMap<String, CachedValue<List<MCPResource>>> = ConcurrentHashMap(),
+    val toolCache: ConcurrentHashMap<String, CachedValue<List<MCPToolDefinition>>> = ConcurrentHashMap()
 )
 
 /**
@@ -136,6 +147,12 @@ object MCPManager {
         val state = projectStates[mapKey(projectId)] ?: return emptyList()
         return state.serverConfigs.map { (serverId, config) ->
             val connection = state.connections[serverId]
+            val resourceCount = state.resourceCache[serverId]
+                ?.takeIf { it.isFresh(RESOURCE_CACHE_TTL_MS) }
+                ?.value
+                ?.size
+                ?: connection?.getCachedResources()?.size
+                ?: 0
             MCPConnectionInfo(
                 serverId = serverId,
                 displayName = config.displayName ?: serverId,
@@ -144,7 +161,7 @@ object MCPManager {
                 lastConnectedAt = connection?.lastConnectedAt,
                 lastError = connection?.lastError,
                 toolCount = state.registeredTools[serverId]?.size ?: 0,
-                resourceCount = 0,
+                resourceCount = resourceCount,
                 promptsEnabled = config.promptsEnabled
             )
         }
@@ -156,6 +173,8 @@ object MCPManager {
             runCatching { connection.disconnect() }
         }
         state.connections.clear()
+        state.resourceCache.clear()
+        state.toolCache.clear()
         unregisterTools(state, null)
         projectStates.remove(mapKey(projectId))
     }
@@ -163,8 +182,36 @@ object MCPManager {
     private fun disconnectServer(projectId: String?, serverId: String) {
         val state = projectStates[mapKey(projectId)] ?: return
         state.connections.remove(serverId)?.disconnect()
+        state.resourceCache.remove(serverId)
+        state.toolCache.remove(serverId)
         ContextProviderRegistry.unregister(serverId)
         unregisterTools(state, serverId)
+    }
+
+    suspend fun getResources(projectId: String?, serverId: String): List<MCPResource> {
+        val state = projectStates[mapKey(projectId)] ?: return emptyList()
+        val cached = state.resourceCache[serverId]
+        if (cached != null && cached.isFresh(RESOURCE_CACHE_TTL_MS)) {
+            return cached.value
+        }
+
+        val connection = state.connections[serverId] ?: return emptyList()
+        val resources = connection.getCachedResources().ifEmpty { connection.refreshResources() }
+        state.resourceCache[serverId] = CachedValue(resources, System.currentTimeMillis())
+        return resources
+    }
+
+    suspend fun getTools(projectId: String?, serverId: String): List<MCPToolDefinition> {
+        val state = projectStates[mapKey(projectId)] ?: return emptyList()
+        val cached = state.toolCache[serverId]
+        if (cached != null && cached.isFresh(TOOL_CACHE_TTL_MS)) {
+            return cached.value
+        }
+
+        val connection = state.connections[serverId] ?: return emptyList()
+        val tools = connection.getCachedTools().ifEmpty { connection.refreshTools() }
+        state.toolCache[serverId] = CachedValue(tools, System.currentTimeMillis())
+        return tools
     }
 
     fun disconnect(projectId: String?, serverId: String) {
@@ -212,7 +259,7 @@ object MCPManager {
         if (connection.getCapabilities()?.tools != true) {
             return
         }
-        val toolDefs = connection.getCachedTools().ifEmpty { connection.refreshTools() }
+        val toolDefs = getTools(state.projectId, connection.serverId)
         val toolMode = if (state.serverConfigs[connection.serverId]?.accessMode == MCPAccessMode.READ) {
             pl.jclab.refio.core.tools.base.ToolMode.READ_ONLY
         } else {

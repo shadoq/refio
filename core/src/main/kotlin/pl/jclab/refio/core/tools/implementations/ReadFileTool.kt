@@ -1,5 +1,7 @@
 package pl.jclab.refio.core.tools.implementations
 
+import pl.jclab.refio.core.services.DocumentReadService
+import pl.jclab.refio.core.services.ImagePreparationService
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
@@ -11,8 +13,8 @@ import pl.jclab.refio.core.tools.security.FileTooLargeException
 import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Files
 import kotlin.io.path.fileSize
-import kotlin.io.path.isRegularFile
 import kotlin.io.path.isDirectory
+import kotlin.io.path.isRegularFile
 
 private val logger = dualLogger("ReadFileTool")
 
@@ -34,14 +36,13 @@ private val logger = dualLogger("ReadFileTool")
  */
 class ReadFileTool(
     private val sandbox: PathSandbox,
-    private val limits: FileLimits
+    private val limits: FileLimits,
+    private val imagePreparationService: ImagePreparationService = ImagePreparationService(),
+    private val documentReadService: DocumentReadService = DocumentReadService()
 ) : Tool {
 
     override val name = "read_file"
-    override val description = "Read contents of a text file within the project. " +
-        "Supports reading specific line ranges with 'offset' and 'limit' parameters — " +
-        "use these for large files or data files to read only the portion you need " +
-        "instead of loading the entire file into context."
+    override val description = "Read a text, image, or PDF file. Use offset/limit for large files."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
 
@@ -68,6 +69,15 @@ class ReadFileTool(
 
             val offset = toIntOrNull(params["offset"])
             val limit = toIntOrNull(params["limit"])
+            val pageStart = toIntOrNull(params["page_start"])
+            val pageEnd = toIntOrNull(params["page_end"])
+            val requestedPages = if (pageStart != null || pageEnd != null) {
+                val start = (pageStart ?: pageEnd ?: 1).coerceAtLeast(1)
+                val end = (pageEnd ?: pageStart ?: start).coerceAtLeast(start)
+                start..end
+            } else {
+                null
+            }
 
             // Normalize path for security (bare filenames → "./file.txt", backslash → forward slash)
             val normalizedPathStr = normalizePath(pathStr)
@@ -101,6 +111,77 @@ class ReadFileTool(
                     "File too large: $fileSize bytes (max ${limits.maxFileSize} bytes). " +
                         "Use 'offset' and 'limit' parameters to read a specific line range."
                 )
+            }
+
+            val mediaType = detectMediaType(path)
+            if (mediaType != null && mediaType.startsWith("image/")) {
+                val bytes = Files.readAllBytes(path)
+                val prepared = imagePreparationService.prepare(bytes, mediaType)
+                val output = "[Image: $pathStr (${prepared.originalSizeBytes} bytes, ${prepared.mediaType})]"
+                return ToolResult(
+                    success = true,
+                    output = output,
+                    bytesRead = prepared.preparedSizeBytes,
+                    durationMs = (System.currentTimeMillis() - startTime).toInt(),
+                    metadata = mapOf(
+                        "type" to "image",
+                        "path" to pathStr,
+                        "media_type" to prepared.mediaType,
+                        "base64" to prepared.base64Data,
+                        "original_size" to prepared.originalSizeBytes,
+                        "prepared_size" to prepared.preparedSizeBytes
+                    )
+                )
+            }
+
+            if (isPdf(path, mediaType)) {
+                val documentResult = documentReadService.read(path, requestedPages)
+                val duration = (System.currentTimeMillis() - startTime).toInt()
+                return when (documentResult) {
+                    is DocumentReadService.DocumentResult.InlineText -> ToolResult(
+                        success = true,
+                        output = documentResult.text,
+                        bytesRead = documentResult.text.toByteArray().size,
+                        durationMs = duration,
+                        metadata = mapOf(
+                            "type" to "document",
+                            "path" to pathStr,
+                            "format" to "pdf",
+                            "page_count" to documentResult.pageCount,
+                            "mode" to "inline"
+                        )
+                    )
+                    is DocumentReadService.DocumentResult.PageRange -> ToolResult(
+                        success = true,
+                        output = "[PDF pages ${documentResult.range.first}-${documentResult.range.last} of ${documentResult.totalPages}]\n${documentResult.text}",
+                        bytesRead = documentResult.text.toByteArray().size,
+                        durationMs = duration,
+                        metadata = mapOf(
+                            "type" to "document",
+                            "path" to pathStr,
+                            "format" to "pdf",
+                            "page_count" to documentResult.totalPages,
+                            "page_start" to documentResult.range.first,
+                            "page_end" to documentResult.range.last,
+                            "mode" to "page_range"
+                        )
+                    )
+                    is DocumentReadService.DocumentResult.Reference -> ToolResult(
+                        success = true,
+                        output = "PDF reference: $pathStr (${documentResult.pageCount} pages, ${documentResult.sizeBytes} bytes). " +
+                            "Use page_start/page_end to read a specific range.",
+                        bytesRead = 0,
+                        durationMs = duration,
+                        metadata = mapOf(
+                            "type" to "document_reference",
+                            "path" to pathStr,
+                            "format" to "pdf",
+                            "page_count" to documentResult.pageCount,
+                            "size_bytes" to documentResult.sizeBytes,
+                            "mode" to "reference"
+                        )
+                    )
+                }
             }
 
             // Read file contents
@@ -203,17 +284,30 @@ class ReadFileTool(
                 ),
                 "offset" to mapOf(
                     "type" to "integer",
-                    "description" to "Start reading from this line number (1-based). " +
-                        "Use with 'limit' to read a specific range. " +
-                        "Useful for large/data files to avoid loading everything into context."
+                    "description" to "Start line (1-based)."
                 ),
                 "limit" to mapOf(
                     "type" to "integer",
-                    "description" to "Maximum number of lines to read from the offset. " +
-                        "When omitted, reads to end of file."
+                    "description" to "Max lines to read from offset."
+                ),
+                "page_start" to mapOf(
+                    "type" to "integer",
+                    "description" to "For PDF files: first page to read (1-based)."
+                ),
+                "page_end" to mapOf(
+                    "type" to "integer",
+                    "description" to "For PDF files: last page to read (1-based, inclusive)."
                 )
             ),
             "required" to listOf("path")
         )
+    }
+
+    private fun detectMediaType(path: java.nio.file.Path): String? {
+        return runCatching { Files.probeContentType(path) }.getOrNull()
+    }
+
+    private fun isPdf(path: java.nio.file.Path, mediaType: String?): Boolean {
+        return path.fileName.toString().endsWith(".pdf", ignoreCase = true) || mediaType == "application/pdf"
     }
 }

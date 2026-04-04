@@ -54,11 +54,27 @@ class TurnToolExecutor(
     private val approvalService: ToolApprovalService? = null,
     private val permissionsService: ToolPermissionsService? = null
 ) {
+    class ReadTracker {
+        private val recentReads = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+        fun recordRead(path: String) {
+            recentReads[normalize(path)] = System.currentTimeMillis()
+        }
+
+        fun wasReadRecently(path: String, withinMs: Long = 5 * 60 * 1000): Boolean {
+            val readAt = recentReads[normalize(path)] ?: return false
+            return System.currentTimeMillis() - readAt <= withinMs
+        }
+
+        private fun normalize(path: String): String = path.replace('\\', '/').trim()
+    }
+
     /** Callback to update turn phase (set by AgentTurnLoop before each turn) */
     var turnStateUpdater: ((TurnPhase) -> Unit)? = null
 
     private val streamingToolNames = setOf("advance_code_editing", "multi_line_editor")
     private val codingToolNames = setOf("advance_code_editing", "multi_line_editor")
+    private val readTracker = ReadTracker()
 
     companion object {
         /** Max raw output size (chars) to preserve in-context for DATA_PRODUCING tools */
@@ -364,6 +380,7 @@ class TurnToolExecutor(
             listener?.onToolExecutionStarted(taskId, toolCall)
 
             val argumentsMap = TurnJsonUtils.parseJsonToMap(toolCall.arguments).toMutableMap()
+            val readBeforeWriteWarning = checkReadBeforeWrite(toolCall.name, argumentsMap)
             injectNestedSubagentMetadata(
                 args = argumentsMap,
                 toolCall = toolCall,
@@ -432,6 +449,8 @@ class TurnToolExecutor(
 
             if (toolResult.success) {
                 val rawOutput = toolResult.output ?: "Success (no output)"
+                val outputWithWarnings = listOfNotNull(readBeforeWriteWarning, rawOutput)
+                    .joinToString("\n\n")
                 val isInvokeSubagent = toolCall.name.equals("invoke_subagent", ignoreCase = true)
                 val subagentName = argumentsMap["subagent_name"]?.toString()?.trim().orEmpty()
                 val displayOutput = if (isInvokeSubagent) {
@@ -440,9 +459,9 @@ class TurnToolExecutor(
                     } else {
                         "Subagent result:"
                     }
-                    "$header\n\n$rawOutput"
+                    "$header\n\n$outputWithWarnings"
                 } else {
-                    rawOutput
+                    outputWithWarnings
                 }
 
                 val summaryToken = GlobalMetrics.beginOperation(
@@ -451,10 +470,10 @@ class TurnToolExecutor(
                 val summaryResult = try {
                     if (isInvokeSubagent) {
                         ToolResultSummary(displayOutput, wasSummarized = false, 0, 0, 0.0)
-                    } else if (rawOutput.isNotBlank()) {
-                        toolResultSummarizer.summarizeToolResult(toolCall.name, rawOutput, taskId)
+                    } else if (outputWithWarnings.isNotBlank()) {
+                        toolResultSummarizer.summarizeToolResult(toolCall.name, outputWithWarnings, taskId)
                     } else {
-                        ToolResultSummary(rawOutput, wasSummarized = false, 0, 0, 0.0)
+                        ToolResultSummary(outputWithWarnings, wasSummarized = false, 0, 0, 0.0)
                     }
                 } catch (e: Exception) {
                     // Summarizer LLM failure should NOT propagate as a tool execution error.
@@ -464,7 +483,7 @@ class TurnToolExecutor(
                             "falling back to deterministic compression: ${e.message}"
                     }
                     val compressed = toolResultSummarizer.compressToolResult(
-                        rawOutput, null,
+                        outputWithWarnings, null,
                         pl.jclab.refio.core.services.context.CompressionLevel.SUMMARY
                     )
                     ToolResultSummary(compressed, wasSummarized = true, 0, 0, 0.0)
@@ -473,16 +492,17 @@ class TurnToolExecutor(
                 }
 
                 listener?.onToolExecutionCompleted(taskId, toolCall, summaryResult.summary, true)
+                recordReadAfterExecution(toolCall.name, argumentsMap)
 
                 subtaskRepository.updateStatus(subtaskId, TaskStatus.SUCCESS)
-                subtaskRepository.updateResult(subtaskId, result = rawOutput, summary = summaryResult.summary)
+                subtaskRepository.updateResult(subtaskId, result = outputWithWarnings, summary = summaryResult.summary)
                 logger.debug { "[SUBTASK_SUCCESS] subtaskId=$subtaskId, tool=${toolCall.name}" }
 
                 workingMemoryIntegration?.recordToolKnowledge(
                     taskId = taskId,
                     toolName = toolCall.name,
                     params = argumentsMap,
-                    result = rawOutput,
+                    result = outputWithWarnings,
                     iteration = iteration
                 )
 
@@ -493,14 +513,14 @@ class TurnToolExecutor(
                         || toolDef?.category == ToolCategory.FILE_PRODUCING
 
                 val (effectiveContent, effectivelySummarized) = resolveEffectiveContent(
-                    rawOutput = rawOutput,
+                    rawOutput = outputWithWarnings,
                     summaryText = summaryResult.summary,
                     wasSummarized = summaryResult.wasSummarized,
                     isDataProducing = isDataProducing
                 )
-                if (isDataProducing && rawOutput.length <= DATA_PRODUCING_RAW_OUTPUT_BUFFER && summaryResult.wasSummarized) {
+                if (isDataProducing && outputWithWarnings.length <= DATA_PRODUCING_RAW_OUTPUT_BUFFER && summaryResult.wasSummarized) {
                     logger.info {
-                        "[TOOL_DATA_PRESERVED] name=${toolCall.name}, rawChars=${rawOutput.length}, " +
+                        "[TOOL_DATA_PRESERVED] name=${toolCall.name}, rawChars=${outputWithWarnings.length}, " +
                         "summaryChars=${summaryResult.summary.length} (raw preserved, summary in subtask)"
                     }
                 }
@@ -508,7 +528,7 @@ class TurnToolExecutor(
                 logger.info {
                     "[TOOL_EXECUTED] name=${toolCall.name}, " +
                     "summarized=${effectivelySummarized}, dataProducing=$isDataProducing, " +
-                    "chars=${rawOutput.length}->${effectiveContent.length}"
+                    "chars=${outputWithWarnings.length}->${effectiveContent.length}"
                 }
 
                 val metadataMap = buildToolResultMetadata(toolCall.name, argumentsMap, toolResult.metadata)
@@ -518,7 +538,7 @@ class TurnToolExecutor(
                     toolCallId = toolCall.id,
                     content = effectiveContent,
                     isSummarized = effectivelySummarized,
-                    rawOutput = rawOutput,
+                    rawOutput = outputWithWarnings,
                     metadata = metadataJson
                 )
             } else {
@@ -621,6 +641,10 @@ class TurnToolExecutor(
      */
     fun countWriteToolCalls(toolCalls: List<ToolCallData>): Int {
         return toolCalls.count { isWriteTool(it.name) }
+    }
+
+    fun countVerificationToolCalls(toolCalls: List<ToolCallData>): Int {
+        return toolCalls.count { it.name in setOf("run_terminal_command", "grep_search", "read_file", "view_diff") }
     }
 
     /**
@@ -778,5 +802,34 @@ class TurnToolExecutor(
         }
 
         return merged
+    }
+
+    private fun recordReadAfterExecution(toolName: String, argumentsMap: Map<String, Any>) {
+        when (toolName) {
+            "read_file" -> (argumentsMap["path"] as? String)?.let(readTracker::recordRead)
+            "code_editing" -> (argumentsMap["path"] as? String)?.let(readTracker::recordRead)
+            "multi_edit" -> extractMultiEditPaths(argumentsMap).forEach(readTracker::recordRead)
+        }
+    }
+
+    private fun checkReadBeforeWrite(toolName: String, params: Map<String, Any>): String? {
+        val paths = when (toolName) {
+            "code_editing" -> listOfNotNull(params["path"] as? String)
+            "multi_edit" -> extractMultiEditPaths(params)
+            else -> emptyList()
+        }
+        if (paths.isEmpty()) return null
+
+        val unreadPaths = paths.filterNot { readTracker.wasReadRecently(it) }
+        if (unreadPaths.isEmpty()) return null
+
+        return TurnNudgeBuilder.buildReadBeforeWriteMessage(unreadPaths)
+    }
+
+    private fun extractMultiEditPaths(params: Map<String, Any>): List<String> {
+        val edits = params["edits"] as? List<*> ?: return emptyList()
+        return edits.mapNotNull { edit ->
+            (edit as? Map<*, *>)?.get("path")?.toString()
+        }
     }
 }

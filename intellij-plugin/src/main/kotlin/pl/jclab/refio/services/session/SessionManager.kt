@@ -1119,7 +1119,7 @@ class SessionManager(private val project: Project) {
             }
 
             // Auto-name session if needed
-            if (session.name == "New Session" && stateManager.messages.value.size >= 2) {
+            if (isDefaultSessionName(session.name) && stateManager.messages.value.size >= 2) {
                 scheduleAutoNameSession(session, input)
             }
 
@@ -1242,14 +1242,18 @@ class SessionManager(private val project: Project) {
         }
     }
 
+    private fun isDefaultSessionName(name: String): Boolean {
+        return name == "New Session" || name.matches(Regex("^Session \\(.+\\)$"))
+    }
+
     private suspend fun autoNameSessionIfNeeded(session: Session, input: String) {
-        if (session.name == "New Session" && stateManager.messages.value.size == 2) {
+        if (isDefaultSessionName(session.name) && stateManager.messages.value.size == 2) {
             scheduleAutoNameSession(session, input)
         }
     }
 
     private fun scheduleAutoNameSession(session: Session, input: String) {
-        if (session.name != "New Session") return
+        if (!isDefaultSessionName(session.name)) return
 
         cs.launch {
             try {

@@ -3,6 +3,7 @@ package pl.jclab.refio.core.services.context
 import pl.jclab.refio.core.db.ChatMessage
 import pl.jclab.refio.core.db.MessageRole
 import pl.jclab.refio.core.llm.LLMMessage
+import pl.jclab.refio.core.llm.LLMMessageMapper
 
 /**
  * Stateless helper that slices, filters and converts persisted [ChatMessage] lists
@@ -110,12 +111,7 @@ class ConversationContextBuilder {
 
             MessageRole.TOOL -> {
                 val summarized = toolContentResolver(msg)
-                val content = "[Tool Result for ${msg.toolCallId}]\n$summarized"
-
-                LLMMessage(
-                    role = "user",  // Tool results as user messages for compatibility
-                    content = content
-                )
+                LLMMessageMapper.fromToolResult(msg, summarized)
             }
 
             MessageRole.SYSTEM -> {

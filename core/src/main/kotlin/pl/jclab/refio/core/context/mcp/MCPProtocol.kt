@@ -57,6 +57,8 @@ object MCPMethods {
     const val RESOURCES_READ = "resources/read"
     const val RESOURCES_SUBSCRIBE = "resources/subscribe"
     const val RESOURCES_UNSUBSCRIBE = "resources/unsubscribe"
+    const val PROMPTS_LIST = "prompts/list"
+    const val PROMPTS_GET = "prompts/get"
 
     const val TOOLS_LIST = "tools/list"
     const val TOOLS_CALL = "tools/call"

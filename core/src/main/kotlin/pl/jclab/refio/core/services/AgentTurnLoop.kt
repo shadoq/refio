@@ -408,6 +408,7 @@ class AgentTurnLoop(
         )
         var formatRetryCount = 0
         var writeToolsExecutedInTurn = 0
+        var verificationToolsExecutedAfterWrite = 0
         var consecutiveReadOnlyIterations = 0
         var consecutiveToolErrors = 0
         var lastToolResultsHadTransientHttpError = false
@@ -415,6 +416,7 @@ class AgentTurnLoop(
         var intentNudgeCount = 0
         var plainTextNudgeCount = 0
         var toolErrorNudgeCount = 0
+        var verificationNudgeCount = 0
         var lastIterationHadToolErrors = false
         var totalTokensIn = 0
         var totalTokensOut = 0
@@ -747,7 +749,14 @@ class AgentTurnLoop(
                             consecutiveToolErrors = if (success) 0 else consecutiveToolErrors + 1
                         }
 
-                        writeToolsExecutedInTurn += turnToolExecutor.countWriteToolCalls(toolCalls)
+                        val writeToolCalls = turnToolExecutor.countWriteToolCalls(toolCalls)
+                        val verificationToolCalls = turnToolExecutor.countVerificationToolCalls(toolCalls)
+                        writeToolsExecutedInTurn += writeToolCalls
+                        if (writeToolCalls > 0) {
+                            verificationToolsExecutedAfterWrite = 0
+                        } else if (writeToolsExecutedInTurn > 0) {
+                            verificationToolsExecutedAfterWrite += verificationToolCalls
+                        }
 
                         // Track transient HTTP errors for retry nudge
                         lastToolResultsHadTransientHttpError = toolResults.any { (call, result) ->
@@ -994,10 +1003,41 @@ class AgentTurnLoop(
                             continue
                         }
 
+                        val shouldRunTaskVerification =
+                            configService.shouldVerifyTask(taskId, iteration, writeToolsExecutedInTurn)
+
+                        if (
+                            mode == TaskMode.AGENT &&
+                            writeToolsExecutedInTurn > 0 &&
+                            verificationToolsExecutedAfterWrite == 0 &&
+                            !shouldRunTaskVerification &&
+                            verificationNudgeCount < 1
+                        ) {
+                            verificationNudgeCount++
+                            val textResponse = toolCallParser.extractTextResponse(llmResponse.content)
+                            chatMessageRepository.create(
+                                taskId = taskId,
+                                role = MessageRole.ASSISTANT,
+                                content = textResponse.ifEmpty { llmResponse.content },
+                                thinking = turnResponseProcessor.resolveAssistantThinking(llmResponse),
+                                toolCalls = null,
+                                tokensIn = llmResponse.usage.inputTokens,
+                                tokensOut = llmResponse.usage.outputTokens,
+                                cost = llmResponse.cost
+                            )
+                            chatMessageRepository.create(
+                                taskId = taskId,
+                                role = MessageRole.SYSTEM,
+                                content = TurnNudgeBuilder.buildVerificationReminderMessage(),
+                                toolCalls = null
+                            )
+                            continue
+                        }
+
                         // NO_CHANGES_NEEDED reconfirmation: let LLM reconsider once
                         // Task verification
                         val userMessageForVerification = userMessageStrategy.getUserMessage(taskId)
-                        if (!verifyTaskCompletionIfNeeded(taskId, iteration, userMessageForVerification, llmResponse.content, writeToolsExecutedInTurn)) {
+                        if (!verifyTaskCompletionIfNeeded(taskId, shouldRunTaskVerification, userMessageForVerification, llmResponse.content)) {
                             continue
                         }
 
@@ -1138,12 +1178,11 @@ class AgentTurnLoop(
      */
     private suspend fun verifyTaskCompletionIfNeeded(
         taskId: String,
-        iteration: Int,
+        shouldRunVerification: Boolean,
         userRequestFallback: String?,
-        llmContent: String,
-        writeToolsExecutedInTurn: Int
+        llmContent: String
     ): Boolean {
-        if (!configService.shouldVerifyTask(taskId, iteration, writeToolsExecutedInTurn)) {
+        if (!shouldRunVerification) {
             return true
         }
 

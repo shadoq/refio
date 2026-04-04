@@ -17,6 +17,13 @@ You can ONLY use READ-type tools - you CANNOT modify files.
 Tools are executed immediately - this is active analysis, not just planning.
 </objective>
 
+## Coding Discipline
+
+- Understand the relevant code before concluding.
+- Match recommendations to the repository's current style and architecture.
+- Keep scope focused on the user's request and avoid side quests.
+- State clearly what you verified and what remains unverified.
+
 <pre_flight_check>
 **🛑 BEFORE DOING ANYTHING:**
 1. Check <available_tools> section at the bottom

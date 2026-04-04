@@ -38,6 +38,7 @@ class ConfigService(
     private val projectRoot: Path? = null
 ) {
     private val logger = dualLogger("ConfigService")
+    private val configCache = ConfigCache()
 
     /**
      * Hierarchical config loader for YAML files.
@@ -60,22 +61,22 @@ class ConfigService(
      * @return Parsed value of type T, or the key's default if not found / unparseable
      */
     fun <T> getTyped(configKey: ConfigKey<T>, taskId: String? = null): T {
-        // 1. Check database
-        val dbConfig = getConfigWithPrecedence(key = configKey.key, taskId = taskId)
-        if (dbConfig?.value != null) {
-            val parsed = configKey.parser(dbConfig.value)
-            if (parsed != null) return parsed
-        }
+        val cacheKey = "typed:${configKey.key}:task=${taskId.orEmpty()}"
+        return configCache.getOrCompute(cacheKey) {
+            val dbConfig = getConfigWithPrecedence(key = configKey.key, taskId = taskId)
+            if (dbConfig?.value != null) {
+                val parsed = configKey.parser(dbConfig.value)
+                if (parsed != null) return@getOrCompute parsed
+            }
 
-        // 2. Check YAML via accessor
-        val yamlValue = configKey.yamlAccessor?.invoke(yamlLoader)
-        if (yamlValue != null) {
-            val parsed = configKey.parser(yamlValue.toString())
-            if (parsed != null) return parsed
-        }
+            val yamlValue = configKey.yamlAccessor?.invoke(yamlLoader)
+            if (yamlValue != null) {
+                val parsed = configKey.parser(yamlValue.toString())
+                if (parsed != null) return@getOrCompute parsed
+            }
 
-        // 3. Return default
-        return configKey.default
+            configKey.default
+        }
     }
 
     /**
@@ -95,6 +96,7 @@ class ConfigService(
             taskId = taskId,
             description = null
         )
+        invalidateConfigCache(configKey.key)
     }
 
     companion object {
@@ -545,6 +547,7 @@ class ConfigService(
                     taskId = taskId,
                     description = "Default model for $operation operation"
                 )
+                invalidateConfigCache(key)
 
                 logger.info { "Set ${scope.name} config $key = $modelId" }
             }
@@ -633,6 +636,7 @@ class ConfigService(
         )
 
         logger.info { "Updated model visibility: $modelId -> $showInDropdown" }
+        invalidateConfigCache(KEY_MODELS_VISIBILITY)
     }
 
     /**
@@ -651,6 +655,7 @@ class ConfigService(
         )
 
         logger.info { "Updated model visibility for ${visibilityMap.size} models" }
+        invalidateConfigCache(KEY_MODELS_VISIBILITY)
     }
 
     /**
@@ -702,22 +707,18 @@ class ConfigService(
         taskId: String? = null,
         projectId: String? = null
     ): String? {
-        // 1. First check database (highest priority)
-        val dbConfig = when {
-            taskId != null -> getConfigWithPrecedence(key = key, taskId = taskId, projectId = projectId)
-            scope == ConfigScope.PROJECT -> {
-                val resolvedProjectId = resolveProjectId(projectId)
-                resolvedProjectId?.let { configRepository.get(key, ConfigScope.PROJECT, projectId = it) }
+        val cacheKey = "raw:$key:scope=${scope.name}:task=${taskId.orEmpty()}:project=${resolveProjectId(projectId).orEmpty()}"
+        return configCache.getOrCompute(cacheKey) {
+            val dbConfig = when {
+                taskId != null -> getConfigWithPrecedence(key = key, taskId = taskId, projectId = projectId)
+                scope == ConfigScope.PROJECT -> {
+                    val resolvedProjectId = resolveProjectId(projectId)
+                    resolvedProjectId?.let { configRepository.get(key, ConfigScope.PROJECT, projectId = it) }
+                }
+                else -> configRepository.get(key, scope)
             }
-            else -> configRepository.get(key, scope)
+            dbConfig?.value ?: getFromYaml(key)
         }
-
-        if (dbConfig?.value != null) {
-            return dbConfig.value
-        }
-
-        // 2. Fall back to YAML config (user + project merged)
-        return getFromYaml(key)
     }
 
     /**
@@ -730,9 +731,12 @@ class ConfigService(
      * @return Value from YAML config or null if not found
      */
     fun getFromYaml(key: String): String? {
-        val configKey = ConfigKeys.byKey(key)
-            ?: return null
-        return configKey.yamlAccessor?.invoke(yamlLoader)?.toString()
+        val cacheKey = "yaml:$key"
+        return configCache.getOrCompute(cacheKey) {
+            val configKey = ConfigKeys.byKey(key)
+                ?: return@getOrCompute null
+            configKey.yamlAccessor?.invoke(yamlLoader)?.toString()
+        }
     }
 
     /**
@@ -759,6 +763,7 @@ class ConfigService(
             taskId = taskId,
             description = null
         )
+        invalidateConfigCache(key)
     }
 
     /**
@@ -814,6 +819,8 @@ class ConfigService(
             taskId = taskId,
             description = "Show LLM thinking process in UI"
         )
+        invalidateConfigCache(KEY_UI_THINKING_ENABLED)
+        invalidateConfigCache(KEY_UI_THINKING_ENABLED)
     }
 
     /**
@@ -837,6 +844,8 @@ class ConfigService(
             taskId = taskId,
             description = "Block external network calls"
         )
+        invalidateConfigCache(KEY_UI_NO_EGRESS_ENABLED)
+        invalidateConfigCache(KEY_UI_NO_EGRESS_ENABLED)
     }
 
     /**
@@ -860,6 +869,8 @@ class ConfigService(
             taskId = taskId,
             description = "Execution mode (AUTO/INTERACTIVE)"
         )
+        invalidateConfigCache(KEY_UI_EXECUTION_MODE)
+        invalidateConfigCache(KEY_UI_EXECUTION_MODE)
     }
 
     /**
@@ -883,6 +894,8 @@ class ConfigService(
             taskId = taskId,
             description = "Selected task mode"
         )
+        invalidateConfigCache(KEY_UI_SELECTED_MODE)
+        invalidateConfigCache(KEY_UI_SELECTED_MODE)
     }
 
     /**
@@ -906,6 +919,8 @@ class ConfigService(
             taskId = taskId,
             description = "Selected model in UI"
         )
+        invalidateConfigCache(KEY_UI_SELECTED_MODEL)
+        invalidateConfigCache(KEY_UI_SELECTED_MODEL)
     }
 
     // ==================== MODELS CONFIGURATION ====================
@@ -932,6 +947,8 @@ class ConfigService(
             taskId = null,
             description = "Cheap model for auxiliary operations"
         )
+        invalidateConfigCache(KEY_WEAK_MODEL)
+        invalidateConfigCache(KEY_WEAK_MODEL)
     }
 
     /**
@@ -957,6 +974,8 @@ class ConfigService(
             taskId = null,
             description = "Model for embeddings"
         )
+        invalidateConfigCache(KEY_EMBEDDING_MODEL)
+        invalidateConfigCache(KEY_EMBEDDING_MODEL)
     }
 
     /**
@@ -1254,6 +1273,8 @@ class ConfigService(
             taskId = null,
             description = "Ollama context size in tokens"
         )
+        invalidateConfigCache(KEY_PROVIDER_OLLAMA_CONTEXT_SIZE)
+        invalidateConfigCache(KEY_PROVIDER_OLLAMA_CONTEXT_SIZE)
     }
 
     /**
@@ -1274,6 +1295,8 @@ class ConfigService(
             taskId = null,
             description = "LM Studio context size in tokens"
         )
+        invalidateConfigCache(KEY_PROVIDER_LM_STUDIO_CONTEXT_SIZE)
+        invalidateConfigCache(KEY_PROVIDER_LM_STUDIO_CONTEXT_SIZE)
     }
 
     // ==================== TOOLS CONFIGURATION ====================
@@ -1307,6 +1330,8 @@ class ConfigService(
             taskId = null,
             description = "Tool permissions"
         )
+        invalidateConfigCache(KEY_TOOLS_PERMISSIONS)
+        invalidateConfigCache(KEY_TOOLS_PERMISSIONS)
     }
 
     /**
@@ -1327,6 +1352,8 @@ class ConfigService(
             taskId = null,
             description = "Allow run_terminal_command tool"
         )
+        invalidateConfigCache(KEY_TOOL_PERMISSION_RUN_TERMINAL)
+        invalidateConfigCache(KEY_TOOL_PERMISSION_RUN_TERMINAL)
     }
 
     fun getTerminalWhitelistConfig(): CommandWhitelistConfig {
@@ -1402,6 +1429,12 @@ class ConfigService(
             taskId = null,
             description = "Terminal whitelist mode"
         )
+        invalidateConfigCache(KEY_TERMINAL_WHITELIST)
+        invalidateConfigCache(KEY_TERMINAL_WHITELIST_ENABLED)
+        invalidateConfigCache(KEY_TERMINAL_WHITELIST_MODE)
+        invalidateConfigCache(KEY_TERMINAL_WHITELIST)
+        invalidateConfigCache(KEY_TERMINAL_WHITELIST_ENABLED)
+        invalidateConfigCache(KEY_TERMINAL_WHITELIST_MODE)
     }
 
     fun addAllowedCommand(command: AllowedCommand, scope: ConfigScope) {
@@ -1459,6 +1492,8 @@ class ConfigService(
             taskId = null,
             description = "Builtin subagent enabled overrides"
         )
+        invalidateConfigCache(KEY_SUBAGENTS_BUILTIN_ENABLED)
+        invalidateConfigCache(KEY_SUBAGENTS_BUILTIN_ENABLED)
     }
 
     // ==================== TOOL RESULT SUMMARIZATION ====================
@@ -1481,6 +1516,8 @@ class ConfigService(
             taskId = null,
             description = "Enable tool result summarization"
         )
+        invalidateConfigCache(KEY_TOOL_SUMMARY_ENABLED)
+        invalidateConfigCache(KEY_TOOL_SUMMARY_ENABLED)
     }
 
     /**
@@ -1502,6 +1539,8 @@ class ConfigService(
             taskId = null,
             description = "Minimum tool output length for summarization"
         )
+        invalidateConfigCache(KEY_TOOL_SUMMARY_MIN_LENGTH)
+        invalidateConfigCache(KEY_TOOL_SUMMARY_MIN_LENGTH)
     }
 
     // ==================== CONTEXT CONFIGURATION (ADR 0017) ====================
@@ -1525,6 +1564,8 @@ class ConfigService(
             taskId = null,
             description = "Number of recent tool executions with full data"
         )
+        invalidateConfigCache(KEY_RECENT_WORK_FULL_DATA_LIMIT)
+        invalidateConfigCache(KEY_RECENT_WORK_FULL_DATA_LIMIT)
     }
 
     /**
@@ -1546,6 +1587,8 @@ class ConfigService(
             taskId = null,
             description = "Maximum length for truncated tool outputs"
         )
+        invalidateConfigCache(KEY_RECENT_WORK_SUMMARY_MAX_LENGTH)
+        invalidateConfigCache(KEY_RECENT_WORK_SUMMARY_MAX_LENGTH)
     }
 
     /**
@@ -1914,6 +1957,7 @@ class ConfigService(
         }
 
         logger.info { "Finished initializing defaults: $initializedCount keys set" }
+        configCache.invalidateAll()
     }
 
     private fun migrateProviderKeysToLowercase() {
@@ -2151,6 +2195,7 @@ class ConfigService(
         }
 
         logger.info { "Finished reloading configuration from YAML: $updatedCount keys updated" }
+        configCache.invalidateAll()
         return updatedCount
     }
 
@@ -2200,6 +2245,12 @@ class ConfigService(
     }
 
     private fun resolveProjectId(projectId: String?): String? = projectId ?: defaultProjectId
+
+    private fun invalidateConfigCache(key: String) {
+        configCache.invalidateByPrefix("typed:$key:")
+        configCache.invalidateByPrefix("raw:$key:")
+        configCache.invalidate("yaml:$key")
+    }
 
     private fun getConfigWithPrecedence(
         key: String,
@@ -2256,6 +2307,7 @@ class ConfigService(
         )
 
         logger.info { "Set orchestration_enabled = $enabled (scope=${scope.name})" }
+        invalidateConfigCache(KEY_ORCHESTRATION_ENABLED)
     }
 
     /**

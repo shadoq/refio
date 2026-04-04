@@ -10,6 +10,7 @@ import pl.jclab.refio.core.db.PromptType
 import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.llm.LLMMessage
+import pl.jclab.refio.core.llm.LLMMessageMapper
 import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 import pl.jclab.refio.core.services.ContextService
 import pl.jclab.refio.core.services.PromptsService
@@ -35,10 +36,27 @@ class TurnPromptBuilder(
     private val promptCache: PromptCache? = null,
     private val sectionProviders: List<PromptSectionProvider> = emptyList()
 ) {
+    class StructuredPromptBuilder {
+        fun buildSystemPrompt(sections: List<PromptSection>): String {
+            val stablePart = sections
+                .filter { it.stable && it.content.isNotBlank() }
+                .joinToString("\n\n") { it.content.trim() }
+            val dynamicPart = sections
+                .filter { !it.stable && it.content.isNotBlank() }
+                .joinToString("\n\n") { it.content.trim() }
+
+            return listOf(stablePart, dynamicPart)
+                .filter { it.isNotBlank() }
+                .joinToString("\n\n")
+        }
+    }
+
     companion object {
         private const val STICKY_REQUIREMENTS_MAX_CHARS = 4_000
         private const val REQUIREMENT_ENTRY_MAX_CHARS = 1_500
     }
+
+    private val structuredPromptBuilder = StructuredPromptBuilder()
 
     /**
      * Get the last context decision trace from ContextService.
@@ -63,7 +81,7 @@ class TurnPromptBuilder(
         writeToolsExecutedInTurn: Int = 0
     ): TurnPrompt {
         // Build system prompt based on mode/profile
-        var systemPrompt = resolveSystemPrompt(
+        val baseSystemPrompt = resolveSystemPrompt(
             mode = mode,
             taskId = taskId,
             currentIteration = currentIteration,
@@ -80,14 +98,19 @@ class TurnPromptBuilder(
 
         val history = chatMessageRepository.findByTaskId(taskId)
         val stickyRequirements = buildStickyRequirementsBlock(history)
+        val promptSections = mutableListOf(
+            PromptSection("base_system_prompt", baseSystemPrompt, stable = true)
+        )
         if (stickyRequirements.isNotBlank()) {
-            systemPrompt = """
-$systemPrompt
-
+            promptSections += PromptSection(
+                id = "task_requirements",
+                content = """
 <task_requirements>
 $stickyRequirements
 </task_requirements>
-            """.trimIndent()
+                """.trimIndent(),
+                stable = false
+            )
         }
 
         // Append sections from providers
@@ -103,10 +126,16 @@ $stickyRequirements
             for (provider in sectionProviders) {
                 val section = provider.build(buildContext)
                 if (!section.isNullOrBlank()) {
-                    systemPrompt += "\n\n$section"
+                    promptSections += PromptSection(
+                        id = "provider_${provider.javaClass.simpleName}",
+                        content = section,
+                        stable = false
+                    )
                 }
             }
         }
+
+        var systemPrompt = structuredPromptBuilder.buildSystemPrompt(promptSections)
 
         // Use ContextService for messages and project context (for PLAN and AGENT modes)
         if ((mode == TaskMode.PLAN || mode == TaskMode.AGENT) && contextService != null && projectRoot != null) {
@@ -138,25 +167,39 @@ $stickyRequirements
                 if (contextProfile?.includeParentSummary == true && workingMemoryService != null) {
                     val parentSummary = workingMemoryService.buildWorkingMemorySection(taskId, contextProfile.maxContextTokens ?: 2048)
                     if (parentSummary.isNotBlank()) {
-                        systemPrompt = """
-$systemPrompt
-
+                        systemPrompt = structuredPromptBuilder.buildSystemPrompt(
+                            listOf(
+                                PromptSection("existing", systemPrompt, stable = true),
+                                PromptSection(
+                                    "parent_working_memory",
+                                    """
 <parent_working_memory>
 $parentSummary
 </parent_working_memory>
-                        """.trimIndent()
+                                    """.trimIndent(),
+                                    stable = false
+                                )
+                            )
+                        )
                     }
                 }
 
                 // Append project context to system prompt
                 if (filteredContextPrompt.isNotBlank()) {
-                    systemPrompt = """
-$systemPrompt
-
+                    systemPrompt = structuredPromptBuilder.buildSystemPrompt(
+                        listOf(
+                            PromptSection("existing", systemPrompt, stable = true),
+                            PromptSection(
+                                "project_context",
+                                """
 <context>
 $filteredContextPrompt
 </context>
-                    """.trimIndent()
+                                """.trimIndent(),
+                                stable = false
+                            )
+                        )
+                    )
                 }
 
                 // Apply maxContextTokens limit if set
@@ -219,12 +262,7 @@ $filteredContextPrompt
                         val base = msg.content.ifBlank { msg.rawOutput ?: "(empty tool result)" }
                         if (base.length > 320) "${base.take(320)}..." else base
                     }
-                    val content = "[Tool Result for ${msg.toolCallId}]\n$toolText"
-
-                    LLMMessage(
-                        role = "user",
-                        content = content
-                    )
+                    LLMMessageMapper.fromToolResult(msg, toolText)
                 }
                 MessageRole.SYSTEM -> LLMMessage(
                     role = "system",

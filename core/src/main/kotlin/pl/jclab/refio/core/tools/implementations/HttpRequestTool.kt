@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.core.security.UrlPolicy
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
@@ -41,18 +42,12 @@ private val logger = dualLogger("HttpRequestTool")
 class HttpRequestTool(
     private val sandbox: PathSandbox? = null,
     private val maxResponseSize: Int = MAX_RESPONSE_SIZE,
-    private val timeoutMs: Long = TIMEOUT_MS
+    private val timeoutMs: Long = TIMEOUT_MS,
+    private val urlPolicy: UrlPolicy = UrlPolicy()
 ) : Tool {
 
     override val name = "http_request"
-    override val description = "Make HTTP requests to external APIs and web services. " +
-        "Supports GET, POST, PUT, DELETE methods with custom headers and body. " +
-        "Handles both text (JSON, CSV, HTML) and binary (PNG, JPEG, PDF, ZIP) responses automatically. " +
-        "Use for downloading data, images, calling REST APIs, and submitting results. " +
-        "IMPORTANT: For large or binary responses (images, CSV files, JSON datasets), use the 'save_to_file' " +
-        "parameter to save the response to disk. Binary content (images etc.) is saved as raw bytes. " +
-        "Text content returns only a summary with file path, size, and preview — then use run_code to process. " +
-        "This prevents large data from filling the context window."
+    override val description = "Make HTTP requests (GET/POST/PUT/DELETE). Use save_to_file for large responses."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.DATA_PRODUCING
 
@@ -76,6 +71,7 @@ class HttpRequestTool(
         try {
             val url = params["url"] as? String
                 ?: return@withContext ToolResult.error("Missing required parameter: 'url'")
+            urlPolicy.validate(url)
             val method = (params["method"] as? String)?.uppercase() ?: "GET"
             val body = params["body"] as? String
             val rawContentType = params["content_type"] as? String
@@ -467,25 +463,20 @@ class HttpRequestTool(
                 ),
                 "body" to mapOf(
                     "type" to "string",
-                    "description" to "Request body (for POST/PUT). Send JSON as a string."
+                    "description" to "Request body (for POST/PUT), JSON as string."
                 ),
                 "headers" to mapOf(
                     "type" to "object",
-                    "description" to "Additional HTTP headers as key-value pairs",
+                    "description" to "HTTP headers as key-value pairs.",
                     "additionalProperties" to mapOf("type" to "string")
                 ),
                 "content_type" to mapOf(
                     "type" to "string",
-                    "description" to "Content-Type header (default: application/json)"
+                    "description" to "Content-Type (default: application/json)."
                 ),
                 "save_to_file" to mapOf(
                     "type" to "string",
-                    "description" to "Path to save response body to disk (relative to project root). " +
-                        "RECOMMENDED for large responses (CSV, JSON datasets). " +
-                        "When set, the full response is saved to the file and only a compact summary " +
-                        "(file path, size, preview, data statistics) is returned instead of the full content. " +
-                        "Use run_code to then process the saved file. " +
-                        "Example: '.refio/downloads/data.csv'"
+                    "description" to "Save response to this path instead of returning full content."
                 )
             ),
             "required" to listOf("url")

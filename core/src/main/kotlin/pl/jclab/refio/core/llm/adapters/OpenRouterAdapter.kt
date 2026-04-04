@@ -124,7 +124,7 @@ class OpenRouterAdapter(
             ?: throw LLMErrorMapper.missingConfig(provider, "api_key")
 
         // Prepare messages
-        val openrouterMessages = mutableListOf<Map<String, String>>()
+        val openrouterMessages = mutableListOf<Map<String, Any>>()
 
         // Add system messages from systemMessages parameter
         systemMessages.filter { it.isNotBlank() }.forEach { sysMsg ->
@@ -133,7 +133,7 @@ class OpenRouterAdapter(
 
         // Add conversation messages (filter out any system messages as they should be in systemMessages parameter)
         for (msg in messages.filter { it.role != "system" }) {
-            openrouterMessages.add(mapOf("role" to msg.role, "content" to msg.content))
+            openrouterMessages.add(mapOf("role" to msg.role, "content" to toOpenAiMessageContent(msg)))
         }
 
         // Build request body
@@ -340,7 +340,7 @@ class OpenRouterAdapter(
             ?: throw LLMErrorMapper.missingConfig(provider, "api_key")
 
         // Prepare messages
-        val openrouterMessages = mutableListOf<Map<String, String>>()
+        val openrouterMessages = mutableListOf<Map<String, Any>>()
 
         // Add system messages from systemMessages parameter
         systemMessages.filter { it.isNotBlank() }.forEach { sysMsg ->
@@ -349,7 +349,7 @@ class OpenRouterAdapter(
 
         // Add conversation messages (filter out any system messages as they should be in systemMessages parameter)
         for (msg in messages.filter { it.role != "system" }) {
-            openrouterMessages.add(mapOf("role" to msg.role, "content" to msg.content))
+            openrouterMessages.add(mapOf("role" to msg.role, "content" to toOpenAiMessageContent(msg)))
         }
 
         // Build request body with stream: true

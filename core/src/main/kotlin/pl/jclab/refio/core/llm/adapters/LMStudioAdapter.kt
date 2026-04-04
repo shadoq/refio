@@ -116,7 +116,7 @@ class LMStudioAdapter(
         val resolvedBaseUrl = resolveBaseUrl()
         val apiKey = resolveApiKey()
 
-        val lmMessages = mutableListOf<Map<String, String>>()
+        val lmMessages = mutableListOf<Map<String, Any>>()
 
         // Add system messages from systemMessages parameter
         systemMessages.filter { it.isNotBlank() }.forEach { sysMsg ->
@@ -125,7 +125,7 @@ class LMStudioAdapter(
 
         // Add conversation messages (filter out any system messages as they should be in systemMessages parameter)
         messages.filter { it.role != "system" }.forEach { msg ->
-            lmMessages.add(mapOf("role" to msg.role, "content" to msg.content))
+            lmMessages.add(mapOf("role" to msg.role, "content" to toOpenAiMessageContent(msg)))
         }
 
         val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)
@@ -395,8 +395,18 @@ class LMStudioAdapter(
             }
 
             @Suppress("UNCHECKED_CAST")
-            val inputTokensEstimate = (requestBody["messages"] as? List<Map<String, String>>)
-                ?.sumOf { it["content"]?.length ?: 0 } ?: 0
+            val inputTokensEstimate = (requestBody["messages"] as? List<Map<String, Any?>>)
+                ?.sumOf {
+                    when (val content = it["content"]) {
+                        is String -> content.length
+                        is List<*> -> content.sumOf { part ->
+                            @Suppress("UNCHECKED_CAST")
+                            val partMap = part as? Map<String, Any?>
+                            (partMap?.get("text") as? String)?.length ?: 0
+                        }
+                        else -> 0
+                    }
+                } ?: 0
             val outputTokensEstimate = contentBuilder.length / 4
 
             val usage = LLMUsage(

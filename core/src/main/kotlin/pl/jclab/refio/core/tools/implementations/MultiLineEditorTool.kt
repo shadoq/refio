@@ -68,7 +68,7 @@ class MultiLineEditorTool(
 
     override val name = "multi_line_editor"
     override val description =
-        "**Preferred** LLM-assisted editing for targeted changes in existing files (2-10 locations). Cost-efficient (~$0.02), precise, preserves unchanged code. Use this for most editing tasks. **Cannot create new files** - only edits existing files. For new code files, use advance_code_editing."
+        "LLM-assisted targeted edits in an existing file (2-10 locations). CHEAP (~\$0.02)."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_MODIFYING
 
@@ -740,7 +740,7 @@ class MultiLineEditorTool(
                 ),
                 "edit_description" to mapOf(
                     "type" to "string",
-                    "description" to "Natural language description of the changes to make (e.g., 'Add null checks to getUserById and updateUser functions')"
+                    "description" to "What to change, in natural language."
                 )
             ),
             "required" to listOf("path", "edit_description")

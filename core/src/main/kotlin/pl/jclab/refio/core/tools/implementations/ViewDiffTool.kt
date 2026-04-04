@@ -30,7 +30,7 @@ class ViewDiffTool(
 ) : Tool {
 
     override val name = "view_diff"
-    override val description = "View differences between files or content"
+    override val description = "Compare two files or a file against provided content."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
 

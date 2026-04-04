@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Regex-based terminal `CommandRule` system with `ALLOW` / `BLOCK` / `ASK` actions.
 - New onboarding documentation in `docs/onboarding.md`.
 - Expanded test coverage for tool approvals, command rules, and mid-execution user input.
+- Multimodal message pipeline for image-aware prompts and provider adapters.
+- MCP prompt listing/fetching support, resource subscriptions, and cache coverage for MCP metadata.
+- Mocked API smoke tests for OpenAI, Anthropic, and Gemini adapter workflows.
 
 ### Changed
 
@@ -24,6 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `run_terminal_command`, `run_code`, and `http_request` now provide better timeout, retry, and response handling.
 - IntelliJ and CLI/TUI workflows were updated to support tool approvals, queued follow-up input, and project-based session restore.
 - Documentation was refreshed to reflect the current architecture, defaults, and security model.
+- LLM adapters now support injectable HTTP clients/base URLs for deterministic smoke tests and multimodal payload verification.
+- Prompt construction, tool execution nudges, and turn guardrails were tightened around read-before-write and post-write verification flow.
+- RAG indexing/search and config/MCP caches were optimized to reduce unnecessary work on large projects.
+
+### Fixed
+
+- `http_request` egress validation, regex safety checks, and tool approval/session-trust race conditions.
+- Subagent recursion tracking, `CoreApiRouter` shutdown cleanup, and file-write locking edge cases.
+- `read_file` media handling for images/PDFs and multimodal handoff into provider-specific request payloads.
+- Kotlin/Gradle module configuration cleanup for shared plugin setup and more stable local builds.
 
 ## [0.0.1.5] - 2025-04-02
 

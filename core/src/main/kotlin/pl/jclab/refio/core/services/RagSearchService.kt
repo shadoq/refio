@@ -155,7 +155,6 @@ class RagSearchService(
             return emptyList()
         }
 
-        val chunkIdsAboveThreshold = linkedSetOf<Int>()
         val similarityByChunkId = mutableMapOf<Int, Float>()
         val topHeap = PriorityQueue<Pair<Float, Int>>(config.topK + 1, compareBy { it.first })
 
@@ -179,10 +178,6 @@ class RagSearchService(
 
                     similarityByChunkId[embedding.chunkId] = similarity
 
-                    if (similarity >= config.similarityThreshold) {
-                        chunkIdsAboveThreshold.add(embedding.chunkId)
-                    }
-
                     if (topHeap.size < config.topK) {
                         topHeap.offer(similarity to embedding.chunkId)
                     } else if (similarity > (topHeap.peek()?.first ?: Float.NEGATIVE_INFINITY)) {
@@ -196,6 +191,11 @@ class RagSearchService(
 
             offset += batch.size
         }
+
+        val chunkIdsAboveThreshold = similarityByChunkId
+            .filterValues { it >= config.similarityThreshold }
+            .keys
+            .toList()
 
         logger.debug { "Embeddings above threshold: ${chunkIdsAboveThreshold.size}/$totalEmbeddings" }
 

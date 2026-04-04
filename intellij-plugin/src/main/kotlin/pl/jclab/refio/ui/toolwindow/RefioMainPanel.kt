@@ -233,10 +233,13 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
 //            }
 //        }
 
-        // Listen to historyPanel session loaded event to return to Chat view
+        // Direct callback for reliable navigation back to chat
+        historyPanel.onNavigateToChat = { showChatView() }
+
+        // Listen to historyPanel session loaded event to return to Chat view (legacy fallback)
         historyPanel.addPropertyChangeListener("sessionLoaded", historySessionLoadedListener)
 
-        // Listen to historyPanel back to chat event
+        // Listen to historyPanel back to chat event (legacy fallback)
         historyPanel.addPropertyChangeListener("backToChat", historyBackToChatListener)
 
         // Listen to mode changes to show/hide steps queue

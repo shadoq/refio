@@ -281,6 +281,13 @@ class CoreConnectionManager {
      * Dispose resources
      */
     fun dispose() {
+        projectRouters.values.forEach { router ->
+            runCatching { router.close() }
+                .onFailure { logger.warn { "Failed to close project router: ${it.message}" } }
+        }
+        projectRouters.clear()
+        runCatching { router.close() }
+            .onFailure { logger.warn { "Failed to close app router: ${it.message}" } }
         cs.cancel()
     }
 

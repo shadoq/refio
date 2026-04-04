@@ -36,13 +36,15 @@ class GeminiAdapter(
     private val configService: pl.jclab.refio.core.services.ConfigService? = null,
     private val taskId: String? = null,
     private val subtaskId: String? = null,
-    private val source: String? = null
+    private val source: String? = null,
+    private val baseUrlOverride: String? = null,
+    private val httpClientOverride: HttpClient? = null
 ) : BaseLLMAdapter(model, "gemini") {
 
     private val logger = dualLogger("GeminiAdapter")
 
     companion object {
-        private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+        private const val DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
         private const val GENERATE_PATH = "/models/%s:generateContent"
         private const val STREAM_PATH = "/models/%s:streamGenerateContent?alt=sse"
         private const val MODELS_PATH = "/models"
@@ -52,7 +54,12 @@ class GeminiAdapter(
         get() = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
             ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
 
-    private val client = HttpClient(CIO) {
+    private val baseUrl: String
+        get() = baseUrlOverride ?: DEFAULT_BASE_URL
+
+    private val ownsHttpClient = httpClientOverride == null
+
+    private val client = httpClientOverride ?: HttpClient(CIO) {
         install(ContentNegotiation) {
             gson {
                 setPrettyPrinting()
@@ -141,7 +148,7 @@ class GeminiAdapter(
             }
             mapOf(
                 "role" to role,
-                "parts" to listOf(mapOf("text" to msg.content))
+                "parts" to toGeminiParts(msg)
             )
         }.ifEmpty {
             // Gemini requires at least one content; fallback to placeholder if only system prompt provided
@@ -210,7 +217,7 @@ class GeminiAdapter(
         logPrefix: String
     ): LLMResponse {
         var httpStatus: Int? = null
-        val url = "$BASE_URL${GENERATE_PATH.format(model)}"
+        val url = "$baseUrl${GENERATE_PATH.format(model)}"
         try {
             logger.info { "$logPrefix Request start: endpoint=$url, body=${SecureLogger.redactAndTruncate(requestJson)}" }
             val httpResponse = client.post(url) {
@@ -311,7 +318,7 @@ class GeminiAdapter(
         onStreamChunk: (StreamChunk) -> Unit,
         logPrefix: String
     ): LLMResponse {
-        val url = "$BASE_URL${STREAM_PATH.format(model)}"
+        val url = "$baseUrl${STREAM_PATH.format(model)}"
         val contentBuilder = StringBuilder()
         val functionCallParts = mutableListOf<Map<String, Any?>>()
         var httpStatus: Int? = null
@@ -517,7 +524,7 @@ class GeminiAdapter(
             ?: return@withContext emptyList()
 
         try {
-            val response: Map<String, Any?> = client.get("$BASE_URL$MODELS_PATH") {
+            val response: Map<String, Any?> = client.get("$baseUrl$MODELS_PATH") {
                 header("x-goog-api-key", apiKey)
             }.body()
 
@@ -551,6 +558,8 @@ class GeminiAdapter(
     }
 
     override suspend fun close() {
-        client.close()
+        if (ownsHttpClient) {
+            client.close()
+        }
     }
 }

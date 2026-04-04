@@ -135,9 +135,9 @@ open class CustomOpenAIAdapter(
     ): LLMResponse {
         val baseUrl = resolveBaseUrl()
         val apiKey = resolveApiKey()
-        val requestMessages = buildList {
+        val requestMessages = buildList<Map<String, Any>> {
             systemMessages.filter { it.isNotBlank() }.forEach { add(mapOf("role" to "system", "content" to it)) }
-            messages.filter { it.role != "system" }.forEach { add(mapOf("role" to it.role, "content" to it.content)) }
+            messages.filter { it.role != "system" }.forEach { add(mapOf("role" to it.role, "content" to toOpenAiMessageContent(it))) }
         }
         val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId) ?: ConfigKeys.MAX_OUTPUT_SIZE.default
         val effectiveMaxTokens = when {
@@ -331,7 +331,17 @@ open class CustomOpenAIAdapter(
             }
 
             @Suppress("UNCHECKED_CAST")
-            val inputTokensEstimate = (requestBody["messages"] as? List<Map<String, String>>)?.sumOf { it["content"]?.length ?: 0 } ?: 0
+            val inputTokensEstimate = (requestBody["messages"] as? List<Map<String, Any?>>)?.sumOf {
+                when (val content = it["content"]) {
+                    is String -> content.length
+                    is List<*> -> content.sumOf { part ->
+                        @Suppress("UNCHECKED_CAST")
+                        val partMap = part as? Map<String, Any?>
+                        (partMap?.get("text") as? String)?.length ?: 0
+                    }
+                    else -> 0
+                }
+            } ?: 0
             val usage = LLMUsage(
                 inputTokens = inputTokensEstimate,
                 outputTokens = contentBuilder.length / 4,

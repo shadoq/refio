@@ -23,6 +23,12 @@ private val logger = dualLogger("MCPConnection")
 class MCPConnection(
     private val config: MCPServerConfig
 ) {
+    companion object {
+        private const val RESOURCE_CACHE_TTL_MS = 5 * 60 * 1000L
+        private const val TOOL_CACHE_TTL_MS = 5 * 60 * 1000L
+        private const val PROMPT_CACHE_TTL_MS = 5 * 60 * 1000L
+    }
+
     val serverId: String = config.id
 
     private var status: MCPServerStatus = MCPServerStatus.DISCONNECTED
@@ -36,6 +42,12 @@ class MCPConnection(
 
     private val cachedResources = mutableListOf<MCPResource>()
     private val cachedTools = mutableListOf<MCPToolDefinition>()
+    private val cachedPrompts = mutableListOf<MCPPrompt>()
+    private val cachedResourceContent = ConcurrentHashMap<String, Pair<MCPResourceContent, Long>>()
+    private val subscribedResources = ConcurrentHashMap.newKeySet<String>()
+    @Volatile private var cachedResourcesAt: Long = 0L
+    @Volatile private var cachedToolsAt: Long = 0L
+    @Volatile private var cachedPromptsAt: Long = 0L
     private var capabilities: MCPServerCapabilities? = null
 
     var lastConnectedAt: java.time.Instant? = null
@@ -62,6 +74,9 @@ class MCPConnection(
             if (config.toolsEnabled && capabilities?.tools == true) {
                 refreshTools()
             }
+            if (config.promptsEnabled && capabilities?.prompts == true) {
+                refreshPrompts()
+            }
 
             status = MCPServerStatus.CONNECTED
             lastConnectedAt = java.time.Instant.now()
@@ -82,6 +97,8 @@ class MCPConnection(
         transport = null
         httpTransport = null
         pendingRequests.clear()
+        cachedResourceContent.clear()
+        subscribedResources.clear()
         scope.cancel()
         status = MCPServerStatus.DISCONNECTED
     }
@@ -98,13 +115,28 @@ class MCPConnection(
         synchronized(cachedResources) {
             cachedResources.clear()
             cachedResources.addAll(resources)
+            cachedResourcesAt = System.currentTimeMillis()
         }
         return resources
     }
 
-    suspend fun readResource(uri: String): MCPResourceContent {
+    suspend fun readResource(uri: String, subscribe: Boolean = false): MCPResourceContent {
+        cachedResourceContent[uri]?.let { (content, cachedAt) ->
+            if (System.currentTimeMillis() - cachedAt <= RESOURCE_CACHE_TTL_MS) {
+                if (subscribe) {
+                    ensureResourceSubscription(uri)
+                }
+                return content
+            }
+        }
+
+        if (subscribe) {
+            ensureResourceSubscription(uri)
+        }
         val response = sendRequest(MCPMethods.RESOURCES_READ, mapOf("uri" to uri))
-        return parseResourceContent(response.result)
+        return parseResourceContent(response.result).also {
+            cachedResourceContent[uri] = it to System.currentTimeMillis()
+        }
     }
 
     suspend fun listTools(): List<MCPToolDefinition> {
@@ -117,8 +149,36 @@ class MCPConnection(
         synchronized(cachedTools) {
             cachedTools.clear()
             cachedTools.addAll(tools)
+            cachedToolsAt = System.currentTimeMillis()
         }
         return tools
+    }
+
+    suspend fun listPrompts(): List<MCPPrompt> {
+        val response = sendRequest(MCPMethods.PROMPTS_LIST)
+        return parsePromptsList(response.result)
+    }
+
+    suspend fun refreshPrompts(): List<MCPPrompt> {
+        val prompts = listPrompts()
+        synchronized(cachedPrompts) {
+            cachedPrompts.clear()
+            cachedPrompts.addAll(prompts)
+            cachedPromptsAt = System.currentTimeMillis()
+        }
+        return prompts
+    }
+
+    suspend fun getPrompt(
+        name: String,
+        arguments: Map<String, String> = emptyMap()
+    ): MCPPromptResult {
+        val params = mutableMapOf<String, Any>("name" to name)
+        if (arguments.isNotEmpty()) {
+            params["arguments"] = arguments
+        }
+        val response = sendRequest(MCPMethods.PROMPTS_GET, params)
+        return parsePromptResult(response.result, name)
     }
 
     suspend fun callTool(name: String, arguments: Map<String, Any>): MCPToolResult {
@@ -132,11 +192,32 @@ class MCPConnection(
         return parseToolResult(response.result)
     }
 
-    fun getCachedResources(): List<MCPResource> = synchronized(cachedResources) { cachedResources.toList() }
-    fun getCachedTools(): List<MCPToolDefinition> = synchronized(cachedTools) { cachedTools.toList() }
+    fun getCachedResources(): List<MCPResource> = synchronized(cachedResources) {
+        if (System.currentTimeMillis() - cachedResourcesAt > RESOURCE_CACHE_TTL_MS) {
+            emptyList()
+        } else {
+            cachedResources.toList()
+        }
+    }
+    fun getCachedTools(): List<MCPToolDefinition> = synchronized(cachedTools) {
+        if (System.currentTimeMillis() - cachedToolsAt > TOOL_CACHE_TTL_MS) {
+            emptyList()
+        } else {
+            cachedTools.toList()
+        }
+    }
+    fun getCachedPrompts(): List<MCPPrompt> = synchronized(cachedPrompts) {
+        if (System.currentTimeMillis() - cachedPromptsAt > PROMPT_CACHE_TTL_MS) {
+            emptyList()
+        } else {
+            cachedPrompts.toList()
+        }
+    }
     fun getCapabilities(): MCPServerCapabilities? = capabilities
     fun supportsResources(): Boolean = config.resourcesEnabled && capabilities?.resources == true
     fun supportsTools(): Boolean = config.toolsEnabled && capabilities?.tools == true
+    fun supportsPrompts(): Boolean = config.promptsEnabled && capabilities?.prompts == true
+    fun supportsResourceSubscriptions(): Boolean = config.resourcesEnabled && capabilities?.resourceSubscriptions == true
 
     private suspend fun initialize(): MCPServerCapabilities {
         val response = sendRequest(
@@ -203,6 +284,18 @@ class MCPConnection(
                 when (method) {
                     MCPMethods.RESOURCES_LIST_CHANGED -> scope.launch { refreshResources() }
                     MCPMethods.TOOLS_LIST_CHANGED -> scope.launch { refreshTools() }
+                    MCPMethods.RESOURCES_UPDATED -> {
+                        val params = json.getAsJsonObject("params")
+                        val uri = params?.get("uri")?.asString
+                        if (!uri.isNullOrBlank()) {
+                            cachedResourceContent.remove(uri)
+                            if (subscribedResources.contains(uri)) {
+                                scope.launch {
+                                    runCatching { readResource(uri, subscribe = false) }
+                                }
+                            }
+                        }
+                    }
                     else -> logger.debug { "Unhandled MCP notification: $method" }
                 }
             }
@@ -269,7 +362,12 @@ class MCPConnection(
             MCPServerCapabilities(
                 resources = hasCapability("resources"),
                 tools = hasCapability("tools"),
-                prompts = hasCapability("prompts")
+                prompts = hasCapability("prompts"),
+                resourceSubscriptions = capabilities
+                    ?.getAsJsonObject("resources")
+                    ?.get("subscribe")
+                    ?.asBoolean
+                    ?: false
             )
         } catch (e: Exception) {
             logger.warn(e) { "Failed to parse capabilities for ${config.id}" }
@@ -304,11 +402,13 @@ class MCPConnection(
             val uri = json.get("uri")?.asString ?: ""
             val mimeType = json.get("mimeType")?.asString
             val contentArray = json.getAsJsonArray("contents")
-            val text = contentArray?.firstOrNull()?.asJsonObject?.get("text")?.asString
-            MCPResourceContent(uri = uri, mimeType = mimeType, text = text)
+            val firstContent = contentArray?.firstOrNull()?.asJsonObject
+            val text = firstContent?.get("text")?.asString
+            val blob = firstContent?.get("blob")?.asString
+            MCPResourceContent(uri = uri, mimeType = mimeType, text = text, blob = blob)
         } catch (e: Exception) {
             logger.warn(e) { "Failed to parse resource content for ${config.id}" }
-            MCPResourceContent(uri = "", text = null)
+            MCPResourceContent(uri = "", text = null, blob = null)
         }
     }
 
@@ -352,7 +452,9 @@ class MCPConnection(
                     val obj = element.asJsonObject
                     MCPContentPart(
                         type = obj.get("type")?.asString ?: "text",
-                        text = obj.get("text")?.asString
+                        text = obj.get("text")?.asString,
+                        blob = obj.get("blob")?.asString,
+                        mimeType = obj.get("mimeType")?.asString
                     )
                 }.getOrNull()
             } ?: emptyList()
@@ -360,6 +462,105 @@ class MCPConnection(
         } catch (e: Exception) {
             logger.warn(e) { "Failed to parse tool result for ${config.id}" }
             MCPToolResult(isError = true, content = listOf(MCPContentPart(text = e.message)))
+        }
+    }
+
+    internal fun parsePromptsList(result: Any): List<MCPPrompt> {
+        return try {
+            val json = gson.toJsonTree(result).asJsonObject
+            val promptsArray = json.getAsJsonArray("prompts") ?: return emptyList()
+            promptsArray.mapNotNull { element ->
+                runCatching {
+                    val obj = element.asJsonObject
+                    val args = obj.getAsJsonArray("arguments")?.mapNotNull { argElement ->
+                        val argObj = argElement.asJsonObject
+                        val argName = argObj.get("name")?.asString ?: return@mapNotNull null
+                        MCPPromptArgument(
+                            name = argName,
+                            description = argObj.get("description")?.asString,
+                            required = argObj.get("required")?.asBoolean ?: false
+                        )
+                    } ?: emptyList()
+                    MCPPrompt(
+                        name = obj.get("name").asString,
+                        description = obj.get("description")?.asString,
+                        arguments = args
+                    )
+                }.getOrNull()
+            }
+        } catch (e: Exception) {
+            logger.warn(e) { "Failed to parse prompts list for ${config.id}" }
+            emptyList()
+        }
+    }
+
+    internal fun parsePromptResult(result: Any, fallbackName: String): MCPPromptResult {
+        return try {
+            val json = gson.toJsonTree(result).asJsonObject
+            val messages = json.getAsJsonArray("messages")?.mapNotNull { element ->
+                runCatching {
+                    val obj = element.asJsonObject
+                    val role = obj.get("role")?.asString ?: "user"
+                    val contentParts = parsePromptContentParts(obj.get("content"))
+                    MCPPromptMessage(role = role, content = contentParts)
+                }.getOrNull()
+            } ?: emptyList()
+
+            MCPPromptResult(
+                name = json.get("name")?.asString ?: fallbackName,
+                description = json.get("description")?.asString,
+                messages = messages
+            )
+        } catch (e: Exception) {
+            logger.warn(e) { "Failed to parse prompt result for ${config.id}" }
+            MCPPromptResult(name = fallbackName)
+        }
+    }
+
+    private fun parsePromptContentParts(element: JsonElement?): List<MCPContentPart> {
+        if (element == null || element.isJsonNull) return emptyList()
+
+        if (element.isJsonPrimitive && element.asJsonPrimitive.isString) {
+            return listOf(MCPContentPart(text = element.asString))
+        }
+
+        if (element.isJsonObject) {
+            val obj = element.asJsonObject
+            return listOf(
+                MCPContentPart(
+                    type = obj.get("type")?.asString ?: "text",
+                    text = obj.get("text")?.asString,
+                    blob = obj.get("blob")?.asString,
+                    mimeType = obj.get("mimeType")?.asString
+                )
+            )
+        }
+
+        if (!element.isJsonArray) return emptyList()
+
+        return element.asJsonArray.mapNotNull { contentElement ->
+            runCatching {
+                val obj = contentElement.asJsonObject
+                MCPContentPart(
+                    type = obj.get("type")?.asString ?: "text",
+                    text = obj.get("text")?.asString,
+                    blob = obj.get("blob")?.asString,
+                    mimeType = obj.get("mimeType")?.asString
+                )
+            }.getOrNull()
+        }
+    }
+
+    private suspend fun ensureResourceSubscription(uri: String) {
+        if (!supportsResourceSubscriptions() || subscribedResources.contains(uri)) {
+            return
+        }
+
+        runCatching {
+            sendRequest(MCPMethods.RESOURCES_SUBSCRIBE, mapOf("uri" to uri))
+            subscribedResources.add(uri)
+        }.onFailure {
+            logger.debug { "Resource subscription failed for $uri on ${config.id}: ${it.message}" }
         }
     }
 

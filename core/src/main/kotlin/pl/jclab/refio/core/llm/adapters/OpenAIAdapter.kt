@@ -47,7 +47,9 @@ class OpenAIAdapter(
     private val configService: pl.jclab.refio.core.services.ConfigService? = null,
     private val taskId: String? = null,
     private val subtaskId: String? = null,
-    private val source: String? = null
+    private val source: String? = null,
+    private val baseUrlOverride: String? = null,
+    private val httpClientOverride: HttpClient? = null
 ) : BaseLLMAdapter(model, "openai") {
 
     private val logger = dualLogger("OpenAIAdapter")
@@ -61,6 +63,9 @@ class OpenAIAdapter(
     private val timeoutMs: Long
         get() = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
             ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
+
+    private val baseUrl: String
+        get() = baseUrlOverride ?: DEFAULT_BASE_URL
 
     /**
      * Get API endpoint path based on model definition.
@@ -82,7 +87,7 @@ class OpenAIAdapter(
         val messages = transformed.remove("messages")
         if (messages is List<*>) {
             @Suppress("UNCHECKED_CAST")
-            val messageList = messages as List<Map<String, String>>
+            val messageList = messages as List<Map<String, Any?>>
 
             // Convert messages array to input format
             // User/system messages use "input_text", assistant messages use "output_text"
@@ -91,20 +96,55 @@ class OpenAIAdapter(
                 val content = msg["content"] ?: return@mapNotNull null
 
                 // Determine content type based on role
-                val contentType = when (role) {
-                    "assistant" -> "output_text"  // Assistant messages from conversation history
-                    else -> "input_text"           // User and system messages
+                val convertedContent = when (content) {
+                    is String -> {
+                        val contentType = when (role) {
+                            "assistant" -> "output_text"
+                            else -> "input_text"
+                        }
+                        listOf(
+                            mapOf(
+                                "type" to contentType,
+                                "text" to content
+                            )
+                        )
+                    }
+
+                    is List<*> -> {
+                        content.mapNotNull { block ->
+                            @Suppress("UNCHECKED_CAST")
+                            val blockMap = block as? Map<String, Any?> ?: return@mapNotNull null
+                            when (blockMap["type"]) {
+                                "text" -> mapOf(
+                                    "type" to if (role == "assistant") "output_text" else "input_text",
+                                    "text" to (blockMap["text"]?.toString() ?: "")
+                                )
+
+                                "image_url" -> {
+                                    if (role == "assistant") {
+                                        null
+                                    } else {
+                                        val imageUrl = blockMap["image_url"] as? Map<*, *>
+                                        val image = imageUrl?.get("url")?.toString() ?: return@mapNotNull null
+                                        mapOf(
+                                            "type" to "input_image",
+                                            "image_url" to image
+                                        )
+                                    }
+                                }
+
+                                else -> null
+                            }
+                        }
+                    }
+
+                    else -> emptyList()
                 }
 
                 mapOf(
                     "type" to "message",
                     "role" to role,
-                    "content" to listOf(
-                        mapOf(
-                            "type" to contentType,
-                            "text" to content
-                        )
-                    )
+                    "content" to convertedContent
                 )
             }
 
@@ -302,7 +342,9 @@ class OpenAIAdapter(
         get() = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
             ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
 
-    private val client = HttpClient(CIO) {
+    private val ownsHttpClient = httpClientOverride == null
+
+    private val client = httpClientOverride ?: HttpClient(CIO) {
         install(ContentNegotiation) {
             gson {
                 setPrettyPrinting()
@@ -402,7 +444,7 @@ class OpenAIAdapter(
                 ?: throw LLMErrorMapper.missingConfig(provider, "api_key")
 
             // Prepare messages
-            val openaiMessages = mutableListOf<Map<String, String>>()
+        val openaiMessages = mutableListOf<Map<String, Any>>()
 
         // Add system messages from systemMessages parameter
         // For reasoning models: system prompts must be converted to user messages
@@ -419,7 +461,7 @@ class OpenAIAdapter(
 
         // Add conversation messages (filter out any system messages as they should be in systemMessages parameter)
         for (msg in messages.filter { it.role != "system" }) {
-            openaiMessages.add(mapOf("role" to msg.role, "content" to msg.content))
+            openaiMessages.add(mapOf("role" to msg.role, "content" to toOpenAiMessageContent(msg)))
         }
 
         // Build base parameters
@@ -533,8 +575,8 @@ class OpenAIAdapter(
 
         try {
             // Make HTTP request
-            logger.info { "$logPrefix Request start: endpoint=$DEFAULT_BASE_URL$endpoint, body=${SecureLogger.redactAndTruncate(requestJson)}" }
-            val httpResponse = client.post("$DEFAULT_BASE_URL$endpoint") {
+            logger.info { "$logPrefix Request start: endpoint=$baseUrl$endpoint, body=${SecureLogger.redactAndTruncate(requestJson)}" }
+            val httpResponse = client.post("$baseUrl$endpoint") {
                 contentType(ContentType.Application.Json)
                 header("Authorization", "Bearer $apiKey")
                 setBody(requestBody)
@@ -583,7 +625,7 @@ class OpenAIAdapter(
                 logger.apiError(
                     provider = provider,
                     model = model,
-                    endpoint = "$DEFAULT_BASE_URL$endpoint",
+                    endpoint = "$baseUrl$endpoint",
                     requestJson = requestJson,
                     httpStatus = httpStatus,
                     error = Exception(fullErrorMessage),
@@ -617,7 +659,7 @@ class OpenAIAdapter(
             logger.apiResponse(
                 provider = provider,
                 model = model,
-                endpoint = "$DEFAULT_BASE_URL$endpoint",
+                endpoint = "$baseUrl$endpoint",
                 requestJson = requestJson,
                 responseJson = responseJson,
                 httpStatus = httpStatus,
@@ -675,7 +717,7 @@ class OpenAIAdapter(
             logger.apiError(
                 provider = provider,
                 model = model,
-                endpoint = "$DEFAULT_BASE_URL$endpoint",
+                endpoint = "$baseUrl$endpoint",
                 requestJson = requestJson,
                 httpStatus = httpStatus,
                 error = e,
@@ -723,8 +765,8 @@ class OpenAIAdapter(
 
         try {
             // Make streaming HTTP request
-            logger.info { "$logPrefix Request start: endpoint=$DEFAULT_BASE_URL$endpoint, body=${SecureLogger.redactAndTruncate(requestJson)}" }
-            client.preparePost("$DEFAULT_BASE_URL$endpoint") {
+            logger.info { "$logPrefix Request start: endpoint=$baseUrl$endpoint, body=${SecureLogger.redactAndTruncate(requestJson)}" }
+            client.preparePost("$baseUrl$endpoint") {
                 contentType(ContentType.Application.Json)
                 header("Authorization", "Bearer $apiKey")
                 setBody(requestBody)
@@ -760,7 +802,7 @@ class OpenAIAdapter(
                     logger.apiError(
                         provider = provider,
                         model = model,
-                        endpoint = "$DEFAULT_BASE_URL$endpoint",
+                        endpoint = "$baseUrl$endpoint",
                         requestJson = requestJson,
                         httpStatus = httpStatus,
                         error = Exception(errorMessage),
@@ -894,7 +936,7 @@ class OpenAIAdapter(
             logger.apiResponse(
                 provider = provider,
                 model = model,
-                endpoint = "$DEFAULT_BASE_URL$endpoint",
+                endpoint = "$baseUrl$endpoint",
                 requestJson = requestJson,
                 responseJson = responseJson,
                 httpStatus = httpStatus ?: 200,
@@ -924,7 +966,7 @@ class OpenAIAdapter(
             logger.apiError(
                 provider = provider,
                 model = model,
-                endpoint = "$DEFAULT_BASE_URL$endpoint",
+                endpoint = "$baseUrl$endpoint",
                 requestJson = requestJson,
                 httpStatus = httpStatus,
                 error = e,
@@ -955,8 +997,8 @@ class OpenAIAdapter(
         val endpoint = getEndpoint(definition)
 
         try {
-            logger.info { "$logPrefix Request start: endpoint=$DEFAULT_BASE_URL$endpoint, body=${SecureLogger.redactAndTruncate(requestJson)}" }
-            client.preparePost("$DEFAULT_BASE_URL$endpoint") {
+            logger.info { "$logPrefix Request start: endpoint=$baseUrl$endpoint, body=${SecureLogger.redactAndTruncate(requestJson)}" }
+            client.preparePost("$baseUrl$endpoint") {
                 contentType(ContentType.Application.Json)
                 header("Authorization", "Bearer $apiKey")
                 setBody(requestBody)
@@ -971,7 +1013,7 @@ class OpenAIAdapter(
                     logger.apiError(
                         provider = provider,
                         model = model,
-                        endpoint = "$DEFAULT_BASE_URL$endpoint",
+                        endpoint = "$baseUrl$endpoint",
                         requestJson = requestJson,
                         httpStatus = httpStatus,
                         error = Exception(errorMessage),
@@ -1094,7 +1136,7 @@ class OpenAIAdapter(
             logger.apiResponse(
                 provider = provider,
                 model = model,
-                endpoint = "$DEFAULT_BASE_URL$endpoint",
+                endpoint = "$baseUrl$endpoint",
                 requestJson = requestJson,
                 responseJson = responseJson,
                 httpStatus = httpStatus ?: 200,
@@ -1123,7 +1165,7 @@ class OpenAIAdapter(
             logger.apiError(
                 provider = provider,
                 model = model,
-                endpoint = "$DEFAULT_BASE_URL$endpoint",
+                endpoint = "$baseUrl$endpoint",
                 requestJson = requestJson,
                 httpStatus = httpStatus,
                 error = e,
@@ -1301,7 +1343,7 @@ class OpenAIAdapter(
      * @throws IllegalStateException if API key is not provided or API returns empty response
      */
     suspend fun listModels(): List<ModelConfig> = withContext(Dispatchers.IO) {
-        logger.info { "[OPENAI] Fetching available models from $DEFAULT_BASE_URL$MODELS_ENDPOINT" }
+        logger.info { "[OPENAI] Fetching available models from $baseUrl$MODELS_ENDPOINT" }
 
         try {
             // Get API key from ConfigService (single source of truth)
@@ -1318,7 +1360,7 @@ class OpenAIAdapter(
             }
 
             // Make HTTP request
-            val httpResponse = client.get("$DEFAULT_BASE_URL$MODELS_ENDPOINT") {
+            val httpResponse = client.get("$baseUrl$MODELS_ENDPOINT") {
                 header("Authorization", "Bearer $apiKeyToUse")
             }
 
@@ -1382,6 +1424,8 @@ class OpenAIAdapter(
     }
 
     override suspend fun close() {
-        client.close()
+        if (ownsHttpClient) {
+            client.close()
+        }
     }
 }

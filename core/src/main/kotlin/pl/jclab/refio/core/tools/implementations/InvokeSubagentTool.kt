@@ -107,6 +107,8 @@ class InvokeSubagentTool(
                 maxIterationsOverride = definition.maxSteps,
                 parentRunId = parentRunId,
                 depth = childDepth,
+                // Keep only ancestors in the chain. The active subagent name is
+                // stored separately in subagentName and validated against ancestors.
                 subagentChain = parentChain,
                 contextProfile = definition.contextProfile
             )
@@ -166,19 +168,16 @@ class InvokeSubagentTool(
 
     private fun buildDynamicDescription(): String {
         val router = subagentRouterProvider()
-            ?: return "Invoke a specialized subagent for a specific task. Available subagents: none. " +
-                "Use 'subagent_name' parameter to select one and 'goal' to describe the task."
+            ?: return "Delegate a task to a specialized subagent. EXPENSIVE (spawns a full turn loop). Available: none."
 
         val subagents = runCatching { router.listSubagents(includeDisabled = false) }
             .getOrElse {
                 logger.warn(it) { "[INVOKE_SUBAGENT] Failed to load subagent list for tool description" }
-                return "Invoke a specialized subagent for a specific task. Available subagents: unavailable. " +
-                    "Use 'subagent_name' parameter to select one and 'goal' to describe the task."
+                return "Delegate a task to a specialized subagent. EXPENSIVE (spawns a full turn loop). Available: unavailable."
             }
 
-        val names = subagents.joinToString(", ") { it.name }
-        return "Invoke a specialized subagent for a specific task. " +
-            "Available subagents: $names. " +
-            "Use 'subagent_name' parameter to select one and 'goal' to describe the task."
+        val names = subagents.joinToString("; ") { "${it.name}: ${it.description}" }
+        return "Delegate a task to a specialized subagent. EXPENSIVE (spawns a full turn loop). " +
+            "Available: $names."
     }
 }

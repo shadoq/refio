@@ -130,7 +130,7 @@ class OllamaAdapter(
 
         // Add conversation messages (filter out any system messages as they should be in systemMessages parameter)
         for (msg in messages.filter { it.role != "system" }) {
-            ollamaMessages.add(mapOf("role" to msg.role, "content" to msg.content))
+            ollamaMessages.add(mapOf("role" to msg.role, "content" to msg.textOnlyContent()))
         }
 
         val responseFormat = kwargs["response_format"] as? Map<*, *>

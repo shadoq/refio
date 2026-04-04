@@ -36,7 +36,7 @@ class MultiEditTool(
 ) : Tool {
 
     override val name = "multi_edit"
-    override val description = "Apply multiple search-and-replace edits to different files atomically. Use this when you need to make simple, consistent changes across multiple files (e.g., renaming variables, updating imports). For complex edits, use multi_line_editor or advance_code_editing on individual files."
+    override val description = "Atomic search-and-replace across multiple files. FREE."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_MODIFYING
 

@@ -29,9 +29,9 @@ class MCPToolWrapper(
         return try {
             val result = mcpConnection.callTool(toolDefinition.name, params)
             if (result.isError) {
-                ToolResult.error(result.content.firstOrNull()?.text ?: "MCP tool error")
+                ToolResult.error(formatToolResult(result).ifBlank { "MCP tool error" })
             } else {
-                val output = result.content.mapNotNull { it.text }.joinToString("\n")
+                val output = formatToolResult(result)
                 ToolResult.success(
                     output = output.ifBlank { "MCP tool executed successfully" },
                     metadata = mapOf(
@@ -49,5 +49,18 @@ class MCPToolWrapper(
 
     override fun getParameterSchema(): Map<String, Any> {
         return toolDefinition.inputSchema
+    }
+
+    private fun formatToolResult(result: MCPToolResult): String {
+        return result.content.mapNotNull { part ->
+            when {
+                !part.text.isNullOrBlank() -> part.text
+                !part.blob.isNullOrBlank() && part.mimeType?.startsWith("image/") == true ->
+                    "[MCP image content: ${part.mimeType}, ${part.blob.length} base64 chars]"
+                !part.blob.isNullOrBlank() ->
+                    "[MCP binary content: ${part.mimeType ?: "application/octet-stream"}, ${part.blob.length} base64 chars]"
+                else -> null
+            }
+        }.joinToString("\n")
     }
 }

@@ -3,6 +3,7 @@ package pl.jclab.refio.core.api
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import pl.jclab.refio.core.db.*
@@ -983,6 +984,10 @@ class CoreApiRouter(
      */
     fun exportAllApiLogsToCsv(): String {
         return apiLogsRouter.exportAllApiLogsToCsv()
+    }
+
+    fun close() {
+        routerScope.cancel("CoreApiRouter closing")
     }
 }
 

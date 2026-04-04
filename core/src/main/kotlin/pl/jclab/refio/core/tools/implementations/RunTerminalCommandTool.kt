@@ -38,7 +38,7 @@ class RunTerminalCommandTool(
 ) : Tool {
 
     override val name = "run_terminal_command"
-    override val description = "Execute shell commands in the project directory"
+    override val description = "Execute a shell command in the project directory."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.EXECUTION
 
@@ -219,8 +219,7 @@ class RunTerminalCommandTool(
                 ),
                 "timeout_seconds" to mapOf(
                     "type" to "integer",
-                    "description" to "Optional execution timeout in seconds (default: ${limits.timeoutSeconds}, max: $MAX_TIMEOUT_SECONDS). " +
-                        "Increase for long-running commands (e.g., scripts with retries/sleeps)."
+                    "description" to "Timeout in seconds (default: ${limits.timeoutSeconds}, max: $MAX_TIMEOUT_SECONDS)."
                 )
             ),
             "required" to listOf("command")

@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import pl.jclab.refio.core.llm.*
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -14,6 +13,33 @@ import kotlin.test.assertTrue
  * Weryfikują poprawność nazw providerów i obsługiwane modele.
  */
 class LLMAdaptersTest {
+
+    private class PayloadProbeAdapter : BaseLLMAdapter("probe", "probe") {
+        override suspend fun chat(
+            messages: List<LLMMessage>,
+            systemMessages: List<String>,
+            maxTokens: Int?,
+            temperature: Double,
+            streaming: Boolean,
+            onStreamChunk: ((StreamChunk) -> Unit)?,
+            kwargs: Map<String, Any>
+        ): LLMResponse {
+            error("Not used in tests")
+        }
+
+        fun openAiContent(message: LLMMessage): Any = toOpenAiMessageContent(message)
+        fun anthropicContent(message: LLMMessage): Any = toAnthropicMessageContent(message)
+        fun geminiContent(message: LLMMessage): List<Map<String, Any>> = toGeminiParts(message)
+    }
+
+    private val multimodalMessage = LLMMessage(
+        role = "user",
+        content = "Inspect attachment",
+        parts = listOf(
+            LLMContentPart.Text("Inspect attachment"),
+            LLMContentPart.Image("image/png", "Zm9v")
+        )
+    )
 
     @Nested
     inner class AnthropicAdapterTests {
@@ -28,12 +54,6 @@ class LLMAdaptersTest {
         @Test
         fun `should have correct provider name`() {
             assertEquals("anthropic", adapter.provider)
-        }
-
-        @Test
-        fun `should support streaming`() {
-            // Anthropic uses SSE for streaming
-            assertNotNull(adapter.provider)
         }
     }
 
@@ -51,12 +71,6 @@ class LLMAdaptersTest {
         fun `should have correct provider name`() {
             assertEquals("ollama", adapter.provider)
         }
-
-        @Test
-        fun `should support streaming`() {
-            // Ollama uses NDJSON for streaming
-            assertNotNull(adapter.provider)
-        }
     }
 
     @Nested
@@ -72,12 +86,6 @@ class LLMAdaptersTest {
         @Test
         fun `should have correct provider name`() {
             assertEquals("openai", adapter.provider)
-        }
-
-        @Test
-        fun `should support streaming`() {
-            // OpenAI uses SSE for streaming
-            assertNotNull(adapter.provider)
         }
     }
 
@@ -95,11 +103,6 @@ class LLMAdaptersTest {
         fun `should have correct provider name`() {
             assertEquals("gemini", adapter.provider)
         }
-
-        @Test
-        fun `should support streaming`() {
-            assertNotNull(adapter.provider)
-        }
     }
 
     @Nested
@@ -116,11 +119,6 @@ class LLMAdaptersTest {
         fun `should have correct provider name`() {
             assertEquals("openrouter", adapter.provider)
         }
-
-        @Test
-        fun `should support streaming`() {
-            assertNotNull(adapter.provider)
-        }
     }
 
     @Nested
@@ -136,11 +134,6 @@ class LLMAdaptersTest {
         @Test
         fun `should have correct provider name`() {
             assertEquals("lmstudio", adapter.provider)
-        }
-
-        @Test
-        fun `should support streaming`() {
-            assertNotNull(adapter.provider)
         }
     }
 
@@ -160,11 +153,6 @@ class LLMAdaptersTest {
         @Test
         fun `should have correct provider name`() {
             assertEquals("custom_openai", adapter.provider)
-        }
-
-        @Test
-        fun `should support streaming`() {
-            assertNotNull(adapter.provider)
         }
 
         @Test
@@ -241,5 +229,43 @@ class LLMAdaptersTest {
 
         kotlin.test.assertTrue("custom_openai" in providers)
         kotlin.test.assertTrue("zai" in providers)
+    }
+
+    @Test
+    fun `should map multimodal message to openai payload`() {
+        val adapter = PayloadProbeAdapter()
+
+        val content = adapter.openAiContent(multimodalMessage) as List<*>
+
+        assertEquals(2, content.size)
+        val imagePart = content[1] as Map<*, *>
+        assertEquals("image_url", imagePart["type"])
+        val imageUrl = imagePart["image_url"] as Map<*, *>
+        assertTrue((imageUrl["url"] as String).startsWith("data:image/png;base64,"))
+    }
+
+    @Test
+    fun `should map multimodal message to anthropic payload`() {
+        val adapter = PayloadProbeAdapter()
+
+        val content = adapter.anthropicContent(multimodalMessage) as List<*>
+
+        assertEquals(2, content.size)
+        val imagePart = content[1] as Map<*, *>
+        assertEquals("image", imagePart["type"])
+        val source = imagePart["source"] as Map<*, *>
+        assertEquals("image/png", source["media_type"])
+    }
+
+    @Test
+    fun `should map multimodal message to gemini payload`() {
+        val adapter = PayloadProbeAdapter()
+
+        val content = adapter.geminiContent(multimodalMessage)
+
+        assertEquals(2, content.size)
+        val inlineData = content[1]["inlineData"] as Map<*, *>
+        assertEquals("image/png", inlineData["mimeType"])
+        assertEquals("Zm9v", inlineData["data"])
     }
 }

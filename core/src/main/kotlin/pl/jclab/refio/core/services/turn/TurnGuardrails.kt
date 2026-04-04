@@ -58,9 +58,10 @@ class TurnGuardrails {
         private val maxConsecutiveRepeats: Int = 5,
         private val maxSameToolTotal: Int = 15,
         private val warnConsecutiveThreshold: Int = 3,
-        private val warnTotalThreshold: Int = 8
+        private val warnTotalThreshold: Int = 8,
+        private val maxHistory: Int = 200
     ) {
-        private val toolCallHistory = mutableListOf<String>()  // List of tool names
+        private val toolCallHistory = ArrayDeque<String>(maxHistory)
         private val toolCallCounts = mutableMapOf<String, Int>()  // toolName -> count
 
         /**
@@ -68,8 +69,7 @@ class TurnGuardrails {
          * @return LoopStatus indicating if we should continue, warn, or abort
          */
         fun recordToolCall(toolName: String, arguments: String): LoopStatus {
-            toolCallHistory.add(toolName)
-            toolCallCounts[toolName] = (toolCallCounts[toolName] ?: 0) + 1
+            recordHistory(toolName)
 
             val totalCount = toolCallCounts[toolName] ?: 0
             val consecutiveCount = countConsecutiveRepeats(toolName)
@@ -93,8 +93,7 @@ class TurnGuardrails {
          */
         fun recordEmptyToolCalls(): LoopStatus {
             val name = "__EMPTY_TOOL_CALLS__"
-            toolCallHistory.add(name)
-            toolCallCounts[name] = (toolCallCounts[name] ?: 0) + 1
+            recordHistory(name)
 
             val count = toolCallCounts[name] ?: 0
             return when {
@@ -106,14 +105,28 @@ class TurnGuardrails {
 
         private fun countConsecutiveRepeats(toolName: String): Int {
             var count = 0
-            for (i in toolCallHistory.indices.reversed()) {
-                if (toolCallHistory[i] == toolName) {
+            for (entry in toolCallHistory.reversed()) {
+                if (entry == toolName) {
                     count++
                 } else {
                     break
                 }
             }
             return count
+        }
+
+        private fun recordHistory(toolName: String) {
+            if (toolCallHistory.size >= maxHistory) {
+                val removed = toolCallHistory.removeFirst()
+                val current = toolCallCounts[removed] ?: 0
+                if (current <= 1) {
+                    toolCallCounts.remove(removed)
+                } else {
+                    toolCallCounts[removed] = current - 1
+                }
+            }
+            toolCallHistory.addLast(toolName)
+            toolCallCounts[toolName] = (toolCallCounts[toolName] ?: 0) + 1
         }
 
         fun getStats(): String {

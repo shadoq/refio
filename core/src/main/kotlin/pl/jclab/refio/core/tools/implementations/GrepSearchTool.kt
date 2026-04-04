@@ -8,6 +8,7 @@ import pl.jclab.refio.core.tools.base.ToolResult
 import pl.jclab.refio.core.tools.normalizePath
 import pl.jclab.refio.core.tools.security.FileLimits
 import pl.jclab.refio.core.tools.security.LimitExceededException
+import pl.jclab.refio.core.security.RegexSafetyValidator
 import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Files
 import kotlin.io.path.isDirectory
@@ -36,14 +37,16 @@ class GrepSearchTool(
 ) : Tool {
 
     override val name = "grep_search"
-    override val description = "Search for text patterns in files within the project"
+    override val description = "Search file contents by regex pattern."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
 
     override fun validateParams(params: Map<String, Any>) {
-        if (params["pattern"] == null || (params["pattern"] as? String).isNullOrBlank()) {
+        val pattern = params["pattern"] as? String
+        if (pattern.isNullOrBlank()) {
             throw IllegalArgumentException("Parameter 'pattern' is required and cannot be empty")
         }
+        RegexSafetyValidator.validate(pattern)
     }
 
     override suspend fun execute(params: Map<String, Any>): ToolResult {
@@ -53,6 +56,7 @@ class GrepSearchTool(
             // Extract parameters with safe casting
             val pattern = params["pattern"] as? String
                 ?: return ToolResult.error("Missing required parameter: 'pattern'")
+            RegexSafetyValidator.validate(pattern)
 
             val pathStr = (params["path"] as? String) ?: "."
             val filePattern = (params["file_pattern"] as? String) ?: "*"

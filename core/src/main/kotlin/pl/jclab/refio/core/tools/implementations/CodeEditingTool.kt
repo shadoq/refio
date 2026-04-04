@@ -37,7 +37,7 @@ class CodeEditingTool(
 ) : Tool {
 
     override val name = "code_editing"
-    override val description = "Edit existing files using search-and-replace, or create new files (when old_string is empty). **For creating new code files** (html, js, ts, php, java, python, etc.), prefer advance_code_editing for better LLM-generated code quality. Automatically creates parent directories if needed."
+    override val description = "Search-and-replace edit in an existing file. FREE."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_MODIFYING
 

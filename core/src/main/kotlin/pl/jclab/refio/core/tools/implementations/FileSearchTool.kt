@@ -36,7 +36,7 @@ class FileSearchTool(
 ) : Tool {
 
     override val name = "file_search"
-    override val description = "Find files by name pattern within the project"
+    override val description = "Find files by name pattern (glob syntax)."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
 

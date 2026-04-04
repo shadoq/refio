@@ -6,11 +6,13 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import pl.jclab.refio.core.api.StreamCallback
+import pl.jclab.refio.core.api.TurnRequest
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.TurnResult
 import pl.jclab.refio.core.services.turn.TurnEventListener
 import pl.jclab.refio.core.subagents.SubagentRouter
 import pl.jclab.refio.core.subagents.models.SubagentDefinition
+import pl.jclab.refio.core.subagents.models.SubagentInfo
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolCategory
 import kotlin.test.assertEquals
@@ -33,40 +35,54 @@ class InvokeSubagentToolTest {
     private var runTurnCallCount = 0
     private var lastRunTurnRequest: Any? = null
 
+    private val testAgentDefinition = SubagentDefinition(
+        name = "test-agent",
+        description = "Test agent",
+        systemPrompt = "You are a test agent",
+        enabled = true,
+        allowedTools = null,
+        disallowedTools = null,
+        model = "default",
+        priority = 0,
+        maxSteps = 10
+    )
+
+    private val disabledAgentDefinition = SubagentDefinition(
+        name = "disabled-agent",
+        description = "Disabled agent",
+        systemPrompt = "Disabled",
+        enabled = false,
+        allowedTools = null,
+        disallowedTools = null,
+        model = "default",
+        priority = 0,
+        maxSteps = 10
+    )
+
     @BeforeEach
     fun setup() {
         mockSubagentRouter = mockk {
             coEvery { getSubagent(any()) } answers {
                 val name = firstArg<String>()
                 if (name == "test-agent") {
-                    SubagentDefinition(
-                        name = "test-agent",
-                        description = "Test agent",
-                        systemPrompt = "You are a test agent",
-                        enabled = true,
-                        allowedTools = null,
-                        disallowedTools = null,
-                        model = "default",
-                        priority = 0,
-                        maxSteps = 10
-                    )
+                    testAgentDefinition
                 } else if (name == "disabled-agent") {
-                    SubagentDefinition(
-                        name = "disabled-agent",
-                        description = "Disabled agent",
-                        systemPrompt = "Disabled",
-                        enabled = false,
-                        allowedTools = null,
-                        disallowedTools = null,
-                        model = "default",
-                        priority = 0,
-                        maxSteps = 10
-                    )
+                    disabledAgentDefinition
                 } else {
                     null
                 }
             }
-            coEvery { listSubagents(any()) } returns emptyList()
+            coEvery { listSubagents(any()) } returns listOf(
+                SubagentInfo(
+                    name = testAgentDefinition.name,
+                    description = testAgentDefinition.description,
+                    tools = testAgentDefinition.allowedTools,
+                    model = testAgentDefinition.model,
+                    enabled = testAgentDefinition.enabled,
+                    scope = "BUILTIN",
+                    priority = testAgentDefinition.priority
+                )
+            )
         }
 
         mockSubagentRouterProvider = { mockSubagentRouter }
@@ -129,6 +145,8 @@ class InvokeSubagentToolTest {
 
             // Then
             assertTrue(description.contains("Subagent") || description.contains("subagent"))
+            assertTrue(description.contains("test-agent"))
+            assertTrue(description.contains("Test agent"))
         }
     }
 
@@ -228,6 +246,23 @@ class InvokeSubagentToolTest {
             // Then
             assertTrue(result.success)
             assertEquals(1, runTurnCallCount)
+        }
+
+        @Test
+        fun `should pass only ancestor chain to child turn`() = runBlocking {
+            val params = mapOf(
+                "_task_id" to "task-123",
+                "subagent_name" to "test-agent",
+                "goal" to "Test",
+                "_subagent_chain" to listOf("parent-agent", "grandparent-agent")
+            )
+
+            val result = tool.execute(params)
+
+            assertTrue(result.success)
+            val request = lastRunTurnRequest as TurnRequest
+            assertEquals(listOf("parent-agent", "grandparent-agent"), request.profileOverrides?.subagentChain)
+            assertEquals("test-agent", request.profileOverrides?.subagentName)
         }
     }
 

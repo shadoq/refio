@@ -6,11 +6,13 @@ import pl.jclab.refio.core.db.repositories.RagRepository
 import pl.jclab.refio.core.services.analysis.CodeElements
 import pl.jclab.refio.core.services.analysis.CppLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.CssLanguageAnalyzer
+import pl.jclab.refio.core.services.analysis.GoLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.HtmlLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.JavaLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.KotlinLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.LanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.PythonLanguageAnalyzer
+import pl.jclab.refio.core.services.analysis.RustLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.TypeScriptLanguageAnalyzer
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.core.config.ConfigKeys
@@ -32,7 +34,6 @@ import kotlin.coroutines.coroutineContext
 import kotlin.io.DEFAULT_BUFFER_SIZE
 import kotlin.io.path.exists
 import kotlin.io.path.extension
-import kotlin.streams.toList
 
 private val logger = dualLogger("RagIndexingService")
 
@@ -47,6 +48,8 @@ class RagIndexingService(
         JavaLanguageAnalyzer(),
         PythonLanguageAnalyzer(),
         TypeScriptLanguageAnalyzer(),
+        GoLanguageAnalyzer(),
+        RustLanguageAnalyzer(),
         HtmlLanguageAnalyzer(),
         CppLanguageAnalyzer(),
         CssLanguageAnalyzer()
@@ -232,21 +235,21 @@ class RagIndexingService(
         maxFileSize: Long
     ): List<ScannedFile> {
         return try {
-            Files.walk(projectRoot)
-                .use { stream ->
-                    stream
-                        .filter { Files.isRegularFile(it) }
-                        .filter { path -> allowPath(projectRoot, path, ignoreMatcher, maxFileSize) }
-                        .map { path ->
-                            ScannedFile(
-                                relativePath = projectRoot.relativize(path).toString(),
-                                absolutePath = path,
-                                fileSize = Files.size(path),
-                                lastModified = Files.getLastModifiedTime(path).toMillis()
-                            )
-                        }
-                        .toList()
-                }
+            val files = mutableListOf<ScannedFile>()
+            Files.walk(projectRoot).use { stream ->
+                stream
+                    .filter { Files.isRegularFile(it) }
+                    .filter { path -> allowPath(projectRoot, path, ignoreMatcher, maxFileSize) }
+                    .forEach { path ->
+                        files += ScannedFile(
+                            relativePath = projectRoot.relativize(path).toString(),
+                            absolutePath = path,
+                            fileSize = Files.size(path),
+                            lastModified = Files.getLastModifiedTime(path).toMillis()
+                        )
+                    }
+            }
+            files
         } catch (e: Exception) {
             logger.error(e) { "Failed to scan $projectRoot" }
             emptyList()

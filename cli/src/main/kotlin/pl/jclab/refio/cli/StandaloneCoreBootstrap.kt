@@ -123,15 +123,19 @@ class StandaloneCoreBootstrap(
      */
     fun shutdown() {
         logger.info { "Shutting down standalone core" }
-
-        // Note: CoreApiRouter doesn't expose a direct shutdown() method.
-        // Sub-routers are shut down when references are released.
+        val localProjectRouter = projectRouter
+        val localAppRouter = appRouter
 
         try {
             MCPManager.shutdown()
         } catch (e: Exception) {
             logger.warn { "Error shutting down MCP: ${e.message}" }
         }
+
+        runCatching { localProjectRouter?.close() }
+            .onFailure { logger.warn { "Error closing project router: ${it.message}" } }
+        runCatching { localAppRouter?.close() }
+            .onFailure { logger.warn { "Error closing app router: ${it.message}" } }
 
         projectRouter = null
         appRouter = null

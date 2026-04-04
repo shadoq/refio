@@ -7,6 +7,12 @@ package pl.jclab.refio.core.services.turn
  * a nudge message is sent to guide it back to correct behavior.
  */
 object TurnNudgeBuilder {
+    fun buildReadBeforeWriteMessage(paths: List<String>): String {
+        val renderedPaths = paths.joinToString(", ")
+        return "Warning: edit requested for file(s) not read recently: $renderedPaths. " +
+            "Read the current file state first before using code_editing or multi_edit."
+    }
+
     /**
      * Build nudge message when agent spends too many iterations reading without writing.
      * Triggered by read-only budget guard (ADR-0044).
@@ -59,6 +65,11 @@ object TurnNudgeBuilder {
         return "A tool returned an error but you stopped instead of continuing. Do NOT give up on the task. " +
             "Analyze the error and decide how to proceed: retry after a delay (use run_terminal_command with 'sleep N'), " +
             "try a different approach, or adjust your parameters. Continue working until the task is complete."
+    }
+
+    fun buildVerificationReminderMessage(): String {
+        return "You made code changes but did not verify them. Run compilation, tests, a diff review, or at least read the modified file before finishing. " +
+            "If verification is not possible, explicitly state what was and was not verified."
     }
 
     /**

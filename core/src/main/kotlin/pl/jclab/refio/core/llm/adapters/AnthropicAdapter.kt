@@ -37,7 +37,9 @@ class AnthropicAdapter(
     private val configService: pl.jclab.refio.core.services.ConfigService? = null,
     private val taskId: String? = null,
     private val subtaskId: String? = null,
-    private val source: String? = null
+    private val source: String? = null,
+    private val baseUrlOverride: String? = null,
+    private val httpClientOverride: HttpClient? = null
 ) : BaseLLMAdapter(model, "anthropic") {
 
     private val logger = dualLogger("AnthropicAdapter")
@@ -54,7 +56,12 @@ class AnthropicAdapter(
         get() = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
             ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
 
-    private val client = HttpClient(CIO) {
+    private val ownsHttpClient = httpClientOverride == null
+
+    private val baseUrl: String
+        get() = baseUrlOverride ?: DEFAULT_BASE_URL
+
+    private val client = httpClientOverride ?: HttpClient(CIO) {
         install(ContentNegotiation) {
             gson {
                 setPrettyPrinting()
@@ -131,7 +138,7 @@ class AnthropicAdapter(
 
         // Map non-system messages to Claude format
         val claudeMessages = nonSystemMessages.map { msg ->
-            mapOf("role" to msg.role, "content" to msg.content)
+            mapOf("role" to msg.role, "content" to toAnthropicMessageContent(msg))
         }
 
         // Build request body
@@ -235,8 +242,8 @@ class AnthropicAdapter(
 
         try {
             // Make HTTP request
-            logger.info { "$logPrefix Request start: endpoint=$DEFAULT_BASE_URL$MESSAGES_ENDPOINT, body=${SecureLogger.redactAndTruncate(requestJson)}" }
-            val httpResponse = client.post("$DEFAULT_BASE_URL$MESSAGES_ENDPOINT") {
+            logger.info { "$logPrefix Request start: endpoint=$baseUrl$MESSAGES_ENDPOINT, body=${SecureLogger.redactAndTruncate(requestJson)}" }
+            val httpResponse = client.post("$baseUrl$MESSAGES_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 header("x-api-key", apiKey)
                 header("anthropic-version", DEFAULT_ANTHROPIC_VERSION)
@@ -274,7 +281,7 @@ class AnthropicAdapter(
                 logger.apiError(
                     provider = provider,
                     model = model,
-                    endpoint = "$DEFAULT_BASE_URL$MESSAGES_ENDPOINT",
+                    endpoint = "$baseUrl$MESSAGES_ENDPOINT",
                     requestJson = requestJson,
                     httpStatus = httpStatus,
                     error = Exception(fullErrorMessage),
@@ -305,7 +312,7 @@ class AnthropicAdapter(
             logger.apiResponse(
                 provider = provider,
                 model = model,
-                endpoint = "$DEFAULT_BASE_URL$MESSAGES_ENDPOINT",
+                endpoint = "$baseUrl$MESSAGES_ENDPOINT",
                 requestJson = requestJson,
                 responseJson = responseJson,
                 httpStatus = httpStatus,
@@ -369,7 +376,7 @@ class AnthropicAdapter(
             logger.apiError(
                 provider = provider,
                 model = model,
-                endpoint = "$DEFAULT_BASE_URL$MESSAGES_ENDPOINT",
+                endpoint = "$baseUrl$MESSAGES_ENDPOINT",
                 requestJson = requestJson,
                 httpStatus = httpStatus,
                 error = e,
@@ -402,8 +409,8 @@ class AnthropicAdapter(
 
         try {
             // Make streaming HTTP request
-            logger.info { "$logPrefix Request start: endpoint=$DEFAULT_BASE_URL$MESSAGES_ENDPOINT, body=${SecureLogger.redactAndTruncate(requestJson)}" }
-            client.preparePost("$DEFAULT_BASE_URL$MESSAGES_ENDPOINT") {
+            logger.info { "$logPrefix Request start: endpoint=$baseUrl$MESSAGES_ENDPOINT, body=${SecureLogger.redactAndTruncate(requestJson)}" }
+            client.preparePost("$baseUrl$MESSAGES_ENDPOINT") {
                 contentType(ContentType.Application.Json)
                 header("x-api-key", apiKey)
                 header("anthropic-version", DEFAULT_ANTHROPIC_VERSION)
@@ -438,7 +445,7 @@ class AnthropicAdapter(
                     logger.apiError(
                         provider = provider,
                         model = model,
-                        endpoint = "$DEFAULT_BASE_URL$MESSAGES_ENDPOINT",
+                        endpoint = "$baseUrl$MESSAGES_ENDPOINT",
                         requestJson = requestJson,
                         httpStatus = httpStatus,
                         error = Exception(errorMessage),
@@ -636,7 +643,7 @@ class AnthropicAdapter(
             logger.apiResponse(
                 provider = provider,
                 model = model,
-                endpoint = "$DEFAULT_BASE_URL$MESSAGES_ENDPOINT",
+                endpoint = "$baseUrl$MESSAGES_ENDPOINT",
                 requestJson = requestJson,
                 responseJson = responseJson,
                 httpStatus = httpStatus ?: 200,
@@ -675,7 +682,7 @@ class AnthropicAdapter(
             logger.apiError(
                 provider = provider,
                 model = model,
-                endpoint = "$DEFAULT_BASE_URL$MESSAGES_ENDPOINT",
+                endpoint = "$baseUrl$MESSAGES_ENDPOINT",
                 requestJson = requestJson,
                 httpStatus = httpStatus,
                 error = e,
@@ -695,7 +702,7 @@ class AnthropicAdapter(
      * @throws IllegalStateException if API key is not provided or API returns empty response
      */
     suspend fun listModels(): List<ModelConfig> = withContext(Dispatchers.IO) {
-        logger.info { "[ANTHROPIC] Fetching available models from $DEFAULT_BASE_URL$MODELS_ENDPOINT" }
+        logger.info { "[ANTHROPIC] Fetching available models from $baseUrl$MODELS_ENDPOINT" }
 
         try {
             // Get API key from ConfigService (single source of truth)
@@ -712,7 +719,7 @@ class AnthropicAdapter(
             }
 
             // Make HTTP request
-            val httpResponse = client.get("$DEFAULT_BASE_URL$MODELS_ENDPOINT") {
+            val httpResponse = client.get("$baseUrl$MODELS_ENDPOINT") {
                 header("x-api-key", apiKeyToUse)
                 header("anthropic-version", DEFAULT_ANTHROPIC_VERSION)
             }
@@ -773,6 +780,8 @@ class AnthropicAdapter(
     }
 
     override suspend fun close() {
-        client.close()
+        if (ownsHttpClient) {
+            client.close()
+        }
     }
 }

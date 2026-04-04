@@ -33,7 +33,7 @@ class ReadDirectoryTool(
 ) : Tool {
 
     override val name = "read_directory"
-    override val description = "List files and directories within the project"
+    override val description = "List files and directories."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
 

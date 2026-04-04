@@ -34,6 +34,11 @@ class MCPContextProvider(
     ): List<ContextItem> {
         logger.debug { "MCP provider query: server=$mcpServerId, query=$query" }
 
+        val promptQuery = resolvePromptQuery(query)
+        if (promptQuery != null && connection.supportsPrompts()) {
+            return handlePromptQuery(promptQuery)
+        }
+
         if (connection.supportsResources()) {
             val resources = runCatching {
                 val cached = connection.getCachedResources()
@@ -71,7 +76,7 @@ class MCPContextProvider(
 
             return matching.map { resource ->
                 val content = runCatching {
-                    connection.readResource(resource.uri).text
+                    formatResourceContent(connection.readResource(resource.uri, subscribe = true))
                 }.getOrElse {
                     logger.warn(it) { "Failed to read MCP resource ${resource.uri}" }
                     null
@@ -177,10 +182,7 @@ class MCPContextProvider(
             )
         }
 
-        val output = result.content.mapNotNull { it.text }.joinToString("\n").ifBlank {
-            if (result.isError) "MCP tool returned an error with no content." else "MCP tool executed successfully."
-        }
-
+        val output = formatMcpToolResult(result)
         return listOf(
             ContextItem(
                 description = "MCP tool: ${toolRequest.toolName}",
@@ -192,7 +194,7 @@ class MCPContextProvider(
     }
 
     private fun formatMcpToolResult(result: MCPToolResult): String {
-        val output = result.content.mapNotNull { it.text }.joinToString("\n").trim()
+        val output = result.content.mapNotNull { formatContentPart(it) }.joinToString("\n").trim()
         if (output.isNotBlank()) {
             return output
         }
@@ -203,9 +205,42 @@ class MCPContextProvider(
         }
     }
 
+    private fun formatResourceContent(content: MCPResourceContent): String {
+        if (!content.text.isNullOrBlank()) {
+            return content.text
+        }
+        if (!content.blob.isNullOrBlank()) {
+            return if (content.mimeType?.startsWith("image/") == true) {
+                "[MCP image resource: ${content.mimeType}, ${content.blob.length} base64 chars]"
+            } else {
+                "[MCP binary resource: ${content.mimeType ?: "application/octet-stream"}, ${content.blob.length} base64 chars]"
+            }
+        }
+        return ""
+    }
+
+    private fun formatContentPart(part: MCPContentPart): String? {
+        if (!part.text.isNullOrBlank()) {
+            return part.text
+        }
+        if (!part.blob.isNullOrBlank()) {
+            return if (part.mimeType?.startsWith("image/") == true) {
+                "[MCP image content: ${part.mimeType}, ${part.blob.length} base64 chars]"
+            } else {
+                "[MCP binary content: ${part.mimeType ?: "application/octet-stream"}, ${part.blob.length} base64 chars]"
+            }
+        }
+        return null
+    }
+
     private data class ToolRequest(
         val toolName: String,
         val arguments: Map<String, Any>
+    )
+
+    private data class PromptQuery(
+        val promptName: String?,
+        val arguments: Map<String, String>
     )
 
     private fun resolveToolRequest(
@@ -236,6 +271,63 @@ class MCPContextProvider(
         return ToolRequest(toolName = toolName, arguments = arguments)
     }
 
+    private suspend fun handlePromptQuery(promptQuery: PromptQuery): List<ContextItem> {
+        if (promptQuery.promptName.isNullOrBlank()) {
+            val prompts = runCatching {
+                val cached = connection.getCachedPrompts()
+                if (cached.isNotEmpty()) cached else connection.refreshPrompts()
+            }.getOrElse {
+                logger.warn(it) { "Failed to load MCP prompts for $mcpServerId" }
+                emptyList()
+            }
+
+            val content = if (prompts.isEmpty()) {
+                "MCP server ${mcpServerConfig.displayName ?: mcpServerId} returned no prompts."
+            } else {
+                prompts.joinToString("\n") { prompt ->
+                    val args = if (prompt.arguments.isEmpty()) "" else {
+                        " args: " + prompt.arguments.joinToString(", ") { arg ->
+                            if (arg.required) "${arg.name}*" else arg.name
+                        }
+                    }
+                    "- ${prompt.name}${prompt.description?.let { ": $it" } ?: ""}$args"
+                }
+            }
+
+            return listOf(
+                ContextItem(
+                    description = "MCP prompts: $mcpServerId",
+                    content = content,
+                    name = "$mcpServerId-prompts",
+                    uri = ContextUri(type = "mcp", value = "$mcpServerId:prompt")
+                )
+            )
+        }
+
+        val prompt = runCatching {
+            connection.getPrompt(promptQuery.promptName, promptQuery.arguments)
+        }.getOrElse {
+            logger.warn(it) { "Failed to get MCP prompt ${promptQuery.promptName} for $mcpServerId" }
+            return listOf(
+                ContextItem(
+                    description = "MCP prompt error",
+                    content = "Failed to load prompt '${promptQuery.promptName}': ${it.message}",
+                    name = promptQuery.promptName,
+                    uri = ContextUri(type = "mcp", value = "$mcpServerId:prompt:${promptQuery.promptName}")
+                )
+            )
+        }
+
+        return listOf(
+            ContextItem(
+                description = "MCP prompt: ${prompt.name}",
+                content = formatPromptResult(prompt),
+                name = prompt.name,
+                uri = ContextUri(type = "mcp", value = "$mcpServerId:prompt:${prompt.name}")
+            )
+        )
+    }
+
     private data class ParsedToolSelection(
         val toolName: String,
         val rawArgs: String
@@ -259,6 +351,68 @@ class MCPContextProvider(
             logger.warn(error) { "Failed to parse MCP tool JSON arguments for ${toolDef.name}" }
             null
         }
+    }
+
+    private fun resolvePromptQuery(rawQuery: String): PromptQuery? {
+        val query = rawQuery.trim()
+        if (query.isBlank()) return null
+        if (!query.startsWith("prompt", ignoreCase = true)) return null
+
+        val parts = query.split(":", limit = 3)
+        if (parts.size == 1) {
+            return PromptQuery(promptName = null, arguments = emptyMap())
+        }
+
+        val promptName = parts.getOrNull(1)?.trim().orEmpty().ifBlank { null }
+        val rawArgs = parts.getOrNull(2)?.trim().orEmpty()
+
+        val arguments = if (rawArgs.isBlank()) {
+            emptyMap()
+        } else {
+            parsePromptArguments(rawArgs)
+        }
+
+        return PromptQuery(promptName = promptName, arguments = arguments)
+    }
+
+    private fun parsePromptArguments(rawArgs: String): Map<String, String> {
+        if (rawArgs.startsWith("{")) {
+            return runCatching {
+                @Suppress("UNCHECKED_CAST")
+                gson.fromJson(rawArgs, Map::class.java) as? Map<String, Any?>
+            }.getOrNull()
+                ?.mapValues { (_, value) -> value?.toString().orEmpty() }
+                ?: emptyMap()
+        }
+
+        return rawArgs.split(",")
+            .mapNotNull { token ->
+                val pair = token.split("=", limit = 2)
+                val key = pair.getOrNull(0)?.trim().orEmpty()
+                val value = pair.getOrNull(1)?.trim().orEmpty()
+                if (key.isBlank()) null else key to value
+            }
+            .toMap()
+    }
+
+    private fun formatPromptResult(prompt: MCPPromptResult): String {
+        val header = buildString {
+            append("Prompt: ")
+            append(prompt.name)
+            if (!prompt.description.isNullOrBlank()) {
+                append("\n")
+                append(prompt.description)
+            }
+        }
+
+        val messages = prompt.messages.joinToString("\n\n") { message ->
+            val content = message.content.mapNotNull { formatContentPart(it) }.joinToString("\n").trim()
+            "[${message.role}]\n$content"
+        }
+
+        return listOf(header, messages)
+            .filter { it.isNotBlank() }
+            .joinToString("\n\n")
     }
 
     private fun buildToolsHelp(tools: List<MCPToolDefinition>): String {

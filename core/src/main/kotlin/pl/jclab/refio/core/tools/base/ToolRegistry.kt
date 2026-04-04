@@ -21,6 +21,21 @@ class ToolRegistry {
     private val tools = ConcurrentHashMap<String, Tool>()
 
     /**
+     * Canonical tool ordering: READ → WRITE (cheapest first) → EXECUTE → DELEGATE.
+     * Tools not listed here appear at the end (e.g. MCP tools).
+     */
+    private val toolOrder = listOf(
+        // READ — orientation & analysis
+        "read_file", "read_directory", "file_search", "grep_search", "view_diff",
+        // WRITE — cheapest first
+        "code_editing", "multi_edit", "create_new_file", "multi_line_editor", "advance_code_editing",
+        // EXECUTE — verification & data
+        "run_terminal_command", "run_code", "http_request",
+        // DELEGATE — only when the agent cannot handle the task itself
+        "invoke_subagent"
+    )
+
+    /**
      * Register a tool
      *
      * @param tool Tool to register
@@ -46,12 +61,20 @@ class ToolRegistry {
     }
 
     /**
-     * Get all registered tools
+     * Get all registered tools in canonical order (READ → WRITE → EXECUTE → DELEGATE).
+     * Tools not in [toolOrder] appear at the end.
      *
      * @return List of all tools
      */
     fun getAllTools(): List<Tool> {
-        return tools.values.toList()
+        return sortByCanonicalOrder(tools.values)
+    }
+
+    private fun sortByCanonicalOrder(values: Collection<Tool>): List<Tool> {
+        val byName = values.associateBy { it.name }
+        val ordered = toolOrder.mapNotNull { byName[it] }
+        val remaining = values.filter { it.name !in toolOrder }
+        return ordered + remaining
     }
 
     /**
@@ -61,7 +84,7 @@ class ToolRegistry {
      * @return List of tools matching the mode
      */
     fun getToolsByMode(mode: ToolMode): List<Tool> {
-        return tools.values.filter { it.mode == mode }
+        return sortByCanonicalOrder(tools.values.filter { it.mode == mode })
     }
 
     /**
@@ -86,8 +109,7 @@ class ToolRegistry {
         permissionsService: ToolPermissionsService,
         taskId: String? = null
     ): List<Tool> {
-        val allTools = getAllTools()
-        return permissionsService.filterAvailableTools(allTools, taskMode, taskId)
+        return permissionsService.filterAvailableTools(getAllTools(), taskMode, taskId)
     }
 
     /**

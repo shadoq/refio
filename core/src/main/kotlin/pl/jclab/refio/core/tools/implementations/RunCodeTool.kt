@@ -40,11 +40,7 @@ class RunCodeTool(
 ) : Tool {
 
     override val name = "run_code"
-    override val description = "Execute inline code snippets in Python, JavaScript, or Kotlin script. " +
-        "Ideal for data processing, CSV parsing, calculations, and transformations. " +
-        "Code runs in the project directory with access to project files. " +
-        "Use together with http_request's save_to_file parameter: first download large data to a file, " +
-        "then use run_code to read and process it (e.g., filter CSV rows, parse JSON, aggregate data)."
+    override val description = "Execute Python, JavaScript, or Kotlin script inline."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.DATA_PRODUCING
 
@@ -216,12 +212,11 @@ class RunCodeTool(
                 ),
                 "code" to mapOf(
                     "type" to "string",
-                    "description" to "Source code to execute. Has access to files in the project directory."
+                    "description" to "Source code to execute."
                 ),
                 "timeout_seconds" to mapOf(
                     "type" to "integer",
-                    "description" to "Optional execution timeout in seconds (default: $DEFAULT_TIMEOUT_SECONDS, max: $MAX_TIMEOUT_SECONDS). " +
-                        "Increase for long-running scripts (e.g., API calls with retries/rate-limit waits)."
+                    "description" to "Timeout in seconds (default: $DEFAULT_TIMEOUT_SECONDS, max: $MAX_TIMEOUT_SECONDS)."
                 )
             ),
             "required" to listOf("language", "code")
