@@ -19,6 +19,7 @@ import pl.jclab.refio.core.db.repositories.SubtaskRepository
 import pl.jclab.refio.core.db.repositories.TaskRepository
 import pl.jclab.refio.core.config.ConfigKey
 import pl.jclab.refio.core.models.context.*
+import pl.jclab.refio.core.services.context.ContextSection
 import pl.jclab.refio.core.services.analysis.FileAnalyzerService
 import pl.jclab.refio.core.services.analysis.project.ProjectAnalysisReport
 import pl.jclab.refio.core.utils.GsonInstance
@@ -713,6 +714,26 @@ class ContextServiceTest {
             val summary = service.buildCompactProjectSummary(analysis, null, maxTokens)
             // maxTokens * 4 chars is the limit (take(maxTokens * 4))
             assertTrue(summary.length <= maxTokens * 4)
+        }
+    }
+
+    @Nested
+    inner class ContextBudgetScalingTests {
+
+        @Test
+        fun `should scale recent work and conversation budgets for large context windows`() {
+            val budget32k = pl.jclab.refio.core.services.context.ContextBudget.forContextSize(32_000)
+            val budget128k = pl.jclab.refio.core.services.context.ContextBudget.forContextSize(128_000)
+
+            assertTrue(budget32k.budgetFor(ContextSection.RECENT_WORK) > 0)
+            assertTrue(
+                budget128k.budgetFor(ContextSection.RECENT_WORK) >
+                    budget32k.budgetFor(ContextSection.RECENT_WORK)
+            )
+            assertTrue(
+                budget128k.budgetFor(ContextSection.CONVERSATION) >
+                    budget32k.budgetFor(ContextSection.CONVERSATION)
+            )
         }
     }
 }

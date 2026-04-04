@@ -30,6 +30,10 @@ data class SubtaskDto(
     val paramsJson: String? = null,
     @SerializedName("step_plan_json")
     val stepPlanJson: String? = null,
+    @SerializedName("summary")
+    val summary: String? = null,
+    @SerializedName("result")
+    val result: String? = null,
     @SerializedName("started_at")
     val startedAt: Long? = null,
     @SerializedName("finished_at")
@@ -44,10 +48,18 @@ data class SubtaskDto(
     val tokensOut: Int? = null,
     @SerializedName("cost_usd")
     val costUsd: Double? = null,
+    @SerializedName("latency_ms")
+    val latencyMs: Int? = null,
     @SerializedName("model")
     val model: String? = null,
     @SerializedName("provider")
     val provider: String? = null,
     @SerializedName("result_summary")
-    val resultSummary: String? = null
+    val resultSummary: String? = null,
+    @SerializedName("created_at")
+    val createdAt: Long? = null,
+    @SerializedName("updated_at")
+    val updatedAt: Long? = null,
+    @SerializedName("completed_at")
+    val completedAt: Long? = null
 )

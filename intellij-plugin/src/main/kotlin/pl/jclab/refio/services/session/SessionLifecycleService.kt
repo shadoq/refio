@@ -462,8 +462,17 @@ class SessionLifecycleService(
 
     suspend fun getAvailableModels(): List<String> {
         val models = projectRouter.configRouter.getModelsWithVisibility()
-        return models
-            .filter { it.showInDropdown }
+        val visibleModels = models.filter { it.showInDropdown }
+        val modelsForDropdown = if (visibleModels.isNotEmpty() || models.isEmpty()) {
+            visibleModels
+        } else {
+            logger.warn {
+                "No models marked as visible in dropdown; falling back to all ${models.size} available models"
+            }
+            models
+        }
+
+        return modelsForDropdown
             .map { model ->
                 val provider = model.provider.replaceFirstChar { it.uppercase() }
                 "$provider/${model.id}"

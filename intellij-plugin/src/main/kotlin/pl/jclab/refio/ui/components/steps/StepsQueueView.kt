@@ -1,6 +1,7 @@
 package pl.jclab.refio.ui.components.steps
 
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
@@ -13,7 +14,15 @@ import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.ui.components.common.PromptDialog
 import kotlinx.coroutines.*
 import java.awt.*
+import java.awt.datatransfer.StringSelection
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
+import java.io.File
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import javax.swing.*
+import javax.swing.filechooser.FileNameExtensionFilter
 
 /**
  * Steps Queue View - displays subtasks (steps) for active session
@@ -33,6 +42,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
     private val sessionManager = SessionManager.getInstance(project)
     private val stepExecutionService = StepExecutionService.getInstance(project)
     private val logger = dualLogger("StepsQueueView")
+    private val timestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault())
 
     private val stepsPanel: JPanel
     private val scrollPane: JBScrollPane
@@ -43,9 +53,6 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
     private lateinit var resumeBtn: JButton
     private lateinit var replanBtn: JButton
     private lateinit var cancelAllBtn: JButton
-
-    // Track which steps are expanded (by subtask ID)
-    private val expandedSteps = mutableSetOf<String>()
 
     init {
         border = LCATheme.paddedBorder(8)
@@ -183,8 +190,6 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
     }
 
     private fun createStepItem(subtask: SubtaskDto, stepNumber: Int): JPanel {
-        val isExpanded = subtask.id in expandedSteps
-
         return JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             background = getBackgroundColorForStatus(subtask.status)
@@ -200,14 +205,8 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
             add(buttonsAndStatus)
 
             // Header (always visible)
-            val header = createStepHeader(subtask, stepNumber, isExpanded)
+            val header = createCompactStepHeader(subtask, stepNumber)
             add(header)
-
-            // Details (collapsible)
-            if (isExpanded) {
-                val details = createStepDetails(subtask)
-                add(details)
-            }
 
             // Section: Metrics (show for PLANNED, RUNNING, SUCCESS, FAILED - whenever we have data)
             val metricsSection = createMetricsSection(subtask)
@@ -217,51 +216,35 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
         }
     }
 
-    private fun createStepHeader(subtask: SubtaskDto, stepNumber: Int, isExpanded: Boolean): JPanel {
+
+    private fun createCompactStepHeader(subtask: SubtaskDto, stepNumber: Int): JPanel {
         return JPanel(BorderLayout(8, 0)).apply {
             isOpaque = false
             border = LCATheme.paddedBorder(6, 8)
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            toolTipText = "Click to open full step details"
 
-            // Left: expand icon + step number (fixed width)
             val leftFixedPanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
                 isOpaque = false
-                preferredSize = Dimension(80, 24)
-                minimumSize = Dimension(80, 24)
-
-                // Expand/collapse icon
-                val expandIcon = JBLabel(if (isExpanded) "▼" else "▶").apply {
-                    font = font.deriveFont(10f)
-                    cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-                    addMouseListener(object : java.awt.event.MouseAdapter() {
-                        override fun mouseClicked(e: java.awt.event.MouseEvent) {
-                            toggleExpand(subtask.id)
-                        }
-                    })
-                }
-                add(expandIcon)
-
-                // Step label
+                preferredSize = Dimension(72, 24)
+                minimumSize = Dimension(72, 24)
                 add(JBLabel("Step $stepNumber:").apply {
                     font = font.deriveFont(Font.BOLD, 12f)
                 })
             }
 
-            // Center: description (takes remaining space, truncates with ellipsis)
             val fullDesc = subtask.description ?: subtask.kind
             val descLabel = JBLabel(fullDesc).apply {
                 font = font.deriveFont(11f)
                 toolTipText = fullDesc
-                // Enable text truncation with ellipsis
-                preferredSize = Dimension(10, 20) // Will expand to fill available space
+                preferredSize = Dimension(10, 20)
             }
 
-            // Right: actions + status + time (fixed width panel)
             val rightPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 0)).apply {
                 isOpaque = false
 
-                // Execution time
                 val startedAt = subtask.startedAt
-                val finishedAt = subtask.finishedAt
+                val finishedAt = subtask.completedAt ?: subtask.finishedAt
                 if (startedAt != null && finishedAt != null) {
                     val executionMs = finishedAt - startedAt
                     add(JBLabel(formatTime(executionMs)).apply {
@@ -274,6 +257,11 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
             add(leftFixedPanel, BorderLayout.WEST)
             add(descLabel, BorderLayout.CENTER)
             add(rightPanel, BorderLayout.EAST)
+
+            installHeaderClickHandler(this, subtask, stepNumber)
+            installHeaderClickHandler(leftFixedPanel, subtask, stepNumber)
+            installHeaderClickHandler(descLabel, subtask, stepNumber)
+            installHeaderClickHandler(rightPanel, subtask, stepNumber)
         }
     }
 
@@ -456,82 +444,6 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
         }
     }
 
-    private fun createStepDetails(subtask: SubtaskDto): JPanel {
-        return JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            isOpaque = false
-            border = LCATheme.paddedBorder(8, 32, 8, 8)  // Indent details
-
-            // Section: Description
-            val description = subtask.description
-            if (!description.isNullOrBlank()) {
-                add(createSection("📋 Description:", description))
-                add(Box.createVerticalStrut(8))
-            }
-
-            // Section: Tools Planned
-            if (subtask.status in listOf("PLANNED", "RUNNING", "SUCCESS", "FAILED")) {
-                val toolsSection = createToolsSection(subtask)
-                if (toolsSection != null) {
-                    add(toolsSection)
-                    add(Box.createVerticalStrut(8))
-                }
-            }
-
-            // Section: Execution Summary
-            val resultSummary = subtask.resultSummary
-            if (!resultSummary.isNullOrBlank()) {
-                add(createSection("📋 Result:", resultSummary))
-                add(Box.createVerticalStrut(8))
-            }
-
-            // Section: Error Message
-            val errorMessage = subtask.errorMessage
-            if (subtask.status == "FAILED" && !errorMessage.isNullOrBlank()) {
-                add(createSection("❌ Error:", errorMessage))
-                add(Box.createVerticalStrut(8))
-            }
-        }
-    }
-
-    private fun toggleExpand(subtaskId: String) {
-        if (subtaskId in expandedSteps) {
-            expandedSteps.remove(subtaskId)
-        } else {
-            expandedSteps.add(subtaskId)
-        }
-        // Trigger UI refresh
-        SwingUtilities.invokeLater {
-            val subtasks = sessionManager.subtasks.value
-            updateSteps(subtasks)
-        }
-    }
-
-
-    private fun createSection(title: String, content: String): JPanel {
-        return JPanel(BorderLayout()).apply {
-            isOpaque = false
-
-            val titleLabel = JBLabel(title).apply {
-                font = font.deriveFont(Font.BOLD, 11f)
-                foreground = LCATheme.grayColor
-            }
-
-            // Use JTextArea for proper text wrapping instead of HTML label
-            val contentArea = JTextArea(content).apply {
-                font = LCATheme.bodyFont.deriveFont(11f)
-                isEditable = false
-                isOpaque = false
-                lineWrap = true
-                wrapStyleWord = true
-                border = LCATheme.paddedBorder(4, 0, 0, 0)
-                background = null
-            }
-
-            add(titleLabel, BorderLayout.NORTH)
-            add(contentArea, BorderLayout.CENTER)
-        }
-    }
 
     private fun createToolsSection(subtask: SubtaskDto): JPanel? {
         val tools = parseToolsFromSubtask(subtask) ?: return null
@@ -583,22 +495,17 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
     private fun createMetricsSection(subtask: SubtaskDto): JPanel? {
         // Calculate execution time from timestamps
         val startedAtMs = subtask.startedAt
-        val finishedAtMs = subtask.finishedAt
+        val finishedAtMs = subtask.completedAt ?: subtask.finishedAt
         val executionMs = if (startedAtMs != null && finishedAtMs != null) {
             finishedAtMs - startedAtMs
         } else null
 
-        if (subtask.model == null && executionMs == null) return null
+        if (subtask.model == null && executionMs == null && subtask.latencyMs == null) return null
 
         return JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             isOpaque = false
 
-            val titleLabel = JBLabel("📊 Metrics:").apply {
-                font = font.deriveFont(Font.BOLD, 11f)
-                foreground = LCATheme.grayColor
-            }
-            add(titleLabel)
             add(Box.createVerticalStrut(4))
 
             // Compact metrics in flow layout (chips style)
@@ -705,6 +612,81 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
                 val seconds = (ms % 60_000) / 1000
                 "${minutes}m ${seconds}s"
             }
+        }
+    }
+
+    private fun formatCost(cost: Double?): String? {
+        if (cost == null) return null
+        return "$${String.format("%.4f", cost)}"
+    }
+
+    private fun formatTimestamp(timestamp: Long?): String? {
+        return timestamp?.let { timestampFormatter.format(Instant.ofEpochMilli(it)) }
+    }
+
+    private fun prettyJsonOrRaw(raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        return try {
+            val gson = pl.jclab.refio.core.utils.GsonInstance.gson
+            gson.toJson(gson.fromJson(raw, Any::class.java))
+        } catch (_: Exception) {
+            raw
+        }
+    }
+
+    private fun installHeaderClickHandler(component: JComponent, subtask: SubtaskDto, stepNumber: Int) {
+        component.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                if (e.clickCount == 1 && SwingUtilities.isLeftMouseButton(e)) {
+                    showStepDetailsDialog(subtask, stepNumber)
+                }
+            }
+        })
+    }
+
+    private fun showStepDetailsDialog(subtask: SubtaskDto, stepNumber: Int) {
+        StepDetailsDialog(project, subtask, stepNumber, this::buildStepDetailsText).show()
+    }
+
+    private fun buildStepDetailsText(subtask: SubtaskDto, stepNumber: Int): String {
+        val completedAt = subtask.completedAt ?: subtask.finishedAt
+        return buildString {
+            appendLine("Step $stepNumber")
+            appendLine()
+            appendLine("kind: ${subtask.kind}")
+            appendLine("status: ${subtask.status}")
+            appendLine("description: ${subtask.description.orEmpty()}")
+            appendLine()
+            appendLine("params_json:")
+            appendLine(prettyJsonOrRaw(subtask.paramsJson).orEmpty())
+            appendLine()
+            appendLine("step_plan_json:")
+            appendLine(prettyJsonOrRaw(subtask.stepPlanJson).orEmpty())
+            appendLine()
+            appendLine("summary:")
+            appendLine(subtask.summary.orEmpty())
+            appendLine()
+            appendLine("requires_approval: ${subtask.requiresApproval}")
+            appendLine("approval_status: ${subtask.approvalStatus}")
+            appendLine()
+            appendLine("result:")
+            appendLine(subtask.result.orEmpty())
+            appendLine()
+            appendLine("error_message:")
+            appendLine(subtask.errorMessage.orEmpty())
+            appendLine()
+            appendLine("llm_model: ${subtask.model.orEmpty()}")
+            appendLine("llm_provider: ${subtask.provider.orEmpty()}")
+            appendLine("input_tokens: ${subtask.tokensIn?.toString().orEmpty()}")
+            appendLine("output_tokens: ${subtask.tokensOut?.toString().orEmpty()}")
+            appendLine("cost_usd: ${formatCost(subtask.costUsd).orEmpty()}")
+            appendLine("latency_ms: ${subtask.latencyMs?.toString().orEmpty()}")
+            appendLine()
+            appendLine("created_at: ${formatTimestamp(subtask.createdAt).orEmpty()}")
+            appendLine("updated_at: ${formatTimestamp(subtask.updatedAt).orEmpty()}")
+            appendLine("started_at: ${formatTimestamp(subtask.startedAt).orEmpty()}")
+            appendLine("completed_at: ${formatTimestamp(completedAt).orEmpty()}")
+            appendLine("finished_at: ${formatTimestamp(subtask.finishedAt).orEmpty()}")
         }
     }
 
@@ -863,3 +845,244 @@ data class ToolInfo(
     val name: String,
     val args: Map<String, Any>
 )
+
+private class StepDetailsDialog(
+    project: Project,
+    private val subtask: SubtaskDto,
+    private val stepNumber: Int,
+    private val detailsProvider: (SubtaskDto, Int) -> String
+) : DialogWrapper(project, true) {
+
+    private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault())
+
+    init {
+        title = "Step $stepNumber Details"
+        init()
+    }
+
+    override fun createCenterPanel(): JComponent {
+        val panel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            border = LCATheme.paddedBorder(LCATheme.margin)
+            preferredSize = Dimension(900, 720)
+        }
+
+        val contentPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+        }
+
+        contentPanel.add(createMetadataSection())
+        contentPanel.add(Box.createVerticalStrut(LCATheme.spacingLg))
+        contentPanel.add(createTimingSection())
+        contentPanel.add(Box.createVerticalStrut(LCATheme.spacingLg))
+        contentPanel.add(createMetricsSection())
+        contentPanel.add(Box.createVerticalStrut(LCATheme.spacingLg))
+        contentPanel.add(createTextSection("Description", subtask.description))
+        contentPanel.add(Box.createVerticalStrut(LCATheme.spacingLg))
+        contentPanel.add(createTextSection("Summary", subtask.summary ?: subtask.resultSummary))
+        contentPanel.add(Box.createVerticalStrut(LCATheme.spacingLg))
+        contentPanel.add(createTextSection("Result", subtask.result))
+
+        subtask.errorMessage?.takeIf { it.isNotBlank() }?.let {
+            contentPanel.add(Box.createVerticalStrut(LCATheme.spacingLg))
+            contentPanel.add(createTextSection("Error", it, isError = true))
+        }
+
+        subtask.paramsJson?.takeIf { it.isNotBlank() }?.let {
+            contentPanel.add(Box.createVerticalStrut(LCATheme.spacingLg))
+            contentPanel.add(createPayloadSection("Params JSON", it))
+        }
+
+        subtask.stepPlanJson?.takeIf { it.isNotBlank() }?.let {
+            contentPanel.add(Box.createVerticalStrut(LCATheme.spacingLg))
+            contentPanel.add(createPayloadSection("Step Plan JSON", it))
+        }
+
+        panel.add(JBScrollPane(contentPanel).apply {
+            border = LCATheme.emptyBorder()
+        }, BorderLayout.CENTER)
+
+        return panel
+    }
+
+    override fun createActions(): Array<Action> {
+        val copyAction = object : DialogWrapperAction("Copy to Clipboard") {
+            override fun doAction(e: java.awt.event.ActionEvent?) {
+                Toolkit.getDefaultToolkit().systemClipboard.setContents(
+                    StringSelection(detailsProvider(subtask, stepNumber)),
+                    null
+                )
+            }
+        }
+        val saveAction = object : DialogWrapperAction("Save to File") {
+            override fun doAction(e: java.awt.event.ActionEvent?) {
+                saveToFile()
+            }
+        }
+        return arrayOf(copyAction, saveAction, okAction)
+    }
+
+    private fun createMetadataSection(): JPanel {
+        return JBPanel<JBPanel<*>>(GridBagLayout()).apply {
+            border = LCATheme.createTitledBorder("Step Information")
+            val gbc = createConstraints()
+
+            addField(this, gbc, "Step:", stepNumber.toString())
+            gbc.gridy++
+            addField(this, gbc, "ID:", subtask.id)
+            gbc.gridy++
+            addField(this, gbc, "Task ID:", subtask.taskId)
+            gbc.gridy++
+            addField(this, gbc, "Order:", subtask.orderIndex.toString())
+            gbc.gridy++
+            addField(this, gbc, "Kind:", subtask.kind)
+            gbc.gridy++
+            addField(this, gbc, "Status:", subtask.status)
+            gbc.gridy++
+            addField(this, gbc, "Requires Approval:", subtask.requiresApproval.toString())
+            gbc.gridy++
+            addField(this, gbc, "Approval Status:", subtask.approvalStatus)
+        }
+    }
+
+    private fun createTimingSection(): JPanel {
+        return JBPanel<JBPanel<*>>(GridBagLayout()).apply {
+            border = LCATheme.createTitledBorder("Timestamps")
+            val gbc = createConstraints()
+
+            addField(this, gbc, "Created At:", formatTimestamp(subtask.createdAt))
+            gbc.gridy++
+            addField(this, gbc, "Updated At:", formatTimestamp(subtask.updatedAt))
+            gbc.gridy++
+            addField(this, gbc, "Started At:", formatTimestamp(subtask.startedAt))
+            gbc.gridy++
+            addField(this, gbc, "Completed At:", formatTimestamp(subtask.completedAt ?: subtask.finishedAt))
+            gbc.gridy++
+            addField(this, gbc, "Finished At:", formatTimestamp(subtask.finishedAt))
+        }
+    }
+
+    private fun createMetricsSection(): JPanel {
+        return JBPanel<JBPanel<*>>(GridBagLayout()).apply {
+            border = LCATheme.createTitledBorder("Metrics")
+            val gbc = createConstraints()
+
+            addField(this, gbc, "LLM Model:", subtask.model ?: "-")
+            gbc.gridy++
+            addField(this, gbc, "LLM Provider:", subtask.provider ?: "-")
+            gbc.gridy++
+            addField(this, gbc, "Input Tokens:", formatNumber(subtask.tokensIn))
+            gbc.gridy++
+            addField(this, gbc, "Output Tokens:", formatNumber(subtask.tokensOut))
+            gbc.gridy++
+            addField(this, gbc, "Cost (USD):", subtask.costUsd?.let { String.format("$%.6f", it) } ?: "-")
+            gbc.gridy++
+            addField(this, gbc, "Latency:", subtask.latencyMs?.let { "${formatNumber(it)} ms" } ?: "-")
+        }
+    }
+
+    private fun createTextSection(title: String, content: String?, isError: Boolean = false): JPanel {
+        return JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            border = LCATheme.createTitledBorder(title)
+
+            val textArea = JTextArea(content?.ifBlank { "-" } ?: "-").apply {
+                isEditable = false
+                lineWrap = true
+                wrapStyleWord = true
+                rows = 4
+                font = LCATheme.bodyFont
+                background = LCATheme.editorBackground
+                border = LCATheme.paddedBorder(LCATheme.padding)
+                if (isError) {
+                    foreground = LCATheme.errorColor
+                }
+            }
+
+            add(textArea, BorderLayout.CENTER)
+        }
+    }
+
+    private fun createPayloadSection(title: String, payload: String): JPanel {
+        return JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            border = LCATheme.createTitledBorder(title)
+
+            val textArea = JTextArea(formatJson(payload)).apply {
+                isEditable = false
+                lineWrap = false
+                font = LCATheme.monoFont
+                background = LCATheme.editorBackground
+                border = LCATheme.paddedBorder(LCATheme.padding)
+                caretPosition = 0
+            }
+
+            add(JBScrollPane(textArea).apply {
+                preferredSize = Dimension(820, 180)
+                border = BorderFactory.createLineBorder(LCATheme.borderColor, 1)
+            }, BorderLayout.CENTER)
+        }
+    }
+
+    private fun createConstraints(): GridBagConstraints {
+        return GridBagConstraints().apply {
+            gridx = 0
+            gridy = 0
+            anchor = GridBagConstraints.WEST
+            insets = LCATheme.insetsMedium
+            fill = GridBagConstraints.HORIZONTAL
+        }
+    }
+
+    private fun addField(panel: JPanel, gbc: GridBagConstraints, label: String, value: String) {
+        gbc.gridx = 0
+        gbc.weightx = 0.3
+        panel.add(JBLabel(label).apply {
+            font = LCATheme.headerFont
+        }, gbc)
+
+        gbc.gridx = 1
+        gbc.weightx = 0.7
+        panel.add(JBLabel(value).apply {
+            font = LCATheme.monoFont
+        }, gbc)
+    }
+
+    private fun formatNumber(number: Int?): String {
+        return number?.let { String.format("%,d", it) } ?: "-"
+    }
+
+    private fun formatTimestamp(timestamp: Long?): String {
+        return timestamp?.let { dateFormatter.format(Instant.ofEpochMilli(it)) } ?: "-"
+    }
+
+    private fun formatJson(json: String): String {
+        return try {
+            val gson = pl.jclab.refio.core.utils.GsonInstance.gson
+            gson.toJson(gson.fromJson(json, Any::class.java))
+        } catch (_: Exception) {
+            json
+        }
+    }
+
+    private fun saveToFile() {
+        val fileChooser = JFileChooser().apply {
+            dialogTitle = "Save Step Details"
+            selectedFile = File("step-$stepNumber-${subtask.id}.txt")
+            fileFilter = FileNameExtensionFilter("Text Files", "txt")
+        }
+
+        if (fileChooser.showSaveDialog(contentPanel) == JFileChooser.APPROVE_OPTION) {
+            try {
+                fileChooser.selectedFile.writeText(detailsProvider(subtask, stepNumber))
+            } catch (e: Exception) {
+                JOptionPane.showMessageDialog(
+                    contentPanel,
+                    "Failed to save file:\n${e.message}",
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE
+                )
+            }
+        }
+    }
+}
+
+

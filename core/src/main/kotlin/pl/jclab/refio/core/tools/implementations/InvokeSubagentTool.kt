@@ -176,8 +176,8 @@ class InvokeSubagentTool(
                 return "Delegate a task to a specialized subagent. EXPENSIVE (spawns a full turn loop). Available: unavailable."
             }
 
-        val names = subagents.joinToString("; ") { "${it.name}: ${it.description}" }
+        val names = subagents.joinToString("; ") { "\n- ${it.name}: ${it.description}" }
         return "Delegate a task to a specialized subagent. EXPENSIVE (spawns a full turn loop). " +
-            "Available: $names."
+            "Available: \n$names."
     }
 }

@@ -19,17 +19,22 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.llm.LLMContentPart
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.services.ConfigService
+import pl.jclab.refio.testutil.TestDatabase
 import pl.jclab.refio.core.utils.GsonInstance.gson as appGson
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class LLMAdapterSmokeTest {
+
+    private lateinit var db: TestDatabase.SharedInMemoryDb
 
     private val multimodalMessage = LLMMessage(
         role = "user",
@@ -39,6 +44,16 @@ class LLMAdapterSmokeTest {
             LLMContentPart.Image("image/png", "Zm9v")
         )
     )
+
+    @BeforeEach
+    fun setup() {
+        db = TestDatabase.createSharedInMemory()
+    }
+
+    @AfterEach
+    fun tearDown() {
+        db.keepAlive.close()
+    }
 
     @Test
     fun `openai smoke test should send multimodal request and parse response`() = runTest {

@@ -27,6 +27,18 @@ class DualLogger(
     private val kotlinLogger: KLogger,
     private val component: String
 ) {
+    private fun canPersistApiLogs(): Boolean {
+        if (!pl.jclab.refio.core.db.DatabaseFactory.isInitialized()) {
+            return false
+        }
+
+        return runCatching {
+            org.jetbrains.exposed.sql.transactions.transaction {
+                exec("SELECT 1 FROM api_logs LIMIT 1") { true } ?: false
+            }
+        }.getOrElse { false }
+    }
+
     private fun safeMessage(msg: Any?): String {
         val message = msg?.toString() ?: "null"
         return pl.jclab.refio.core.security.SecureLogger.redact(message)
@@ -133,6 +145,11 @@ class DualLogger(
         }
         debug { "[$component] API Request to $provider/$model: $truncated" }
 
+        if (!canPersistApiLogs()) {
+            debug { "[$component] Skipping API request DB log because DatabaseFactory is not initialized" }
+            return
+        }
+
         // Log to database (taskId can be null for tool-level calls)
         try {
             val apiLogRepo = pl.jclab.refio.core.db.repositories.ApiLogRepository()
@@ -222,6 +239,11 @@ class DualLogger(
             )
         }
 
+        if (!canPersistApiLogs()) {
+            debug { "[$component] Skipping API response DB log because DatabaseFactory is not initialized" }
+            return
+        }
+
         // Log to database (taskId can be null for tool-level calls)
         try {
             val apiLogRepo = pl.jclab.refio.core.db.repositories.ApiLogRepository()
@@ -276,6 +298,11 @@ class DualLogger(
         this.error(error) {
             "[$component] API Error from $provider/$model: " +
             "status=$httpStatus, latency=${latencyMs}ms, error=${safeMessage(error.message)}"
+        }
+
+        if (!canPersistApiLogs()) {
+            debug { "[$component] Skipping API error DB log because DatabaseFactory is not initialized" }
+            return
         }
 
         // Log to database (taskId can be null for tool-level calls)

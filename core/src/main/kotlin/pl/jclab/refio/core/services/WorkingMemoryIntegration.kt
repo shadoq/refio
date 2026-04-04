@@ -61,13 +61,15 @@ class WorkingMemoryIntegration(
         toolName: String,
         params: Map<String, Any>,
         result: String,
-        iteration: Int
+        iteration: Int,
+        metadata: Map<String, Any?>? = null
     ) {
         val entries = workingMemoryService.extractKnowledge(
             toolName = toolName,
             args = params,
             output = result,
-            iteration = iteration
+            iteration = iteration,
+            metadata = metadata
         )
 
         if (entries.isNotEmpty()) {

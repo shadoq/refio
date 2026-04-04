@@ -40,6 +40,8 @@ data class SubtaskResponse(
     val description: String,
     val paramsJson: String?,
     val stepPlanJson: String?,
+    val summary: String?,
+    val result: String?,
     val startedAt: Long?,
     val finishedAt: Long?,
     val errorCode: String?,
@@ -47,9 +49,13 @@ data class SubtaskResponse(
     val tokensIn: Int,
     val tokensOut: Int,
     val costUsd: Double,
+    val latencyMs: Int,
     val model: String?,
     val provider: String?,
-    val resultSummary: String? = null
+    val resultSummary: String? = null,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val completedAt: Long? = null
 )
 
 /**

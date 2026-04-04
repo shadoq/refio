@@ -821,6 +821,7 @@ class PromptInputPanel(
 
                         // Add "Auto" option at the beginning
                         modelSelector.addItem(ModelItem("auto", "Auto (from Settings)", "Auto (from Settings)", "auto"))
+                        modelSelector.selectedIndex = 0
 
                         if (modelStrings.isEmpty()) {
                             logger.warn { "No models available from core, using fallback" }

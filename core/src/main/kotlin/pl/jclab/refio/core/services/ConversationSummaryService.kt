@@ -22,19 +22,22 @@ class ConversationSummaryService(
 ) {
     companion object {
         private const val FALLBACK_SUMMARY_MAX_CHARS = 2_000
+        private const val SUMMARY_THRESHOLD_RATIO = 0.85
+        private const val DEFAULT_KEEP_RECENT_MESSAGES = 12
+        private const val MIN_MESSAGES_TO_SUMMARIZE = 12
     }
 
     fun shouldSummarize(messages: List<ChatMessage>, maxTokens: Int): Boolean {
         if (messages.isEmpty() || maxTokens <= 0) return false
         val totalTokens = messages.sumOf { ContextTokenEstimator.estimateTokens(it.content) }
-        return totalTokens > (maxTokens * 0.7).toInt()
+        return totalTokens > (maxTokens * SUMMARY_THRESHOLD_RATIO).toInt()
     }
 
     suspend fun ensureSummaryIfNeeded(
         taskId: String,
         messages: List<ChatMessage>,
         maxTokens: Int,
-        keepRecent: Int = 6
+        keepRecent: Int = DEFAULT_KEEP_RECENT_MESSAGES
     ): List<ChatMessage> {
         if (messages.isEmpty() || maxTokens <= 0) return messages
 
@@ -49,6 +52,7 @@ class ConversationSummaryService(
         if (!shouldSummarize(messagesSinceSummary, maxTokens)) return messages
 
         val toSummarize = messagesSinceSummary.dropLast(keepRecent)
+        if (toSummarize.size < MIN_MESSAGES_TO_SUMMARIZE) return messages
         if (toSummarize.isEmpty()) return messages
 
         logger.info { "[CONVERSATION_SUMMARY] Summarizing ${toSummarize.size} messages for task=$taskId" }

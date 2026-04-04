@@ -547,6 +547,8 @@ class PlanningService(
             description = subtask.description,
             paramsJson = subtask.paramsJson,
             stepPlanJson = subtask.stepPlanJson,
+            summary = subtask.summary,
+            result = subtask.result,
             startedAt = subtask.startedAt,
             finishedAt = subtask.completedAt,
             errorCode = null,
@@ -554,9 +556,13 @@ class PlanningService(
             tokensIn = subtask.inputTokens,
             tokensOut = subtask.outputTokens,
             costUsd = subtask.costUsd,
+            latencyMs = subtask.latencyMs,
             model = subtask.llmModel,
             provider = subtask.llmProvider,
-            resultSummary = subtask.summary ?: subtask.result?.take(500)
+            resultSummary = subtask.summary ?: subtask.result?.take(500),
+            createdAt = subtask.createdAt,
+            updatedAt = subtask.updatedAt,
+            completedAt = subtask.completedAt
         )
     }
 }

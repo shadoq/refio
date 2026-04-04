@@ -43,11 +43,9 @@ class TurnGuardrails {
     /**
      * Loop detector to prevent infinite loops when model repeatedly calls same tools.
      *
-     * Uses tool name as the signature — different arguments to the same tool are
-     * treated as repeated calls. This catches loops where the model retries the same
-     * operation regardless of parameter changes, while still allowing legitimate
-     * multi-call workflows (e.g. reading different files) since different tool names
-     * won't collide.
+     * Consecutive and total-call tracking both use tool name only. This is intentionally
+     * conservative: repeatedly invoking the same tool with different arguments is often
+     * still a loop pattern that should trigger warnings or aborts.
      *
      * @param maxConsecutiveRepeats Abort after N consecutive calls to the same tool
      * @param maxSameToolTotal Abort after N total calls to the same tool
@@ -61,8 +59,8 @@ class TurnGuardrails {
         private val warnTotalThreshold: Int = 8,
         private val maxHistory: Int = 200
     ) {
-        private val toolCallHistory = ArrayDeque<String>(maxHistory)
-        private val toolCallCounts = mutableMapOf<String, Int>()  // toolName -> count
+        private val toolHistory = ArrayDeque<String>(maxHistory)
+        private val toolCallCounts = mutableMapOf<String, Int>()
 
         /**
          * Record a tool call and check if it indicates a loop.
@@ -76,10 +74,10 @@ class TurnGuardrails {
 
             return when {
                 consecutiveCount >= maxConsecutiveRepeats -> {
-                    LoopStatus.ABORT("Tool $toolName called $consecutiveCount times consecutively — agent may be stuck")
+                    LoopStatus.ABORT("Tool $toolName called $consecutiveCount times consecutively - agent may be stuck")
                 }
                 totalCount >= maxSameToolTotal -> {
-                    LoopStatus.ABORT("Tool $toolName called $totalCount times total — agent may be stuck")
+                    LoopStatus.ABORT("Tool $toolName called $totalCount times total - agent may be stuck")
                 }
                 consecutiveCount >= warnConsecutiveThreshold || totalCount >= warnTotalThreshold -> {
                     LoopStatus.WARN("Tool $toolName called $totalCount times (consecutive: $consecutiveCount)")
@@ -92,10 +90,10 @@ class TurnGuardrails {
          * Check if model is stuck producing empty tool calls.
          */
         fun recordEmptyToolCalls(): LoopStatus {
-            val name = "__EMPTY_TOOL_CALLS__"
-            recordHistory(name)
+            val toolName = "__EMPTY_TOOL_CALLS__"
+            recordHistory(toolName)
 
-            val count = toolCallCounts[name] ?: 0
+            val count = toolCallCounts[toolName] ?: 0
             return when {
                 count >= 3 -> LoopStatus.ABORT("Model returned empty tool calls $count times - may be stuck")
                 count >= 2 -> LoopStatus.WARN("Model returned empty tool calls twice")
@@ -105,7 +103,7 @@ class TurnGuardrails {
 
         private fun countConsecutiveRepeats(toolName: String): Int {
             var count = 0
-            for (entry in toolCallHistory.reversed()) {
+            for (entry in toolHistory.reversed()) {
                 if (entry == toolName) {
                     count++
                 } else {
@@ -116,22 +114,16 @@ class TurnGuardrails {
         }
 
         private fun recordHistory(toolName: String) {
-            if (toolCallHistory.size >= maxHistory) {
-                val removed = toolCallHistory.removeFirst()
-                val current = toolCallCounts[removed] ?: 0
-                if (current <= 1) {
-                    toolCallCounts.remove(removed)
-                } else {
-                    toolCallCounts[removed] = current - 1
-                }
+            if (toolHistory.size >= maxHistory) {
+                toolHistory.removeFirst()
             }
-            toolCallHistory.addLast(toolName)
+            toolHistory.addLast(toolName)
             toolCallCounts[toolName] = (toolCallCounts[toolName] ?: 0) + 1
         }
 
         fun getStats(): String {
             val uniqueTools = toolCallCounts.keys.size
-            val totalCalls = toolCallHistory.size
+            val totalCalls = toolHistory.size
             val mostFrequent = toolCallCounts.maxByOrNull { it.value }
             return "unique=$uniqueTools, total=$totalCalls, mostFrequent=${mostFrequent?.key?.take(30)}(${mostFrequent?.value})"
         }

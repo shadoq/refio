@@ -88,8 +88,8 @@ data class TurnLoopConfig(
          * PLAN mode is read-only, focused on analysis and planning.
          */
         fun plan() = TurnLoopConfig(
-            maxIterations = 25,
-            warningThreshold = 10,
+            maxIterations = 50,
+            warningThreshold = 20,
             parallelReadTools = true,
             enableSnapshots = false,
             toolTimeout = Duration.ofSeconds(30),
@@ -120,8 +120,8 @@ data class TurnLoopConfig(
          * AGENT mode has full read-write access and can execute all tools.
          */
         fun agent() = TurnLoopConfig(
-            maxIterations = 50,
-            warningThreshold = 18,
+            maxIterations = 100,
+            warningThreshold = 30,
             parallelReadTools = true,
             enableSnapshots = true,
             toolTimeout = Duration.ofMinutes(2),

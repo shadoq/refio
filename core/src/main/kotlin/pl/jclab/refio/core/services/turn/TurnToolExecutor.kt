@@ -503,7 +503,8 @@ class TurnToolExecutor(
                     toolName = toolCall.name,
                     params = argumentsMap,
                     result = outputWithWarnings,
-                    iteration = iteration
+                    iteration = iteration,
+                    metadata = toolResult.metadata
                 )
 
                 // Decide what content to store in conversation history.

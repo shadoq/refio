@@ -61,6 +61,8 @@ class SubtaskRouter(
             description = subtask.description,
             paramsJson = subtask.paramsJson,
             stepPlanJson = subtask.stepPlanJson,
+            summary = subtask.summary,
+            result = subtask.result,
             startedAt = subtask.startedAt,
             finishedAt = subtask.completedAt,
             errorCode = null,
@@ -68,8 +70,13 @@ class SubtaskRouter(
             tokensIn = subtask.inputTokens,
             tokensOut = subtask.outputTokens,
             costUsd = subtask.costUsd,
+            latencyMs = subtask.latencyMs,
             model = subtask.llmModel,
-            provider = subtask.llmProvider
+            provider = subtask.llmProvider,
+            resultSummary = subtask.summary ?: subtask.result?.take(500),
+            createdAt = subtask.createdAt,
+            updatedAt = subtask.updatedAt,
+            completedAt = subtask.completedAt
         )
     }
 
@@ -95,6 +102,8 @@ class SubtaskRouter(
                     description = st.description,
                     paramsJson = st.paramsJson,
                     stepPlanJson = st.stepPlanJson,
+                    summary = st.summary,
+                    result = st.result,
                     startedAt = st.startedAt,
                     finishedAt = st.completedAt,  // Map completedAt to finishedAt
                     errorCode = null,  // errorCode not present in Subtask model
@@ -102,8 +111,13 @@ class SubtaskRouter(
                     tokensIn = st.inputTokens,  // Map inputTokens to tokensIn
                     tokensOut = st.outputTokens,  // Map outputTokens to tokensOut
                     costUsd = st.costUsd,
+                    latencyMs = st.latencyMs,
                     model = st.llmModel,  // Map llmModel to model
-                    provider = st.llmProvider  // Map llmProvider to provider
+                    provider = st.llmProvider,  // Map llmProvider to provider
+                    resultSummary = st.summary ?: st.result?.take(500),
+                    createdAt = st.createdAt,
+                    updatedAt = st.updatedAt,
+                    completedAt = st.completedAt
                 )
             },
             count = subtasks.size
@@ -147,6 +161,8 @@ class SubtaskRouter(
             description = updated.description,
             paramsJson = updated.paramsJson,
             stepPlanJson = updated.stepPlanJson,
+            summary = updated.summary,
+            result = updated.result,
             startedAt = updated.startedAt,
             finishedAt = updated.completedAt,
             errorCode = null,
@@ -154,8 +170,13 @@ class SubtaskRouter(
             tokensIn = updated.inputTokens,
             tokensOut = updated.outputTokens,
             costUsd = updated.costUsd,
+            latencyMs = updated.latencyMs,
             model = updated.llmModel,
-            provider = updated.llmProvider
+            provider = updated.llmProvider,
+            resultSummary = updated.summary ?: updated.result?.take(500),
+            createdAt = updated.createdAt,
+            updatedAt = updated.updatedAt,
+            completedAt = updated.completedAt
         )
     }
 
@@ -188,6 +209,8 @@ class SubtaskRouter(
             description = updated.description,
             paramsJson = updated.paramsJson,
             stepPlanJson = updated.stepPlanJson,
+            summary = updated.summary,
+            result = updated.result,
             startedAt = updated.startedAt,
             finishedAt = updated.completedAt,
             errorCode = null,
@@ -195,8 +218,13 @@ class SubtaskRouter(
             tokensIn = updated.inputTokens,
             tokensOut = updated.outputTokens,
             costUsd = updated.costUsd,
+            latencyMs = updated.latencyMs,
             model = updated.llmModel,
-            provider = updated.llmProvider
+            provider = updated.llmProvider,
+            resultSummary = updated.summary ?: updated.result?.take(500),
+            createdAt = updated.createdAt,
+            updatedAt = updated.updatedAt,
+            completedAt = updated.completedAt
         )
     }
 
@@ -229,6 +257,8 @@ class SubtaskRouter(
             description = updated.description,
             paramsJson = updated.paramsJson,
             stepPlanJson = updated.stepPlanJson,
+            summary = updated.summary,
+            result = updated.result,
             startedAt = updated.startedAt,
             finishedAt = updated.completedAt,
             errorCode = null,
@@ -236,8 +266,13 @@ class SubtaskRouter(
             tokensIn = updated.inputTokens,
             tokensOut = updated.outputTokens,
             costUsd = updated.costUsd,
+            latencyMs = updated.latencyMs,
             model = updated.llmModel,
-            provider = updated.llmProvider
+            provider = updated.llmProvider,
+            resultSummary = updated.summary ?: updated.result?.take(500),
+            createdAt = updated.createdAt,
+            updatedAt = updated.updatedAt,
+            completedAt = updated.completedAt
         )
     }
 

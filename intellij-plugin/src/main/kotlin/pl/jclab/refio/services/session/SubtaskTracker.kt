@@ -49,6 +49,8 @@ class SubtaskTracker(
                     description = coreSubtask.description,
                     paramsJson = coreSubtask.paramsJson,
                     stepPlanJson = coreSubtask.stepPlanJson,
+                    summary = coreSubtask.summary,
+                    result = coreSubtask.result,
                     startedAt = coreSubtask.startedAt,
                     finishedAt = coreSubtask.finishedAt,
                     errorCode = coreSubtask.errorCode,
@@ -56,9 +58,13 @@ class SubtaskTracker(
                     tokensIn = coreSubtask.tokensIn,
                     tokensOut = coreSubtask.tokensOut,
                     costUsd = coreSubtask.costUsd,
+                    latencyMs = coreSubtask.latencyMs,
                     model = coreSubtask.model,
                     provider = coreSubtask.provider,
-                    resultSummary = coreSubtask.resultSummary
+                    resultSummary = coreSubtask.resultSummary,
+                    createdAt = coreSubtask.createdAt,
+                    updatedAt = coreSubtask.updatedAt,
+                    completedAt = coreSubtask.completedAt
                 )
             }
 

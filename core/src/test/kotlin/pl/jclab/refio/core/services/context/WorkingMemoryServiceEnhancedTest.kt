@@ -5,6 +5,7 @@ import pl.jclab.refio.core.services.analysis.CodeElements
 import pl.jclab.refio.core.services.analysis.FunctionElement
 import pl.jclab.refio.core.services.analysis.ImportElement
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.test.assertFalse
 
@@ -145,7 +146,7 @@ class WorkingMemoryServiceEnhancedTest {
     }
 
     @Test
-    fun `extractKnowledge for unknown tool returns empty`() {
+    fun `extractKnowledge for unknown tool uses generic fallback`() {
         val entries = service.extractKnowledge(
             toolName = "unknown_tool",
             args = emptyMap(),
@@ -153,6 +154,9 @@ class WorkingMemoryServiceEnhancedTest {
             iteration = 1
         )
 
-        assertTrue(entries.isEmpty())
+        assertTrue(entries.isNotEmpty())
+        assertEquals("tool_activity", entries.first().key)
+        assertTrue(entries.first().value.contains("unknown_tool"))
+        assertEquals("some output", entries.first().outputExcerpt)
     }
 }

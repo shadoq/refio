@@ -724,7 +724,8 @@ class AgentTurnLoop(
                                         toolName = toolCall.name,
                                         params = params,
                                         result = resultData.rawOutput ?: resultData.content,
-                                        iteration = iteration
+                                        iteration = iteration,
+                                        metadata = resultData.metadata?.let { TurnJsonUtils.parseJsonToMap(it) }
                                     )
                                 }
                             }
@@ -1024,12 +1025,6 @@ class AgentTurnLoop(
                                 tokensIn = llmResponse.usage.inputTokens,
                                 tokensOut = llmResponse.usage.outputTokens,
                                 cost = llmResponse.cost
-                            )
-                            chatMessageRepository.create(
-                                taskId = taskId,
-                                role = MessageRole.SYSTEM,
-                                content = TurnNudgeBuilder.buildVerificationReminderMessage(),
-                                toolCalls = null
                             )
                             continue
                         }

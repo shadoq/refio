@@ -61,17 +61,6 @@ object TurnNudgeBuilder {
             "NEVER respond with plain text — always use the JSON envelope."
     }
 
-    fun buildToolErrorGiveUpNudgeMessage(): String {
-        return "A tool returned an error but you stopped instead of continuing. Do NOT give up on the task. " +
-            "Analyze the error and decide how to proceed: retry after a delay (use run_terminal_command with 'sleep N'), " +
-            "try a different approach, or adjust your parameters. Continue working until the task is complete."
-    }
-
-    fun buildVerificationReminderMessage(): String {
-        return "You made code changes but did not verify them. Run compilation, tests, a diff review, or at least read the modified file before finishing. " +
-            "If verification is not possible, explicitly state what was and was not verified."
-    }
-
     /**
      * Build nudge message for invalid tool call format.
      */

@@ -9,7 +9,7 @@ class TurnLoopConfigTest {
     fun `agent config should allow longer runs`() {
         val config = TurnLoopConfig.agent()
 
-        assertEquals(50, config.maxIterations)
+        assertEquals(100, config.maxIterations)
         assertEquals(15, config.maxConsecutiveReadOnlyIterations)
         assertEquals(3, config.maxFormatRetries)
     }
@@ -18,7 +18,7 @@ class TurnLoopConfigTest {
     fun `plan config should allow more analysis retries`() {
         val config = TurnLoopConfig.plan()
 
-        assertEquals(25, config.maxIterations)
+        assertEquals(50, config.maxIterations)
         assertEquals(15, config.maxConsecutiveReadOnlyIterations)
         assertEquals(3, config.maxFormatRetries)
     }

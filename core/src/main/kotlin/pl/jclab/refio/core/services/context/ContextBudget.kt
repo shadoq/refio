@@ -3,6 +3,7 @@ package pl.jclab.refio.core.services.context
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * Cached stable context layer — invalidated only on project file change.
@@ -120,6 +121,7 @@ data class ContextBudget(
             ContextSection.CONVERSATION to 8000,
             ContextSection.REFERENCE to 2500
         )
+        private val baselineTotalBudget = defaultBudgets.values.sum()
 
         fun forContextSize(
             contextSize: Int,
@@ -128,12 +130,21 @@ data class ContextBudget(
             totalTokensOverride: Int? = null
         ): ContextBudget {
             val available = totalTokensOverride ?: max(1, (contextSize * inputRatio).toInt())
-            val base = defaultBudgets
+            val base = scaleBudgetsForAvailableTokens(available)
             val merged = base.toMutableMap().apply { putAll(overrides) }
             return ContextBudget(
                 totalTokens = available,
                 sectionBudgets = normalizeBudgets(available, merged)
             )
+        }
+
+        private fun scaleBudgetsForAvailableTokens(availableTokens: Int): Map<ContextSection, Int> {
+            if (availableTokens <= baselineTotalBudget) return defaultBudgets
+
+            val scale = availableTokens.toDouble() / baselineTotalBudget.toDouble()
+            return defaultBudgets.mapValues { (_, value) ->
+                max(1, (value * scale).roundToInt())
+            }
         }
 
         private fun normalizeBudgets(
