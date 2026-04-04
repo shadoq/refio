@@ -353,6 +353,7 @@ class SubtaskTracker(
         if (current.size != new.size) return false
         return current.zip(new).all { (a, b) ->
             a.id == b.id &&
+                a.orderIndex == b.orderIndex &&
                 a.status == b.status &&
                 a.approvalStatus == b.approvalStatus &&
                 a.requiresApproval == b.requiresApproval &&
@@ -368,7 +369,8 @@ class SubtaskTracker(
                 a.tokensOut == b.tokensOut &&
                 a.costUsd == b.costUsd &&
                 a.model == b.model &&
-                a.provider == b.provider
+                a.provider == b.provider &&
+                a.resultSummary == b.resultSummary
         }
     }
 }

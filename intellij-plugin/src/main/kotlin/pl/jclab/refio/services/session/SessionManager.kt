@@ -745,7 +745,6 @@ class SessionManager(private val project: Project) {
             var streamingMessageId: String? = null
             val streamingClosed = AtomicBoolean(false)
             val pendingStreamContent = AtomicReference<String?>(null)
-            val pendingStreamComplete = AtomicBoolean(false)
             val streamStateMutex = Mutex()
             var streamUiFlushJob: Job? = null
             val streamFilter = IncrementalToolCallStreamFilter()
@@ -757,11 +756,13 @@ class SessionManager(private val project: Project) {
                     if (streamingClosed.get()) return@launch
 
                     streamStateMutex.withLock {
+                        val now = System.currentTimeMillis()
                         val filteredContent = streamFilter.filter(
                             delta = chunk.delta,
                             accumulated = chunk.accumulated,
                             isComplete = chunk.isComplete
                         )
+
                         if (filteredContent.isNotBlank()) {
                             if (streamingMessageId == null) {
                                 streamingMessageId = UUID.randomUUID().toString()
@@ -772,62 +773,58 @@ class SessionManager(private val project: Project) {
                                         role = "assistant",
                                         content = "",
                                         isStreaming = true,
-                                        streamStartedAt = System.currentTimeMillis(),
-                                        createdAt = System.currentTimeMillis()
+                                        streamStartedAt = now,
+                                        createdAt = now
                                     )
                                 )
                             }
                             pendingStreamContent.set(filteredContent)
                         }
+
                         if (chunk.isComplete) {
-                            pendingStreamComplete.set(true)
+                            val completedId = streamingMessageId
+                            val finalContent = pendingStreamContent.getAndSet(null)
+                            if (completedId != null) {
+                                stateManager.updateMessages { messages ->
+                                    messages.map { msg ->
+                                        if (msg.id == completedId) {
+                                            msg.copy(
+                                                content = finalContent ?: msg.content,
+                                                lastChunkAt = now,
+                                                isStreaming = false
+                                            )
+                                        } else msg
+                                    }
+                                }
+                            }
+                            streamingMessageId = null
+                            streamUiFlushJob?.cancel()
+                            streamUiFlushJob = null
+                            return@withLock
                         }
 
                         if (streamUiFlushJob?.isActive != true) {
                             streamUiFlushJob = cs.launch {
                                 while (!streamingClosed.get()) {
-                                    var shouldStop = false
-                                    streamStateMutex.withLock {
-                                        val contentToFlush = pendingStreamContent.getAndSet(null)
-                                        val isComplete = pendingStreamComplete.get()
+                                    val contentToFlush = streamStateMutex.withLock {
+                                        pendingStreamContent.getAndSet(null)
+                                    }
 
-                                        if (!contentToFlush.isNullOrBlank()) {
-                                            val activeMessageId = streamingMessageId
-                                            if (activeMessageId != null) {
-                                                stateManager.updateMessages { messages ->
-                                                    messages.map { msg ->
-                                                        if (msg.id == activeMessageId) {
-                                                            msg.copy(
-                                                                content = contentToFlush,
-                                                                lastChunkAt = System.currentTimeMillis(),
-                                                                isStreaming = !isComplete
-                                                            )
-                                                        } else msg
-                                                    }
-                                                }
-                                            }
-                                        } else if (isComplete && streamingMessageId != null) {
-                                            val completedId = streamingMessageId
+                                    if (!contentToFlush.isNullOrBlank()) {
+                                        val activeMessageId = streamingMessageId
+                                        if (activeMessageId != null) {
                                             stateManager.updateMessages { messages ->
                                                 messages.map { msg ->
-                                                    if (msg.id == completedId) {
+                                                    if (msg.id == activeMessageId) {
                                                         msg.copy(
-                                                            isStreaming = false,
-                                                            lastChunkAt = System.currentTimeMillis()
+                                                            content = contentToFlush,
+                                                            lastChunkAt = System.currentTimeMillis(),
+                                                            isStreaming = true
                                                         )
                                                     } else msg
                                                 }
                                             }
-                                            streamingMessageId = null
                                         }
-
-                                        if (isComplete) {
-                                            shouldStop = true
-                                        }
-                                    }
-
-                                    if (shouldStop) {
-                                        break
                                     }
 
                                     delay(500)

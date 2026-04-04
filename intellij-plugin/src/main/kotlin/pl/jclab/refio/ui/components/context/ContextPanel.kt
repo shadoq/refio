@@ -204,6 +204,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private var streamingSuppressStartMs: Long? = null
     private var pendingAutoRefreshAfterStreaming = false
     private var latestPromptSnapshot: PromptSnapshot? = null
+    private var autoRefreshBlockedLogged = false
 
     private val sectionEntries = listOf(
         SectionEntry("project_overview", 1, projectOverviewSection) { context, _ ->
@@ -541,10 +542,14 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private fun requestAutoRefresh(reason: String) {
         if (isAutoRefreshBlocked()) {
             pendingAutoRefreshAfterStreaming = true
-            logger.debug { "$reason, but auto-refresh is blocked during streaming/generation" }
+            if (!autoRefreshBlockedLogged) {
+                logger.debug { "$reason, but auto-refresh is blocked during streaming/generation" }
+                autoRefreshBlockedLogged = true
+            }
             return
         }
 
+        autoRefreshBlockedLogged = false
         logger.debug { "$reason, emitting refresh trigger..." }
         refreshTrigger.tryEmit(Unit)
     }
