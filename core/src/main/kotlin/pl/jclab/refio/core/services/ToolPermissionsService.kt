@@ -70,7 +70,8 @@ class ToolPermissionsService(
             "multi_edit" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ON),
             "run_terminal_command" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ASK),
             "http_request" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ON),
-            "run_code" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.OFF)
+            "run_code" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.OFF),
+            "llm_call" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ON)
         )
     }
 

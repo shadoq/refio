@@ -26,7 +26,11 @@ private val logger = dualLogger("HttpRequestTool")
  * Parameters:
  * - url: Target URL (required)
  * - method: HTTP method - GET, POST, PUT, DELETE (default: GET)
- * - body: Request body (optional, for POST/PUT)
+ * - body: Request body as string (optional, for POST/PUT)
+ * - body_file: Path to a file whose contents will be sent as the request body (optional, for POST/PUT).
+ *   Use this instead of 'body' when the payload is large or binary (e.g. a JSON dataset, CSV upload,
+ *   or binary file). The file is streamed directly without loading its content into LLM context.
+ *   If both 'body' and 'body_file' are provided, 'body_file' takes precedence.
  * - headers: Additional headers as key-value map (optional)
  * - content_type: Content-Type header value (default: application/json)
  * - save_to_file: Path to save response body to disk (optional).
@@ -73,7 +77,8 @@ class HttpRequestTool(
                 ?: return@withContext ToolResult.error("Missing required parameter: 'url'")
             urlPolicy.validate(url)
             val method = (params["method"] as? String)?.uppercase() ?: "GET"
-            val body = params["body"] as? String
+            val bodyFile = params["body_file"] as? String
+            val body = if (bodyFile != null) null else params["body"] as? String
             val rawContentType = params["content_type"] as? String
             // Validate and fallback to default if content_type is invalid
             val contentType = run {
@@ -97,7 +102,18 @@ class HttpRequestTool(
             @Suppress("UNCHECKED_CAST")
             val headers = params["headers"] as? Map<String, String> ?: emptyMap()
 
-            logger.info { "HTTP $method $url (body=${body?.length ?: 0} chars, save_to_file=$saveToFile)" }
+            // Resolve body_file path and read bytes if provided
+            val bodyFileBytes: ByteArray? = if (bodyFile != null && method in listOf("POST", "PUT", "PATCH")) {
+                val resolvedBodyFile = if (sandbox != null) sandbox.resolve(bodyFile) else java.nio.file.Paths.get(bodyFile)
+                if (!Files.exists(resolvedBodyFile)) {
+                    return@withContext ToolResult.error("body_file not found: $resolvedBodyFile")
+                }
+                Files.readAllBytes(resolvedBodyFile)
+            } else null
+
+            logger.info {
+                "HTTP $method $url (body=${body?.length ?: 0} chars, body_file=${bodyFileBytes?.size?.let { "$it bytes" } ?: bodyFile}, save_to_file=$saveToFile)"
+            }
 
             val client = HttpClient(CIO) {
                 engine {
@@ -111,9 +127,17 @@ class HttpRequestTool(
                     val response = httpClient.request(url) {
                         this.method = HttpMethod.parse(method)
                         headers.forEach { (key, value) -> header(key, value) }
-                        if (body != null && method in listOf("POST", "PUT", "PATCH")) {
-                            contentType(ContentType.parse(contentType))
-                            setBody(body)
+                        if (method in listOf("POST", "PUT", "PATCH")) {
+                            when {
+                                bodyFileBytes != null -> {
+                                    contentType(ContentType.parse(contentType))
+                                    setBody(bodyFileBytes)
+                                }
+                                body != null -> {
+                                    contentType(ContentType.parse(contentType))
+                                    setBody(body)
+                                }
+                            }
                         }
                     }
 
@@ -463,7 +487,11 @@ class HttpRequestTool(
                 ),
                 "body" to mapOf(
                     "type" to "string",
-                    "description" to "Request body (for POST/PUT), JSON as string."
+                    "description" to "Request body as string (for POST/PUT). Mutually exclusive with body_file."
+                ),
+                "body_file" to mapOf(
+                    "type" to "string",
+                    "description" to "Path to a file to send as request body (for POST/PUT). Preferred over 'body' for large or binary payloads — streams the file directly without loading it into LLM context. If both body and body_file are given, body_file takes precedence."
                 ),
                 "headers" to mapOf(
                     "type" to "object",

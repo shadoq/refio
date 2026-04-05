@@ -116,7 +116,10 @@ class ToolFactory(
             HttpRequestTool(sandbox),
 
             // Code execution
-            RunCodeTool(sandbox)
+            RunCodeTool(sandbox),
+
+            // LLM call (raw single-turn call, no agent loop)
+            LlmCallTool(llmClient, configService, sandbox, fileLimits)
         )
     }
 }

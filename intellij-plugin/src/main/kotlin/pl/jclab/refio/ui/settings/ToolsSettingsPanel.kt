@@ -61,7 +61,8 @@ class ToolsSettingsPanel(
         ToolDefinition("run_terminal_command", "run_terminal_command", "Execute terminal commands", "Off", "On"),
         ToolDefinition("http_request", "http_request", "Make HTTP requests to external APIs (GET, POST, PUT, DELETE)", "Off", "On"),
         ToolDefinition("run_code", "run_code", "Execute inline code snippets (Python, JavaScript, Kotlin)", "Off", "Off"),
-        ToolDefinition("invoke_subagent", "subagent", "Invoke a specialized subagent to solve part of the task", "On", "On")
+        ToolDefinition("invoke_subagent", "subagent", "Invoke a specialized subagent to solve part of the task", "On", "On"),
+        ToolDefinition("llm_call", "llm_call", "Send a prompt directly to an LLM (raw single-turn call, no agent loop)", "Off", "On")
     )
 
     init {

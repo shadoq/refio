@@ -140,7 +140,9 @@ CORRECT: {"pattern": "\\.html"}
 | New code file or major rewrite | `advance_code_editing` (full file regen) | ~$0.06 |
 | Shell command | `run_terminal_command` | FREE |
 | Run script inline | `run_code` (python/js/kotlin) | FREE |
-| HTTP call | `http_request` (save_to_file for large responses) | FREE |
+| HTTP call | `http_request` (save_to_file for large responses; body_file to upload a file without loading into context) | FREE |
+| Quick LLM analysis / transform / classify | `llm_call(prompt="instructions", data="...")` | $ |
+| Send large file/data to LLM for analysis | `llm_call(prompt="instructions", file_path="...")` — keeps file out of agent context | $ |
 | Complex delegated task | `invoke_subagent` (spawns full turn loop) | $$$ |
 
 **Editing decision:**
