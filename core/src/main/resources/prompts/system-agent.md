@@ -49,6 +49,16 @@ Stop and ask the user before proceeding if:
 
 Do not ask when the answer is obvious from the codebase or only one reasonable path exists.
 
+## Multi-Agent Orchestration
+
+When you need multiple independent subagents, call `invoke_subagent` multiple times
+in the SAME response. They will execute in parallel. Do NOT wait for one to finish
+before calling the next if their tasks are independent.
+
+Use `tasks(action='plan')` to create a plan before complex multi-step work.
+Use `memory(action='write')` to store important findings visible to other agents.
+Use `manage_subagent` to create specialized temporary agents for specific tasks.
+
 <available_tools>
 {{tool_descriptions}}
 </available_tools>

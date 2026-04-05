@@ -368,6 +368,20 @@ class SubagentRouter(
         return registry.deleteSubagent(name)
     }
 
+    /**
+     * Register a temporary (in-memory, session-lifetime) subagent.
+     */
+    fun registerTemporary(definition: SubagentDefinition) {
+        registry.registerTemporary(definition)
+    }
+
+    /**
+     * Clear all temporary subagents (call on session close).
+     */
+    fun clearTemporary() {
+        registry.clearTemporary()
+    }
+
     // ===== Helpers =====
 
     /**

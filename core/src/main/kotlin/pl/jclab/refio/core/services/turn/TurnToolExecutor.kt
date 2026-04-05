@@ -393,6 +393,18 @@ class TurnToolExecutor(
                 listener = listener
             )
 
+            // Inject internal metadata for SYSTEM tools (tasks, memory, etc.)
+            val tool = toolRegistry.getTool(toolCall.name)
+            if (tool?.category == ToolCategory.SYSTEM || toolCall.name == "invoke_subagent") {
+                argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.TASK_ID, taskId)
+                argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.MODE, mode.name)
+                argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.ITERATION, iteration)
+                argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.SESSION_ID, taskId)
+                profileOverrides?.subagentName?.let { argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.AGENT_NAME, it) }
+                profileOverrides?.let { argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.AGENT_ID, runId) }
+                profileOverrides?.parentRunId?.let { argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.PARENT_RUN_ID, it) }
+            }
+
             // Inject enriched conversation context for LLM-based coding tools
             if (toolCall.name in codingToolNames) {
                 val context = buildCodingToolContext(taskId, CODING_TOOL_CONTEXT_TOKENS)

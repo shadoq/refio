@@ -27,10 +27,14 @@ class ToolRegistry {
     private val toolOrder = listOf(
         // READ — orientation & analysis
         "read_file", "read_directory", "file_search", "grep_search", "view_diff",
+        // SYSTEM — planning, memory & agent management
+        "tasks", "memory", "manage_subagent",
         // WRITE — cheapest first
         "code_editing", "multi_edit", "create_new_file", "multi_line_editor", "advance_code_editing",
         // EXECUTE — verification & data
         "run_terminal_command", "run_code", "http_request",
+        // COMMUNICATE
+        "send_message",
         // DELEGATE — only when the agent cannot handle the task itself
         "invoke_subagent"
     )

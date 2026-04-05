@@ -460,6 +460,18 @@ class SessionLifecycleService(
         saveCurrentSessionState()
     }
 
+    fun setMultiAgentEnabled(enabled: Boolean) {
+        stateManager.setMultiAgentEnabled(enabled)
+        logger.info { "Multi-agent mode set to: $enabled" }
+        setUiSettingDefaults(ConfigService.KEY_UI_ORCHESTRATION_ENABLED, enabled.toString())
+    }
+
+    fun setMultiAgentStrategy(strategy: pl.jclab.refio.api.models.MultiAgentStrategy) {
+        stateManager.setMultiAgentStrategy(strategy)
+        logger.info { "Multi-agent strategy set to: $strategy" }
+        setUiSettingDefaults(ConfigService.KEY_UI_MULTI_AGENT_STRATEGY, strategy.name)
+    }
+
     suspend fun getAvailableModels(): List<String> {
         val models = projectRouter.configRouter.getModelsWithVisibility()
         val visibleModels = models.filter { it.showInDropdown }
@@ -610,7 +622,7 @@ class SessionLifecycleService(
         logger.info {
             "Loaded UI state from config: model=${stateManager.getSelectedModel()}, " +
                 "thinking=${stateManager.getThinkingEnabled()}, noEgress=${stateManager.getNoEgressEnabled()}, " +
-            "mode=$selectedMode"
+                "multiAgent=${stateManager.getMultiAgentEnabled()}, mode=$selectedMode"
         }
     }
 
@@ -680,7 +692,7 @@ class SessionLifecycleService(
             projectId = projectId
         )?.also { hasAny = true }
 
-        @Suppress("UNUSED_VARIABLE") val _orchestrationEnabled = configService.get(
+        val multiAgentEnabled = configService.get(
             ConfigService.KEY_UI_ORCHESTRATION_ENABLED,
             scope,
             taskId = taskId,
@@ -698,10 +710,21 @@ class SessionLifecycleService(
             return null
         }
 
+        val multiAgentStrategyValue = configService.get(
+            ConfigService.KEY_UI_MULTI_AGENT_STRATEGY,
+            scope,
+            taskId = taskId,
+            projectId = projectId
+        )?.also { hasAny = true }
+
         return SessionSettings(
             selectedModel = selectedModel,
             thinkingEnabled = thinkingEnabled ?: false,
             noEgressEnabled = noEgressEnabled ?: false,
+            multiAgentEnabled = multiAgentEnabled ?: false,
+            multiAgentStrategy = multiAgentStrategyValue?.let {
+                pl.jclab.refio.api.models.MultiAgentStrategy.fromString(it)
+            } ?: pl.jclab.refio.api.models.MultiAgentStrategy.SINGLE,
             executionMode = parseExecutionMode(executionModeValue)
         )
     }
@@ -713,6 +736,8 @@ class SessionLifecycleService(
         settings.selectedModel?.let { stateManager.setSelectedModel(it) }
         stateManager.setThinkingEnabled(settings.thinkingEnabled)
         stateManager.setNoEgressEnabled(settings.noEgressEnabled)
+        stateManager.setMultiAgentEnabled(settings.multiAgentEnabled)
+        stateManager.setMultiAgentStrategy(settings.multiAgentStrategy)
     }
 
     private fun captureCurrentSettings(currentExecutionMode: ExecutionMode): SessionSettings =
@@ -720,6 +745,8 @@ class SessionLifecycleService(
             selectedModel = stateManager.getSelectedModel(),
             thinkingEnabled = stateManager.getThinkingEnabled(),
             noEgressEnabled = stateManager.getNoEgressEnabled(),
+            multiAgentEnabled = stateManager.getMultiAgentEnabled(),
+            multiAgentStrategy = stateManager.getMultiAgentStrategy(),
             executionMode = currentExecutionMode
         )
 
@@ -833,6 +860,8 @@ class SessionLifecycleService(
             selectedModel = selectedModel,
             thinkingEnabled = thinkingEnabled,
             noEgressEnabled = noEgressEnabled,
+            multiAgentEnabled = multiAgentEnabled,
+            multiAgentStrategy = multiAgentStrategy.name,
             executionMode = executionMode.name
         )
         return pl.jclab.refio.core.utils.GsonInstance.gson.toJson(payload)
@@ -851,6 +880,8 @@ class SessionLifecycleService(
         val selectedModel: String?,
         val thinkingEnabled: Boolean,
         val noEgressEnabled: Boolean,
+        val multiAgentEnabled: Boolean,
+        val multiAgentStrategy: pl.jclab.refio.api.models.MultiAgentStrategy,
         val executionMode: ExecutionMode
     ) {
         companion object {
@@ -858,6 +889,8 @@ class SessionLifecycleService(
                 selectedModel = null,
                 thinkingEnabled = false,
                 noEgressEnabled = false,
+                multiAgentEnabled = false,
+                multiAgentStrategy = pl.jclab.refio.api.models.MultiAgentStrategy.SINGLE,
                 executionMode = ExecutionMode.INTERACTIVE
             )
         }
@@ -867,12 +900,16 @@ class SessionLifecycleService(
         val selectedModel: String? = null,
         val thinkingEnabled: Boolean = false,
         val noEgressEnabled: Boolean = false,
+        val multiAgentEnabled: Boolean = false,
+        val multiAgentStrategy: String = pl.jclab.refio.api.models.MultiAgentStrategy.SINGLE.name,
         val executionMode: String = ExecutionMode.INTERACTIVE.name
     ) {
         fun toSettings(): SessionSettings = SessionSettings(
             selectedModel = selectedModel,
             thinkingEnabled = thinkingEnabled,
             noEgressEnabled = noEgressEnabled,
+            multiAgentEnabled = multiAgentEnabled,
+            multiAgentStrategy = pl.jclab.refio.api.models.MultiAgentStrategy.fromString(multiAgentStrategy),
             executionMode = parseExecutionModeValue(executionMode)
         )
     }

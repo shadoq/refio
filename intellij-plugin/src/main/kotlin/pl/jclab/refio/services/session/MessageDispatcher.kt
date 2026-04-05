@@ -158,7 +158,9 @@ class MessageDispatcher(
                     },
                     toolCallId = coreMsg.toolCallId, // For TOOL messages - link to tool call
                     toolCallInfo = toolCallInfo,
-                    toolStreamContent = toolDisplay.toolStreamContent
+                    toolStreamContent = toolDisplay.toolStreamContent,
+                    agentName = (coreMsg as? pl.jclab.refio.core.api.MessageResponse)?.agentName,
+                    agentDepth = (coreMsg as? pl.jclab.refio.core.api.MessageResponse)?.agentDepth
                 )
 
                 // Skip tool result messages whose content is already inlined into the tool call bubble

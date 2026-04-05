@@ -94,6 +94,7 @@ class CoreApiRouter(
     val llmClient = llmClientOverride ?: LLMClient(configService)
     private val workingMemoryService = WorkingMemoryService()
     private val workingMemoryIntegration = WorkingMemoryIntegration(workingMemoryService)
+    val agentPlanService = AgentPlanService()
     private val conversationSummaryService = ConversationSummaryService(
         llmClient = llmClient,
         promptsService = promptsService,
@@ -294,7 +295,10 @@ class CoreApiRouter(
             workingMemoryService = workingMemoryService,
             projectRoot = projectRoot,
             tokenEstimator = tokenEstimator,
-            promptCache = null  // Could be added later if needed
+            promptCache = null,  // Could be added later if needed
+            sectionProviders = listOf(
+                AgentPlansSectionProvider(agentPlanService)
+            )
         )
 
         val toolCallParser = ToolCallParser(
@@ -357,7 +361,8 @@ class CoreApiRouter(
             tokenEstimator = tokenEstimator,
             conversationCompactor = null,
             llmRetryHandler = null,
-            workingMemoryIntegration = workingMemoryIntegration
+            workingMemoryIntegration = workingMemoryIntegration,
+            agentEventBus = agentEventBus
         )
     } else null
 
@@ -619,9 +624,29 @@ class CoreApiRouter(
                     toolRegistry.register(invokeSubagentTool)
                     logger.info { "CoreApiRouter: invoke_subagent tool registered" }
                 }
+
+                // Register SYSTEM tools for multi-agent orchestration
+                val tasksTool = pl.jclab.refio.core.tools.implementations.TasksTool(agentPlanService)
+                val memoryTool = pl.jclab.refio.core.tools.implementations.MemoryTool(workingMemoryService)
+                val manageSubagentTool = pl.jclab.refio.core.tools.implementations.ManageSubagentTool { subagentRouter }
+                val sendMessageTool = pl.jclab.refio.core.tools.implementations.SendMessageTool(agentEventBus)
+
+                listOf(tasksTool, memoryTool, manageSubagentTool, sendMessageTool).forEach { tool ->
+                    if (!toolRegistry.hasTool(tool.name)) {
+                        toolRegistry.register(tool)
+                    }
+                }
+                logger.info { "CoreApiRouter: SYSTEM tools registered (tasks, memory, manage_subagent, send_message)" }
             } catch (e: Exception) {
                 logger.warn(e) { "CoreApiRouter: failed to register invoke_subagent tool" }
             }
+        }
+
+        // Apply Ollama concurrency from config
+        val ollamaMaxConcurrent = configService.get(ConfigService.KEY_OLLAMA_MAX_CONCURRENT)?.toIntOrNull()
+        if (ollamaMaxConcurrent != null && ollamaMaxConcurrent > 0) {
+            OllamaRequestGate.maxConcurrentPerEndpoint = ollamaMaxConcurrent
+            logger.info { "CoreApiRouter: Ollama maxConcurrent set to $ollamaMaxConcurrent" }
         }
 
         logger.info { "CoreApiRouter initialized with services" }
@@ -987,6 +1012,8 @@ class CoreApiRouter(
     }
 
     fun close() {
+        subagentRouter?.clearTemporary()
+        agentPlanService.clear()
         routerScope.cancel("CoreApiRouter closing")
     }
 }

@@ -123,7 +123,9 @@ data class MessageResponse(
     val cost: Double?,
     val createdAt: Long,
     val isSummarized: Boolean = false,  // For TOOL messages - whether content is a summary
-    val rawOutput: String? = null       // For TOOL messages - original full output before summarization
+    val rawOutput: String? = null,      // For TOOL messages - original full output before summarization
+    val agentName: String? = null,      // Subagent name for multi-agent UI
+    val agentDepth: Int? = null         // Nesting depth (0=main, 1=subagent)
 )
 
 data class GetMessagesResponse(

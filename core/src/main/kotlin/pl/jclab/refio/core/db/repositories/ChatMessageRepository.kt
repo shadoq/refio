@@ -31,12 +31,16 @@ class ChatMessageRepository {
         tokensIn: Int? = null,
         tokensOut: Int? = null,
         cost: Double? = null,
-        agentInstanceId: String? = null
+        agentInstanceId: String? = null,
+        agentName: String? = null,
+        agentDepth: Int? = null
     ): ChatMessage {
         return transaction {
             val messageId = ChatMessagesTable.insert {
                 it[ChatMessagesTable.taskId] = taskId
                 it[ChatMessagesTable.agentInstanceId] = agentInstanceId
+                it[ChatMessagesTable.agentName] = agentName
+                it[ChatMessagesTable.agentDepth] = agentDepth
                 it[ChatMessagesTable.role] = role
                 it[ChatMessagesTable.content] = content
                 it[ChatMessagesTable.thinking] = thinking
@@ -223,6 +227,8 @@ class ChatMessageRepository {
             id = row[ChatMessagesTable.id],
             taskId = row[ChatMessagesTable.taskId],
             agentInstanceId = row[ChatMessagesTable.agentInstanceId],
+            agentName = row[ChatMessagesTable.agentName],
+            agentDepth = row[ChatMessagesTable.agentDepth],
             role = row[ChatMessagesTable.role],
             content = row[ChatMessagesTable.content],
             thinking = row[ChatMessagesTable.thinking],

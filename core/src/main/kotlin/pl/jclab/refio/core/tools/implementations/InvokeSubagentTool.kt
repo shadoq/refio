@@ -63,9 +63,12 @@ class InvokeSubagentTool(
             return ToolResult.error("Subagent recursion detected for '$subagentName'")
         }
 
-        val mode = runCatching {
-            TaskMode.valueOf(params["_mode"]?.toString() ?: TaskMode.AGENT.name)
-        }.getOrDefault(TaskMode.AGENT)
+        // Security ceiling: subagent mode can never exceed parent mode.
+        // Default to PLAN (not AGENT) if _mode is missing — safe fallback.
+        val parentMode = runCatching {
+            TaskMode.valueOf(params["_mode"]?.toString() ?: TaskMode.PLAN.name)
+        }.getOrDefault(TaskMode.PLAN)
+        val mode = parentMode // subagent inherits parent's mode as ceiling
 
         val executionMode = runCatching {
             ExecutionMode.valueOf(params["_execution_mode"]?.toString() ?: ExecutionMode.AUTO.name)
@@ -119,15 +122,25 @@ class InvokeSubagentTool(
             if (!result.success) {
                 ToolResult.error("Subagent '$subagentName' failed: ${result.response}")
             } else {
+                // Include any unanswered questions from the child in the output
+                val unansweredQuestions = result.unansweredQuestions.orEmpty()
+                val output = if (unansweredQuestions.isNotEmpty()) {
+                    val questionsSummary = unansweredQuestions.joinToString("\n") { "  - $it" }
+                    "${result.response}\n\n[Subagent '$subagentName' had unanswered questions:]\n$questionsSummary"
+                } else {
+                    result.response
+                }
+
                 ToolResult.success(
-                    output = result.response,
+                    output = output,
                     metadata = mapOf(
                         "subagent_name" to subagentName,
                         "depth" to childDepth,
                         "iterations" to result.iterations,
                         "tokens_in" to result.tokensIn,
                         "tokens_out" to result.tokensOut,
-                        "cost" to result.cost
+                        "cost" to result.cost,
+                        "unanswered_questions" to unansweredQuestions.size
                     )
                 )
             }

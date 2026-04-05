@@ -164,6 +164,7 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
         tabbedPane = JTabbedPane().apply {
             addTab("Chat", chatPanel)
             addTab("Execution", stepsPanel)
+            addTab("Agents", pl.jclab.refio.ui.components.agents.AgentExecutionPanel())
             addTab("Context", contextPanel)
             addTab("RAG", ragViewPanel)
             addTab("Logs", logsPanel)

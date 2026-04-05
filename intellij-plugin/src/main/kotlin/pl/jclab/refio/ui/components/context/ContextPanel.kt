@@ -149,6 +149,8 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private val recentWorkSection = createSection("Recent Work", "recent_work")
     private val frameworkAnalysisSection = createSection("Framework Analysis", "framework_analysis")
     private val workingMemorySection = createSection("Working Memory", "working_memory")
+    private val agentPlansSection = createSection("Agent Plans", "agent_plans")
+    private val agentMemorySection = createSection("Agent Memory", "agent_memory")
     private val contextStabilitySection = createSection("Context Stability", "context_stability")
     private val domainAnalysisSection = createSection("Domain Analysis", "domain_analysis")
     // Runtime sections (from ProjectContextRouter.buildActiveSectionTokens)
@@ -258,7 +260,9 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         SectionEntry("framework_analysis", 16, frameworkAnalysisSection) { context, _ ->
             updateFrameworkAnalysisSection(context)
         },
-        SectionEntry("working_memory", 17, workingMemorySection) { context, _ ->
+        SectionEntry("agent_plans", 17, agentPlansSection) { _, _ -> },
+        SectionEntry("agent_memory", 18, agentMemorySection) { _, _ -> },
+        SectionEntry("working_memory", 19, workingMemorySection) { context, _ ->
             updateWorkingMemorySection(context)
         },
         SectionEntry("context_stability", 18, contextStabilitySection) { context, _ ->

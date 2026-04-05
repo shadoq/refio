@@ -22,8 +22,9 @@ class WorkingMemoryService(
     private val maxEntriesPerTask: Int = ConfigService.DEFAULT_WORKING_MEMORY_MAX_FACTS
 ) {
     private val entriesByTask = ConcurrentHashMap<String, ConcurrentHashMap<String, WorkingMemoryEntry>>()
+    private val entriesBySession = ConcurrentHashMap<String, ConcurrentHashMap<String, WorkingMemoryEntry>>()
 
-    fun recordEntries(taskId: String, entries: List<WorkingMemoryEntry>) {
+    fun recordEntries(taskId: String, entries: List<WorkingMemoryEntry>, sessionId: String? = null) {
         if (entries.isEmpty()) return
         val taskEntries = entriesByTask.computeIfAbsent(taskId) { ConcurrentHashMap() }
 
@@ -33,6 +34,31 @@ class WorkingMemoryService(
         }
 
         trimEntries(taskEntries)
+
+        // Also record under sessionId so orchestrator sees all subagent memory
+        if (sessionId != null) {
+            val sessionEntries = entriesBySession.computeIfAbsent(sessionId) { ConcurrentHashMap() }
+            entries.forEach { entry ->
+                val id = buildEntryId(entry)
+                sessionEntries[id] = entry.copy(lastAccessedAt = Instant.now())
+            }
+            trimEntries(sessionEntries)
+        }
+    }
+
+    /**
+     * Build working memory section from session-scoped entries (all agents).
+     * Falls back to task-scoped if sessionId not found.
+     */
+    fun buildSessionMemorySection(sessionId: String, maxTokens: Int): String {
+        val sessionEntries = entriesBySession[sessionId]
+        if (sessionEntries == null || sessionEntries.isEmpty()) return ""
+        return formatEntriesAsSection(sessionEntries, maxTokens)
+    }
+
+    /** Remove session-scoped entries (call on session close). */
+    fun clearSession(sessionId: String) {
+        entriesBySession.remove(sessionId)
     }
 
     fun extractKnowledge(
@@ -63,9 +89,17 @@ class WorkingMemoryService(
         if (maxTokens <= 0) return ""
         val taskEntries = entriesByTask[taskId] ?: return ""
         if (taskEntries.isEmpty()) return ""
+        return formatEntriesAsSection(taskEntries, maxTokens)
+    }
 
-        val maxIteration = taskEntries.values.maxOf { it.iteration }
-        val grouped = taskEntries.values.groupBy { it.key }
+    private fun formatEntriesAsSection(
+        entries: ConcurrentHashMap<String, WorkingMemoryEntry>,
+        maxTokens: Int
+    ): String {
+        if (entries.isEmpty()) return ""
+
+        val maxIteration = entries.values.maxOf { it.iteration }
+        val grouped = entries.values.groupBy { it.key }
         val sortedKeys = grouped.keys.sortedByDescending { key ->
             grouped[key]?.maxOfOrNull { effectiveImportance(it, maxIteration) } ?: 0
         }
@@ -75,7 +109,7 @@ class WorkingMemoryService(
         var tokensUsed = ContextTokenEstimator.estimateTokens(sb.toString())
 
         for (key in sortedKeys) {
-            val entries = grouped[key].orEmpty().sortedWith(
+            val sortedEntries = grouped[key].orEmpty().sortedWith(
                 compareByDescending<WorkingMemoryEntry> { effectiveImportance(it, maxIteration) }.thenByDescending { it.lastAccessedAt }
             )
 
@@ -85,7 +119,7 @@ class WorkingMemoryService(
             sb.append(header).append('\n')
             tokensUsed += headerTokens
 
-            for (entry in entries) {
+            for (entry in sortedEntries) {
                 val line = "- ${entry.value}"
                 val lineTokens = ContextTokenEstimator.estimateTokens(line)
                 if (tokensUsed + lineTokens > maxTokens) {
@@ -101,7 +135,7 @@ class WorkingMemoryService(
                         tokensUsed += excerptTokens
                     }
                 }
-                taskEntries[buildEntryId(entry)] = entry.copy(lastAccessedAt = Instant.now())
+                entries[buildEntryId(entry)] = entry.copy(lastAccessedAt = Instant.now())
             }
 
             sb.append('\n')

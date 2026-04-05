@@ -7,6 +7,7 @@ import pl.jclab.refio.core.subagents.models.SubagentExecutionMode
 import pl.jclab.refio.core.subagents.models.SubagentScope
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.exists
 
 /**
@@ -23,6 +24,12 @@ class SubagentRegistry(
     private val projectRootPath: Path,
     private val parser: SubagentParser = SubagentParser()
 ) : FileBasedRegistry<SubagentDefinition>("subagents", projectRootPath) {
+
+    /**
+     * In-memory storage for temporary (session-lifetime) subagents.
+     * Highest priority in lookup: TEMPORARY > PROJECT > USER > BUILTIN.
+     */
+    private val temporaryItems = ConcurrentHashMap<String, SubagentDefinition>()
 
     /**
      * Katalog subagentów w projekcie.
@@ -105,6 +112,58 @@ class SubagentRegistry(
         }
 
         logger.info { "Finished loading builtin subagents: ${builtinItems.size} total" }
+    }
+
+    // ==========================================
+    // TEMPORARY scope support
+    // ==========================================
+
+    /**
+     * Register a temporary (in-memory, session-lifetime) subagent.
+     * Temporary agents have highest lookup priority.
+     */
+    fun registerTemporary(definition: SubagentDefinition) {
+        val def = definition.copy(scope = SubagentScope.TEMPORARY, sourcePath = null)
+        temporaryItems[def.name.lowercase()] = def
+        logger.info { "Registered temporary subagent: ${def.name}" }
+    }
+
+    /**
+     * Clear all temporary subagents (call on session close).
+     */
+    fun clearTemporary() {
+        val count = temporaryItems.size
+        temporaryItems.clear()
+        if (count > 0) {
+            logger.info { "Cleared $count temporary subagents" }
+        }
+    }
+
+    // ==========================================
+    // Override base class lookup to include TEMPORARY layer
+    // ==========================================
+
+    /**
+     * Priority: TEMPORARY > PROJECT > USER > BUILTIN
+     */
+    override fun get(name: String): SubagentDefinition? {
+        refreshIfNeeded()
+        val key = name.lowercase()
+        return temporaryItems[key] ?: projectFileItems[key] ?: userFileItems[key] ?: builtinItems[key]
+    }
+
+    /**
+     * Merged view including temporary agents.
+     */
+    override fun getAll(includeDisabled: Boolean): List<SubagentDefinition> {
+        refreshIfNeeded()
+        val merged = LinkedHashMap<String, SubagentDefinition>()
+        builtinItems.forEach { (k, v) -> merged[k] = v }
+        userFileItems.forEach { (k, v) -> merged[k] = v }
+        projectFileItems.forEach { (k, v) -> merged[k] = v }
+        temporaryItems.forEach { (k, v) -> merged[k] = v }
+        return merged.values
+            .let { if (includeDisabled) it.toList() else it.filter { item -> isEnabled(item) } }
     }
 
     // ==========================================
@@ -217,6 +276,7 @@ class SubagentRegistry(
             SubagentScope.PROJECT -> projectFileItems
             SubagentScope.USER -> userFileItems
             SubagentScope.BUILTIN -> builtinItems
+            SubagentScope.TEMPORARY -> temporaryItems
         }
         targetMap[definition.name.lowercase()] = definition
 
@@ -235,6 +295,13 @@ class SubagentRegistry(
             throw IllegalArgumentException("Cannot delete builtin subagent")
         }
 
+        // Temporary agents: just remove from in-memory map
+        if (definition.scope == SubagentScope.TEMPORARY) {
+            temporaryItems.remove(name.lowercase())
+            logger.info { "Deleted temporary subagent: $name" }
+            return true
+        }
+
         val sourcePath = definition.sourcePath
             ?: throw IllegalArgumentException("Cannot delete subagent without source path")
 
@@ -244,6 +311,7 @@ class SubagentRegistry(
                 SubagentScope.PROJECT -> projectFileItems
                 SubagentScope.USER -> userFileItems
                 SubagentScope.BUILTIN -> builtinItems
+                SubagentScope.TEMPORARY -> temporaryItems
             }
             targetMap.remove(name.lowercase())
             logger.info { "Deleted subagent: $name" }

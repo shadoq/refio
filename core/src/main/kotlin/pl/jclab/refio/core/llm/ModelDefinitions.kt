@@ -3455,6 +3455,101 @@ object ModelDefinitions {
             active = true
         ),
 
+        // Gemma 4 - Latest generation with vision, audio, and function calling
+        "gemma4:e2b" to ModelDefinition(
+            id = "gemma4:e2b",
+            name = "Gemma 4 E2B",
+            provider = "ollama",
+            description = "Edge model, 2.3B effective (5.1B with embeddings), multimodal with function calling",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.AUDIO,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "gemma4:e4b" to ModelDefinition(
+            id = "gemma4:e4b",
+            name = "Gemma 4 E4B",
+            provider = "ollama",
+            description = "Edge model, 4.5B effective (8B with embeddings), multimodal with function calling",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.AUDIO,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "gemma4:26b" to ModelDefinition(
+            id = "gemma4:26b",
+            name = "Gemma 4 26B MoE",
+            provider = "ollama",
+            description = "Mixture-of-Experts, 25.2B total / 3.8B active, vision with function calling",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "gemma4:31b" to ModelDefinition(
+            id = "gemma4:31b",
+            name = "Gemma 4 31B",
+            provider = "ollama",
+            description = "Dense 30.7B model, vision with function calling, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
         "gemma2:2b" to ModelDefinition(
             id = "gemma2:2b",
             name = "Gemma 2 2B",

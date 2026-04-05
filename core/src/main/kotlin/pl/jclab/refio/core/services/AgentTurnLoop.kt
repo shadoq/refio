@@ -4,6 +4,8 @@
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import pl.jclab.refio.core.api.StreamCallback
 import pl.jclab.refio.core.api.TurnProfileOverrides
@@ -114,7 +116,8 @@ class AgentTurnLoop(
     private val conversationCompactor: ConversationCompactor? = null,
     private val llmRetryHandler: LLMRetryHandler? = null,
     private val workingMemoryIntegration: WorkingMemoryIntegration? = null,
-    private val pendingUserMessageQueue: PendingUserMessageQueue? = null
+    private val pendingUserMessageQueue: PendingUserMessageQueue? = null,
+    private val agentEventBus: pl.jclab.refio.core.agents.events.AgentEventBus? = null
 ) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
 
@@ -731,6 +734,42 @@ class AgentTurnLoop(
                             }
                         }
 
+                        // Handle AWAITING_RESPONSE from send_message tool
+                        for ((toolCall, resultData) in toolResults) {
+                            val metadata = resultData.metadata?.let { TurnJsonUtils.parseJsonToMap(it) }
+                            if (metadata?.get("type") == "AWAITING_RESPONSE" && agentEventBus != null) {
+                                val requestId = metadata["requestId"] as? String ?: continue
+                                val timeout = 300_000L // 5 minutes
+                                logger.info { "[AWAITING_RESPONSE] Tool ${toolCall.name} waiting for response to $requestId" }
+                                updateTurnState { copy(phase = TurnPhase.WAITING_FOR_PERMISSION) } // reuse state
+
+                                val response = try {
+                                    kotlinx.coroutines.withTimeout(timeout) {
+                                        agentEventBus.eventsOfType<pl.jclab.refio.core.agents.events.AgentEvent.DataResponse>()
+                                            .filter { it.requestId == requestId }
+                                            .first()
+                                    }
+                                } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
+                                    null
+                                }
+
+                                updateTurnState { copy(phase = TurnPhase.EXECUTING_TOOLS) }
+
+                                val responseContent = if (response != null) {
+                                    "Response received: ${response.response}"
+                                } else {
+                                    "No response received within timeout. Continue with available information."
+                                }
+
+                                chatMessageRepository.create(
+                                    taskId = taskId,
+                                    role = MessageRole.SYSTEM,
+                                    content = responseContent
+                                )
+                                logger.info { "[AWAITING_RESPONSE] Got response for $requestId: ${responseContent.take(100)}" }
+                            }
+                        }
+
                         // Generate batch summary for UI
                         val batchInput = toolResults.map { (call, resultData) ->
                             ToolCallWithResult(
@@ -1239,5 +1278,6 @@ data class TurnResult(
     val toolsUsed: List<String> = emptyList(),
     val rejectedByUser: Boolean = false,
     val rejectedToolName: String? = null,
-    val rejectionReason: String? = null
+    val rejectionReason: String? = null,
+    val unansweredQuestions: List<String>? = null
 )

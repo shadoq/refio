@@ -507,10 +507,63 @@ class InvokeSubagentToolTest {
     }
 
     @Nested
+    inner class SecurityCeilingTests {
+
+        @Test
+        fun `should default to PLAN mode when _mode not specified`() = runBlocking {
+            // Security ceiling: missing _mode defaults to PLAN (safe fallback), not AGENT
+            val params = mapOf(
+                "_task_id" to "task-123",
+                "subagent_name" to "test-agent",
+                "goal" to "Test"
+                // No _mode parameter
+            )
+
+            val result = tool.execute(params)
+            assertTrue(result.success)
+
+            val request = lastRunTurnRequest as TurnRequest
+            assertEquals(pl.jclab.refio.core.db.TaskMode.PLAN, request.mode)
+        }
+
+        @Test
+        fun `should inherit PLAN mode from parent`() = runBlocking {
+            val params = mapOf(
+                "_task_id" to "task-123",
+                "subagent_name" to "test-agent",
+                "goal" to "Test",
+                "_mode" to "PLAN"
+            )
+
+            val result = tool.execute(params)
+            assertTrue(result.success)
+
+            val request = lastRunTurnRequest as TurnRequest
+            assertEquals(pl.jclab.refio.core.db.TaskMode.PLAN, request.mode)
+        }
+
+        @Test
+        fun `should inherit AGENT mode from parent`() = runBlocking {
+            val params = mapOf(
+                "_task_id" to "task-123",
+                "subagent_name" to "test-agent",
+                "goal" to "Test",
+                "_mode" to "AGENT"
+            )
+
+            val result = tool.execute(params)
+            assertTrue(result.success)
+
+            val request = lastRunTurnRequest as TurnRequest
+            assertEquals(pl.jclab.refio.core.db.TaskMode.AGENT, request.mode)
+        }
+    }
+
+    @Nested
     inner class DefaultParameterTests {
 
         @Test
-        fun `should default to AGENT mode when not specified`() = runBlocking {
+        fun `should default to PLAN mode when not specified`() = runBlocking {
             // Given
             val params = mapOf(
                 "_task_id" to "task-123",

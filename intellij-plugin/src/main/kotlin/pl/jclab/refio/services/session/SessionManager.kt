@@ -81,6 +81,8 @@ class SessionManager(private val project: Project) {
     val selectedModel: StateFlow<String> = stateManager.selectedModel
     val thinkingEnabled: StateFlow<Boolean> = stateManager.thinkingEnabled
     val noEgressEnabled: StateFlow<Boolean> = stateManager.noEgressEnabled
+    val multiAgentEnabled: StateFlow<Boolean> = stateManager.multiAgentEnabled
+    val multiAgentStrategy: StateFlow<pl.jclab.refio.api.models.MultiAgentStrategy> = stateManager.multiAgentStrategy
 
     val isPaused: StateFlow<Boolean> = stateManager.isPaused
     val isGenerating: StateFlow<Boolean> = stateManager.isGenerating
@@ -463,9 +465,16 @@ class SessionManager(private val project: Project) {
     }
 
     /**
-     * Set orchestration mode enabled/disabled (US-028).
+     * Set multi-agent mode enabled/disabled.
      * Auto-saves UI state to database.
      */
+    fun setMultiAgentEnabled(enabled: Boolean) {
+        lifecycleService.setMultiAgentEnabled(enabled)
+    }
+
+    fun setMultiAgentStrategy(strategy: pl.jclab.refio.api.models.MultiAgentStrategy) {
+        lifecycleService.setMultiAgentStrategy(strategy)
+    }
 
     suspend fun getAvailableModels(): List<String> {
         return lifecycleService.getAvailableModels()

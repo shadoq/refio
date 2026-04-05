@@ -100,6 +100,7 @@ class PromptInputPanel(
     private val executionModeToggle: JToggleButton
     private val thinkingToggle: JToggleButton
     private val noEgressToggle: JToggleButton
+    private val multiAgentToggle: JToggleButton
 
     private val inputContainer: InputPanelContainer
     private val promptEditor: EditorTextField
@@ -412,6 +413,29 @@ class PromptInputPanel(
             }
         }
 
+        multiAgentToggle = JToggleButton("👤").apply {
+            toolTipText = "Multi-agent mode disabled"
+            preferredSize = Dimension(200, 28)
+            minimumSize = Dimension(200, 28)
+            maximumSize = Dimension(200, 28)
+
+            addActionListener {
+                if (!isUpdatingToggleProgrammatically) {
+                    if (isSelected) {
+                        text = "👥 Multi-agent enabled"
+                        toolTipText = "Multi-agent mode enabled"
+                    } else {
+                        text = "👤 Multi-agent disabled"
+                        toolTipText = "Multi-agent mode disabled"
+                    }
+
+                    sessionManager.setMultiAgentEnabled(isSelected)
+                    logger.info { "Multi-agent mode toggled: ${isSelected}" }
+                }
+                updateBadge()
+            }
+        }
+
         // More options button (...) - shows popup with toggle buttons
         val moreOptionsButton = JButton("...").apply {
             toolTipText = "More options"
@@ -533,6 +557,29 @@ class PromptInputPanel(
                         } else {
                             noEgressToggle.text = "🌐 No-egress disabled"
                             noEgressToggle.toolTipText = "No-egress mode disabled (network enabled)"
+                        }
+                    }
+
+                    isUpdatingToggleProgrammatically = false
+                    updateBadge()
+                }
+            }
+        }
+
+        // Listen to multi-agent toggle state changes
+        cs.launch {
+            sessionManager.multiAgentEnabled.collect { enabled ->
+                if (multiAgentToggle.isSelected != enabled) {
+                    isUpdatingToggleProgrammatically = true
+                    multiAgentToggle.isSelected = enabled
+
+                    SwingUtilities.invokeLater {
+                        if (enabled) {
+                            multiAgentToggle.text = "👥 Multi-agent enabled"
+                            multiAgentToggle.toolTipText = "Multi-agent mode enabled"
+                        } else {
+                            multiAgentToggle.text = "👤 Multi-agent disabled"
+                            multiAgentToggle.toolTipText = "Multi-agent mode disabled"
                         }
                     }
 
@@ -2330,6 +2377,7 @@ class PromptInputPanel(
         executionModeToggle.text = if (executionModeToggle.isSelected) "🤚 Interactive mode" else "⚡ Auto mode"
         thinkingToggle.text = if (thinkingToggle.isSelected) "🧠 Thinking mode enabled" else "💭 Thinking mode disabled"
         noEgressToggle.text = if (noEgressToggle.isSelected) "🔒 No-egress enabled" else "🌐 No-egress disabled"
+        multiAgentToggle.text = if (multiAgentToggle.isSelected) "👥 Multi-agent enabled" else "👤 Multi-agent disabled"
 
         buttonPanel.add(executionModeToggle)
         buttonPanel.add(Box.createVerticalStrut(3))
@@ -2337,6 +2385,8 @@ class PromptInputPanel(
         buttonPanel.add(thinkingToggle)
         buttonPanel.add(Box.createVerticalStrut(3))
         buttonPanel.add(noEgressToggle)
+        buttonPanel.add(Box.createVerticalStrut(3))
+        buttonPanel.add(multiAgentToggle)
 
         // Add the panel to the popup
         popup.add(buttonPanel)

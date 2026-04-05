@@ -10,7 +10,8 @@ import java.nio.file.Path
 enum class SubagentScope {
     PROJECT,    // .refio/agents/
     USER,       // ~/.refio/agents/
-    BUILTIN     // Wbudowany (z resources)
+    BUILTIN,    // Wbudowany (z resources)
+    TEMPORARY   // In-memory, session lifetime
 }
 
 /**

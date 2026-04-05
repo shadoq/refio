@@ -123,7 +123,14 @@ enum class ToolCategory {
      * (e.g., run_terminal_command)
      * Mixed behavior - may produce data or modify files
      */
-    EXECUTION
+    EXECUTION,
+
+    /**
+     * Tools that manage internal agent state (plans, memory, messages, subagents).
+     * Do not modify user files. Treated as sequential by ParallelToolExecutor
+     * despite being READ_ONLY in filesystem terms.
+     */
+    SYSTEM
 }
 
 /**

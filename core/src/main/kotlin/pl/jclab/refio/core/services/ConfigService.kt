@@ -126,6 +126,7 @@ class ConfigService(
         const val KEY_UI_THINKING_ENABLED = "ui.thinking_enabled"
         const val KEY_UI_NO_EGRESS_ENABLED = "ui.no_egress_enabled"
         const val KEY_UI_ORCHESTRATION_ENABLED = "ui.orchestration_enabled"
+        const val KEY_UI_MULTI_AGENT_STRATEGY = "ui.multi_agent_strategy"
         const val KEY_UI_INTENT_CLASSIFICATION_ENABLED = "ui.intent_classification_enabled"
         const val KEY_UI_EXECUTION_MODE = "ui.execution_mode"
         const val KEY_UI_SELECTED_MODE = "ui.selected_mode"
@@ -142,6 +143,7 @@ class ConfigService(
         const val KEY_RAG_CACHE_TTL_MS = "rag.cache_ttl_ms"
         const val KEY_RAG_MAX_CONCURRENT_JOBS = "rag.max_concurrent_jobs"
         const val KEY_RAG_MAX_CHUNKS_PER_FILE = "rag.max_chunks_per_file"
+        const val KEY_OLLAMA_MAX_CONCURRENT = "providers.ollama_max_concurrent"
         const val KEY_RAG_INDEX_BATCH_SIZE = "rag.index_batch_size"
         const val KEY_RAG_EMBEDDINGS_BATCH_SIZE = "rag.embeddings_batch_size"
         const val KEY_RAG_EMBEDDING_CACHE_SIZE = "rag.embedding_cache_size"
@@ -1900,6 +1902,7 @@ class ConfigService(
             Triple(KEY_UI_THINKING_ENABLED, "false", "Show LLM thinking process in UI"),
             Triple(KEY_UI_NO_EGRESS_ENABLED, "false", "Block external network calls"),
             Triple(KEY_UI_ORCHESTRATION_ENABLED, "true", "Enable orchestration UI toggle"),
+            Triple(KEY_UI_MULTI_AGENT_STRATEGY, "SINGLE", "Multi-agent orchestration strategy: SINGLE, PARALLEL, PIPELINE, ORCHESTRATOR"),
             Triple(KEY_UI_INTENT_CLASSIFICATION_ENABLED, "false", "Enable LLM intent classification"),
             Triple(KEY_UI_EXECUTION_MODE, "AUTO", "Execution mode (AUTO/INTERACTIVE)"),
             Triple(KEY_UI_SELECTED_MODE, "CHAT", "Selected task mode (CHAT/PLAN/AGENT)"),
