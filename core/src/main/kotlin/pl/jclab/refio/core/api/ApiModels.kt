@@ -95,7 +95,20 @@ data class TurnRequest(
     val provider: String? = null,
     val userContextRefs: List<ContextReference> = emptyList(),
     val runProfile: TurnRunProfile = TurnRunProfile.DEFAULT,
-    val profileOverrides: TurnProfileOverrides? = null
+    val profileOverrides: TurnProfileOverrides? = null,
+    /**
+     * Optional override for the sessionId used when emitting AgentEventBus events.
+     * Used by MultiAgentRouter so that Turn/LLM/Tool events from a sub-agent are
+     * attributed to the parent multi-agent session (not the sub-task).
+     * Defaults to [taskId] when null.
+     */
+    val emitSessionId: String? = null,
+    /**
+     * Optional override for the sourceAgentId used when emitting AgentEventBus events.
+     * Used by MultiAgentRouter to attribute per-turn events to a specific sub-agent.
+     * Defaults to [taskId] when null.
+     */
+    val emitSourceAgentId: String? = null
 )
 
 data class ToolDefinitionInfo(

@@ -54,7 +54,7 @@ class LlmCallTool(
     override val name = "llm_call"
     override val description = "Send a prompt to an LLM and get the text response. " +
         "Use 'prompt' for instructions/role, 'data' for inline text, 'file_path' for large content (keeps it out of agent context). " +
-        "Supports vision: use 'image_path' or 'image_base64' with a vision-capable model (e.g. openai/gpt-4o). " +
+        "Supports vision: use 'image_path' or 'image_base64' with a vision-capable model (e.g. openai/gpt-5.4-mini). " +
         "No tools, no history, no project context — a raw single-turn LLM call. CHEAPER than invoke_subagent."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_PRODUCING
@@ -245,7 +245,7 @@ class LlmCallTool(
         if (definition != null && !definition.supportsVision) {
             return ToolResult.error(
                 "Model '$provider/$model' does not support vision. " +
-                    "Use a vision-capable model (e.g. openai/gpt-4o, anthropic/claude-sonnet-4-5, gemini/gemini-2.5-pro)."
+                    "Use a vision-capable model (e.g. openai/gpt-5.4-mini, anthropic/claude-sonnet-4-5, gemini/gemini-2.5-pro)."
             )
         }
         // definition == null means unknown model — allow attempt (e.g. OpenRouter, custom models)
@@ -355,7 +355,7 @@ class LlmCallTool(
             "image_path" to mapOf(
                 "type" to "string",
                 "description" to "Path to an image file (PNG, JPEG, GIF, WebP) to include in the prompt. " +
-                    "Requires a vision-capable model (e.g. openai/gpt-4o, anthropic/claude-sonnet-4-5). " +
+                    "Requires a vision-capable model (e.g. openai/gpt-5.4-mini, anthropic/claude-sonnet-4-5). " +
                     "Returns error if the selected model does not support vision."
             ),
             "image_base64" to mapOf(

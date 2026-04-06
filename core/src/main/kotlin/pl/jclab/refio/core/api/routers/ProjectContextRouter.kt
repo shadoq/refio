@@ -30,7 +30,14 @@ class ProjectContextRouter(
     private val promptsService: PromptsService,
     private val toolDescriptionBuilder: pl.jclab.refio.core.prompts.ToolDescriptionBuilder,
     private val projectAnalyzer: ProjectAnalyzerService?,
-    private val richProjectAnalysisEngine: RichProjectAnalysisEngine?
+    private val richProjectAnalysisEngine: RichProjectAnalysisEngine?,
+    /**
+     * Prompt section providers shared with TurnPromptBuilder so that the
+     * Context panel preview shows exactly the same system prompt additions
+     * (e.g. <system_environment>, <agent_plans>) that the runtime prompt has.
+     * Pass emptyList() to preserve the legacy stripped preview.
+     */
+    private val promptSectionProviders: List<pl.jclab.refio.core.services.turn.PromptSectionProvider> = emptyList()
 ) : Router {
 
     override suspend fun initialize() {
@@ -198,13 +205,14 @@ class ProjectContextRouter(
         }
     }
 
-    private fun buildChatRuntimePromptPreview(
+    private suspend fun buildChatRuntimePromptPreview(
         chatHistory: List<ChatMessage>,
         pendingUserInput: String?,
         contextPrompt: String,
         contextSectionTokens: Map<String, ContextSectionTokenInfo>
     ): RuntimePromptPreview {
-        val systemPrompt = promptsService.getSystemPrompt(PromptType.SYSTEM_CHAT)
+        val basePrompt = promptsService.getSystemPrompt(PromptType.SYSTEM_CHAT)
+        val systemPrompt = appendProviderSections(basePrompt, TaskMode.CHAT, taskId = "", iteration = 0)
         val messages = chatHistory
             .map { msg -> LLMMessage(role = msg.role.name.lowercase(), content = msg.content) }
             .toMutableList()
@@ -236,7 +244,7 @@ class ProjectContextRouter(
         return RuntimePromptPreview(previewText = preview, activeEstimatedTokens = activeTokens, sectionTokens = sectionTokens)
     }
 
-    private fun buildPlanRuntimePromptPreview(
+    private suspend fun buildPlanRuntimePromptPreview(
         task: Task,
         chatHistory: List<ChatMessage>,
         pendingUserInput: String?,
@@ -245,10 +253,11 @@ class ProjectContextRouter(
     ): RuntimePromptPreview {
         val toolDescriptions = toolDescriptionBuilder.getToolDescriptions(TaskMode.PLAN, task.id)
         val validToolNames = toolDescriptionBuilder.getValidToolNames(TaskMode.PLAN, task.id)
-        val systemPrompt = promptsService.getSystemPrompt(
+        val basePrompt = promptsService.getSystemPrompt(
             type = PromptType.SYSTEM_PLAN,
             variables = mapOf("tool_descriptions" to toolDescriptions, "valid_tool_names" to validToolNames)
         )
+        val systemPrompt = appendProviderSections(basePrompt, TaskMode.PLAN, task.id, iteration = 0)
 
         val requestText = pendingUserInput
             ?: chatHistory.lastOrNull { it.role == MessageRole.USER }?.content ?: ""
@@ -295,10 +304,13 @@ class ProjectContextRouter(
         contextSectionTokens: Map<String, ContextSectionTokenInfo>
     ): RuntimePromptPreview {
         val toolDescriptions = toolDescriptionBuilder.getToolDescriptions(TaskMode.AGENT, task.id)
-        val baseSystemPrompt = promptsService.getSystemPrompt(
+        val baseSystemPromptRaw = promptsService.getSystemPrompt(
             type = PromptType.SYSTEM_AGENT,
             variables = mapOf("tool_descriptions" to toolDescriptions)
         )
+        // Apply the same section providers used by TurnPromptBuilder in runtime
+        // so the preview reflects the real prompt (including <system_environment>).
+        val baseSystemPrompt = appendProviderSections(baseSystemPromptRaw, TaskMode.AGENT, task.id, iteration = 0)
 
         val runtimeSystemPrompt = if (contextPrompt.isNotBlank()) {
             "$baseSystemPrompt\n\n<context>\n$contextPrompt\n</context>"
@@ -658,5 +670,42 @@ class ProjectContextRouter(
             index = prompt.indexOf(tag, index + 1)
         }
         return -1
+    }
+
+    /**
+     * Append sections contributed by [promptSectionProviders] to [basePrompt],
+     * mirroring what TurnPromptBuilder does at runtime. Returns the original
+     * prompt unchanged when the provider list is empty or all providers decline.
+     */
+    private suspend fun appendProviderSections(
+        basePrompt: String,
+        mode: TaskMode,
+        taskId: String,
+        iteration: Int
+    ): String {
+        if (promptSectionProviders.isEmpty()) return basePrompt
+        val buildContext = pl.jclab.refio.core.services.turn.PromptBuildContext(
+            taskId = taskId,
+            mode = mode,
+            iteration = iteration,
+            maxIterations = 25,
+            writeToolsExecutedInTurn = 0,
+            profileOverrides = null
+        )
+        val extras = buildString {
+            for (provider in promptSectionProviders) {
+                val section = try {
+                    provider.build(buildContext)
+                } catch (e: Exception) {
+                    logger.debug { "[CONTEXT_PREVIEW] Provider ${provider.javaClass.simpleName} failed: ${e.message}" }
+                    null
+                }
+                if (!section.isNullOrBlank()) {
+                    if (isNotEmpty()) append("\n\n")
+                    append(section)
+                }
+            }
+        }
+        return if (extras.isBlank()) basePrompt else "$basePrompt\n\n$extras"
     }
 }

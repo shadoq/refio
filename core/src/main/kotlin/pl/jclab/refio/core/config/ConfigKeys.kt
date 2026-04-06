@@ -635,10 +635,21 @@ object ConfigKeys {
         default = false
     )
 
+    /**
+     * Maximum consecutive failures of the SAME tool call (same tool name + identical arguments)
+     * before the turn loop aborts with a "definitive loop" error.
+     *
+     * Only identical-argument retries count. If the agent varies its arguments or switches
+     * tools, the counter resets — the agent is still exploring. This replaces the older
+     * "any error" counter, which was too aggressive for tasks involving trial-and-error
+     * API interactions (e.g. CTF tasks where remote endpoints return 4xx on wrong answers).
+     *
+     * The sliding-window error-rate guard (70% failure rate) remains as a secondary safety net.
+     */
     val MAX_CONSECUTIVE_TOOL_ERRORS = ConfigKey(
         key = "agent.max_consecutive_tool_errors",
         parser = String::toIntOrNull,
-        default = 10
+        default = 5
     )
 
     val MAX_ITERATIONS = ConfigKey(

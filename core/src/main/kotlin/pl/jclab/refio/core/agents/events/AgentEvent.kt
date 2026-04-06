@@ -155,6 +155,77 @@ sealed interface AgentEvent {
         val accumulated: String,
         val isComplete: Boolean
     ) : AgentEvent
+
+    // ── TURN LIFECYCLE — per-iteration events for Session Trace panel ──
+
+    /**
+     * Emitted at the beginning of a single AgentTurnLoop iteration.
+     * Used by Session Trace view to group nested spans (LLM call, tool calls) under a Turn node.
+     */
+    data class TurnStarted(
+        override val id: String,
+        override val sessionId: String,
+        override val sourceAgentId: String,
+        override val timestamp: Long,
+        override val correlationId: String,
+        val iteration: Int,
+        val maxIterations: Int,
+        val mode: String
+    ) : AgentEvent
+
+    /**
+     * Emitted after a Turn iteration finishes (either loops again or completes).
+     * durationMs covers the full iteration including prompt build, LLM call and tool execution.
+     */
+    data class TurnEnded(
+        override val id: String,
+        override val sessionId: String,
+        override val sourceAgentId: String,
+        override val timestamp: Long,
+        override val correlationId: String,
+        val iteration: Int,
+        val durationMs: Long,
+        val isFinal: Boolean
+    ) : AgentEvent
+
+    /**
+     * Emitted after a single LLM generation completes.
+     * Carries token usage, cost and timing so the trace panel can build a Generation span.
+     */
+    data class LLMCallCompleted(
+        override val id: String,
+        override val sessionId: String,
+        override val sourceAgentId: String,
+        override val timestamp: Long,
+        override val correlationId: String,
+        val iteration: Int,
+        val model: String,
+        val provider: String?,
+        val tokensIn: Int,
+        val tokensOut: Int,
+        val costUsd: Double,
+        val durationMs: Long,
+        val finishReason: String?
+    ) : AgentEvent
+
+    /**
+     * Emitted after a single tool invocation completes.
+     * Carries timing/success so the trace panel and tool analytics can aggregate stats.
+     */
+    data class ToolCalled(
+        override val id: String,
+        override val sessionId: String,
+        override val sourceAgentId: String,
+        override val timestamp: Long,
+        override val correlationId: String,
+        val iteration: Int,
+        val toolName: String,
+        val argumentsPreview: String,
+        val durationMs: Long,
+        val success: Boolean,
+        val errorMessage: String?,
+        val resultPreview: String
+    ) : AgentEvent
 }
 
 /**

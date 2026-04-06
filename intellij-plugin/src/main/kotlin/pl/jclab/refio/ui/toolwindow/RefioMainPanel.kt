@@ -78,6 +78,7 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
     private val tabbedPane: JTabbedPane
     private val middlePanel: JPanel
     private val cardLayout: CardLayout
+    private val agentExecutionPanel: pl.jclab.refio.ui.components.agents.AgentExecutionPanel
 
     // Cache SettingsView to avoid creating new instance each time
     private var settingsView: SettingsView? = null
@@ -124,6 +125,7 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
         historyPanel = HistoryPanel(project, autoLoadOnInit = false)
         ragViewPanel = RagViewPanel(project)
         turnStateStatusBar = TurnStateStatusBar()
+        agentExecutionPanel = pl.jclab.refio.ui.components.agents.AgentExecutionPanel()
 
         // Observe turn state for status bar
         val turnStateFlow = sessionManager.turnState
@@ -164,7 +166,7 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
         tabbedPane = JTabbedPane().apply {
             addTab("Chat", chatPanel)
             addTab("Execution", stepsPanel)
-            addTab("Agents", pl.jclab.refio.ui.components.agents.AgentExecutionPanel())
+            addTab("Agents", agentExecutionPanel)
             addTab("Context", contextPanel)
             addTab("RAG", ragViewPanel)
             addTab("Logs", logsPanel)
@@ -247,6 +249,11 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
         cs.launch {
             sessionManager.activeSession.collect { session ->
                 session?.let { updateStepsQueueVisibility(it.mode) }
+                // Wire AgentExecutionPanel to the active session so Trace/Timeline
+                // get populated for single-agent runs too (not only multi-agent).
+                session?.let {
+                    agentExecutionPanel.subscribeToSession(sessionManager.apiRouter.agentEventBus, it.id)
+                }
             }
         }
 

@@ -6,60 +6,103 @@ import kotlinx.coroutines.flow.collect
 import pl.jclab.refio.core.agents.events.AgentEvent
 import pl.jclab.refio.core.agents.events.AgentEventBus
 import java.awt.BorderLayout
+import java.awt.Font
 import javax.swing.*
 
 /**
- * Main panel for multi-agent execution visualization.
+ * Main panel for agent execution visualization (single session OR multi-agent).
  *
  * Layout:
  * - NORTH: Header with title
- * - CENTER: Split between agent graph (top) and event timeline (bottom)
+ * - CENTER: Tabs
+ *      • Trace   — hierarchical Turn/LLM/Tool tree for the current session
+ *      • Graph   — legacy DAG + event timeline (for multi-agent runs)
  * - SOUTH: Control bar (Clear button)
+ *
+ * Trace tab is always useful for single-agent sessions because AgentTurnLoop emits
+ * TurnStarted / LLMCallCompleted / ToolCalled / TurnEnded events via AgentEventBus.
  */
 class AgentExecutionPanel : JPanel(BorderLayout()), Disposable {
 
+    private val tracePanel = SessionTracePanel()
     private val graphPanel = AgentGraphPanel()
     private val timelinePanel = EventTimelinePanel()
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-    private val agentNames = mutableMapOf<String, String>() // agentId → human name
+    private val agentNames = mutableMapOf<String, String>() // sourceAgentId → human name
 
     private var eventBus: AgentEventBus? = null
+    private var subscriptionJob: Job? = null
+    private var currentSessionId: String? = null
 
     init {
-        val header = JLabel("  Multi-Agent Execution").apply {
-            font = font.deriveFont(java.awt.Font.BOLD, 13f)
+        val header = JLabel("  Agent Execution").apply {
+            font = font.deriveFont(Font.BOLD, 13f)
             border = BorderFactory.createEmptyBorder(8, 4, 8, 4)
         }
         add(header, BorderLayout.NORTH)
 
-        val splitPane = JSplitPane(
+        // Multi-agent view: graph (top) + timeline (bottom)
+        val graphAndTimeline = JSplitPane(
             JSplitPane.VERTICAL_SPLIT,
             JScrollPane(graphPanel),
             timelinePanel
         ).apply {
-            resizeWeight = 0.5
-            dividerLocation = 200
+            resizeWeight = 0.35
+            dividerLocation = 180
         }
-        add(splitPane, BorderLayout.CENTER)
 
-        val controlBar = JPanel().apply {
-            val clearBtn = JButton("Clear").apply {
-                addActionListener {
-                    graphPanel.clear()
-                    timelinePanel.clear()
-                }
-            }
-            add(clearBtn)
+        val tabs = JTabbedPane().apply {
+            addTab("Trace", tracePanel)
+            addTab("Graph + Events", graphAndTimeline)
         }
-        add(controlBar, BorderLayout.SOUTH)
+        add(tabs, BorderLayout.CENTER)
+        // No Clear button by design — the panel state is driven entirely by the
+        // currently loaded session, so switching sessions (including loading from
+        // history) resets it automatically via subscribeToSession().
     }
 
     /**
      * Subscribe to events from AgentEventBus for a given session.
+     * Safe to call multiple times — cancels any previous subscription.
+     *
+     * On first subscription for a given session the panel will also replay any
+     * persisted events so that reloading a session from history reconstructs
+     * the Trace / Timeline / Graph state it had when the session ended.
      */
     fun subscribeToSession(eventBus: AgentEventBus, sessionId: String) {
+        if (currentSessionId == sessionId && subscriptionJob?.isActive == true) return
+
+        subscriptionJob?.cancel()
         this.eventBus = eventBus
-        scope.launch {
+        currentSessionId = sessionId
+        agentNames.clear()
+
+        SwingUtilities.invokeLater {
+            tracePanel.setSession(sessionId)
+            timelinePanel.setSession(sessionId)
+            graphPanel.clear()
+            timelinePanel.clear()
+            tracePanel.clear()
+        }
+
+        subscriptionJob = scope.launch {
+            // Replay persisted events first so the panels reflect the saved state
+            // before we start consuming live events. Any live events with the same
+            // ids arriving later are effectively idempotent because they'd just
+            // update the same tree nodes / table rows.
+            //
+            // IMPORTANT: replay is best-effort. A repository failure must NOT stop
+            // us from starting the live collect — that was the cause of the "nothing
+            // shows up" regression after the repo was first wired in.
+            try {
+                val persisted = eventBus.loadPersistedEvents(sessionId)
+                persisted.forEach { handleEvent(it) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // swallow and continue to live subscription
+            }
+
             eventBus.sessionEvents(sessionId).collect { event ->
                 handleEvent(event)
             }
@@ -67,8 +110,27 @@ class AgentExecutionPanel : JPanel(BorderLayout()), Disposable {
     }
 
     private fun handleEvent(event: AgentEvent) {
+        // Always feed the trace panel — it knows which events to render
+        tracePanel.handleEvent(event)
+        // Timeline shows everything
+        timelinePanel.addEvent(event)
+
         SwingUtilities.invokeLater {
-            timelinePanel.addEvent(event)
+            // Auto-register a graph node for any new sourceAgentId so single-agent
+            // sessions also get a visible node (not just multi-agent runs).
+            if (!agentNames.containsKey(event.sourceAgentId)) {
+                val name = when (event) {
+                    is AgentEvent.AgentStarted -> event.agentName
+                    else -> "Session ${event.sourceAgentId.take(8)}"
+                }
+                agentNames[event.sourceAgentId] = name
+                graphPanel.addOrUpdateAgent(
+                    agentId = event.sourceAgentId,
+                    name = name,
+                    depth = 0,
+                    status = AgentNodeStatus.RUNNING
+                )
+            }
 
             when (event) {
                 is AgentEvent.AgentStarted -> {
@@ -110,6 +172,7 @@ class AgentExecutionPanel : JPanel(BorderLayout()), Disposable {
     }
 
     override fun dispose() {
+        subscriptionJob?.cancel()
         scope.cancel()
     }
 }

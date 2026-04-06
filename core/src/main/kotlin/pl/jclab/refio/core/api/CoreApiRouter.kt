@@ -78,7 +78,24 @@ class CoreApiRouter(
     private val agentInstanceRepository = pl.jclab.refio.core.db.repositories.AgentInstanceRepository()
 
     // Multi-agent infrastructure
-    val agentEventBus = pl.jclab.refio.core.agents.events.AgentEventBus()
+    val agentEventBus = pl.jclab.refio.core.agents.events.AgentEventBus().apply {
+        // Persist all events so Session Trace / Timeline / Graph can be replayed
+        // when the user reloads a session from history.
+        setRepository(pl.jclab.refio.core.db.repositories.AgentEventSqlRepository())
+    }
+
+    // Single source of truth for prompt section providers.
+    // IMPORTANT: this same list must be used by both TurnPromptBuilder (runtime)
+    // and ProjectContextRouter (preview) so the Context panel shows the actual
+    // prompt the model receives. Previously preview used a stripped-down path
+    // and e.g. <system_environment> was invisible in the Context panel even
+    // though the real agent call included it.
+    val promptSectionProviders: List<pl.jclab.refio.core.services.turn.PromptSectionProvider> by lazy {
+        listOf(
+            AgentPlansSectionProvider(agentPlanService),
+            pl.jclab.refio.core.services.turn.providers.SystemEnvironmentPromptProvider(projectRoot)
+        )
+    }
 
     // Services (public for cross-module access by plugin services)
     val taskRepository = TaskRepository()
@@ -296,9 +313,7 @@ class CoreApiRouter(
             projectRoot = projectRoot,
             tokenEstimator = tokenEstimator,
             promptCache = null,  // Could be added later if needed
-            sectionProviders = listOf(
-                AgentPlansSectionProvider(agentPlanService)
-            )
+            sectionProviders = promptSectionProviders
         )
 
         val toolCallParser = ToolCallParser(
@@ -555,7 +570,8 @@ class CoreApiRouter(
             promptsService = promptsService,
             toolDescriptionBuilder = toolDescriptionBuilder,
             projectAnalyzer = projectAnalyzer,
-            richProjectAnalysisEngine = richProjectAnalysisEngine
+            richProjectAnalysisEngine = richProjectAnalysisEngine,
+            promptSectionProviders = promptSectionProviders
         )
     }
 

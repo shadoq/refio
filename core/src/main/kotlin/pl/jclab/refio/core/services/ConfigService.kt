@@ -1919,7 +1919,7 @@ class ConfigService(
             Triple(KEY_RAG_SEARCH_CACHE_TTL_SECONDS, DEFAULT_RAG_SEARCH_CACHE_TTL_SECONDS.toString(), "TTL for cached @codebase search results in seconds"),
             Triple(KEY_WORKING_MEMORY_MAX_FACTS, DEFAULT_WORKING_MEMORY_MAX_FACTS.toString(), "Maximum working memory facts stored per task"),
             Triple(KEY_TASK_VERIFICATION_ENABLED, "false", "Enable task completion verification for AGENT mode"),
-            Triple(KEY_MAX_CONSECUTIVE_TOOL_ERRORS, DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS.toString(), "Max consecutive tool errors before failing the turn"),
+            Triple(KEY_MAX_CONSECUTIVE_TOOL_ERRORS, DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS.toString(), "Max consecutive failures of the same tool+args before aborting (definitive loop). Varied args reset the counter."),
             Triple(KEY_JSON_THINKING_XML_TAGS, DEFAULT_JSON_THINKING_XML_TAGS, "Comma-separated XML tags stripped before JSON extraction (e.g., thinking,think)")
         )
 

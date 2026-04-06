@@ -109,6 +109,12 @@ object TuiChatMessageMapper {
             )
 
             is AgentEvent.ApprovalDecision, is AgentEvent.SpawnAgentRequest, is AgentEvent.AgentSpawned -> null
+
+            // Turn lifecycle events are consumed by GUI trace panel, not shown in TUI chat.
+            is AgentEvent.TurnStarted,
+            is AgentEvent.TurnEnded,
+            is AgentEvent.LLMCallCompleted,
+            is AgentEvent.ToolCalled -> null
         }
     }
 

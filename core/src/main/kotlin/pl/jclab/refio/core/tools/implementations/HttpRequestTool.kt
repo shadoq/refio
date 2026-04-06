@@ -42,6 +42,17 @@ private val logger = dualLogger("HttpRequestTool")
  * Limits:
  * - Response body max 5MB
  * - Timeout 60 seconds
+ *
+ * Success semantics:
+ * - success=true whenever an HTTP response is received, regardless of status code.
+ *   The status code is exposed via ToolResult.exitCode and included in the output
+ *   header summary so the agent can react to 4xx/5xx as domain data (e.g. retry
+ *   with different payload, parse error body).
+ * - success=false ONLY on infrastructure failures: network error, DNS failure,
+ *   timeout, exception, invalid parameters. These are true tool failures.
+ * - For save_to_file: the file is only written on 2xx/3xx. On 4xx/5xx the response
+ *   body is returned inline (so the agent can inspect the error) and a NOTE is
+ *   prepended indicating the save was skipped.
  */
 class HttpRequestTool(
     private val sandbox: PathSandbox? = null,
@@ -179,20 +190,27 @@ class HttpRequestTool(
                                 )
                             )
                         } else {
-                            // Binary without save_to_file: return base64 (capped at 1MB)
+                            // Binary without save_to_file (or save skipped on non-2xx): return base64 (capped at 1MB)
                             val cap = minOf(bytes.size, MAX_BINARY_INLINE_BYTES)
                             val b64 = Base64.getEncoder().encodeToString(bytes.take(cap).toByteArray())
                             val truncated = bytes.size > MAX_BINARY_INLINE_BYTES
+                            val saveSkippedNote = if (saveToFile != null) {
+                                "NOTE: save_to_file was skipped because HTTP status $statusCode is not 2xx/3xx. Response body is returned inline for inspection."
+                            } else null
                             val output = buildString {
                                 appendLine("Binary response (${bytes.size} bytes, content-type: $responseContentType)")
                                 if (truncated) appendLine("WARNING: truncated to $MAX_BINARY_INLINE_BYTES bytes")
-                                appendLine("Use 'save_to_file' parameter to save binary content to disk.")
+                                if (saveSkippedNote != null) appendLine(saveSkippedNote)
+                                if (saveToFile == null) appendLine("Use 'save_to_file' parameter to save binary content to disk.")
                                 appendLine()
                                 appendLine("Base64:")
                                 append(b64)
                             }
+                            // Tool succeeds whenever we received an HTTP response. Status code is
+                            // returned in exitCode + output for the agent to react on. Only network
+                            // failures / timeouts / exceptions map to success=false.
                             ToolResult(
-                                success = statusCode in 200..399,
+                                success = true,
                                 output = headerSummary + output,
                                 exitCode = statusCode,
                                 durationMs = duration,
@@ -235,10 +253,16 @@ class HttpRequestTool(
                             } else {
                                 responseBody
                             }
+                            val saveSkippedPrefix = if (saveToFile != null) {
+                                "NOTE: save_to_file was skipped because HTTP status $statusCode is not 2xx/3xx. Response body is returned inline for inspection.\n\n"
+                            } else ""
 
+                            // Tool succeeds whenever we received an HTTP response. Status code is
+                            // returned in exitCode + output for the agent to react on. Only network
+                            // failures / timeouts / exceptions map to success=false.
                             ToolResult(
-                                success = statusCode in 200..399,
-                                output = headerSummary + truncatedBody,
+                                success = true,
+                                output = headerSummary + saveSkippedPrefix + truncatedBody,
                                 exitCode = statusCode,
                                 durationMs = duration,
                                 bytesRead = responseBody.toByteArray().size,

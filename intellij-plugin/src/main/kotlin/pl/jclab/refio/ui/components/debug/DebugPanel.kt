@@ -66,6 +66,22 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
         rows = 8
     }
 
+    // Tool Usage Analytics
+    private val toolUsageArea = JTextArea().apply {
+        isEditable = false
+        font = Font("Monospaced", Font.PLAIN, 11)
+        lineWrap = false
+        rows = 8
+    }
+
+    // Model Usage Analytics
+    private val modelUsageArea = JTextArea().apply {
+        isEditable = false
+        font = Font("Monospaced", Font.PLAIN, 11)
+        lineWrap = false
+        rows = 8
+    }
+
     init {
         // Title panel
         val titlePanel = JPanel(BorderLayout()).apply {
@@ -127,6 +143,24 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
                 maximumSize = Dimension(Int.MAX_VALUE, 200)
             }
             add(logsScrollPane)
+
+            // Tool Usage Analytics
+            add(Box.createVerticalStrut(10))
+            add(createSectionHeader("Tool Usage Analytics"))
+            val toolUsageScrollPane = JBScrollPane(toolUsageArea).apply {
+                preferredSize = Dimension(Int.MAX_VALUE, 200)
+                maximumSize = Dimension(Int.MAX_VALUE, 200)
+            }
+            add(toolUsageScrollPane)
+
+            // Model Usage Analytics
+            add(Box.createVerticalStrut(10))
+            add(createSectionHeader("Model Usage Analytics"))
+            val modelUsageScrollPane = JBScrollPane(modelUsageArea).apply {
+                preferredSize = Dimension(Int.MAX_VALUE, 200)
+                maximumSize = Dimension(Int.MAX_VALUE, 200)
+            }
+            add(modelUsageScrollPane)
 
             // Last update
             add(Box.createVerticalStrut(10))
@@ -304,6 +338,56 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
                     recentLogsArea.text = "No API logs yet"
                 }
 
+                // Tool Usage Analytics
+                val toolRows = pl.jclab.refio.core.services.monitoring.ToolUsageStats.snapshot()
+                if (toolRows.isNotEmpty()) {
+                    val toolText = buildString {
+                        append(String.format("%-22s %6s %8s %9s %9s  %s\n",
+                            "Tool", "Count", "Success", "Avg", "Max", "Last Error"))
+                        append("─".repeat(110))
+                        append("\n")
+                        toolRows.forEach { row ->
+                            val name = if (row.toolName.length > 22) row.toolName.take(19) + "..." else row.toolName
+                            val successPct = String.format("%.0f%%", row.successRate * 100)
+                            val avg = formatMs(row.avgDurationMs)
+                            val max = formatMs(row.maxDurationMs)
+                            val err = row.lastError?.replace('\n', ' ')?.take(60) ?: "-"
+                            append(String.format("%-22s %6d %8s %9s %9s  %s\n",
+                                name, row.count, successPct, avg, max, err))
+                        }
+                    }
+                    toolUsageArea.text = toolText
+                    toolUsageArea.caretPosition = 0
+                } else {
+                    toolUsageArea.text = "No tool invocations recorded yet"
+                }
+
+                // Model Usage Analytics
+                val modelRows = pl.jclab.refio.core.services.monitoring.ModelUsageStats.snapshot()
+                if (modelRows.isNotEmpty()) {
+                    val modelText = buildString {
+                        append(String.format("%-12s %-26s %6s %10s %10s %10s %9s %9s\n",
+                            "Provider", "Model", "Calls", "Tokens In", "Tokens Out", "Cost", "Avg", "Max"))
+                        append("─".repeat(110))
+                        append("\n")
+                        modelRows.forEach { row ->
+                            val provider = if (row.provider.length > 12) row.provider.take(9) + "..." else row.provider
+                            val modelName = if (row.model.length > 26) row.model.take(23) + "..." else row.model
+                            val cost = String.format("$%.4f", row.costUsd)
+                            val avg = formatMs(row.avgDurationMs)
+                            val max = formatMs(row.maxDurationMs)
+                            append(String.format("%-12s %-26s %6d %10s %10s %10s %9s %9s\n",
+                                provider, modelName, row.calls,
+                                formatNumber(row.tokensIn), formatNumber(row.tokensOut),
+                                cost, avg, max))
+                        }
+                    }
+                    modelUsageArea.text = modelText
+                    modelUsageArea.caretPosition = 0
+                } else {
+                    modelUsageArea.text = "No LLM calls recorded yet"
+                }
+
                 // Debug info
                 projectRootLabel.text = project.basePath ?: "Unknown"
                 databasePathLabel.text = coreManager.getDatabasePath()
@@ -330,6 +414,12 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
 
     private fun formatTimestamp(timestamp: Long): String {
         return SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(Date(timestamp))
+    }
+
+    private fun formatMs(ms: Long): String = when {
+        ms <= 0 -> "-"
+        ms < 1000 -> "${ms}ms"
+        else -> String.format("%.2fs", ms / 1000.0)
     }
 
     fun dispose() {

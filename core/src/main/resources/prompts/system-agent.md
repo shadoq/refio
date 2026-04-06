@@ -134,6 +134,23 @@ CORRECT: {"pattern": "\\.html"}
 </json_rules>
 
 <tool_selection>
+**PRIORITY RULE — prefer built-in tools over `run_terminal_command`.**
+Built-in tools are portable, sandboxed, fast, and give structured results. Shell commands vary between OS/shells (see `<system_environment>`), can fail on missing binaries, and are harder to parse. Always try a built-in tool first; only fall back to `run_terminal_command` when no built-in tool covers the task.
+
+| If you're tempted to run | Use this built-in instead |
+|---|---|
+| `cat`, `type`, `less`, `head`, `tail` | `read_file` (supports offset/limit) |
+| `ls`, `dir`, `tree` | `read_directory` |
+| `find`, `where`, `Get-ChildItem` | `file_search` (glob pattern) |
+| `grep`, `rg`, `findstr`, `Select-String` | `grep_search` (regex) |
+| `diff`, `git diff` | `view_diff` |
+| `sed -i`, `awk -i`, `echo > file`, `>>` redirection | `code_editing` / `multi_edit` |
+| `curl`, `wget`, `Invoke-WebRequest` | `http_request` (use `save_to_file` / `body_file` for large payloads) |
+| `python -c`, `node -e`, inline scripts | `run_code` |
+| `mkdir`, `touch`, here-docs to create a file | `create_new_file` |
+
+`run_terminal_command` is the right choice ONLY for things no built-in tool covers — typically: building/compiling (`./gradlew`, `npm run build`, `cargo build`), running the project's test suite, package manager installs, git operations beyond `view_diff`, or running project-specific scripts. Before invoking it, re-read the matrix above and confirm no built-in fits.
+
 **Tool selection by task (prefer FREE tools):**
 
 | Task | Tool | Cost |

@@ -2,6 +2,9 @@ package pl.jclab.refio.core.agents.events
 
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.*
+import pl.jclab.refio.core.logging.dualLogger
+
+private val logger = dualLogger("AgentEventBus")
 
 /**
  * Central event bus for multi-agent communication.
@@ -25,9 +28,19 @@ class AgentEventBus {
 
     /**
      * Emit an event to all subscribers and optionally persist.
+     *
+     * CRITICAL: live emission must NEVER be blocked by a repository failure.
+     * Previously a DB save exception would propagate and prevent `_events.emit`
+     * from running, which silently killed the GUI Trace/Graph tracking whenever
+     * the `agent_events` table was not yet migrated or the DB was momentarily
+     * unavailable. Persistence is now best-effort and logged on failure.
      */
     suspend fun emit(event: AgentEvent) {
-        eventRepository?.save(event)
+        try {
+            eventRepository?.save(event)
+        } catch (e: Exception) {
+            logger.warn { "Failed to persist agent event (${event::class.simpleName}): ${e.message}" }
+        }
         _events.emit(event)
     }
 
@@ -71,6 +84,33 @@ class AgentEventBus {
     fun approvalEvents(sessionId: String): Flow<AgentEvent.ApprovalRequired> =
         events.filterIsInstance<AgentEvent.ApprovalRequired>()
             .filter { it.sessionId == sessionId }
+
+    /** Turn lifecycle events (for Session Trace panel) */
+    fun turnEvents(sessionId: String): Flow<AgentEvent> =
+        events.filter {
+            it.sessionId == sessionId && (
+                it is AgentEvent.TurnStarted ||
+                it is AgentEvent.TurnEnded ||
+                it is AgentEvent.LLMCallCompleted ||
+                it is AgentEvent.ToolCalled
+            )
+        }
+
+    /**
+     * Non-suspend emit for callers that cannot suspend (e.g. Swing listeners).
+     * Skips repository persistence. Returns false if the event buffer is full.
+     */
+    fun tryEmit(event: AgentEvent): Boolean = _events.tryEmit(event)
+
+    /**
+     * Load persisted events for a session from the backing repository (if any).
+     *
+     * Used by the GUI to replay the full Trace/Timeline/Graph state after the user
+     * reloads a conversation from history. Returns an empty list when no repository
+     * is wired or when the session has no persisted events.
+     */
+    suspend fun loadPersistedEvents(sessionId: String): List<AgentEvent> =
+        eventRepository?.findBySessionId(sessionId) ?: emptyList()
 
     /** Events of a specific type */
     inline fun <reified T : AgentEvent> eventsOfType(): Flow<T> =

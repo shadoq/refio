@@ -259,7 +259,11 @@ class AgentTurnLoop(
         provider: String? = null,
         userContextRefs: List<pl.jclab.refio.api.models.ContextReference> = emptyList(),
         runProfile: TurnRunProfile = TurnRunProfile.DEFAULT,
-        profileOverrides: TurnProfileOverrides? = null
+        profileOverrides: TurnProfileOverrides? = null,
+        /** Override for AgentEvent.sessionId (see TurnRequest.emitSessionId). */
+        emitSessionId: String? = null,
+        /** Override for AgentEvent.sourceAgentId (see TurnRequest.emitSourceAgentId). */
+        emitSourceAgentId: String? = null
     ): TurnResult {
         val runId = UUID.randomUUID().toString()
         val parentRunId = profileOverrides?.parentRunId
@@ -306,7 +310,9 @@ class AgentTurnLoop(
             parentRunId = parentRunId,
             depth = depth,
             source = TurnSource.RUN,
-            userMessageStrategy = UserMessageStrategy { userInput }
+            userMessageStrategy = UserMessageStrategy { userInput },
+            emitSessionId = emitSessionId,
+            emitSourceAgentId = emitSourceAgentId
         )
     }
 
@@ -333,7 +339,9 @@ class AgentTurnLoop(
         provider: String? = null,
         userContextRefs: List<pl.jclab.refio.api.models.ContextReference> = emptyList(),
         runProfile: TurnRunProfile = TurnRunProfile.DEFAULT,
-        profileOverrides: TurnProfileOverrides? = null
+        profileOverrides: TurnProfileOverrides? = null,
+        emitSessionId: String? = null,
+        emitSourceAgentId: String? = null
     ): TurnResult {
         val runId = UUID.randomUUID().toString()
         val parentRunId = profileOverrides?.parentRunId
@@ -363,7 +371,9 @@ class AgentTurnLoop(
             parentRunId = parentRunId,
             depth = depth,
             source = TurnSource.CONTINUE,
-            userMessageStrategy = UserMessageStrategy { getLastUserMessage(taskId) }
+            userMessageStrategy = UserMessageStrategy { getLastUserMessage(taskId) },
+            emitSessionId = emitSessionId,
+            emitSourceAgentId = emitSourceAgentId
         )
 
     }
@@ -381,6 +391,22 @@ class AgentTurnLoop(
      * @param source RUN or CONTINUE - affects some logging messages
      * @param userMessageStrategy Strategy for obtaining user message during task verification
      */
+    /**
+     * Emit a Turn lifecycle event to AgentEventBus if available.
+     * Non-fatal on failure (GUI visualization is best-effort).
+     */
+    private suspend fun emitTurnEvent(
+        @Suppress("UNUSED_PARAMETER") taskId: String,
+        build: () -> pl.jclab.refio.core.agents.events.AgentEvent
+    ) {
+        val bus = agentEventBus ?: return
+        try {
+            bus.emit(build())
+        } catch (e: Exception) {
+            logger.debug { "Failed to emit turn event: ${e.message}" }
+        }
+    }
+
     private suspend fun executeTurnLoop(
         taskId: String,
         mode: TaskMode,
@@ -396,8 +422,14 @@ class AgentTurnLoop(
         parentRunId: String?,
         depth: Int,
         source: TurnSource,
-        userMessageStrategy: UserMessageStrategy
+        userMessageStrategy: UserMessageStrategy,
+        emitSessionId: String? = null,
+        emitSourceAgentId: String? = null
     ): TurnResult {
+        // sessionId/sourceAgentId used in AgentEvent emissions. Default to taskId so
+        // single-agent sessions remain self-contained; multi-agent overrides with parent ids.
+        val evSessionId = emitSessionId ?: taskId
+        val evSourceAgentId = emitSourceAgentId ?: taskId
         // Initialize loop variables
         var iteration = 0
         val config = TurnLoopConfigs.forMode(mode)
@@ -413,7 +445,11 @@ class AgentTurnLoop(
         var writeToolsExecutedInTurn = 0
         var verificationToolsExecutedAfterWrite = 0
         var consecutiveReadOnlyIterations = 0
-        var consecutiveToolErrors = 0
+        // Definitive-loop guard: counts consecutive failures of the SAME (tool + args).
+        // Resets whenever arguments change, a different tool is used, or any tool succeeds.
+        // Catches true retry loops while allowing the agent to explore with varied calls.
+        var consecutiveIdenticalFailures = 0
+        var lastFailureSignature: String? = null
         var lastToolResultsHadTransientHttpError = false
         var transientErrorNudgeCount = 0
         var intentNudgeCount = 0
@@ -425,7 +461,7 @@ class AgentTurnLoop(
         var totalTokensOut = 0
         var totalCost = 0.0
         val usedTools = mutableListOf<String>()
-        val maxConsecutiveToolErrors = configService.getTyped(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS, taskId)
+        val maxConsecutiveIdenticalFailures = configService.getTyped(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS, taskId)
         val subagentMetadata: String? = if (runProfile == TurnRunProfile.SUBAGENT) {
             val name = profileOverrides?.subagentName ?: "subagent"
             """{"subagent_name":"$name"}"""
@@ -444,6 +480,11 @@ class AgentTurnLoop(
             updateTurnState { copy(phase = phase) }
         }
 
+        // Per-tool timing map for emitting ToolCalled events with accurate durations.
+        // Populated by the wrapped tool listener below; consumed after executeToolCalls returns.
+        val toolStartNanos = java.util.concurrent.ConcurrentHashMap<String, Long>()
+        val toolDurationsMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
         try {
             while (iteration < maxIterations) {
                 if (GlobalMetrics.isCancelled()) {
@@ -452,6 +493,21 @@ class AgentTurnLoop(
                 iteration++
 
                 logger.info { "[TURN_ITERATION] taskId=$taskId, iteration=$iteration/$maxIterations" }
+
+                // Emit TurnStarted for Session Trace panel
+                val iterationStartMs = System.currentTimeMillis()
+                emitTurnEvent(taskId) {
+                    pl.jclab.refio.core.agents.events.AgentEvent.TurnStarted(
+                        id = UUID.randomUUID().toString(),
+                        sessionId = evSessionId,
+                        sourceAgentId = evSourceAgentId,
+                        timestamp = iterationStartMs,
+                        correlationId = runId,
+                        iteration = iteration,
+                        maxIterations = maxIterations,
+                        mode = mode.name
+                    )
+                }
 
                 // Track turn iteration
                 val iterationToken = GlobalMetrics.beginOperation(
@@ -496,6 +552,7 @@ class AgentTurnLoop(
                     GlobalMetrics.setCurrentOperation(OperationInfo.TurnLLMCall(iteration, mode.name))
 
                     val llmPrompt = TurnPromptAdapter.toLLMCallPrompt(prompt)
+                    val llmCallStartNanos = System.nanoTime()
                     val llmResponse = if (config.maxRetries > 0 && llmRetryHandler != null) {
                         llmRetryHandler.callWithRetry(
                             provider = effectiveProvider,
@@ -521,6 +578,26 @@ class AgentTurnLoop(
                             profileOverrides = profileOverrides
                         )
                     }
+                    val llmDurationMs = (System.nanoTime() - llmCallStartNanos) / 1_000_000
+
+                    // Emit LLMCallCompleted for Session Trace panel / cost analytics
+                    emitTurnEvent(taskId) {
+                        pl.jclab.refio.core.agents.events.AgentEvent.LLMCallCompleted(
+                            id = UUID.randomUUID().toString(),
+                            sessionId = evSessionId,
+                            sourceAgentId = evSourceAgentId,
+                            timestamp = System.currentTimeMillis(),
+                            correlationId = runId,
+                            iteration = iteration,
+                            model = effectiveModel ?: "unknown",
+                            provider = effectiveProvider,
+                            tokensIn = llmResponse.usage.inputTokens,
+                            tokensOut = llmResponse.usage.outputTokens,
+                            costUsd = llmResponse.cost,
+                            durationMs = llmDurationMs,
+                            finishReason = llmResponse.finishReason
+                        )
+                    }
 
                     if (GlobalMetrics.isCancelled()) {
                         throw CancellationException("Operation cancelled by user")
@@ -529,6 +606,22 @@ class AgentTurnLoop(
                     totalTokensIn += llmResponse.usage.inputTokens
                     totalTokensOut += llmResponse.usage.outputTokens
                     totalCost += llmResponse.cost
+
+                    // Populate per-session metrics for Session Trace footer / cost analytics
+                    GlobalMetrics.forAgent(taskId).recordTokens(
+                        tokensIn = llmResponse.usage.inputTokens,
+                        tokensOut = llmResponse.usage.outputTokens,
+                        costUsd = llmResponse.cost
+                    )
+                    // Feed global model analytics (Debug panel)
+                    pl.jclab.refio.core.services.monitoring.ModelUsageStats.record(
+                        provider = effectiveProvider,
+                        model = effectiveModel ?: "unknown",
+                        tokensIn = llmResponse.usage.inputTokens,
+                        tokensOut = llmResponse.usage.outputTokens,
+                        costUsd = llmResponse.cost,
+                        durationMs = llmDurationMs
+                    )
 
                     if (mode != TaskMode.CHAT && llmResponse.content.isBlank()) {
                         if (formatRetryCount < config.maxFormatRetries) {
@@ -666,13 +759,55 @@ class AgentTurnLoop(
                             activeToolCount = toolCalls.size
                         ) }
 
+                        // If the caller passed a listener, wrap it to capture per-tool timings.
+                        // IMPORTANT: do NOT pass a non-null listener into executeToolCalls when the
+                        // caller didn't, because TurnToolExecutor takes a different (streaming) code
+                        // path for certain tools when listener != null (see TurnToolExecutor.kt:424).
+                        // When no caller listener is present we fall back to batch-level timing.
+                        toolStartNanos.clear()
+                        toolDurationsMs.clear()
+                        val innerListener = listener?.toTurnEventListener()
+                        val effectiveListener: pl.jclab.refio.core.services.turn.TurnEventListener? =
+                            if (innerListener != null) {
+                                object : pl.jclab.refio.core.services.turn.TurnEventListener {
+                                    override fun onTurnStarted(taskId: String, mode: TaskMode, runId: String, parentRunId: String?, depth: Int) {
+                                        innerListener.onTurnStarted(taskId, mode, runId, parentRunId, depth)
+                                    }
+                                    override fun onToolExecutionStarted(taskId: String, toolCall: pl.jclab.refio.core.db.ToolCallData) {
+                                        toolStartNanos[toolCall.id] = System.nanoTime()
+                                        innerListener.onToolExecutionStarted(taskId, toolCall)
+                                    }
+                                    override fun onToolStreamChunk(taskId: String, toolCallId: String, delta: String, accumulated: String) {
+                                        innerListener.onToolStreamChunk(taskId, toolCallId, delta, accumulated)
+                                    }
+                                    override fun onToolExecutionCompleted(taskId: String, toolCall: pl.jclab.refio.core.db.ToolCallData, result: String, success: Boolean) {
+                                        toolStartNanos[toolCall.id]?.let { start ->
+                                            toolDurationsMs[toolCall.id] = (System.nanoTime() - start) / 1_000_000
+                                        }
+                                        innerListener.onToolExecutionCompleted(taskId, toolCall, result, success)
+                                    }
+                                    override fun onStreamChunk(taskId: String, delta: String, accumulated: String) {
+                                        innerListener.onStreamChunk(taskId, delta, accumulated)
+                                    }
+                                    override fun onToolBatchCompleted(taskId: String, summary: ToolBatchSummary.BatchSummary) {
+                                        innerListener.onToolBatchCompleted(taskId, summary)
+                                    }
+                                    override fun onTurnCompleted(taskId: String, result: pl.jclab.refio.core.services.TurnResult, runId: String, parentRunId: String?, depth: Int) {
+                                        innerListener.onTurnCompleted(taskId, result, runId, parentRunId, depth)
+                                    }
+                                }
+                            } else null
+
+                        // Batch-level timing fallback (used when no caller listener is available).
+                        val batchStartNanos = System.nanoTime()
+
                         val toolResults = try {
                             turnToolExecutor.executeToolCalls(
                                 taskId = taskId,
                                 toolCalls = toolCalls,
                                 mode = mode,
                                 executionMode = executionMode,
-                                listener = listener?.toTurnEventListener(),
+                                listener = effectiveListener,
                                 iteration = iteration,
                                 config = config,
                                 profileOverrides = profileOverrides,
@@ -715,6 +850,39 @@ class AgentTurnLoop(
                                 rawOutput = resultData.rawOutput,
                                 metadata = resultData.metadata
                             )
+                        }
+
+                        // Emit ToolCalled events for Session Trace / Tool analytics.
+                        // When per-tool timings aren't available (no caller listener) fall back to
+                        // a batch-average estimate so the Debug panel still gets meaningful data.
+                        val batchDurationMs = (System.nanoTime() - batchStartNanos) / 1_000_000
+                        val fallbackPerToolMs = if (toolResults.isNotEmpty()) batchDurationMs / toolResults.size else 0L
+                        for ((toolCall, resultData) in toolResults) {
+                            val success = !resultData.content.startsWith("Error:")
+                            val durationMs = toolDurationsMs[toolCall.id] ?: fallbackPerToolMs
+                            // Feed global tool analytics (Debug panel)
+                            pl.jclab.refio.core.services.monitoring.ToolUsageStats.record(
+                                toolName = toolCall.name,
+                                durationMs = durationMs,
+                                success = success,
+                                errorMessage = if (success) null else resultData.content.take(200)
+                            )
+                            emitTurnEvent(taskId) {
+                                pl.jclab.refio.core.agents.events.AgentEvent.ToolCalled(
+                                    id = UUID.randomUUID().toString(),
+                                    sessionId = evSessionId,
+                                    sourceAgentId = evSourceAgentId,
+                                    timestamp = System.currentTimeMillis(),
+                                    correlationId = runId,
+                                    iteration = iteration,
+                                    toolName = toolCall.name,
+                                    argumentsPreview = toolCall.arguments.take(120),
+                                    durationMs = durationMs,
+                                    success = success,
+                                    errorMessage = if (success) null else resultData.content.take(200),
+                                    resultPreview = resultData.content.take(200)
+                                )
+                            }
                         }
 
                         // Record to working memory
@@ -782,11 +950,25 @@ class AgentTurnLoop(
                         val batchSummary = ToolBatchSummary.summarize(batchInput)
                         listener?.toTurnEventListener()?.onToolBatchCompleted(taskId, batchSummary)
 
-                        // Track error rate
-                        for ((_, result) in toolResults) {
+                        // Track error rate + definitive-loop detection.
+                        // A definitive loop = the SAME tool with the SAME arguments failing
+                        // repeatedly. Varying either the tool or arguments resets the counter,
+                        // because the agent is still exploring alternatives.
+                        for ((toolCall, result) in toolResults) {
                             val success = !result.content.startsWith("Error:")
                             errorTracker.recordResult(success)
-                            consecutiveToolErrors = if (success) 0 else consecutiveToolErrors + 1
+                            if (success) {
+                                consecutiveIdenticalFailures = 0
+                                lastFailureSignature = null
+                            } else {
+                                val signature = "${toolCall.name}:${toolCall.arguments.hashCode()}"
+                                if (signature == lastFailureSignature) {
+                                    consecutiveIdenticalFailures++
+                                } else {
+                                    consecutiveIdenticalFailures = 1
+                                    lastFailureSignature = signature
+                                }
+                            }
                         }
 
                         val writeToolCalls = turnToolExecutor.countWriteToolCalls(toolCalls)
@@ -825,10 +1007,15 @@ class AgentTurnLoop(
                             consecutiveReadOnlyIterations = 0
                         }
 
-                        if (consecutiveToolErrors >= maxConsecutiveToolErrors) {
+                        if (consecutiveIdenticalFailures >= maxConsecutiveIdenticalFailures) {
+                            logger.warn {
+                                "[DEFINITIVE_LOOP] taskId=$taskId, signature=$lastFailureSignature, " +
+                                    "consecutiveIdenticalFailures=$consecutiveIdenticalFailures/$maxConsecutiveIdenticalFailures"
+                            }
                             val result = TurnResult(
                                 success = false,
-                                response = "Too many consecutive tool errors ($consecutiveToolErrors/$maxConsecutiveToolErrors). Please review tool usage and arguments.",
+                                response = "Definitive loop detected: the same tool call failed $consecutiveIdenticalFailures times in a row with identical arguments. " +
+                                    "The agent appears stuck retrying the same failing operation. Please rephrase your request or adjust the approach.",
                                 iterations = iteration,
                                 tokensIn = totalTokensIn,
                                 tokensOut = totalTokensOut,
@@ -1110,6 +1297,20 @@ class AgentTurnLoop(
                     }
                 } finally {
                     GlobalMetrics.endOperation(iterationToken)
+                    // Emit TurnEnded so the trace panel can close the iteration span
+                    val iterationDurationMs = System.currentTimeMillis() - iterationStartMs
+                    emitTurnEvent(taskId) {
+                        pl.jclab.refio.core.agents.events.AgentEvent.TurnEnded(
+                            id = UUID.randomUUID().toString(),
+                            sessionId = evSessionId,
+                            sourceAgentId = evSourceAgentId,
+                            timestamp = System.currentTimeMillis(),
+                            correlationId = runId,
+                            iteration = iteration,
+                            durationMs = iterationDurationMs,
+                            isFinal = false
+                        )
+                    }
                 }
             }
         } catch (e: CancellationException) {

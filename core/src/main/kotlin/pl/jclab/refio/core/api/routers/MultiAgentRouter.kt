@@ -65,7 +65,7 @@ class MultiAgentRouter(
         val startTime = System.currentTimeMillis()
 
         try {
-            val results = multiAgentRunner.run(session.id, specs) { spec, _ ->
+            val results = multiAgentRunner.run(session.id, specs) { spec, agentId ->
                 val instance = instanceMap[spec.name]!!
                 agentInstanceRepository.updateStatus(
                     instance.id, pl.jclab.refio.core.db.AgentInstanceStatus.RUNNING,
@@ -79,6 +79,10 @@ class MultiAgentRouter(
                     projectPath = defaultProjectPath ?: LEGACY_PROJECT_PATH
                 ))
 
+                // Attribute per-turn events to the parent multi-agent session so the
+                // user sees one unified trace for the whole run. sourceAgentId is the
+                // spawned agentId already used by MultiAgentRunner.AgentStarted/Completed,
+                // so Graph and Trace views correlate cleanly.
                 val turnResult = runTurnFn(
                     TurnRequest(
                         taskId = agentTask.id,
@@ -86,7 +90,9 @@ class MultiAgentRouter(
                         mode = spec.mode,
                         executionMode = pl.jclab.refio.core.db.ExecutionMode.AUTO,
                         model = spec.model ?: request.model,
-                        provider = request.provider
+                        provider = request.provider,
+                        emitSessionId = session.id,
+                        emitSourceAgentId = agentId
                     ),
                     streamCallback
                 )
