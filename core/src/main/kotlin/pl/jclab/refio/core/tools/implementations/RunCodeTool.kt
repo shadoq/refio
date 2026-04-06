@@ -146,35 +146,64 @@ class RunCodeTool(
             val exitCode = process.exitValue()
             val duration = (System.currentTimeMillis() - startTime).toInt()
 
-            val truncatedOutput = if (output.length > maxOutputSize) {
-                output.take(maxOutputSize) +
-                    "\n\n... (output truncated to $maxOutputSize characters). " +
-                    "TIP: For large data, save results to a file (e.g., open('output.json', 'w')) " +
-                    "and print only a summary."
-            } else if (output.length > LARGE_OUTPUT_WARNING_THRESHOLD) {
-                output + "\n\n[NOTE: Output is ${output.length} chars. For multi-step processing, " +
-                    "consider saving results to a file to prevent data loss from context compaction.]"
+            // For large outputs: persist the FULL stdout to a file inside the project
+            // sandbox and feed only a head/tail snippet back to the LLM. This stops the
+            // summarizer from collapsing structured outputs to useless prose and gives
+            // the model an explicit way to retrieve more via read_file.
+            var savedPath: String? = null
+            var savedFullSize: Int? = null
+            val displayOutput = if (output.length > maxOutputSize) {
+                // Hard cap (200 KB) — save full output, return head only.
+                val snapshot = saveOutputSnapshot(workingDir, output)
+                savedPath = snapshot
+                savedFullSize = output.length
+                buildLargeOutputMessage(
+                    head = output.take(LARGE_OUTPUT_HEAD_CHARS),
+                    tail = output.takeLast(LARGE_OUTPUT_TAIL_CHARS),
+                    fullSize = output.length,
+                    path = snapshot,
+                    capExceeded = true
+                )
+            } else if (output.length > LARGE_OUTPUT_AUTOSAVE_THRESHOLD) {
+                // Soft threshold (8 KB) — save full output but ALSO return everything,
+                // so the model can use it directly OR re-read later. The summarizer is
+                // told not to crush this since the file path is already in the message.
+                val snapshot = saveOutputSnapshot(workingDir, output)
+                savedPath = snapshot
+                savedFullSize = output.length
+                output + buildString {
+                    append("\n\n[NOTE: full output (${output.length} chars) also saved to ")
+                    append("`$snapshot`. If this gets summarised later, re-read with ")
+                    append("read_file(path=\"$snapshot\") to recover the raw data.]")
+                }
             } else {
                 output
             }
 
             logger.info {
                 "Code execution completed: language=$language, exitCode=$exitCode, " +
-                    "output=${output.length} chars, ${duration}ms"
+                    "output=${output.length} chars, ${duration}ms" +
+                    if (savedPath != null) ", saved=$savedPath" else ""
+            }
+
+            val metadata = mutableMapOf<String, Any>(
+                "language" to language,
+                "exit_code" to exitCode,
+                "code_length" to code.length,
+                "output_length" to output.length,
+                "truncated" to (output.length > maxOutputSize)
+            )
+            if (savedPath != null) {
+                metadata["output_saved_path"] = savedPath
+                metadata["output_full_size"] = savedFullSize ?: output.length
             }
 
             ToolResult(
                 success = exitCode == 0,
-                output = truncatedOutput,
+                output = displayOutput,
                 exitCode = exitCode,
                 durationMs = duration,
-                metadata = mapOf(
-                    "language" to language,
-                    "exit_code" to exitCode,
-                    "code_length" to code.length,
-                    "output_length" to output.length,
-                    "truncated" to (output.length > maxOutputSize)
-                )
+                metadata = metadata
             )
 
         } catch (e: Exception) {
@@ -188,6 +217,48 @@ class RunCodeTool(
                 }
             }
         }
+    }
+
+    /**
+     * Save full stdout to a workspace file so the model can re-read it via `read_file`.
+     * Returns the relative path (forward-slash) for use in messages.
+     */
+    private fun saveOutputSnapshot(workingDir: java.nio.file.Path, content: String): String {
+        return try {
+            val fileName = ".refio_output_${System.currentTimeMillis()}.txt"
+            val target = workingDir.resolve(fileName)
+            Files.writeString(target, content)
+            // Relative form so the LLM can pass it straight to read_file.
+            fileName
+        } catch (e: Exception) {
+            logger.warn(e) { "Failed to persist run_code output snapshot: ${e.message}" }
+            "(failed to save: ${e.message})"
+        }
+    }
+
+    /**
+     * Compose a head+tail message that tells the model exactly how to recover the
+     * full output via read_file. Used when the hard cap (maxOutputSize) is exceeded.
+     */
+    private fun buildLargeOutputMessage(
+        head: String,
+        tail: String,
+        fullSize: Int,
+        path: String,
+        capExceeded: Boolean
+    ): String = buildString {
+        if (capExceeded) {
+            append("[!! LARGE OUTPUT — full ${fullSize} chars exceeds inline cap. ")
+            append("Saved to `$path`. Read it with read_file(path=\"$path\") ")
+            append("(use offset/limit for paging). Below: head ${head.length} + tail ${tail.length} chars only. !!]\n\n")
+        } else {
+            append("[!! LARGE OUTPUT — ${fullSize} chars saved to `$path`. ")
+            append("Re-read with read_file(path=\"$path\") if needed. !!]\n\n")
+        }
+        append("--- HEAD ---\n")
+        append(head)
+        append("\n\n--- TAIL ---\n")
+        append(tail)
     }
 
     private fun getShellCommand(command: String): List<String> {
@@ -235,6 +306,14 @@ class RunCodeTool(
         const val MAX_TIMEOUT_SECONDS = 600L
         const val DEFAULT_MAX_OUTPUT_SIZE = 200 * 1024 // 200KB
         const val LARGE_OUTPUT_WARNING_THRESHOLD = 16_000 // 16KB - warn about saving to file
+
+        /** Outputs above this size are auto-persisted to a workspace file
+         *  so the model can recover them via read_file even after summarization. */
+        const val LARGE_OUTPUT_AUTOSAVE_THRESHOLD = 8_000  // 8 KB
+
+        /** Head/tail snippet sizes returned to the model when the hard cap is exceeded. */
+        const val LARGE_OUTPUT_HEAD_CHARS = 4_000
+        const val LARGE_OUTPUT_TAIL_CHARS = 2_000
 
         val SUPPORTED_LANGUAGES = mapOf(
             "python" to LanguageConfig(

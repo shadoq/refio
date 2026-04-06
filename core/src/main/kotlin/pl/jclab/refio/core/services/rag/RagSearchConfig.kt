@@ -16,7 +16,7 @@ data class RagSearchConfig(
     val includeContextChunks: Boolean = false
 ) {
     companion object {
-        const val DEFAULT_SIMILARITY_THRESHOLD = 0.5f
+        const val DEFAULT_SIMILARITY_THRESHOLD = 0.65f
         private const val MIN_SIMILARITY_THRESHOLD = 0.0f
         private const val MAX_SIMILARITY_THRESHOLD = 1.0f
         private const val DEFAULT_TOP_K = 5

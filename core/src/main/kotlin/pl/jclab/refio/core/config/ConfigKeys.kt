@@ -327,7 +327,11 @@ object ConfigKeys {
     val RAG_SEARCH_SIMILARITY_THRESHOLD = ConfigKey(
         key = "rag.search_similarity_threshold",
         parser = String::toFloatOrNull,
-        default = 0.5f,
+        // Bumped from 0.5 → 0.65: at 0.5 the loader returned ~15 fragments per
+        // query even when none were genuinely relevant (e.g. unrelated tasks
+        // matched on the boilerplate "Rozwiąz mi zadanie..." prefix).
+        // 0.65 still keeps useful matches but drops the long noise tail.
+        default = 0.65f,
         yamlAccessor = { it.getRagSearchSimilarityThreshold() }
     )
 

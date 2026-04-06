@@ -240,7 +240,7 @@ class ConfigService(
         const val DEFAULT_RAG_MAX_CONCURRENT_JOBS = 4
         const val DEFAULT_RAG_MAX_CHUNKS_PER_FILE = 100
         const val DEFAULT_RAG_CHUNKING_MODE = "semantic"
-        const val DEFAULT_RAG_SEARCH_SIMILARITY_THRESHOLD = 0.5f
+        const val DEFAULT_RAG_SEARCH_SIMILARITY_THRESHOLD = 0.65f
         const val DEFAULT_RAG_SEARCH_TOP_K = 5
         const val DEFAULT_RAG_SEARCH_CACHE_TTL_SECONDS = 60L
         const val DEFAULT_RAG_SEARCH_HYBRID_ENABLED = false

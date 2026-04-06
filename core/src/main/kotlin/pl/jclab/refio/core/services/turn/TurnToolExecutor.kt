@@ -69,12 +69,69 @@ class TurnToolExecutor(
         private fun normalize(path: String): String = path.replace('\\', '/').trim()
     }
 
+    /**
+     * In-session deduplication cache for READ_ONLY tool calls.
+     *
+     * When the LLM repeats an identical (toolName, normalized args) call within
+     * the same task, we return the previous result with a "[CACHED ...]" prefix
+     * instead of re-executing. The prefix is essential — it tells the model
+     * "you already did this", which is the only way to break read-loops on
+     * smaller/weaker models that otherwise re-issue the same query forever.
+     *
+     * Cache is scoped per taskId so different sessions never cross-contaminate.
+     * Write tools are NEVER cached (they have side effects).
+     */
+    class ResultCache {
+        data class Entry(
+            val resultData: ToolResultData,
+            val iteration: Int,
+            val subtaskId: String,
+            val recordedAt: Long = System.currentTimeMillis()
+        )
+
+        private val byTask = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.ConcurrentHashMap<String, Entry>>()
+
+        fun get(taskId: String, key: String): Entry? = byTask[taskId]?.get(key)
+
+        fun put(taskId: String, key: String, entry: Entry) {
+            val map = byTask.computeIfAbsent(taskId) { java.util.concurrent.ConcurrentHashMap() }
+            map[key] = entry
+        }
+
+        fun clearTask(taskId: String) {
+            byTask.remove(taskId)
+        }
+
+        /**
+         * Build a stable cache key from tool name + arguments JSON.
+         * Whitespace is normalized so functionally identical JSON hits the same key.
+         */
+        fun buildKey(toolName: String, argumentsJson: String): String {
+            val normalized = argumentsJson.replace(Regex("\\s+"), " ").trim()
+            return "$toolName::$normalized"
+        }
+    }
+
     /** Callback to update turn phase (set by AgentTurnLoop before each turn) */
     var turnStateUpdater: ((TurnPhase) -> Unit)? = null
 
     private val streamingToolNames = setOf("advance_code_editing", "multi_line_editor")
     private val codingToolNames = setOf("advance_code_editing", "multi_line_editor")
     private val readTracker = ReadTracker()
+    private val resultCache = ResultCache()
+
+    /**
+     * Tools eligible for in-session deduplication. Only side-effect-free
+     * read tools — never run_code, run_terminal_command, http_request, etc.
+     */
+    private val cacheableTools = setOf(
+        "read_file", "read_directory", "file_search", "grep_search", "view_diff"
+    )
+
+    /** Public hook so AgentTurnLoop / SessionManager can wipe the cache on session reset. */
+    fun clearResultCache(taskId: String) {
+        resultCache.clearTask(taskId)
+    }
 
     companion object {
         /** Max raw output size (chars) to preserve in-context for DATA_PRODUCING tools */
@@ -331,6 +388,40 @@ class TurnToolExecutor(
             )
         }
 
+        // --- In-session deduplication cache (READ_ONLY tools only) ---
+        if (toolCall.name in cacheableTools) {
+            val cacheKey = resultCache.buildKey(toolCall.name, toolCall.arguments)
+            val cached = resultCache.get(taskId, cacheKey)
+            if (cached != null) {
+                logger.info {
+                    "[TOOL_CACHE_HIT] tool=${toolCall.name}, taskId=$taskId, " +
+                        "previousIteration=${cached.iteration}, previousSubtask=${cached.subtaskId}"
+                }
+                val cachedRefShort = cached.subtaskId.take(8)
+                val notice = "[CACHED — identical call already executed in iteration ${cached.iteration} " +
+                    "(subtask $cachedRefShort). Result below is unchanged. " +
+                    "If you need fresh data, vary the arguments or run a different tool.]\n\n"
+                val combinedContent = notice + cached.resultData.content
+                val combinedRaw = cached.resultData.rawOutput?.let { notice + it }
+
+                // Surface as a SUCCESS subtask so the UI shows the call happened.
+                subtaskRepository.updateStatus(subtaskId, TaskStatus.SUCCESS)
+                subtaskRepository.updateResult(
+                    subtaskId,
+                    result = combinedRaw ?: combinedContent,
+                    summary = combinedContent
+                )
+                listener?.onToolExecutionCompleted(taskId, toolCall, combinedContent, true)
+                return ToolResultData(
+                    toolCallId = toolCall.id,
+                    content = combinedContent,
+                    isSummarized = cached.resultData.isSummarized,
+                    rawOutput = combinedRaw,
+                    metadata = cached.resultData.metadata
+                )
+            }
+        }
+
         // --- ASK permission check ---
         if (approvalService != null && permissionsService != null) {
             val permissionLevel = permissionsService.getPermission(toolCall.name, mode)
@@ -483,7 +574,14 @@ class TurnToolExecutor(
                     if (isInvokeSubagent) {
                         ToolResultSummary(displayOutput, wasSummarized = false, 0, 0, 0.0)
                     } else if (outputWithWarnings.isNotBlank()) {
-                        toolResultSummarizer.summarizeToolResult(toolCall.name, outputWithWarnings, taskId)
+                        // Pass argumentsMap so the summarizer can pick the right context
+                        // type — e.g. read_file on .json should not run code-analysis prompt.
+                        toolResultSummarizer.summarizeToolResult(
+                            toolName = toolCall.name,
+                            rawOutput = outputWithWarnings,
+                            taskId = taskId,
+                            toolArgs = argumentsMap
+                        )
                     } else {
                         ToolResultSummary(outputWithWarnings, wasSummarized = false, 0, 0, 0.0)
                     }
@@ -516,7 +614,8 @@ class TurnToolExecutor(
                     params = argumentsMap,
                     result = outputWithWarnings,
                     iteration = iteration,
-                    metadata = toolResult.metadata
+                    metadata = toolResult.metadata,
+                    originId = subtaskId
                 )
 
                 // Decide what content to store in conversation history.
@@ -547,13 +646,31 @@ class TurnToolExecutor(
                 val metadataMap = buildToolResultMetadata(toolCall.name, argumentsMap, toolResult.metadata)
                 val metadataJson = metadataMap.takeIf { it.isNotEmpty() }?.let { gson.toJson(it) }
 
-                return ToolResultData(
+                val resultData = ToolResultData(
                     toolCallId = toolCall.id,
                     content = effectiveContent,
                     isSummarized = effectivelySummarized,
                     rawOutput = outputWithWarnings,
                     metadata = metadataJson
                 )
+
+                // Cache successful results from cacheable read-only tools so a
+                // repeat of the same call within this session returns instantly
+                // with a [CACHED ...] notice instead of re-executing.
+                if (toolCall.name in cacheableTools) {
+                    val cacheKey = resultCache.buildKey(toolCall.name, toolCall.arguments)
+                    resultCache.put(
+                        taskId,
+                        cacheKey,
+                        ResultCache.Entry(
+                            resultData = resultData,
+                            iteration = iteration,
+                            subtaskId = subtaskId
+                        )
+                    )
+                }
+
+                return resultData
             } else {
                 val errorDetail = toolResult.error
                     ?: toolResult.output?.takeIf { it.isNotBlank() }

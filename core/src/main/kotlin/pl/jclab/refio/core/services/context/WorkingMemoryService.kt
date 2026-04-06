@@ -7,6 +7,10 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Working memory keeps compact, high-value facts across turns.
+ *
+ * @param originId Optional identifier of the source (e.g. subtask id or tool_call id).
+ *                 Surfaced in the rendered section so the LLM can tell which entry came
+ *                 from which run and recognise superseded values across iterations.
  */
 data class WorkingMemoryEntry(
     val iteration: Int,
@@ -15,7 +19,8 @@ data class WorkingMemoryEntry(
     val outputExcerpt: String? = null,
     val importance: Int = 5,
     val timestamp: Instant = Instant.now(),
-    val lastAccessedAt: Instant = Instant.now()
+    val lastAccessedAt: Instant = Instant.now(),
+    val originId: String? = null
 )
 
 class WorkingMemoryService(
@@ -67,9 +72,10 @@ class WorkingMemoryService(
         output: String,
         iteration: Int,
         metadata: Map<String, Any?>? = null,
-        codeElementsProvider: ((String) -> CodeElements?)? = null
+        codeElementsProvider: ((String) -> CodeElements?)? = null,
+        originId: String? = null
     ): List<WorkingMemoryEntry> {
-        return when (toolName) {
+        val entries = when (toolName) {
             "read_file" -> buildReadFileEntries(args, output, iteration, metadata, codeElementsProvider)
             "read_directory" -> buildReadDirectoryEntries(args, output, iteration, metadata)
             "file_search" -> buildFileSearchEntries(args, output, iteration, metadata)
@@ -83,6 +89,7 @@ class WorkingMemoryService(
                 buildWriteEntries(toolName, args, output, iteration, metadata)
             else -> buildGenericToolEntries(toolName, args, output, iteration, metadata)
         }
+        return if (originId != null) entries.map { it.copy(originId = originId) } else entries
     }
 
     fun buildWorkingMemorySection(taskId: String, maxTokens: Int): String {
@@ -106,11 +113,15 @@ class WorkingMemoryService(
 
         val sb = StringBuilder()
         sb.append("<WORKING_MEMORY>\n")
+        sb.append("<!-- [it#N]=iteration, [ref#X]=tool-call id; newer it# supersedes older -->\n")
         var tokensUsed = ContextTokenEstimator.estimateTokens(sb.toString())
 
         for (key in sortedKeys) {
+            // Sort newest-first within a key so the model sees the most recent fact at the top.
             val sortedEntries = grouped[key].orEmpty().sortedWith(
-                compareByDescending<WorkingMemoryEntry> { effectiveImportance(it, maxIteration) }.thenByDescending { it.lastAccessedAt }
+                compareByDescending<WorkingMemoryEntry> { it.iteration }
+                    .thenByDescending { effectiveImportance(it, maxIteration) }
+                    .thenByDescending { it.lastAccessedAt }
             )
 
             val header = "## $key"
@@ -120,7 +131,8 @@ class WorkingMemoryService(
             tokensUsed += headerTokens
 
             for (entry in sortedEntries) {
-                val line = "- ${entry.value}"
+                val tag = buildEntryTag(entry)
+                val line = "- $tag ${entry.value}"
                 val lineTokens = ContextTokenEstimator.estimateTokens(line)
                 if (tokensUsed + lineTokens > maxTokens) {
                     break
@@ -143,6 +155,16 @@ class WorkingMemoryService(
 
         sb.append("</WORKING_MEMORY>")
         return sb.toString().trim()
+    }
+
+    /**
+     * Build a compact origin tag for a working-memory entry.
+     * Format: `[it#N ref#XXXXXXXX]` where XXXXXXXX is the first 8 chars of the originId.
+     * If no originId is set: `[it#N]`.
+     */
+    private fun buildEntryTag(entry: WorkingMemoryEntry): String {
+        val ref = entry.originId?.take(8)
+        return if (ref != null) "[it#${entry.iteration} ref#$ref]" else "[it#${entry.iteration}]"
     }
 
     private fun buildReadFileEntries(

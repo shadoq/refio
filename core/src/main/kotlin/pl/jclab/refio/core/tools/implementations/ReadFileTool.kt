@@ -208,10 +208,35 @@ class ReadFileTool(
                 endLine = startIdx + readLineCount
 
                 val header = "[Lines $startLine-$endLine of $totalLineCount total]"
-                outputContent = "$header\n${selectedLines.joinToString("\n")}"
+                val body = selectedLines.joinToString("\n")
+
+                // Truncation warning: there are more lines AFTER what we just read.
+                // This is critical so the model knows the file is incomplete and
+                // explicitly knows how to read the rest. Without this, models tend
+                // to silently assume they have the full file.
+                val unreadAfter = totalLineCount - endLine
+                val unreadBefore = startLine - 1
+                outputContent = if (unreadAfter > 0 || unreadBefore > 0) {
+                    val nextOffset = endLine + 1
+                    val warning = buildString {
+                        append("\n\n[!! PARTIAL READ — file '$pathStr' has $totalLineCount lines, ")
+                        append("you read lines $startLine-$endLine ($readLineCount shown).")
+                        if (unreadBefore > 0) append(" $unreadBefore line(s) BEFORE.")
+                        if (unreadAfter > 0) {
+                            append(" $unreadAfter line(s) AFTER — to continue reading call:")
+                            append(" read_file(path=\"$pathStr\", offset=$nextOffset).")
+                            append(" Critical constants/sections may be in the unread part.")
+                        }
+                        append(" !!]")
+                    }
+                    "$header\n$body$warning"
+                } else {
+                    "$header\n$body"
+                }
 
                 logger.info {
-                    "Read file range: $pathStr lines $startLine-$endLine of $totalLineCount"
+                    "Read file range: $pathStr lines $startLine-$endLine of $totalLineCount " +
+                        "(unread before=$unreadBefore, after=$unreadAfter)"
                 }
             } else {
                 // Full file read
@@ -225,19 +250,30 @@ class ReadFileTool(
 
             logger.info { "Successfully read file: $pathStr ($readLineCount lines, ${duration}ms)" }
 
+            val truncated = startLine > 1 || endLine < totalLineCount
+            val metadata = mutableMapOf<String, Any>(
+                "file_size" to fileSize,
+                "total_lines" to totalLineCount,
+                "lines_read" to readLineCount,
+                "start_line" to startLine,
+                "end_line" to endLine,
+                "path" to pathStr,
+                "truncated" to truncated
+            )
+            if (truncated && endLine < totalLineCount) {
+                metadata["next_offset"] = endLine + 1
+                metadata["unread_after"] = totalLineCount - endLine
+            }
+            if (truncated && startLine > 1) {
+                metadata["unread_before"] = startLine - 1
+            }
+
             return ToolResult(
                 success = true,
                 output = outputContent,
                 bytesRead = outputContent.toByteArray().size,
                 durationMs = duration,
-                metadata = mapOf(
-                    "file_size" to fileSize,
-                    "total_lines" to totalLineCount,
-                    "lines_read" to readLineCount,
-                    "start_line" to startLine,
-                    "end_line" to endLine,
-                    "path" to pathStr
-                )
+                metadata = metadata
             )
 
         } catch (e: SecurityException) {

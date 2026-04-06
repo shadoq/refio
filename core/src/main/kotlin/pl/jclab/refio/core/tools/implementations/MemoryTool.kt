@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.tools.implementations
 
+import pl.jclab.refio.core.db.repositories.SubtaskRepository
 import pl.jclab.refio.core.services.context.WorkingMemoryEntry
 import pl.jclab.refio.core.services.context.WorkingMemoryService
 import pl.jclab.refio.core.tools.base.Tool
@@ -16,15 +17,19 @@ import java.time.Instant
  * - write: Store a fact, conclusion, or discovery
  * - read: Read facts with optional key prefix filter
  * - list: List all memory keys with their importance scores
+ * - get_subtask_output: Retrieve the FULL raw output of a previous tool call
+ *   by its subtask id (the `ref#XXXXXXXX` shown in <WORKING_MEMORY>). Use when
+ *   the in-context summary lost details you need to verify.
  */
 class MemoryTool(
-    private val workingMemoryService: WorkingMemoryService
+    private val workingMemoryService: WorkingMemoryService,
+    private val subtaskRepository: SubtaskRepository? = null
 ) : Tool {
     override val name = "memory"
     override val description = """Manage shared working memory visible to orchestrator and other agents.
-Actions: write (store a finding), read (retrieve facts), list (show all keys).
-Use for: key findings, intermediate results, decisions, blockers.
-Do NOT store raw data — only processed insights."""
+Actions: write (store a finding), read (retrieve facts), list (show all keys),
+get_subtask_output (recover full raw output of a past tool call by subtask id / ref#).
+Use for: key findings, intermediate results, decisions, blockers, recovering data lost to summarization."""
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.SYSTEM
 
@@ -33,7 +38,7 @@ Do NOT store raw data — only processed insights."""
         "properties" to mapOf(
             "action" to mapOf(
                 "type" to "string",
-                "enum" to listOf("write", "read", "list"),
+                "enum" to listOf("write", "read", "list", "get_subtask_output"),
                 "description" to "Action to perform"
             ),
             "key" to mapOf(
@@ -52,6 +57,18 @@ Do NOT store raw data — only processed insights."""
             "filter" to mapOf(
                 "type" to "string",
                 "description" to "Optional key prefix filter for read (e.g., 'agent:searcher', 'findings')"
+            ),
+            "subtask_id" to mapOf(
+                "type" to "string",
+                "description" to "Subtask id (or first 8 chars of it — the ref# shown in WORKING_MEMORY tags). Required for get_subtask_output."
+            ),
+            "offset" to mapOf(
+                "type" to "integer",
+                "description" to "For get_subtask_output: char offset to start reading from (default: 0)."
+            ),
+            "limit" to mapOf(
+                "type" to "integer",
+                "description" to "For get_subtask_output: max chars to return (default: 8000, max: 64000)."
             )
         ),
         "required" to listOf("action")
@@ -65,7 +82,8 @@ Do NOT store raw data — only processed insights."""
             "write" -> handleWrite(params)
             "read" -> handleRead(params)
             "list" -> handleList(params)
-            else -> ToolResult.error("Unknown action: $action. Use: write, read, list")
+            "get_subtask_output" -> handleGetSubtaskOutput(params)
+            else -> ToolResult.error("Unknown action: $action. Use: write, read, list, get_subtask_output")
         }
     }
 
@@ -130,6 +148,82 @@ Do NOT store raw data — only processed insights."""
         return ToolResult(
             success = true,
             output = if (filtered.isBlank()) "Working memory is empty." else filtered
+        )
+    }
+
+    /**
+     * Recover the FULL raw output of a previous tool call by subtask id.
+     *
+     * The model only sees a (possibly summarized) version of past tool results
+     * in conversation history. When it needs the literal data — exact numbers,
+     * full lists of identifiers, complete error bodies — it can call this with
+     * the `ref#XXXXXXXX` shown in <WORKING_MEMORY> tags (or the full subtask id).
+     *
+     * Pagination via offset/limit so even very large outputs (the file we
+     * persist via run_code's auto-save also lives in subtask.result) can be
+     * scrolled without blowing the context window.
+     */
+    private fun handleGetSubtaskOutput(params: Map<String, Any>): ToolResult {
+        val repo = subtaskRepository
+            ?: return ToolResult.error("Subtask repository not wired into MemoryTool")
+        val taskId = params[ToolInternalParams.TASK_ID] as? String
+            ?: return ToolResult.error("No task context")
+        val rawId = (params["subtask_id"] as? String)?.trim()
+            ?: return ToolResult.error("subtask_id required for get_subtask_output")
+
+        val offset = (params["offset"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 0
+        val limit = (params["limit"] as? Number)?.toInt()?.coerceIn(1, 64_000) ?: 8_000
+
+        // Try exact id first; if the user passed only the 8-char ref#, fall back
+        // to a prefix lookup over the task's subtasks.
+        val subtask = repo.findById(rawId)
+            ?: run {
+                // Prefix lookup — `getByTaskId` is the broadest enumerator we have here.
+                val candidates = runCatching { repo.findByTaskId(taskId) }.getOrNull().orEmpty()
+                candidates.firstOrNull { it.id.startsWith(rawId, ignoreCase = true) }
+            }
+            ?: return ToolResult.error(
+                "No subtask found for id/ref '$rawId' in task $taskId. " +
+                    "Use the full id from a tool result or the ref#XXXXXXXX from <WORKING_MEMORY>."
+            )
+
+        val raw = subtask.result
+        if (raw.isNullOrEmpty()) {
+            return ToolResult(
+                success = true,
+                output = "[Subtask ${subtask.id} (${subtask.kind}) has no stored raw output. " +
+                    "Summary: ${subtask.summary ?: "(none)"}]",
+                metadata = mapOf(
+                    "subtask_id" to subtask.id,
+                    "kind" to subtask.kind.toString(),
+                    "has_raw" to false
+                )
+            )
+        }
+
+        val total = raw.length
+        val safeStart = offset.coerceAtMost(total)
+        val safeEnd = (safeStart + limit).coerceAtMost(total)
+        val slice = raw.substring(safeStart, safeEnd)
+        val unreadAfter = total - safeEnd
+
+        val header = "[Subtask ${subtask.id} (${subtask.kind}), chars $safeStart-$safeEnd of $total]"
+        val footer = if (unreadAfter > 0) {
+            "\n\n[!! ${unreadAfter} more chars available. Continue with " +
+                "memory(action=\"get_subtask_output\", subtask_id=\"${subtask.id}\", offset=$safeEnd) !!]"
+        } else ""
+
+        return ToolResult(
+            success = true,
+            output = "$header\n$slice$footer",
+            metadata = mapOf(
+                "subtask_id" to subtask.id,
+                "kind" to subtask.kind.toString(),
+                "char_offset" to safeStart,
+                "char_end" to safeEnd,
+                "total_chars" to total,
+                "unread_after" to unreadAfter
+            )
         )
     }
 

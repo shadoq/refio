@@ -15,11 +15,25 @@ private val logger = dualLogger("ToolResultSummarizer")
  * Context type for summarization - determines detail level.
  */
 enum class SummaryContextType {
-    /** read_file - need to preserve class structures, function signatures */
+    /** read_file on a code file - need to preserve class structures, function signatures */
     CODE_ANALYSIS,
 
     /** grep_search, file_search - need to preserve match context */
     SEARCH_RESULT,
+
+    /**
+     * read_file on a data file (.json, .csv, .txt, .log, .md). Code-style summarization
+     * is destructive here ("no class definitions found" is useless prose). Instead we
+     * keep structure (item count, sample first/last) and never paraphrase numbers.
+     */
+    DATA_FILE,
+
+    /**
+     * run_code / run_terminal_command — deterministic program output. Preserve every
+     * number, identifier, and error message verbatim; never collapse lists; keep
+     * head + tail when too long. The summarizer must NOT rephrase.
+     */
+    RAW_OUTPUT,
 
     /** Other tools - standard summarization */
     GENERAL
@@ -51,16 +65,17 @@ class ToolResultSummarizer(
      * @param toolName Name of the tool that was executed
      * @param rawOutput Raw output from the tool
      * @param taskId Task ID for metrics tracking
+     * @param toolArgs Optional tool arguments (used to refine context type — e.g.
+     *                 read_file on `.json` → DATA_FILE, on `.kt` → CODE_ANALYSIS)
      * @return Concise summary of the tool result
      */
     suspend fun summarizeToolResult(
         toolName: String,
         rawOutput: String,
-        taskId: String
+        taskId: String,
+        toolArgs: Map<String, Any?>? = null
     ): ToolResultSummary {
-        // Determine context type based on tool name
-        val contextType = getContextTypeForTool(toolName)
-
+        val contextType = getContextTypeForTool(toolName, toolArgs)
         return summarizeToolResultWithContext(toolName, rawOutput, taskId, contextType)
     }
 
@@ -119,6 +134,8 @@ class ToolResultSummarizer(
         // that tend to be verbose (e.g. qwen3.5, glm-5).
         val maxTokens = when (contextType) {
             SummaryContextType.CODE_ANALYSIS -> 4096   // Keep more details for code
+            SummaryContextType.DATA_FILE -> 3072       // Preserve structure + samples
+            SummaryContextType.RAW_OUTPUT -> 4096      // Preserve numbers/IDs/errors verbatim
             SummaryContextType.SEARCH_RESULT -> 2048   // Medium for search
             SummaryContextType.GENERAL -> 1536         // Standard for others
         }
@@ -190,6 +207,38 @@ Focus on:
 - Omit implementation details unless critical
             """.trimIndent()
 
+            SummaryContextType.DATA_FILE -> """
+This is a DATA file (JSON/CSV/TXT/log/markdown), NOT source code.
+DO NOT mention "no class definitions", "no functions", "no imports" — that is wrong context.
+
+Instead, describe:
+- What type of data the file holds (array of strings, table of records, log lines, prose, etc.)
+- The total number of items / rows / lines if visible
+- The structure of one item (field names for JSON, columns for CSV, log format, etc.)
+- A literal sample: first 1–3 items AND last 1–3 items, copied verbatim
+- Any obvious pattern (sorted? all numeric? all matching a regex?)
+- Any error markers, status fields, or anomalies
+
+Never paraphrase numbers or identifiers — copy them exactly.
+            """.trimIndent()
+
+            SummaryContextType.RAW_OUTPUT -> """
+This is the raw stdout of an executed program (run_code / run_terminal_command).
+Treat it as deterministic data the model needs to read literally — DO NOT rephrase.
+
+Preserve verbatim:
+- Every number (counts, IDs, totals, percentages, sizes)
+- Every error message and stack-trace line, exactly as printed
+- Every file path, URL, exit code, and HTTP status
+- The first 5 and last 5 non-empty output lines, copied as-is
+
+If the output is a list (e.g. lines like "0001: ..."), keep AT LEAST the first 10 items
+and the total count. Never collapse a list to "many items" or "various IDs".
+
+If the output contains an explicit error / API response (e.g. "HTTP Error 400",
+"code: -970", "Traceback", "SyntaxError"), reproduce that block IN FULL.
+            """.trimIndent()
+
             SummaryContextType.SEARCH_RESULT -> """
 Focus on:
 - Number of matches found
@@ -238,6 +287,34 @@ Guidelines:
 - Max 3-5 sentences for files, more for complex structures
             """.trimIndent()
 
+            SummaryContextType.DATA_FILE -> """
+You are a DATA-file summarizer. The file you are looking at is structured data
+(JSON, CSV, log, markdown, plain text), NOT source code.
+
+Strict rules:
+- NEVER write "no class definitions", "no interfaces", "no functions",
+  "no imports", or any code-architecture commentary. That is wrong context.
+- NEVER paraphrase numeric values or identifiers — copy them character-for-character.
+- ALWAYS include a literal sample of the first and last entries.
+- ALWAYS include a count (rows / items / lines) when visible.
+- Treat the content as data the user will need to retrieve later.
+            """.trimIndent()
+
+            SummaryContextType.RAW_OUTPUT -> """
+You are a RAW-output summarizer for program stdout (Python, JavaScript, shell).
+The downstream model needs to read this output LITERALLY to make a decision —
+your job is to compress safely, not to interpret.
+
+Strict rules:
+- NEVER rewrite, rephrase, or "improve" the wording of any line.
+- NEVER replace specific numbers with words like "several", "many", "some".
+- ALWAYS copy errors, exceptions, stack traces, and HTTP error bodies VERBATIM.
+- ALWAYS keep the first ~10 and last ~5 non-empty output lines unchanged.
+- If the output contains a list of identifiers, preserve identifiers exactly
+  and report the total count.
+- Use a markdown code block (```) to wrap any preserved literal output.
+            """.trimIndent()
+
             SummaryContextType.SEARCH_RESULT -> """
 You are a search result summarizer. Create concise summaries of search matches.
 
@@ -263,14 +340,40 @@ Guidelines:
     }
 
     /**
-     * Determine context type based on tool name.
+     * Determine context type based on tool name + arguments.
+     *
+     * Key distinctions:
+     * - read_file on a code file → CODE_ANALYSIS (preserve classes/functions)
+     * - read_file on a data file (.json/.csv/.txt/.log/.md) → DATA_FILE
+     *   (preserve structure, never rephrase numbers/IDs)
+     * - run_code / run_terminal_command → RAW_OUTPUT (preserve every number,
+     *   ID, error verbatim — these are deterministic program outputs that the
+     *   model needs to read literally)
      */
-    private fun getContextTypeForTool(toolName: String): SummaryContextType {
+    private fun getContextTypeForTool(
+        toolName: String,
+        toolArgs: Map<String, Any?>? = null
+    ): SummaryContextType {
         return when (toolName) {
-            "read_file" -> SummaryContextType.CODE_ANALYSIS
+            "read_file" -> {
+                val path = (toolArgs?.get("path") as? String).orEmpty()
+                if (isDataFilePath(path)) SummaryContextType.DATA_FILE
+                else SummaryContextType.CODE_ANALYSIS
+            }
             "grep_search", "file_search" -> SummaryContextType.SEARCH_RESULT
+            "run_code", "run_terminal_command" -> SummaryContextType.RAW_OUTPUT
             else -> SummaryContextType.GENERAL
         }
+    }
+
+    /**
+     * Heuristic: paths whose extension indicates structured/data content rather
+     * than source code. Code-style summarization is destructive for these.
+     */
+    private fun isDataFilePath(path: String): Boolean {
+        if (path.isBlank()) return false
+        val ext = path.substringAfterLast('.', "").lowercase()
+        return ext in DATA_FILE_EXTENSIONS
     }
 
     fun compressToolResult(rawOutput: String, summary: String?, level: CompressionLevel): String {
@@ -283,6 +386,17 @@ Guidelines:
     }
 
     companion object {
+        /**
+         * File extensions treated as DATA_FILE rather than CODE_ANALYSIS.
+         * These are structured/text files where code-style summarization
+         * ("no classes found, no imports detected") is actively misleading.
+         */
+        val DATA_FILE_EXTENSIONS = setOf(
+            "json", "csv", "tsv", "txt", "log", "md", "markdown",
+            "yaml", "yml", "xml", "html", "htm", "ini", "conf", "cfg",
+            "properties", "toml", "env", "sql"
+        )
+
         private const val DEFAULT_SYSTEM_PROMPT = """
 You are a tool result summarizer. Create a concise summary of tool execution results.
 

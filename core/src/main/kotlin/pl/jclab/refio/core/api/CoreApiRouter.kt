@@ -643,7 +643,10 @@ class CoreApiRouter(
 
                 // Register SYSTEM tools for multi-agent orchestration
                 val tasksTool = pl.jclab.refio.core.tools.implementations.TasksTool(agentPlanService)
-                val memoryTool = pl.jclab.refio.core.tools.implementations.MemoryTool(workingMemoryService)
+                val memoryTool = pl.jclab.refio.core.tools.implementations.MemoryTool(
+                    workingMemoryService = workingMemoryService,
+                    subtaskRepository = subtaskRepository
+                )
                 val manageSubagentTool = pl.jclab.refio.core.tools.implementations.ManageSubagentTool { subagentRouter }
                 val sendMessageTool = pl.jclab.refio.core.tools.implementations.SendMessageTool(agentEventBus)
 

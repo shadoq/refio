@@ -896,7 +896,8 @@ class AgentTurnLoop(
                                         params = params,
                                         result = resultData.rawOutput ?: resultData.content,
                                         iteration = iteration,
-                                        metadata = resultData.metadata?.let { TurnJsonUtils.parseJsonToMap(it) }
+                                        metadata = resultData.metadata?.let { TurnJsonUtils.parseJsonToMap(it) },
+                                        originId = toolCall.id
                                     )
                                 }
                             }
