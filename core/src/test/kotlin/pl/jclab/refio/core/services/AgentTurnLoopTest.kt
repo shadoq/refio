@@ -22,6 +22,7 @@ import pl.jclab.refio.core.tools.base.ToolResult
 import pl.jclab.refio.core.services.turn.TurnFinalizer
 import pl.jclab.refio.core.services.turn.TurnGuardrails
 import pl.jclab.refio.core.services.turn.TurnLLMCaller
+import pl.jclab.refio.core.services.turn.TurnNudgeBuilder
 import pl.jclab.refio.core.services.turn.TurnPromptBuilder
 import pl.jclab.refio.core.services.turn.TurnResponseProcessor
 import pl.jclab.refio.core.services.turn.TurnSubagentValidator
@@ -537,11 +538,13 @@ class AgentTurnLoopTest {
 
             assertTrue(result.success)
             assertEquals(2, result.iterations)
+            // Empty-content branch now uses its own dedicated nudge (not the generic invalid-format
+            // nudge) so users see a clearer hint about what went wrong.
             verify {
                 chatMessageRepository.create(
                     testTaskId,
                     MessageRole.SYSTEM,
-                    TurnGuardrails.buildInvalidFormatMessage(TaskMode.PLAN),
+                    TurnNudgeBuilder.buildEmptyContentNudgeMessage(),
                     any(),
                     any(),
                     any(),
@@ -675,6 +678,143 @@ class AgentTurnLoopTest {
         }
     }
 
+    /**
+     * Tests for the empty-content / nudge fixes from docs/0107-multiagent.md.
+     *
+     * Background: qwen3.5:35b on Ollama would emit empty `content` (the JSON envelope ended up in
+     * the `thinking` field instead) and the loop would burn through all retries trying to nudge
+     * the model back into format. These tests pin down the recovery behaviours we now rely on.
+     */
+    @Nested
+    inner class EmptyContentRecoveryAndNudgeTests {
+
+        @Test
+        fun `should recover when JSON envelope arrives in thinking field instead of content`() = runTest {
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returns LLMResponse(
+                content = "",
+                thinking = """{"response":"Recovered from thinking","intent":"response"}""",
+                usage = LLMUsage(inputTokens = 100, outputTokens = 25, totalTokens = 125),
+                model = "qwen3.5:35b",
+                provider = "ollama",
+                cost = 0.0,
+                finishReason = "stop"
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Test thinking recovery",
+                mode = TaskMode.PLAN
+            )
+
+            // Should succeed in a single iteration: empty content but thinking carried valid JSON.
+            assertTrue(result.success, "expected recovery from thinking field, got: ${result.response}")
+            assertEquals(1, result.iterations)
+        }
+
+        @Test
+        fun `should not persist plain text body as ASSISTANT message during plain text nudge`() = runTest {
+            // First response: plain text (will trigger nudge). Second: valid JSON (recovers).
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                LLMResponse(
+                    content = "```python\nprint('garbage plain text')\n```",
+                    usage = LLMUsage(inputTokens = 100, outputTokens = 20, totalTokens = 120),
+                    model = "gpt-4",
+                    provider = "openai",
+                    cost = 0.0,
+                    finishReason = "stop"
+                ),
+                createLLMResponse("""{"response":"recovered","intent":"response"}""")
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Run task",
+                mode = TaskMode.AGENT
+            )
+
+            assertTrue(result.success)
+            // The plain-text body must NOT be saved as an ASSISTANT message — that would teach
+            // the model to keep emitting markdown on the next turn.
+            verify(exactly = 0) {
+                chatMessageRepository.create(
+                    testTaskId,
+                    MessageRole.ASSISTANT,
+                    match<String> { it.contains("garbage plain text") },
+                    any(), any(), any(), any(), any(), any()
+                )
+            }
+        }
+
+        @Test
+        fun `nudge SYSTEM message is replaced not appended across retries`() = runTest {
+            // Track all created messages so we can count SYSTEM nudges. Capture the slot for the
+            // create() args; mockk will record every invocation.
+            val createdRoles = mutableListOf<MessageRole>()
+            val createdContents = mutableListOf<String>()
+            // Override the default mock to capture role + content.
+            every {
+                chatMessageRepository.create(
+                    any(), capture(createdRoles), capture(createdContents),
+                    any(), any(), any(), any(), any(), any()
+                )
+            } answers {
+                // Each created message gets a unique id so the delete() lookup logic in the
+                // production code can find the previous nudge to replace.
+                createMockMessage(id = "msg-${createdContents.size}")
+            }
+            // Repository.delete is invoked when replacing a previous nudge — keep it relaxed.
+            every { chatMessageRepository.delete(any()) } returns true
+
+            val emptyResponse = LLMResponse(
+                content = "",
+                usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
+                model = "qwen3.5:35b",
+                provider = "ollama",
+                cost = 0.0,
+                finishReason = "stop"
+            )
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                emptyResponse,
+                emptyResponse,
+                emptyResponse,
+                createLLMResponse("""{"response":"finally","intent":"response"}""")
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Test nudge replace",
+                mode = TaskMode.PLAN
+            )
+
+            assertTrue(result.success, "expected eventual recovery, got: ${result.response}")
+            // We hit the empty-content branch 3 times. Each adds a fresh SYSTEM nudge, but the
+            // PREVIOUS nudge should have been deleted to avoid stacking. So delete() must be
+            // called at least twice (after the 2nd and 3rd nudge).
+            verify(atLeast = 2) { chatMessageRepository.delete(any()) }
+        }
+    }
+
     @Nested
     inner class TaskVerificationIntegrationTests {
 
@@ -763,17 +903,16 @@ class AgentTurnLoopTest {
             }
 
             every { chatMessageRepository.findByTaskId(testTaskId) } answers { messages.toList() }
+            // Single 16-arg stub matching the current ChatMessageRepository.create signature:
+            // (taskId, role, content, thinking, metadata, toolCalls, toolCallId, subtaskId,
+            //  isSummarized, rawOutput, tokensIn, tokensOut, cost, agentInstanceId, agentName, agentDepth)
             every {
                 chatMessageRepository.create(
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any()
+                    any(), any(), any(),
+                    any(), any(), any(), any(), any(),
+                    any(), any(),
+                    any(), any(), any(),
+                    any(), any(), any()
                 )
             } answers {
                 val message = ChatMessage(
@@ -785,46 +924,11 @@ class AgentTurnLoopTest {
                     metadata = arg(4),
                     toolCalls = arg(5),
                     toolCallId = arg(6),
-                    isSummarized = arg(7),
-                    rawOutput = arg(8),
-                    tokensIn = null,
-                    tokensOut = null,
-                    cost = null,
-                    createdAt = System.currentTimeMillis()
-                )
-                messages += message
-                message
-            }
-            every {
-                chatMessageRepository.create(
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any()
-                )
-            } answers {
-                val message = ChatMessage(
-                    id = "msg-${++messageCounter}",
-                    taskId = firstArg(),
-                    role = secondArg(),
-                    content = thirdArg(),
-                    thinking = arg(3),
-                    metadata = arg(4),
-                    toolCalls = arg(5),
-                    toolCallId = arg(6),
-                    isSummarized = arg(7),
-                    rawOutput = arg(8),
-                    tokensIn = arg(9),
-                    tokensOut = arg(10),
-                    cost = arg(11),
+                    isSummarized = arg(8),
+                    rawOutput = arg(9),
+                    tokensIn = arg(10),
+                    tokensOut = arg(11),
+                    cost = arg(12),
                     createdAt = System.currentTimeMillis()
                 )
                 messages += message
@@ -834,6 +938,7 @@ class AgentTurnLoopTest {
                 chatMessageRepository.createToolResult(
                     taskId = any(),
                     toolCallId = any(),
+                    subtaskId = any(),
                     result = any(),
                     isSummarized = any(),
                     rawOutput = any(),
@@ -844,13 +949,13 @@ class AgentTurnLoopTest {
                     id = "msg-${++messageCounter}",
                     taskId = firstArg(),
                     role = MessageRole.TOOL,
-                    content = thirdArg(),
+                    content = arg(3),
                     thinking = null,
-                    metadata = arg(5),
+                    metadata = arg(6),
                     toolCalls = null,
                     toolCallId = secondArg(),
-                    isSummarized = arg(3),
-                    rawOutput = arg(4),
+                    isSummarized = arg(4),
+                    rawOutput = arg(5),
                     tokensIn = null,
                     tokensOut = null,
                     cost = null,

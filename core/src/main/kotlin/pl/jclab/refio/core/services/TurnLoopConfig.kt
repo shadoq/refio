@@ -138,12 +138,12 @@ data class TurnLoopConfig(
             enableWorkingMemory = true,
             workingMemoryMaxEntries = 50,
             enableVerification = true,
-            verificationIterationThreshold = 10,
-            maxConsecutiveReadOnlyIterations = 15, // Allow deeper analysis before nudging agent to write
-            loopMaxConsecutiveRepeats = 10,
-            loopMaxSameToolTotal = 30,
-            loopWarnConsecutiveThreshold = 6,
-            loopWarnTotalThreshold = 16
+            verificationIterationThreshold = 40,
+            maxConsecutiveReadOnlyIterations = 20, // Allow deeper analysis before nudging agent to write
+            loopMaxConsecutiveRepeats = 40,
+            loopMaxSameToolTotal = 40,
+            loopWarnConsecutiveThreshold = 20,
+            loopWarnTotalThreshold = 26
         )
 
         /**

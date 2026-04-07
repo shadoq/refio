@@ -80,7 +80,12 @@ class TurnGuardrails {
                     LoopStatus.ABORT("Tool $toolName called $totalCount times total - agent may be stuck")
                 }
                 consecutiveCount >= warnConsecutiveThreshold || totalCount >= warnTotalThreshold -> {
-                    LoopStatus.WARN("Tool $toolName called $totalCount times (consecutive: $consecutiveCount)")
+                    LoopStatus.WARN(
+                        message = "Tool $toolName called $totalCount times (consecutive: $consecutiveCount)",
+                        toolName = toolName,
+                        totalCount = totalCount,
+                        consecutiveCount = consecutiveCount
+                    )
                 }
                 else -> LoopStatus.OK
             }
@@ -96,7 +101,12 @@ class TurnGuardrails {
             val count = toolCallCounts[toolName] ?: 0
             return when {
                 count >= 3 -> LoopStatus.ABORT("Model returned empty tool calls $count times - may be stuck")
-                count >= 2 -> LoopStatus.WARN("Model returned empty tool calls twice")
+                count >= 2 -> LoopStatus.WARN(
+                    message = "Model returned empty tool calls twice",
+                    toolName = toolName,
+                    totalCount = count,
+                    consecutiveCount = count
+                )
                 else -> LoopStatus.OK
             }
         }
@@ -131,7 +141,12 @@ class TurnGuardrails {
 
     sealed class LoopStatus {
         object OK : LoopStatus()
-        data class WARN(val message: String) : LoopStatus()
+        data class WARN(
+            val message: String,
+            val toolName: String,
+            val totalCount: Int,
+            val consecutiveCount: Int
+        ) : LoopStatus()
         data class ABORT(val reason: String) : LoopStatus()
     }
 

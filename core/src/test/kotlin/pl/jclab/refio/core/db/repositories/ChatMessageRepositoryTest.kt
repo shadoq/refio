@@ -102,6 +102,7 @@ class ChatMessageRepositoryTest {
                 val message = repository.createToolResult(
                     taskId = task.id,
                     toolCallId = toolCallId,
+                    subtaskId = null,
                     result = "Tool executed successfully"
                 )
 

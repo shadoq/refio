@@ -50,33 +50,52 @@ object TurnNudgeBuilder {
 
     /**
      * Build nudge message when agent returns plain text without any JSON structure.
-     * This happens when weaker models "forget" the required output format mid-task.
+     * Kept short on purpose: long instructions push thinking-models (qwen3) into long internal
+     * reasoning that yields empty content. Two sentences + one example is enough.
      */
     fun buildPlainTextNudgeMessage(): String {
-        return "Your previous response was plain text without any JSON structure. " +
-            "You MUST respond with valid JSON in the required format: " +
-            "{\"actions\":[{\"tool\":\"...\",\"arguments\":{...}}],\"response\":\"your status\",\"intent\":\"implementation|analysis|response\"}. " +
-            "If you need to use tools, include them in 'actions'. If the task is truly complete, " +
-            "use {\"actions\":[],\"response\":\"final answer\",\"intent\":\"response\"}. " +
-            "NEVER respond with plain text — always use the JSON envelope."
+        return "Reply with JSON only: " +
+            "{\"actions\":[{\"tool\":\"NAME\",\"arguments\":{...}}],\"response\":\"...\",\"intent\":\"implementation\"}. " +
+            "No prose, no markdown fences."
     }
 
     /**
-     * Build nudge message for invalid tool call format.
+     * Build nudge message when the model returned an empty body (content + thinking both blank).
+     * Distinct from plain-text nudge: here the model produced literally nothing.
+     */
+    fun buildEmptyContentNudgeMessage(): String {
+        return "Your previous reply was empty. Send the JSON envelope now: " +
+            "{\"actions\":[...],\"response\":\"...\",\"intent\":\"implementation|analysis|response\"}."
+    }
+
+    /**
+     * Build nudge message when the agent has called the same tool many times.
+     * Surfaces TurnGuardrails.LoopStatus.WARN to the model — without this the
+     * warning is only logged and the agent never realizes it is stuck.
+     */
+    fun buildLoopWarningNudgeMessage(toolName: String, totalCalls: Int, consecutiveCalls: Int): String {
+        return "[HARNESS WARNING] You have called `$toolName` $totalCalls times in this task " +
+            "(consecutive: $consecutiveCalls). This usually means you are stuck in a loop and " +
+            "are re-discovering the same information. Before calling `$toolName` again: " +
+            "1) Use memory(action=\"read\") to recall what you have already learned. " +
+            "2) Use memory(action=\"get_subtask_output\", subtask_id=\"<ref#>\") to recover full data " +
+            "from a previous tool result if its summary lost details you need. " +
+            "3) If you cannot make progress, return a final response describing what you tried " +
+            "and ask the user for clarification — DO NOT keep retrying the same approach."
+    }
+
+    /**
+     * Build nudge message for invalid/malformed JSON format.
+     * Kept terse — see [buildPlainTextNudgeMessage] for rationale.
      */
     fun buildInvalidFormatMessage(mode: String): String {
         return if (mode == "PLAN") {
-            "Invalid plan format. Respond ONLY with JSON using either: " +
-                "{\"actions\":[...]} for READ_ONLY tools, or {\"plan\":\"...\",\"subtasks\":[...],\"actions\":[]} " +
-                "for the final plan. Use exact tool names/params from <available_tools>."
+            "Invalid format. Reply with JSON only: {\"actions\":[...]} or " +
+                "{\"plan\":\"...\",\"subtasks\":[...],\"actions\":[]}. Escape inner quotes with \\\\\"."
         } else {
-            "Your previous response contained malformed JSON that could not be parsed. " +
-                "Common causes: unescaped quotes inside string values, truncated content_type (use \"application/json\" not \"application/\"). " +
-                "Respond ONLY with valid JSON: " +
-                "{\"actions\":[{\"tool\":\"...\",\"arguments\":{...}}],\"response\":\"your status or final answer\",\"intent\":\"implementation|analysis|response\"}. " +
-                "'response' and 'intent' are REQUIRED and must be non-empty. " +
-                "IMPORTANT: When the 'body' parameter contains JSON, ensure all inner quotes are properly escaped with backslash. " +
-                "Use exact tool names and parameters from <available_tools>."
+            "Invalid JSON. Reply with: " +
+                "{\"actions\":[{\"tool\":\"NAME\",\"arguments\":{...}}],\"response\":\"...\",\"intent\":\"implementation\"}. " +
+                "Escape inner quotes inside strings with \\\\\"."
         }
     }
 }

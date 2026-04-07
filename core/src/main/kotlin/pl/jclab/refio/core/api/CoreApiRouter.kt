@@ -350,6 +350,10 @@ class CoreApiRouter(
             chatMessageRepository = chatMessageRepository
         )
 
+        // beforeFinish guardian registry — empty by default, no behavior change.
+        // Plug in domain-specific guardians here (e.g. write-without-verification, missing-deliverable).
+        val completionGuardians = pl.jclab.refio.core.services.turn.GuardianRegistry()
+
         val turnSubagentValidator = TurnSubagentValidator(
             maxSubagentDepth = 3
         )
@@ -372,6 +376,7 @@ class CoreApiRouter(
             turnResponseProcessor = turnResponseProcessor,
             turnFinalizer = turnFinalizer,
             turnSubagentValidator = turnSubagentValidator,
+            completionGuardians = completionGuardians,
             // ADR-0028: Optional dependencies
             tokenEstimator = tokenEstimator,
             conversationCompactor = null,
@@ -744,6 +749,24 @@ class CoreApiRouter(
             val ragComponents = initializeRagSearchService()
             ragComponents?.let { (service, modelId, providerId) ->
                 contextService.updateRagSearchConfig(service, modelId, providerId)
+                // Register on-demand rag_search tool now that the embedding stack is wired.
+                // Done here (not in ToolFactory) because RagSearchService is project-scoped and
+                // only available after embedding model resolution succeeds.
+                if (toolRegistry != null) {
+                    try {
+                        val ragTool = pl.jclab.refio.core.tools.implementations.RagSearchTool(
+                            ragSearchService = service,
+                            embeddingModel = modelId,
+                            projectRoot = projectRoot
+                        )
+                        toolRegistry.register(ragTool)
+                        logger.info { "Registered rag_search tool (model=$modelId, provider=$providerId)" }
+                    } catch (e: IllegalArgumentException) {
+                        logger.debug { "rag_search tool already registered" }
+                    } catch (e: Exception) {
+                        logger.warn(e) { "Failed to register rag_search tool: ${e.message}" }
+                    }
+                }
             }
         }
     }

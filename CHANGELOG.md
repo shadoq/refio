@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multimodal message pipeline for image-aware prompts and provider adapters.
 - MCP prompt listing/fetching support, resource subscriptions, and cache coverage for MCP metadata.
 - Mocked API smoke tests for OpenAI, Anthropic, and Gemini adapter workflows.
+- **Multi-agent runtime** (WIP): parallel orchestration with `MultiAgentStrategy`, event bus, plan tracking via `AgentPlanService`, Mermaid export, agent graph/timeline/trace UI panels, per-agent model/tool usage stats.
+- **New SYSTEM tools** for inter-agent coordination: `tasks`, `memory`, `send_message`, `manage_subagent`, `llm_call`.
+- `ChangeSummary` on `ToolResult` (added/removed lines, unified diff, SHA-256 hashes) plus shared `DiffUtils` reused by all write tools.
+- `nextActionHints` and `recovery` fields on `ToolResult` so tools can suggest concrete next steps on empty results / recoverable failures.
+- `detail` parameter (`summary`/`normal`/`full`) on `read_file`, `grep_search`, `file_search`, `read_directory` for caller-controlled verbosity.
 
 ### Changed
 
@@ -30,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - LLM adapters now support injectable HTTP clients/base URLs for deterministic smoke tests and multimodal payload verification.
 - Prompt construction, tool execution nudges, and turn guardrails were tightened around read-before-write and post-write verification flow.
 - RAG indexing/search and config/MCP caches were optimized to reduce unnecessary work on large projects.
+- Improved context management: working memory decay, context section budgeting, and RAG search config refinements.
+- `TurnToolExecutor` now surfaces tool-provided `nextActionHints`/`recovery` into the agent's view and bypasses the LLM summarizer for write tools that already produce a structured `ChangeSummary` (deterministic, zero extra tokens).
+- `code_editing` and `multi_edit` now emit a proper Myers unified diff instead of a naive dump, with richer error messages pointing to recovery actions.
 
 ### Fixed
 
@@ -37,6 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Subagent recursion tracking, `CoreApiRouter` shutdown cleanup, and file-write locking edge cases.
 - `read_file` media handling for images/PDFs and multimodal handoff into provider-specific request payloads.
 - Kotlin/Gradle module configuration cleanup for shared plugin setup and more stable local builds.
+- Plain-text guard for JSON-mode LLM responses; `ConfigService` edge cases.
+- `ChatView` message ordering when streaming and tool results interleave.
 
 ## [0.0.1.5] - 2025-04-02
 

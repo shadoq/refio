@@ -26,6 +26,7 @@ object ChatMessagesTable : Table("chat_messages") {
     // Tool call support for turn-loop pattern
     val toolCallsJson = text("tool_calls_json").nullable()  // JSON array of ToolCallData
     val toolCallId = varchar("tool_call_id", 255).nullable()  // For TOOL role - references the tool call this is a result for
+    val subtaskId = varchar("subtask_id", 36).nullable()  // For TOOL role - links to the Subtask row that produced this result. Unified identifier used by MESSAGES header, RECENT_WORK, and WORKING_MEMORY so every context section keys off the same id.
 
     // Tool result summarization
     val isSummarized = bool("is_summarized").default(false)  // Whether content is a summary of the original output
@@ -98,6 +99,7 @@ data class ChatMessage(
     val metadata: String?,
     val toolCalls: List<ToolCallData>?,  // For ASSISTANT - tool calls made
     val toolCallId: String?,              // For TOOL - which tool call this is a result for
+    val subtaskId: String? = null,        // For TOOL - id of the Subtask that produced the result (preferred identifier)
     val isSummarized: Boolean = false,    // Whether content is a summary
     val rawOutput: String? = null,        // Full original output
     val tokensIn: Int?,

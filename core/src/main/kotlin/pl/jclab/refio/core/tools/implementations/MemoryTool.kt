@@ -18,8 +18,9 @@ import java.time.Instant
  * - read: Read facts with optional key prefix filter
  * - list: List all memory keys with their importance scores
  * - get_subtask_output: Retrieve the FULL raw output of a previous tool call
- *   by its subtask id (the `ref#XXXXXXXX` shown in <WORKING_MEMORY>). Use when
- *   the in-context summary lost details you need to verify.
+ *   by its subtask id (the same id shown as `ref#...` in <WORKING_MEMORY> and
+ *   as `id: ...` in tool-result message headers). Use when the in-context
+ *   summary lost details you need to verify.
  */
 class MemoryTool(
     private val workingMemoryService: WorkingMemoryService,
@@ -60,7 +61,7 @@ Use for: key findings, intermediate results, decisions, blockers, recovering dat
             ),
             "subtask_id" to mapOf(
                 "type" to "string",
-                "description" to "Subtask id (or first 8 chars of it — the ref# shown in WORKING_MEMORY tags). Required for get_subtask_output."
+                "description" to "Subtask / tool-call id — the same value shown as ref# in WORKING_MEMORY and as id: in tool-result message headers. Required for get_subtask_output."
             ),
             "offset" to mapOf(
                 "type" to "integer",
@@ -99,13 +100,17 @@ Use for: key findings, intermediate results, decisions, blockers, recovering dat
 
         val prefixedKey = if (agentName != null) "agent:$agentName:$key" else key
 
+        // Tag the entry with the subtask id so it lines up with RECENT_WORK / MESSAGES headers
+        // (the same canonical id used everywhere else for this tool execution).
+        val subtaskId = params[ToolInternalParams.SUBTASK_ID] as? String
         val entry = WorkingMemoryEntry(
             iteration = (params[ToolInternalParams.ITERATION] as? Number)?.toInt() ?: 0,
             key = prefixedKey,
             value = value,
             importance = importance.coerceIn(1, 10),
             timestamp = Instant.now(),
-            lastAccessedAt = Instant.now()
+            lastAccessedAt = Instant.now(),
+            originId = subtaskId
         )
 
         val sessionId = params[ToolInternalParams.SESSION_ID] as? String

@@ -14,6 +14,7 @@ import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
+import pl.jclab.refio.core.tools.DiffUtils
 import pl.jclab.refio.core.tools.FileLockManager
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
@@ -323,9 +324,15 @@ class MultiLineEditorTool(
             // 8. Apply edits (from end to start to preserve line numbers)
             val newContent = applyEdits(lines, edits)
 
-            // 9. Generate diff
-            val diff = generateUnifiedDiff(originalContent, newContent, pathStr)
-            val (addedLines, removedLines) = parseDiffStats(diff)
+            // 9. Generate diff (delegated to shared DiffUtils)
+            val diff = DiffUtils.generateUnifiedDiff(originalContent, newContent, pathStr)
+            val (addedLines, removedLines) = DiffUtils.parseDiffStats(diff)
+            val changeSummary = DiffUtils.buildChangeSummary(
+                originalContent = originalContent,
+                newContent = newContent,
+                filePath = pathStr,
+                replacements = edits.size
+            )
 
             // 10. Write file
             Files.writeString(path, newContent)
@@ -366,6 +373,7 @@ class MultiLineEditorTool(
                 bytesWritten = newContent.toByteArray().size,
                 durationMs = duration,
                 filesChanged = listOf(pathStr),
+                changeSummary = changeSummary,
                 metadata = mapOf(
                     "path" to pathStr,
                     "mode" to "multi_line_edit",
@@ -500,204 +508,6 @@ class MultiLineEditorTool(
         }
 
         return mutableLines.joinToString("\n")
-    }
-
-    /**
-     * Generate unified diff between original and new content
-     */
-    private fun generateUnifiedDiff(
-        originalContent: String,
-        newContent: String,
-        filePath: String
-    ): String {
-        val contextLines = 3
-        val original = originalContent.lines()
-        val updated = newContent.lines()
-        val diffEntries = buildDiffEntries(original, updated)
-        val hunks = buildDiffHunks(diffEntries, contextLines)
-
-        val diff = StringBuilder()
-        diff.appendLine("--- a/$filePath")
-        diff.appendLine("+++ b/$filePath")
-
-        for (hunk in hunks) {
-            diff.appendLine("@@ -${hunk.oldStart},${hunk.oldCount} +${hunk.newStart},${hunk.newCount} @@")
-            for (entry in hunk.lines) {
-                when (entry.type) {
-                    DiffEntryType.CONTEXT -> diff.appendLine("  ${entry.content}")
-                    DiffEntryType.DELETE -> diff.appendLine("- ${entry.content}")
-                    DiffEntryType.INSERT -> diff.appendLine("+ ${entry.content}")
-                }
-            }
-        }
-
-        return diff.toString()
-    }
-
-    private data class DiffEntry(
-        val type: DiffEntryType,
-        val content: String,
-        val oldLine: Int?,
-        val newLine: Int?
-    )
-
-    private enum class DiffEntryType {
-        CONTEXT,
-        DELETE,
-        INSERT
-    }
-
-    private data class DiffHunk(
-        val oldStart: Int,
-        val oldCount: Int,
-        val newStart: Int,
-        val newCount: Int,
-        val lines: List<DiffEntry>
-    )
-
-    private fun buildDiffEntries(original: List<String>, updated: List<String>): List<DiffEntry> {
-        val m = original.size
-        val n = updated.size
-        val lcs = Array(m + 1) { IntArray(n + 1) }
-
-        for (i in m - 1 downTo 0) {
-            for (j in n - 1 downTo 0) {
-                lcs[i][j] = if (original[i] == updated[j]) {
-                    lcs[i + 1][j + 1] + 1
-                } else {
-                    maxOf(lcs[i + 1][j], lcs[i][j + 1])
-                }
-            }
-        }
-
-        val result = mutableListOf<DiffEntry>()
-        var i = 0
-        var j = 0
-
-        while (i < m && j < n) {
-            when {
-                original[i] == updated[j] -> {
-                    result.add(
-                        DiffEntry(
-                            type = DiffEntryType.CONTEXT,
-                            content = original[i],
-                            oldLine = i,
-                            newLine = j
-                        )
-                    )
-                    i++
-                    j++
-                }
-                lcs[i + 1][j] >= lcs[i][j + 1] -> {
-                    result.add(
-                        DiffEntry(
-                            type = DiffEntryType.DELETE,
-                            content = original[i],
-                            oldLine = i,
-                            newLine = null
-                        )
-                    )
-                    i++
-                }
-                else -> {
-                    result.add(
-                        DiffEntry(
-                            type = DiffEntryType.INSERT,
-                            content = updated[j],
-                            oldLine = null,
-                            newLine = j
-                        )
-                    )
-                    j++
-                }
-            }
-        }
-
-        while (i < m) {
-            result.add(
-                DiffEntry(
-                    type = DiffEntryType.DELETE,
-                    content = original[i],
-                    oldLine = i,
-                    newLine = null
-                )
-            )
-            i++
-        }
-
-        while (j < n) {
-            result.add(
-                DiffEntry(
-                    type = DiffEntryType.INSERT,
-                    content = updated[j],
-                    oldLine = null,
-                    newLine = j
-                )
-            )
-            j++
-        }
-
-        return result
-    }
-
-    private fun buildDiffHunks(entries: List<DiffEntry>, contextLines: Int): List<DiffHunk> {
-        if (entries.isEmpty()) return emptyList()
-
-        val changedIndices = entries.indices.filter { entries[it].type != DiffEntryType.CONTEXT }
-        if (changedIndices.isEmpty()) return emptyList()
-
-        val mergedRanges = mutableListOf<IntRange>()
-        for (index in changedIndices) {
-            val rangeStart = maxOf(0, index - contextLines)
-            val rangeEnd = minOf(entries.lastIndex, index + contextLines)
-
-            if (mergedRanges.isEmpty()) {
-                mergedRanges.add(rangeStart..rangeEnd)
-                continue
-            }
-
-            val previous = mergedRanges.last()
-            if (rangeStart <= previous.last + 1) {
-                mergedRanges[mergedRanges.lastIndex] = previous.first..maxOf(previous.last, rangeEnd)
-            } else {
-                mergedRanges.add(rangeStart..rangeEnd)
-            }
-        }
-
-        return mergedRanges.map { range ->
-            val hunkEntries = entries.subList(range.first, range.last + 1)
-            val oldStart = (hunkEntries.firstNotNullOfOrNull { it.oldLine }
-                ?: hunkEntries.firstNotNullOfOrNull { it.newLine }
-                ?: 0) + 1
-            val newStart = (hunkEntries.firstNotNullOfOrNull { it.newLine }
-                ?: hunkEntries.firstNotNullOfOrNull { it.oldLine }
-                ?: 0) + 1
-
-            DiffHunk(
-                oldStart = oldStart,
-                oldCount = hunkEntries.count { it.oldLine != null },
-                newCount = hunkEntries.count { it.newLine != null },
-                newStart = newStart,
-                lines = hunkEntries.toList()
-            )
-        }
-    }
-
-    /**
-     * Parse diff stats to count added and removed lines
-     */
-    private fun parseDiffStats(diff: String): Pair<Int, Int> {
-        var addedLines = 0
-        var removedLines = 0
-
-        diff.lines().forEach { line ->
-            when {
-                line.startsWith("+ ") -> addedLines++
-                line.startsWith("- ") -> removedLines++
-            }
-        }
-
-        return Pair(addedLines, removedLines)
     }
 
     /**

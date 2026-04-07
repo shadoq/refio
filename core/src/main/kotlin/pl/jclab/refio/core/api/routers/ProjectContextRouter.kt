@@ -7,6 +7,7 @@ import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.db.repositories.TaskRepository
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
+import pl.jclab.refio.core.llm.LLMMessageMapper
 import pl.jclab.refio.core.llm.TokenEstimator
 import pl.jclab.refio.core.models.context.*
 import pl.jclab.refio.core.services.ContextService
@@ -372,6 +373,13 @@ class ProjectContextRouter(
 
     private fun buildAgentMessagesFallback(chatHistory: List<ChatMessage>, pendingUserInput: String?): List<LLMMessage> {
         val lastToolIndex = chatHistory.indexOfLast { it.role == MessageRole.TOOL }
+        val toolNameByCallId = chatHistory
+            .asSequence()
+            .filter { it.role == MessageRole.ASSISTANT }
+            .flatMap { it.toolCalls?.asSequence() ?: emptySequence() }
+            .filter { it.id.isNotBlank() && it.name.isNotBlank() }
+            .associate { it.id to it.name }
+
         val messages = chatHistory.mapIndexedNotNull { index, msg ->
             when (msg.role) {
                 MessageRole.USER -> LLMMessage(role = "user", content = msg.content)
@@ -391,13 +399,13 @@ class ProjectContextRouter(
                     if (content.isNotBlank()) LLMMessage(role = "assistant", content = content) else null
                 }
                 MessageRole.TOOL -> {
-                    val content = if (index == lastToolIndex && msg.isSummarized) {
-                        val raw = msg.rawOutput ?: msg.content
-                        "[Tool Result for ${msg.toolCallId}]\n$raw"
+                    val body = if (index == lastToolIndex && msg.isSummarized) {
+                        msg.rawOutput ?: msg.content
                     } else {
-                        "[Tool Result for ${msg.toolCallId}]\n${msg.content}"
+                        msg.content
                     }
-                    LLMMessage(role = "user", content = content)
+                    val toolName = msg.toolCallId?.let { toolNameByCallId[it] }
+                    LLMMessageMapper.fromToolResult(msg, body, toolName)
                 }
                 MessageRole.SYSTEM -> LLMMessage(role = "system", content = msg.content)
             }

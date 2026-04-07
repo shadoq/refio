@@ -327,11 +327,12 @@ object ConfigKeys {
     val RAG_SEARCH_SIMILARITY_THRESHOLD = ConfigKey(
         key = "rag.search_similarity_threshold",
         parser = String::toFloatOrNull,
-        // Bumped from 0.5 → 0.65: at 0.5 the loader returned ~15 fragments per
-        // query even when none were genuinely relevant (e.g. unrelated tasks
-        // matched on the boilerplate "Rozwiąz mi zadanie..." prefix).
-        // 0.65 still keeps useful matches but drops the long noise tail.
-        default = 0.65f,
+        // 0.5 → 0.65 → 0.75: auto-RAG injection at the start of every turn was still
+        // returning marginal matches that bloated the prompt before the agent had any
+        // signal about relevance. The on-demand `rag_search` tool is the right place
+        // for broad searches (it can lower the threshold per call). For automatic
+        // context loading we keep only high-confidence hits.
+        default = 0.75f,
         yamlAccessor = { it.getRagSearchSimilarityThreshold() }
     )
 

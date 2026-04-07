@@ -192,11 +192,16 @@ class PlanningServiceTest {
             val request = PlanningRequest(input = "Analyze the project")
             planningService.createPlan("task-1", request)
 
-            // Verify assistant message was saved (second call)
+            // Verify assistant message was saved (second call).
+            // Positional layout matches ChatMessageRepository.create:
+            // (taskId, role, content, thinking, metadata, toolCalls, toolCallId, subtaskId,
+            //  isSummarized, rawOutput, tokensIn, tokensOut, cost, agentInstanceId, agentName, agentDepth)
             verify {
                 chatMessageRepository.create(
                     "task-1", MessageRole.ASSISTANT, any(),
-                    any(), any(), any(), any(), any(), any(), 200, 300, 0.005, any()
+                    any(), any(), any(), any(), any(), any(), any(),
+                    200, 300, 0.005,
+                    any(), any(), any()
                 )
             }
         }

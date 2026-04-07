@@ -123,9 +123,12 @@ class LMStudioAdapter(
             lmMessages.add(mapOf("role" to "system", "content" to sysMsg))
         }
 
-        // Add conversation messages (filter out any system messages as they should be in systemMessages parameter)
+        // Add conversation messages (filter out any system messages as they should be in systemMessages parameter).
+        // Remap "tool" (used by LLMMessageMapper for tool results) to "assistant" — LM Studio uses the
+        // OpenAI-compatible chat schema where role="tool" requires tool_call_id, which this adapter does not emit.
         messages.filter { it.role != "system" }.forEach { msg ->
-            lmMessages.add(mapOf("role" to msg.role, "content" to toOpenAiMessageContent(msg)))
+            val mappedRole = if (msg.role == "tool") "assistant" else msg.role
+            lmMessages.add(mapOf("role" to mappedRole, "content" to toOpenAiMessageContent(msg)))
         }
 
         val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)

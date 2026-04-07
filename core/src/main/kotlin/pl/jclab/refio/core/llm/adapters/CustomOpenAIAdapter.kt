@@ -137,7 +137,12 @@ open class CustomOpenAIAdapter(
         val apiKey = resolveApiKey()
         val requestMessages = buildList<Map<String, Any>> {
             systemMessages.filter { it.isNotBlank() }.forEach { add(mapOf("role" to "system", "content" to it)) }
-            messages.filter { it.role != "system" }.forEach { add(mapOf("role" to it.role, "content" to toOpenAiMessageContent(it))) }
+            // Remap "tool" (used by LLMMessageMapper for tool results) to "assistant" — OpenAI-compatible
+            // APIs require tool_call_id alongside role="tool", which this adapter does not currently emit.
+            messages.filter { it.role != "system" }.forEach {
+                val mappedRole = if (it.role == "tool") "assistant" else it.role
+                add(mapOf("role" to mappedRole, "content" to toOpenAiMessageContent(it)))
+            }
         }
         val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId) ?: ConfigKeys.MAX_OUTPUT_SIZE.default
         val effectiveMaxTokens = when {

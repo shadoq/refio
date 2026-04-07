@@ -117,8 +117,8 @@ data class ContextBudget(
             ContextSection.PROJECT_CONTEXT to 1500,
             ContextSection.RECENT_WORK to 8000,
             ContextSection.USER_CONTEXT to 5000,
-            ContextSection.RAG_FRAGMENTS to 2000,
-            ContextSection.CONVERSATION to 8000,
+            ContextSection.RAG_FRAGMENTS to 1000,
+            ContextSection.CONVERSATION to 14000,
             ContextSection.REFERENCE to 2500
         )
         private val baselineTotalBudget = defaultBudgets.values.sum()

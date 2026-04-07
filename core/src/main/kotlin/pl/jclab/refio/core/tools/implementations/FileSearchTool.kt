@@ -57,7 +57,10 @@ class FileSearchTool(
             val pathStr = (params["path"] as? String) ?: "."
             val maxDepth = (params["max_depth"] as? Number)?.toInt() ?: 10
             val offset = (params["offset"] as? Number)?.toInt() ?: 0
-            val limit = (params["limit"] as? Number)?.toInt() ?: limits.maxSearchResults
+            val rawLimit = (params["limit"] as? Number)?.toInt() ?: limits.maxSearchResults
+            val detail = ((params["detail"] as? String) ?: "normal").lowercase()
+            // detail=summary trims output to a small head + count, regardless of `limit`.
+            val limit = if (detail == "summary") rawLimit.coerceAtMost(20) else rawLimit
 
             if (offset < 0) {
                 return ToolResult.error("Parameter 'offset' must be >= 0")
@@ -157,32 +160,45 @@ class FileSearchTool(
                 }
             }
 
-            // Format output
-            val output = if (results.isEmpty()) {
-                if (matchedCount == 0) {
-                    "No files found matching pattern: $pattern"
-                } else {
-                    "No files found in requested range for pattern: $pattern"
-                }
-            } else {
-                results.sorted().joinToString("\n")
+            // Format output (verbosity controlled by `detail`)
+            val output = when {
+                results.isEmpty() && matchedCount == 0 -> "No files found matching pattern: $pattern"
+                results.isEmpty() -> "No files found in requested range for pattern: $pattern"
+                detail == "summary" -> buildString {
+                    appendLine("Found $matchedCount file(s) matching '$pattern' (showing first ${results.size}):")
+                    results.sorted().forEach { appendLine("  $it") }
+                }.trimEnd()
+                else -> results.sorted().joinToString("\n")
             }
 
             val duration = (System.currentTimeMillis() - startTime).toInt()
 
-            logger.info { "File search completed: ${results.size} results, ${duration}ms" }
+            logger.info { "File search completed: ${results.size} results, ${duration}ms, detail=$detail" }
+
+            // Empty-result hints (lesson 03E04: tools should suggest next steps).
+            val hints: List<String>? = if (results.isEmpty() && matchedCount == 0) {
+                buildList {
+                    add("Try a broader glob (e.g. **/${pattern.removePrefix("**/")})")
+                    add("Drop file-extension constraints to confirm the file exists at all")
+                    if (pathStr != ".") add("Search from project root with path=\".\"")
+                    add("Use grep_search to look for known content from the file")
+                }
+            } else null
 
             return ToolResult(
                 success = true,
                 output = output,
                 durationMs = duration,
+                nextActionHints = hints,
                 metadata = mapOf(
                     "result_count" to results.size,
+                    "matched_count" to matchedCount,
                     "pattern" to pattern,
                     "search_path" to pathStr,
                     "offset" to offset,
                     "limit" to limit,
-                    "has_more" to hasMore
+                    "has_more" to hasMore,
+                    "detail" to detail
                 )
             )
 
@@ -264,6 +280,12 @@ class FileSearchTool(
                     "type" to "integer",
                     "description" to "Maximum number of results to return",
                     "default" to limits.maxSearchResults
+                ),
+                "detail" to mapOf(
+                    "type" to "string",
+                    "enum" to listOf("summary", "normal", "full"),
+                    "description" to "Verbosity. 'summary' = first 20 paths + total count; 'normal' (default) / 'full' = full sorted listing.",
+                    "default" to "normal"
                 )
             ),
             "required" to listOf("pattern")

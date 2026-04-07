@@ -158,7 +158,8 @@ Built-in tools are portable, sandboxed, fast, and give structured results. Shell
 | Read file | `read_file` (use offset/limit for large files) | FREE |
 | List directory | `read_directory` | FREE |
 | Find file by name | `file_search` (glob) | FREE |
-| Search file contents | `grep_search` (regex) | FREE |
+| Search file contents (exact text / regex) | `grep_search` (regex) | FREE |
+| Search by concept / meaning (semantic) | `rag_search` (only if indexed) | FREE |
 | Compare files | `view_diff` | FREE |
 | Simple text replace | `code_editing` (exact string match) | FREE |
 | Batch replace across files | `multi_edit` (atomic) | FREE |
@@ -171,6 +172,13 @@ Built-in tools are portable, sandboxed, fast, and give structured results. Shell
 | Quick LLM analysis / transform / classify | `llm_call(prompt="instructions", data="...")` | $ |
 | Send large file/data to LLM for analysis | `llm_call(prompt="instructions", file_path="...")` — keeps file out of agent context | $ |
 | Complex delegated task | `invoke_subagent` (spawns full turn loop) | $$$ |
+
+**Search decision (`grep_search` vs `rag_search`):**
+- You know the exact identifier, string, regex, or file pattern → `grep_search`. Always cheaper, always exact, returns line numbers.
+- You only know the *concept* and have no good keyword to grep for ("where is the auth retry logic?", "where do we handle rate limits?") → `rag_search` with a natural-language query.
+- `rag_search` is only available when the project has been indexed; if it returns "No matches", do NOT retry with the same args — fall back to `grep_search` with broader patterns.
+- `rag_search` parameters: `query` (required), `top_k` (1..15, default 5), `threshold` (0..1, default 0.65 — lower = more recall, more noise), `content_type` (`PROJECT_CODE` | `DOCUMENTATION`).
+- Never call `rag_search` for trivial lookups you could do with `grep_search` or `file_search` — it costs an embedding round-trip.
 
 **Editing decision:**
 - Exact old_string known → `code_editing` or `multi_edit` (FREE)

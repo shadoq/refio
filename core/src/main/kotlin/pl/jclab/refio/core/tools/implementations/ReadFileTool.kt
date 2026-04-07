@@ -68,7 +68,15 @@ class ReadFileTool(
                 ?: return ToolResult.error("Missing required parameter: 'path'")
 
             val offset = toIntOrNull(params["offset"])
-            val limit = toIntOrNull(params["limit"])
+            val explicitLimit = toIntOrNull(params["limit"])
+            val detail = ((params["detail"] as? String) ?: "normal").lowercase()
+            // detail=summary trims to first 40 lines unless caller passed an explicit limit.
+            // detail=full ignores summary truncation. detail=normal preserves caller offset/limit.
+            val limit = when {
+                explicitLimit != null -> explicitLimit
+                detail == "summary" -> 40
+                else -> null
+            }
             val pageStart = toIntOrNull(params["page_start"])
             val pageEnd = toIntOrNull(params["page_end"])
             val requestedPages = if (pageStart != null || pageEnd != null) {
@@ -93,13 +101,25 @@ class ReadFileTool(
             // Check if file exists
             if (!Files.exists(path)) {
                 logger.warn { "File not found: $pathStr (resolved to ${path.toAbsolutePath()})" }
-                return ToolResult.error("File not found: $pathStr")
+                return ToolResult.error(
+                    message = "File not found: $pathStr",
+                    recovery = "Verify the path. The file may have been renamed, moved, or never existed.",
+                    nextActionHints = listOf(
+                        "file_search(pattern=\"${path.fileName}\") to locate the file",
+                        "read_directory(path=\"${path.parent?.let { sandbox.resolve(".").relativize(it).toString() } ?: "."}\") to inspect the parent",
+                        "Use grep_search to find content if the path is uncertain"
+                    )
+                )
             }
 
             // Check if it's a regular file
             if (!path.isRegularFile()) {
                 logger.warn { "Not a regular file: $pathStr (is directory: ${path.isDirectory()})" }
-                return ToolResult.error("Not a regular file: $pathStr (is it a directory?)")
+                return ToolResult.error(
+                    message = "Not a regular file: $pathStr (is it a directory?)",
+                    recovery = "Use read_directory to list a directory's contents.",
+                    nextActionHints = listOf("read_directory(path=\"$pathStr\")")
+                )
             }
 
             // Check file size
@@ -333,6 +353,12 @@ class ReadFileTool(
                 "page_end" to mapOf(
                     "type" to "integer",
                     "description" to "For PDF files: last page to read (1-based, inclusive)."
+                ),
+                "detail" to mapOf(
+                    "type" to "string",
+                    "enum" to listOf("summary", "normal", "full"),
+                    "description" to "Verbosity. 'summary' caps reading to the first 40 lines (good for scanning structure); 'normal' (default) honors offset/limit; 'full' = same as normal.",
+                    "default" to "normal"
                 )
             ),
             "required" to listOf("path")

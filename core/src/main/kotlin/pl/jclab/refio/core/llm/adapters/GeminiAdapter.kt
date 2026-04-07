@@ -142,8 +142,11 @@ class GeminiAdapter(
             .takeIf { it.isNotBlank() }
 
         val contents = nonSystemMessages.map { msg ->
+            // Gemini only allows "user"/"model". Tool results (role="tool" from LLMMessageMapper)
+            // map to "model" so they stay attributed to the assistant turn — same as the previous
+            // behavior where the mapper produced role="assistant" directly.
             val role = when (msg.role.lowercase()) {
-                "assistant", "model" -> "model"
+                "assistant", "model", "tool" -> "model"
                 else -> "user"
             }
             mapOf(

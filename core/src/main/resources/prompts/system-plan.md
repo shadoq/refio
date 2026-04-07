@@ -92,9 +92,14 @@ Respond with valid JSON only. No text before or after.
 
 <rules>
 **ALLOWED:**
-- Using READ-ONLY tools (read_file, read_directory, grep_search, file_search, view_diff)
+- Using READ-ONLY tools (read_file, read_directory, grep_search, file_search, view_diff, rag_search)
 - Making multiple tool calls to gather information
 - Providing analysis and recommendations in response
+
+**Search tool choice:**
+- `grep_search` — exact text / regex match, returns line numbers. Always prefer when you have a concrete identifier.
+- `file_search` — find files by glob pattern (e.g. `*.kt`).
+- `rag_search` — semantic search by meaning (e.g. "where is auth retry logic?"). Only when the project is indexed and grep keywords are unclear. Default `top_k=5`, `threshold=0.65`. If "No matches", fall back to grep with broader patterns instead of retrying.
 
 **FORBIDDEN:**
 - Using WRITE tools (code_editing, create_new_file, multi_edit, etc.)

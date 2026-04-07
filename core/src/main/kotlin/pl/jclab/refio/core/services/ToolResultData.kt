@@ -6,7 +6,11 @@ package pl.jclab.refio.core.services
  * Internal data structure for tool results with summarization information.
  * Used by AgentTurnLoop to pass summarized tool results to the database layer.
  *
- * @property toolCallId ID of the tool call this result is for
+ * @property toolCallId ID of the tool call this result is for (LLM-side identifier)
+ * @property subtaskId Id of the persisted Subtask row that produced this result. This is the
+ *   canonical identifier shared by RECENT_WORK, WORKING_MEMORY, and the MESSAGES tool header so
+ *   the model sees one stable id per tool execution. Nullable for the rare paths that build
+ *   ToolResultData without a backing subtask row (legacy/synthetic results).
  * @property content Summarized content (or RAW if not summarized)
  * @property isSummarized Whether content is a summary of the original output
  * @property rawOutput Full original RAW output (for UI or last tool in context)
@@ -14,6 +18,7 @@ package pl.jclab.refio.core.services
  */
 data class ToolResultData(
     val toolCallId: String,
+    val subtaskId: String? = null,
     val content: String,          // Summary (or RAW if not summarized)
     val isSummarized: Boolean,    // Whether content is a summary
     val rawOutput: String? = null, // Full RAW output (optional, for UI)

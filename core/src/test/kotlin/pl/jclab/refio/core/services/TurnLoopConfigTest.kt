@@ -10,7 +10,7 @@ class TurnLoopConfigTest {
         val config = TurnLoopConfig.agent()
 
         assertEquals(100, config.maxIterations)
-        assertEquals(15, config.maxConsecutiveReadOnlyIterations)
+        assertEquals(20, config.maxConsecutiveReadOnlyIterations)
         assertEquals(3, config.maxFormatRetries)
     }
 

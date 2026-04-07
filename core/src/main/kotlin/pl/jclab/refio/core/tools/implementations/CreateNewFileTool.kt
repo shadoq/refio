@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.tools.implementations
 
+import pl.jclab.refio.core.tools.DiffUtils
 import pl.jclab.refio.core.tools.FileLockManager
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
@@ -86,6 +87,10 @@ class CreateNewFileTool(
                         bytesWritten = 0,
                         durationMs = duration,
                         filesChanged = emptyList(),
+                        nextActionHints = listOf(
+                            "Use code_editing or multi_line_editor to modify the existing file",
+                            "Use read_file to inspect current content before deciding"
+                        ),
                         metadata = mapOf(
                             "path" to pathStr,
                             "warning" to "file_already_exists"
@@ -110,18 +115,27 @@ class CreateNewFileTool(
                 val duration = (System.currentTimeMillis() - startTime).toInt()
                 val createdFileSize = path.fileSize()
 
+                val changeSummary = DiffUtils.buildChangeSummary(
+                    originalContent = "",
+                    newContent = content,
+                    filePath = pathStr,
+                    created = true
+                )
+
                 logger.info { "Successfully created file: $pathStr (${content.length} chars, ${duration}ms, size: $createdFileSize bytes, absolute='${path.toAbsolutePath()}')" }
 
                 ToolResult(
                     success = true,
-                    output = "File created successfully: $pathStr",
+                    output = "File created successfully: $pathStr (${changeSummary.addedLines} lines)",
                     bytesWritten = content.toByteArray().size,
                     durationMs = duration,
                     filesChanged = listOf(pathStr),
+                    changeSummary = changeSummary,
                     metadata = mapOf(
                         "path" to pathStr,
                         "line_count" to content.lines().size,
-                        "char_count" to content.length
+                        "char_count" to content.length,
+                        "added_lines" to changeSummary.addedLines
                     )
                 )
             }

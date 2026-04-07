@@ -69,69 +69,12 @@ class TurnToolExecutor(
         private fun normalize(path: String): String = path.replace('\\', '/').trim()
     }
 
-    /**
-     * In-session deduplication cache for READ_ONLY tool calls.
-     *
-     * When the LLM repeats an identical (toolName, normalized args) call within
-     * the same task, we return the previous result with a "[CACHED ...]" prefix
-     * instead of re-executing. The prefix is essential — it tells the model
-     * "you already did this", which is the only way to break read-loops on
-     * smaller/weaker models that otherwise re-issue the same query forever.
-     *
-     * Cache is scoped per taskId so different sessions never cross-contaminate.
-     * Write tools are NEVER cached (they have side effects).
-     */
-    class ResultCache {
-        data class Entry(
-            val resultData: ToolResultData,
-            val iteration: Int,
-            val subtaskId: String,
-            val recordedAt: Long = System.currentTimeMillis()
-        )
-
-        private val byTask = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.ConcurrentHashMap<String, Entry>>()
-
-        fun get(taskId: String, key: String): Entry? = byTask[taskId]?.get(key)
-
-        fun put(taskId: String, key: String, entry: Entry) {
-            val map = byTask.computeIfAbsent(taskId) { java.util.concurrent.ConcurrentHashMap() }
-            map[key] = entry
-        }
-
-        fun clearTask(taskId: String) {
-            byTask.remove(taskId)
-        }
-
-        /**
-         * Build a stable cache key from tool name + arguments JSON.
-         * Whitespace is normalized so functionally identical JSON hits the same key.
-         */
-        fun buildKey(toolName: String, argumentsJson: String): String {
-            val normalized = argumentsJson.replace(Regex("\\s+"), " ").trim()
-            return "$toolName::$normalized"
-        }
-    }
-
     /** Callback to update turn phase (set by AgentTurnLoop before each turn) */
     var turnStateUpdater: ((TurnPhase) -> Unit)? = null
 
     private val streamingToolNames = setOf("advance_code_editing", "multi_line_editor")
     private val codingToolNames = setOf("advance_code_editing", "multi_line_editor")
     private val readTracker = ReadTracker()
-    private val resultCache = ResultCache()
-
-    /**
-     * Tools eligible for in-session deduplication. Only side-effect-free
-     * read tools — never run_code, run_terminal_command, http_request, etc.
-     */
-    private val cacheableTools = setOf(
-        "read_file", "read_directory", "file_search", "grep_search", "view_diff"
-    )
-
-    /** Public hook so AgentTurnLoop / SessionManager can wipe the cache on session reset. */
-    fun clearResultCache(taskId: String) {
-        resultCache.clearTask(taskId)
-    }
 
     companion object {
         /** Max raw output size (chars) to preserve in-context for DATA_PRODUCING tools */
@@ -219,6 +162,7 @@ class TurnToolExecutor(
             index to (
                 toolCall to ToolResultData(
                     toolCallId = toolCall.id,
+                    subtaskId = subtaskId,
                     content = errorText,
                     isSummarized = false,
                     rawOutput = null,
@@ -381,45 +325,12 @@ class TurnToolExecutor(
             logger.debug { "[SUBTASK_FAILED] subtaskId=$subtaskId, tool=${toolCall.name}, error=$errorText" }
             return ToolResultData(
                 toolCallId = toolCall.id,
+                subtaskId = subtaskId,
                 content = errorText,
                 isSummarized = false,
                 rawOutput = null,
                 metadata = null
             )
-        }
-
-        // --- In-session deduplication cache (READ_ONLY tools only) ---
-        if (toolCall.name in cacheableTools) {
-            val cacheKey = resultCache.buildKey(toolCall.name, toolCall.arguments)
-            val cached = resultCache.get(taskId, cacheKey)
-            if (cached != null) {
-                logger.info {
-                    "[TOOL_CACHE_HIT] tool=${toolCall.name}, taskId=$taskId, " +
-                        "previousIteration=${cached.iteration}, previousSubtask=${cached.subtaskId}"
-                }
-                val cachedRefShort = cached.subtaskId.take(8)
-                val notice = "[CACHED — identical call already executed in iteration ${cached.iteration} " +
-                    "(subtask $cachedRefShort). Result below is unchanged. " +
-                    "If you need fresh data, vary the arguments or run a different tool.]\n\n"
-                val combinedContent = notice + cached.resultData.content
-                val combinedRaw = cached.resultData.rawOutput?.let { notice + it }
-
-                // Surface as a SUCCESS subtask so the UI shows the call happened.
-                subtaskRepository.updateStatus(subtaskId, TaskStatus.SUCCESS)
-                subtaskRepository.updateResult(
-                    subtaskId,
-                    result = combinedRaw ?: combinedContent,
-                    summary = combinedContent
-                )
-                listener?.onToolExecutionCompleted(taskId, toolCall, combinedContent, true)
-                return ToolResultData(
-                    toolCallId = toolCall.id,
-                    content = combinedContent,
-                    isSummarized = cached.resultData.isSummarized,
-                    rawOutput = combinedRaw,
-                    metadata = cached.resultData.metadata
-                )
-            }
         }
 
         // --- ASK permission check ---
@@ -491,6 +402,7 @@ class TurnToolExecutor(
                 argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.MODE, mode.name)
                 argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.ITERATION, iteration)
                 argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.SESSION_ID, taskId)
+                argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.SUBTASK_ID, subtaskId)
                 profileOverrides?.subagentName?.let { argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.AGENT_NAME, it) }
                 profileOverrides?.let { argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.AGENT_ID, runId) }
                 profileOverrides?.parentRunId?.let { argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.PARENT_RUN_ID, it) }
@@ -544,7 +456,10 @@ class TurnToolExecutor(
                     output = output.output,
                     error = output.error,
                     metadata = output.metadata,
-                    filesChanged = output.affectedFiles
+                    filesChanged = output.affectedFiles,
+                    nextActionHints = output.nextActionHints,
+                    recovery = output.recovery,
+                    changeSummary = output.changeSummary
                 )
             } else {
                 toolExecutor.executeTool(toolCallRequest, taskId)
@@ -552,7 +467,13 @@ class TurnToolExecutor(
 
             if (toolResult.success) {
                 val rawOutput = toolResult.output ?: "Success (no output)"
-                val outputWithWarnings = listOfNotNull(readBeforeWriteWarning, rawOutput)
+                // Append next-step hints from the tool itself (e.g. grep_search "no matches" hints,
+                // file_search "broaden the glob" hints). The agent sees these directly in the
+                // tool result, no separate nudge round-trip needed.
+                val hintsBlock = toolResult.nextActionHints
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.joinToString(prefix = "[next-step hints]\n- ", separator = "\n- ")
+                val outputWithWarnings = listOfNotNull(readBeforeWriteWarning, rawOutput, hintsBlock)
                     .joinToString("\n\n")
                 val isInvokeSubagent = toolCall.name.equals("invoke_subagent", ignoreCase = true)
                 val subagentName = argumentsMap["subagent_name"]?.toString()?.trim().orEmpty()
@@ -570,20 +491,39 @@ class TurnToolExecutor(
                 val summaryToken = GlobalMetrics.beginOperation(
                     OperationInfo.TurnToolSummarization(toolCall.name, iteration)
                 )
+                // Skip the LLM summarizer entirely when the tool already produced a structured
+                // ChangeSummary (write tools). The diff + stats are more informative AND
+                // deterministic — no need to spend a WEAK-model call paraphrasing them.
+                val structuredChangeSummary = toolResult.changeSummary
                 val summaryResult = try {
-                    if (isInvokeSubagent) {
-                        ToolResultSummary(displayOutput, wasSummarized = false, 0, 0, 0.0)
-                    } else if (outputWithWarnings.isNotBlank()) {
-                        // Pass argumentsMap so the summarizer can pick the right context
-                        // type — e.g. read_file on .json should not run code-analysis prompt.
-                        toolResultSummarizer.summarizeToolResult(
-                            toolName = toolCall.name,
-                            rawOutput = outputWithWarnings,
-                            taskId = taskId,
-                            toolArgs = argumentsMap
-                        )
-                    } else {
-                        ToolResultSummary(outputWithWarnings, wasSummarized = false, 0, 0, 0.0)
+                    when {
+                        isInvokeSubagent ->
+                            ToolResultSummary(displayOutput, wasSummarized = false, 0, 0, 0.0)
+                        structuredChangeSummary != null -> {
+                            val cs = structuredChangeSummary
+                            val deterministic = buildString {
+                                if (cs.created) append("Created ") else append("Edited ")
+                                append(toolResult.filesChanged?.firstOrNull() ?: "(unknown)")
+                                append(" (+${cs.addedLines}/-${cs.removedLines}")
+                                cs.replacements?.let { append(", ${it} replacement(s)") }
+                                append(")")
+                                cs.unifiedDiff?.takeIf { it.isNotBlank() }?.let { diff ->
+                                    append("\n```diff\n").append(diff.trimEnd()).append("\n```")
+                                }
+                            }
+                            ToolResultSummary(deterministic, wasSummarized = true, 0, 0, 0.0)
+                        }
+                        outputWithWarnings.isNotBlank() ->
+                            // Pass argumentsMap so the summarizer can pick the right context
+                            // type — e.g. read_file on .json should not run code-analysis prompt.
+                            toolResultSummarizer.summarizeToolResult(
+                                toolName = toolCall.name,
+                                rawOutput = outputWithWarnings,
+                                taskId = taskId,
+                                toolArgs = argumentsMap
+                            )
+                        else ->
+                            ToolResultSummary(outputWithWarnings, wasSummarized = false, 0, 0, 0.0)
                     }
                 } catch (e: Exception) {
                     // Summarizer LLM failure should NOT propagate as a tool execution error.
@@ -648,34 +588,31 @@ class TurnToolExecutor(
 
                 val resultData = ToolResultData(
                     toolCallId = toolCall.id,
+                    subtaskId = subtaskId,
                     content = effectiveContent,
                     isSummarized = effectivelySummarized,
                     rawOutput = outputWithWarnings,
                     metadata = metadataJson
                 )
 
-                // Cache successful results from cacheable read-only tools so a
-                // repeat of the same call within this session returns instantly
-                // with a [CACHED ...] notice instead of re-executing.
-                if (toolCall.name in cacheableTools) {
-                    val cacheKey = resultCache.buildKey(toolCall.name, toolCall.arguments)
-                    resultCache.put(
-                        taskId,
-                        cacheKey,
-                        ResultCache.Entry(
-                            resultData = resultData,
-                            iteration = iteration,
-                            subtaskId = subtaskId
-                        )
-                    )
-                }
-
                 return resultData
             } else {
                 val errorDetail = toolResult.error
                     ?: toolResult.output?.takeIf { it.isNotBlank() }
                     ?: "Unknown error"
-                val errorText = "Error: $errorDetail"
+                // Surface tool-provided recovery + next-step hints to the agent so it can
+                // attempt a corrected retry instead of guessing or giving up. Lesson 03E04:
+                // failed tool results should explain *what to do next*, not just *what failed*.
+                val errorText = buildString {
+                    append("Error: ").append(errorDetail)
+                    toolResult.recovery?.takeIf { it.isNotBlank() }?.let {
+                        append("\nRecovery: ").append(it)
+                    }
+                    toolResult.nextActionHints?.takeIf { it.isNotEmpty() }?.let { hints ->
+                        append("\nNext steps:")
+                        hints.forEach { append("\n- ").append(it) }
+                    }
+                }
                 listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
 
                 subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
@@ -686,6 +623,7 @@ class TurnToolExecutor(
 
                 return ToolResultData(
                     toolCallId = toolCall.id,
+                    subtaskId = subtaskId,
                     content = errorText,
                     isSummarized = false,
                     rawOutput = null,
@@ -708,6 +646,7 @@ class TurnToolExecutor(
 
             return ToolResultData(
                 toolCallId = toolCall.id,
+                subtaskId = subtaskId,
                 content = errorText,
                 isSummarized = false,
                 rawOutput = null,

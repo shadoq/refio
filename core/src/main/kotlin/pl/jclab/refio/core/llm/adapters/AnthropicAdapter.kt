@@ -136,9 +136,13 @@ class AnthropicAdapter(
             .joinToString("\n\n")
             .takeIf { it.isNotEmpty() }
 
-        // Map non-system messages to Claude format
+        // Map non-system messages to Claude format. Claude only accepts
+        // "user"/"assistant" in the messages array — remap "tool" (used by
+        // LLMMessageMapper for tool results) to "assistant" so the request
+        // body stays valid.
         val claudeMessages = nonSystemMessages.map { msg ->
-            mapOf("role" to msg.role, "content" to toAnthropicMessageContent(msg))
+            val mappedRole = if (msg.role == "tool") "assistant" else msg.role
+            mapOf("role" to mappedRole, "content" to toAnthropicMessageContent(msg))
         }
 
         // Build request body

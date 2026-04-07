@@ -724,9 +724,16 @@ class ContextService(
         val historyFromSummary = conversationContextBuilder.sliceConversationHistoryFromLastSummary(summarizedMessages)
         val filteredHistory = conversationContextBuilder.filterMeaningfulConversation(historyFromSummary)
 
-        // 2. Convert to LLMMessage list
+        // 2. Convert to LLMMessage list. Build tool-name lookup from the full
+        // (pre-filter) history so TOOL results can reference their originating
+        // assistant tool call by name even after filtering dropped some rows.
+        val toolNameByCallId = conversationContextBuilder.buildToolNameByCallId(allMessages)
         val messages = filteredHistory.mapNotNull { msg ->
-            conversationContextBuilder.convertChatMessageToLLMMessage(msg, ::resolveToolConversationContent)
+            conversationContextBuilder.convertChatMessageToLLMMessage(
+                msg,
+                ::resolveToolConversationContent,
+                toolNameByCallId
+            )
         }
 
         // 4. Build project context (with user context refs)

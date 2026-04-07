@@ -233,6 +233,13 @@ $filteredContextPrompt
         }
 
         // Fallback: Direct message building for CHAT mode or when ContextService unavailable
+        val fallbackToolNames = history
+            .asSequence()
+            .filter { it.role == MessageRole.ASSISTANT }
+            .flatMap { it.toolCalls?.asSequence() ?: emptySequence() }
+            .filter { it.id.isNotBlank() && it.name.isNotBlank() }
+            .associate { it.id to it.name }
+
         val messages = history.mapNotNull { msg ->
             when (msg.role) {
                 MessageRole.USER -> LLMMessage(
@@ -262,7 +269,8 @@ $filteredContextPrompt
                         val base = msg.content.ifBlank { msg.rawOutput ?: "(empty tool result)" }
                         if (base.length > 320) "${base.take(320)}..." else base
                     }
-                    LLMMessageMapper.fromToolResult(msg, toolText)
+                    val toolName = msg.toolCallId?.let { fallbackToolNames[it] }
+                    LLMMessageMapper.fromToolResult(msg, toolText, toolName)
                 }
                 MessageRole.SYSTEM -> LLMMessage(
                     role = "system",

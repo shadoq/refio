@@ -106,10 +106,36 @@ class ToolResultSummarizer(
             )
         }
 
-        val minLength = configService.getTyped(ConfigKeys.TOOL_SUMMARY_MIN_LENGTH)
+        val configMinLength = configService.getTyped(ConfigKeys.TOOL_SUMMARY_MIN_LENGTH)
+        // Hard floor: never summarize below this regardless of config. The summarizer
+        // LLM call costs more (latency + WEAK-model tokens) than the saved bytes for
+        // outputs of a few hundred chars. Applied to ALL context types.
+        val effectiveMinLength = maxOf(configMinLength, GLOBAL_MIN_SKIP_THRESHOLD)
 
-        if (rawOutput.length <= minLength) {
-            // Too short to summarize, return as-is
+        if (rawOutput.length <= effectiveMinLength) {
+            logger.info {
+                "[SUMMARIZER_SKIP] Tool $toolName output (${rawOutput.length} chars) below " +
+                    "effective min ($effectiveMinLength), keeping raw."
+            }
+            return ToolResultSummary(
+                summary = rawOutput,
+                wasSummarized = false,
+                tokensIn = 0,
+                tokensOut = 0,
+                cost = 0.0
+            )
+        }
+
+        // Higher skip threshold for RAW_OUTPUT (run_code, run_terminal_command).
+        // These tool outputs typically contain literal data the model needs to read
+        // verbatim (IDs, counts, error bodies). Below 4KB the cost-benefit is clearly
+        // negative — observed production traces show 506-char outputs triggering 80s+
+        // WEAK calls for 8 chars of "compression" while paraphrasing critical IDs.
+        if (contextType == SummaryContextType.RAW_OUTPUT && rawOutput.length < RAW_OUTPUT_SKIP_THRESHOLD) {
+            logger.info {
+                "[SUMMARIZER_SKIP] Tool $toolName output (${rawOutput.length} chars) below " +
+                    "RAW_OUTPUT_SKIP_THRESHOLD ($RAW_OUTPUT_SKIP_THRESHOLD), keeping raw."
+            }
             return ToolResultSummary(
                 summary = rawOutput,
                 wasSummarized = false,
@@ -387,6 +413,23 @@ Guidelines:
 
     companion object {
         /**
+         * Hard floor for ALL tool outputs regardless of context type or user config.
+         * Below this size the summarizer LLM call (~hundreds of ms to multiple seconds
+         * even with WEAK model, plus its own input tokens) costs more than the bytes
+         * it could possibly save. Acts as a lower bound on TOOL_SUMMARY_MIN_LENGTH —
+         * raising the config above this is fine, lowering it below has no effect.
+         */
+        const val GLOBAL_MIN_SKIP_THRESHOLD = 512
+
+        /**
+         * Below this size, RAW_OUTPUT (run_code / run_terminal_command) is NEVER
+         * summarized. The summarizer LLM call costs more than the saved tokens —
+         * see TurnToolExecutor traces where 506-char outputs triggered 80s+ calls
+         * for 8 chars of "compression". Not configurable on purpose.
+         */
+        const val RAW_OUTPUT_SKIP_THRESHOLD = 4_000
+
+        /**
          * File extensions treated as DATA_FILE rather than CODE_ANALYSIS.
          * These are structured/text files where code-style summarization
          * ("no classes found, no imports detected") is actively misleading.
@@ -396,21 +439,5 @@ Guidelines:
             "yaml", "yml", "xml", "html", "htm", "ini", "conf", "cfg",
             "properties", "toml", "env", "sql"
         )
-
-        private const val DEFAULT_SYSTEM_PROMPT = """
-You are a tool result summarizer. Create a concise summary of tool execution results.
-
-Guidelines:
-- Keep key findings (file paths, match counts, class names, function signatures)
-- Truncate verbose content (long file contents, repetitive output)
-- Preserve error messages exactly
-- Max 2-3 sentences
-- Use markdown formatting for clarity
-
-Examples:
-- read_file: "Read Service.kt (450 lines). Contains 3 classes: Service, Validator, Client."
-- grep_search: "Found 5 matches for 'Token' in 3 files: AuthService.kt (2), Validator.kt (2), Token.kt (1)"
-- file_search: "Found 8 .kt files matching pattern '*Service.kt' in src/main/kotlin/"
-"""
     }
 }

@@ -10,7 +10,11 @@ import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Path
 
 private val logger = dualLogger("RagContextLoader")
-private const val MAX_RAG_FRAGMENTS = 15
+// Hard cap on auto-injected RAG fragments. The actual count is taken from
+// ConfigKeys.RAG_SEARCH_TOP_K (default 5) but we never exceed this even if a user sets a
+// higher value, because auto-RAG bloats the prompt at turn start before the agent has
+// any signal about which fragments are actually relevant.
+private const val MAX_AUTO_RAG_FRAGMENTS = 8
 
 class RagContextLoader(
     private val configService: ConfigService,
@@ -43,7 +47,21 @@ class RagContextLoader(
     internal fun shouldSkipRag(query: String?): Boolean {
         if (query.isNullOrBlank()) return true
 
-        val queryLower = query.lowercase()
+        val queryLower = query.lowercase().trim()
+
+        // System-injected harness phrases (retry / continue / nudge follow-ups). Embedding these
+        // wastes 8-20s per iteration and never returns useful fragments because they carry no
+        // task-specific signal.
+        val systemPhrases = listOf(
+            "continue from where you left off",
+            "continue where you left off",
+            "kontynuuj od miejsca",
+            "kontynuuj zadanie"
+        )
+        if (systemPhrases.any { queryLower.contains(it) }) {
+            logger.info { "[CONTEXT] Skipping RAG - system harness phrase: ${query.take(80)}" }
+            return true
+        }
 
         // Meta questions that don't need code context
         val metaPatterns = listOf(
@@ -122,9 +140,13 @@ class RagContextLoader(
             logger.info {
                 "[CONTEXT] Running hybrid RAG search: query='${combinedQuery.take(120)}...', keywords=$keywords"
             }
+            // topK comes from config (default 5), capped at MAX_AUTO_RAG_FRAGMENTS so an
+            // unintended high config value cannot pollute the startup prompt with noise.
+            val configuredTopK = configService.getTyped(ConfigKeys.RAG_SEARCH_TOP_K)
+            val effectiveTopK = configuredTopK.coerceIn(1, MAX_AUTO_RAG_FRAGMENTS)
             val config = RagSearchConfig(
                 similarityThreshold = configService.getTyped(ConfigKeys.RAG_SEARCH_SIMILARITY_THRESHOLD),
-                topK = MAX_RAG_FRAGMENTS,
+                topK = effectiveTopK,
                 hybridSearch = hybridEnabled,
                 keywords = keywords,
                 semanticWeight = configService.getTyped(ConfigKeys.RAG_SEARCH_SEMANTIC_WEIGHT),

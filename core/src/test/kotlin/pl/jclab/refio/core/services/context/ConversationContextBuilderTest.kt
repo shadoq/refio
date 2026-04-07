@@ -27,7 +27,10 @@ class ConversationContextBuilderTest {
             createdAt = 1L
         )
 
-        val llmMessage = builder.convertChatMessageToLLMMessage(message) { "[Image: screenshot.png]" }
+        val llmMessage = builder.convertChatMessageToLLMMessage(
+            msg = message,
+            toolContentResolver = { "[Image: screenshot.png]" }
+        )
 
         assertEquals("user", llmMessage?.role)
         assertTrue(llmMessage?.content?.contains("Attached image from screenshot.png.") == true)

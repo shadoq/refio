@@ -1,7 +1,9 @@
 package pl.jclab.refio.core.tools.implementations
 
+import pl.jclab.refio.core.tools.DiffUtils
 import pl.jclab.refio.core.tools.FileLockManager
 import pl.jclab.refio.core.tools.PathSandbox
+import pl.jclab.refio.core.tools.base.ChangeSummary
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
@@ -83,18 +85,33 @@ class MultiEditTool(
             val duration = (System.currentTimeMillis() - startTime).toInt()
             val filesChanged = results.map { it.path }
             val totalReplacements = results.sumOf { it.replacements }
+            val totalAdded = results.sumOf { it.changeSummary.addedLines }
+            val totalRemoved = results.sumOf { it.changeSummary.removedLines }
 
-            logger.info { "Successfully applied ${edits.size} edits to ${filesChanged.size} files, ${duration}ms" }
+            // Aggregate change summary across all edits — agent gets a single rolled-up diff
+            // it can scan, plus per-file diffs in metadata.
+            val aggregatedSummary = ChangeSummary(
+                addedLines = totalAdded,
+                removedLines = totalRemoved,
+                unifiedDiff = results.mapNotNull { it.changeSummary.unifiedDiff }.joinToString("\n"),
+                replacements = totalReplacements
+            )
+
+            logger.info { "Successfully applied ${edits.size} edits to ${filesChanged.size} files, ${duration}ms (+$totalAdded/-$totalRemoved)" }
 
             return ToolResult(
                 success = true,
                 output = formatResults(results),
                 durationMs = duration,
                 filesChanged = filesChanged,
+                changeSummary = aggregatedSummary,
                 metadata = mapOf(
                     "edit_count" to edits.size,
                     "files_changed" to filesChanged.size,
-                    "total_replacements" to totalReplacements
+                    "total_replacements" to totalReplacements,
+                    "added_lines" to totalAdded,
+                    "removed_lines" to totalRemoved,
+                    "diffs" to results.associate { it.path to (it.changeSummary.unifiedDiff ?: "") }
                 )
             )
 
@@ -188,19 +205,26 @@ class MultiEditTool(
         Files.writeString(prep.path, newContent)
 
         val newFileSize = prep.path.fileSize()
-        logger.debug { "Applied edit #${prep.edit.index}: ${prep.edit.path}, size: ${prep.originalContent.length} → ${newContent.length} chars, fileSize=$newFileSize bytes" }
+        val changeSummary = DiffUtils.buildChangeSummary(
+            originalContent = prep.originalContent,
+            newContent = newContent,
+            filePath = prep.edit.path,
+            replacements = 1
+        )
+        logger.debug { "Applied edit #${prep.edit.index}: ${prep.edit.path}, size: ${prep.originalContent.length} → ${newContent.length} chars, fileSize=$newFileSize bytes, +${changeSummary.addedLines}/-${changeSummary.removedLines}" }
 
         return EditResult(
             path = prep.edit.path,
             replacements = 1,
             oldLength = prep.originalContent.length,
-            newLength = newContent.length
+            newLength = newContent.length,
+            changeSummary = changeSummary
         )
     }
 
     private fun formatResults(results: List<EditResult>): String {
         val lines = results.mapIndexed { index, result ->
-            "${index + 1}. ${result.path}: ${result.replacements} replacement(s)"
+            "${index + 1}. ${result.path}: ${result.replacements} replacement(s) (+${result.changeSummary.addedLines}/-${result.changeSummary.removedLines})"
         }
 
         return "Successfully applied ${results.size} edit(s):\n" + lines.joinToString("\n")
@@ -254,7 +278,8 @@ class MultiEditTool(
         val path: String,
         val replacements: Int,
         val oldLength: Int,
-        val newLength: Int
+        val newLength: Int,
+        val changeSummary: ChangeSummary
     )
 
     private class EditException(message: String) : Exception(message)

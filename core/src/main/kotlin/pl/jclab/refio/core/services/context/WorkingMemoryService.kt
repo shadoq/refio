@@ -159,11 +159,14 @@ class WorkingMemoryService(
 
     /**
      * Build a compact origin tag for a working-memory entry.
-     * Format: `[it#N ref#XXXXXXXX]` where XXXXXXXX is the first 8 chars of the originId.
+     * Format: `[it#N ref#<originId>]`. The full originId is used (not a prefix)
+     * so it matches 1:1 the `id:` shown in tool-result message headers and the
+     * subtask id accepted by `memory(action="get_subtask_output")` — the model
+     * can copy-paste the same identifier across all three places.
      * If no originId is set: `[it#N]`.
      */
     private fun buildEntryTag(entry: WorkingMemoryEntry): String {
-        val ref = entry.originId?.take(8)
+        val ref = entry.originId
         return if (ref != null) "[it#${entry.iteration} ref#$ref]" else "[it#${entry.iteration}]"
     }
 
@@ -469,6 +472,23 @@ class WorkingMemoryService(
                 normalizeValue("http_request facts: ${facts.joinToString(" | ")}"),
                 outputExcerpt = buildOutputExcerpt(output),
                 importance = 5
+            )
+        }
+        // Auto-record API failures so the agent doesn't keep retrying the same
+        // rejected request. We pin these with importance=10 (never evicted) and
+        // a dedicated key so they can't be merged into generic `network` noise.
+        // Includes the response excerpt so the rejection reason is visible —
+        // critical for verify-style endpoints that explain why the answer was wrong.
+        if (status != null && status >= 400) {
+            val failureValue = "FAILED $method $host: status=$status. " +
+                "Do NOT retry the same payload — the server rejected it. " +
+                "Read the response excerpt below for the rejection reason and adjust before retrying."
+            entries += WorkingMemoryEntry(
+                iteration,
+                "api_failure",
+                normalizeValue(failureValue),
+                outputExcerpt = buildOutputExcerpt(output),
+                importance = 10
             )
         }
         return entries

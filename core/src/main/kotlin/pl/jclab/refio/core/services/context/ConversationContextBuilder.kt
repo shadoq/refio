@@ -52,11 +52,40 @@ class ConversationContextBuilder {
         messages: List<ChatMessage>
     ): List<ChatMessage> {
         val lastSummaryIndex = messages.indexOfLast { isConversationSummary(it) }
-        return if (lastSummaryIndex >= 2) {
-            messages.drop(lastSummaryIndex - 1)
-        } else {
-            messages
+        if (lastSummaryIndex < 2) return messages
+
+        val tail = messages.drop(lastSummaryIndex - 1)
+        val droppedHead = messages.take(lastSummaryIndex - 1)
+
+        // Always preserve the very first message (usually the user's opening
+        // request) and every USER message that appeared before the summary —
+        // they may carry instructions, constraints, or facts the model still
+        // needs, and they are small enough that duplicating them next to the
+        // summary is cheap.
+        val preservedHead = droppedHead.filterIndexed { index, msg ->
+            index == 0 || msg.role == MessageRole.USER
         }
+
+        return preservedHead + tail
+    }
+
+    /**
+     * Build a lookup of tool call id → tool name by scanning ASSISTANT messages.
+     * Used so TOOL result messages can be rendered with the originating tool's
+     * name (e.g. `[Tool result: run_code id: abc]`) instead of a bare id.
+     */
+    fun buildToolNameByCallId(messages: List<ChatMessage>): Map<String, String> {
+        val map = mutableMapOf<String, String>()
+        for (msg in messages) {
+            if (msg.role != MessageRole.ASSISTANT) continue
+            val calls = msg.toolCalls ?: continue
+            for (call in calls) {
+                if (call.id.isNotBlank() && call.name.isNotBlank()) {
+                    map[call.id] = call.name
+                }
+            }
+        }
+        return map
     }
 
     fun isConversationSummary(message: ChatMessage): Boolean {
@@ -83,7 +112,8 @@ class ConversationContextBuilder {
      */
     fun convertChatMessageToLLMMessage(
         msg: ChatMessage,
-        toolContentResolver: (ChatMessage) -> String
+        toolContentResolver: (ChatMessage) -> String,
+        toolNameByCallId: Map<String, String> = emptyMap()
     ): LLMMessage? {
         return when (msg.role) {
             MessageRole.USER -> LLMMessage(
@@ -111,7 +141,8 @@ class ConversationContextBuilder {
 
             MessageRole.TOOL -> {
                 val summarized = toolContentResolver(msg)
-                LLMMessageMapper.fromToolResult(msg, summarized)
+                val toolName = msg.toolCallId?.let { toolNameByCallId[it] }
+                LLMMessageMapper.fromToolResult(msg, summarized, toolName)
             }
 
             MessageRole.SYSTEM -> {

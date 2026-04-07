@@ -24,6 +24,9 @@ import pl.jclab.refio.core.services.AgentTurnLoop.UserMessageStrategy
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 import pl.jclab.refio.core.services.turn.ToolCallParser
+import pl.jclab.refio.core.services.turn.GuardianContext
+import pl.jclab.refio.core.services.turn.GuardianDecision
+import pl.jclab.refio.core.services.turn.GuardianRegistry
 import pl.jclab.refio.core.services.turn.TurnFinalizer
 import pl.jclab.refio.core.services.turn.TurnGuardrails
 import pl.jclab.refio.core.services.turn.TurnJsonUtils
@@ -48,8 +51,6 @@ import java.util.concurrent.CancellationException
 
 // Type aliases for turn/ package classes
 private typealias ToolErrorTracker = TurnGuardrails.ToolErrorTracker
-private typealias LoopDetector = TurnGuardrails.LoopDetector
-private typealias LoopStatus = TurnGuardrails.LoopStatus
 private typealias AssistantIntent = TurnGuardrails.AssistantIntent
 
 private val logger = dualLogger("AgentTurnLoop")
@@ -110,6 +111,12 @@ class AgentTurnLoop(
     private val turnResponseProcessor: TurnResponseProcessor,
     private val turnFinalizer: TurnFinalizer,
     private val turnSubagentValidator: TurnSubagentValidator,
+    /**
+     * beforeFinish guardian registry. When non-empty, runs after task verification at the
+     * natural completion exit and may push the loop back into another iteration with a nudge.
+     * See [GuardianRegistry] / [TurnCompletionGuardian]. Empty by default — no behavior change.
+     */
+    private val completionGuardians: GuardianRegistry = GuardianRegistry(),
 
     // ADR-0028: Optional dependencies for enhanced turn loop
     private val tokenEstimator: PromptTokenEstimator = PromptTokenEstimator(),
@@ -435,13 +442,13 @@ class AgentTurnLoop(
         val config = TurnLoopConfigs.forMode(mode)
         val maxIterations = turnLLMCaller.resolveMaxIterations(config, profileOverrides)
         val errorTracker = ToolErrorTracker(windowSize = config.errorWindowSize)
-        val loopDetector = LoopDetector(
-            maxConsecutiveRepeats = config.loopMaxConsecutiveRepeats,
-            maxSameToolTotal = config.loopMaxSameToolTotal,
-            warnConsecutiveThreshold = config.loopWarnConsecutiveThreshold,
-            warnTotalThreshold = config.loopWarnTotalThreshold
-        )
-        var formatRetryCount = 0
+        // Retry counters are split per failure category so one category cannot starve another.
+        // Previously a single shared `formatRetryCount` covered empty-content, malformed JSON,
+        // and plain-text nudges, which let one category exhaust the budget for the others
+        // (see docs/0107-multiagent.md and the qwen3 empty-content investigation).
+        var formatRetryCount = 0          // malformed JSON in tool-call path
+        var emptyContentRetries = 0       // model returned blank content (and blank thinking)
+        var meaninglessJsonRetries = 0    // valid JSON but with unresolved variables / placeholders
         var writeToolsExecutedInTurn = 0
         var verificationToolsExecutedAfterWrite = 0
         var consecutiveReadOnlyIterations = 0
@@ -456,6 +463,13 @@ class AgentTurnLoop(
         var plainTextNudgeCount = 0
         var toolErrorNudgeCount = 0
         var verificationNudgeCount = 0
+        // beforeFinish guardian re-entry counter (capped by GuardianRegistry.maxReentries).
+        var guardianReentryCount = 0
+        // Tracks the last SYSTEM nudge message id so we can REPLACE it on the next iteration
+        // instead of stacking duplicates in conversation history. Stacking has two failure modes:
+        // (a) it bloats the prompt by ~200 tokens per iteration, and (b) it teaches the model that
+        // the harness will keep nagging without taking action, which encourages it to stop responding.
+        var lastNudgeMessageId: String? = null
         var lastIterationHadToolErrors = false
         var totalTokensIn = 0
         var totalTokensOut = 0
@@ -484,6 +498,26 @@ class AgentTurnLoop(
         // Populated by the wrapped tool listener below; consumed after executeToolCalls returns.
         val toolStartNanos = java.util.concurrent.ConcurrentHashMap<String, Long>()
         val toolDurationsMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+        /**
+         * Adds a SYSTEM nudge message and removes the previous one (if any) to keep the
+         * conversation history clean. Returns the new message id so callers can chain replacements.
+         */
+        fun addOrReplaceNudge(content: String): String {
+            val previousId = lastNudgeMessageId
+            if (previousId != null) {
+                runCatching { chatMessageRepository.delete(previousId) }
+                    .onFailure { logger.debug { "[NUDGE_REPLACE] failed to delete previous nudge $previousId: ${it.message}" } }
+            }
+            val msg = chatMessageRepository.create(
+                taskId = taskId,
+                role = MessageRole.SYSTEM,
+                content = content,
+                toolCalls = null
+            )
+            lastNudgeMessageId = msg.id
+            return msg.id
+        }
 
         try {
             while (iteration < maxIterations) {
@@ -553,7 +587,9 @@ class AgentTurnLoop(
 
                     val llmPrompt = TurnPromptAdapter.toLLMCallPrompt(prompt)
                     val llmCallStartNanos = System.nanoTime()
-                    val llmResponse = if (config.maxRetries > 0 && llmRetryHandler != null) {
+                    // Mutable so the empty-content recovery path below can re-bind it after pulling
+                    // a JSON envelope out of the `thinking` field (qwen3 / Ollama edge case).
+                    var llmResponse = if (config.maxRetries > 0 && llmRetryHandler != null) {
                         llmRetryHandler.callWithRetry(
                             provider = effectiveProvider,
                             model = effectiveModel,
@@ -624,38 +660,63 @@ class AgentTurnLoop(
                     )
 
                     if (mode != TaskMode.CHAT && llmResponse.content.isBlank()) {
-                        if (formatRetryCount < config.maxFormatRetries) {
-                            formatRetryCount++
-                            logger.warn {
-                                "[TURN_EMPTY_CONTENT] taskId=$taskId, iteration=$iteration, " +
-                                    "retry=$formatRetryCount/${config.maxFormatRetries}, " +
-                                    "finishReason=${llmResponse.finishReason}, " +
-                                    "thinkingLength=${llmResponse.thinking?.length ?: 0}"
-                            }
-                            chatMessageRepository.create(
-                                taskId = taskId,
-                                role = MessageRole.SYSTEM,
-                                content = TurnGuardrails.buildInvalidFormatMessage(mode),
-                                toolCalls = null
-                            )
-                            continue
+                        // Fallback 1: recover JSON from the thinking field. Some Ollama setups
+                        // (qwen3 with think=true defaulted) emit the JSON envelope inside `thinking`
+                        // while `content` stays empty. We accept recovery if thinking *looks like*
+                        // a JSON envelope — either it parses to tool calls, OR its trimmed form
+                        // starts with `{` (a final-response envelope without `actions`). The
+                        // downstream pipeline handles both shapes.
+                        val thinking = llmResponse.thinking
+                        val thinkingTrimmed = thinking?.trim().orEmpty()
+                        val looksLikeEnvelope = thinkingTrimmed.startsWith("{")
+                        val recoveredFromThinking = if (!thinking.isNullOrBlank()) {
+                            runCatching { toolCallParser.extractToolCalls(thinking, mode, profileOverrides) }
+                                .getOrDefault(emptyList())
+                        } else {
+                            emptyList()
                         }
 
-                        logger.error {
-                            "[TURN_FAILED] Empty content from model in JSON mode " +
-                                "(mode=$mode, finishReason=${llmResponse.finishReason}, thinkingLength=${llmResponse.thinking?.length ?: 0})"
+                        if (recoveredFromThinking.isNotEmpty() || looksLikeEnvelope) {
+                            logger.warn {
+                                "[TURN_EMPTY_CONTENT_RECOVERED] taskId=$taskId, iteration=$iteration, " +
+                                    "recovered=${recoveredFromThinking.size} tool calls, envelope=$looksLikeEnvelope, " +
+                                    "thinkingLength=${thinking?.length ?: 0}"
+                            }
+                            // Re-bind llmResponse so downstream code (extractToolCalls,
+                            // ChatMessage persistence, etc.) sees the recovered envelope as content.
+                            llmResponse = llmResponse.copy(content = thinking ?: "", thinking = null)
+                            // Fall through to the regular tool-call extraction path.
+                        } else {
+                            // Fallback 2: bounded retry with a short, distinct nudge.
+                            if (emptyContentRetries < config.maxFormatRetries) {
+                                emptyContentRetries++
+                                logger.warn {
+                                    "[TURN_EMPTY_CONTENT] taskId=$taskId, iteration=$iteration, " +
+                                        "retry=$emptyContentRetries/${config.maxFormatRetries}, " +
+                                        "finishReason=${llmResponse.finishReason}, " +
+                                        "thinkingLength=${llmResponse.thinking?.length ?: 0}"
+                                }
+                                addOrReplaceNudge(TurnNudgeBuilder.buildEmptyContentNudgeMessage())
+                                continue
+                            }
+
+                            logger.error {
+                                "[TURN_FAILED] Empty content from model in JSON mode " +
+                                    "(mode=$mode, finishReason=${llmResponse.finishReason}, thinkingLength=${llmResponse.thinking?.length ?: 0})"
+                            }
+                            val result = TurnResult(
+                                success = false,
+                                response = "Model repeatedly returned empty content in structured mode. " +
+                                    "This usually means the selected model does not produce the required JSON envelope. " +
+                                    "Try a different model (e.g. one tuned for tool use) or simplify the request.",
+                                iterations = iteration,
+                                tokensIn = totalTokensIn,
+                                tokensOut = totalTokensOut,
+                                cost = totalCost,
+                                toolsUsed = usedTools.distinct()
+                            )
+                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
                         }
-                        val result = TurnResult(
-                            success = false,
-                            response = "Model repeatedly returned empty content in structured mode. " +
-                                "No tool actions or final response could be parsed.",
-                            iterations = iteration,
-                            tokensIn = totalTokensIn,
-                            tokensOut = totalTokensOut,
-                            cost = totalCost,
-                            toolsUsed = usedTools.distinct()
-                        )
-                        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
                     }
 
                     // Check if model invoked tools
@@ -689,48 +750,32 @@ class AgentTurnLoop(
                         return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
                     }
 
-                    // Format retry logic
+                    // Format retry logic — uses its own counter so empty-content / meaningless-JSON
+                    // categories cannot starve it.
                     if (
                         toolCalls.isEmpty() &&
                         toolCallParser.shouldRequestRetry(contentForExtraction, mode) &&
                         formatRetryCount < config.maxFormatRetries
                     ) {
                         formatRetryCount++
-                        chatMessageRepository.create(
-                            taskId = taskId,
-                            role = MessageRole.SYSTEM,
-                            content = TurnGuardrails.buildInvalidFormatMessage(mode),
-                            toolCalls = null
-                        )
+                        addOrReplaceNudge(TurnGuardrails.buildInvalidFormatMessage(mode))
                         logger.warn { "[TOOL_CALLS] Invalid format detected, requesting retry (attempt=$formatRetryCount)" }
                         continue
                     }
 
                     if (toolCalls.isNotEmpty()) {
-                        // Loop detection before executing
-                        for (toolCall in toolCalls) {
-                            val loopStatus = loopDetector.recordToolCall(toolCall.name, toolCall.arguments)
-                            when (loopStatus) {
-                                is TurnGuardrails.LoopStatus.ABORT -> {
-                                    logger.warn { "[LOOP_DETECTED] ${loopStatus.reason}" }
-                                    val result = TurnResult(
-                                        success = false,
-                                        response = "Loop detected: ${loopStatus.reason}. The agent may be stuck. " +
-                                            "Please rephrase your request or provide more specific instructions.",
-                                        iterations = iteration,
-                                        tokensIn = totalTokensIn,
-                                        tokensOut = totalTokensOut,
-                                        cost = totalCost,
-                                        toolsUsed = usedTools.distinct()
-                                    )
-                                    return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
-                                }
-                                is TurnGuardrails.LoopStatus.WARN -> {
-                                    logger.warn { "[LOOP_WARNING] ${loopStatus.message}" }
-                                }
-                                TurnGuardrails.LoopStatus.OK -> { /* continue */ }
-                            }
-                        }
+                        // The model produced something usable on this iteration — drop the
+                        // nudge-replace anchor so a future nudge starts fresh instead of trying
+                        // to delete a SYSTEM message that is no longer the most recent.
+                        lastNudgeMessageId = null
+
+                        // Tool-call loop detection (consecutive/total same-tool calls) was removed
+                        // intentionally — the heuristic was too aggressive and aborted legitimate
+                        // workflows that genuinely need to call the same tool many times (e.g. batch
+                        // file edits, repeated http_request polling). The loop is still bounded by
+                        // `maxIterations` and by `consecutiveIdenticalFailures` (same tool + same
+                        // args + failure), which catches the only case we actually care about:
+                        // a tool retried with identical arguments after it already failed.
 
                         // Save assistant message with tool calls
                         logger.info { "[TOOL_CALLS] taskId=$taskId, count=${toolCalls.size}" }
@@ -840,11 +885,14 @@ class AgentTurnLoop(
                             )
                         }
 
-                        // Save tool results
+                        // Save tool results. Forward the persisted Subtask id so the TOOL chat
+                        // message can render its header with the same identifier as RECENT_WORK
+                        // and WORKING_MEMORY.
                         for ((toolCall, resultData) in toolResults) {
                             chatMessageRepository.createToolResult(
                                 taskId = taskId,
                                 toolCallId = toolCall.id,
+                                subtaskId = resultData.subtaskId,
                                 result = resultData.content,
                                 isSummarized = resultData.isSummarized,
                                 rawOutput = resultData.rawOutput,
@@ -885,23 +933,10 @@ class AgentTurnLoop(
                             }
                         }
 
-                        // Record to working memory
-                        if (config.enableWorkingMemory && workingMemoryIntegration != null) {
-                            for ((toolCall, resultData) in toolResults) {
-                                if (!resultData.content.startsWith("Error:")) {
-                                    val params = TurnJsonUtils.parseJsonToMap(toolCall.arguments)
-                                    workingMemoryIntegration.recordToolKnowledge(
-                                        taskId = taskId,
-                                        toolName = toolCall.name,
-                                        params = params,
-                                        result = resultData.rawOutput ?: resultData.content,
-                                        iteration = iteration,
-                                        metadata = resultData.metadata?.let { TurnJsonUtils.parseJsonToMap(it) },
-                                        originId = toolCall.id
-                                    )
-                                }
-                            }
-                        }
+                        // Working memory is recorded inside TurnToolExecutor with originId=subtaskId
+                        // so every context section (MESSAGES / RECENT_WORK / WORKING_MEMORY) keys off
+                        // the same subtask id. Recording here would overwrite those entries with
+                        // originId=toolCall.id and desynchronize the identifiers.
 
                         // Handle AWAITING_RESPONSE from send_message tool
                         for ((toolCall, resultData) in toolResults) {
@@ -1108,24 +1143,19 @@ class AgentTurnLoop(
                         }
 
                         if (mode != TaskMode.CHAT && toolCallParser.isMeaninglessJson(contentForExtraction)) {
-                            if (formatRetryCount < config.maxFormatRetries) {
-                                formatRetryCount++
+                            if (meaninglessJsonRetries < config.maxFormatRetries) {
+                                meaninglessJsonRetries++
                                 logger.warn {
                                     "[MEANINGLESS_JSON] taskId=$taskId, iteration=$iteration, " +
-                                        "retry=$formatRetryCount/${config.maxFormatRetries}, " +
+                                        "retry=$meaninglessJsonRetries/${config.maxFormatRetries}, " +
                                         "content='${contentForExtraction.take(100)}'"
                                 }
-                                chatMessageRepository.create(
-                                    taskId = taskId,
-                                    role = MessageRole.SYSTEM,
-                                    content = TurnGuardrails.buildInvalidFormatMessage(mode),
-                                    toolCalls = null
-                                )
+                                addOrReplaceNudge(TurnGuardrails.buildInvalidFormatMessage(mode))
                                 continue
                             }
 
                             logger.error {
-                                "[MEANINGLESS_JSON_ABORT] taskId=$taskId, retries=$formatRetryCount, " +
+                                "[MEANINGLESS_JSON_ABORT] taskId=$taskId, retries=$meaninglessJsonRetries, " +
                                     "content='${contentForExtraction.take(100)}'"
                             }
                             val result = TurnResult(
@@ -1198,7 +1228,13 @@ class AgentTurnLoop(
                         }
 
                         // Nudge when LLM returns plain text without any JSON structure
-                        // (common with weaker models that "forget" the required format mid-task)
+                        // (common with weaker models that "forget" the required format mid-task).
+                        //
+                        // We deliberately do NOT persist the plain-text body as an ASSISTANT message:
+                        // doing so reinjects the bad output (often a markdown code block) into the
+                        // next prompt and trains the model to keep emitting plain text. We persist
+                        // only the model's thinking (if any) so the user can still inspect what it
+                        // tried to do.
                         if (mode == TaskMode.AGENT &&
                             !contentForExtraction.trim().let { it.startsWith("{") || it.startsWith("[") } &&
                             contentForExtraction.isNotBlank() &&
@@ -1210,24 +1246,22 @@ class AgentTurnLoop(
                                     "LLM returned plain text without JSON structure. " +
                                     "Nudge=$plainTextNudgeCount/2, content='${contentForExtraction.take(80)}'"
                             }
-                            // Save the current assistant response before nudging
-                            val textResponse = toolCallParser.extractTextResponse(llmResponse.content)
-                            chatMessageRepository.create(
-                                taskId = taskId,
-                                role = MessageRole.ASSISTANT,
-                                content = textResponse.ifEmpty { llmResponse.content },
-                                thinking = turnResponseProcessor.resolveAssistantThinking(llmResponse),
-                                toolCalls = null,
-                                tokensIn = llmResponse.usage.inputTokens,
-                                tokensOut = llmResponse.usage.outputTokens,
-                                cost = llmResponse.cost
-                            )
-                            chatMessageRepository.create(
-                                taskId = taskId,
-                                role = MessageRole.SYSTEM,
-                                content = TurnNudgeBuilder.buildPlainTextNudgeMessage(),
-                                toolCalls = null
-                            )
+                            val resolvedThinking = turnResponseProcessor.resolveAssistantThinking(llmResponse)
+                            if (!resolvedThinking.isNullOrBlank()) {
+                                // Persist only the thinking — gives the user audit trail without
+                                // reinjecting the bad plain-text body into history.
+                                chatMessageRepository.create(
+                                    taskId = taskId,
+                                    role = MessageRole.ASSISTANT,
+                                    content = "",
+                                    thinking = resolvedThinking,
+                                    toolCalls = null,
+                                    tokensIn = llmResponse.usage.inputTokens,
+                                    tokensOut = llmResponse.usage.outputTokens,
+                                    cost = llmResponse.cost
+                                )
+                            }
+                            addOrReplaceNudge(TurnNudgeBuilder.buildPlainTextNudgeMessage())
                             continue
                         }
 
@@ -1261,6 +1295,37 @@ class AgentTurnLoop(
                         val userMessageForVerification = userMessageStrategy.getUserMessage(taskId)
                         if (!verifyTaskCompletionIfNeeded(taskId, shouldRunTaskVerification, userMessageForVerification, llmResponse.content)) {
                             continue
+                        }
+
+                        // beforeFinish guardian hook (lesson S03E03): run deterministic completion
+                        // checks BEFORE persisting the final assistant message. A guardian may push
+                        // the loop back into another iteration via a SYSTEM nudge. Bounded by
+                        // GuardianRegistry.maxReentries to prevent infinite loops.
+                        if (!completionGuardians.isEmpty) {
+                            val guardianTextResponse = toolCallParser.extractTextResponse(llmResponse.content)
+                            val guardianContext = GuardianContext(
+                                taskId = taskId,
+                                mode = mode,
+                                runProfile = runProfile,
+                                iteration = iteration,
+                                maxIterations = maxIterations,
+                                userRequest = userMessageForVerification,
+                                finalResponse = guardianTextResponse.ifEmpty { llmResponse.content },
+                                toolsUsed = usedTools.distinct(),
+                                writeToolsExecutedInTurn = writeToolsExecutedInTurn,
+                                verificationToolsExecutedAfterWrite = verificationToolsExecutedAfterWrite,
+                                priorReentries = guardianReentryCount
+                            )
+                            when (val decision = completionGuardians.runChecks(guardianContext)) {
+                                is GuardianDecision.Reenter -> {
+                                    guardianReentryCount++
+                                    addOrReplaceNudge(decision.nudge)
+                                    continue
+                                }
+                                GuardianDecision.Pass -> {
+                                    // proceed to finalize
+                                }
+                            }
                         }
 
                         // Model responded with text - save and complete turn

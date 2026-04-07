@@ -459,9 +459,12 @@ class OpenAIAdapter(
             }
         }
 
-        // Add conversation messages (filter out any system messages as they should be in systemMessages parameter)
+        // Add conversation messages (filter out any system messages as they should be in systemMessages parameter).
+        // Remap "tool" (used by LLMMessageMapper for tool results) to "assistant" — OpenAI's "tool" role
+        // requires a matching tool_call_id, which this adapter does not currently emit.
         for (msg in messages.filter { it.role != "system" }) {
-            openaiMessages.add(mapOf("role" to msg.role, "content" to toOpenAiMessageContent(msg)))
+            val mappedRole = if (msg.role == "tool") "assistant" else msg.role
+            openaiMessages.add(mapOf("role" to mappedRole, "content" to toOpenAiMessageContent(msg)))
         }
 
         // Build base parameters
