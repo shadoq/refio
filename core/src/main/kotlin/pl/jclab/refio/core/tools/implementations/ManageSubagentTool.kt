@@ -73,7 +73,7 @@ Actions: create, update, delete, list"""
             ),
             "max_steps" to mapOf(
                 "type" to "integer",
-                "default" to 10,
+                "default" to 25,
                 "description" to "Maximum iterations for the agent (1-50)"
             )
         ),
@@ -111,7 +111,7 @@ Actions: create, update, delete, list"""
             ?: return ToolResult.error("system_prompt required for create")
         val scope = params["scope"] as? String ?: "temporary"
         val model = params["model"] as? String ?: "inherit"
-        val maxSteps = (params["max_steps"] as? Number)?.toInt()?.coerceIn(1, 50) ?: 10
+        val maxSteps = (params["max_steps"] as? Number)?.toInt()?.coerceIn(1, 50) ?: 25
 
         @Suppress("UNCHECKED_CAST")
         val tools = (params["tools"] as? List<*>)?.filterIsInstance<String>()?.let { requestedTools ->

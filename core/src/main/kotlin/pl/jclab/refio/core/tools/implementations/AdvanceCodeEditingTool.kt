@@ -61,7 +61,17 @@ class AdvanceCodeEditingTool(
 
     override val name = "advance_code_editing"
     override val description =
-        "LLM-assisted full file regeneration or creation. EXPENSIVE (~\$0.06) — use for major rewrites or new code files."
+        "LLM-assisted FULL FILE regeneration. EXPENSIVE (~\$0.06) — regenerates the entire file from scratch every call. " +
+        "DO NOT use this for small fixes (1–3 line changes, fixing a single function, renaming, adding a missing branch). " +
+        "Full regeneration frequently introduces NEW bugs in untouched code regions: the LLM rewrites the whole file " +
+        "from a description, drops invariants, changes function signatures inconsistently, and silently breaks call sites. " +
+        "Reserve this tool for: (a) creating brand new code files from scratch, " +
+        "(b) rewrites that would touch >50% of the file, " +
+        "(c) cases where surgical find/replace is impractical because the file is structurally broken. " +
+        "FOR EVERYTHING ELSE use code_editing (FREE, exact find/replace) for known strings, " +
+        "or multi_line_editor (CHEAP ~\$0.02) for 2–10 targeted semantic edits. " +
+        "Calling advance_code_editing twice in a row on the same file is almost always wrong — if the previous " +
+        "regeneration produced a bug, fix THAT bug surgically with code_editing instead of regenerating again."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_PRODUCING
 

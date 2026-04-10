@@ -51,12 +51,7 @@ class ReadDirectoryTool(
             // Extract parameters
             val pathStr = (params["path"] as? String) ?: "."
             val explicitRecursive = params["recursive"] as? Boolean
-            val detail = ((params["detail"] as? String) ?: "normal").lowercase()
-            // detail=summary forces non-recursive top-level listing regardless of caller's recursive flag.
-            val recursive = when {
-                detail == "summary" -> false
-                else -> explicitRecursive ?: false
-            }
+            val recursive = explicitRecursive ?: false
             val maxDepth = (params["max_depth"] as? Number)?.toInt() ?: 3
 
             // Validate max depth
@@ -111,8 +106,7 @@ class ReadDirectoryTool(
                     "file_count" to filesList.size,
                     "directory_count" to filesList.count { it.isDirectory },
                     "path" to pathStr,
-                    "recursive" to recursive,
-                    "detail" to detail
+                    "recursive" to recursive
                 )
             )
 
@@ -209,12 +203,6 @@ class ReadDirectoryTool(
                     "description" to "Maximum recursion depth",
                     "default" to 3
                 ),
-                "detail" to mapOf(
-                    "type" to "string",
-                    "enum" to listOf("summary", "normal", "full"),
-                    "description" to "Verbosity. 'summary' forces top-level only (overrides recursive); 'normal' (default) / 'full' honor recursive + max_depth.",
-                    "default" to "normal"
-                )
             ),
             "required" to emptyList<String>()
         )

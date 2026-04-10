@@ -67,6 +67,15 @@ class TurnPromptBuilder(
     }
 
     /**
+     * Get the last granular section token breakdown from ContextService.
+     * Available after buildPrompt() has been called.
+     * Keys match ContextSectionColorPalette (e.g. "recent_work", "key_components").
+     */
+    fun getLastSectionTokens(): Map<String, pl.jclab.refio.core.api.ContextSectionTokenInfo>? {
+        return contextService?.lastSectionTokens
+    }
+
+    /**
      * Build complete prompt for turn iteration.
      * Includes: system prompt + tool descriptions + context + conversation history.
      */
@@ -267,7 +276,13 @@ $filteredContextPrompt
                         msg.content
                     } else {
                         val base = msg.content.ifBlank { msg.rawOutput ?: "(empty tool result)" }
-                        if (base.length > 320) "${base.take(320)}..." else base
+                        // Error results from TurnToolExecutor carry tool-provided
+                        // `Recovery:` + `Next steps:` blocks that the agent MUST see to correct course.
+                        when {
+                            base.startsWith("Error:") -> base
+                            base.length > 512 -> "${base.take(512)}..."
+                            else -> base
+                        }
                     }
                     val toolName = msg.toolCallId?.let { fallbackToolNames[it] }
                     LLMMessageMapper.fromToolResult(msg, toolText, toolName)

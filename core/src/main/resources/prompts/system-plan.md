@@ -66,6 +66,10 @@ Respond with valid JSON only. No text before or after.
   - "tool" (string): Exact tool name from <available_tools>
   - "arguments" (object): Parameters with exact names from tool definition
 - "response" (string, required): Explanation during analysis OR final recommendations when done
+
+**Note on `intent` field:** PLAN mode does NOT use the `intent` field. If a SYSTEM
+nudge complains about a missing `intent`, that nudge is targeted at AGENT mode —
+ignore it in PLAN. Just respond with `actions` + `response` as shown above.
 </response_format>
 
 <parameter_rules>
@@ -101,10 +105,20 @@ Respond with valid JSON only. No text before or after.
 - `file_search` — find files by glob pattern (e.g. `*.kt`).
 - `rag_search` — semantic search by meaning (e.g. "where is auth retry logic?"). Only when the project is indexed and grep keywords are unclear. Default `top_k=5`, `threshold=0.65`. If "No matches", fall back to grep with broader patterns instead of retrying.
 
+**Reasoning tool (`think`):**
+- `think` is a no-op slot that echoes your `thought` back so the reasoning becomes part of the turn history. It does NOT read files or run code.
+- **Required parameter:** `thought` — a NON-EMPTY, concrete string with actual reasoning. `think({})` and `think({"thought": ""})` are INVALID and waste a turn.
+- Use it when: a tool result was complex and you need to extract findings before continuing, you face 2+ plausible interpretations of the code and need to commit to one, or a nudge tells you to stop and reason. Do NOT use it as filler before every action.
+- Example: `{"tool": "think", "arguments": {"thought": "UserService.kt:78 uses !! on getUserById result. The method is nullable per its return type, so this can NPE when the user is missing. Next: grep for other callers of getUserById to see if they handle null."}}`
+
 **FORBIDDEN:**
-- Using WRITE tools (code_editing, create_new_file, multi_edit, etc.)
-- Inventing tool names not in <available_tools>
-- Using placeholder values in arguments
+- Using WRITE tools — explicitly: `code_editing`, `create_new_file`, `multi_edit`,
+  `multi_line_editor`, `advance_code_editing`, `run_terminal_command`, `run_code`,
+  and `http_request` with `method` other than `GET`. These will be rejected by
+  the harness in PLAN mode.
+- Inventing tool names not in `<available_tools>`.
+- Using placeholder values in arguments (e.g. `"path": "<filename>"`).
+- Returning prose responses outside of the JSON envelope.
 </rules>
 
 <examples>

@@ -105,7 +105,10 @@ class CoreApiRouter(
     )
     private val promptRegistry = pl.jclab.refio.core.prompts.PromptRegistry(projectRoot)
     val promptsService = PromptsService(promptsRepository, promptRegistry)
-    val toolPermissionsService = ToolPermissionsService(configRepository)
+    val toolPermissionsService = ToolPermissionsService(
+        configRepository = configRepository,
+        toolRegistry = toolRegistry
+    )
     val toolApprovalService = ToolApprovalService()
     val pendingUserMessageQueue = PendingUserMessageQueue(chatMessageRepository)
     val llmClient = llmClientOverride ?: LLMClient(configService)

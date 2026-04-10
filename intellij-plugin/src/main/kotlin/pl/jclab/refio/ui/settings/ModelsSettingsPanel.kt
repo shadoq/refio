@@ -10,6 +10,7 @@ import com.intellij.ui.table.JBTable
 import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.api.CoreApiClient
 import pl.jclab.refio.core.api.ModelOperation
+import pl.jclab.refio.core.config.ModelPresetConfig
 import pl.jclab.refio.services.logging.dualLogger
 import pl.jclab.refio.services.notification.NotificationService
 import kotlinx.coroutines.CoroutineScope
@@ -169,6 +170,16 @@ data class ModelPreset(
         )
     }
 }
+
+private fun ModelPresetConfig.toModelPreset(): ModelPreset = ModelPreset(
+    name = "[Custom] $name",
+    description = description ?: name,
+    defaultModel = defaultModel,
+    planModel = planModel ?: defaultModel,
+    codingModel = codingModel ?: defaultModel,
+    weakModel = weakModel ?: defaultModel,
+    visibleModels = visibleModels ?: emptyList()
+)
 
 /**
  * Models Settings Panel
@@ -353,14 +364,27 @@ class ModelsSettingsPanel(
 
             // Description label
             val descLabel =
-                JLabel("<html><font color='gray'>Select a preset to quickly configure all model slots. You can customize individual models below.</font></html>")
+                JLabel("<html><font color='gray'>Select a preset to quickly configure all model slots. You can customize individual models below. Custom presets can be defined in config.yaml.</font></html>")
             add(descLabel, BorderLayout.NORTH)
 
             // Dropdown and Apply button panel
             val controlsPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 8))
 
+            // Combine built-in presets with YAML-defined presets
+            val allPresets = buildList {
+                addAll(ModelPreset.PRESETS)
+                coreApiClient?.let { client ->
+                    try {
+                        val yamlPresets = client.getYamlModelPresets().map { it.toModelPreset() }
+                        addAll(yamlPresets)
+                    } catch (e: Exception) {
+                        logger.warn(e) { "Failed to load YAML model presets" }
+                    }
+                }
+            }
+
             // Preset dropdown
-            val presetCombo = JComboBox(ModelPreset.PRESETS.toTypedArray()).apply {
+            val presetCombo = JComboBox(allPresets.toTypedArray()).apply {
                 renderer = object : DefaultListCellRenderer() {
                     override fun getListCellRendererComponent(
                         list: JList<*>?,
@@ -958,7 +982,7 @@ class ModelsSettingsPanel(
                 val chatModel = coreApiClient?.getDefaultModel(ModelOperation.DEFAULT)
                 val planModel = coreApiClient?.getDefaultModel(ModelOperation.PLAN)
                 val agentModel = coreApiClient?.getDefaultModel(ModelOperation.CODING)
-
+                val weakModel = coreApiClient?.getDefaultModel(ModelOperation.WEAK)
                 val embeddingModel = coreApiClient?.getDefaultModel(ModelOperation.EMBEDDING)
 
                 ApplicationManager.getApplication().invokeLater {
@@ -969,13 +993,14 @@ class ModelsSettingsPanel(
                         chatModel?.let { selectModelInCombo(defaultModelCombo, "${it.provider}/${it.modelId}") }
                         planModel?.let { selectModelInCombo(planModelCombo, "${it.provider}/${it.modelId}") }
                         agentModel?.let { selectModelInCombo(codingModelCombo, "${it.provider}/${it.modelId}") }
+                        weakModel?.let { selectModelInCombo(weakModelCombo, "${it.provider}/${it.modelId}") }
 
                         // Set embedding model or default to Ollama nomic-embed-text
                         val embeddingValue =
                             embeddingModel?.let { "${it.provider}/${it.modelId}" } ?: "ollama/nomic-embed-text"
                         selectModelInCombo(embeddingModelCombo, embeddingValue)
 
-                        logger.info { "Loaded saved model selections: chat=${chatModel?.modelId}, plan=${planModel?.modelId}, agent=${agentModel?.modelId}, embedding=$embeddingValue" }
+                        logger.info { "Loaded saved model selections: chat=${chatModel?.modelId}, plan=${planModel?.modelId}, agent=${agentModel?.modelId}, weak=${weakModel?.modelId}, embedding=$embeddingValue" }
                     } finally {
                         // Always reset flag
                         isUpdatingDropdowns = false

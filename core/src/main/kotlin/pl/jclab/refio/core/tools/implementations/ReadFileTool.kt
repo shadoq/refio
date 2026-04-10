@@ -42,7 +42,13 @@ class ReadFileTool(
 ) : Tool {
 
     override val name = "read_file"
-    override val description = "Read a text, image, or PDF file. Use offset/limit for large files."
+    override val description = "Read a text, image, or PDF file. " +
+        "DEFAULT BEHAVIOUR: reads the WHOLE file in one call (up to the 2 MB sandbox limit). " +
+        "DO NOT pass offset/limit for normal source files — you will fragment your view of the code " +
+        "and waste turns paginating. Only use offset/limit when: " +
+        "(a) the file is very large (thousands of lines, e.g. logs, generated code, big datasets), or " +
+        "(b) you genuinely need a single slice and reading the rest would be wasteful. " +
+        "For typical Kotlin/Java/TS/Python source files: call read_file with just `path` and read it all."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
 
@@ -340,11 +346,15 @@ class ReadFileTool(
                 ),
                 "offset" to mapOf(
                     "type" to "integer",
-                    "description" to "Start line (1-based)."
+                    "description" to "Start line (1-based). OPTIONAL — omit to read from line 1. " +
+                        "Only set this when you genuinely need a slice of a large file."
                 ),
                 "limit" to mapOf(
                     "type" to "integer",
-                    "description" to "Max lines to read from offset."
+                    "description" to "Max lines to read from offset. OPTIONAL — omit to read the WHOLE file. " +
+                        "Default behaviour reads everything (up to the 2 MB sandbox limit). " +
+                        "Only set this for very large files (thousands of lines) where you need a slice. " +
+                        "DO NOT pass small values like 50/100 on normal source files — read the whole file in one call instead."
                 ),
                 "page_start" to mapOf(
                     "type" to "integer",

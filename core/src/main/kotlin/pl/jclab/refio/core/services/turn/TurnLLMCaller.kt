@@ -61,6 +61,13 @@ class TurnLLMCaller(
         val responseFormat = resolveResponseFormat(mode, providerName)
         val thinkingEnabled = configService.getTyped(ConfigKeys.UI_THINKING_ENABLED, taskId)
         val noEgressEnabled = configService.getTyped(ConfigKeys.UI_NO_EGRESS_ENABLED, taskId)
+        val reasoningEffortOverride = profileOverrides?.reasoningEffort
+        if (reasoningEffortOverride != null) {
+            logger.info {
+                "[CALL_LLM] Subagent reasoning_effort override: $reasoningEffortOverride " +
+                    "(subagent=${profileOverrides.subagentName ?: "?"})"
+            }
+        }
 
         return withContext(Dispatchers.IO) {
             llmClient.complete(
@@ -72,6 +79,7 @@ class TurnLLMCaller(
                 source = "AgentTurnLoop",
                 responseFormat = responseFormat,
                 thinking = thinkingEnabled,
+                reasoningEffort = reasoningEffortOverride,
                 noEgressEnabled = noEgressEnabled,
                 stream = streamCallback != null,
                 onChunk = streamCallback

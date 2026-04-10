@@ -55,7 +55,7 @@ class FileSearchTool(
                 ?: return ToolResult.error("Missing required parameter: 'pattern'")
 
             val pathStr = (params["path"] as? String) ?: "."
-            val maxDepth = (params["max_depth"] as? Number)?.toInt() ?: 10
+            val maxDepth = (params["max_depth"] as? Number)?.toInt() ?: limits.maxSearchDepth
             val offset = (params["offset"] as? Number)?.toInt() ?: 0
             val rawLimit = (params["limit"] as? Number)?.toInt() ?: limits.maxSearchResults
             val detail = ((params["detail"] as? String) ?: "normal").lowercase()

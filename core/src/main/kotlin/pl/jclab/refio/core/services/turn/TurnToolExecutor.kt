@@ -61,6 +61,17 @@ class TurnToolExecutor(
             recentReads[normalize(path)] = System.currentTimeMillis()
         }
 
+        /**
+         * Drop the recorded read timestamp for a path. Call this whenever the file changes
+         * in a way the agent cannot fully observe in the tool result — typically after an
+         * LLM-assisted full-file regeneration. The next time the agent tries to edit this
+         * path, checkReadBeforeWrite will fire because the tracker no longer has a recent
+         * read for it.
+         */
+        fun invalidate(path: String) {
+            recentReads.remove(normalize(path))
+        }
+
         fun wasReadRecently(path: String, withinMs: Long = 5 * 60 * 1000): Boolean {
             val readAt = recentReads[normalize(path)] ?: return false
             return System.currentTimeMillis() - readAt <= withinMs
@@ -74,6 +85,16 @@ class TurnToolExecutor(
 
     private val streamingToolNames = setOf("advance_code_editing", "multi_line_editor")
     private val codingToolNames = setOf("advance_code_editing", "multi_line_editor")
+
+    /**
+     * Tools that fully regenerate a file via an LLM sub-call. After running one of these,
+     * the on-disk content of the affected file is materially different from any read_file
+     * result the agent has in conversation history, and the agent cannot fully observe the
+     * change in the diff alone. We invalidate the ReadTracker entry and inject an explicit
+     * STALE warning so the next iteration's checkReadBeforeWrite catches an unsafe re-edit.
+     */
+    private val llmRegenEditTools = setOf("advance_code_editing", "multi_line_editor")
+
     private val readTracker = ReadTracker()
 
     companion object {
@@ -103,7 +124,15 @@ class TurnToolExecutor(
                 wasSummarized ->
                     summaryText to true
                 else ->
-                    rawOutput.take(2000) to false
+                    // Non-summarized fallback for tools whose output is between
+                    // 500 chars and the data-producing buffer. We previously did
+                    // `rawOutput.take(2000)` here, which silently dropped trailing
+                    // exit codes / API responses for any tool that wasn't routed
+                    // through the summarizer — exactly the data-loss pattern this
+                    // refactor exists to eliminate. Use the shared head+tail
+                    // helper so both ends survive.
+                    pl.jclab.refio.core.services.context.ToolResultCompression
+                        .headTailTruncate(rawOutput, 2000) to false
             }
         }
     }
@@ -473,7 +502,21 @@ class TurnToolExecutor(
                 val hintsBlock = toolResult.nextActionHints
                     ?.takeIf { it.isNotEmpty() }
                     ?.joinToString(prefix = "[next-step hints]\n- ", separator = "\n- ")
-                val outputWithWarnings = listOfNotNull(readBeforeWriteWarning, rawOutput, hintsBlock)
+
+                // After an LLM full-file regeneration, invalidate the tracker for every
+                // affected file and emit an explicit stale warning. This is the immediate
+                // signal to the agent in the same tool result; the tracker invalidation is
+                // the safety net that makes the next iteration's checkReadBeforeWrite fire
+                // if the agent tries to edit the same path again without re-reading.
+                val staleFileWarning: String? = if (toolCall.name in llmRegenEditTools) {
+                    val changedPaths = toolResult.filesChanged.orEmpty()
+                    if (changedPaths.isNotEmpty()) {
+                        changedPaths.forEach { readTracker.invalidate(it) }
+                        buildStaleFileWarning(toolCall.name, changedPaths)
+                    } else null
+                } else null
+
+                val outputWithWarnings = listOfNotNull(readBeforeWriteWarning, rawOutput, hintsBlock, staleFileWarning)
                     .joinToString("\n\n")
                 val isInvokeSubagent = toolCall.name.equals("invoke_subagent", ignoreCase = true)
                 val subagentName = argumentsMap["subagent_name"]?.toString()?.trim().orEmpty()
@@ -882,9 +925,18 @@ class TurnToolExecutor(
     }
 
     private fun checkReadBeforeWrite(toolName: String, params: Map<String, Any>): String? {
+        // LLM-regen tools (multi_line_editor, advance_code_editing) used to be excluded
+        // here because they receive the full file content via CODING_CONTEXT injection
+        // into their sub-LLM call. The agent that ORCHESTRATES the call, however, never
+        // sees that fresh content — its mental model is whatever it last read via read_file.
+        // Skipping the check for those tools enabled the failure mode where an agent calls
+        // advance_code_editing 3 times in a row on the same file, each call regenerating
+        // from a stale description and introducing new bugs in untouched code regions.
         val paths = when (toolName) {
             "code_editing" -> listOfNotNull(params["path"] as? String)
             "multi_edit" -> extractMultiEditPaths(params)
+            "multi_line_editor" -> listOfNotNull(params["path"] as? String)
+            "advance_code_editing" -> listOfNotNull(params["path"] as? String)
             else -> emptyList()
         }
         if (paths.isEmpty()) return null
@@ -900,5 +952,27 @@ class TurnToolExecutor(
         return edits.mapNotNull { edit ->
             (edit as? Map<*, *>)?.get("path")?.toString()
         }
+    }
+
+    /**
+     * Build the inline warning that follows the body of a successful LLM-regen edit
+     * tool result. The agent sees it in the same tool result message that announces the
+     * edit, so it has no excuse to act on a stale mental model in the very next call.
+     */
+    private fun buildStaleFileWarning(toolName: String, changedPaths: List<String>): String {
+        val list = changedPaths.joinToString("\n") { "- $it" }
+        return """
+            [STALE FILES — RE-READ REQUIRED]
+            $toolName regenerated the following file(s) via an LLM sub-call. The current
+            on-disk content is materially different from any read_file result you have in
+            conversation history, even if the diff above looks small. Your mental model of
+            these files is now obsolete:
+            $list
+
+            Before performing ANY further edit on these paths you MUST call read_file to
+            see the current content. Do NOT chain another advance_code_editing /
+            multi_line_editor / code_editing on a stale view — that is exactly how
+            regenerations introduce new bugs in code regions you cannot currently see.
+        """.trimIndent()
     }
 }

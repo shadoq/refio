@@ -26,6 +26,26 @@ object LLMMessageMapper {
                 append("\n")
                 append(summarizedContent)
             }
+            // When the tool result was summarized we proactively tell the agent that
+            // (a) what it sees is compressed and (b) how to fetch the full raw output.
+            // Without this hint the agent has no way to know data was dropped — it
+            // sees a coherent-looking summary and assumes that's all there is. This
+            // produced loops where the agent re-ran or re-read files trying to find
+            // information that was sitting unread in the subtask row.
+            //
+            // Only emit when we have a real subtaskId — memory(get_subtask_output)
+            // resolves by subtask_id, not by the legacy toolCallId fallback.
+            if (msg.isSummarized && !msg.subtaskId.isNullOrBlank()) {
+                val rawLen = msg.rawOutput?.length
+                val sumLen = summarizedContent.length
+                append("\n\n[Output was summarized")
+                if (rawLen != null && rawLen > sumLen) {
+                    append(" from $rawLen to $sumLen chars")
+                }
+                append(". To retrieve the full raw output, call ")
+                append("memory(action=\"get_subtask_output\", subtask_id=\"${msg.subtaskId}\", offset=0, limit=64000). ")
+                append("Use this when the summary cuts off data you need (trailing API responses, exit codes, full lists, error tails).]")
+            }
             if (isImage) {
                 append("\n\nAttached image")
                 if (!path.isNullOrBlank()) {

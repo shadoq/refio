@@ -155,7 +155,12 @@ class ConversationSummaryService(
         val lines = messages.mapNotNull { msg ->
             val body = msg.content.trim().ifBlank { return@mapNotNull null }
             val normalized = body.replace(Regex("\\s+"), " ")
-            val clipped = if (normalized.length > 220) normalized.take(220) + "..." else normalized
+            // Per-message head+tail rather than head-only `.take(220)`. The
+            // last sentence of an assistant message is often the conclusion
+            // / decision / final answer — losing it to a 220-char prefix cap
+            // turned this fallback into a confidence-laundering machine.
+            val clipped = pl.jclab.refio.core.services.context.ToolResultCompression
+                .headTailTruncate(normalized, 220)
             "${msg.role.name.uppercase()}: $clipped"
         }
 
@@ -163,6 +168,9 @@ class ConversationSummaryService(
             return "No stable summary could be generated."
         }
 
-        return lines.joinToString("\n").take(FALLBACK_SUMMARY_MAX_CHARS)
+        // Final-pass head+tail on the joined fallback so a 2000-char cap can't
+        // chop the most recent (and usually most relevant) messages off the end.
+        return pl.jclab.refio.core.services.context.ToolResultCompression
+            .headTailTruncate(lines.joinToString("\n"), FALLBACK_SUMMARY_MAX_CHARS)
     }
 }

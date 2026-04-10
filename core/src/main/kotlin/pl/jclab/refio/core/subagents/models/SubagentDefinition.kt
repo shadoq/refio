@@ -106,12 +106,25 @@ data class SubagentDefinition(
     /**
      * Maksymalna liczba kroków (tylko dla multi_step).
      */
-    val maxSteps: Int = 10,
+    val maxSteps: Int = 50,
 
     /**
      * Profil kontekstu - kontroluje które sekcje kontekstu są włączone.
      */
-    val contextProfile: SubagentContextProfile = SubagentContextProfile()
+    val contextProfile: SubagentContextProfile = SubagentContextProfile(),
+
+    /**
+     * Reasoning effort override for reasoning-capable models (OpenAI o1/o3/gpt-5,
+     * Anthropic thinking, etc.). Allowed values: "low", "medium", "high".
+     *
+     * - null = inherit global config (UI_THINKING_ENABLED → low/medium)
+     * - explicit value = override per-subagent (e.g. architectural reviewers benefit
+     *   from "high" while quick documentation tasks should stay on "low")
+     *
+     * Forwarded as `reasoning.effort` in OpenAI Responses API and as `thinking`
+     * for adapters that support it. Adapters without reasoning support ignore it.
+     */
+    val reasoningEffort: String? = null
 ) {
     /**
      * Rozwiązuje alias modelu na rzeczywisty ID.

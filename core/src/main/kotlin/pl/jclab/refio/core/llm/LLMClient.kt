@@ -146,6 +146,7 @@ class LLMClient(
         temperature: Double = 0.7,
         responseFormat: Map<String, Any>? = null,
         thinking: Boolean = false,
+        reasoningEffort: String? = null,
         noEgressEnabled: Boolean = false,
         stream: Boolean = false,
         onChunk: StreamCallback? = null,
@@ -263,7 +264,13 @@ class LLMClient(
             val adapterKwargs = buildMap {
                 putAll(kwargs)
                 responseFormat?.let { put("response_format", it) }
-                if (thinking) put("thinking", true)
+                // reasoningEffort takes precedence over the boolean `thinking` flag.
+                // OpenAI adapter accepts either a Boolean or a String ("low"/"medium"/"high")
+                // and maps it to the Responses API `reasoning.effort` field.
+                when {
+                    reasoningEffort != null -> put("thinking", reasoningEffort)
+                    thinking -> put("thinking", true)
+                }
             }
 
             val finalMessages = preparedRequest.messages

@@ -132,19 +132,52 @@ class WorkingMemoryService(
 
             for (entry in sortedEntries) {
                 val tag = buildEntryTag(entry)
-                val line = "- $tag ${entry.value}"
-                val lineTokens = ContextTokenEstimator.estimateTokens(line)
-                if (tokensUsed + lineTokens > maxTokens) {
-                    break
+                val linePrefix = "- $tag "
+                val fullLine = "$linePrefix${entry.value}"
+                val fullLineTokens = ContextTokenEstimator.estimateTokens(fullLine)
+
+                // If the full line fits, use it directly. Otherwise try to shrink
+                // the entry's value with head+tail truncation so the agent at
+                // least sees that the entry exists and the start/end of its
+                // value — instead of the previous behaviour of silently dropping
+                // the entry on the first overflow. Only break (giving up on
+                // the rest of this key's entries) when even a minimally useful
+                // truncated form would not fit.
+                val (effectiveLine, effectiveLineTokens) = if (tokensUsed + fullLineTokens <= maxTokens) {
+                    fullLine to fullLineTokens
+                } else {
+                    val fitted = fitLineWithHeadTailTruncation(
+                        prefix = linePrefix,
+                        value = entry.value,
+                        tokenBudgetLeft = maxTokens - tokensUsed
+                    )
+                    if (fitted == null) break
+                    fitted
                 }
-                sb.append(line).append('\n')
-                tokensUsed += lineTokens
+
+                sb.append(effectiveLine).append('\n')
+                tokensUsed += effectiveLineTokens
+
                 entry.outputExcerpt?.takeIf { it.isNotBlank() }?.let { excerpt ->
-                    val excerptLine = "  output: $excerpt"
-                    val excerptTokens = ContextTokenEstimator.estimateTokens(excerptLine)
-                    if (tokensUsed + excerptTokens <= maxTokens) {
-                        sb.append(excerptLine).append('\n')
-                        tokensUsed += excerptTokens
+                    val excerptPrefix = "  output: "
+                    val fullExcerptLine = "$excerptPrefix$excerpt"
+                    val fullExcerptTokens = ContextTokenEstimator.estimateTokens(fullExcerptLine)
+                    if (tokensUsed + fullExcerptTokens <= maxTokens) {
+                        sb.append(fullExcerptLine).append('\n')
+                        tokensUsed += fullExcerptTokens
+                    } else {
+                        val fitted = fitLineWithHeadTailTruncation(
+                            prefix = excerptPrefix,
+                            value = excerpt,
+                            tokenBudgetLeft = maxTokens - tokensUsed
+                        )
+                        if (fitted != null) {
+                            sb.append(fitted.first).append('\n')
+                            tokensUsed += fitted.second
+                        }
+                        // If even the truncated excerpt doesn't fit, drop only
+                        // the excerpt — the parent entry's main line is already
+                        // appended above so the agent still knows it exists.
                     }
                 }
                 entries[buildEntryId(entry)] = entry.copy(lastAccessedAt = Instant.now())
@@ -168,6 +201,43 @@ class WorkingMemoryService(
     private fun buildEntryTag(entry: WorkingMemoryEntry): String {
         val ref = entry.originId
         return if (ref != null) "[it#${entry.iteration} ref#$ref]" else "[it#${entry.iteration}]"
+    }
+
+    /**
+     * Try to fit `prefix + value` into the remaining token budget by head+tail
+     * truncating `value`. Returns the rendered line + its token count if a
+     * minimally useful truncation fits, or null when even that won't fit (in
+     * which case the caller should drop the entry rather than render garbage).
+     *
+     * Replaces the previous "if it doesn't fit, silently drop" behaviour that
+     * caused entries to disappear from WORKING_MEMORY without the agent ever
+     * being told they existed.
+     */
+    private fun fitLineWithHeadTailTruncation(
+        prefix: String,
+        value: String,
+        tokenBudgetLeft: Int
+    ): Pair<String, Int>? {
+        if (tokenBudgetLeft <= 0) return null
+        // Conservative chars-per-token (real ratio is closer to 4 for English /
+        // code; using 3 leaves headroom so we don't overshoot the budget after
+        // re-estimating tokens on the truncated line).
+        val charBudget = (tokenBudgetLeft * 3) - prefix.length
+        if (charBudget < MIN_USEFUL_TRUNCATED_VALUE_CHARS) return null
+
+        val truncatedValue = ToolResultCompression.headTailTruncate(value, charBudget)
+        val candidate = "$prefix$truncatedValue"
+        val candidateTokens = ContextTokenEstimator.estimateTokens(candidate)
+        return if (candidateTokens <= tokenBudgetLeft) candidate to candidateTokens else null
+    }
+
+    companion object {
+        /**
+         * Below this many characters a head+tail truncated working-memory value
+         * conveys nothing useful to the agent — better to drop the line entirely
+         * than render `[head=10]...[tail=10]`.
+         */
+        private const val MIN_USEFUL_TRUNCATED_VALUE_CHARS = 60
     }
 
     private fun buildReadFileEntries(

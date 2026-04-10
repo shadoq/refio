@@ -145,6 +145,31 @@ class ToolResultSummarizer(
             )
         }
 
+        // Above the skip threshold, RAW_OUTPUT (shell / script stdout) is summarized
+        // DETERMINISTICALLY — head + tail with the TAIL placed FIRST. The LLM summarizer
+        // is bypassed entirely for this context type because:
+        //   1) Trailing data is critical (exit codes, API verify responses, error blocks,
+        //      stack traces) — paraphrasing it via WEAK model loses information that
+        //      gates the agent's next decision.
+        //   2) Downstream conversation builders may further compact tool result content
+        //      to a fixed prefix; placing the tail first guarantees critical trailing
+        //      data survives any prefix-based truncation.
+        //   3) Skipping the WEAK call saves ~5–25s and ~$0.005 per shell invocation.
+        if (contextType == SummaryContextType.RAW_OUTPUT) {
+            val deterministic = buildRawOutputTailFirstSummary(toolName, rawOutput)
+            logger.info {
+                "[SUMMARIZER_DETERMINISTIC] RAW_OUTPUT for tool $toolName: " +
+                    "${rawOutput.length} -> ${deterministic.length} chars (head+tail, no LLM call)"
+            }
+            return ToolResultSummary(
+                summary = deterministic,
+                wasSummarized = true,
+                tokensIn = 0,
+                tokensOut = 0,
+                cost = 0.0
+            )
+        }
+
         logger.info { "[SUMMARIZER] Summarizing result for tool: $toolName (output length: ${rawOutput.length}, context: $contextType)" }
 
         val userPrompt = buildSummarizerPrompt(toolName, rawOutput, contextType)
@@ -216,11 +241,24 @@ class ToolResultSummarizer(
      * Build prompt for tool result summarization.
      */
     private fun buildSummarizerPrompt(toolName: String, rawOutput: String, contextType: SummaryContextType): String {
-        // Truncate very long outputs
-        val truncatedOutput = if (rawOutput.length > 16394) {
-            rawOutput.take(16394) + "\n... (truncated raw ... ${rawOutput.length - 16394} more chars)"
-        } else {
+        // For oversized outputs we used to take only the head and drop everything after
+        // 16 KB. That made the "preserve last N lines" instruction in the RAW_OUTPUT
+        // prompt impossible to follow — the tail simply never reached the summarizer.
+        // Concrete failure mode: an 80 KB run_terminal_command output where the last
+        // ~2 KB contained the /verify API response with the flag was silently dropped,
+        // and downstream the agent went into a re-read loop because the result it
+        // needed was nowhere to be seen.
+        //
+        // Keep a head + tail slice instead. Tail is preserved verbatim so trailing
+        // exit codes, HTTP responses, error blocks, and stack traces always survive.
+        val truncatedOutput = if (rawOutput.length <= SUMMARIZER_INPUT_BUDGET) {
             rawOutput
+        } else {
+            val sliceSize = (SUMMARIZER_INPUT_BUDGET - 200) / 2
+            val omitted = rawOutput.length - 2 * sliceSize
+            val head = rawOutput.take(sliceSize)
+            val tail = rawOutput.takeLast(sliceSize)
+            "$head\n... [middle truncated: $omitted chars omitted; end of output preserved below] ...\n$tail"
         }
 
         val instructions = when (contextType) {
@@ -411,6 +449,82 @@ Guidelines:
         return ToolResultCompression.compress(rawOutput, summary, level, compressionConfig)
     }
 
+    /**
+     * Build a deterministic head + tail summary for shell / script stdout. Tail is
+     * placed FIRST so that any prefix-based downstream truncation preserves the
+     * critical trailing content (exit codes, API verify responses, error blocks,
+     * stack traces). Below the (head + tail) size threshold the whole output is
+     * emitted verbatim with no head/tail split.
+     *
+     * Format:
+     *
+     * ```
+     * [run_terminal_command output, total=120018 chars]
+     * [TAIL — last 1500 chars verbatim, contains exit code / API response / errors]
+     * ```
+     * <verbatim tail>
+     * ```
+     *
+     * [HEAD — first 600 chars verbatim]
+     * ```
+     * <verbatim head>
+     * ```
+     * [middle truncated: 117918 chars omitted between head and tail.
+     *  To retrieve the full raw output, call memory(action="get_subtask_output", subtask_id=...)]
+     * ```
+     */
+    private fun buildRawOutputTailFirstSummary(toolName: String, output: String): String {
+        val total = output.length
+        if (total <= RAW_OUTPUT_HEAD_BYTES + RAW_OUTPUT_TAIL_BYTES) {
+            return buildString {
+                append("[$toolName output, total=$total chars — full verbatim]\n")
+                append("```\n")
+                append(output.trimEnd())
+                append("\n```")
+            }
+        }
+        val tail = output.takeLast(RAW_OUTPUT_TAIL_BYTES)
+        val head = output.take(RAW_OUTPUT_HEAD_BYTES)
+        val omitted = total - RAW_OUTPUT_HEAD_BYTES - RAW_OUTPUT_TAIL_BYTES
+        // The middle-cut marker is the single most important affordance for debugging
+        // tasks where the diagnostic data lives in the MIDDLE of the output (state
+        // exploration traces, full JSON dumps from API discovery endpoints, per-step
+        // logs). A polite "you can call memory(...)" is routinely ignored — the agent
+        // sees the tail with an error and just patches the code again. The marker
+        // below is intentionally loud and directive: it tells the agent that retrying
+        // the same command without first reading the omitted middle is forbidden.
+        return buildString {
+            append("[$toolName output, total=$total chars — head+tail summary, middle wycięto]\n")
+            append("[TAIL — last $RAW_OUTPUT_TAIL_BYTES chars verbatim, contains exit code / API response / errors]\n")
+            append("```\n")
+            append(tail.trimEnd())
+            append("\n```\n\n")
+            append("[HEAD — first $RAW_OUTPUT_HEAD_BYTES chars verbatim]\n")
+            append("```\n")
+            append(head.trimEnd())
+            append("\n```\n")
+            append("\n[!! MIDDLE TRUNCATED — $omitted chars hidden between HEAD and TAIL !!]\n")
+            append("The hidden middle of this output frequently contains the data that\n")
+            append("explains *why* the visible TAIL says what it says — full API JSON\n")
+            append("responses, per-step traces, intermediate values, discovery results,\n")
+            append("and tool listings that did not fit in the first $RAW_OUTPUT_HEAD_BYTES bytes.\n")
+            append("\n")
+            append("BEFORE YOU TAKE YOUR NEXT ACTION:\n")
+            append("- If you are about to RETRY the same command or PATCH the same file\n")
+            append("  based only on the TAIL above, STOP. The TAIL alone is rarely enough\n")
+            append("  to diagnose anything more complex than a syntax error.\n")
+            append("- Call memory(action=\"get_subtask_output\", subtask_id=\"<id of THIS\n")
+            append("  subtask — the one that just produced this output>\", offset=0,\n")
+            append("  limit=64000) to recover the full middle. Use a larger offset to\n")
+            append("  page through if the output is bigger than 64KB.\n")
+            append("- Only after you have actually read the middle should you decide what\n")
+            append("  to change. Do NOT guess from the tail.\n")
+            append("- If you have already retrieved the middle once and the answer was\n")
+            append("  not there, then a different command is probably needed — do NOT\n")
+            append("  re-run the same command expecting a different output.\n")
+        }
+    }
+
     companion object {
         /**
          * Hard floor for ALL tool outputs regardless of context type or user config.
@@ -428,6 +542,21 @@ Guidelines:
          * for 8 chars of "compression". Not configurable on purpose.
          */
         const val RAW_OUTPUT_SKIP_THRESHOLD = 4_000
+
+        /** Trailing bytes of stdout copied verbatim into the head of a deterministic RAW_OUTPUT summary. */
+        const val RAW_OUTPUT_TAIL_BYTES = 1_500
+
+        /** Leading bytes of stdout copied verbatim after the tail block in a deterministic RAW_OUTPUT summary. */
+        const val RAW_OUTPUT_HEAD_BYTES = 600
+
+        /**
+         * Total characters of raw output sent to the summarizer LLM. When the output
+         * exceeds this budget we keep half from the head and half from the tail (see
+         * buildSummarizerPrompt). The tail-preserving slice exists so trailing data
+         * — exit codes, API response bodies, stack traces — always survives the
+         * compression step regardless of what the WEAK summarizer model decides.
+         */
+        const val SUMMARIZER_INPUT_BUDGET = 16_394
 
         /**
          * File extensions treated as DATA_FILE rather than CODE_ANALYSIS.

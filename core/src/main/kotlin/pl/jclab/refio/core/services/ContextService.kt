@@ -103,6 +103,15 @@ class ContextService(
         private set
 
     /**
+     * Last granular section token breakdown from buildLLMContextPrompt().
+     * Parsed from XML tags in the generated prompt — maps UI-friendly keys
+     * (e.g. "recent_work", "key_components") to token info.
+     * Used by AgentTurnLoop to populate PromptSnapshot.sectionTokens.
+     */
+    var lastSectionTokens: Map<String, ContextSectionTokenInfo>? = null
+        private set
+
+    /**
      * Configuration for RECENT_WORK section generation.
      * Refaktoryzacja Context Service.
      */
@@ -644,6 +653,9 @@ class ContextService(
             totalUsed = baseUsed + overflowUsed
         )
 
+        // Parse XML tags from the built prompt for granular section token breakdown
+        lastSectionTokens = parsePromptSectionTokens(contextPrompt)
+
         return contextPrompt
     }
 
@@ -767,13 +779,21 @@ class ContextService(
             ?: msg.rawOutput?.takeIf { it.isNotBlank() }
             ?: "(empty tool result)"
 
-        // Keep RECENT_WORK untouched; this is only for conversation history/messages.
-        // If result was not summarized by tool pipeline, keep a compact fallback summary.
-        // Even summarized results are capped at 2000 chars to prevent context bloat in long sessions.
+        // The summarizer pipeline (ToolResultSummarizer + TurnToolExecutor) is the
+        // single point that decides what a tool result looks like in conversation
+        // history. If msg.isSummarized is true, msg.content already IS the canonical
+        // summary chosen for that tool / context type — we trust it as-is here, no
+        // ad-hoc truncation. Conversation budget pressure is handled separately by
+        // the context budget allocator (which can drop or compact whole entries),
+        // not by silently mangling the tail of an individual tool result.
+        //
+        // For non-summarized messages we still apply a tight cap, because those are
+        // either tiny by definition or fall through from a path that did not run the
+        // summarizer at all and we cannot inflate the budget unboundedly.
         return if (msg.isSummarized) {
-            preferred.take(2000)
+            preferred
         } else {
-            truncate(preferred, 320)
+            truncate(preferred, 1024)
         }
     }
 
@@ -1288,6 +1308,15 @@ class ContextService(
         _context: ProjectContextDTO,
         llmPrompt: String
     ): Map<String, ContextSectionTokenInfo> {
+        return parsePromptSectionTokens(llmPrompt)
+    }
+
+    /**
+     * Parse XML-tagged sections from an LLM context prompt and calculate
+     * per-section token estimates. Returns a map with UI-friendly keys
+     * (e.g. "recent_work", "key_components") suitable for the color palette.
+     */
+    private fun parsePromptSectionTokens(llmPrompt: String): Map<String, ContextSectionTokenInfo> {
         if (llmPrompt.isBlank()) {
             logger.debug { "[CONTEXT_TOKENS] Empty LLM prompt, skipping section token calculation" }
             return emptyMap()

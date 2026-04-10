@@ -108,6 +108,7 @@ class InvokeSubagentTool(
                 modelOverride = resolvedModel,
                 providerOverride = resolvedProvider,
                 maxIterationsOverride = definition.maxSteps,
+                reasoningEffort = definition.reasoningEffort,
                 parentRunId = parentRunId,
                 depth = childDepth,
                 // Keep only ancestors in the chain. The active subagent name is

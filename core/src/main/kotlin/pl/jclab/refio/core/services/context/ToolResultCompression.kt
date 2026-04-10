@@ -19,7 +19,7 @@ object ToolResultCompression {
             CompressionLevel.FULL -> raw
             // DETAILED should preserve real tool output when budget allows.
             CompressionLevel.DETAILED -> smartCompress(raw, config.detailedMaxChars)
-            CompressionLevel.SUMMARY -> truncate(summaryOrRaw, config.summaryMaxChars)
+            CompressionLevel.SUMMARY -> headTailTruncate(summaryOrRaw, config.summaryMaxChars)
         }
     }
 
@@ -31,9 +31,11 @@ object ToolResultCompression {
         if (maxChars <= 0) return ""
         if (text.length <= maxChars) return text
 
-        // For very short limits, use simple truncate
+        // For very short limits, fall back to plain head+tail without trying
+        // the structure-aware path. headTailTruncate is now safe (preserves
+        // both ends with a marker) so this fast path no longer drops tails.
         if (maxChars < 200) {
-            return truncate(text, maxChars)
+            return headTailTruncate(text, maxChars)
         }
 
         // Check if text has structural elements (code blocks, headers, lists)
@@ -57,7 +59,7 @@ object ToolResultCompression {
     private fun compressWithStructure(text: String, maxChars: Int): String {
         val lines = text.lines()
         if (lines.size <= 20) {
-            return truncate(text, maxChars)
+            return headTailTruncate(text, maxChars)
         }
 
         // Allocate 60% for beginning, 40% for end
@@ -157,12 +159,44 @@ object ToolResultCompression {
         return text
     }
 
-    private fun truncate(text: String, maxChars: Int): String {
+    /**
+     * Safe head+tail truncation for any content flowing through the
+     * summarization / conversation pipeline. If the input already fits, it is
+     * returned unchanged. Otherwise the result is `head + omittedMarker + tail`
+     * with head and tail roughly equal in size, so trailing data (exit codes,
+     * API verify responses, error messages, stack traces) is never silently
+     * dropped — the failure mode that previously caused agents to hallucinate
+     * success after a failed run_terminal_command.
+     *
+     * Use this anywhere in the pipeline where you would otherwise reach for
+     * `text.take(N)` as a "safety cap". A pure prefix cap is exactly the bug
+     * pattern this helper exists to replace.
+     *
+     * For pathologically small budgets (a few dozen chars) head+tail with a
+     * marker can't fit meaningfully, so we fall back to a marked prefix —
+     * intentional, because at that size nothing useful survives either way.
+     */
+    fun headTailTruncate(text: String, maxChars: Int): String {
         if (maxChars <= 0) return ""
         if (text.length <= maxChars) return text
 
-        val suffix = "..."
-        if (maxChars <= suffix.length) return text.take(maxChars)
-        return text.take(maxChars - suffix.length) + suffix
+        // Reserve room for the omitted-bytes marker. We don't know the digit
+        // length of `omitted` upfront so reserve a generous fixed budget for
+        // the marker itself; any leftover bytes go back into head/tail evenly.
+        val markerReserve = 40
+        // Below this size head+tail loses meaning — return a marked prefix
+        // instead. Bounded fallback by design.
+        if (maxChars <= markerReserve + 20) {
+            val suffix = "..."
+            return if (maxChars > suffix.length) text.take(maxChars - suffix.length) + suffix
+                   else text.take(maxChars)
+        }
+
+        val available = maxChars - markerReserve
+        val headChars = available / 2
+        val tailChars = available - headChars
+        val omitted = text.length - headChars - tailChars
+        val marker = "\n... [$omitted chars omitted] ...\n"
+        return text.take(headChars) + marker + text.takeLast(tailChars)
     }
 }

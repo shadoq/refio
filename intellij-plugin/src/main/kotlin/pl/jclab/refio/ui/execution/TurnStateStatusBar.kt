@@ -4,6 +4,7 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import pl.jclab.refio.core.services.turn.TurnPhase
 import pl.jclab.refio.core.services.turn.TurnStateSnapshot
+import java.awt.Dimension
 import java.awt.FlowLayout
 import javax.swing.JPanel
 import javax.swing.JSeparator
@@ -23,10 +24,11 @@ class TurnStateStatusBar : JPanel() {
 
     init {
         layout = FlowLayout(FlowLayout.LEFT, 8, 4)
+        isOpaque = false
         add(phaseLabel)
-        add(JSeparator(JSeparator.VERTICAL).apply { preferredSize = java.awt.Dimension(1, 16) })
+        add(JSeparator(JSeparator.VERTICAL).apply { preferredSize = Dimension(1, 16) })
         add(iterationLabel)
-        add(JSeparator(JSeparator.VERTICAL).apply { preferredSize = java.awt.Dimension(1, 16) })
+        add(JSeparator(JSeparator.VERTICAL).apply { preferredSize = Dimension(1, 16) })
         add(tokensLabel)
         add(toolLabel)
     }

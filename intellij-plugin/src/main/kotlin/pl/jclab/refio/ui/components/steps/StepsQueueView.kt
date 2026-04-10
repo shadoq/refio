@@ -50,31 +50,13 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
     private val executionToolbar: JPanel
 
     // Execution control buttons (for enabling/disabling)
-    private lateinit var resumeBtn: JButton
     private lateinit var replanBtn: JButton
     private lateinit var cancelAllBtn: JButton
 
     init {
-        border = LCATheme.paddedBorder(8)
+        border = LCATheme.paddedBorder(4)
 
-        // Header with title and Add Step button
-        val headerPanel = JPanel(BorderLayout()).apply {
-            val titleLabel = JBLabel("Steps Queue").apply {
-                font = font.deriveFont(Font.BOLD, 14f)
-            }
-            add(titleLabel, BorderLayout.WEST)
-
-            val addStepBtn = JButton("+ Add Step").apply {
-                toolTipText = "Add new step to the queue"
-                preferredSize = Dimension(100, 24)
-                addActionListener {
-                    showAddStepDialog()
-                }
-            }
-            add(addStepBtn, BorderLayout.EAST)
-        }
-
-        // Execution state toolbar (Resume/Re-plan/Cancel All)
+        // Buttons toolbar: Add Step | Resume | Re-plan | Delete All
         executionToolbar = createExecutionToolbar()
 
         // Steps list
@@ -100,14 +82,8 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
             border = LCATheme.paddedBorder(20)
         }
 
-        // Layout: Header | Toolbar | Steps
-        val topPanel = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            add(headerPanel)
-            add(executionToolbar)
-        }
-
-        add(topPanel, BorderLayout.NORTH)
+        // Layout: Buttons (fixed) | Steps (scrollable)
+        add(executionToolbar, BorderLayout.NORTH)
         add(scrollPane, BorderLayout.CENTER)
 
         // Initially show empty state
@@ -121,22 +97,15 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
             }
         }
 
-        // Observe execution state to enable/disable toolbar buttons
+        // Enable/disable buttons: active when session exists and not currently generating
         cs.launch {
             kotlinx.coroutines.flow.combine(
-                stepExecutionService.isExecuting,
-                sessionManager.subtasks
-            ) { isExecuting, subtasks ->
-                // Enable buttons only when:
-                // 1. Not currently executing
-                // 2. There are pending/planned steps remaining
-                // 3. At least one step was already executed (meaning execution started and stopped)
-                val hasPendingSteps = subtasks.any { it.status in listOf("PENDING", "PLANNED") }
-                val hasExecutedSteps = subtasks.any { it.status in listOf("SUCCESS", "FAILED", "RUNNING") }
-                !isExecuting && hasPendingSteps && hasExecutedSteps
+                sessionManager.activeSession,
+                sessionManager.isGenerating
+            ) { session, generating ->
+                session != null && !generating
             }.collect { shouldEnable ->
                 SwingUtilities.invokeLater {
-                    resumeBtn.isEnabled = shouldEnable
                     replanBtn.isEnabled = shouldEnable
                     cancelAllBtn.isEnabled = shouldEnable
                 }
@@ -727,36 +696,34 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
      * Create execution toolbar with Resume/Re-plan/Cancel All buttons
      */
     private fun createExecutionToolbar(): JPanel {
-        val panel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 8)).apply {
-            border = BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(1, 0, 1, 0, LCATheme.borderColor),
-                LCATheme.paddedBorder(6)
-            )
+        val panel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 4)).apply {
+            border = BorderFactory.createMatteBorder(0, 0, 1, 0, LCATheme.borderColor)
         }
 
-        // Resume button
-        resumeBtn = JButton("▶ Resume").apply {
-            toolTipText = "Continue execution from where it stopped"
-            preferredSize = Dimension(110, 28)
-            isEnabled = false  // Initially disabled
+        // Refresh button — always active
+        val refreshBtn = JButton("⟳ Refresh").apply {
+            toolTipText = "Refresh steps list"
+            preferredSize = Dimension(100, 28)
+            isEnabled = true
             addActionListener {
-                logger.info { "Resume execution clicked" }
+                logger.info { "Refresh steps clicked" }
                 cs.launch {
                     try {
-                        sessionManager.sendMessage("Continue execution of the previous task.")
+                        sessionManager.refreshSubtasks()
+                        logger.info { "Steps list refreshed" }
                     } catch (e: Exception) {
-                        logger.error(e) { "Failed to continue execution via AgentTurnLoop" }
+                        logger.error(e) { "Failed to refresh steps" }
                     }
                 }
             }
         }
-        panel.add(resumeBtn)
+        panel.add(refreshBtn)
 
-        // Re-plan button
-        replanBtn = JButton("🔄 Re-plan").apply {
+        // Re-plan button — delete pending first, then ask LLM for new plan
+        replanBtn = JButton("Re-plan").apply {
             toolTipText = "Delete remaining steps and generate new plan"
-            preferredSize = Dimension(110, 28)
-            isEnabled = false  // Initially disabled
+            preferredSize = Dimension(90, 28)
+            isEnabled = false
             addActionListener {
                 logger.info { "Re-plan clicked" }
                 val prompt = PromptDialog.showAndGet(
@@ -767,10 +734,12 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
                 if (prompt != null) {
                     cs.launch {
                         try {
-                            sessionManager.sendMessage("Replan the remaining work: $prompt")
-                            logger.info { "Replan request sent via AgentTurnLoop" }
+                            sessionManager.cancelAllPendingSteps()
+                            logger.info { "Deleted pending subtasks before replan" }
+                            sessionManager.sendMessage("Create a new plan: $prompt")
+                            logger.info { "Replan request sent" }
                         } catch (e: Exception) {
-                            logger.error(e) { "Failed to send replan request via AgentTurnLoop" }
+                            logger.error(e) { "Failed to replan" }
                         }
                     }
                 }
@@ -778,18 +747,18 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
         }
         panel.add(replanBtn)
 
-        // Cancel All button
-        cancelAllBtn = JButton("✖ Cancel All").apply {
-            toolTipText = "Delete all remaining steps without creating new plan"
-            preferredSize = Dimension(120, 28)
+        // Delete All button — deterministic delete
+        cancelAllBtn = JButton("Delete All").apply {
+            toolTipText = "Delete all remaining steps"
+            preferredSize = Dimension(100, 28)
             foreground = LCATheme.redColor
-            isEnabled = false  // Initially disabled
+            isEnabled = false
             addActionListener {
-                logger.info { "Cancel all clicked" }
+                logger.info { "Delete all clicked" }
                 val confirmed = JOptionPane.showConfirmDialog(
                     this@StepsQueueView,
-                    "Are you sure you want to cancel all remaining steps?",
-                    "Confirm Cancellation",
+                    "Are you sure you want to delete all remaining steps?",
+                    "Confirm Deletion",
                     JOptionPane.YES_NO_OPTION,
                     JOptionPane.WARNING_MESSAGE
                 ) == JOptionPane.YES_OPTION
@@ -798,9 +767,9 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
                     cs.launch {
                         try {
                             sessionManager.cancelAllPendingSteps()
-                            logger.info { "Cancelled all pending steps" }
+                            logger.info { "Deleted all pending steps" }
                         } catch (e: Exception) {
-                            logger.error(e) { "Failed to cancel steps" }
+                            logger.error(e) { "Failed to delete steps" }
                         }
                     }
                 }

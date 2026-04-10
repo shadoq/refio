@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
+import pl.jclab.refio.core.api.ContextSectionTokenInfo
 import pl.jclab.refio.core.api.StreamCallback
 import pl.jclab.refio.core.api.TurnProfileOverrides
 import pl.jclab.refio.core.api.TurnRunProfile
@@ -51,6 +52,8 @@ import java.util.concurrent.CancellationException
 
 // Type aliases for turn/ package classes
 private typealias ToolErrorTracker = TurnGuardrails.ToolErrorTracker
+private typealias EffectKeyedLoopTracker = TurnGuardrails.EffectKeyedLoopTracker
+private typealias OutputHashTracker = TurnGuardrails.OutputHashTracker
 private typealias AssistantIntent = TurnGuardrails.AssistantIntent
 
 private val logger = dualLogger("AgentTurnLoop")
@@ -442,6 +445,15 @@ class AgentTurnLoop(
         val config = TurnLoopConfigs.forMode(mode)
         val maxIterations = turnLLMCaller.resolveMaxIterations(config, profileOverrides)
         val errorTracker = ToolErrorTracker(windowSize = config.errorWindowSize)
+        // Effect-keyed loop tracker — counts repeated calls keyed by (toolName, primary-arg)
+        // to catch the "edit→run→edit→run on the same file 8 times" pattern that the legacy
+        // tool-name-only LoopDetector misses. See TurnGuardrails.EffectKeyedLoopTracker.
+        val effectLoopTracker = EffectKeyedLoopTracker()
+        // Output-hash tracker — fires STRATEGY_CHANGE_REQUIRED when run_terminal_command /
+        // run_code produce byte-identical tail output for the same command N times in a row,
+        // which is the only honest signal that the agent's edits aren't actually changing
+        // runtime behaviour. See TurnGuardrails.OutputHashTracker.
+        val outputHashTracker = OutputHashTracker()
         // Retry counters are split per failure category so one category cannot starve another.
         // Previously a single shared `formatRetryCount` covered empty-content, malformed JSON,
         // and plain-text nudges, which let one category exhaust the budget for the others
@@ -990,6 +1002,19 @@ class AgentTurnLoop(
                         // A definitive loop = the SAME tool with the SAME arguments failing
                         // repeatedly. Varying either the tool or arguments resets the counter,
                         // because the agent is still exploring alternatives.
+                        //
+                        // ALSO: feed the effect-keyed loop tracker and the output-hash tracker.
+                        // These two fire on the failure modes the legacy guards miss:
+                        //   * effect tracker — agent edits and re-runs the SAME file 8 times,
+                        //     each individual tool call succeeds but no progress is made;
+                        //   * output-hash tracker — script keeps producing byte-identical
+                        //     output for byte-different invocations, meaning the edits aren't
+                        //     actually changing the runtime behaviour.
+                        // Both feed into a single per-iteration nudge so we don't stack
+                        // multiple SYSTEM messages in one turn.
+                        var effectLoopWarn: TurnGuardrails.LoopStatus.WARN? = null
+                        var effectLoopAbort: TurnGuardrails.LoopStatus.ABORT? = null
+                        var outputHashWarn: TurnGuardrails.LoopStatus.WARN? = null
                         for ((toolCall, result) in toolResults) {
                             val success = !result.content.startsWith("Error:")
                             errorTracker.recordResult(success)
@@ -1005,6 +1030,117 @@ class AgentTurnLoop(
                                     lastFailureSignature = signature
                                 }
                             }
+
+                            // Effect-keyed and output-hash tracking — both run regardless of
+                            // success because the failure mode is "everything succeeds but
+                            // no progress". Parsing args defensively: if the JSON is malformed
+                            // we just skip tracking for this call rather than crashing the
+                            // turn loop.
+                            val parsedArgs: Map<String, Any?>? = runCatching {
+                                TurnJsonUtils.parseJsonToMap(toolCall.arguments)
+                            }.getOrNull()
+                            if (parsedArgs != null) {
+                                when (val status = effectLoopTracker.record(toolCall.name, parsedArgs)) {
+                                    is TurnGuardrails.LoopStatus.ABORT ->
+                                        if (effectLoopAbort == null) effectLoopAbort = status
+                                    is TurnGuardrails.LoopStatus.WARN ->
+                                        if (effectLoopWarn == null) effectLoopWarn = status
+                                    TurnGuardrails.LoopStatus.OK -> Unit
+                                }
+                                if (success) {
+                                    when (val ohStatus = outputHashTracker.record(toolCall.name, parsedArgs, result.content)) {
+                                        is TurnGuardrails.LoopStatus.WARN ->
+                                            if (outputHashWarn == null) outputHashWarn = ohStatus
+                                        is TurnGuardrails.LoopStatus.ABORT,
+                                        TurnGuardrails.LoopStatus.OK -> Unit
+                                    }
+                                }
+                            }
+                        }
+
+                        // Hard abort path — effect loop crossed the abort threshold. End the
+                        // turn cleanly with an explanation rather than letting it spin further.
+                        if (effectLoopAbort != null) {
+                            logger.warn {
+                                "[EFFECT_LOOP_ABORT] taskId=$taskId, reason=${effectLoopAbort.reason}"
+                            }
+                            val result = TurnResult(
+                                success = false,
+                                response = "Effect-keyed loop detected: " + effectLoopAbort.reason +
+                                    " Stopping the turn to prevent further wasted iterations. " +
+                                    "Verify your assumptions against an authoritative source before retrying.",
+                                iterations = iteration,
+                                tokensIn = totalTokensIn,
+                                tokensOut = totalTokensOut,
+                                cost = totalCost,
+                                toolsUsed = usedTools.distinct()
+                            )
+                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata)
+                        }
+
+                        // Soft path — at most ONE nudge per iteration. The output-hash warning
+                        // is the more specific signal (script behaviour is provably stuck), so
+                        // we prefer it over the more generic effect-keyed warning when both fire.
+                        if (outputHashWarn != null) {
+                            // Find the offending (toolCall, result) so we can name the target
+                            // in the nudge. Falls back to a generic message if we can't find it.
+                            val offending = toolResults.firstOrNull { (call, _) ->
+                                call.name == outputHashWarn.toolName
+                            }
+                            val target = offending?.let { (call, _) ->
+                                runCatching { TurnJsonUtils.parseJsonToMap(call.arguments) }
+                                    .getOrNull()
+                                    ?.let { args ->
+                                        (args["command"] as? String)
+                                            ?: (args["language"] as? String)?.let { "run_code/$it" }
+                                            ?: "<unknown target>"
+                                    }
+                            } ?: "<unknown target>"
+                            logger.warn {
+                                "[STRATEGY_CHANGE_REQUIRED] taskId=$taskId, tool=${outputHashWarn.toolName}, " +
+                                    "target=$target, identicalRuns=${outputHashWarn.totalCount}"
+                            }
+                            addOrReplaceNudge(
+                                TurnNudgeBuilder.buildStrategyChangeRequiredMessage(
+                                    toolName = outputHashWarn.toolName,
+                                    target = target,
+                                    identicalRuns = outputHashWarn.totalCount
+                                )
+                            )
+                            // Reset the output-hash counter so the agent gets a clean slate
+                            // after acknowledging the nudge — without this, every subsequent
+                            // batch would re-fire the same warning even if the agent did try
+                            // something new.
+                            offending?.let { (call, _) ->
+                                runCatching { TurnJsonUtils.parseJsonToMap(call.arguments) }
+                                    .getOrNull()
+                                    ?.let { args -> outputHashTracker.reset(call.name, args) }
+                            }
+                        } else if (effectLoopWarn != null) {
+                            val offending = toolResults.firstOrNull { (call, _) ->
+                                call.name == effectLoopWarn.toolName
+                            }
+                            val target = offending?.let { (call, _) ->
+                                runCatching { TurnJsonUtils.parseJsonToMap(call.arguments) }
+                                    .getOrNull()
+                                    ?.let { args ->
+                                        (args["path"] as? String)
+                                            ?: (args["command"] as? String)
+                                            ?: (args["url"] as? String)
+                                            ?: "<unknown target>"
+                                    }
+                            } ?: "<unknown target>"
+                            logger.warn {
+                                "[EFFECT_LOOP_WARN] taskId=$taskId, tool=${effectLoopWarn.toolName}, " +
+                                    "target=$target, totalCount=${effectLoopWarn.totalCount}"
+                            }
+                            addOrReplaceNudge(
+                                TurnNudgeBuilder.buildEffectKeyedLoopMessage(
+                                    toolName = effectLoopWarn.toolName,
+                                    target = target,
+                                    totalCount = effectLoopWarn.totalCount
+                                )
+                            )
                         }
 
                         val writeToolCalls = turnToolExecutor.countWriteToolCalls(toolCalls)
@@ -1235,10 +1371,16 @@ class AgentTurnLoop(
                         // next prompt and trains the model to keep emitting plain text. We persist
                         // only the model's thinking (if any) so the user can still inspect what it
                         // tried to do.
+                        //
+                        // Guard: skip nudge on the last iteration — nudging is pointless when there
+                        // won't be another iteration to respond. Let the plain text fall through to
+                        // finalization so the user receives the actual analysis instead of a generic
+                        // "max iterations exceeded" error.
                         if (mode == TaskMode.AGENT &&
                             !contentForExtraction.trim().let { it.startsWith("{") || it.startsWith("[") } &&
                             contentForExtraction.isNotBlank() &&
-                            plainTextNudgeCount < 2
+                            plainTextNudgeCount < 2 &&
+                            iteration < maxIterations
                         ) {
                             plainTextNudgeCount++
                             logger.warn {
@@ -1453,17 +1595,30 @@ class AgentTurnLoop(
         if (contextTrace != null) {
             val systemTokens = tokenEstimator.estimateString(turnPrompt.systemPrompt)
             val messagesTokens = turnPrompt.messages.sumOf { tokenEstimator.estimateString(it.content) }
+            val totalTokens = systemTokens + messagesTokens
             val toolNames = toolRegistry.getAllTools().map { it.name }
+
+            // Build granular section tokens: base context sections + system prompt + messages
+            val baseSectionTokens = turnPromptBuilder.getLastSectionTokens() ?: emptyMap()
+            val sectionTokens = buildSnapshotSectionTokens(
+                baseSectionTokens = baseSectionTokens,
+                systemPromptTokens = systemTokens,
+                messagesTokens = messagesTokens,
+                messages = turnPrompt.messages,
+                totalTokens = totalTokens
+            )
+
             _lastPromptSnapshot.value = PromptSnapshot(
                 taskId = taskId,
                 iteration = currentIteration,
                 systemPromptTokens = systemTokens,
                 messagesTokens = messagesTokens,
-                totalTokens = systemTokens + messagesTokens,
+                totalTokens = totalTokens,
                 toolCount = toolNames.size,
                 toolNames = toolNames,
                 contextTrace = contextTrace,
-                systemPromptPreview = turnPrompt.systemPrompt.take(500)
+                systemPromptPreview = turnPrompt.systemPrompt.take(500),
+                sectionTokens = sectionTokens
             )
         }
 
@@ -1473,6 +1628,51 @@ class AgentTurnLoop(
         )
     }
 
+    /**
+     * Build full section token map for PromptSnapshot.
+     * Combines granular context sections (from XML tag parsing) with system prompt
+     * and per-role message tokens — matching the breakdown from manual UI refresh.
+     */
+    private fun buildSnapshotSectionTokens(
+        baseSectionTokens: Map<String, ContextSectionTokenInfo>,
+        systemPromptTokens: Int,
+        messagesTokens: Int,
+        messages: List<LLMMessage>,
+        totalTokens: Int
+    ): Map<String, ContextSectionTokenInfo> {
+        val denominator = totalTokens.coerceAtLeast(1).toDouble()
+        val result = linkedMapOf<String, ContextSectionTokenInfo>()
+
+        // System prompt
+        if (systemPromptTokens > 0) {
+            result["system_prompt"] = ContextSectionTokenInfo(
+                name = "System Prompt",
+                tokens = systemPromptTokens,
+                chars = systemPromptTokens * 4,
+                percentage = systemPromptTokens / denominator * 100.0
+            )
+        }
+
+        // Granular context sections (already using the right keys for color palette)
+        result.putAll(baseSectionTokens)
+
+        // Per-role message breakdown
+        val userTokens = messages.filter { it.role == "user" }.sumOf { tokenEstimator.estimateString(it.content) }
+        val assistantTokens = messages.filter { it.role == "assistant" }.sumOf { tokenEstimator.estimateString(it.content) }
+        val otherTokens = messages.filter { it.role !in setOf("user", "assistant") }.sumOf { tokenEstimator.estimateString(it.content) }
+
+        if (userTokens > 0) {
+            result["messages_user"] = ContextSectionTokenInfo("User Messages", userTokens, userTokens * 4, userTokens / denominator * 100.0)
+        }
+        if (assistantTokens > 0) {
+            result["messages_assistant"] = ContextSectionTokenInfo("Assistant Messages", assistantTokens, assistantTokens * 4, assistantTokens / denominator * 100.0)
+        }
+        if (otherTokens > 0) {
+            result["messages_other"] = ContextSectionTokenInfo("Other Role Messages", otherTokens, otherTokens * 4, otherTokens / denominator * 100.0)
+        }
+
+        return result
+    }
 
     /**
      * Verify task completion if enabled.

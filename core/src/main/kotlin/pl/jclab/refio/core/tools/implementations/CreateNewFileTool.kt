@@ -35,7 +35,13 @@ class CreateNewFileTool(
 ) : Tool {
 
     override val name = "create_new_file"
-    override val description = "Create a new file with given content. FREE."
+    override val description = "Create a NEW file with given content. FREE. " +
+        "HARD FAILS if the file already exists — does NOT overwrite. " +
+        "MANDATORY: before calling this tool, you MUST have already verified in a PRIOR turn that the path is unused " +
+        "(via file_search or read_directory called ALONE). Do not call this tool in the same actions array as the existence check — " +
+        "tools in one turn run in parallel and the check will not gate the create. " +
+        "Even if the user named the file specifically and it 'looks new', the project may already contain it — always pre-check. " +
+        "On 'File already exists' error: do NOT retry. Switch to read_file + code_editing / multi_edit / multi_line_editor."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_MODIFYING
 
@@ -77,23 +83,25 @@ class CreateNewFileTool(
                 // Re-validate path inside lock to close TOCTOU window
                 sandbox.revalidateBeforeIO(path)
 
-                // Check if file already exists
+                // Check if file already exists.
+                // We return success=false (a real failure) rather than a soft warning, because
+                // create_new_file MUST NOT silently no-op: prior behaviour caused models to think
+                // creation succeeded and continue with stale assumptions about file content.
                 if (path.exists()) {
                     logger.warn { "File already exists: $pathStr (resolved to ${path.toAbsolutePath()})" }
-                    val duration = (System.currentTimeMillis() - startTime).toInt()
-                    return@withFileLock ToolResult(
-                        success = true,
-                        output = "⚠️ Warning: File already exists: $pathStr (skipped, use code_editing to modify existing files)",
-                        bytesWritten = 0,
-                        durationMs = duration,
-                        filesChanged = emptyList(),
+                    return@withFileLock ToolResult.error(
+                        message = "File already exists: $pathStr. create_new_file refuses to overwrite.",
+                        recovery = "DO NOT retry create_new_file for this path. Instead: " +
+                            "1) read_file($pathStr) to inspect current content, " +
+                            "2) decide whether the file already satisfies the request " +
+                            "(it might — in that case skip the write entirely and report it), " +
+                            "3) if changes are needed, use code_editing / multi_edit / multi_line_editor " +
+                            "to modify the existing file in place.",
                         nextActionHints = listOf(
-                            "Use code_editing or multi_line_editor to modify the existing file",
-                            "Use read_file to inspect current content before deciding"
-                        ),
-                        metadata = mapOf(
-                            "path" to pathStr,
-                            "warning" to "file_already_exists"
+                            "read_file path=$pathStr — inspect current content first",
+                            "code_editing — for small targeted edits to the existing file",
+                            "multi_line_editor — for semantic edits where exact strings are unknown",
+                            "advance_code_editing — only if a near-total rewrite is required"
                         )
                     )
                 }

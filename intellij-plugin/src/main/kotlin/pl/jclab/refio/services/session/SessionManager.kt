@@ -216,6 +216,26 @@ class SessionManager(private val project: Project) {
                 }
             }
         }
+
+        // Observe lastPromptSnapshot to propagate context section tokens to UI.
+        // lastPromptSnapshot is published by AgentTurnLoop after each prompt build,
+        // so this bridges core-layer context info to SessionStateManager → StatusBar/ContextPanel.
+        cs.launch {
+            var snapshotJob: Job? = null
+            activeSession.collect { _ ->
+                snapshotJob?.cancel()
+                val flow = lastPromptSnapshot
+                if (flow != null) {
+                    snapshotJob = cs.launch {
+                        flow.collect { snapshot ->
+                            if (snapshot != null && snapshot.sectionTokens.isNotEmpty()) {
+                                updateContextSectionTokens(snapshot.sectionTokens, snapshot.totalTokens)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private fun initializeServices() {
@@ -386,6 +406,16 @@ class SessionManager(private val project: Project) {
 
         // 5) Re-send using standard path for the active mode
         return sendMessage(trimmed, contextRefs = emptyList())
+    }
+
+    /**
+     * Manually re-load the subtask list for the active session from the backend.
+     * Wired to the refresh button in the Execution panel — useful when the
+     * UI state has drifted from the database (e.g. after a backend hiccup
+     * or when an event was missed).
+     */
+    suspend fun refreshSubtasks() {
+        subtaskTracker.loadSubtasks()
     }
 
     suspend fun deleteChatMessage(messageId: String) {
@@ -1071,7 +1101,8 @@ class SessionManager(private val project: Project) {
                             maxIterationsOverride = definition.maxSteps,
                             depth = 0,
                             subagentChain = emptyList(),
-                            contextProfile = definition.contextProfile
+                            contextProfile = definition.contextProfile,
+                            reasoningEffort = definition.reasoningEffort
                         )
                     )
                 } else {

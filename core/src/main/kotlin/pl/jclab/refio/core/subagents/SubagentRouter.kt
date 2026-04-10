@@ -186,7 +186,8 @@ class SubagentRouter(
                 maxIterationsOverride = definition.maxSteps,
                 depth = 0,
                 subagentChain = emptyList(),
-                contextProfile = definition.contextProfile
+                contextProfile = definition.contextProfile,
+                reasoningEffort = definition.reasoningEffort
             )
         )
 

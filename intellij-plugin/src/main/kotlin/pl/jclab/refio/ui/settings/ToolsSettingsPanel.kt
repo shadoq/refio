@@ -46,25 +46,6 @@ class ToolsSettingsPanel(
     private var isLoadingPermissions = false
     private var isLoadingWhitelist = false
 
-    // Definicje narzędzi (nazwa, opis, domyślne ustawienia)
-    private val toolDefinitions = listOf(
-        ToolDefinition("read_file", "read_file", "Read file contents from the project", "On", "On"),
-        ToolDefinition("read_directory", "read_directory", "List directory contents", "On", "On"),
-        ToolDefinition("file_search", "file_search", "Search for files by name or pattern", "On", "On"),
-        ToolDefinition("grep_search", "grep_search", "Search for content within files", "On", "On"),
-        ToolDefinition("view_diff", "view_diff", "View differences between file versions", "On", "On"),
-        ToolDefinition("create_new_file", "create_new_file", "Create a new file in the project", "Off", "On"),
-        ToolDefinition("code_editing", "code_editing", "Edit existing file with simple search-replace", "Off", "On"),
-        ToolDefinition("advance_code_editing", "advance_code_editing", "Edit file using LLM-assisted generation", "Off", "On"),
-        ToolDefinition("multi_line_editor", "multi_line_editor", "Edit file parts using LLM-assisted generation", "Off", "On"),
-        ToolDefinition("multi_edit", "multi_edit", "Edit multiple files in a single operation", "Off", "On"),
-        ToolDefinition("run_terminal_command", "run_terminal_command", "Execute terminal commands", "Off", "On"),
-        ToolDefinition("http_request", "http_request", "Make HTTP requests to external APIs (GET, POST, PUT, DELETE)", "Off", "On"),
-        ToolDefinition("run_code", "run_code", "Execute inline code snippets (Python, JavaScript, Kotlin)", "Off", "Off"),
-        ToolDefinition("invoke_subagent", "subagent", "Invoke a specialized subagent to solve part of the task", "On", "On"),
-        ToolDefinition("llm_call", "llm_call", "Send a prompt directly to an LLM (raw single-turn call, no agent loop)", "Off", "On")
-    )
-
     init {
         border = BorderFactory.createCompoundBorder(
             BorderFactory.createTitledBorder(
@@ -81,6 +62,8 @@ class ToolsSettingsPanel(
             add(createToolsTable())
             add(Box.createVerticalStrut(12))
             add(createCommandRulesPanel())
+            add(Box.createVerticalStrut(12))
+            add(createTerminalWhitelistPanel())
         }
 
         val scrollPane = com.intellij.ui.components.JBScrollPane(contentPanel).apply {
@@ -120,9 +103,6 @@ class ToolsSettingsPanel(
                 }
             }
         }
-
-        // Populate with initial data
-        populateTable()
 
         // Set up Plan Mode column with combo box editor
         val planModeColumn = toolsTable.columnModel.getColumn(2)
@@ -402,27 +382,13 @@ class ToolsSettingsPanel(
         }
     }
 
-    private fun populateTable() {
-        val tableModel = toolsTable.model as DefaultTableModel
-        tableModel.rowCount = 0
-
-        toolDefinitions.forEach { tool ->
-            tableModel.addRow(arrayOf(
-                tool.displayName,
-                tool.description,
-                tool.defaultPlanMode,
-                tool.defaultAgentMode
-            ))
-        }
-    }
-
     /**
-     * Ładuje uprawnienia narzędzi z backendu
+     * Ładuje definicje narzędzi z backendu (jedyne źródło prawdy).
+     * Backend wyznacza listę i defaulty z ToolRegistry + ToolPermissionsService.
      */
     private fun loadToolDefinitions() {
         if (coreApiClient == null) {
-            populateTable()
-            loadToolPermissions()
+            logger.warn { "CoreApiClient not available – tools table will be empty" }
             return
         }
 
@@ -430,19 +396,11 @@ class ToolsSettingsPanel(
             try {
                 val definitions = coreApiClient.getAvailableToolDefinitions()
                 SwingUtilities.invokeLater {
-                    if (definitions.isNotEmpty()) {
-                        populateTableFromBackend(definitions)
-                    } else {
-                        populateTable()
-                    }
+                    populateTableFromBackend(definitions)
                     loadToolPermissions()
                 }
             } catch (e: Exception) {
-                logger.warn(e) { "Failed to load tool definitions from backend, using defaults" }
-                SwingUtilities.invokeLater {
-                    populateTable()
-                    loadToolPermissions()
-                }
+                logger.warn(e) { "Failed to load tool definitions from backend" }
             }
         }
     }
@@ -452,9 +410,12 @@ class ToolsSettingsPanel(
         tableModel.rowCount = 0
 
         definitions.forEach { tool ->
-            val defaultPlan = if (tool.defaultPlanMode.uppercase() == "ON") "On" else "Off"
-            val defaultAgent = if (tool.defaultAgentMode.uppercase() == "ON") "On" else "Off"
-            tableModel.addRow(arrayOf(toDisplayToolName(tool.name), tool.description, defaultPlan, defaultAgent))
+            tableModel.addRow(arrayOf(
+                toDisplayToolName(tool.name),
+                tool.description,
+                normalizePermissionValue(tool.defaultPlanMode),
+                normalizePermissionValue(tool.defaultAgentMode)
+            ))
         }
     }
 
@@ -724,11 +685,4 @@ class ToolsSettingsPanel(
         }
     }
 
-    private data class ToolDefinition(
-        val name: String,
-        val displayName: String,
-        val description: String,
-        val defaultPlanMode: String,
-        val defaultAgentMode: String
-    )
 }

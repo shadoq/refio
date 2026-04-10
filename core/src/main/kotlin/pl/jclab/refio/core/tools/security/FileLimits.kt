@@ -15,9 +15,9 @@ data class FileLimits(
     val maxFilesInDirectory: Int = 1000,
 
     /**
-     * Maximum search depth for file search (default: 10)
+     * Maximum search depth for file search (default: 15)
      */
-    val maxSearchDepth: Int = 10,
+    val maxSearchDepth: Int = 15,
 
     /**
      * Maximum number of search results (default: 100)

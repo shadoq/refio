@@ -14,6 +14,7 @@ import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.db.repositories.ConfigRepository
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolMode
+import pl.jclab.refio.core.tools.base.ToolRegistry
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -40,11 +41,18 @@ class ToolPermissionsServiceTest {
 
     private val allTools = listOf(readFileTool, codeEditingTool, terminalTool)
 
+    private lateinit var toolRegistry: ToolRegistry
+
     @BeforeEach
     fun setup() {
         configRepository = mockk()
         every { configRepository.getWithPrecedence(any(), any()) } returns null
-        service = ToolPermissionsService(configRepository)
+        val byName = allTools.associateBy { it.name }
+        toolRegistry = mockk {
+            every { getAllTools() } returns allTools
+            every { getTool(any()) } answers { byName[firstArg<String>()] }
+        }
+        service = ToolPermissionsService(configRepository, toolRegistry)
     }
 
     @Nested

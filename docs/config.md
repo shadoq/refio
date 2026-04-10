@@ -160,6 +160,24 @@ models:
     "openai/gpt-4o-mini": true
     "openai/gpt-4o": false              # Hidden (expensive)
     "anthropic/claude-3-opus-20240229": false  # Hidden (expensive)
+
+  # Custom model presets (appear in Settings → Models → Quick Presets)
+  presets:
+    - name: "My Cloud Setup"
+      description: "Mixed cloud models for daily work"
+      defaultModel: "openai/gpt-4.1-mini"
+      planModel: "openai/gpt-4.1"
+      codingModel: "anthropic/claude-sonnet-4-5-20250929"
+      weakModel: "openai/gpt-4.1-nano"
+      visibleModels:
+        - "openai/gpt-4.1-mini"
+        - "openai/gpt-4.1"
+        - "openai/gpt-4.1-nano"
+        - "anthropic/claude-sonnet-4-5-20250929"
+    - name: "Local Dev"
+      description: "Fully local models"
+      defaultModel: "ollama/qwen3:14b"
+      # planModel, codingModel, weakModel default to defaultModel when omitted
 ```
 
 ### System Limits
