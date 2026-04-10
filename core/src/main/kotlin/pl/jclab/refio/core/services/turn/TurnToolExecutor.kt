@@ -52,7 +52,8 @@ class TurnToolExecutor(
     private val taskRepository: TaskRepository? = null,
     private val chatMessageRepository: ChatMessageRepository? = null,
     private val approvalService: ToolApprovalService? = null,
-    private val permissionsService: ToolPermissionsService? = null
+    private val permissionsService: ToolPermissionsService? = null,
+    private val hookService: pl.jclab.refio.core.services.hooks.HookService? = null
 ) {
     class ReadTracker {
         private val recentReads = java.util.concurrent.ConcurrentHashMap<String, Long>()
@@ -96,6 +97,10 @@ class TurnToolExecutor(
     private val llmRegenEditTools = setOf("advance_code_editing", "multi_line_editor")
 
     private val readTracker = ReadTracker()
+
+    private fun isDelegationTool(name: String): Boolean =
+        name.equals("invoke_subagent", ignoreCase = true) ||
+        name.equals("delegate_to_strong_model", ignoreCase = true)
 
     companion object {
         /** Max raw output size (chars) to preserve in-context for DATA_PRODUCING tools */
@@ -184,6 +189,12 @@ class TurnToolExecutor(
             subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
             subtaskRepository.updateResult(subtaskId, result = null, errorMessage = errorText)
             listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
+            hookService?.trigger("after_tool", mapOf(
+                "toolName" to toolCall.name,
+                "taskId" to taskId,
+                "success" to "false",
+                "mode" to mode.name
+            ))
             logger.warn {
                 "[TOOL_BLOCKED] runId=$runId, depth=$depth, tool=${toolCall.name}, " +
                     "subagent=${profileOverrides?.subagentName ?: "-"}"
@@ -207,15 +218,18 @@ class TurnToolExecutor(
         }
 
         val containsInvokeSubagent = allowedIndexed.any { (_, toolCall) ->
-            toolCall.name.equals("invoke_subagent", ignoreCase = true)
+            isDelegationTool(toolCall.name)
         }
-        val isSubagentRun = !profileOverrides?.subagentName.isNullOrBlank()
         // If any tool requires ASK approval, run sequentially to avoid multiple simultaneous dialogs
         val containsAskTool = permissionsService != null && approvalService != null &&
             allowedIndexed.any { (_, toolCall) ->
                 permissionsService.getPermission(toolCall.name, mode) == PermissionLevel.ASK
             }
-        val shouldDisableParallel = containsInvokeSubagent || isSubagentRun || containsAskTool
+        // Allow READ_ONLY parallel execution during subagent runs — only block parallel
+        // for invoke_subagent (recursion risk) and ASK tools (concurrent approval dialogs).
+        // Previously isSubagentRun blanket-disabled all parallelism, causing 5 sequential
+        // read_file calls to take 270s instead of ~70s in a documentation-engineer session.
+        val shouldDisableParallel = containsInvokeSubagent || containsAskTool
 
         // Parallel execution for READ_ONLY tools
         if (config.parallelReadTools && allowedIndexed.size > 1 && !shouldDisableParallel) {
@@ -295,7 +309,7 @@ class TurnToolExecutor(
         if (config.parallelReadTools && shouldDisableParallel) {
             logger.info {
                 "[PARALLEL] Disabled for this batch: invoke_subagent=$containsInvokeSubagent, " +
-                    "subagentRun=$isSubagentRun, containsAskTool=$containsAskTool"
+                    "containsAskTool=$containsAskTool"
             }
         }
 
@@ -349,6 +363,12 @@ class TurnToolExecutor(
         if (toolCall.error != null) {
             val errorText = "Error: ${toolCall.error}"
             listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
+            hookService?.trigger("after_tool", mapOf(
+                "toolName" to toolCall.name,
+                "taskId" to taskId,
+                "success" to "false",
+                "mode" to mode.name
+            ))
             subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
             subtaskRepository.updateResult(subtaskId, result = null, errorMessage = errorText)
             logger.debug { "[SUBTASK_FAILED] subtaskId=$subtaskId, tool=${toolCall.name}, error=$errorText" }
@@ -409,6 +429,11 @@ class TurnToolExecutor(
             logger.debug { "[SUBTASK_RUNNING] subtaskId=$subtaskId, tool=${toolCall.name}" }
 
             listener?.onToolExecutionStarted(taskId, toolCall)
+            hookService?.trigger("before_tool", mapOf(
+                "toolName" to toolCall.name,
+                "taskId" to taskId,
+                "mode" to mode.name
+            ))
 
             val argumentsMap = TurnJsonUtils.parseJsonToMap(toolCall.arguments).toMutableMap()
             val readBeforeWriteWarning = checkReadBeforeWrite(toolCall.name, argumentsMap)
@@ -426,7 +451,7 @@ class TurnToolExecutor(
 
             // Inject internal metadata for SYSTEM tools (tasks, memory, etc.)
             val tool = toolRegistry.getTool(toolCall.name)
-            if (tool?.category == ToolCategory.SYSTEM || toolCall.name == "invoke_subagent") {
+            if (tool?.category == ToolCategory.SYSTEM || isDelegationTool(toolCall.name)) {
                 argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.TASK_ID, taskId)
                 argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.MODE, mode.name)
                 argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.ITERATION, iteration)
@@ -519,16 +544,21 @@ class TurnToolExecutor(
                 val outputWithWarnings = listOfNotNull(readBeforeWriteWarning, rawOutput, hintsBlock, staleFileWarning)
                     .joinToString("\n\n")
                 val isInvokeSubagent = toolCall.name.equals("invoke_subagent", ignoreCase = true)
-                val subagentName = argumentsMap["subagent_name"]?.toString()?.trim().orEmpty()
-                val displayOutput = if (isInvokeSubagent) {
-                    val header = if (subagentName.isNotBlank()) {
-                        "Subagent [$subagentName] result:"
-                    } else {
-                        "Subagent result:"
+                val isDelegateStrong = toolCall.name.equals("delegate_to_strong_model", ignoreCase = true)
+                val isMemoryGetSubtaskOutput = toolCall.name.equals("memory", ignoreCase = true)
+                    && argumentsMap["action"]?.toString().equals("get_subtask_output", ignoreCase = true)
+                val displayOutput = when {
+                    isInvokeSubagent -> {
+                        val subagentName = argumentsMap["subagent_name"]?.toString()?.trim().orEmpty()
+                        val header = if (subagentName.isNotBlank()) {
+                            "Subagent [$subagentName] result:"
+                        } else {
+                            "Subagent result:"
+                        }
+                        "$header\n\n$outputWithWarnings"
                     }
-                    "$header\n\n$outputWithWarnings"
-                } else {
-                    outputWithWarnings
+                    isDelegateStrong -> "Strong model result:\n\n$outputWithWarnings"
+                    else -> outputWithWarnings
                 }
 
                 val summaryToken = GlobalMetrics.beginOperation(
@@ -540,7 +570,7 @@ class TurnToolExecutor(
                 val structuredChangeSummary = toolResult.changeSummary
                 val summaryResult = try {
                     when {
-                        isInvokeSubagent ->
+                        isInvokeSubagent || isDelegateStrong || isMemoryGetSubtaskOutput ->
                             ToolResultSummary(displayOutput, wasSummarized = false, 0, 0, 0.0)
                         structuredChangeSummary != null -> {
                             val cs = structuredChangeSummary
@@ -585,6 +615,12 @@ class TurnToolExecutor(
                 }
 
                 listener?.onToolExecutionCompleted(taskId, toolCall, summaryResult.summary, true)
+                hookService?.trigger("after_tool", mapOf(
+                    "toolName" to toolCall.name,
+                    "taskId" to taskId,
+                    "success" to "true",
+                    "mode" to mode.name
+                ))
                 recordReadAfterExecution(toolCall.name, argumentsMap)
 
                 subtaskRepository.updateStatus(subtaskId, TaskStatus.SUCCESS)
@@ -657,6 +693,12 @@ class TurnToolExecutor(
                     }
                 }
                 listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
+                hookService?.trigger("after_tool", mapOf(
+                    "toolName" to toolCall.name,
+                    "taskId" to taskId,
+                    "success" to "false",
+                    "mode" to mode.name
+                ))
 
                 subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
                 subtaskRepository.updateResult(subtaskId, result = null, errorMessage = errorText)
@@ -677,6 +719,12 @@ class TurnToolExecutor(
             logger.error(e) { "[TOOL_ERROR] Failed to execute ${toolCall.name}: ${e.message}" }
             val errorText = "Error: ${e.message}"
             listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
+            hookService?.trigger("after_tool", mapOf(
+                "toolName" to toolCall.name,
+                "taskId" to taskId,
+                "success" to "false",
+                "mode" to mode.name
+            ))
 
             subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
             subtaskRepository.updateResult(
@@ -777,7 +825,7 @@ class TurnToolExecutor(
         profileOverrides: TurnProfileOverrides?,
         listener: TurnEventListener? = null
     ) {
-        if (toolCall.name != "invoke_subagent") return
+        if (!isDelegationTool(toolCall.name)) return
 
         val chain = (profileOverrides?.subagentChain.orEmpty() + listOfNotNull(profileOverrides?.subagentName))
             .distinct()

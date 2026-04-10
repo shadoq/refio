@@ -84,6 +84,13 @@ class CoreApiRouter(
         setRepository(pl.jclab.refio.core.db.repositories.AgentEventSqlRepository())
     }
 
+    // Hook system
+    private val hookExecutor = pl.jclab.refio.core.services.hooks.HookExecutor()
+    private val hookService = pl.jclab.refio.core.services.hooks.HookService(
+        configProvider = { pl.jclab.refio.core.config.HierarchicalConfigLoader.getInstance(projectRoot).getHooks() },
+        hookExecutor = hookExecutor
+    )
+
     // Single source of truth for prompt section providers.
     // IMPORTANT: this same list must be used by both TurnPromptBuilder (runtime)
     // and ProjectContextRouter (preview) so the Context panel shows the actual
@@ -316,7 +323,8 @@ class CoreApiRouter(
             projectRoot = projectRoot,
             tokenEstimator = tokenEstimator,
             promptCache = null,  // Could be added later if needed
-            sectionProviders = promptSectionProviders
+            sectionProviders = promptSectionProviders,
+            configService = configService
         )
 
         val toolCallParser = ToolCallParser(
@@ -335,7 +343,8 @@ class CoreApiRouter(
             taskRepository = taskRepository,
             chatMessageRepository = chatMessageRepository,
             approvalService = toolApprovalService,
-            permissionsService = toolPermissionsService
+            permissionsService = toolPermissionsService,
+            hookService = hookService
         )
 
         val turnLLMCaller = TurnLLMCaller(
@@ -385,7 +394,8 @@ class CoreApiRouter(
             conversationCompactor = null,
             llmRetryHandler = null,
             workingMemoryIntegration = workingMemoryIntegration,
-            agentEventBus = agentEventBus
+            agentEventBus = agentEventBus,
+            hookService = hookService
         )
     } else null
 
@@ -647,6 +657,26 @@ class CoreApiRouter(
                     )
                     toolRegistry.register(invokeSubagentTool)
                     logger.info { "CoreApiRouter: invoke_subagent tool registered" }
+                }
+
+                // Register delegate_to_strong_model only if a strong model is configured
+                val strongModel = configService.getStrongModel()
+                if (strongModel != null && !toolRegistry.hasTool("delegate_to_strong_model")) {
+                    val delegateToStrongModelTool = pl.jclab.refio.core.tools.implementations.DelegateToStrongModelTool(
+                        llmClient = llmClient,
+                        configServiceProvider = { configService },
+                        runTurnCallback = { request, turnEventListener, streamCallback ->
+                            agentRouter.runTurn(
+                                request = request,
+                                streamCallback = streamCallback,
+                                listener = turnEventListener?.let {
+                                    pl.jclab.refio.core.services.AgentTurnLoop.TurnEventListener.fromTurnEventListener(it)
+                                }
+                            )
+                        }
+                    )
+                    toolRegistry.register(delegateToStrongModelTool)
+                    logger.info { "CoreApiRouter: delegate_to_strong_model tool registered (strong model: ${strongModel.second}/${strongModel.first})" }
                 }
 
                 // Register SYSTEM tools for multi-agent orchestration

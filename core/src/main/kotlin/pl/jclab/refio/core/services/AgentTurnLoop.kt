@@ -127,7 +127,8 @@ class AgentTurnLoop(
     private val llmRetryHandler: LLMRetryHandler? = null,
     private val workingMemoryIntegration: WorkingMemoryIntegration? = null,
     private val pendingUserMessageQueue: PendingUserMessageQueue? = null,
-    private val agentEventBus: pl.jclab.refio.core.agents.events.AgentEventBus? = null
+    private val agentEventBus: pl.jclab.refio.core.agents.events.AgentEventBus? = null,
+    private val hookService: pl.jclab.refio.core.services.hooks.HookService? = null
 ) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
 
@@ -297,6 +298,12 @@ class AgentTurnLoop(
 
         listener?.onTurnStarted(taskId, mode, runId, parentRunId, depth)
 
+        hookService?.trigger("before_turn_loop", mapOf(
+            "taskId" to taskId,
+            "mode" to mode.name,
+            "agentName" to (profileOverrides?.subagentName ?: "default")
+        ))
+
         // Step 1: Save user message to history
         chatMessageRepository.create(
             taskId = taskId,
@@ -364,6 +371,12 @@ class AgentTurnLoop(
                 "runId=$runId, parentRunId=${parentRunId ?: "-"}, depth=$depth"
         }
         listener?.onTurnStarted(taskId, mode, runId, parentRunId, depth)
+
+        hookService?.trigger("before_turn_loop", mapOf(
+            "taskId" to taskId,
+            "mode" to mode.name,
+            "agentName" to (profileOverrides?.subagentName ?: "default")
+        ))
 
         // Execute turn loop (continues from current history state)
         return executeTurnLoop(
@@ -551,7 +564,10 @@ class AgentTurnLoop(
                         correlationId = runId,
                         iteration = iteration,
                         maxIterations = maxIterations,
-                        mode = mode.name
+                        mode = mode.name,
+                        runId = runId,
+                        parentRunId = parentRunId,
+                        depth = depth
                     )
                 }
 
@@ -643,7 +659,10 @@ class AgentTurnLoop(
                             tokensOut = llmResponse.usage.outputTokens,
                             costUsd = llmResponse.cost,
                             durationMs = llmDurationMs,
-                            finishReason = llmResponse.finishReason
+                            finishReason = llmResponse.finishReason,
+                            runId = runId,
+                            parentRunId = parentRunId,
+                            depth = depth
                         )
                     }
 
@@ -940,7 +959,10 @@ class AgentTurnLoop(
                                     durationMs = durationMs,
                                     success = success,
                                     errorMessage = if (success) null else resultData.content.take(200),
-                                    resultPreview = resultData.content.take(200)
+                                    resultPreview = resultData.content.take(200),
+                                    runId = runId,
+                                    parentRunId = parentRunId,
+                                    depth = depth
                                 )
                             }
                         }
@@ -1499,6 +1521,12 @@ class AgentTurnLoop(
                         )
 
                         updateTurnState { copy(phase = TurnPhase.COMPLETED, tokensUsed = totalTokensIn + totalTokensOut) }
+                        hookService?.trigger("on_agent_complete", mapOf(
+                            "taskId" to taskId,
+                            "mode" to mode.name,
+                            "iterations" to iteration.toString(),
+                            "agentName" to (profileOverrides?.subagentName ?: "default")
+                        ))
                         val finalResult = turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = false, metadata = subagentMetadata)
                         updateTurnState { TurnStateSnapshot() }
                         return finalResult
@@ -1516,13 +1544,28 @@ class AgentTurnLoop(
                             correlationId = runId,
                             iteration = iteration,
                             durationMs = iterationDurationMs,
-                            isFinal = false
+                            isFinal = false,
+                            runId = runId,
+                            parentRunId = parentRunId,
+                            depth = depth
                         )
                     }
+                    hookService?.trigger("after_turn_loop", mapOf(
+                        "taskId" to taskId,
+                        "mode" to mode.name,
+                        "iteration" to iteration.toString(),
+                        "agentName" to (profileOverrides?.subagentName ?: "default")
+                    ))
                 }
             }
         } catch (e: CancellationException) {
             updateTurnState { copy(phase = TurnPhase.FAILED) }
+            hookService?.trigger("on_agent_error", mapOf(
+                "taskId" to taskId,
+                "mode" to mode.name,
+                "error" to "Operation cancelled by user",
+                "agentName" to (profileOverrides?.subagentName ?: "default")
+            ))
             val result = TurnResult(
                 success = false,
                 response = "Operation cancelled by user.",
@@ -1540,6 +1583,12 @@ class AgentTurnLoop(
         // Max iterations exceeded
         updateTurnState { copy(phase = TurnPhase.FAILED) }
         logger.warn { "[TURN_MAX_ITERATIONS] taskId=$taskId, exceeded $maxIterations iterations" }
+        hookService?.trigger("on_agent_error", mapOf(
+            "taskId" to taskId,
+            "mode" to mode.name,
+            "error" to "Maximum iterations exceeded",
+            "agentName" to (profileOverrides?.subagentName ?: "default")
+        ))
         val result = TurnResult(
             success = false,
             response = "Error: Maximum iterations exceeded. The agent may be stuck in a loop.",
