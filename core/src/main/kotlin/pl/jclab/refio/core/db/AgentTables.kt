@@ -4,6 +4,12 @@ import org.jetbrains.exposed.sql.ReferenceOption
 import org.jetbrains.exposed.sql.Table
 import java.util.UUID
 
+// NOTE: AgentEventsTable.sessionId intentionally has NO foreign key. It is a
+// correlation id that may reference either an agent_sessions.id (multi-agent
+// flows) OR a tasks.id (single-agent AgentTurnLoop runs that default
+// evSessionId to taskId). A FK to agent_sessions would fail for the latter
+// case, which previously caused FOREIGN KEY constraint floods on every emit.
+
 /**
  * Multi-agent session — groups multiple agent instances working together.
  */
@@ -53,8 +59,9 @@ object AgentInstancesTable : Table("agent_instances") {
  */
 object AgentEventsTable : Table("agent_events") {
     val id = varchar("id", 36)
+    // No FK: see header comment. sessionId may be either an agent_sessions.id
+    // or a tasks.id depending on the emitter.
     val sessionId = varchar("session_id", 36)
-        .references(AgentSessionsTable.id, onDelete = ReferenceOption.CASCADE)
     val sourceAgentId = varchar("source_agent_id", 36)
     val eventType = varchar("event_type", 64) // Class simple name: "AgentStarted", "DataRequest", etc.
     val correlationId = varchar("correlation_id", 36)

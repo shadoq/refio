@@ -136,13 +136,16 @@ class ToolRouter(
             .orEmpty()
             .sortedBy { it.name }
             .map { tool ->
+                // Single source of truth: defaults pochodzą z ToolPermissionsService
+                // (czerpie z tool.mode + DEFAULT_OVERRIDES dla wyjątków).
+                val default = toolPermissionsService.getDefaultPermissionConfig(tool)
                 ToolDefinitionInfo(
                     name = tool.name,
                     description = tool.description,
                     mode = tool.mode.name,
                     category = tool.category.name,
-                    defaultPlanMode = if (tool.mode == pl.jclab.refio.core.tools.base.ToolMode.READ_ONLY) "ON" else "OFF",
-                    defaultAgentMode = "ON"
+                    defaultPlanMode = default.planMode.name,
+                    defaultAgentMode = default.agentMode.name
                 )
             }
     }

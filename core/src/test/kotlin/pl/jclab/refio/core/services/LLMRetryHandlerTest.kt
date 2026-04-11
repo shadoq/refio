@@ -179,6 +179,43 @@ class LLMRetryHandlerTest {
 
             assertEquals(1, retryHandler.getStats().totalRetries)
         }
+
+        @Test
+        fun `should retry when Ollama stream ends before done=true`() = runTest {
+            // OllamaAdapter throws this when the NDJSON channel closes without a final done chunk
+            // (remote Ollama restart, idle proxy timeout, mid-generation network drop).
+            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } throws
+                RuntimeException("Ollama stream ended before done=true final chunk (contentBytes=512, thinkingBytes=0, durationMs=29051)") andThen successResponse()
+
+            val response = retryHandler.callWithRetry(
+                provider = "ollama",
+                model = "qwen3.5:122b",
+                messages = testMessages,
+                taskId = "task-1",
+                source = "test",
+                baseDelayMs = 1
+            )
+
+            assertEquals("response", response.content)
+            assertEquals(1, retryHandler.getStats().totalRetries)
+        }
+
+        @Test
+        fun `should retry on unexpected end of stream`() = runTest {
+            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } throws
+                RuntimeException("Unexpected end of stream") andThen successResponse()
+
+            retryHandler.callWithRetry(
+                provider = "test",
+                model = "test-model",
+                messages = testMessages,
+                taskId = "task-1",
+                source = "test",
+                baseDelayMs = 1
+            )
+
+            assertEquals(1, retryHandler.getStats().totalRetries)
+        }
     }
 
     @Nested

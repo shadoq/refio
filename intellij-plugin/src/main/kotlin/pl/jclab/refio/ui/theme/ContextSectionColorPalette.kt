@@ -10,6 +10,7 @@ import java.awt.Color
 object ContextSectionColorPalette {
     private val sectionColors = mapOf(
         // Core context
+        "project_context" to Color(0x4A90D9),
         "project_overview" to Color(0x4A90D9),
         "project_instructions" to Color(0x3498DB),
         "dependencies" to Color(0x7B68EE),
@@ -21,6 +22,8 @@ object ContextSectionColorPalette {
         "user_context" to Color(0x98FB98),
         "tool_outputs" to Color(0x87CEEB),
         "recent_work" to Color(0xDDA0DD),
+        // Composite/aggregate sections
+        "reference" to Color(0x6C8EBF),
         // Semantic summary subsections
         "architecture" to Color(0x5B9BD5),
         "key_components" to Color(0x6C8EBF),

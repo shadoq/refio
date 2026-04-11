@@ -122,7 +122,7 @@ Refio runs in two environments sharing the same `:core` module:
 ├─────────────────────────────────────────────────────────────────────────┤
 │  Infrastructure Layer                                                   │
 │  ├── LLMClient (unified) → 8 provider adapters                          │
-│  ├── ToolRegistry → 14 registered tools (6 read-only, 8 write)          │
+│  ├── ToolRegistry → 15 registered tools (7 read-only, 8 write)          │
 │  ├── MCPManager → MCP server lifecycle (STDIO/HTTP)                     │
 │  ├── EmbeddingsService → Ollama/OpenAI embeddings                       │
 │  └── DatabaseFactory → SQLite (WAL) + Exposed ORM                       │
@@ -154,7 +154,7 @@ core/src/main/kotlin/pl/jclab/refio/
 │   ├── agents/               # Multi-agent system
 │   │   └── events/           # AgentEventBus, AgentEvent sealed interface
 │   ├── subagents/            # Subagent system (21 built-in)
-│   ├── tools/                # Tool system (14 registered implementations)
+│   ├── tools/                # Tool system (15 registered implementations)
 │   │   ├── implementations/
 │   │   └── security/
 │   └── prompts/              # Prompt templates
@@ -214,11 +214,12 @@ Unknown placeholders remain unchanged.
 |------|----------|-----------------|----------|----------|
 | **CHAT** | ChatExecutor | None | No | Conversation, explanations |
 | **PLAN** | AgentTurnLoop | READ_ONLY (6) | Yes | Code review, analysis |
-| **AGENT** | AgentTurnLoop | ALL (14) | Yes | Code generation, refactoring |
+| **AGENT** | AgentTurnLoop | ALL (15) | Yes | Code generation, refactoring |
 | **SUBAGENT** | AgentTurnLoop (`runProfile=SUBAGENT`) | Profile-filtered | Yes | Specialized delegated tasks |
 
-`ToolRegistry` has 14 registered tools; `run_terminal_command` is enabled by default in AGENT mode and restricted by terminal whitelist rules.
+`ToolRegistry` has 15 registered tools; `run_terminal_command` is enabled by default in AGENT mode and restricted by terminal whitelist rules.
 `invoke_subagent` is enabled by default in PLAN and AGENT, and is displayed as `subagent` in Tools Settings.
+`delegate_to_strong_model` is registered only when `models.defaults.strong` is configured; it delegates complex tasks to a more capable model (single-shot or tool-enabled sub-agent mode).
 
 ### CHAT Mode Flow
 
@@ -642,7 +643,7 @@ interface Tool {
 }
 ```
 
-### READ_ONLY Tools (6)
+### READ_ONLY Tools (7)
 
 | Tool | Parameters | Description | Limits |
 |------|------------|-------------|--------|
@@ -652,6 +653,7 @@ interface Tool {
 | `grep_search` | pattern, path, case_sensitive | Regex content search | 500 results |
 | `view_diff` | file1, file2/content2 | Line-by-line diff | - |
 | `invoke_subagent` | subagent_name, goal, context_refs? | Run nested child loop with a specialized subagent (dynamic description: active subagents + allowed tools/inherit) | Depth <= 3 |
+| `delegate_to_strong_model` | task, context?, allow_tools?, response_format? | Delegate complex task to a stronger model (single-shot or tool-enabled sub-agent). Only registered when `models.defaults.strong` is configured. | - |
 
 ### WRITE Tools (8)
 
@@ -1298,7 +1300,7 @@ The Settings screen provides full configuration access via `ConfigRouter`, match
 | Context | `index` | RAG search tuning (similarity threshold, top-k, hybrid search) and indexing settings |
 | MCP | `mcp` | MCP server list with enable/disable and type |
 | Docs | `docs` | Documentation sources for @docs context provider |
-| Tools | `tools` | 14 tools × Plan/Agent mode permission matrix (ON/ASK/OFF) |
+| Tools | `tools` | 15 tools × Plan/Agent mode permission matrix (ON/ASK/OFF) |
 | Subagents | `subagents` | Enable/disable individual subagent profiles |
 | Advanced | `advanced`+`limits` | Security (no-egress, read-only), timeouts, limits, performance |
 | Theme | — | ANSI color preview (roles, status, agents, log levels) |

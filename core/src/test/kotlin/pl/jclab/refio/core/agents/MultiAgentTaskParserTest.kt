@@ -1,10 +1,15 @@
 package pl.jclab.refio.core.agents
 
+import com.charleskorn.kaml.Yaml
+import com.charleskorn.kaml.YamlConfiguration
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import pl.jclab.refio.core.agents.testutil.YAMLGenerator
 import pl.jclab.refio.core.db.TaskMode
+import kotlin.random.Random
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -239,6 +244,73 @@ class MultiAgentTaskParserTest {
 
             val definition = MultiAgentTaskParser.parse(yaml)
             assertEquals(".", definition.project)
+        }
+    }
+
+    @Nested
+    inner class PropertyBasedParsing {
+
+        private val yaml = Yaml(configuration = YamlConfiguration(strictMode = false))
+
+        @Test
+        fun `round-trip stability — serialize then parse preserves agent specs`() {
+            val random = Random(42)
+            repeat(200) { i ->
+                val definition = YAMLGenerator.randomDefinition(1, 10, random)
+
+                // Serialize to YAML
+                val yamlString = yaml.encodeToString(
+                    MultiAgentTaskDefinition.serializer(), definition
+                )
+
+                // Parse back
+                val parsed = MultiAgentTaskParser.parse(yamlString)
+                val specs = MultiAgentTaskParser.toAgentSpecs(parsed)
+
+                // Verify each agent
+                assertEquals(definition.agents.size, specs.size,
+                    "Iteration $i: agent count mismatch")
+
+                for ((j, agent) in definition.agents.withIndex()) {
+                    val spec = specs[j]
+                    assertEquals(agent.name, spec.name,
+                        "Iteration $i, agent $j: name mismatch")
+                    assertEquals(agent.task, spec.task,
+                        "Iteration $i, agent $j: task mismatch")
+
+                    val expectedMode = when (agent.mode?.lowercase()) {
+                        "plan" -> TaskMode.PLAN
+                        "chat" -> TaskMode.CHAT
+                        else -> TaskMode.AGENT
+                    }
+                    assertEquals(expectedMode, spec.mode,
+                        "Iteration $i, agent $j: mode mismatch (source: ${agent.mode})")
+                    assertEquals(agent.model, spec.model,
+                        "Iteration $i, agent $j: model mismatch")
+                    assertEquals(agent.dependsOn, spec.dependsOn,
+                        "Iteration $i, agent $j: dependsOn mismatch")
+                }
+            }
+        }
+
+        @Test
+        fun `garbage input — parse never causes NPE, OOM, or StackOverflow`() {
+            val random = Random(42)
+            repeat(500) { i ->
+                val garbage = YAMLGenerator.randomGarbage(0, 10_000, random)
+                try {
+                    MultiAgentTaskParser.parse(garbage)
+                    // If it somehow parses, that's fine — just shouldn't crash
+                } catch (e: Throwable) {
+                    assertFalse(e is NullPointerException,
+                        "Iteration $i: NPE on garbage input (len=${garbage.length})")
+                    assertFalse(e is OutOfMemoryError,
+                        "Iteration $i: OOM on garbage input (len=${garbage.length})")
+                    assertFalse(e is StackOverflowError,
+                        "Iteration $i: StackOverflow on garbage input (len=${garbage.length})")
+                    // Any other exception (SerializationException, etc.) is expected
+                }
+            }
         }
     }
 }

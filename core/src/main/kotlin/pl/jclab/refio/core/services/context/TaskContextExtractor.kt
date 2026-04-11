@@ -127,17 +127,29 @@ internal class TaskContextExtractor {
     /**
      * Build structured executed steps for RECENT_WORK (ADR 0041).
      * Parses subtask result JSON to extract tool runs with parameters and outputs.
+     *
+     * Returns ALL terminal subtasks (both SUCCESS and FAILED) without any count cap —
+     * selection and compression are the RECENT_WORK section's job (budget-driven via
+     * [pl.jclab.refio.core.services.context.ContextFormatter.buildRecentWorkSection]
+     * which picks FULL/DETAILED/SUMMARY levels based on available tokens). Hard-capping
+     * here used to hide older tool calls from the agent, causing it to forget its own
+     * prior attempts and re-run failed operations. PENDING/RUNNING subtasks are skipped
+     * because they have no result to render yet.
      */
     fun buildExecutedSteps(
-        subtasks: List<Subtask>,
-        limit: Int = 10
+        subtasks: List<Subtask>
     ): List<ExecutedStepDTO> {
         val gson = GsonInstance.gson
-        val completed = subtasks.filter { it.status == TaskStatus.SUCCESS }
+        // Include both SUCCESS and FAILED so the agent sees its own errors in RECENT_WORK.
+        // Without this, failed tool calls were invisible to the agent and it kept re-trying
+        // the same approach under the impression it hadn't tried yet.
+        val completed = subtasks.filter {
+            it.status == TaskStatus.SUCCESS || it.status == TaskStatus.FAILED
+        }
         val executedSteps = mutableListOf<ExecutedStepDTO>()
         val mapType = object : TypeToken<Map<String, Any>>() {}.type
 
-        completed.takeLast(limit).forEach { prevSubtask ->
+        completed.forEach { prevSubtask ->
             val rawResult = prevSubtask.result ?: return@forEach
             var hasAddedSteps = false
             val fallbackParams = extractParamsFromSubtask(prevSubtask, gson)
@@ -171,7 +183,8 @@ internal class TaskContextExtractor {
                                     parameters = paramsMap,
                                     result = resultText,
                                     summary = summary,
-                                    timestamp = Instant.ofEpochMilli(timestamp)
+                                    timestamp = Instant.ofEpochMilli(timestamp),
+                                    success = prevSubtask.status == TaskStatus.SUCCESS
                                 )
                             )
                             hasAddedSteps = true
@@ -215,15 +228,17 @@ internal class TaskContextExtractor {
                         parameters = fallbackParams,
                         result = resultText,
                         summary = summary,
-                        timestamp = Instant.ofEpochMilli(timestamp)
+                        timestamp = Instant.ofEpochMilli(timestamp),
+                        success = prevSubtask.status == TaskStatus.SUCCESS
                     )
                 )
                 logger.debug { "[CONTEXT] Added fallback step for subtask ${prevSubtask.id}: ${prevSubtask.kind.name}" }
             }
         }
 
-        // Keep only the most recent entries if outputs expanded the list beyond limit
-        return executedSteps.takeLast(limit)
+        // No hard cap — return all terminal steps and let the RECENT_WORK section
+        // picker apply budget-driven selection + compression.
+        return executedSteps
     }
 
     private fun normalizeResultJson(rawResult: String, gson: com.google.gson.Gson): String? {

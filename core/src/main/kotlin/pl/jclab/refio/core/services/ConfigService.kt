@@ -100,11 +100,17 @@ class ConfigService(
     }
 
     companion object {
+        const val INHERIT_MODEL_VALUE = "inherit"
+
+        /** Context sizes at or below this threshold trigger compact (shorter) prompts. */
+        const val COMPACT_PROMPT_THRESHOLD = 48_000
+
         // Configuration keys
         const val KEY_DEFAULT_MODEL_CHAT = "default_model.chat"
         const val KEY_DEFAULT_MODEL_PLAN = "default_model.plan"
         const val KEY_DEFAULT_MODEL_AGENT = "default_model.agent"
         const val KEY_WEAK_MODEL = "default_model.weak"  // Cheap model for auxiliary operations (summaries, etc.)
+        const val KEY_STRONG_MODEL = "default_model.strong"  // Powerful model for complex delegation
         const val KEY_MODELS_VISIBILITY = "models.visibility"
 
         // Limits configuration keys
@@ -126,6 +132,7 @@ class ConfigService(
         const val KEY_UI_THINKING_ENABLED = "ui.thinking_enabled"
         const val KEY_UI_NO_EGRESS_ENABLED = "ui.no_egress_enabled"
         const val KEY_UI_ORCHESTRATION_ENABLED = "ui.orchestration_enabled"
+        const val KEY_UI_MULTI_AGENT_STRATEGY = "ui.multi_agent_strategy"
         const val KEY_UI_INTENT_CLASSIFICATION_ENABLED = "ui.intent_classification_enabled"
         const val KEY_UI_EXECUTION_MODE = "ui.execution_mode"
         const val KEY_UI_SELECTED_MODE = "ui.selected_mode"
@@ -142,6 +149,7 @@ class ConfigService(
         const val KEY_RAG_CACHE_TTL_MS = "rag.cache_ttl_ms"
         const val KEY_RAG_MAX_CONCURRENT_JOBS = "rag.max_concurrent_jobs"
         const val KEY_RAG_MAX_CHUNKS_PER_FILE = "rag.max_chunks_per_file"
+        const val KEY_OLLAMA_MAX_CONCURRENT = "providers.ollama_max_concurrent"
         const val KEY_RAG_INDEX_BATCH_SIZE = "rag.index_batch_size"
         const val KEY_RAG_EMBEDDINGS_BATCH_SIZE = "rag.embeddings_batch_size"
         const val KEY_RAG_EMBEDDING_CACHE_SIZE = "rag.embedding_cache_size"
@@ -238,7 +246,7 @@ class ConfigService(
         const val DEFAULT_RAG_MAX_CONCURRENT_JOBS = 4
         const val DEFAULT_RAG_MAX_CHUNKS_PER_FILE = 100
         const val DEFAULT_RAG_CHUNKING_MODE = "semantic"
-        const val DEFAULT_RAG_SEARCH_SIMILARITY_THRESHOLD = 0.5f
+        const val DEFAULT_RAG_SEARCH_SIMILARITY_THRESHOLD = 0.65f
         const val DEFAULT_RAG_SEARCH_TOP_K = 5
         const val DEFAULT_RAG_SEARCH_CACHE_TTL_SECONDS = 60L
         const val DEFAULT_RAG_SEARCH_HYBRID_ENABLED = false
@@ -369,6 +377,12 @@ class ConfigService(
         ModelOperation.CODING -> KEY_DEFAULT_MODEL_AGENT
         ModelOperation.WEAK -> KEY_WEAK_MODEL
         ModelOperation.EMBEDDING -> KEY_EMBEDDING_MODEL
+        ModelOperation.STRONG -> KEY_STRONG_MODEL
+    }
+
+    private fun isInheritedModelConfig(data: ModelConfigData): Boolean {
+        return data.modelId.equals(INHERIT_MODEL_VALUE, ignoreCase = true) &&
+                data.provider.equals(INHERIT_MODEL_VALUE, ignoreCase = true)
     }
 
     private fun fallbackModelForOperation(operation: ModelOperation): Pair<String, String> = when (operation) {
@@ -377,6 +391,7 @@ class ConfigService(
         ModelOperation.CODING -> Pair(FALLBACK_MODEL, FALLBACK_PROVIDER)
         ModelOperation.WEAK -> Pair(FALLBACK_WEAK_MODEL, FALLBACK_WEAK_PROVIDER)
         ModelOperation.EMBEDDING -> Pair(FALLBACK_EMBEDDING_MODEL, FALLBACK_EMBEDDING_PROVIDER)
+        ModelOperation.STRONG -> throw IllegalStateException("STRONG model has no fallback — must be explicitly configured")
     }
 
     /**
@@ -427,6 +442,10 @@ class ConfigService(
                 // Check DB first
                 if (config != null) {
                     val data = gson.fromJson(config.value, ModelConfigData::class.java)
+                    if (isInheritedModelConfig(data)) {
+                        logger.info { "Using inherited weak model -> default model" }
+                        return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
+                    }
                     if (data.modelId != null && data.provider != null) {
                         logger.info { "Using weak model from DB: ${data.modelId}" }
                         return Pair(data.modelId, data.provider)
@@ -461,6 +480,10 @@ class ConfigService(
             ModelOperation.PLAN -> {
                 if (config != null) {
                     val data = gson.fromJson(config.value, ModelConfigData::class.java)
+                    if (isInheritedModelConfig(data)) {
+                        logger.info { "Using inherited plan model -> default model" }
+                        return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
+                    }
                     if (data.modelId != null && data.provider != null) {
                         logger.info { "Using plan model from DB: ${data.modelId}" }
                         return Pair(data.modelId, data.provider)
@@ -478,6 +501,10 @@ class ConfigService(
             ModelOperation.CODING -> {
                 if (config != null) {
                     val data = gson.fromJson(config.value, ModelConfigData::class.java)
+                    if (isInheritedModelConfig(data)) {
+                        logger.info { "Using inherited coding model -> default model" }
+                        return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
+                    }
                     if (data.modelId != null && data.provider != null) {
                         logger.info { "Using coding model from DB: ${data.modelId}" }
                         return Pair(data.modelId, data.provider)
@@ -491,11 +518,69 @@ class ConfigService(
                     return Pair(model, provider)
                 }
             }
+
+            ModelOperation.STRONG -> {
+                if (config != null) {
+                    val data = gson.fromJson(config.value, ModelConfigData::class.java)
+                    if (isInheritedModelConfig(data)) {
+                        logger.info { "Using inherited strong model -> default model" }
+                        return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
+                    }
+                    if (data.modelId != null && data.provider != null) {
+                        logger.info { "Using strong model from DB: ${data.modelId}" }
+                        return Pair(data.modelId, data.provider)
+                    }
+                }
+                val yamlModel = yamlLoader.getDefaultStrongModel()
+                if (yamlModel != null) {
+                    val (provider, model) = parseModelString(yamlModel)
+                    logger.info { "Using strong model from YAML: $model (provider=$provider)" }
+                    return Pair(model, provider)
+                }
+                // No fallback for STRONG — callers should use getStrongModel() which returns null
+                throw IllegalStateException("STRONG model not configured and has no fallback")
+            }
         }
 
         val fallback = fallbackModelForOperation(operation)
         logger.info { "No config found for $operation, using fallback: ${fallback.first}" }
         return fallback
+    }
+
+    /**
+     * Get the configured strong model, or null if not configured.
+     * Unlike other operations, STRONG has no fallback.
+     */
+    fun getStrongModel(
+        taskId: String? = null,
+        projectId: String? = null
+    ): Pair<String, String>? {
+        val key = KEY_STRONG_MODEL
+
+        // 1. Check database
+        val config = getConfigWithPrecedence(key = key, taskId = taskId, projectId = projectId)
+        if (config != null) {
+            val data = gson.fromJson(config.value, ModelConfigData::class.java)
+            if (isInheritedModelConfig(data)) {
+                logger.info { "Using inherited strong model -> default model" }
+                return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
+            }
+            if (data.modelId != null && data.provider != null) {
+                logger.info { "Using strong model from DB: ${data.modelId}" }
+                return Pair(data.modelId, data.provider)
+            }
+        }
+
+        // 2. Check YAML
+        val yamlModel = yamlLoader.getDefaultStrongModel()
+        if (yamlModel != null) {
+            val (provider, model) = parseModelString(yamlModel)
+            logger.info { "Using strong model from YAML: $model (provider=$provider)" }
+            return Pair(model, provider)
+        }
+
+        // 3. No fallback — return null
+        return null
     }
 
     /**
@@ -1644,6 +1729,16 @@ class ConfigService(
     }
 
     /**
+     * Whether compact (shorter) system prompts should be used.
+     * Auto-detects based on resolved context size for the operation:
+     * context <= 48000 tokens → compact mode (saves ~40% prompt tokens).
+     */
+    fun isCompactPrompts(operation: ModelOperation? = null, taskId: String? = null): Boolean {
+        val contextSize = resolveContextSizeForBudget(operation, taskId)
+        return contextSize <= COMPACT_PROMPT_THRESHOLD
+    }
+
+    /**
      * Get streaming read timeout (time between chunks) in milliseconds.
      * Used to detect stalled streaming connections.
      */
@@ -1900,6 +1995,7 @@ class ConfigService(
             Triple(KEY_UI_THINKING_ENABLED, "false", "Show LLM thinking process in UI"),
             Triple(KEY_UI_NO_EGRESS_ENABLED, "false", "Block external network calls"),
             Triple(KEY_UI_ORCHESTRATION_ENABLED, "true", "Enable orchestration UI toggle"),
+            Triple(KEY_UI_MULTI_AGENT_STRATEGY, "SINGLE", "Multi-agent orchestration strategy: SINGLE, PARALLEL, PIPELINE, ORCHESTRATOR"),
             Triple(KEY_UI_INTENT_CLASSIFICATION_ENABLED, "false", "Enable LLM intent classification"),
             Triple(KEY_UI_EXECUTION_MODE, "AUTO", "Execution mode (AUTO/INTERACTIVE)"),
             Triple(KEY_UI_SELECTED_MODE, "CHAT", "Selected task mode (CHAT/PLAN/AGENT)"),
@@ -1916,7 +2012,7 @@ class ConfigService(
             Triple(KEY_RAG_SEARCH_CACHE_TTL_SECONDS, DEFAULT_RAG_SEARCH_CACHE_TTL_SECONDS.toString(), "TTL for cached @codebase search results in seconds"),
             Triple(KEY_WORKING_MEMORY_MAX_FACTS, DEFAULT_WORKING_MEMORY_MAX_FACTS.toString(), "Maximum working memory facts stored per task"),
             Triple(KEY_TASK_VERIFICATION_ENABLED, "false", "Enable task completion verification for AGENT mode"),
-            Triple(KEY_MAX_CONSECUTIVE_TOOL_ERRORS, DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS.toString(), "Max consecutive tool errors before failing the turn"),
+            Triple(KEY_MAX_CONSECUTIVE_TOOL_ERRORS, DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS.toString(), "Max consecutive failures of the same tool+args before aborting (definitive loop). Varied args reset the counter."),
             Triple(KEY_JSON_THINKING_XML_TAGS, DEFAULT_JSON_THINKING_XML_TAGS, "Comma-separated XML tags stripped before JSON extraction (e.g., thinking,think)")
         )
 

@@ -130,6 +130,8 @@ class HierarchicalConfigLoader private constructor(
 
     fun getDefaultEmbeddingModel(): String? = getConfig().models?.defaults?.embedding
 
+    fun getDefaultStrongModel(): String? = getConfig().models?.defaults?.strong
+
     fun getModelsVisibility(): Map<String, Boolean>? = getConfig().models?.visibility
 
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -218,6 +220,12 @@ class HierarchicalConfigLoader private constructor(
     // ═══════════════════════════════════════════════════════════════════════════════
 
     fun getMcpServers(): List<McpServerConfig>? = getConfig().mcp?.servers
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // Hooks Settings
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    fun getHooks(): HooksConfig? = getConfig().hooks
 
     companion object {
         private val instances = mutableMapOf<Path?, HierarchicalConfigLoader>()

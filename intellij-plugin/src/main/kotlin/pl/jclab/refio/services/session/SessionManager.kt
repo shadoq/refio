@@ -81,6 +81,8 @@ class SessionManager(private val project: Project) {
     val selectedModel: StateFlow<String> = stateManager.selectedModel
     val thinkingEnabled: StateFlow<Boolean> = stateManager.thinkingEnabled
     val noEgressEnabled: StateFlow<Boolean> = stateManager.noEgressEnabled
+    val multiAgentEnabled: StateFlow<Boolean> = stateManager.multiAgentEnabled
+    val multiAgentStrategy: StateFlow<pl.jclab.refio.api.models.MultiAgentStrategy> = stateManager.multiAgentStrategy
 
     val isPaused: StateFlow<Boolean> = stateManager.isPaused
     val isGenerating: StateFlow<Boolean> = stateManager.isGenerating
@@ -211,6 +213,26 @@ class SessionManager(private val project: Project) {
                 if (isWaiting) {
                     logger.info { "UserInteraction is waiting for response - refreshing messages" }
                     messageDispatcher.loadMessages()
+                }
+            }
+        }
+
+        // Observe lastPromptSnapshot to propagate context section tokens to UI.
+        // lastPromptSnapshot is published by AgentTurnLoop after each prompt build,
+        // so this bridges core-layer context info to SessionStateManager → StatusBar/ContextPanel.
+        cs.launch {
+            var snapshotJob: Job? = null
+            activeSession.collect { _ ->
+                snapshotJob?.cancel()
+                val flow = lastPromptSnapshot
+                if (flow != null) {
+                    snapshotJob = cs.launch {
+                        flow.collect { snapshot ->
+                            if (snapshot != null && snapshot.sectionTokens.isNotEmpty()) {
+                                updateContextSectionTokens(snapshot.sectionTokens, snapshot.totalTokens)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -386,6 +408,16 @@ class SessionManager(private val project: Project) {
         return sendMessage(trimmed, contextRefs = emptyList())
     }
 
+    /**
+     * Manually re-load the subtask list for the active session from the backend.
+     * Wired to the refresh button in the Execution panel — useful when the
+     * UI state has drifted from the database (e.g. after a backend hiccup
+     * or when an event was missed).
+     */
+    suspend fun refreshSubtasks() {
+        subtaskTracker.loadSubtasks()
+    }
+
     suspend fun deleteChatMessage(messageId: String) {
         val session = stateManager.getActiveSession() ?: throw IllegalStateException("No active session")
         val deleted = projectRouter.chatRouter.deleteMessage(messageId)
@@ -463,9 +495,16 @@ class SessionManager(private val project: Project) {
     }
 
     /**
-     * Set orchestration mode enabled/disabled (US-028).
+     * Set multi-agent mode enabled/disabled.
      * Auto-saves UI state to database.
      */
+    fun setMultiAgentEnabled(enabled: Boolean) {
+        lifecycleService.setMultiAgentEnabled(enabled)
+    }
+
+    fun setMultiAgentStrategy(strategy: pl.jclab.refio.api.models.MultiAgentStrategy) {
+        lifecycleService.setMultiAgentStrategy(strategy)
+    }
 
     suspend fun getAvailableModels(): List<String> {
         return lifecycleService.getAvailableModels()
@@ -1062,7 +1101,8 @@ class SessionManager(private val project: Project) {
                             maxIterationsOverride = definition.maxSteps,
                             depth = 0,
                             subagentChain = emptyList(),
-                            contextProfile = definition.contextProfile
+                            contextProfile = definition.contextProfile,
+                            reasoningEffort = definition.reasoningEffort
                         )
                     )
                 } else {

@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.services.turn
 
+import pl.jclab.refio.core.api.ContextSectionTokenInfo
 import pl.jclab.refio.core.services.context.ContextSection
 import pl.jclab.refio.core.services.context.ContextPriority
 import java.time.Instant
@@ -54,7 +55,13 @@ data class PromptSnapshot(
     val toolCount: Int,
     val toolNames: List<String>,
     val contextTrace: ContextDecisionTrace,
-    val systemPromptPreview: String? = null
+    val systemPromptPreview: String? = null,
+    /**
+     * Granular section token breakdown for UI visualization.
+     * Keys match ContextSectionColorPalette (e.g. "system_prompt", "recent_work", "key_components").
+     * Includes system prompt + context sections + messages — same breakdown as manual refresh.
+     */
+    val sectionTokens: Map<String, ContextSectionTokenInfo> = emptyMap()
 )
 
 /**

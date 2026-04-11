@@ -292,4 +292,158 @@ class AgentEventHandlerTest {
             handler.shutdown()
         }
     }
+
+    @Nested
+    inner class OrphanedDeferreds {
+
+        @Test
+        fun `late response after timeout should not cause exception`() = runTest {
+            val handler = createHandler()
+
+            // Request with short timeout — no response will come
+            val response = handler.requestData(
+                targetAgentId = "agent-2",
+                query = "Will timeout",
+                timeout = 100.milliseconds
+            )
+            assertNull(response, "Should return null on timeout")
+
+            // Emit a late DataResponse with a requestId that was already cleaned up.
+            // The handler should not crash.
+            eventBus.emit(AgentEvent.DataResponse(
+                id = UUID.randomUUID().toString(),
+                sessionId = "session-1",
+                sourceAgentId = "agent-2",
+                timestamp = System.currentTimeMillis(),
+                correlationId = "corr-1",
+                targetAgentId = "agent-1",
+                requestId = "already-cleaned-up-id",
+                response = "Late response"
+            ))
+
+            // Handler still works for new requests
+            val responderJob = launch {
+                eventBus.events.collect { event ->
+                    if (event is AgentEvent.DataRequest && event.sourceAgentId == "agent-1") {
+                        delay(10)
+                        eventBus.emit(AgentEvent.DataResponse(
+                            id = UUID.randomUUID().toString(),
+                            sessionId = "session-1",
+                            sourceAgentId = "agent-2",
+                            timestamp = System.currentTimeMillis(),
+                            correlationId = "corr-1",
+                            targetAgentId = "agent-1",
+                            requestId = event.id,
+                            response = "Fresh response"
+                        ))
+                    }
+                }
+            }
+
+            val freshResponse = handler.requestData(
+                targetAgentId = "agent-2",
+                query = "New request after timeout",
+                timeout = 5.seconds
+            )
+            assertNotNull(freshResponse, "Handler should still work after previous timeout")
+            assertEquals("Fresh response", freshResponse.response)
+
+            responderJob.cancel()
+            handler.shutdown()
+        }
+    }
+
+    @Nested
+    inner class ShutdownWithPendingRequests {
+
+        @Test
+        fun `shutdown cancels pending data request`() = runTest {
+            val handler = createHandler()
+
+            // Launch a request that will never get a response
+            val requestJob = async {
+                handler.requestData(
+                    targetAgentId = "agent-2",
+                    query = "Will be cancelled",
+                    timeout = 60.seconds
+                )
+            }
+
+            // Give the request time to register
+            delay(50)
+
+            // Shutdown should cancel pending deferred
+            handler.shutdown()
+
+            // The pending request should complete (cancelled deferred -> CancellationException)
+            val result = try {
+                requestJob.await()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                null // Expected: deferred was cancelled
+            }
+
+            // Either null (cancelled) or null (timeout) — both are acceptable
+            assertNull(result, "Pending request should be cancelled on shutdown")
+        }
+
+        @Test
+        fun `shutdown cancels pending approval`() = runTest {
+            val handler = createHandler()
+
+            val approvalJob = async {
+                handler.requestApproval(
+                    action = "Write file",
+                    actionType = "FILE_WRITE",
+                    risk = "HIGH",
+                    details = emptyMap()
+                    // No autoApproveAfterMs — waits indefinitely
+                )
+            }
+
+            delay(50)
+            handler.shutdown()
+
+            val result = try {
+                approvalJob.await()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                null
+            }
+
+            assertNull(result, "Pending approval should be cancelled on shutdown")
+        }
+    }
+
+    @Nested
+    inner class ConcurrentShutdownRace {
+
+        @Test
+        fun `concurrent requestData and shutdown should not throw ConcurrentModificationException`() = runTest {
+            val handler = createHandler()
+
+            // Launch 10 concurrent requestData coroutines
+            val jobs = (0 until 10).map { i ->
+                async {
+                    try {
+                        handler.requestData(
+                            targetAgentId = "agent-$i",
+                            query = "query-$i",
+                            timeout = 5.seconds
+                        )
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        null // Expected when shutdown cancels deferred
+                    }
+                }
+            }
+
+            // After some requests are registered, shut down
+            delay(50)
+            handler.shutdown()
+
+            // All jobs should complete without ConcurrentModificationException
+            val results = jobs.map { it.await() }
+            assertTrue(results.all { it == null }, "All requests should be null (cancelled or timed out)")
+
+            // No hanging coroutines — all jobs completed
+        }
+    }
 }

@@ -78,7 +78,12 @@ class AgentEventSqlRepository : AgentEventRepository {
             "ApprovalRequired" to AgentEvent.ApprovalRequired::class.java,
             "ApprovalDecision" to AgentEvent.ApprovalDecision::class.java,
             "ProgressUpdate" to AgentEvent.ProgressUpdate::class.java,
-            "StreamChunk" to AgentEvent.StreamChunk::class.java
+            "StreamChunk" to AgentEvent.StreamChunk::class.java,
+            "TurnStarted" to AgentEvent.TurnStarted::class.java,
+            "TurnEnded" to AgentEvent.TurnEnded::class.java,
+            "LLMCallCompleted" to AgentEvent.LLMCallCompleted::class.java,
+            "ToolCalled" to AgentEvent.ToolCalled::class.java,
+            "StreamAborted" to AgentEvent.StreamAborted::class.java
         )
     }
 }
@@ -99,4 +104,9 @@ private fun AgentEvent.eventTypeName(): String = when (this) {
     is AgentEvent.ApprovalDecision -> "ApprovalDecision"
     is AgentEvent.ProgressUpdate -> "ProgressUpdate"
     is AgentEvent.StreamChunk -> "StreamChunk"
+    is AgentEvent.TurnStarted -> "TurnStarted"
+    is AgentEvent.TurnEnded -> "TurnEnded"
+    is AgentEvent.LLMCallCompleted -> "LLMCallCompleted"
+    is AgentEvent.ToolCalled -> "ToolCalled"
+    is AgentEvent.StreamAborted -> "StreamAborted"
 }

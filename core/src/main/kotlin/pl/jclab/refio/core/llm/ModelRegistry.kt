@@ -5,6 +5,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import pl.jclab.refio.core.llm.adapters.AnthropicAdapter
 import pl.jclab.refio.core.llm.adapters.CustomOpenAIAdapter
 import pl.jclab.refio.core.llm.adapters.GeminiAdapter
@@ -128,6 +129,7 @@ fun ModelDefinition.toModelConfig(): ModelConfig {
 private var modelsCache: Map<String, List<ModelConfig>>? = null
 private var cacheTimestamp: Long = 0L
 private const val CACHE_TTL_MS = 300_000L // 5 minutes
+private const val LIST_MODELS_TIMEOUT_MS = 15_000L // 15s per-provider timeout for listing models
 private val modelsCacheMutex = Mutex()
 
 private fun getCachedModelsIfFresh(now: Long = System.currentTimeMillis()): List<ModelConfig>? {
@@ -210,26 +212,33 @@ suspend fun getAllModels(
             providerNames.map { name ->
                 async {
                     try {
-                        val models = when (name) {
-                            "ollama" -> OllamaAdapter(configService = configService).listModels()
-                            "openai" -> OpenAIAdapter(configService = configService).listModels()
-                            "anthropic" -> AnthropicAdapter(configService = configService).listModels()
-                            "openrouter" -> OpenRouterAdapter(configService = configService).listModels()
-                            "gemini" -> GeminiAdapter(configService = configService).listModels()
-                            "lmstudio" -> LMStudioAdapter(configService = configService).listModels()
-                            "custom_openai" -> CustomOpenAIAdapter(
-                                model = configService?.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_MODEL) ?: "custom-openai",
-                                providerName = "custom_openai",
-                                configService = configService
-                            ).listModels()
-                            "zai" -> ZAIAdapter(
-                                model = "glm-4.5",
-                                configService = configService
-                            ).listModels()
-                            else -> emptyList()
+                        val models = withTimeoutOrNull(LIST_MODELS_TIMEOUT_MS) {
+                            when (name) {
+                                "ollama" -> OllamaAdapter(configService = configService).listModels()
+                                "openai" -> OpenAIAdapter(configService = configService).listModels()
+                                "anthropic" -> AnthropicAdapter(configService = configService).listModels()
+                                "openrouter" -> OpenRouterAdapter(configService = configService).listModels()
+                                "gemini" -> GeminiAdapter(configService = configService).listModels()
+                                "lmstudio" -> LMStudioAdapter(configService = configService).listModels()
+                                "custom_openai" -> CustomOpenAIAdapter(
+                                    model = configService?.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_MODEL) ?: "custom-openai",
+                                    providerName = "custom_openai",
+                                    configService = configService
+                                ).listModels()
+                                "zai" -> ZAIAdapter(
+                                    model = "glm-4.5",
+                                    configService = configService
+                                ).listModels()
+                                else -> emptyList()
+                            }
                         }
-                        logger.info { "[ModelRegistry] Fetched ${models.size} models from $name" }
-                        ProviderFetch(name, models)
+                        if (models == null) {
+                            logger.warn { "[ModelRegistry] Timeout fetching $name models (${LIST_MODELS_TIMEOUT_MS}ms)" }
+                            ProviderFetch(name, emptyList())
+                        } else {
+                            logger.info { "[ModelRegistry] Fetched ${models.size} models from $name" }
+                            ProviderFetch(name, models)
+                        }
                     } catch (e: Exception) {
                         logger.warn { "[ModelRegistry] Failed to fetch $name models: ${e.message}" }
                         ProviderFetch(name, emptyList())
@@ -268,52 +277,60 @@ suspend fun getModelsByProvider(
     logger.info { "[ModelRegistry] Fetching models from provider: $provider" }
 
     return try {
-        when (provider.lowercase()) {
-            "ollama" -> {
-                val adapter = OllamaAdapter(
-                    configService = configService
-                )
-                adapter.listModels()
+        val models = withTimeoutOrNull(LIST_MODELS_TIMEOUT_MS) {
+            when (provider.lowercase()) {
+                "ollama" -> {
+                    val adapter = OllamaAdapter(
+                        configService = configService
+                    )
+                    adapter.listModels()
+                }
+                "openai" -> {
+                    val adapter = OpenAIAdapter(configService = configService)
+                    adapter.listModels()
+                }
+                "anthropic" -> {
+                    val adapter = AnthropicAdapter(configService = configService)
+                    adapter.listModels()
+                }
+                "openrouter" -> {
+                    val adapter = OpenRouterAdapter(configService = configService)
+                    adapter.listModels()
+                }
+                "gemini" -> {
+                    val adapter = GeminiAdapter(configService = configService)
+                    adapter.listModels()
+                }
+                "lmstudio" -> {
+                    val adapter = LMStudioAdapter(configService = configService)
+                    adapter.listModels()
+                }
+                "custom_openai" -> {
+                    val adapter = CustomOpenAIAdapter(
+                        model = configService?.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_MODEL) ?: "custom-openai",
+                        providerName = "custom_openai",
+                        configService = configService
+                    )
+                    adapter.listModels()
+                }
+                "zai" -> {
+                    val adapter = ZAIAdapter(
+                        model = "glm-4.5",
+                        configService = configService
+                    )
+                    adapter.listModels()
+                }
+                else -> {
+                    logger.error { "[ModelRegistry] Unknown provider: $provider" }
+                    emptyList()
+                }
             }
-            "openai" -> {
-                val adapter = OpenAIAdapter(configService = configService)
-                adapter.listModels()
-            }
-            "anthropic" -> {
-                val adapter = AnthropicAdapter(configService = configService)
-                adapter.listModels()
-            }
-            "openrouter" -> {
-                val adapter = OpenRouterAdapter(configService = configService)
-                adapter.listModels()
-            }
-            "gemini" -> {
-                val adapter = GeminiAdapter(configService = configService)
-                adapter.listModels()
-            }
-            "lmstudio" -> {
-                val adapter = LMStudioAdapter(configService = configService)
-                adapter.listModels()
-            }
-            "custom_openai" -> {
-                val adapter = CustomOpenAIAdapter(
-                    model = configService?.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_MODEL) ?: "custom-openai",
-                    providerName = "custom_openai",
-                    configService = configService
-                )
-                adapter.listModels()
-            }
-            "zai" -> {
-                val adapter = ZAIAdapter(
-                    model = "glm-4.5",
-                    configService = configService
-                )
-                adapter.listModels()
-            }
-            else -> {
-                logger.error { "[ModelRegistry] Unknown provider: $provider" }
-                emptyList()
-            }
+        }
+        if (models == null) {
+            logger.warn { "[ModelRegistry] Timeout fetching $provider models (${LIST_MODELS_TIMEOUT_MS}ms)" }
+            emptyList()
+        } else {
+            models
         }
     } catch (e: Exception) {
         logger.error(e) { "[ModelRegistry] Failed to fetch models from $provider: ${e.message}" }

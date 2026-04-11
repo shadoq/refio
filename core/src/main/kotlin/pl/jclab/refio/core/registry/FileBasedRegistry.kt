@@ -83,7 +83,7 @@ abstract class FileBasedRegistry<T>(
     /**
      * Get a definition by name with priority resolution: project > user > builtin.
      */
-    fun get(name: String): T? {
+    open fun get(name: String): T? {
         refreshIfNeeded()
         val key = name.lowercase()
         return projectFileItems[key] ?: userFileItems[key] ?: builtinItems[key]
@@ -110,7 +110,7 @@ abstract class FileBasedRegistry<T>(
     /**
      * Get all definitions (merged view: project overrides user overrides builtin).
      */
-    fun getAll(includeDisabled: Boolean = false): List<T> {
+    open fun getAll(includeDisabled: Boolean = false): List<T> {
         refreshIfNeeded()
         val merged = LinkedHashMap<String, T>()
         builtinItems.forEach { (k, v) -> merged[k] = v }

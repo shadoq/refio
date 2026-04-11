@@ -50,7 +50,8 @@ class ReadDirectoryTool(
         try {
             // Extract parameters
             val pathStr = (params["path"] as? String) ?: "."
-            val recursive = (params["recursive"] as? Boolean) ?: false
+            val explicitRecursive = params["recursive"] as? Boolean
+            val recursive = explicitRecursive ?: false
             val maxDepth = (params["max_depth"] as? Number)?.toInt() ?: 3
 
             // Validate max depth
@@ -201,7 +202,7 @@ class ReadDirectoryTool(
                     "type" to "integer",
                     "description" to "Maximum recursion depth",
                     "default" to 3
-                )
+                ),
             ),
             "required" to emptyList<String>()
         )

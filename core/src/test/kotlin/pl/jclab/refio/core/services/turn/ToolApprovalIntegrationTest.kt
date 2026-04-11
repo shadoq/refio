@@ -52,7 +52,7 @@ class ToolApprovalIntegrationTest {
         every { subtaskRepository.create(any(), any(), any(), any(), any(), any()) } returns mockk(relaxed = true)
         every { subtaskRepository.getMaxOrderIndex(any()) } returns 0
         every { subtaskRepository.findById(any()) } returns null
-        coEvery { toolResultSummarizer.summarizeToolResult(any(), any(), any()) } returns
+        coEvery { toolResultSummarizer.summarizeToolResult(any(), any(), any(), any()) } returns
             ToolResultSummary("summary", wasSummarized = false, 0, 0, 0.0)
     }
 

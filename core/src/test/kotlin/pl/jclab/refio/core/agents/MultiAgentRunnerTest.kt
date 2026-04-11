@@ -1,19 +1,24 @@
 package pl.jclab.refio.core.agents
 
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import pl.jclab.refio.core.agents.events.AgentEvent
 import pl.jclab.refio.core.agents.events.AgentEventBus
+import pl.jclab.refio.core.agents.testutil.FakeAgentExecutor
 import pl.jclab.refio.core.db.TaskMode
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 class MultiAgentRunnerTest {
 
@@ -182,6 +187,90 @@ class MultiAgentRunnerTest {
             assertEquals("analyst", started.agentName)
             assertEquals("claude", started.model)
             assertEquals("Analyze", started.task)
+        }
+    }
+
+    @Nested
+    inner class DependencyWaitTimeout {
+
+        @Test
+        fun `hanging executor prevents dependent agent from starting`() = runTest {
+            val fake = FakeAgentExecutor()
+            fake.configure("A", FakeAgentExecutor.AgentConfig(hang = true))
+            fake.configure("B", FakeAgentExecutor.AgentConfig(delayMs = 10))
+
+            val specs = listOf(
+                AgentSpec("A", task = "Hangs forever"),
+                AgentSpec("B", task = "Depends on A", dependsOn = listOf("A"))
+            )
+
+            // Current behavior: no built-in timeout on dependency wait.
+            // runner.run() hangs because A never completes and B waits forever.
+            // Use withTimeout to prevent test hang.
+            assertFailsWith<kotlinx.coroutines.TimeoutCancellationException> {
+                withTimeout(5.seconds) {
+                    runner.run("s1", specs, fake.executor)
+                }
+            }
+
+            // B never started — it was waiting for A's completion
+            assertTrue(
+                fake.executionLog.none { it.agentName == "B" },
+                "B should not have started since A never completed"
+            )
+        }
+    }
+
+    @Nested
+    inner class PartialFailureIsolation {
+
+        @Test
+        fun `failed dependency still unblocks dependent agent`() = runTest {
+            val executionOrder = mutableListOf<String>()
+            val specs = listOf(
+                AgentSpec("A", task = "Succeeds"),
+                AgentSpec("B", task = "Fails", dependsOn = listOf("A")),
+                AgentSpec("C", task = "Depends on B", dependsOn = listOf("B"))
+            )
+
+            val results = runner.run("s1", specs) { spec, _ ->
+                executionOrder.add(spec.name)
+                when (spec.name) {
+                    "B" -> throw RuntimeException("LLM unavailable")
+                    else -> AgentResult(spec.name, true, "done", 100, 0.01)
+                }
+            }
+
+            // A completes successfully
+            assertTrue(results["A"]!!.success)
+
+            // B fails with error
+            assertFalse(results["B"]!!.success)
+            assertEquals("LLM unavailable", results["B"]!!.error)
+
+            // C runs because B is added to completedAgents in finally block
+            // (current behavior: failed agents still unblock dependents)
+            assertTrue(results.containsKey("C"), "C should have run after B failed")
+            assertTrue(results["C"]!!.success)
+
+            // Execution order: A first, then B, then C
+            assertEquals("A", executionOrder[0])
+            assertEquals("B", executionOrder[1])
+            assertEquals("C", executionOrder[2])
+        }
+
+        @Test
+        fun `no ConcurrentModificationException on results map`() = runTest {
+            // Stress test: many agents completing concurrently
+            val specs = (0 until 10).map { AgentSpec("agent-$it", task = "Task $it") }
+
+            val results = runner.run("s1", specs) { spec, _ ->
+                delay(10) // Small delay to increase interleaving
+                AgentResult(spec.name, true, "done", 100, 0.01)
+            }
+
+            assertEquals(10, results.size)
+            assertTrue(results.values.all { it.success })
         }
     }
 }

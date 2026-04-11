@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.tools.implementations
 
+import pl.jclab.refio.core.tools.DiffUtils
 import pl.jclab.refio.core.tools.FileLockManager
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
@@ -102,8 +103,14 @@ class CodeEditingTool(
 
                         logger.info { "Successfully created file: $pathStr (size: $newFileSize bytes, ${duration}ms)" }
 
-                        val addedLines = newString.lines().size
-                        val diff = generateReplacementDiff(pathStr, "", newString)
+                        val changeSummary = DiffUtils.buildChangeSummary(
+                            originalContent = "",
+                            newContent = newString,
+                            filePath = pathStr,
+                            replacements = 1,
+                            created = true
+                        )
+                        val diff = changeSummary.unifiedDiff ?: ""
 
                         return@withFileLock ToolResult(
                             success = true,
@@ -118,19 +125,26 @@ class CodeEditingTool(
                             bytesWritten = newString.toByteArray().size,
                             durationMs = duration,
                             filesChanged = listOf(pathStr),
+                            changeSummary = changeSummary,
                             metadata = mapOf(
                                 "path" to pathStr,  // Relative path to project root
                                 "mode" to "create",
                                 "file_size" to newFileSize,
-                                "added_lines" to addedLines,
-                                "removed_lines" to 0,
+                                "added_lines" to changeSummary.addedLines,
+                                "removed_lines" to changeSummary.removedLines,
                                 "diff" to diff
                             )
                         )
                     } else {
                         logger.warn { "File not found: $pathStr (resolved to ${path.toAbsolutePath()})" }
                         return@withFileLock ToolResult.error(
-                            "File not found: $pathStr. To create a new file, use old_string=\"\" or use advance_code_editing with edit_description."
+                            message = "File not found: $pathStr",
+                            recovery = "To create a new file pass old_string=\"\" with the full new content, or use advance_code_editing with edit_description.",
+                            nextActionHints = listOf(
+                                "Verify the path with file_search(pattern=\"${path.fileName}\")",
+                                "If the file should be created, retry with old_string=\"\"",
+                                "For complex new files prefer advance_code_editing"
+                            )
                         )
                     }
                 }
@@ -146,7 +160,8 @@ class CodeEditingTool(
                 logger.info { "File size before edit: $fileSize bytes, absolute='${path.toAbsolutePath()}'" }
                 if (fileSize > limits.maxFileSize) {
                     return@withFileLock ToolResult.error(
-                        "File too large: $fileSize bytes (max ${limits.maxFileSize} bytes)"
+                        message = "File too large: $fileSize bytes (max ${limits.maxFileSize} bytes)",
+                        recovery = "Use multi_line_editor for targeted edits, or split the change into smaller hunks."
                     )
                 }
 
@@ -156,8 +171,13 @@ class CodeEditingTool(
                 // Check if old_string exists
                 if (!content.contains(oldString)) {
                     return@withFileLock ToolResult.error(
-                        "String not found in file: '$oldString' (${oldString.length} chars). " +
-                        "Tip: Use read_file first to see actual file content before editing."
+                        message = "String not found in file: '${oldString.take(80)}${if (oldString.length > 80) "…" else ""}' (${oldString.length} chars).",
+                        recovery = "Read the file first to see the actual content, then retry with the exact substring (including whitespace).",
+                        nextActionHints = listOf(
+                            "read_file(path=\"$pathStr\") to inspect actual content",
+                            "Try grep_search to locate the intended substring",
+                            "Use multi_line_editor if the exact bytes are uncertain"
+                        )
                     )
                 }
 
@@ -166,7 +186,12 @@ class CodeEditingTool(
                     val occurrences = countOccurrences(content, oldString)
                     if (occurrences > 1) {
                         return@withFileLock ToolResult.error(
-                            "String appears $occurrences times in file. Use replace_all=true or provide more unique context."
+                            message = "String appears $occurrences times in file.",
+                            recovery = "Either pass replace_all=true to apply to every occurrence, or extend old_string with surrounding context to make it unique.",
+                            nextActionHints = listOf(
+                                "Add more surrounding context to old_string",
+                                "Pass replace_all=true if every occurrence should change"
+                            )
                         )
                     }
                 }
@@ -184,18 +209,18 @@ class CodeEditingTool(
 
                 val replacements = countOccurrences(content, oldString)
                 val newFileSize = path.fileSize()
-                val diff = generateReplacementDiff(pathStr, oldString, newString)
 
-                // Calculate line changes
-                val oldLines = oldString.lines().size
-                val newLines = newString.lines().size
-                val (addedLines, removedLines) = when {
-                    newLines > oldLines -> Pair((newLines - oldLines) * replacements, 0)
-                    oldLines > newLines -> Pair(0, (oldLines - newLines) * replacements)
-                    else -> Pair(0, 0)
-                }
+                // Build proper unified diff (Myers, 3 lines context) via shared DiffUtils.
+                // This replaces the previous naive "dump old then new" formatter.
+                val changeSummary = DiffUtils.buildChangeSummary(
+                    originalContent = content,
+                    newContent = newContent,
+                    filePath = pathStr,
+                    replacements = replacements
+                )
+                val diff = changeSummary.unifiedDiff ?: ""
 
-                logger.info { "Successfully edited file: $pathStr ($replacements replacements, ${duration}ms, size: $fileSize → $newFileSize bytes)" }
+                logger.info { "Successfully edited file: $pathStr ($replacements replacements, ${duration}ms, size: $fileSize → $newFileSize bytes, +${changeSummary.addedLines}/-${changeSummary.removedLines})" }
 
                 ToolResult(
                     success = true,
@@ -213,13 +238,14 @@ class CodeEditingTool(
                     bytesWritten = newContent.toByteArray().size,
                     durationMs = duration,
                     filesChanged = listOf(pathStr),
+                    changeSummary = changeSummary,
                     metadata = mapOf(
                         "path" to pathStr,  // Relative path to project root
                         "replacements" to replacements,
                         "old_length" to content.length,
                         "new_length" to newContent.length,
-                        "added_lines" to addedLines,
-                        "removed_lines" to removedLines,
+                        "added_lines" to changeSummary.addedLines,
+                        "removed_lines" to changeSummary.removedLines,
                         "diff" to diff
                     )
                 )
@@ -251,19 +277,6 @@ class CodeEditingTool(
         }
 
         return count
-    }
-
-    private fun generateReplacementDiff(path: String, oldString: String, newString: String): String {
-        val oldLines = oldString.lines()
-        val newLines = newString.lines()
-
-        return buildString {
-            appendLine("--- a/$path")
-            appendLine("+++ b/$path")
-            appendLine("@@ -1,${oldLines.size} +1,${newLines.size} @@")
-            oldLines.forEach { appendLine("- $it") }
-            newLines.forEach { appendLine("+ $it") }
-        }.trimEnd()
     }
 
     override fun getParameterSchema(): Map<String, Any> {

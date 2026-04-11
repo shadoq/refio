@@ -1,6 +1,7 @@
 package pl.jclab.refio.api
 
 import pl.jclab.refio.core.api.*
+import pl.jclab.refio.core.config.ModelPresetConfig
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.models.api.ChatRequest
 import pl.jclab.refio.core.models.api.ChatResponse
@@ -255,6 +256,10 @@ class CoreApiClient(internal val router: CoreApiRouter) {
             logger.error(e) { "Failed to set config: $section.$key" }
             throw e
         }
+    }
+
+    fun getYamlModelPresets(): List<ModelPresetConfig> {
+        return router.configService.getYamlConfig().models?.presets ?: emptyList()
     }
 
     // ========================================================================

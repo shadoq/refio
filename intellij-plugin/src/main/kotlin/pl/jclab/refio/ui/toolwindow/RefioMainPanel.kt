@@ -78,6 +78,7 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
     private val tabbedPane: JTabbedPane
     private val middlePanel: JPanel
     private val cardLayout: CardLayout
+    private val agentExecutionPanel: pl.jclab.refio.ui.components.agents.AgentExecutionPanel
 
     // Cache SettingsView to avoid creating new instance each time
     private var settingsView: SettingsView? = null
@@ -124,13 +125,22 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
         historyPanel = HistoryPanel(project, autoLoadOnInit = false)
         ragViewPanel = RagViewPanel(project)
         turnStateStatusBar = TurnStateStatusBar()
+        agentExecutionPanel = pl.jclab.refio.ui.components.agents.AgentExecutionPanel()
+        debugPanel.agentTraceProvider = { agentExecutionPanel.toText() }
 
-        // Observe turn state for status bar
-        val turnStateFlow = sessionManager.turnState
-        if (turnStateFlow != null) {
-            cs.launch {
-                turnStateFlow.collect { snapshot ->
-                    SwingUtilities.invokeLater { turnStateStatusBar.update(snapshot) }
+        // Observe turn state for status bar.
+        // turnState may be null initially (AgentTurnLoop created lazily), so re-check on each session change.
+        cs.launch {
+            var turnStateJob: kotlinx.coroutines.Job? = null
+            sessionManager.activeSession.collect { _ ->
+                turnStateJob?.cancel()
+                val turnStateFlow = sessionManager.turnState
+                if (turnStateFlow != null) {
+                    turnStateJob = cs.launch {
+                        turnStateFlow.collect { snapshot ->
+                            SwingUtilities.invokeLater { turnStateStatusBar.update(snapshot) }
+                        }
+                    }
                 }
             }
         }
@@ -154,10 +164,10 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
             add(promptInputPanel, BorderLayout.SOUTH)
         }
 
-        // Steps panel with turn state status bar at top
+        // Steps panel: turn state status bar (IDLE/iteration) at top, steps view below (has its own internal scroll)
         val stepsPanel = JPanel(BorderLayout()).apply {
             add(turnStateStatusBar, BorderLayout.NORTH)
-            add(JBScrollPane(stepsQueueView), BorderLayout.CENTER)
+            add(stepsQueueView, BorderLayout.CENTER)
         }
 
         // Create tabbed pane
@@ -165,13 +175,13 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
             addTab("Chat", chatPanel)
             addTab("Execution", stepsPanel)
             addTab("Context", contextPanel)
+            addTab("Agents", agentExecutionPanel)
             addTab("RAG", ragViewPanel)
-            addTab("Logs", logsPanel)
             addTab("Debug", debugPanel)
-            addTab("API Logs", apiLogsPanel)
+            addTab("Logs", logsPanel)
+            addTab("API", apiLogsPanel)
             addChangeListener {
-                val selectedTitle = getTitleAt(selectedIndex)
-                if (selectedTitle == "API Logs") {
+                if (selectedIndex >= 0 && getComponentAt(selectedIndex) === apiLogsPanel) {
                     apiLogsPanel.ensureLoaded()
                 }
             }
@@ -246,6 +256,11 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
         cs.launch {
             sessionManager.activeSession.collect { session ->
                 session?.let { updateStepsQueueVisibility(it.mode) }
+                // Wire AgentExecutionPanel to the active session so Trace/Timeline
+                // get populated for single-agent runs too (not only multi-agent).
+                session?.let {
+                    agentExecutionPanel.subscribeToSession(sessionManager.apiRouter.agentEventBus, it.id)
+                }
             }
         }
 
@@ -441,7 +456,7 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
                 // Advanced mode: Show all tabs
                 // Add tabs back if they were removed (check if tab count is only 1)
                 if (tabbedPane.tabCount == 1) {
-                    tabbedPane.addTab("Steps", JBScrollPane(stepsQueueView))
+                    tabbedPane.addTab("Steps", stepsQueueView)
                     tabbedPane.addTab("Context", contextPanel)
                     tabbedPane.addTab("RAG", ragViewPanel)
                     tabbedPane.addTab("Logs", logsPanel)

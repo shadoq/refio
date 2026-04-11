@@ -22,6 +22,7 @@ import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.security.SecureLogger
 import io.ktor.client.request.get
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import io.ktor.utils.io.ByteReadChannel
@@ -120,6 +121,10 @@ class GeminiAdapter(
             } else {
                 executeStandard(apiKey, requestBody, requestJson, startTime, logPrefix)
             }
+        } catch (e: CancellationException) {
+            // Stream aborted by a guardrail (see core/llm/streaming/) — must propagate
+            // so the caller can see StreamAbortedException instead of RefioError.LLMError.
+            throw e
         } catch (e: Exception) {
             throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
         }
@@ -142,8 +147,11 @@ class GeminiAdapter(
             .takeIf { it.isNotBlank() }
 
         val contents = nonSystemMessages.map { msg ->
+            // Gemini only allows "user"/"model". Tool results (role="tool" from LLMMessageMapper)
+            // map to "model" so they stay attributed to the assistant turn — same as the previous
+            // behavior where the mapper produced role="assistant" directly.
             val role = when (msg.role.lowercase()) {
-                "assistant", "model" -> "model"
+                "assistant", "model", "tool" -> "model"
                 else -> "user"
             }
             mapOf(
@@ -368,6 +376,9 @@ class GeminiAdapter(
                     val chunkMap = try {
                         @Suppress("UNCHECKED_CAST")
                         gson.fromJson(payload, Map::class.java) as Map<String, Any?>
+                    } catch (e: CancellationException) {
+                        // Let stream abort (guardrail trip) propagate out of the loop.
+                        throw e
                     } catch (e: Exception) {
                         logger.warn { "[GEMINI] Failed to parse stream chunk: ${e.message}" }
                         continue
@@ -452,6 +463,22 @@ class GeminiAdapter(
                 cost = cost,
                 finishReason = finalFinishReason
             )
+        } catch (e: CancellationException) {
+            // Guardrail-triggered abort — log and rethrow as-is, do NOT wrap.
+            val latencyMs = (System.currentTimeMillis() - startTime).toInt()
+            logger.apiError(
+                provider = provider,
+                model = model,
+                endpoint = url,
+                requestJson = requestJson,
+                httpStatus = httpStatus,
+                error = e,
+                latencyMs = latencyMs,
+                taskId = taskId,
+                subtaskId = subtaskId,
+                source = source
+            )
+            throw e
         } catch (e: Exception) {
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
             logger.apiError(

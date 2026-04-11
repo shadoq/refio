@@ -21,25 +21,6 @@ class ToolCallParserTest {
     )
 
     @Test
-    fun `should detect empty object as meaningless json`() {
-        assertTrue(parser.isMeaninglessJson("{}"))
-        assertTrue(parser.isMeaninglessJson("{ }"))
-    }
-
-    @Test
-    fun `should treat known payload keys as meaningful json`() {
-        assertFalse(parser.isMeaninglessJson("""{"response":"done"}"""))
-        assertFalse(parser.isMeaninglessJson("""{"actions":[]}"""))
-        assertFalse(parser.isMeaninglessJson("""{"thinking":"..."}"""))
-    }
-
-    @Test
-    fun `should treat unknown payload object as meaningless json`() {
-        assertTrue(parser.isMeaninglessJson("""{"foo":"bar"}"""))
-        assertFalse(parser.isMeaninglessJson(""))
-    }
-
-    @Test
     fun `should recover create new file tool call from malformed envelope with long markdown content`() {
         val malformed = """
             {

@@ -86,7 +86,12 @@ data class ConfigYaml(
     /**
      * MCP server configurations (project-specific)
      */
-    val mcp: McpConfig? = null
+    val mcp: McpConfig? = null,
+
+    /**
+     * Hooks configuration (user-defined lifecycle actions)
+     */
+    val hooks: HooksConfig? = null
 ) {
     companion object {
         /**
@@ -337,7 +342,8 @@ data class ConfigYaml(
                 rag = mergeRag(base.rag, override.rag),
                 ui = mergeUi(base.ui, override.ui),
                 prompts = mergePrompts(base.prompts, override.prompts),
-                mcp = mergeMcp(base.mcp, override.mcp)
+                mcp = mergeMcp(base.mcp, override.mcp),
+                hooks = mergeHooks(base.hooks, override.hooks)
             )
         }
 
@@ -521,6 +527,20 @@ data class ConfigYaml(
 
             val mergedServers = (base.servers ?: emptyList()) + (override.servers ?: emptyList())
             return McpConfig(servers = mergedServers.distinctBy { it.id })
+        }
+
+        private fun mergeHooks(base: HooksConfig?, override: HooksConfig?): HooksConfig? {
+            if (base == null) return override
+            if (override == null) return base
+
+            return HooksConfig(
+                beforeTurnLoop = override.beforeTurnLoop ?: base.beforeTurnLoop,
+                afterTurnLoop = override.afterTurnLoop ?: base.afterTurnLoop,
+                beforeTool = override.beforeTool ?: base.beforeTool,
+                afterTool = override.afterTool ?: base.afterTool,
+                onAgentComplete = override.onAgentComplete ?: base.onAgentComplete,
+                onAgentError = override.onAgentError ?: base.onAgentError
+            )
         }
 
         /**
@@ -1262,7 +1282,8 @@ data class ModelDefaultsConfig(
     val plan: String? = null,
     val coding: String? = null,
     val weak: String? = null,
-    val embedding: String? = null
+    val embedding: String? = null,
+    val strong: String? = null
 )
 
 @Serializable
@@ -1273,6 +1294,7 @@ data class ModelPresetConfig(
     val planModel: String? = null,
     val codingModel: String? = null,
     val weakModel: String? = null,
+    val strongModel: String? = null,
     val visibleModels: List<String>? = null
 )
 
@@ -1441,4 +1463,34 @@ data class McpHeaderConfig(
     val name: String,
     val value: String,
     val isSecret: Boolean = false
+)
+
+/**
+ * Hooks configuration — user-defined actions triggered on agent lifecycle events.
+ * Configured in .refio/config.yaml under the `hooks` key.
+ */
+@Serializable
+data class HooksConfig(
+    @SerialName("before_turn_loop")
+    val beforeTurnLoop: List<HookDefinition>? = null,
+    @SerialName("after_turn_loop")
+    val afterTurnLoop: List<HookDefinition>? = null,
+    @SerialName("before_tool")
+    val beforeTool: List<HookDefinition>? = null,
+    @SerialName("after_tool")
+    val afterTool: List<HookDefinition>? = null,
+    @SerialName("on_agent_complete")
+    val onAgentComplete: List<HookDefinition>? = null,
+    @SerialName("on_agent_error")
+    val onAgentError: List<HookDefinition>? = null
+)
+
+@Serializable
+data class HookDefinition(
+    val action: String,
+    val command: String? = null,
+    val message: String? = null,
+    val match: String? = null,
+    val modes: List<String>? = null,
+    val timeout: Long? = null
 )

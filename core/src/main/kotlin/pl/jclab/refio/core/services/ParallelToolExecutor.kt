@@ -8,6 +8,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import pl.jclab.refio.core.db.ToolCallData
 import pl.jclab.refio.core.tools.base.Tool
+import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.tools.base.ToolResult
@@ -60,7 +61,8 @@ class ParallelToolExecutor(
         // Partition by tool mode
         val indexed = toolCalls.mapIndexed { index, tc -> index to tc }
         val (readOnlyIndexed, writeIndexed) = indexed.partition { (_, tc) ->
-            getToolMode(tc.name) == ToolMode.READ_ONLY
+            val tool = toolRegistry.getTool(tc.name)
+            tool?.mode == ToolMode.READ_ONLY && tool.category != ToolCategory.SYSTEM
         }
 
         parallelExecutions.addAndGet(readOnlyIndexed.size)

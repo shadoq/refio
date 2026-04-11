@@ -11,6 +11,7 @@ import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.db.repositories.TaskRepository
+import pl.jclab.refio.core.tools.DiffUtils
 import pl.jclab.refio.core.tools.FileLockManager
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
@@ -60,7 +61,17 @@ class AdvanceCodeEditingTool(
 
     override val name = "advance_code_editing"
     override val description =
-        "LLM-assisted full file regeneration or creation. EXPENSIVE (~\$0.06) — use for major rewrites or new code files."
+        "LLM-assisted FULL FILE regeneration. EXPENSIVE (~\$0.06) — regenerates the entire file from scratch every call. " +
+        "DO NOT use this for small fixes (1–3 line changes, fixing a single function, renaming, adding a missing branch). " +
+        "Full regeneration frequently introduces NEW bugs in untouched code regions: the LLM rewrites the whole file " +
+        "from a description, drops invariants, changes function signatures inconsistently, and silently breaks call sites. " +
+        "Reserve this tool for: (a) creating brand new code files from scratch, " +
+        "(b) rewrites that would touch >50% of the file, " +
+        "(c) cases where surgical find/replace is impractical because the file is structurally broken. " +
+        "FOR EVERYTHING ELSE use code_editing (FREE, exact find/replace) for known strings, " +
+        "or multi_line_editor (CHEAP ~\$0.02) for 2–10 targeted semantic edits. " +
+        "Calling advance_code_editing twice in a row on the same file is almost always wrong — if the previous " +
+        "regeneration produced a bug, fix THAT bug surgically with code_editing instead of regenerating again."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_PRODUCING
 
@@ -328,8 +339,8 @@ class AdvanceCodeEditingTool(
                     "LLM did not return valid code block. Try rephrasing the edit description or use simple search-replace mode."
                 )
 
-            // 6. Generate diff
-            val diff = generateUnifiedDiff(
+            // 6. Generate diff (delegated to shared DiffUtils)
+            val diff = DiffUtils.generateUnifiedDiff(
                 originalContent = originalContent,
                 newContent = newContent,
                 filePath = pathStr
@@ -368,7 +379,16 @@ class AdvanceCodeEditingTool(
             }
 
             // 10. Parse diff stats for UI display
-            val (addedLines, removedLines) = parseDiffStats(diff)
+            val (addedLines, removedLines) = DiffUtils.parseDiffStats(diff)
+
+            // Build structured ChangeSummary so the agent can reason about what changed
+            // without re-reading the file (lesson 03E04: modify tools should return what changed).
+            val changeSummary = DiffUtils.buildChangeSummary(
+                originalContent = originalContent,
+                newContent = newContent,
+                filePath = pathStr,
+                created = !fileExists
+            )
 
             // 11. Return result (changes displayed as badge in UI)
             ToolResult(
@@ -395,6 +415,7 @@ class AdvanceCodeEditingTool(
                 bytesWritten = newContent.toByteArray().size,
                 durationMs = duration,
                 filesChanged = listOf(pathStr),
+                changeSummary = changeSummary,
                 metadata = mapOf(
                     "path" to pathStr,  // Relative path to project root
                     "mode" to "llm_assisted",
@@ -410,24 +431,6 @@ class AdvanceCodeEditingTool(
                 )
             )
         }
-    }
-
-    /**
-     * Parse diff stats to count added and removed lines.
-     * Returns Pair(addedLines, removedLines).
-     */
-    private fun parseDiffStats(diff: String): Pair<Int, Int> {
-        var addedLines = 0
-        var removedLines = 0
-
-        diff.lines().forEach { line ->
-            when {
-                line.startsWith("+ ") -> addedLines++
-                line.startsWith("- ") -> removedLines++
-            }
-        }
-
-        return Pair(addedLines, removedLines)
     }
 
     /**
@@ -456,188 +459,6 @@ class AdvanceCodeEditingTool(
         }
 
         return null
-    }
-
-    /**
-     * Generate unified diff between two strings using Myers diff algorithm
-     * Groups changes into hunks with proper @@ headers for better readability
-     */
-    private fun generateUnifiedDiff(
-        originalContent: String,
-        newContent: String,
-        filePath: String
-    ): String {
-        val contextLines = 3
-        val original = originalContent.lines()
-        val updated = newContent.lines()
-        val diffEntries = buildDiffEntries(original, updated)
-        val hunks = buildDiffHunks(diffEntries, contextLines)
-
-        val diff = StringBuilder()
-        diff.appendLine("--- a/$filePath")
-        diff.appendLine("+++ b/$filePath")
-
-        for (hunk in hunks) {
-            diff.appendLine("@@ -${hunk.oldStart},${hunk.oldCount} +${hunk.newStart},${hunk.newCount} @@")
-            for (entry in hunk.lines) {
-                when (entry.type) {
-                    DiffEntryType.CONTEXT -> diff.appendLine("  ${entry.content}")
-                    DiffEntryType.DELETE -> diff.appendLine("- ${entry.content}")
-                    DiffEntryType.INSERT -> diff.appendLine("+ ${entry.content}")
-                }
-            }
-        }
-
-        return diff.toString()
-    }
-
-    private data class DiffEntry(
-        val type: DiffEntryType,
-        val content: String,
-        val oldLine: Int?,
-        val newLine: Int?
-    )
-
-    private enum class DiffEntryType {
-        CONTEXT,
-        DELETE,
-        INSERT
-    }
-
-    private data class DiffHunk(
-        val oldStart: Int,
-        val oldCount: Int,
-        val newStart: Int,
-        val newCount: Int,
-        val lines: List<DiffEntry>
-    )
-
-    private fun buildDiffEntries(original: List<String>, updated: List<String>): List<DiffEntry> {
-        val m = original.size
-        val n = updated.size
-        val lcs = Array(m + 1) { IntArray(n + 1) }
-
-        for (i in m - 1 downTo 0) {
-            for (j in n - 1 downTo 0) {
-                lcs[i][j] = if (original[i] == updated[j]) {
-                    lcs[i + 1][j + 1] + 1
-                } else {
-                    maxOf(lcs[i + 1][j], lcs[i][j + 1])
-                }
-            }
-        }
-
-        val result = mutableListOf<DiffEntry>()
-        var i = 0
-        var j = 0
-
-        while (i < m && j < n) {
-            when {
-                original[i] == updated[j] -> {
-                    result.add(
-                        DiffEntry(
-                            type = DiffEntryType.CONTEXT,
-                            content = original[i],
-                            oldLine = i,
-                            newLine = j
-                        )
-                    )
-                    i++
-                    j++
-                }
-                lcs[i + 1][j] >= lcs[i][j + 1] -> {
-                    result.add(
-                        DiffEntry(
-                            type = DiffEntryType.DELETE,
-                            content = original[i],
-                            oldLine = i,
-                            newLine = null
-                        )
-                    )
-                    i++
-                }
-                else -> {
-                    result.add(
-                        DiffEntry(
-                            type = DiffEntryType.INSERT,
-                            content = updated[j],
-                            oldLine = null,
-                            newLine = j
-                        )
-                    )
-                    j++
-                }
-            }
-        }
-
-        while (i < m) {
-            result.add(
-                DiffEntry(
-                    type = DiffEntryType.DELETE,
-                    content = original[i],
-                    oldLine = i,
-                    newLine = null
-                )
-            )
-            i++
-        }
-
-        while (j < n) {
-            result.add(
-                DiffEntry(
-                    type = DiffEntryType.INSERT,
-                    content = updated[j],
-                    oldLine = null,
-                    newLine = j
-                )
-            )
-            j++
-        }
-
-        return result
-    }
-
-    private fun buildDiffHunks(entries: List<DiffEntry>, contextLines: Int): List<DiffHunk> {
-        if (entries.isEmpty()) return emptyList()
-
-        val changedIndices = entries.indices.filter { entries[it].type != DiffEntryType.CONTEXT }
-        if (changedIndices.isEmpty()) return emptyList()
-
-        val mergedRanges = mutableListOf<IntRange>()
-        for (index in changedIndices) {
-            val rangeStart = maxOf(0, index - contextLines)
-            val rangeEnd = minOf(entries.lastIndex, index + contextLines)
-
-            if (mergedRanges.isEmpty()) {
-                mergedRanges.add(rangeStart..rangeEnd)
-                continue
-            }
-
-            val previous = mergedRanges.last()
-            if (rangeStart <= previous.last + 1) {
-                mergedRanges[mergedRanges.lastIndex] = previous.first..maxOf(previous.last, rangeEnd)
-            } else {
-                mergedRanges.add(rangeStart..rangeEnd)
-            }
-        }
-
-        return mergedRanges.map { range ->
-            val hunkEntries = entries.subList(range.first, range.last + 1)
-            val oldStart = (hunkEntries.firstNotNullOfOrNull { it.oldLine }
-                ?: hunkEntries.firstNotNullOfOrNull { it.newLine }
-                ?: 0) + 1
-            val newStart = (hunkEntries.firstNotNullOfOrNull { it.newLine }
-                ?: hunkEntries.firstNotNullOfOrNull { it.oldLine }
-                ?: 0) + 1
-
-            DiffHunk(
-                oldStart = oldStart,
-                oldCount = hunkEntries.count { it.oldLine != null },
-                newStart = newStart,
-                newCount = hunkEntries.count { it.newLine != null },
-                lines = hunkEntries.toList()
-            )
-        }
     }
 
     /**

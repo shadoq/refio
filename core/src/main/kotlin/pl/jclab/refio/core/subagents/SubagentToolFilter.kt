@@ -43,6 +43,15 @@ class SubagentToolFilter(
         )
 
         /**
+         * SYSTEM tools automatically available to all subagents
+         * (unless explicitly in disallowedTools).
+         * These manage internal agent state, not user files.
+         */
+        val SYSTEM_TOOLS = setOf(
+            "tasks", "memory"
+        )
+
+        /**
          * Mapowanie nazw Claude Code -> Refio.
          */
         private val CLAUDE_TO_REFIO = mapOf(
@@ -109,7 +118,7 @@ class SubagentToolFilter(
 
         // Strategia 1: Whitelist (allowedTools)
         if (definition.usesToolWhitelist()) {
-            val whitelist = definition.allowedTools!!.map { normalizeToolName(it) }.toSet()
+            val whitelist = definition.allowedTools!!.map { normalizeToolName(it) }.toSet() + SYSTEM_TOOLS
             // Filtruj tylko te, które są na whitelist I przeszły filtr trybu
             filtered = filtered.filter { normalizeToolName(it.name) in whitelist }
 

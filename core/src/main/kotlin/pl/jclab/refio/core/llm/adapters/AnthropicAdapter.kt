@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.llm.adapters
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import pl.jclab.refio.core.llm.BaseLLMAdapter
@@ -103,6 +104,10 @@ class AnthropicAdapter(
 
         return try {
             chatInternal(messages, systemMessages, maxTokens, temperature, streaming, onStreamChunk, kwargs)
+        } catch (e: CancellationException) {
+            // Stream aborted by a guardrail (see core/llm/streaming/) — must propagate
+            // so the caller can see StreamAbortedException instead of RefioError.LLMError.
+            throw e
         } catch (e: Exception) {
             throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
         }
@@ -136,9 +141,21 @@ class AnthropicAdapter(
             .joinToString("\n\n")
             .takeIf { it.isNotEmpty() }
 
-        // Map non-system messages to Claude format
-        val claudeMessages = nonSystemMessages.map { msg ->
-            mapOf("role" to msg.role, "content" to toAnthropicMessageContent(msg))
+        // Map non-system messages to Claude format. Claude only accepts
+        // "user"/"assistant" in the messages array — remap "tool" (used by
+        // LLMMessageMapper for tool results) to "assistant" so the request
+        // body stays valid.
+        val claudeMessages = nonSystemMessages.mapIndexed { index, msg ->
+            val mappedRole = if (msg.role == "tool") "assistant" else msg.role
+            val content = toAnthropicMessageContent(msg)
+            // Anthropic API rejects requests where assistant content ends with trailing whitespace.
+            // Trim trailing whitespace from the last assistant message to prevent HTTP 400.
+            val sanitizedContent = if (index == nonSystemMessages.lastIndex && mappedRole == "assistant" && content is String) {
+                content.trimEnd()
+            } else {
+                content
+            }
+            mapOf("role" to mappedRole, "content" to sanitizedContent)
         }
 
         // Build request body
@@ -595,6 +612,9 @@ class AnthropicAdapter(
                                         break
                                     }
                                 }
+                            } catch (e: CancellationException) {
+                                // Let stream abort (guardrail trip) propagate out of the loop.
+                                throw e
                             } catch (e: Exception) {
                                 logger.warn { "$logPrefix Failed to parse chunk: $data - ${e.message}" }
                                 continue
@@ -677,6 +697,22 @@ class AnthropicAdapter(
                 thinking = thinkingBuilder.takeIf { it.isNotEmpty() }?.toString()  // Include thinking for UI
             )
 
+        } catch (e: CancellationException) {
+            // Guardrail-triggered abort — log and rethrow as-is, do NOT wrap.
+            val latencyMs = (System.currentTimeMillis() - startTime).toInt()
+            logger.apiError(
+                provider = provider,
+                model = model,
+                endpoint = "$baseUrl$MESSAGES_ENDPOINT",
+                requestJson = requestJson,
+                httpStatus = httpStatus,
+                error = e,
+                latencyMs = latencyMs,
+                taskId = taskId,
+                subtaskId = subtaskId,
+                source = source
+            )
+            throw e
         } catch (e: Exception) {
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
             logger.apiError(

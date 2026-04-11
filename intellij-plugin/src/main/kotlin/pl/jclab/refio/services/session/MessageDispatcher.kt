@@ -158,7 +158,9 @@ class MessageDispatcher(
                     },
                     toolCallId = coreMsg.toolCallId, // For TOOL messages - link to tool call
                     toolCallInfo = toolCallInfo,
-                    toolStreamContent = toolDisplay.toolStreamContent
+                    toolStreamContent = toolDisplay.toolStreamContent,
+                    agentName = (coreMsg as? pl.jclab.refio.core.api.MessageResponse)?.agentName,
+                    agentDepth = (coreMsg as? pl.jclab.refio.core.api.MessageResponse)?.agentDepth
                 )
 
                 // Skip tool result messages whose content is already inlined into the tool call bubble
@@ -207,10 +209,13 @@ class MessageDispatcher(
 
             val dbMessageIds = dbMessages.map { it.id }.toSet()
             val inMemoryOnlySystemMessages = existingSystemMessages.filterNot { it.id in dbMessageIds }
-            // DB already returns messages ordered by createdAt ASC, id ASC.
-            // Preserve that order and keep UI-only system messages appended in their current order
-            // so reloads do not reshuffle bubbles after streaming finishes.
-            val allMessages = dbMessages + inMemoryOnlySystemMessages
+            // Merge in-memory system messages into the DB list by createdAt so they
+            // keep their chronological position instead of jumping to the end after reload.
+            val allMessages = if (inMemoryOnlySystemMessages.isEmpty()) {
+                dbMessages
+            } else {
+                (dbMessages + inMemoryOnlySystemMessages).sortedBy { it.createdAt }
+            }
 
             val currentMessages = stateManager.messages.value
             if (!areMessagesEqual(currentMessages, allMessages)) {

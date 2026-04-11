@@ -65,7 +65,12 @@ data class TurnProfileOverrides(
     val parentRunId: String? = null,
     val depth: Int = 0,
     val subagentChain: List<String> = emptyList(),
-    val contextProfile: pl.jclab.refio.core.subagents.models.SubagentContextProfile? = null
+    val contextProfile: pl.jclab.refio.core.subagents.models.SubagentContextProfile? = null,
+    /**
+     * Reasoning effort override for reasoning-capable models. Values: "low" | "medium" | "high".
+     * Sourced from SubagentDefinition.reasoningEffort. Null = use global UI_THINKING_ENABLED config.
+     */
+    val reasoningEffort: String? = null
 )
 
 /**
@@ -95,7 +100,20 @@ data class TurnRequest(
     val provider: String? = null,
     val userContextRefs: List<ContextReference> = emptyList(),
     val runProfile: TurnRunProfile = TurnRunProfile.DEFAULT,
-    val profileOverrides: TurnProfileOverrides? = null
+    val profileOverrides: TurnProfileOverrides? = null,
+    /**
+     * Optional override for the sessionId used when emitting AgentEventBus events.
+     * Used by MultiAgentRouter so that Turn/LLM/Tool events from a sub-agent are
+     * attributed to the parent multi-agent session (not the sub-task).
+     * Defaults to [taskId] when null.
+     */
+    val emitSessionId: String? = null,
+    /**
+     * Optional override for the sourceAgentId used when emitting AgentEventBus events.
+     * Used by MultiAgentRouter to attribute per-turn events to a specific sub-agent.
+     * Defaults to [taskId] when null.
+     */
+    val emitSourceAgentId: String? = null
 )
 
 data class ToolDefinitionInfo(
@@ -123,7 +141,9 @@ data class MessageResponse(
     val cost: Double?,
     val createdAt: Long,
     val isSummarized: Boolean = false,  // For TOOL messages - whether content is a summary
-    val rawOutput: String? = null       // For TOOL messages - original full output before summarization
+    val rawOutput: String? = null,      // For TOOL messages - original full output before summarization
+    val agentName: String? = null,      // Subagent name for multi-agent UI
+    val agentDepth: Int? = null         // Nesting depth (0=main, 1=subagent)
 )
 
 data class GetMessagesResponse(

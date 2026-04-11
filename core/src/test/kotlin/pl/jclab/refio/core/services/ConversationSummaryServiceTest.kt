@@ -42,8 +42,9 @@ class ConversationSummaryServiceTest {
     }
 
     @Test
-    fun `should not summarize when only a few messages would be compacted`() = runTest {
-        val messages = (1..13).map { index ->
+    fun `should not summarize when token budget is not exhausted`() = runTest {
+        // Each message ~50 tokens, 5 messages = ~250 tokens, budget = 1000 → 25% used.
+        val messages = (1..5).map { index ->
             MockFactory.createChatMessage(
                 id = "msg-$index",
                 taskId = "task-1",
@@ -55,7 +56,7 @@ class ConversationSummaryServiceTest {
         val result = service.ensureSummaryIfNeeded(
             taskId = "task-1",
             messages = messages,
-            maxTokens = 100
+            maxTokens = 1000
         )
 
         assertEquals(messages, result)
@@ -72,7 +73,7 @@ class ConversationSummaryServiceTest {
     }
 
     @Test
-    fun `should summarize once at least twelve messages can be compacted`() = runTest {
+    fun `should summarize when token budget is exhausted`() = runTest {
         val messages = (1..24).map { index ->
             MockFactory.createChatMessage(
                 id = "msg-$index",

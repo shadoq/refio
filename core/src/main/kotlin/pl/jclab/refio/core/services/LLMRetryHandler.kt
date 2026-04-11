@@ -152,6 +152,11 @@ class LLMRetryHandler(
             message.contains("service unavailable") || message.contains("bad gateway") -> true
             message.contains("overloaded") || message.contains("server is busy") -> true
             message.contains("connection refused") || message.contains("connection reset") -> true
+            // Streaming NDJSON cut off mid-flight (Ollama remote, flaky proxy, server restart).
+            // The server closed the channel before sending the final done=true chunk — transient,
+            // safe to retry from scratch since no tool side-effects ran on this turn yet.
+            message.contains("stream ended before") -> true
+            message.contains("unexpected end of stream") -> true
             else -> false
         }
     }

@@ -186,7 +186,8 @@ class SubagentRouter(
                 maxIterationsOverride = definition.maxSteps,
                 depth = 0,
                 subagentChain = emptyList(),
-                contextProfile = definition.contextProfile
+                contextProfile = definition.contextProfile,
+                reasoningEffort = definition.reasoningEffort
             )
         )
 
@@ -366,6 +367,20 @@ class SubagentRouter(
      */
     fun deleteSubagent(name: String): Boolean {
         return registry.deleteSubagent(name)
+    }
+
+    /**
+     * Register a temporary (in-memory, session-lifetime) subagent.
+     */
+    fun registerTemporary(definition: SubagentDefinition) {
+        registry.registerTemporary(definition)
+    }
+
+    /**
+     * Clear all temporary subagents (call on session close).
+     */
+    fun clearTemporary() {
+        registry.clearTemporary()
     }
 
     // ===== Helpers =====

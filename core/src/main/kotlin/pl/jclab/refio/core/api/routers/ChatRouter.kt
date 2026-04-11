@@ -115,7 +115,9 @@ class ChatRouter(
                     cost = msg.cost,
                     createdAt = msg.createdAt,
                     isSummarized = msg.isSummarized,
-                    rawOutput = msg.rawOutput
+                    rawOutput = msg.rawOutput,
+                    agentName = msg.agentName,
+                    agentDepth = msg.agentDepth
                 )
             },
             count = messages.size

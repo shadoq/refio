@@ -46,7 +46,7 @@ UI (IntelliJ Swing / TUI Mordant)
     → Domain Routers (12 routers: Task, Chat, Agent, Subtask, Config, Prompts, Tool, RAG, ApiLogs, MultiAgent, ProjectContext, Subagent)
     → CoreApiRouter (composition root — creates dependencies, exposes routers, no business logic)
       → Execution (WorkflowOrchestrator → ChatService for CHAT | AgentTurnLoop for PLAN/AGENT)
-        → LLMClient (8 provider adapters) + ToolRegistry (14 tools) + ContextService (14 providers)
+        → LLMClient (8 provider adapters) + ToolRegistry (15 tools) + ContextService (14 providers)
           → Infrastructure (SQLite via Exposed ORM, Ktor HTTP, Caffeine cache)
 ```
 
@@ -56,7 +56,7 @@ Callers access domain routers directly via `coreApiRouter.taskRouter`, `coreApiR
 
 - **CHAT** — No tools. Conversation-only via WorkflowOrchestrator → ChatService.
 - **PLAN** — Read-only tools (6). AgentTurnLoop with max 25 iterations.
-- **AGENT** — Full read/write tools (14). AgentTurnLoop with max 50 iterations. File snapshots before edits.
+- **AGENT** — Full read/write tools (15). AgentTurnLoop with max 50 iterations. File snapshots before edits.
 
 Subagents use a nested invocation model (max depth 3) with custom system prompts and tool filtering.
 
@@ -70,7 +70,7 @@ Each module has its own source tree:
 ### Core module (`core/src/main/kotlin/pl/jclab/refio/`)
 
 - `core/llm/adapters/` — LLM provider implementations (Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio, Custom OpenAI, Z.AI)
-- `core/tools/` — Tool implementations (read_file, grep_search, code_editing, run_terminal_command, etc.)
+- `core/tools/` — Tool implementations (read_file, grep_search, code_editing, run_terminal_command, delegate_to_strong_model, etc.)
 - `core/services/` — ~35 services (AgentTurnLoop, ContextService, RagIndexingService, ConfigService, etc.)
 - `core/services/turn/` — AgentTurnLoop sub-components (TurnLLMCaller, TurnPromptBuilder, TurnToolExecutor, TurnResponseProcessor, TurnGuardrails, ToolCallParser, TurnFinalizer, TurnNudgeBuilder, ToolApprovalService, etc.)
 - `core/services/context/` — Context building helpers (ContextBudget, ContextSection, WorkingMemoryService, ProjectInstructionsLoader, ToolResultCompression, ContextTokenEstimator)

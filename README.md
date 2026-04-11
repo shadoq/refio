@@ -97,7 +97,7 @@ The CLI provides a full-featured TUI that mirrors the IntelliJ plugin GUI — no
 
 - **14 context providers** — @file, @folder, @codebase, @grep, @diff, @url, @docs, @clipboard, and more
 - **RAG-powered semantic search** — automatic project indexing with 5 language analyzers
-- **14 tools** — 6 read-only + 8 write (incl. `http_request`, `run_code`, `invoke_subagent`), with per-mode permissions
+- **15 tools** — 7 read-only + 8 write (incl. `http_request`, `run_code`, `invoke_subagent`, `delegate_to_strong_model`), with per-mode permissions
 - **8 LLM providers** — Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio, Custom OpenAI, Z.AI
 - **MCP protocol support** — 17 built-in server presets + custom (GitHub, PostgreSQL, Brave Search, etc.)
 - **21 built-in subagents** — specialized agents invocable with `!agent-name` prefix

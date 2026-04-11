@@ -59,7 +59,8 @@ class CollapsibleContextSection(
     private val contentLabel = JTextPane().apply {
         contentType = "text/html"
         isEditable = false
-        isOpaque = false
+        isOpaque = true
+        background = com.intellij.util.ui.UIUtil.getPanelBackground()
         putClientProperty(javax.swing.JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
         border = BorderFactory.createEmptyBorder(6, 10, 8, 10)
     }
@@ -120,12 +121,14 @@ class CollapsibleContextSection(
             contentLabel.text = "<html><body>${raw.trim()}</body></html>"
         }
         copyButton.isEnabled = rawContent.isNotBlank()
+        refreshTokenLabel()
     }
 
     fun clearContent() {
         rawContent = ""
         contentLabel.text = ""
         copyButton.isEnabled = false
+        refreshTokenLabel()
         if (collapsible) {
             collapse()
         } else {
@@ -133,14 +136,42 @@ class CollapsibleContextSection(
         }
     }
 
+    /**
+     * Whether this section has meaningful data to display (tokens or content).
+     * Sections with no tokens and no content should be hidden from the panel.
+     */
+    fun hasData(): Boolean {
+        return (tokenInfo != null && tokenInfo!!.tokens > 0) || rawContent.isNotBlank()
+    }
+
+    /**
+     * Whether the updater has set content (not just initial "Loading...").
+     */
+    fun hasContent(): Boolean {
+        return rawContent.isNotBlank() && rawContent != "Loading..."
+    }
+
     fun updateTokenInfo(info: ContextSectionTokenInfo?) {
         tokenInfo = info
-        tokenLabel.text = when {
-            info == null -> "0 tokens"
-            info.tokens <= 0 -> "0 tokens"
-            else -> "${formatTokens(info.tokens)} (${String.format("%.1f", info.percentage)}%)"
+        refreshTokenLabel()
+    }
+
+    private fun refreshTokenLabel() {
+        val info = tokenInfo
+        val tokens = when {
+            info != null && info.tokens > 0 -> info.tokens
+            rawContent.isNotBlank() -> (rawContent.length / 4).coerceAtLeast(1)
+            else -> 0
         }
-        tokenLabel.foreground = if (info == null) JBColor.GRAY else LCATheme.labelDisabledForeground
+        if (tokens <= 0) {
+            tokenLabel.text = ""
+            tokenLabel.isVisible = false
+        } else {
+            val pctText = if (info != null && info.percentage > 0) " (${String.format("%.1f", info.percentage)}%)" else ""
+            tokenLabel.text = "${formatTokens(tokens)}$pctText"
+            tokenLabel.isVisible = true
+            tokenLabel.foreground = LCATheme.labelDisabledForeground
+        }
     }
 
     fun expand() {

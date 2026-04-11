@@ -123,8 +123,38 @@ enum class ToolCategory {
      * (e.g., run_terminal_command)
      * Mixed behavior - may produce data or modify files
      */
-    EXECUTION
+    EXECUTION,
+
+    /**
+     * Tools that manage internal agent state (plans, memory, messages, subagents).
+     * Do not modify user files. Treated as sequential by ParallelToolExecutor
+     * despite being READ_ONLY in filesystem terms.
+     */
+    SYSTEM
 }
+
+/**
+ * Structured summary of file modifications produced by a write tool.
+ *
+ * Lets the agent see *what* changed without re-reading the file.
+ * Populated by FILE_MODIFYING / FILE_PRODUCING tools.
+ */
+data class ChangeSummary(
+    /** Number of lines added (per "+" lines in unified diff). */
+    val addedLines: Int,
+    /** Number of lines removed (per "-" lines in unified diff). */
+    val removedLines: Int,
+    /** Unified diff (Myers algorithm, 3 lines context). Null for create-from-empty. */
+    val unifiedDiff: String? = null,
+    /** SHA-256 hash of file content before edit. Null if file did not exist. */
+    val oldHash: String? = null,
+    /** SHA-256 hash of file content after edit. */
+    val newHash: String? = null,
+    /** Number of replacements applied (for search-and-replace tools). */
+    val replacements: Int? = null,
+    /** Whether the file was newly created (vs. modified in place). */
+    val created: Boolean = false
+)
 
 /**
  * Result of tool execution
@@ -173,16 +203,43 @@ data class ToolResult(
     /**
      * Additional metadata
      */
-    val metadata: Map<String, Any>? = null
+    val metadata: Map<String, Any>? = null,
+
+    /**
+     * Concrete next steps the agent should consider after this result.
+     * Populated for empty-result, partial-result, or recoverable-error paths so the
+     * agent does not need to guess (e.g. ["Try a less specific pattern", "Use file_search to locate the file"]).
+     */
+    val nextActionHints: List<String>? = null,
+
+    /**
+     * Recovery instruction for failed executions.
+     * Explains *what to do next* in plain language. Always populated together with `error`
+     * for recoverable failures (file not found, string not unique, parse failure, etc.).
+     */
+    val recovery: String? = null,
+
+    /**
+     * Structured summary of file changes (added/removed lines, diff, hashes).
+     * Populated by FILE_MODIFYING / FILE_PRODUCING tools so the agent can reason about
+     * what changed without re-reading the file.
+     */
+    val changeSummary: ChangeSummary? = null
 ) {
     companion object {
         /**
-         * Create error result
+         * Create error result with optional recovery instruction and next-step hints.
          */
-        fun error(message: String): ToolResult {
+        fun error(
+            message: String,
+            recovery: String? = null,
+            nextActionHints: List<String>? = null
+        ): ToolResult {
             return ToolResult(
                 success = false,
-                error = message
+                error = message,
+                recovery = recovery,
+                nextActionHints = nextActionHints
             )
         }
 

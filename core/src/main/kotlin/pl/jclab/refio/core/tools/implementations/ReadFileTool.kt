@@ -42,7 +42,13 @@ class ReadFileTool(
 ) : Tool {
 
     override val name = "read_file"
-    override val description = "Read a text, image, or PDF file. Use offset/limit for large files."
+    override val description = "Read a text, image, or PDF file. " +
+        "DEFAULT BEHAVIOUR: reads the WHOLE file in one call (up to the 2 MB sandbox limit). " +
+        "DO NOT pass offset/limit for normal source files — you will fragment your view of the code " +
+        "and waste turns paginating. Only use offset/limit when: " +
+        "(a) the file is very large (thousands of lines, e.g. logs, generated code, big datasets), or " +
+        "(b) you genuinely need a single slice and reading the rest would be wasteful. " +
+        "For typical Kotlin/Java/TS/Python source files: call read_file with just `path` and read it all."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
 
@@ -68,7 +74,15 @@ class ReadFileTool(
                 ?: return ToolResult.error("Missing required parameter: 'path'")
 
             val offset = toIntOrNull(params["offset"])
-            val limit = toIntOrNull(params["limit"])
+            val explicitLimit = toIntOrNull(params["limit"])
+            val detail = ((params["detail"] as? String) ?: "normal").lowercase()
+            // detail=summary trims to first 40 lines unless caller passed an explicit limit.
+            // detail=full ignores summary truncation. detail=normal preserves caller offset/limit.
+            val limit = when {
+                explicitLimit != null -> explicitLimit
+                detail == "summary" -> 40
+                else -> null
+            }
             val pageStart = toIntOrNull(params["page_start"])
             val pageEnd = toIntOrNull(params["page_end"])
             val requestedPages = if (pageStart != null || pageEnd != null) {
@@ -93,13 +107,25 @@ class ReadFileTool(
             // Check if file exists
             if (!Files.exists(path)) {
                 logger.warn { "File not found: $pathStr (resolved to ${path.toAbsolutePath()})" }
-                return ToolResult.error("File not found: $pathStr")
+                return ToolResult.error(
+                    message = "File not found: $pathStr",
+                    recovery = "Verify the path. The file may have been renamed, moved, or never existed.",
+                    nextActionHints = listOf(
+                        "file_search(pattern=\"${path.fileName}\") to locate the file",
+                        "read_directory(path=\"${path.parent?.let { sandbox.resolve(".").relativize(it).toString() } ?: "."}\") to inspect the parent",
+                        "Use grep_search to find content if the path is uncertain"
+                    )
+                )
             }
 
             // Check if it's a regular file
             if (!path.isRegularFile()) {
                 logger.warn { "Not a regular file: $pathStr (is directory: ${path.isDirectory()})" }
-                return ToolResult.error("Not a regular file: $pathStr (is it a directory?)")
+                return ToolResult.error(
+                    message = "Not a regular file: $pathStr (is it a directory?)",
+                    recovery = "Use read_directory to list a directory's contents.",
+                    nextActionHints = listOf("read_directory(path=\"$pathStr\")")
+                )
             }
 
             // Check file size
@@ -208,10 +234,35 @@ class ReadFileTool(
                 endLine = startIdx + readLineCount
 
                 val header = "[Lines $startLine-$endLine of $totalLineCount total]"
-                outputContent = "$header\n${selectedLines.joinToString("\n")}"
+                val body = selectedLines.joinToString("\n")
+
+                // Truncation warning: there are more lines AFTER what we just read.
+                // This is critical so the model knows the file is incomplete and
+                // explicitly knows how to read the rest. Without this, models tend
+                // to silently assume they have the full file.
+                val unreadAfter = totalLineCount - endLine
+                val unreadBefore = startLine - 1
+                outputContent = if (unreadAfter > 0 || unreadBefore > 0) {
+                    val nextOffset = endLine + 1
+                    val warning = buildString {
+                        append("\n\n[!! PARTIAL READ — file '$pathStr' has $totalLineCount lines, ")
+                        append("you read lines $startLine-$endLine ($readLineCount shown).")
+                        if (unreadBefore > 0) append(" $unreadBefore line(s) BEFORE.")
+                        if (unreadAfter > 0) {
+                            append(" $unreadAfter line(s) AFTER — to continue reading call:")
+                            append(" read_file(path=\"$pathStr\", offset=$nextOffset).")
+                            append(" Critical constants/sections may be in the unread part.")
+                        }
+                        append(" !!]")
+                    }
+                    "$header\n$body$warning"
+                } else {
+                    "$header\n$body"
+                }
 
                 logger.info {
-                    "Read file range: $pathStr lines $startLine-$endLine of $totalLineCount"
+                    "Read file range: $pathStr lines $startLine-$endLine of $totalLineCount " +
+                        "(unread before=$unreadBefore, after=$unreadAfter)"
                 }
             } else {
                 // Full file read
@@ -225,19 +276,30 @@ class ReadFileTool(
 
             logger.info { "Successfully read file: $pathStr ($readLineCount lines, ${duration}ms)" }
 
+            val truncated = startLine > 1 || endLine < totalLineCount
+            val metadata = mutableMapOf<String, Any>(
+                "file_size" to fileSize,
+                "total_lines" to totalLineCount,
+                "lines_read" to readLineCount,
+                "start_line" to startLine,
+                "end_line" to endLine,
+                "path" to pathStr,
+                "truncated" to truncated
+            )
+            if (truncated && endLine < totalLineCount) {
+                metadata["next_offset"] = endLine + 1
+                metadata["unread_after"] = totalLineCount - endLine
+            }
+            if (truncated && startLine > 1) {
+                metadata["unread_before"] = startLine - 1
+            }
+
             return ToolResult(
                 success = true,
                 output = outputContent,
                 bytesRead = outputContent.toByteArray().size,
                 durationMs = duration,
-                metadata = mapOf(
-                    "file_size" to fileSize,
-                    "total_lines" to totalLineCount,
-                    "lines_read" to readLineCount,
-                    "start_line" to startLine,
-                    "end_line" to endLine,
-                    "path" to pathStr
-                )
+                metadata = metadata
             )
 
         } catch (e: SecurityException) {
@@ -284,11 +346,15 @@ class ReadFileTool(
                 ),
                 "offset" to mapOf(
                     "type" to "integer",
-                    "description" to "Start line (1-based)."
+                    "description" to "Start line (1-based). OPTIONAL — omit to read from line 1. " +
+                        "Only set this when you genuinely need a slice of a large file."
                 ),
                 "limit" to mapOf(
                     "type" to "integer",
-                    "description" to "Max lines to read from offset."
+                    "description" to "Max lines to read from offset. OPTIONAL — omit to read the WHOLE file. " +
+                        "Default behaviour reads everything (up to the 2 MB sandbox limit). " +
+                        "Only set this for very large files (thousands of lines) where you need a slice. " +
+                        "DO NOT pass small values like 50/100 on normal source files — read the whole file in one call instead."
                 ),
                 "page_start" to mapOf(
                     "type" to "integer",
@@ -297,6 +363,12 @@ class ReadFileTool(
                 "page_end" to mapOf(
                     "type" to "integer",
                     "description" to "For PDF files: last page to read (1-based, inclusive)."
+                ),
+                "detail" to mapOf(
+                    "type" to "string",
+                    "enum" to listOf("summary", "normal", "full"),
+                    "description" to "Verbosity. 'summary' caps reading to the first 40 lines (good for scanning structure); 'normal' (default) honors offset/limit; 'full' = same as normal.",
+                    "default" to "normal"
                 )
             ),
             "required" to listOf("path")

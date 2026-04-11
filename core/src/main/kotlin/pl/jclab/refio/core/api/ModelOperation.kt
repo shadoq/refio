@@ -5,18 +5,20 @@ import pl.jclab.refio.core.db.TaskMode
 /**
  * Logical operation slot used for model selection.
  *
- * DEFAULT - generic chat / regular prompts
- * PLAN    - planning / reasoning heavy steps
- * CODING  - agent coding/execution flows
- * WEAK    - cheap auxiliary steps (summaries, reflections)
+ * DEFAULT   - generic chat / regular prompts
+ * PLAN      - planning / reasoning heavy steps
+ * CODING    - agent coding/execution flows
+ * WEAK      - cheap auxiliary steps (summaries, reflections)
  * EMBEDDING - RAG embedding generation
+ * STRONG    - powerful model for complex delegation (optional, no fallback)
  */
 enum class ModelOperation {
     DEFAULT,
     PLAN,
     CODING,
     WEAK,
-    EMBEDDING;
+    EMBEDDING,
+    STRONG;
 
     companion object {
         fun fromTaskMode(mode: TaskMode): ModelOperation = when (mode) {

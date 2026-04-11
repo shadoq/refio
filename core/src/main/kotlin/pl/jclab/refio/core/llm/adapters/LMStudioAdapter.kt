@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.llm.adapters
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import pl.jclab.refio.core.db.ConfigScope
@@ -123,9 +124,12 @@ class LMStudioAdapter(
             lmMessages.add(mapOf("role" to "system", "content" to sysMsg))
         }
 
-        // Add conversation messages (filter out any system messages as they should be in systemMessages parameter)
+        // Add conversation messages (filter out any system messages as they should be in systemMessages parameter).
+        // Remap "tool" (used by LLMMessageMapper for tool results) to "assistant" — LM Studio uses the
+        // OpenAI-compatible chat schema where role="tool" requires tool_call_id, which this adapter does not emit.
         messages.filter { it.role != "system" }.forEach { msg ->
-            lmMessages.add(mapOf("role" to msg.role, "content" to toOpenAiMessageContent(msg)))
+            val mappedRole = if (msg.role == "tool") "assistant" else msg.role
+            lmMessages.add(mapOf("role" to mappedRole, "content" to toOpenAiMessageContent(msg)))
         }
 
         val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)
@@ -179,6 +183,10 @@ class LMStudioAdapter(
             } else {
                 executeStandard(resolvedBaseUrl, apiKey, requestBody, requestJson, startTime, logPrefix)
             }
+        } catch (e: CancellationException) {
+            // Stream aborted by a guardrail (see core/llm/streaming/) — must propagate
+            // so the caller can see StreamAbortedException instead of RefioError.LLMError.
+            throw e
         } catch (e: Exception) {
             throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
         }
@@ -380,6 +388,9 @@ class LMStudioAdapter(
                         if (finishReason != null) {
                             finalFinishReason = finishReason
                         }
+                    } catch (e: CancellationException) {
+                        // Let stream abort (guardrail trip) propagate out of the loop.
+                        throw e
                     } catch (_: Exception) {
                         continue
                     }
@@ -463,6 +474,22 @@ class LMStudioAdapter(
                 finishReason = finalFinishReason,
                 rawResponse = syntheticResponse
             )
+        } catch (e: CancellationException) {
+            // Guardrail-triggered abort — log and rethrow as-is, do NOT wrap.
+            val latencyMs = (System.currentTimeMillis() - startTime).toInt()
+            logger.apiError(
+                provider = provider,
+                model = model,
+                endpoint = "$baseUrl$CHAT_ENDPOINT",
+                requestJson = requestJson,
+                httpStatus = httpStatus,
+                error = e,
+                latencyMs = latencyMs,
+                taskId = taskId,
+                subtaskId = subtaskId,
+                source = source
+            )
+            throw e
         } catch (e: Exception) {
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
             logger.apiError(

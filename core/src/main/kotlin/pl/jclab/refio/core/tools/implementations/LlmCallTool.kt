@@ -2,10 +2,13 @@ package pl.jclab.refio.core.tools.implementations
 
 import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.llm.LLMClient
+import pl.jclab.refio.core.llm.LLMContentPart
 import pl.jclab.refio.core.llm.LLMMessage
+import pl.jclab.refio.core.llm.ModelDefinitions
 import pl.jclab.refio.core.llm.inferProvider
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.services.ConfigService
+import pl.jclab.refio.core.services.ImagePreparationService
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
@@ -32,6 +35,9 @@ private val logger = dualLogger("LlmCallTool")
  * - prompt: System prompt — instructions, role, or task description
  * - data: Inline data or text to analyze (optional if file_path is provided)
  * - file_path: Optional file whose contents are used as data input
+ * - image_path: Optional image file path to include in the prompt (requires vision-capable model)
+ * - image_base64: Optional base64-encoded image data (requires vision-capable model, use with image_media_type)
+ * - image_media_type: Media type for image_base64 (e.g. "image/png"). Defaults to "image/png".
  * - model: Optional model override, e.g. "ollama/qwen2.5:7b". Defaults to weak model.
  * - temperature: 0.0–2.0 (default: 0.7)
  * - max_tokens: Max output tokens (default: 2048)
@@ -41,12 +47,14 @@ class LlmCallTool(
     private val llmClient: LLMClient,
     private val configService: ConfigService,
     private val sandbox: PathSandbox,
-    private val fileLimits: FileLimits = FileLimits.DEFAULT
+    private val fileLimits: FileLimits = FileLimits.DEFAULT,
+    private val imagePreparationService: ImagePreparationService = ImagePreparationService()
 ) : Tool {
 
     override val name = "llm_call"
     override val description = "Send a prompt to an LLM and get the text response. " +
         "Use 'prompt' for instructions/role, 'data' for inline text, 'file_path' for large content (keeps it out of agent context). " +
+        "Supports vision: use 'image_path' or 'image_base64' with a vision-capable model (e.g. openai/gpt-5.4-mini). " +
         "No tools, no history, no project context — a raw single-turn LLM call. CHEAPER than invoke_subagent."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_PRODUCING
@@ -54,6 +62,9 @@ class LlmCallTool(
     override suspend fun execute(params: Map<String, Any>): ToolResult {
         val userPrompt = params["data"]?.toString()?.trim() ?: ""
         val filePath = params["file_path"]?.toString()?.trim()
+        val imagePath = params["image_path"]?.toString()?.trim()
+        val imageBase64 = params["image_base64"]?.toString()?.trim()
+        val imageMediaType = params["image_media_type"]?.toString()?.trim() ?: "image/png"
         val systemPrompt = params["prompt"]?.toString()?.takeIf { it.isNotBlank() }
         val temperature = (params["temperature"] as? Number)?.toDouble()?.coerceIn(0.0, 2.0) ?: 0.7
         val maxTokens = (params["max_tokens"] as? Number)?.toInt()?.coerceAtLeast(1) ?: 8192
@@ -61,22 +72,55 @@ class LlmCallTool(
         val taskId = params["_task_id"]?.toString()
 
         // Build final prompt: data + optional file contents
+        val hasImage = !imagePath.isNullOrBlank() || !imageBase64.isNullOrBlank()
         val finalPrompt = buildFinalPrompt(userPrompt, filePath)
-            ?: return ToolResult.error("Either 'data' or 'file_path' is required")
+            ?: if (hasImage) "" else return ToolResult.error("Either 'data', 'file_path', or 'image_path'/'image_base64' is required")
 
         // Resolve model
         val (model, provider) = resolveModel(params["model"]?.toString())
 
+        // Prepare image if provided (image_path takes priority over image_base64)
+        val imagePart = if (hasImage) {
+            val visionCheck = checkVisionSupport(provider, model)
+            if (visionCheck != null) return visionCheck
+
+            if (!imagePath.isNullOrBlank()) {
+                prepareImage(imagePath) ?: return ToolResult.error("Failed to read or prepare image: $imagePath")
+            } else {
+                prepareBase64Image(imageBase64!!, imageMediaType)
+                    ?: return ToolResult.error("Failed to process base64 image. Check image_base64 and image_media_type.")
+            }
+        } else {
+            null
+        }
+
+        // Build message parts
+        val message = if (imagePart != null) {
+            val parts = mutableListOf<LLMContentPart>()
+            if (finalPrompt.isNotBlank()) {
+                parts.add(LLMContentPart.Text(finalPrompt))
+            }
+            parts.add(imagePart)
+            LLMMessage(role = "user", content = finalPrompt, parts = parts)
+        } else {
+            LLMMessage(role = "user", content = finalPrompt)
+        }
+
+        val imageSource = when {
+            !imagePath.isNullOrBlank() -> "file:$imagePath"
+            !imageBase64.isNullOrBlank() -> "base64:${imageMediaType}"
+            else -> "-"
+        }
         logger.info {
             "[LLM_CALL] provider=$provider model=$model temp=$temperature maxTokens=$maxTokens " +
-                "file=${filePath ?: "-"} saveTo=${saveToFile ?: "-"}"
+                "file=${filePath ?: "-"} image=$imageSource saveTo=${saveToFile ?: "-"}"
         }
 
         val response = try {
             llmClient.complete(
                 provider = provider,
                 model = model,
-                messages = listOf(LLMMessage(role = "user", content = finalPrompt)),
+                messages = listOf(message),
                 systemPrompt = systemPrompt,
                 maxTokens = maxTokens,
                 temperature = temperature,
@@ -196,6 +240,89 @@ class LlmCallTool(
         }
     }
 
+    private fun checkVisionSupport(provider: String, model: String): ToolResult? {
+        val definition = ModelDefinitions.getDefinition(provider, model)
+        if (definition != null && !definition.supportsVision) {
+            return ToolResult.error(
+                "Model '$provider/$model' does not support vision. " +
+                    "Use a vision-capable model (e.g. openai/gpt-5.4-mini, anthropic/claude-sonnet-4-5, gemini/gemini-2.5-pro)."
+            )
+        }
+        // definition == null means unknown model — allow attempt (e.g. OpenRouter, custom models)
+        if (definition == null) {
+            logger.warn { "[LLM_CALL] Model '$provider/$model' not in registry, cannot verify vision support. Proceeding anyway." }
+        }
+        return null
+    }
+
+    private fun prepareImage(imagePath: String): LLMContentPart.Image? {
+        return try {
+            val normalized = normalizePath(imagePath)
+            val resolved = sandbox.resolve(normalized)
+
+            if (!resolved.isRegularFile()) {
+                logger.warn { "[LLM_CALL] Image not a regular file: $resolved" }
+                return null
+            }
+
+            val bytes = Files.readAllBytes(resolved)
+            val mediaType = Files.probeContentType(resolved)
+                ?: detectMediaTypeByExtension(resolved.toString())
+
+            if (mediaType == null || !mediaType.startsWith("image/")) {
+                logger.warn { "[LLM_CALL] Not an image file: $resolved (mediaType=$mediaType)" }
+                return null
+            }
+
+            val prepared = imagePreparationService.prepare(bytes, mediaType)
+            logger.info { "[LLM_CALL] Image prepared: ${prepared.originalSizeBytes} -> ${prepared.preparedSizeBytes} bytes" }
+
+            LLMContentPart.Image(
+                mediaType = prepared.mediaType,
+                base64Data = prepared.base64Data,
+                detail = "high"
+            )
+        } catch (e: Exception) {
+            logger.error(e) { "[LLM_CALL] Failed to prepare image: $imagePath" }
+            null
+        }
+    }
+
+    private fun prepareBase64Image(base64Data: String, mediaType: String): LLMContentPart.Image? {
+        return try {
+            if (mediaType !in ImagePreparationService.SUPPORTED_TYPES) {
+                logger.warn { "[LLM_CALL] Unsupported image media type: $mediaType" }
+                return null
+            }
+
+            val bytes = java.util.Base64.getDecoder().decode(base64Data)
+            val prepared = imagePreparationService.prepare(bytes, mediaType)
+            logger.info { "[LLM_CALL] Base64 image prepared: ${prepared.originalSizeBytes} -> ${prepared.preparedSizeBytes} bytes" }
+
+            LLMContentPart.Image(
+                mediaType = prepared.mediaType,
+                base64Data = prepared.base64Data,
+                detail = "high"
+            )
+        } catch (e: IllegalArgumentException) {
+            logger.error(e) { "[LLM_CALL] Invalid base64 image data" }
+            null
+        } catch (e: Exception) {
+            logger.error(e) { "[LLM_CALL] Failed to prepare base64 image" }
+            null
+        }
+    }
+
+    private fun detectMediaTypeByExtension(path: String): String? {
+        return when (path.substringAfterLast('.').lowercase()) {
+            "png" -> "image/png"
+            "jpg", "jpeg" -> "image/jpeg"
+            "gif" -> "image/gif"
+            "webp" -> "image/webp"
+            else -> null
+        }
+    }
+
     private fun resolveModel(modelParam: String?): Pair<String, String> {
         if (!modelParam.isNullOrBlank()) {
             if (modelParam.contains("/")) {
@@ -222,8 +349,25 @@ class LlmCallTool(
             ),
             "file_path" to mapOf(
                 "type" to "string",
-                "description" to "Path to a file whose contents are used as data. " +
+                "description" to "Path to a text file whose contents are used as data. " +
                     "Prefer this over passing large content via 'data' — keeps it out of agent context."
+            ),
+            "image_path" to mapOf(
+                "type" to "string",
+                "description" to "Path to an image file (PNG, JPEG, GIF, WebP) to include in the prompt. " +
+                    "Requires a vision-capable model (e.g. openai/gpt-5.4-mini, anthropic/claude-sonnet-4-5). " +
+                    "Returns error if the selected model does not support vision."
+            ),
+            "image_base64" to mapOf(
+                "type" to "string",
+                "description" to "Base64-encoded image data to include in the prompt. " +
+                    "Alternative to image_path — use when you already have image bytes (e.g. from http_request). " +
+                    "Requires a vision-capable model. Use image_media_type to specify the format."
+            ),
+            "image_media_type" to mapOf(
+                "type" to "string",
+                "description" to "Media type for image_base64 (e.g. 'image/png', 'image/jpeg'). Defaults to 'image/png'. " +
+                    "Only used with image_base64."
             ),
             "model" to mapOf(
                 "type" to "string",

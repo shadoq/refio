@@ -78,7 +78,31 @@ class CoreApiRouter(
     private val agentInstanceRepository = pl.jclab.refio.core.db.repositories.AgentInstanceRepository()
 
     // Multi-agent infrastructure
-    val agentEventBus = pl.jclab.refio.core.agents.events.AgentEventBus()
+    val agentEventBus = pl.jclab.refio.core.agents.events.AgentEventBus().apply {
+        // Persist all events so Session Trace / Timeline / Graph can be replayed
+        // when the user reloads a session from history.
+        setRepository(pl.jclab.refio.core.db.repositories.AgentEventSqlRepository())
+    }
+
+    // Hook system
+    private val hookExecutor = pl.jclab.refio.core.services.hooks.HookExecutor()
+    private val hookService = pl.jclab.refio.core.services.hooks.HookService(
+        configProvider = { pl.jclab.refio.core.config.HierarchicalConfigLoader.getInstance(projectRoot).getHooks() },
+        hookExecutor = hookExecutor
+    )
+
+    // Single source of truth for prompt section providers.
+    // IMPORTANT: this same list must be used by both TurnPromptBuilder (runtime)
+    // and ProjectContextRouter (preview) so the Context panel shows the actual
+    // prompt the model receives. Previously preview used a stripped-down path
+    // and e.g. <system_environment> was invisible in the Context panel even
+    // though the real agent call included it.
+    val promptSectionProviders: List<pl.jclab.refio.core.services.turn.PromptSectionProvider> by lazy {
+        listOf(
+            AgentPlansSectionProvider(agentPlanService),
+            pl.jclab.refio.core.services.turn.providers.SystemEnvironmentPromptProvider(projectRoot)
+        )
+    }
 
     // Services (public for cross-module access by plugin services)
     val taskRepository = TaskRepository()
@@ -88,12 +112,16 @@ class CoreApiRouter(
     )
     private val promptRegistry = pl.jclab.refio.core.prompts.PromptRegistry(projectRoot)
     val promptsService = PromptsService(promptsRepository, promptRegistry)
-    val toolPermissionsService = ToolPermissionsService(configRepository)
+    val toolPermissionsService = ToolPermissionsService(
+        configRepository = configRepository,
+        toolRegistry = toolRegistry
+    )
     val toolApprovalService = ToolApprovalService()
     val pendingUserMessageQueue = PendingUserMessageQueue(chatMessageRepository)
     val llmClient = llmClientOverride ?: LLMClient(configService)
     private val workingMemoryService = WorkingMemoryService()
     private val workingMemoryIntegration = WorkingMemoryIntegration(workingMemoryService)
+    val agentPlanService = AgentPlanService()
     private val conversationSummaryService = ConversationSummaryService(
         llmClient = llmClient,
         promptsService = promptsService,
@@ -294,7 +322,9 @@ class CoreApiRouter(
             workingMemoryService = workingMemoryService,
             projectRoot = projectRoot,
             tokenEstimator = tokenEstimator,
-            promptCache = null  // Could be added later if needed
+            promptCache = null,  // Could be added later if needed
+            sectionProviders = promptSectionProviders,
+            configService = configService
         )
 
         val toolCallParser = ToolCallParser(
@@ -313,7 +343,8 @@ class CoreApiRouter(
             taskRepository = taskRepository,
             chatMessageRepository = chatMessageRepository,
             approvalService = toolApprovalService,
-            permissionsService = toolPermissionsService
+            permissionsService = toolPermissionsService,
+            hookService = hookService
         )
 
         val turnLLMCaller = TurnLLMCaller(
@@ -330,6 +361,10 @@ class CoreApiRouter(
         val turnFinalizer = TurnFinalizer(
             chatMessageRepository = chatMessageRepository
         )
+
+        // beforeFinish guardian registry — empty by default, no behavior change.
+        // Plug in domain-specific guardians here (e.g. write-without-verification, missing-deliverable).
+        val completionGuardians = pl.jclab.refio.core.services.turn.GuardianRegistry()
 
         val turnSubagentValidator = TurnSubagentValidator(
             maxSubagentDepth = 3
@@ -353,11 +388,14 @@ class CoreApiRouter(
             turnResponseProcessor = turnResponseProcessor,
             turnFinalizer = turnFinalizer,
             turnSubagentValidator = turnSubagentValidator,
+            completionGuardians = completionGuardians,
             // ADR-0028: Optional dependencies
             tokenEstimator = tokenEstimator,
             conversationCompactor = null,
             llmRetryHandler = null,
-            workingMemoryIntegration = workingMemoryIntegration
+            workingMemoryIntegration = workingMemoryIntegration,
+            agentEventBus = agentEventBus,
+            hookService = hookService
         )
     } else null
 
@@ -550,7 +588,8 @@ class CoreApiRouter(
             promptsService = promptsService,
             toolDescriptionBuilder = toolDescriptionBuilder,
             projectAnalyzer = projectAnalyzer,
-            richProjectAnalysisEngine = richProjectAnalysisEngine
+            richProjectAnalysisEngine = richProjectAnalysisEngine,
+            promptSectionProviders = promptSectionProviders
         )
     }
 
@@ -619,9 +658,52 @@ class CoreApiRouter(
                     toolRegistry.register(invokeSubagentTool)
                     logger.info { "CoreApiRouter: invoke_subagent tool registered" }
                 }
+
+                // Register delegate_to_strong_model only if a strong model is configured
+                val strongModel = configService.getStrongModel()
+                if (strongModel != null && !toolRegistry.hasTool("delegate_to_strong_model")) {
+                    val delegateToStrongModelTool = pl.jclab.refio.core.tools.implementations.DelegateToStrongModelTool(
+                        llmClient = llmClient,
+                        configServiceProvider = { configService },
+                        runTurnCallback = { request, turnEventListener, streamCallback ->
+                            agentRouter.runTurn(
+                                request = request,
+                                streamCallback = streamCallback,
+                                listener = turnEventListener?.let {
+                                    pl.jclab.refio.core.services.AgentTurnLoop.TurnEventListener.fromTurnEventListener(it)
+                                }
+                            )
+                        }
+                    )
+                    toolRegistry.register(delegateToStrongModelTool)
+                    logger.info { "CoreApiRouter: delegate_to_strong_model tool registered (strong model: ${strongModel.second}/${strongModel.first})" }
+                }
+
+                // Register SYSTEM tools for multi-agent orchestration
+                val tasksTool = pl.jclab.refio.core.tools.implementations.TasksTool(agentPlanService)
+                val memoryTool = pl.jclab.refio.core.tools.implementations.MemoryTool(
+                    workingMemoryService = workingMemoryService,
+                    subtaskRepository = subtaskRepository
+                )
+                val manageSubagentTool = pl.jclab.refio.core.tools.implementations.ManageSubagentTool { subagentRouter }
+                val sendMessageTool = pl.jclab.refio.core.tools.implementations.SendMessageTool(agentEventBus)
+
+                listOf(tasksTool, memoryTool, manageSubagentTool, sendMessageTool).forEach { tool ->
+                    if (!toolRegistry.hasTool(tool.name)) {
+                        toolRegistry.register(tool)
+                    }
+                }
+                logger.info { "CoreApiRouter: SYSTEM tools registered (tasks, memory, manage_subagent, send_message)" }
             } catch (e: Exception) {
                 logger.warn(e) { "CoreApiRouter: failed to register invoke_subagent tool" }
             }
+        }
+
+        // Apply Ollama concurrency from config
+        val ollamaMaxConcurrent = configService.get(ConfigService.KEY_OLLAMA_MAX_CONCURRENT)?.toIntOrNull()
+        if (ollamaMaxConcurrent != null && ollamaMaxConcurrent > 0) {
+            OllamaRequestGate.maxConcurrentPerEndpoint = ollamaMaxConcurrent
+            logger.info { "CoreApiRouter: Ollama maxConcurrent set to $ollamaMaxConcurrent" }
         }
 
         logger.info { "CoreApiRouter initialized with services" }
@@ -700,6 +782,24 @@ class CoreApiRouter(
             val ragComponents = initializeRagSearchService()
             ragComponents?.let { (service, modelId, providerId) ->
                 contextService.updateRagSearchConfig(service, modelId, providerId)
+                // Register on-demand rag_search tool now that the embedding stack is wired.
+                // Done here (not in ToolFactory) because RagSearchService is project-scoped and
+                // only available after embedding model resolution succeeds.
+                if (toolRegistry != null) {
+                    try {
+                        val ragTool = pl.jclab.refio.core.tools.implementations.RagSearchTool(
+                            ragSearchService = service,
+                            embeddingModel = modelId,
+                            projectRoot = projectRoot
+                        )
+                        toolRegistry.register(ragTool)
+                        logger.info { "Registered rag_search tool (model=$modelId, provider=$providerId)" }
+                    } catch (e: IllegalArgumentException) {
+                        logger.debug { "rag_search tool already registered" }
+                    } catch (e: Exception) {
+                        logger.warn(e) { "Failed to register rag_search tool: ${e.message}" }
+                    }
+                }
             }
         }
     }
@@ -987,6 +1087,8 @@ class CoreApiRouter(
     }
 
     fun close() {
+        subagentRouter?.clearTemporary()
+        agentPlanService.clear()
         routerScope.cancel("CoreApiRouter closing")
     }
 }

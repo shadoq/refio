@@ -25,6 +25,7 @@ import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.core.services.OllamaRequestGate
 import pl.jclab.refio.core.logging.dualLogger
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -106,6 +107,10 @@ class OllamaAdapter(
 
         return try {
             chatInternal(messages, systemMessages, maxTokens, temperature, streaming, onStreamChunk, kwargs)
+        } catch (e: CancellationException) {
+            // Stream aborted by a guardrail (see core/llm/streaming/) — must propagate
+            // so the caller can see StreamAbortedException instead of RefioError.LLMError.
+            throw e
         } catch (e: Exception) {
             throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
         }
@@ -137,58 +142,14 @@ class OllamaAdapter(
         val jsonMode = responseFormat?.get("type") == "json_object"
         val thinkingRequested = kwargs["thinking"] as? Boolean ?: false
 
-        // Build request body
-        val requestBody = buildMap {
-            put("model", model)
-            put("messages", ollamaMessages)
-            put("stream", streaming)  // Enable streaming if requested
-
-            // Keep model in GPU memory to avoid loading delays
-            // Get from config (default: 1800 seconds = 30 minutes)
-            val keepAlive = configService?.getTyped(ConfigKeys.PROVIDER_OLLAMA_KEEP_ALIVE) ?: ConfigKeys.PROVIDER_OLLAMA_KEEP_ALIVE.default
-            put("keep_alive", keepAlive)
-
-            // JSON mode for Ollama (if requested)
-            if (jsonMode) {
-                put("format", "json")
-                logger.info { "[OLLAMA] Enabled JSON mode" }
-            } else if (thinkingRequested) {
-                // Enable thinking mode for reasoning models (e.g., deepseek-r1)
-                put("think", true)
-                logger.info { "[OLLAMA] Enabled thinking mode for $model" }
-            }
-
-            put("options", buildMap {
-                put("temperature", temperature)
-
-                // Get configured context size for Ollama
-                val contextSize = configService?.get(ConfigService.KEY_PROVIDER_OLLAMA_CONTEXT_SIZE)?.toIntOrNull()
-                    ?: DEFAULT_CONTEXT_SIZE
-                put("num_ctx", contextSize)
-
-                // Use min of provided maxTokens and configured limit
-                val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId) ?: ConfigKeys.MAX_OUTPUT_SIZE.default
-                val requestedMaxTokens = when {
-                    maxTokens != null && maxTokens > 0 -> minOf(maxTokens, maxOutputLimit)
-                    else -> maxOutputLimit
-                }
-                val modelLimit =
-                    pl.jclab.refio.core.llm.ModelDefinitions.getDefinition("ollama", model)?.maxOutputTokens
-                val effectiveMaxTokens = if (modelLimit != null && modelLimit > 0 && requestedMaxTokens > modelLimit) {
-                    logger.warn {
-                        "[OLLAMA] Requested num_predict=$requestedMaxTokens exceeds model limit ($modelLimit) for $model - clamping to safe value"
-                    }
-                    modelLimit
-                } else {
-                    requestedMaxTokens
-                }
-                put("num_predict", effectiveMaxTokens)
-                logger.info {
-                    "[OLLAMA] Using maxTokens=$effectiveMaxTokens, context=$contextSize, temp=$temperature " +
-                        "(requested=$maxTokens, configLimit=$maxOutputLimit, modelLimit=${modelLimit ?: "n/a"})"
-                }
-            })
-        }
+        val requestBody = buildOllamaRequestBody(
+            ollamaMessages = ollamaMessages,
+            jsonMode = jsonMode,
+            thinkingRequested = thinkingRequested,
+            streaming = streaming,
+            maxTokens = maxTokens,
+            temperature = temperature
+        )
 
         val requestJson = gson.toJson(requestBody)
         val requestId = UUID.randomUUID().toString()
@@ -236,6 +197,76 @@ class OllamaAdapter(
         } else {
             // Standard mode
             executeStandard(requestBody, requestJson, startTime, logPrefix)
+        }
+    }
+
+    /**
+     * Builds the Ollama `/api/chat` request body. Extracted as `internal` so it can be unit-tested
+     * without spinning up the HTTP client.
+     *
+     * Important: the `think` key is ALWAYS set explicitly (true or false). Skipping it lets thinking
+     * models like qwen3 fall back to their built-in default (think=true), which produces empty
+     * `content` chunks when Refio expects structured JSON. See AgentTurnLoop empty-content retries.
+     */
+    internal fun buildOllamaRequestBody(
+        ollamaMessages: List<Map<String, String>>,
+        jsonMode: Boolean,
+        thinkingRequested: Boolean,
+        streaming: Boolean,
+        maxTokens: Int?,
+        temperature: Double
+    ): Map<String, Any> {
+        return buildMap {
+            put("model", model)
+            put("messages", ollamaMessages)
+            put("stream", streaming)
+
+            // Keep model in GPU memory to avoid loading delays.
+            val keepAlive = configService?.getTyped(ConfigKeys.PROVIDER_OLLAMA_KEEP_ALIVE)
+                ?: ConfigKeys.PROVIDER_OLLAMA_KEEP_ALIVE.default
+            put("keep_alive", keepAlive)
+
+            if (jsonMode) {
+                put("format", "json")
+                logger.info { "[OLLAMA] Enabled JSON mode" }
+            }
+
+            // ALWAYS pass `think` explicitly. For thinking-capable models (qwen3, deepseek-r1, gpt-oss)
+            // omitting this key causes Ollama to default to think=true, which can yield empty content.
+            put("think", thinkingRequested)
+            if (thinkingRequested) {
+                logger.info { "[OLLAMA] Enabled thinking mode for $model" }
+            }
+
+            put("options", buildMap {
+                put("temperature", temperature)
+
+                val contextSize = configService?.get(ConfigService.KEY_PROVIDER_OLLAMA_CONTEXT_SIZE)?.toIntOrNull()
+                    ?: DEFAULT_CONTEXT_SIZE
+                put("num_ctx", contextSize)
+
+                val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)
+                    ?: ConfigKeys.MAX_OUTPUT_SIZE.default
+                val requestedMaxTokens = when {
+                    maxTokens != null && maxTokens > 0 -> minOf(maxTokens, maxOutputLimit)
+                    else -> maxOutputLimit
+                }
+                val modelLimit =
+                    pl.jclab.refio.core.llm.ModelDefinitions.getDefinition("ollama", model)?.maxOutputTokens
+                val effectiveMaxTokens = if (modelLimit != null && modelLimit > 0 && requestedMaxTokens > modelLimit) {
+                    logger.warn {
+                        "[OLLAMA] Requested num_predict=$requestedMaxTokens exceeds model limit ($modelLimit) for $model - clamping to safe value"
+                    }
+                    modelLimit
+                } else {
+                    requestedMaxTokens
+                }
+                put("num_predict", effectiveMaxTokens)
+                logger.info {
+                    "[OLLAMA] Using maxTokens=$effectiveMaxTokens, context=$contextSize, temp=$temperature " +
+                        "(requested=$maxTokens, configLimit=$maxOutputLimit, modelLimit=${modelLimit ?: "n/a"})"
+                }
+            })
         }
     }
 
@@ -482,21 +513,6 @@ class OllamaAdapter(
                         @Suppress("UNCHECKED_CAST")
                         val chunk = gson.fromJson(line, Map::class.java) as Map<String, Any?>
 
-                        // Debug: Log first chunk structure when using JSON mode
-                        if (chunkCount == 1) {
-                            logger.info { "$logPrefix First chunk keys: ${chunk.keys.joinToString()}, has_message=${chunk.containsKey("message")}" }
-                            val msg = chunk["message"] as? Map<*, *>
-                            if (msg != null) {
-                                logger.info { "$logPrefix Message keys: ${msg.keys.joinToString()}, has_content=${msg.containsKey("content")}, has_thinking=${msg.containsKey("thinking")}" }
-                                // Log first 100 chars of thinking to debug gpt-oss models
-                                val firstThinking = msg["thinking"] as? String
-                                if (!firstThinking.isNullOrEmpty()) {
-                                    logger.info { "$logPrefix First thinking preview (100 chars): ${firstThinking.take(100)}" }
-                                    logger.info { "$logPrefix First thinking starts with JSON: ${firstThinking.trim().startsWith("{")}" }
-                                }
-                            }
-                        }
-
                         // Extract message content
                         @Suppress("UNCHECKED_CAST")
                         val message = chunk["message"] as? Map<String, Any?>
@@ -560,6 +576,9 @@ class OllamaAdapter(
                             }
                             break
                         }
+                    } catch (e: CancellationException) {
+                        // Let stream abort (guardrail trip) propagate out of the loop.
+                        throw e
                     } catch (e: Exception) {
                         logger.warn { "$logPrefix Failed to parse chunk : ${line.take(100)} - ${e.message}" }
                         continue
@@ -569,11 +588,19 @@ class OllamaAdapter(
             }
 
             if (!receivedDoneChunk && finalDoneReason != "cancelled") {
+                // Server closed the NDJSON channel without emitting a final chunk with done=true.
+                // Common causes: remote Ollama restart, idle proxy timeout, network drop, model crash.
+                // Marked retryable by LLMRetryHandler.shouldRetryByMessage via "stream ended before".
+                val durationMs = System.currentTimeMillis() - startTime
                 throw LLMErrorMapper.fromThrowable(
                     provider,
                     model,
                     timeout,
-                    IllegalStateException("Ollama stream ended before done=true final chunk")
+                    IllegalStateException(
+                        "Ollama stream ended before done=true final chunk " +
+                            "(contentBytes=${rawContentBuilder.length}, " +
+                            "thinkingBytes=${rawThinkingBuilder.length}, durationMs=$durationMs)"
+                    )
                 )
             }
 
@@ -665,6 +692,22 @@ class OllamaAdapter(
                 rawResponse = syntheticResponse,
                 thinking = finalThinking
             )
+        } catch (e: CancellationException) {
+            // Guardrail-triggered abort — log and rethrow as-is, do NOT wrap.
+            val latencyMs = (System.currentTimeMillis() - startTime).toInt()
+            logger.apiError(
+                provider = provider,
+                model = model,
+                endpoint = "$baseUrl$CHAT_ENDPOINT",
+                requestJson = requestJson,
+                httpStatus = httpStatus,
+                error = e,
+                latencyMs = latencyMs,
+                taskId = taskId,
+                subtaskId = subtaskId,
+                source = source
+            )
+            throw e
         } catch (e: Exception) {
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
             logger.apiError(

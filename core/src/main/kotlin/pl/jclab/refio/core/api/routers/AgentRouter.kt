@@ -746,7 +746,9 @@ _Execution time: ${result.durationMs}ms_
             provider = request.provider,
             userContextRefs = request.userContextRefs,
             runProfile = request.runProfile,
-            profileOverrides = request.profileOverrides
+            profileOverrides = request.profileOverrides,
+            emitSessionId = request.emitSessionId,
+            emitSourceAgentId = request.emitSourceAgentId
         )
     }
 

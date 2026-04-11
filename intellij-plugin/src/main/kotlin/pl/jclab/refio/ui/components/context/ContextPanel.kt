@@ -149,6 +149,8 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private val recentWorkSection = createSection("Recent Work", "recent_work")
     private val frameworkAnalysisSection = createSection("Framework Analysis", "framework_analysis")
     private val workingMemorySection = createSection("Working Memory", "working_memory")
+    private val agentPlansSection = createSection("Agent Plans", "agent_plans")
+    private val agentMemorySection = createSection("Agent Memory", "agent_memory")
     private val contextStabilitySection = createSection("Context Stability", "context_stability")
     private val domainAnalysisSection = createSection("Domain Analysis", "domain_analysis")
     // Runtime sections (from ProjectContextRouter.buildActiveSectionTokens)
@@ -258,7 +260,13 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         SectionEntry("framework_analysis", 16, frameworkAnalysisSection) { context, _ ->
             updateFrameworkAnalysisSection(context)
         },
-        SectionEntry("working_memory", 17, workingMemorySection) { context, _ ->
+        SectionEntry("agent_plans", 17, agentPlansSection) { context, _ ->
+            updateSectionFromPromptTag(agentPlansSection, context.llmContextPrompt, "AGENT_PLANS")
+        },
+        SectionEntry("agent_memory", 18, agentMemorySection) { context, _ ->
+            updateSectionFromPromptTag(agentMemorySection, context.llmContextPrompt, "AGENT_MEMORY")
+        },
+        SectionEntry("working_memory", 19, workingMemorySection) { context, _ ->
             updateWorkingMemorySection(context)
         },
         SectionEntry("context_stability", 18, contextStabilitySection) { context, _ ->
@@ -267,17 +275,33 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         SectionEntry("domain_analysis", 19, domainAnalysisSection) { context, _ ->
             updateDomainAnalysisSection(context)
         },
-        // Runtime sections from buildActiveSectionTokens (token-only, no content detail)
-        SectionEntry("system_prompt", 20, systemPromptSection) { _, _ -> },
+        // Runtime sections — content extracted from LLM prompts and conversation history
+        SectionEntry("system_prompt", 20, systemPromptSection) { context, _ ->
+            updateSystemPromptSection(context)
+        },
         SectionEntry("system_messages", 21, systemMessagesSection) { _, _ -> },
-        SectionEntry("messages_assistant", 22, messagesAssistantSection) { _, _ -> },
-        SectionEntry("messages_user", 23, messagesUserSection) { _, _ -> },
-        SectionEntry("messages_system", 24, messagesSystemSection) { _, _ -> },
-        SectionEntry("messages_other", 25, messagesOtherSection) { _, _ -> },
+        SectionEntry("messages_assistant", 22, messagesAssistantSection) { context, _ ->
+            updateMessagesSection(messagesAssistantSection, context.conversationHistory, "assistant")
+        },
+        SectionEntry("messages_user", 23, messagesUserSection) { context, _ ->
+            updateMessagesSection(messagesUserSection, context.conversationHistory, "user")
+        },
+        SectionEntry("messages_system", 24, messagesSystemSection) { context, _ ->
+            updateMessagesSection(messagesSystemSection, context.conversationHistory, "system")
+        },
+        SectionEntry("messages_other", 25, messagesOtherSection) { context, _ ->
+            updateMessagesSection(messagesOtherSection, context.conversationHistory, "tool")
+        },
         SectionEntry("context_injection_overhead", 26, contextOverheadSection) { _, _ -> },
-        SectionEntry("architecture", 27, architectureSection) { _, _ -> },
-        SectionEntry("patterns", 28, patternsSection) { _, _ -> },
-        SectionEntry("navigation_map", 29, navigationMapSection) { _, _ -> }
+        SectionEntry("architecture", 27, architectureSection) { context, _ ->
+            updateSectionFromPromptTag(architectureSection, context.llmContextPrompt, "PROJECT_ARCHITECTURE")
+        },
+        SectionEntry("patterns", 28, patternsSection) { context, _ ->
+            updateSectionFromPromptTag(patternsSection, context.llmContextPrompt, "PATTERNS")
+        },
+        SectionEntry("navigation_map", 29, navigationMapSection) { context, _ ->
+            updateSectionFromPromptTag(navigationMapSection, context.llmContextPrompt, "NAVIGATION_MAP")
+        }
     )
 
     init {
@@ -387,6 +411,18 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
             }
         }
 
+        // Listen to isGenerating transitions: when generation completes, fire pending refresh
+        cs.launch {
+            sessionManager.isGenerating.collectLatest { generating ->
+                if (!generating && pendingAutoRefreshAfterStreaming) {
+                    pendingAutoRefreshAfterStreaming = false
+                    autoRefreshBlockedLogged = false
+                    logger.debug { "Generation completed, firing pending context refresh" }
+                    refreshTrigger.tryEmit(Unit)
+                }
+            }
+        }
+
         // Listen to model changes (context limit changes with model)
         cs.launch {
             sessionManager.selectedModel.collectLatest {
@@ -417,6 +453,22 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                     }
                 }
             }
+        }
+
+        // Reactively update token visualization from StateFlows (fed by lastPromptSnapshot observer in SessionManager).
+        // This keeps tokenUsagePanel in sync with the actual computed context without calling getProjectContext().
+        cs.launch {
+            kotlinx.coroutines.flow.combine(
+                sessionManager.contextSectionTokens,
+                sessionManager.totalEstimatedTokens
+            ) { sections, total -> sections to total }
+                .collectLatest { (sections, total) ->
+                    if (sections.isNotEmpty() || total > 0) {
+                        SwingUtilities.invokeLater {
+                            tokenUsagePanel.updateTokenUsage(sections, total, getSelectedModelContextLimit())
+                        }
+                    }
+                }
         }
 
         // Initial load
@@ -1536,8 +1588,10 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         promptTracePanel.alignmentX = LEFT_ALIGNMENT
         contentPanel.add(promptTracePanel)
         entries.forEach { entry ->
-            entry.section.alignmentX = LEFT_ALIGNMENT
-            contentPanel.add(entry.section)
+            if (entry.section.hasData()) {
+                entry.section.alignmentX = LEFT_ALIGNMENT
+                contentPanel.add(entry.section)
+            }
         }
         contentPanel.revalidate()
         contentPanel.repaint()
@@ -1616,7 +1670,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private fun mapUiSectionKeyToLogicalSection(key: String): ContextSection? {
         return when (key) {
             "system_prompt" -> ContextSection.SYSTEM_PROMPT
-            "project_overview", "current_task", "user_requirements" -> ContextSection.PROJECT_CONTEXT
+            "project_overview", "current_task", "user_requirements", "project_context" -> ContextSection.PROJECT_CONTEXT
             "project_instructions" -> ContextSection.PROJECT_INSTRUCTIONS
             "working_memory" -> ContextSection.WORKING_MEMORY
             "recent_work" -> ContextSection.RECENT_WORK
@@ -1633,7 +1687,8 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
             "css_analysis",
             "patterns",
             "navigation_map",
-            "code_analysis" -> ContextSection.REFERENCE
+            "code_analysis",
+            "reference" -> ContextSection.REFERENCE
             else -> null
         }
     }
@@ -1841,6 +1896,104 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private fun getSelectedModelContextLimit(): Int {
         // Use SessionManager's dynamic context window calculation
         return sessionManager.getMaxContextWindow()
+    }
+
+    /**
+     * Extract content between XML tags from the LLM prompt and set it as section content.
+     */
+    private fun updateSectionFromPromptTag(
+        section: CollapsibleContextSection,
+        llmPrompt: String?,
+        tag: String
+    ) {
+        if (llmPrompt.isNullOrBlank()) {
+            section.clearContent()
+            return
+        }
+        val content = extractTagContent(llmPrompt, tag)
+        if (content.isNullOrBlank()) {
+            section.clearContent()
+            return
+        }
+        val escaped = content.trim()
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", "<br>")
+        val html = "<html><body style='padding: 5px; word-wrap: break-word; font-family: monospace; font-size: 11px;'>$escaped</body></html>"
+        section.setContent(content.trim(), html)
+    }
+
+    /**
+     * Update a messages section with filtered conversation history by role.
+     */
+    private fun updateMessagesSection(
+        section: CollapsibleContextSection,
+        history: List<pl.jclab.refio.core.models.context.ConversationMessageDTO>,
+        role: String
+    ) {
+        val filtered = history.filter { it.role == role }
+        if (filtered.isEmpty()) {
+            section.clearContent()
+            return
+        }
+        val maxPreview = 5
+        val rawParts = mutableListOf<String>()
+        val htmlParts = mutableListOf<String>()
+        filtered.takeLast(maxPreview).forEach { msg ->
+            val preview = msg.content.take(300).let { if (msg.content.length > 300) "$it..." else it }
+            rawParts.add("[${msg.role}] $preview")
+            val escaped = preview
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\n", "<br>")
+            htmlParts.add("<b>[${msg.role}]</b> $escaped")
+        }
+        if (filtered.size > maxPreview) {
+            val more = "... +${filtered.size - maxPreview} earlier messages"
+            rawParts.add(0, more)
+            htmlParts.add(0, "<i>$more</i>")
+        }
+        val raw = rawParts.joinToString("\n\n")
+        val html = "<html><body style='padding: 5px; word-wrap: break-word; font-size: 11px;'>${htmlParts.joinToString("<br><br>")}</body></html>"
+        section.setContent(raw, html)
+    }
+
+    /**
+     * Update system prompt section with a preview of the active LLM system prompt.
+     */
+    private fun updateSystemPromptSection(context: pl.jclab.refio.core.api.ProjectContextResponse) {
+        val prompt = context.activeLlmRequestPrompt
+        if (prompt.isNullOrBlank()) {
+            systemPromptSection.clearContent()
+            return
+        }
+        // Extract system messages portion (before MESSAGES section)
+        val systemPart = prompt.substringBefore("MESSAGES (", prompt).trim()
+        val preview = systemPart.take(2000).let { if (systemPart.length > 2000) "$it\n\n... (truncated, ${systemPart.length} chars total)" else it }
+        val escaped = preview
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", "<br>")
+        val html = "<html><body style='padding: 5px; word-wrap: break-word; font-family: monospace; font-size: 11px;'>$escaped</body></html>"
+        systemPromptSection.setContent(preview, html)
+    }
+
+    /**
+     * Extract text content between `<TAG>` and `</TAG>` from a prompt string.
+     */
+    private fun extractTagContent(prompt: String, tag: String): String? {
+        val openTag = "<$tag>"
+        val closeTag = "</$tag>"
+        val openIdx = prompt.indexOf(openTag)
+        if (openIdx == -1) return null
+        val contentStart = openIdx + openTag.length
+        val closeIdx = prompt.indexOf(closeTag, contentStart)
+        val contentEnd = if (closeIdx != -1) closeIdx else prompt.length
+        if (contentEnd <= contentStart) return null
+        return prompt.substring(contentStart, contentEnd)
     }
 
     private fun showMessage(message: String) {

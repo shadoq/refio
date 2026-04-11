@@ -16,6 +16,7 @@ object MigrationRunner {
     private val migrations: List<Migration> = listOf(
         // SeedTestDataMigration removed from production runtime (Phase 7 refactor).
         // Seed data was for UI development only. Existing databases retain v1 data.
+        V2DropAgentEventsSessionFk(),
     )
 
     fun run(database: Database) {

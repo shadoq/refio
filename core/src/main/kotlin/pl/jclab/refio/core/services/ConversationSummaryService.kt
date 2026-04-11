@@ -23,8 +23,8 @@ class ConversationSummaryService(
     companion object {
         private const val FALLBACK_SUMMARY_MAX_CHARS = 2_000
         private const val SUMMARY_THRESHOLD_RATIO = 0.85
-        private const val DEFAULT_KEEP_RECENT_MESSAGES = 12
-        private const val MIN_MESSAGES_TO_SUMMARIZE = 12
+        private const val SUMMARY_TARGET_RATIO = 0.50
+        private const val MIN_KEEP_RECENT_MESSAGES = 2
     }
 
     fun shouldSummarize(messages: List<ChatMessage>, maxTokens: Int): Boolean {
@@ -36,11 +36,13 @@ class ConversationSummaryService(
     suspend fun ensureSummaryIfNeeded(
         taskId: String,
         messages: List<ChatMessage>,
-        maxTokens: Int,
-        keepRecent: Int = DEFAULT_KEEP_RECENT_MESSAGES
+        maxTokens: Int
     ): List<ChatMessage> {
         if (messages.isEmpty() || maxTokens <= 0) return messages
 
+        // Only summarize messages that came AFTER the most recent summary —
+        // never re-summarize a summary, so we don't lose information through
+        // chained compressions.
         val lastSummaryIndex = messages.indexOfLast { isConversationSummary(it) }
         val messagesSinceSummary = if (lastSummaryIndex >= 0) {
             messages.drop(lastSummaryIndex + 1)
@@ -48,14 +50,39 @@ class ConversationSummaryService(
             messages
         }
 
-        if (messagesSinceSummary.size <= keepRecent) return messages
+        // Trigger is purely budget-based: only when the uncompressed tail
+        // exceeds the configured ratio of the conversation budget.
         if (!shouldSummarize(messagesSinceSummary, maxTokens)) return messages
 
-        val toSummarize = messagesSinceSummary.dropLast(keepRecent)
-        if (toSummarize.size < MIN_MESSAGES_TO_SUMMARIZE) return messages
-        if (toSummarize.isEmpty()) return messages
+        // Walk oldest-first and collect just enough messages to bring the
+        // remaining tail below SUMMARY_TARGET_RATIO of the budget. Always
+        // preserve at least MIN_KEEP_RECENT_MESSAGES at the end so the model
+        // still sees fresh context (current user query, latest tool result).
+        val tokensPerMessage = messagesSinceSummary.map { ContextTokenEstimator.estimateTokens(it.content) }
+        val totalTokens = tokensPerMessage.sum()
+        val target = (maxTokens * SUMMARY_TARGET_RATIO).toInt().coerceAtLeast(1)
+        val tokensToReduce = (totalTokens - target).coerceAtLeast(1)
 
-        logger.info { "[CONVERSATION_SUMMARY] Summarizing ${toSummarize.size} messages for task=$taskId" }
+        val maxSummarizable = (messagesSinceSummary.size - MIN_KEEP_RECENT_MESSAGES).coerceAtLeast(0)
+        if (maxSummarizable == 0) return messages
+
+        var accumulated = 0
+        var summarizeCount = 0
+        for (i in 0 until maxSummarizable) {
+            if (accumulated >= tokensToReduce) break
+            accumulated += tokensPerMessage[i]
+            summarizeCount++
+        }
+
+        if (summarizeCount == 0) return messages
+
+        val toSummarize = messagesSinceSummary.take(summarizeCount)
+
+        logger.info {
+            "[CONVERSATION_SUMMARY] Summarizing ${toSummarize.size} messages " +
+                "(~$accumulated tokens) for task=$taskId, budget=$maxTokens, " +
+                "tail=$totalTokens, target=$target"
+        }
 
         val conversationText = buildString {
             toSummarize.forEach { msg ->
@@ -128,7 +155,12 @@ class ConversationSummaryService(
         val lines = messages.mapNotNull { msg ->
             val body = msg.content.trim().ifBlank { return@mapNotNull null }
             val normalized = body.replace(Regex("\\s+"), " ")
-            val clipped = if (normalized.length > 220) normalized.take(220) + "..." else normalized
+            // Per-message head+tail rather than head-only `.take(220)`. The
+            // last sentence of an assistant message is often the conclusion
+            // / decision / final answer — losing it to a 220-char prefix cap
+            // turned this fallback into a confidence-laundering machine.
+            val clipped = pl.jclab.refio.core.services.context.ToolResultCompression
+                .headTailTruncate(normalized, 220)
             "${msg.role.name.uppercase()}: $clipped"
         }
 
@@ -136,6 +168,9 @@ class ConversationSummaryService(
             return "No stable summary could be generated."
         }
 
-        return lines.joinToString("\n").take(FALLBACK_SUMMARY_MAX_CHARS)
+        // Final-pass head+tail on the joined fallback so a 2000-char cap can't
+        // chop the most recent (and usually most relevant) messages off the end.
+        return pl.jclab.refio.core.services.context.ToolResultCompression
+            .headTailTruncate(lines.joinToString("\n"), FALLBACK_SUMMARY_MAX_CHARS)
     }
 }

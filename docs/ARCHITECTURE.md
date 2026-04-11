@@ -27,7 +27,7 @@ Unlike tools that send entire codebases to LLMs, Refio uses **selective context 
 | **Enhanced AgentTurnLoop** | AgentTurnLoop execution + ADR-0028/ADR-0029 profile support, caching, parallel tools |
 | **14 Context Providers** | @file, @folder, @codebase, @grep, @url, @docs, @commit, and more                     |
 | **RAG Indexing** | Automatic project indexing with language-specific analyzers                          |
-| **14 Registered Tools** | 6 read-only + 8 write tools (AGENT enables full toolset by default)                |
+| **15 Registered Tools** | 7 read-only + 8 write tools (AGENT enables full toolset by default)                 |
 | **8 LLM Adapters** | Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio, Custom OpenAI, Z.AI        |
 | **MCP Protocol** | Full Model Context Protocol with 17 built-in presets                                 |
 | **21 Built-in Subagents** | Specialized agents for code review, security, architecture, docs, business analysis, and coordination |
@@ -65,7 +65,7 @@ Unlike tools that send entire codebases to LLMs, Refio uses **selective context 
 +-------------------------------------------------------------------------+
 |  Infrastructure Layer                                                   |
 |  +-- LLMClient (unified) -> 8 provider adapters                        |
-|  +-- ToolRegistry -> 14 registered tools with security layers           |
+|  +-- ToolRegistry -> 15 registered tools with security layers            |
 |  +-- MCPManager -> MCP server lifecycle (STDIO/HTTP)                    |
 |  +-- EmbeddingsService -> Ollama/OpenAI embeddings                      |
 |  +-- DatabaseFactory -> SQLite (WAL) + Exposed ORM                      |
@@ -276,7 +276,7 @@ RagSearchResult[]
 
 ## Tools
 
-### READ_ONLY Tools (6)
+### READ_ONLY Tools (7)
 
 | Tool | Parameters | Description |
 |------|------------|-------------|
@@ -286,6 +286,7 @@ RagSearchResult[]
 | `grep_search` | pattern, path, case_sensitive | Regex content search |
 | `view_diff` | file1, file2 OR content2 | Line-by-line comparison |
 | `invoke_subagent` | subagent_name, goal, context_refs? | Run nested child loop via subagent profile |
+| `delegate_to_strong_model` | task, context?, allow_tools?, response_format? | Delegate complex task to a stronger model (single-shot or tool-enabled sub-agent). Only registered when `models.defaults.strong` is configured. |
 
 ### WRITE Tools (8)
 
@@ -521,6 +522,7 @@ models:
     chat: "ollama/qwen3.5:9b"
     coding: "ollama/qwen3.5:9b"
     embedding: "ollama/nomic-embed-text"
+    strong: "anthropic/claude-3-5-sonnet-20241022"  # optional, enables delegate_to_strong_model tool
 
   visibility:
     "ollama/qwen3.5:9b": true
@@ -567,7 +569,7 @@ core/src/main/kotlin/pl/jclab/refio/
 |   +-- services/context/     # ContextService sub-components (6 extracted classes)
 |   +-- services/turn/        # AgentTurnLoop sub-components (13 files)
 |   +-- subagents/            # Subagent system
-|   +-- tools/                # Tool system (14 registered implementations)
+|   +-- tools/                # Tool system (15 registered implementations)
 |   +-- prompts/              # Prompt templates
 +-- api/                      # Shared API models (DTOs)
 

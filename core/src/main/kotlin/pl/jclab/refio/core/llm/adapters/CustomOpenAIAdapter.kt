@@ -18,6 +18,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.serialization.gson.gson
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -137,7 +138,12 @@ open class CustomOpenAIAdapter(
         val apiKey = resolveApiKey()
         val requestMessages = buildList<Map<String, Any>> {
             systemMessages.filter { it.isNotBlank() }.forEach { add(mapOf("role" to "system", "content" to it)) }
-            messages.filter { it.role != "system" }.forEach { add(mapOf("role" to it.role, "content" to toOpenAiMessageContent(it))) }
+            // Remap "tool" (used by LLMMessageMapper for tool results) to "assistant" — OpenAI-compatible
+            // APIs require tool_call_id alongside role="tool", which this adapter does not currently emit.
+            messages.filter { it.role != "system" }.forEach {
+                val mappedRole = if (it.role == "tool") "assistant" else it.role
+                add(mapOf("role" to mappedRole, "content" to toOpenAiMessageContent(it)))
+            }
         }
         val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId) ?: ConfigKeys.MAX_OUTPUT_SIZE.default
         val effectiveMaxTokens = when {
@@ -305,7 +311,7 @@ open class CustomOpenAIAdapter(
                             val data = line.removePrefix("data: ").trim()
                             if (data == "[DONE]") break
 
-                            runCatching {
+                            try {
                                 @Suppress("UNCHECKED_CAST")
                                 val chunk = gson.fromJson(data, Map::class.java) as Map<String, Any?>
                                 @Suppress("UNCHECKED_CAST")
@@ -320,6 +326,13 @@ open class CustomOpenAIAdapter(
                                     onStreamChunk(StreamChunk(delta = content))
                                 }
                                 finalFinishReason = first["finish_reason"] as? String ?: finalFinishReason
+                            } catch (e: CancellationException) {
+                                // Let stream abort (guardrail trip) propagate out of the loop.
+                                // NOTE: replaced an earlier `runCatching { }` here — runCatching
+                                // swallowed CancellationException into a Result and the abort was lost.
+                                throw e
+                            } catch (_: Exception) {
+                                // Match previous behavior of silently skipping malformed chunks.
                             }
                         }
                     }
@@ -375,6 +388,21 @@ open class CustomOpenAIAdapter(
                 rawResponse = mapOf("content" to contentBuilder.toString())
             )
         } catch (e: RefioError) {
+            logger.apiError(
+                provider = provider,
+                model = model,
+                endpoint = "$baseUrl$CHAT_ENDPOINT",
+                requestJson = requestJson,
+                httpStatus = httpStatus,
+                error = e,
+                latencyMs = (System.currentTimeMillis() - startTime).toInt(),
+                taskId = taskId,
+                subtaskId = subtaskId,
+                source = source
+            )
+            throw e
+        } catch (e: CancellationException) {
+            // Guardrail-triggered abort — log and rethrow as-is, do NOT wrap.
             logger.apiError(
                 provider = provider,
                 model = model,

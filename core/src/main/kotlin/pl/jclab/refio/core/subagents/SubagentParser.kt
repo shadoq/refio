@@ -104,9 +104,29 @@ class SubagentParser {
             sourcePath = sourcePath,
             scope = scope,
             executionMode = parseExecutionMode(frontmatter["executionMode"]),
-            maxSteps = parseIntSafe(frontmatter["maxSteps"]) ?: 10,
-            contextProfile = parseContextProfile(frontmatter["context_profile"])
+            maxSteps = parseIntSafe(frontmatter["maxSteps"]) ?: 50,
+            contextProfile = parseContextProfile(frontmatter["context_profile"]),
+            reasoningEffort = parseReasoningEffort(frontmatter["reasoning_effort"] ?: frontmatter["reasoningEffort"])
         )
+    }
+
+    /**
+     * Parse reasoning_effort from front-matter. Accepts "low", "medium", "high"
+     * (case-insensitive). Returns null for any other value or null input — global
+     * config will be used in that case. Logs a warning on invalid values so authors
+     * can spot typos in their .md files.
+     */
+    private fun parseReasoningEffort(value: Any?): String? {
+        if (value == null) return null
+        val str = value.toString().trim().lowercase()
+        return when (str) {
+            "low", "medium", "high" -> str
+            "" -> null
+            else -> {
+                logger.warn { "Invalid reasoning_effort value: '$value' (expected: low|medium|high). Ignoring." }
+                null
+            }
+        }
     }
 
     /**

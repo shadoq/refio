@@ -16,6 +16,8 @@ object ChatMessagesTable : Table("chat_messages") {
     val id = varchar("id", 36).clientDefault { UUID.randomUUID().toString() }
     val taskId = varchar("task_id", 36).references(TasksTable.id, onDelete = ReferenceOption.CASCADE)
     val agentInstanceId = varchar("agent_instance_id", 36).nullable()  // Links message to specific agent in multi-agent sessions
+    val agentName = varchar("agent_name", 255).nullable()  // Subagent name for multi-agent UI headers
+    val agentDepth = integer("agent_depth").nullable()  // Nesting depth (0=main, 1=subagent, 2=sub-subagent)
     val role = enumerationByName<MessageRole>("role", 16)
     val content = text("content")
     val thinking = text("thinking").nullable()  // Reasoning process from models (gpt-oss, Claude)
@@ -24,6 +26,7 @@ object ChatMessagesTable : Table("chat_messages") {
     // Tool call support for turn-loop pattern
     val toolCallsJson = text("tool_calls_json").nullable()  // JSON array of ToolCallData
     val toolCallId = varchar("tool_call_id", 255).nullable()  // For TOOL role - references the tool call this is a result for
+    val subtaskId = varchar("subtask_id", 36).nullable()  // For TOOL role - links to the Subtask row that produced this result. Unified identifier used by MESSAGES header, RECENT_WORK, and WORKING_MEMORY so every context section keys off the same id.
 
     // Tool result summarization
     val isSummarized = bool("is_summarized").default(false)  // Whether content is a summary of the original output
@@ -88,12 +91,15 @@ data class ChatMessage(
     val id: String,
     val taskId: String,
     val agentInstanceId: String? = null,
+    val agentName: String? = null,
+    val agentDepth: Int? = null,
     val role: MessageRole,
     val content: String,
     val thinking: String? = null,         // Reasoning process (gpt-oss, Claude)
     val metadata: String?,
     val toolCalls: List<ToolCallData>?,  // For ASSISTANT - tool calls made
     val toolCallId: String?,              // For TOOL - which tool call this is a result for
+    val subtaskId: String? = null,        // For TOOL - id of the Subtask that produced the result (preferred identifier)
     val isSummarized: Boolean = false,    // Whether content is a summary
     val rawOutput: String? = null,        // Full original output
     val tokensIn: Int?,

@@ -100,7 +100,10 @@ class ToolExecutor(
                         output = result.output,
                         error = result.error,
                         metadata = result.metadata,
-                        affectedFiles = result.filesChanged ?: emptyList()
+                        affectedFiles = result.filesChanged ?: emptyList(),
+                        nextActionHints = result.nextActionHints,
+                        recovery = result.recovery,
+                        changeSummary = result.changeSummary
                     )
                 )
 
@@ -226,7 +229,10 @@ class ToolExecutor(
                         output = result.output,
                         error = result.error,
                         metadata = result.metadata,
-                        affectedFiles = result.filesChanged ?: emptyList()
+                        affectedFiles = result.filesChanged ?: emptyList(),
+                        nextActionHints = result.nextActionHints,
+                        recovery = result.recovery,
+                        changeSummary = result.changeSummary
                     )
                 )
 
@@ -616,7 +622,25 @@ data class SingleToolResult(
     /**
      * Files affected by this operation
      */
-    val affectedFiles: List<String>
+    val affectedFiles: List<String>,
+
+    /**
+     * Concrete next-step hints from the tool (e.g. for empty-result paths).
+     * Mirrors [pl.jclab.refio.core.tools.base.ToolResult.nextActionHints].
+     */
+    val nextActionHints: List<String>? = null,
+
+    /**
+     * Recovery instruction for failed executions.
+     * Mirrors [pl.jclab.refio.core.tools.base.ToolResult.recovery].
+     */
+    val recovery: String? = null,
+
+    /**
+     * Structured change summary for write tools (avoids re-reading the file).
+     * Mirrors [pl.jclab.refio.core.tools.base.ToolResult.changeSummary].
+     */
+    val changeSummary: pl.jclab.refio.core.tools.base.ChangeSummary? = null
 )
 
 /**

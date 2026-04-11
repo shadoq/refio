@@ -20,6 +20,7 @@ enum class ContextSection(val defaultPriority: ContextPriority) {
     SYSTEM_PROMPT(ContextPriority.CRITICAL),
     TOOL_DESCRIPTIONS(ContextPriority.CRITICAL),
     WORKING_MEMORY(ContextPriority.HIGH),
+    AGENT_PLANS(ContextPriority.HIGH),
     PROJECT_CONTEXT(ContextPriority.HIGH),
     PROJECT_INSTRUCTIONS(ContextPriority.HIGH),
     RECENT_WORK(ContextPriority.NORMAL),
@@ -37,7 +38,7 @@ enum class ContextSection(val defaultPriority: ContextPriority) {
     val contextLayer: ContextLayer
         get() = when (this) {
             SYSTEM_PROMPT, TOOL_DESCRIPTIONS, PROJECT_CONTEXT, PROJECT_INSTRUCTIONS, REFERENCE -> ContextLayer.STABLE
-            WORKING_MEMORY, RECENT_WORK -> ContextLayer.ACCUMULATED
+            WORKING_MEMORY, RECENT_WORK, AGENT_PLANS -> ContextLayer.ACCUMULATED
             USER_CONTEXT, RAG_FRAGMENTS, CONVERSATION -> ContextLayer.EPHEMERAL
         }
 }

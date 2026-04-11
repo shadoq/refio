@@ -26,23 +26,29 @@ class ChatMessageRepository {
         metadata: String? = null,
         toolCalls: List<ToolCallData>? = null,
         toolCallId: String? = null,
+        subtaskId: String? = null,
         isSummarized: Boolean = false,
         rawOutput: String? = null,
         tokensIn: Int? = null,
         tokensOut: Int? = null,
         cost: Double? = null,
-        agentInstanceId: String? = null
+        agentInstanceId: String? = null,
+        agentName: String? = null,
+        agentDepth: Int? = null
     ): ChatMessage {
         return transaction {
             val messageId = ChatMessagesTable.insert {
                 it[ChatMessagesTable.taskId] = taskId
                 it[ChatMessagesTable.agentInstanceId] = agentInstanceId
+                it[ChatMessagesTable.agentName] = agentName
+                it[ChatMessagesTable.agentDepth] = agentDepth
                 it[ChatMessagesTable.role] = role
                 it[ChatMessagesTable.content] = content
                 it[ChatMessagesTable.thinking] = thinking
                 it[ChatMessagesTable.metadata] = metadata
                 it[ChatMessagesTable.toolCallsJson] = ToolCallData.toJsonList(toolCalls)
                 it[ChatMessagesTable.toolCallId] = toolCallId
+                it[ChatMessagesTable.subtaskId] = subtaskId
                 it[ChatMessagesTable.isSummarized] = isSummarized
                 it[ChatMessagesTable.rawOutput] = rawOutput
                 it[ChatMessagesTable.tokensIn] = tokensIn
@@ -52,8 +58,9 @@ class ChatMessageRepository {
 
             val toolCallsInfo = if (toolCalls != null) ", toolCalls=${toolCalls.size}" else ""
             val toolCallIdInfo = if (toolCallId != null) ", toolCallId=$toolCallId" else ""
+            val subtaskIdInfo = if (subtaskId != null) ", subtaskId=$subtaskId" else ""
             val thinkingInfo = if (!thinking.isNullOrEmpty()) ", thinking=${thinking.length} chars" else ""
-            logger.info { "Created chat message: id=$messageId, taskId=$taskId, role=$role$toolCallsInfo$toolCallIdInfo$thinkingInfo, tokens=$tokensIn/$tokensOut, cost=$cost" }
+            logger.info { "Created chat message: id=$messageId, taskId=$taskId, role=$role$toolCallsInfo$toolCallIdInfo$subtaskIdInfo$thinkingInfo, tokens=$tokensIn/$tokensOut, cost=$cost" }
 
             findById(messageId) ?: throw IllegalStateException("Failed to retrieve created message")
         }
@@ -65,6 +72,7 @@ class ChatMessageRepository {
     fun createToolResult(
         taskId: String,
         toolCallId: String,
+        subtaskId: String?,
         result: String,
         isSummarized: Boolean = false,
         rawOutput: String? = null,
@@ -76,6 +84,7 @@ class ChatMessageRepository {
             content = result,
             metadata = metadata,
             toolCallId = toolCallId,
+            subtaskId = subtaskId,
             isSummarized = isSummarized,
             rawOutput = rawOutput
         )
@@ -223,12 +232,15 @@ class ChatMessageRepository {
             id = row[ChatMessagesTable.id],
             taskId = row[ChatMessagesTable.taskId],
             agentInstanceId = row[ChatMessagesTable.agentInstanceId],
+            agentName = row[ChatMessagesTable.agentName],
+            agentDepth = row[ChatMessagesTable.agentDepth],
             role = row[ChatMessagesTable.role],
             content = row[ChatMessagesTable.content],
             thinking = row[ChatMessagesTable.thinking],
             metadata = row[ChatMessagesTable.metadata],
             toolCalls = ToolCallData.fromJsonList(row[ChatMessagesTable.toolCallsJson]),
             toolCallId = row[ChatMessagesTable.toolCallId],
+            subtaskId = row[ChatMessagesTable.subtaskId],
             isSummarized = row[ChatMessagesTable.isSummarized],
             rawOutput = row[ChatMessagesTable.rawOutput],
             tokensIn = row[ChatMessagesTable.tokensIn],

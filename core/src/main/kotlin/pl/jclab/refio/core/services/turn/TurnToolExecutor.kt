@@ -52,29 +52,18 @@ class TurnToolExecutor(
     private val taskRepository: TaskRepository? = null,
     private val chatMessageRepository: ChatMessageRepository? = null,
     private val approvalService: ToolApprovalService? = null,
-    private val permissionsService: ToolPermissionsService? = null
+    private val permissionsService: ToolPermissionsService? = null,
+    private val hookService: pl.jclab.refio.core.services.hooks.HookService? = null
 ) {
-    class ReadTracker {
-        private val recentReads = java.util.concurrent.ConcurrentHashMap<String, Long>()
-
-        fun recordRead(path: String) {
-            recentReads[normalize(path)] = System.currentTimeMillis()
-        }
-
-        fun wasReadRecently(path: String, withinMs: Long = 5 * 60 * 1000): Boolean {
-            val readAt = recentReads[normalize(path)] ?: return false
-            return System.currentTimeMillis() - readAt <= withinMs
-        }
-
-        private fun normalize(path: String): String = path.replace('\\', '/').trim()
-    }
-
     /** Callback to update turn phase (set by AgentTurnLoop before each turn) */
     var turnStateUpdater: ((TurnPhase) -> Unit)? = null
 
     private val streamingToolNames = setOf("advance_code_editing", "multi_line_editor")
     private val codingToolNames = setOf("advance_code_editing", "multi_line_editor")
-    private val readTracker = ReadTracker()
+
+    private fun isDelegationTool(name: String): Boolean =
+        name.equals("invoke_subagent", ignoreCase = true) ||
+        name.equals("delegate_to_strong_model", ignoreCase = true)
 
     companion object {
         /** Max raw output size (chars) to preserve in-context for DATA_PRODUCING tools */
@@ -103,7 +92,15 @@ class TurnToolExecutor(
                 wasSummarized ->
                     summaryText to true
                 else ->
-                    rawOutput.take(2000) to false
+                    // Non-summarized fallback for tools whose output is between
+                    // 500 chars and the data-producing buffer. We previously did
+                    // `rawOutput.take(2000)` here, which silently dropped trailing
+                    // exit codes / API responses for any tool that wasn't routed
+                    // through the summarizer — exactly the data-loss pattern this
+                    // refactor exists to eliminate. Use the shared head+tail
+                    // helper so both ends survive.
+                    pl.jclab.refio.core.services.context.ToolResultCompression
+                        .headTailTruncate(rawOutput, 2000) to false
             }
         }
     }
@@ -155,6 +152,12 @@ class TurnToolExecutor(
             subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
             subtaskRepository.updateResult(subtaskId, result = null, errorMessage = errorText)
             listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
+            hookService?.trigger("after_tool", mapOf(
+                "toolName" to toolCall.name,
+                "taskId" to taskId,
+                "success" to "false",
+                "mode" to mode.name
+            ))
             logger.warn {
                 "[TOOL_BLOCKED] runId=$runId, depth=$depth, tool=${toolCall.name}, " +
                     "subagent=${profileOverrides?.subagentName ?: "-"}"
@@ -162,6 +165,7 @@ class TurnToolExecutor(
             index to (
                 toolCall to ToolResultData(
                     toolCallId = toolCall.id,
+                    subtaskId = subtaskId,
                     content = errorText,
                     isSummarized = false,
                     rawOutput = null,
@@ -177,15 +181,18 @@ class TurnToolExecutor(
         }
 
         val containsInvokeSubagent = allowedIndexed.any { (_, toolCall) ->
-            toolCall.name.equals("invoke_subagent", ignoreCase = true)
+            isDelegationTool(toolCall.name)
         }
-        val isSubagentRun = !profileOverrides?.subagentName.isNullOrBlank()
         // If any tool requires ASK approval, run sequentially to avoid multiple simultaneous dialogs
         val containsAskTool = permissionsService != null && approvalService != null &&
             allowedIndexed.any { (_, toolCall) ->
                 permissionsService.getPermission(toolCall.name, mode) == PermissionLevel.ASK
             }
-        val shouldDisableParallel = containsInvokeSubagent || isSubagentRun || containsAskTool
+        // Allow READ_ONLY parallel execution during subagent runs — only block parallel
+        // for invoke_subagent (recursion risk) and ASK tools (concurrent approval dialogs).
+        // Previously isSubagentRun blanket-disabled all parallelism, causing 5 sequential
+        // read_file calls to take 270s instead of ~70s in a documentation-engineer session.
+        val shouldDisableParallel = containsInvokeSubagent || containsAskTool
 
         // Parallel execution for READ_ONLY tools
         if (config.parallelReadTools && allowedIndexed.size > 1 && !shouldDisableParallel) {
@@ -265,7 +272,7 @@ class TurnToolExecutor(
         if (config.parallelReadTools && shouldDisableParallel) {
             logger.info {
                 "[PARALLEL] Disabled for this batch: invoke_subagent=$containsInvokeSubagent, " +
-                    "subagentRun=$isSubagentRun, containsAskTool=$containsAskTool"
+                    "containsAskTool=$containsAskTool"
             }
         }
 
@@ -319,11 +326,18 @@ class TurnToolExecutor(
         if (toolCall.error != null) {
             val errorText = "Error: ${toolCall.error}"
             listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
+            hookService?.trigger("after_tool", mapOf(
+                "toolName" to toolCall.name,
+                "taskId" to taskId,
+                "success" to "false",
+                "mode" to mode.name
+            ))
             subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
             subtaskRepository.updateResult(subtaskId, result = null, errorMessage = errorText)
             logger.debug { "[SUBTASK_FAILED] subtaskId=$subtaskId, tool=${toolCall.name}, error=$errorText" }
             return ToolResultData(
                 toolCallId = toolCall.id,
+                subtaskId = subtaskId,
                 content = errorText,
                 isSummarized = false,
                 rawOutput = null,
@@ -378,9 +392,13 @@ class TurnToolExecutor(
             logger.debug { "[SUBTASK_RUNNING] subtaskId=$subtaskId, tool=${toolCall.name}" }
 
             listener?.onToolExecutionStarted(taskId, toolCall)
+            hookService?.trigger("before_tool", mapOf(
+                "toolName" to toolCall.name,
+                "taskId" to taskId,
+                "mode" to mode.name
+            ))
 
             val argumentsMap = TurnJsonUtils.parseJsonToMap(toolCall.arguments).toMutableMap()
-            val readBeforeWriteWarning = checkReadBeforeWrite(toolCall.name, argumentsMap)
             injectNestedSubagentMetadata(
                 args = argumentsMap,
                 toolCall = toolCall,
@@ -392,6 +410,19 @@ class TurnToolExecutor(
                 profileOverrides = profileOverrides,
                 listener = listener
             )
+
+            // Inject internal metadata for SYSTEM tools (tasks, memory, etc.)
+            val tool = toolRegistry.getTool(toolCall.name)
+            if (tool?.category == ToolCategory.SYSTEM || isDelegationTool(toolCall.name)) {
+                argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.TASK_ID, taskId)
+                argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.MODE, mode.name)
+                argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.ITERATION, iteration)
+                argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.SESSION_ID, taskId)
+                argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.SUBTASK_ID, subtaskId)
+                profileOverrides?.subagentName?.let { argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.AGENT_NAME, it) }
+                profileOverrides?.let { argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.AGENT_ID, runId) }
+                profileOverrides?.parentRunId?.let { argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.PARENT_RUN_ID, it) }
+            }
 
             // Inject enriched conversation context for LLM-based coding tools
             if (toolCall.name in codingToolNames) {
@@ -441,7 +472,10 @@ class TurnToolExecutor(
                     output = output.output,
                     error = output.error,
                     metadata = output.metadata,
-                    filesChanged = output.affectedFiles
+                    filesChanged = output.affectedFiles,
+                    nextActionHints = output.nextActionHints,
+                    recovery = output.recovery,
+                    changeSummary = output.changeSummary
                 )
             } else {
                 toolExecutor.executeTool(toolCallRequest, taskId)
@@ -449,31 +483,68 @@ class TurnToolExecutor(
 
             if (toolResult.success) {
                 val rawOutput = toolResult.output ?: "Success (no output)"
-                val outputWithWarnings = listOfNotNull(readBeforeWriteWarning, rawOutput)
-                    .joinToString("\n\n")
+                // Append next-step hints from the tool itself (e.g. grep_search "no matches" hints,
+                // file_search "broaden the glob" hints). The agent sees these directly in the
+                // tool result, no separate nudge round-trip needed.
+                val hintsBlock = toolResult.nextActionHints
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.joinToString(prefix = "[next-step hints]\n- ", separator = "\n- ")
+
+                val outputWithWarnings = listOfNotNull(rawOutput, hintsBlock).joinToString("\n\n")
                 val isInvokeSubagent = toolCall.name.equals("invoke_subagent", ignoreCase = true)
-                val subagentName = argumentsMap["subagent_name"]?.toString()?.trim().orEmpty()
-                val displayOutput = if (isInvokeSubagent) {
-                    val header = if (subagentName.isNotBlank()) {
-                        "Subagent [$subagentName] result:"
-                    } else {
-                        "Subagent result:"
+                val isDelegateStrong = toolCall.name.equals("delegate_to_strong_model", ignoreCase = true)
+                val isMemoryGetSubtaskOutput = toolCall.name.equals("memory", ignoreCase = true)
+                    && argumentsMap["action"]?.toString().equals("get_subtask_output", ignoreCase = true)
+                val displayOutput = when {
+                    isInvokeSubagent -> {
+                        val subagentName = argumentsMap["subagent_name"]?.toString()?.trim().orEmpty()
+                        val header = if (subagentName.isNotBlank()) {
+                            "Subagent [$subagentName] result:"
+                        } else {
+                            "Subagent result:"
+                        }
+                        "$header\n\n$outputWithWarnings"
                     }
-                    "$header\n\n$outputWithWarnings"
-                } else {
-                    outputWithWarnings
+                    isDelegateStrong -> "Strong model result:\n\n$outputWithWarnings"
+                    else -> outputWithWarnings
                 }
 
                 val summaryToken = GlobalMetrics.beginOperation(
                     OperationInfo.TurnToolSummarization(toolCall.name, iteration)
                 )
+                // Skip the LLM summarizer entirely when the tool already produced a structured
+                // ChangeSummary (write tools). The diff + stats are more informative AND
+                // deterministic — no need to spend a WEAK-model call paraphrasing them.
+                val structuredChangeSummary = toolResult.changeSummary
                 val summaryResult = try {
-                    if (isInvokeSubagent) {
-                        ToolResultSummary(displayOutput, wasSummarized = false, 0, 0, 0.0)
-                    } else if (outputWithWarnings.isNotBlank()) {
-                        toolResultSummarizer.summarizeToolResult(toolCall.name, outputWithWarnings, taskId)
-                    } else {
-                        ToolResultSummary(outputWithWarnings, wasSummarized = false, 0, 0, 0.0)
+                    when {
+                        isInvokeSubagent || isDelegateStrong || isMemoryGetSubtaskOutput ->
+                            ToolResultSummary(displayOutput, wasSummarized = false, 0, 0, 0.0)
+                        structuredChangeSummary != null -> {
+                            val cs = structuredChangeSummary
+                            val deterministic = buildString {
+                                if (cs.created) append("Created ") else append("Edited ")
+                                append(toolResult.filesChanged?.firstOrNull() ?: "(unknown)")
+                                append(" (+${cs.addedLines}/-${cs.removedLines}")
+                                cs.replacements?.let { append(", ${it} replacement(s)") }
+                                append(")")
+                                cs.unifiedDiff?.takeIf { it.isNotBlank() }?.let { diff ->
+                                    append("\n```diff\n").append(diff.trimEnd()).append("\n```")
+                                }
+                            }
+                            ToolResultSummary(deterministic, wasSummarized = true, 0, 0, 0.0)
+                        }
+                        outputWithWarnings.isNotBlank() ->
+                            // Pass argumentsMap so the summarizer can pick the right context
+                            // type — e.g. read_file on .json should not run code-analysis prompt.
+                            toolResultSummarizer.summarizeToolResult(
+                                toolName = toolCall.name,
+                                rawOutput = outputWithWarnings,
+                                taskId = taskId,
+                                toolArgs = argumentsMap
+                            )
+                        else ->
+                            ToolResultSummary(outputWithWarnings, wasSummarized = false, 0, 0, 0.0)
                     }
                 } catch (e: Exception) {
                     // Summarizer LLM failure should NOT propagate as a tool execution error.
@@ -492,7 +563,12 @@ class TurnToolExecutor(
                 }
 
                 listener?.onToolExecutionCompleted(taskId, toolCall, summaryResult.summary, true)
-                recordReadAfterExecution(toolCall.name, argumentsMap)
+                hookService?.trigger("after_tool", mapOf(
+                    "toolName" to toolCall.name,
+                    "taskId" to taskId,
+                    "success" to "true",
+                    "mode" to mode.name
+                ))
 
                 subtaskRepository.updateStatus(subtaskId, TaskStatus.SUCCESS)
                 subtaskRepository.updateResult(subtaskId, result = outputWithWarnings, summary = summaryResult.summary)
@@ -504,7 +580,8 @@ class TurnToolExecutor(
                     params = argumentsMap,
                     result = outputWithWarnings,
                     iteration = iteration,
-                    metadata = toolResult.metadata
+                    metadata = toolResult.metadata,
+                    originId = subtaskId
                 )
 
                 // Decide what content to store in conversation history.
@@ -535,19 +612,40 @@ class TurnToolExecutor(
                 val metadataMap = buildToolResultMetadata(toolCall.name, argumentsMap, toolResult.metadata)
                 val metadataJson = metadataMap.takeIf { it.isNotEmpty() }?.let { gson.toJson(it) }
 
-                return ToolResultData(
+                val resultData = ToolResultData(
                     toolCallId = toolCall.id,
+                    subtaskId = subtaskId,
                     content = effectiveContent,
                     isSummarized = effectivelySummarized,
                     rawOutput = outputWithWarnings,
                     metadata = metadataJson
                 )
+
+                return resultData
             } else {
                 val errorDetail = toolResult.error
                     ?: toolResult.output?.takeIf { it.isNotBlank() }
                     ?: "Unknown error"
-                val errorText = "Error: $errorDetail"
+                // Surface tool-provided recovery + next-step hints to the agent so it can
+                // attempt a corrected retry instead of guessing or giving up. Lesson 03E04:
+                // failed tool results should explain *what to do next*, not just *what failed*.
+                val errorText = buildString {
+                    append("Error: ").append(errorDetail)
+                    toolResult.recovery?.takeIf { it.isNotBlank() }?.let {
+                        append("\nRecovery: ").append(it)
+                    }
+                    toolResult.nextActionHints?.takeIf { it.isNotEmpty() }?.let { hints ->
+                        append("\nNext steps:")
+                        hints.forEach { append("\n- ").append(it) }
+                    }
+                }
                 listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
+                hookService?.trigger("after_tool", mapOf(
+                    "toolName" to toolCall.name,
+                    "taskId" to taskId,
+                    "success" to "false",
+                    "mode" to mode.name
+                ))
 
                 subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
                 subtaskRepository.updateResult(subtaskId, result = null, errorMessage = errorText)
@@ -557,6 +655,7 @@ class TurnToolExecutor(
 
                 return ToolResultData(
                     toolCallId = toolCall.id,
+                    subtaskId = subtaskId,
                     content = errorText,
                     isSummarized = false,
                     rawOutput = null,
@@ -567,6 +666,12 @@ class TurnToolExecutor(
             logger.error(e) { "[TOOL_ERROR] Failed to execute ${toolCall.name}: ${e.message}" }
             val errorText = "Error: ${e.message}"
             listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
+            hookService?.trigger("after_tool", mapOf(
+                "toolName" to toolCall.name,
+                "taskId" to taskId,
+                "success" to "false",
+                "mode" to mode.name
+            ))
 
             subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
             subtaskRepository.updateResult(
@@ -579,6 +684,7 @@ class TurnToolExecutor(
 
             return ToolResultData(
                 toolCallId = toolCall.id,
+                subtaskId = subtaskId,
                 content = errorText,
                 isSummarized = false,
                 rawOutput = null,
@@ -666,7 +772,7 @@ class TurnToolExecutor(
         profileOverrides: TurnProfileOverrides?,
         listener: TurnEventListener? = null
     ) {
-        if (toolCall.name != "invoke_subagent") return
+        if (!isDelegationTool(toolCall.name)) return
 
         val chain = (profileOverrides?.subagentChain.orEmpty() + listOfNotNull(profileOverrides?.subagentName))
             .distinct()
@@ -805,32 +911,4 @@ class TurnToolExecutor(
         return merged
     }
 
-    private fun recordReadAfterExecution(toolName: String, argumentsMap: Map<String, Any>) {
-        when (toolName) {
-            "read_file" -> (argumentsMap["path"] as? String)?.let(readTracker::recordRead)
-            "code_editing" -> (argumentsMap["path"] as? String)?.let(readTracker::recordRead)
-            "multi_edit" -> extractMultiEditPaths(argumentsMap).forEach(readTracker::recordRead)
-        }
-    }
-
-    private fun checkReadBeforeWrite(toolName: String, params: Map<String, Any>): String? {
-        val paths = when (toolName) {
-            "code_editing" -> listOfNotNull(params["path"] as? String)
-            "multi_edit" -> extractMultiEditPaths(params)
-            else -> emptyList()
-        }
-        if (paths.isEmpty()) return null
-
-        val unreadPaths = paths.filterNot { readTracker.wasReadRecently(it) }
-        if (unreadPaths.isEmpty()) return null
-
-        return TurnNudgeBuilder.buildReadBeforeWriteMessage(unreadPaths)
-    }
-
-    private fun extractMultiEditPaths(params: Map<String, Any>): List<String> {
-        val edits = params["edits"] as? List<*> ?: return emptyList()
-        return edits.mapNotNull { edit ->
-            (edit as? Map<*, *>)?.get("path")?.toString()
-        }
-    }
 }

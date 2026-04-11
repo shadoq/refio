@@ -63,6 +63,7 @@ class GrepSearchTool(
             val caseSensitive = (params["case_sensitive"] as? Boolean) ?: false
             val maxResults = ((params["max_results"] as? Number)?.toInt() ?: 100)
                 .coerceAtMost(limits.maxGrepResults)
+            val detail = ((params["detail"] as? String) ?: "normal").lowercase()
 
             // Normalize path for security (backslash → forward slash)
             var normalizedPathStr = pathStr.replace('\\', '/')
@@ -181,26 +182,39 @@ class GrepSearchTool(
                 logger.warn { "Grep search hit limit: ${results.size} >= $maxResults" }
             }
 
-            // Format output
-            val output = if (results.isEmpty()) {
-                "No matches found for pattern: $pattern"
-            } else {
-                formatResults(results)
+            // Format output (verbosity controlled by `detail`)
+            val output = when {
+                results.isEmpty() -> "No matches found for pattern: $pattern"
+                detail == "summary" -> formatResultsSummary(results)
+                else -> formatResults(results)
             }
 
             val duration = (System.currentTimeMillis() - startTime).toInt()
 
-            logger.info { "Grep search completed: ${results.size} matches in $filesSearched files (skipped $filesSkipped large files), ${duration}ms" }
+            logger.info { "Grep search completed: ${results.size} matches in $filesSearched files (skipped $filesSkipped large files), ${duration}ms, detail=$detail" }
+
+            // Empty-result hints (lesson 03E04: tools should suggest next steps).
+            val hints: List<String>? = if (results.isEmpty()) {
+                buildList {
+                    add("Try a less specific pattern or remove anchors")
+                    if (caseSensitive) add("Retry with case_sensitive=false")
+                    if (filePattern != "*") add("Broaden file_pattern (currently '$filePattern')")
+                    if (pathStr != ".") add("Search a parent directory or use path=\".\"")
+                    add("Use file_search to confirm files of the expected type exist")
+                }
+            } else null
 
             return ToolResult(
                 success = true,
                 output = output,
                 durationMs = duration,
+                nextActionHints = hints,
                 metadata = mapOf(
                     "match_count" to results.size,
                     "files_searched" to filesSearched,
                     "pattern" to pattern,
-                    "search_path" to pathStr
+                    "search_path" to pathStr,
+                    "detail" to detail
                 )
             )
 
@@ -230,6 +244,20 @@ class GrepSearchTool(
         }
     }
 
+    /**
+     * Compact one-line-per-file summary used when detail="summary".
+     * Trades match content for context budget — agent gets file paths + counts only.
+     */
+    private fun formatResultsSummary(results: List<GrepResult>): String {
+        val byFile = results.groupingBy { it.file }.eachCount()
+        return buildString {
+            appendLine("Matches in ${byFile.size} file(s) (${results.size} total):")
+            byFile.entries
+                .sortedByDescending { it.value }
+                .forEach { (file, count) -> appendLine("  $file: $count match(es)") }
+        }.trimEnd()
+    }
+
     override fun getParameterSchema(): Map<String, Any> {
         return mapOf(
             "type" to "object",
@@ -257,6 +285,12 @@ class GrepSearchTool(
                     "type" to "integer",
                     "description" to "Maximum number of results",
                     "default" to 100
+                ),
+                "detail" to mapOf(
+                    "type" to "string",
+                    "enum" to listOf("summary", "normal", "full"),
+                    "description" to "Verbosity. 'summary' = file:count aggregation only (cheapest); 'normal' (default) = full file:line:content lines; 'full' = same as normal.",
+                    "default" to "normal"
                 )
             ),
             "required" to listOf("pattern")

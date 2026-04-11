@@ -10,6 +10,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -200,6 +201,89 @@ class HttpRequestToolTest {
             val smallLimitTool = HttpRequestTool(maxResponseSize = 100)
             assertNotNull(smallLimitTool)
             assertEquals("http_request", smallLimitTool.name)
+        }
+    }
+
+    /**
+     * Tests for the body-coercion helper introduced after a bug where qwen3.5
+     * (and other models) passed `body` as a JSON object instead of a JSON string.
+     * Without coercion the parameter silently dropped to null and the HTTP body
+     * went out empty, which is what produced the "no data sent" stuck-agent loop.
+     */
+    @Nested
+    inner class BodyCoercionTests {
+
+        @Test
+        fun `coerce null body to null`() {
+            assertNull(tool.coerceBody(null))
+        }
+
+        @Test
+        fun `coerce string body returns it as-is`() {
+            val raw = """{"apikey":"abc","task":"foo"}"""
+            assertEquals(raw, tool.coerceBody(raw))
+        }
+
+        @Test
+        fun `coerce empty string returns empty string`() {
+            assertEquals("", tool.coerceBody(""))
+        }
+
+        @Test
+        fun `coerce Map body serializes to JSON object`() {
+            val raw = linkedMapOf<String, Any>(
+                "apikey" to "abc",
+                "task" to "domatowo",
+                "answer" to linkedMapOf(
+                    "action" to "inspect",
+                    "object" to "8d347de8c433175cbc3b415b163cd9ec"
+                )
+            )
+            val coerced = tool.coerceBody(raw)
+            assertNotNull(coerced)
+            // Verify it produced valid JSON, not Java map toString.
+            assertTrue(coerced.startsWith("{"))
+            assertTrue(coerced.contains("\"apikey\":\"abc\""), "Expected JSON-quoted apikey, got: $coerced")
+            assertTrue(coerced.contains("\"action\":\"inspect\""), "Expected nested JSON serialization, got: $coerced")
+            assertTrue(coerced.contains("\"task\":\"domatowo\""), "Expected JSON-quoted task, got: $coerced")
+            // Critical anti-regression: must NOT use Java map's `=` syntax.
+            assertFalse(coerced.contains("apikey=abc"), "Body must not look like Java Map toString: $coerced")
+        }
+
+        @Test
+        fun `coerce List body serializes to JSON array`() {
+            val raw = listOf("a", "b", "c")
+            val coerced = tool.coerceBody(raw)
+            assertEquals("[\"a\",\"b\",\"c\"]", coerced)
+        }
+
+        @Test
+        fun `coerce nested Map preserves structure`() {
+            val raw = linkedMapOf("outer" to linkedMapOf("inner" to listOf(1, 2, 3)))
+            val coerced = tool.coerceBody(raw)
+            assertEquals("{\"outer\":{\"inner\":[1,2,3]}}", coerced)
+        }
+
+        @Test
+        fun `coerce Number body returns string form`() {
+            assertEquals("42", tool.coerceBody(42))
+            assertEquals("3.14", tool.coerceBody(3.14))
+        }
+
+        @Test
+        fun `coerce Boolean body returns string form`() {
+            assertEquals("true", tool.coerceBody(true))
+            assertEquals("false", tool.coerceBody(false))
+        }
+
+        @Test
+        fun `coerce empty Map serializes to empty JSON object`() {
+            assertEquals("{}", tool.coerceBody(emptyMap<String, Any>()))
+        }
+
+        @Test
+        fun `coerce empty List serializes to empty JSON array`() {
+            assertEquals("[]", tool.coerceBody(emptyList<Any>()))
         }
     }
 }

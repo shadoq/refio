@@ -78,6 +78,10 @@ data class Message(
     val isToolStreaming: Boolean = false,
     val toolStreamContent: String? = null,
 
+    // Agent identity for multi-agent UI
+    val agentName: String? = null,         // Subagent name (null = main orchestrator)
+    val agentDepth: Int? = null,           // Nesting depth (0=main, 1=subagent, 2=sub-subagent)
+
     // Streaming fields (US-027)
     val isStreaming: Boolean = false,      // Whether message is currently streaming
     val streamStartedAt: Long? = null,     // When streaming started (epoch ms)

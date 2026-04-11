@@ -109,6 +109,25 @@ object TuiChatMessageMapper {
             )
 
             is AgentEvent.ApprovalDecision, is AgentEvent.SpawnAgentRequest, is AgentEvent.AgentSpawned -> null
+
+            // Turn lifecycle events are consumed by GUI trace panel, not shown in TUI chat.
+            is AgentEvent.TurnStarted,
+            is AgentEvent.TurnEnded,
+            is AgentEvent.LLMCallCompleted,
+            is AgentEvent.ToolCalled -> null
+
+            // Guardrail abort IS shown in TUI — user needs to see why the stream stopped.
+            // Rendered as AGENT_FAILED so it picks up the red "✗" status icon.
+            is AgentEvent.StreamAborted -> TuiChatMessage(
+                id = event.id,
+                timestamp = event.timestamp,
+                role = "agent_event",
+                content = "Stream aborted by guardrail [${event.code}]: ${event.reason} " +
+                    "(partial=${event.partialLength} chars)",
+                agentId = event.sourceAgentId,
+                agentColorIndex = colorIdx,
+                messageType = TuiMessageType.AGENT_FAILED
+            )
         }
     }
 

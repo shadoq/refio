@@ -160,6 +160,24 @@ models:
     "openai/gpt-4o-mini": true
     "openai/gpt-4o": false              # Hidden (expensive)
     "anthropic/claude-3-opus-20240229": false  # Hidden (expensive)
+
+  # Custom model presets (appear in Settings → Models → Quick Presets)
+  presets:
+    - name: "My Cloud Setup"
+      description: "Mixed cloud models for daily work"
+      defaultModel: "openai/gpt-4.1-mini"
+      planModel: "openai/gpt-4.1"
+      codingModel: "anthropic/claude-sonnet-4-5-20250929"
+      weakModel: "openai/gpt-4.1-nano"
+      visibleModels:
+        - "openai/gpt-4.1-mini"
+        - "openai/gpt-4.1"
+        - "openai/gpt-4.1-nano"
+        - "anthropic/claude-sonnet-4-5-20250929"
+    - name: "Local Dev"
+      description: "Fully local models"
+      defaultModel: "ollama/qwen3:14b"
+      # planModel, codingModel, weakModel default to defaultModel when omitted
 ```
 
 ### System Limits
@@ -381,6 +399,7 @@ mcp:
 | `models.defaults.coding` | `default_model.agent` | `qwen3.5:9b` |
 | `models.defaults.weak` | `default_model.weak` | `qwen3.5:9b` |
 | `models.defaults.embedding` | `models.embedding_model` | `nomic-embed-text` |
+| `models.defaults.strong` | `default_model.strong` | - (optional, no fallback) |
 | `limits.apiCallTimeout` | `limits.api_call_timeout` | `240` |
 | `limits.toolExecutionTimeout` | `limits.tool_execution_timeout` | `240` |
 | `limits.maxContextSize` | `limits.max_context_size` | `128000` |
@@ -449,6 +468,7 @@ models:
     coding: "anthropic/claude-3-5-sonnet-20241022"
     weak: "ollama/qwen3.5:4b"
     embedding: "ollama/nomic-embed-text"
+    strong: "anthropic/claude-3-5-sonnet-20241022"  # optional, enables delegate_to_strong_model tool
 
   visibility:
     "ollama/qwen3.5:9b": true

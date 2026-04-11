@@ -1,0 +1,134 @@
+package pl.jclab.refio.core.services.turn
+
+import pl.jclab.refio.core.api.TurnRunProfile
+import pl.jclab.refio.core.db.TaskMode
+import pl.jclab.refio.core.logging.dualLogger
+
+private val logger = dualLogger("TurnCompletionGuardian")
+
+/**
+ * beforeFinish guardian hook (lesson S03E03 — autonomy & feedback loops).
+ *
+ * Runs after the LLM produces a final text response (no more tool calls) and before the turn
+ * is persisted/closed. A guardian can either let the turn finish ([GuardianDecision.Pass])
+ * or push the loop back into another iteration with an injected SYSTEM nudge
+ * ([GuardianDecision.Reenter]).
+ *
+ * This is intentionally separate from [pl.jclab.refio.core.services.TaskVerifier]:
+ * - TaskVerifier is a single, optional, LLM-driven check ("did the assistant claim something
+ *   that the evidence does not support?").
+ * - Guardians are a *list* of cheap, deterministic / domain-specific checks that can each
+ *   independently demand re-entry (e.g. "AGENT wrote files but never ran a verification step",
+ *   "user asked for X and X is still missing in the response", "no subagent was called for a
+ *   delegated task", ...).
+ *
+ * Re-entry is bounded by [GuardianRegistry.maxReentries] per turn so a misbehaving guardian
+ * cannot create an infinite loop.
+ */
+interface TurnCompletionGuardian {
+    /** Stable id used for logging and to count per-guardian re-entries. */
+    val name: String
+
+    /**
+     * Inspect the turn state.
+     *
+     * Implementations MUST be idempotent and side-effect-free apart from logging — the same
+     * context may be checked again on the next iteration if another guardian re-entered.
+     */
+    suspend fun check(context: GuardianContext): GuardianDecision
+}
+
+/**
+ * Snapshot of turn state passed to guardians.
+ *
+ * Only includes fields that are stable at the natural-completion exit point of
+ * [pl.jclab.refio.core.services.AgentTurnLoop]. Adding new fields is a non-breaking change.
+ */
+data class GuardianContext(
+    val taskId: String,
+    val mode: TaskMode,
+    val runProfile: TurnRunProfile,
+    val iteration: Int,
+    val maxIterations: Int,
+    /** Original user request text, if resolvable from history. */
+    val userRequest: String?,
+    /** Final assistant text the model is about to send. */
+    val finalResponse: String,
+    /** Distinct names of tools used during this turn. */
+    val toolsUsed: List<String>,
+    /** How many WRITE-mode tools executed in this turn. */
+    val writeToolsExecutedInTurn: Int,
+    /** How many verification (read-only) tool calls happened after the last write. */
+    val verificationToolsExecutedAfterWrite: Int,
+    /** How many times any guardian has already requested re-entry in this turn. */
+    val priorReentries: Int
+)
+
+/**
+ * Result of a single guardian check.
+ */
+sealed class GuardianDecision {
+    /** No issue found — let the turn complete. */
+    data object Pass : GuardianDecision()
+
+    /**
+     * Push the loop back into another iteration.
+     *
+     * @param nudge SYSTEM message to inject into history. Should be short and instructive.
+     * @param reason Short human-readable reason for logging / metrics.
+     */
+    data class Reenter(val nudge: String, val reason: String) : GuardianDecision()
+}
+
+/**
+ * Holds zero or more guardians and runs them in order.
+ *
+ * The first [GuardianDecision.Reenter] short-circuits the rest, because injecting more than one
+ * nudge per iteration would just bloat the prompt — subsequent guardians get a fresh chance on
+ * the next iteration.
+ */
+class GuardianRegistry(
+    private val guardians: List<TurnCompletionGuardian> = emptyList(),
+    /** Hard cap on guardian-driven re-entries per turn. */
+    val maxReentries: Int = DEFAULT_MAX_REENTRIES
+) {
+    val isEmpty: Boolean get() = guardians.isEmpty()
+
+    /**
+     * Run all guardians sequentially. Returns the first non-[GuardianDecision.Pass] decision,
+     * or [GuardianDecision.Pass] if every guardian agrees the turn is done.
+     *
+     * Per-guardian exceptions are caught and treated as Pass — a broken guardian must never
+     * block a turn from finishing.
+     */
+    suspend fun runChecks(context: GuardianContext): GuardianDecision {
+        if (guardians.isEmpty()) return GuardianDecision.Pass
+        if (context.priorReentries >= maxReentries) {
+            logger.info {
+                "[GUARDIAN] taskId=${context.taskId} re-entry budget exhausted " +
+                    "(${context.priorReentries}/$maxReentries) — letting turn finish"
+            }
+            return GuardianDecision.Pass
+        }
+        for (guardian in guardians) {
+            val decision = try {
+                guardian.check(context)
+            } catch (e: Exception) {
+                logger.warn(e) { "[GUARDIAN] guardian=${guardian.name} threw — treating as Pass: ${e.message}" }
+                GuardianDecision.Pass
+            }
+            if (decision is GuardianDecision.Reenter) {
+                logger.info {
+                    "[GUARDIAN] taskId=${context.taskId} guardian=${guardian.name} requested re-entry " +
+                        "(${context.priorReentries + 1}/$maxReentries): ${decision.reason}"
+                }
+                return decision
+            }
+        }
+        return GuardianDecision.Pass
+    }
+
+    companion object {
+        const val DEFAULT_MAX_REENTRIES = 2
+    }
+}

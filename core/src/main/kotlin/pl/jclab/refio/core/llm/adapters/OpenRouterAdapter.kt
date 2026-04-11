@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.llm.adapters
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import pl.jclab.refio.core.llm.BaseLLMAdapter
@@ -100,6 +101,10 @@ class OpenRouterAdapter(
             }
 
             return chatStandard(messages, systemMessages, maxTokens, temperature, kwargs)
+        } catch (e: CancellationException) {
+            // Stream aborted by a guardrail (see core/llm/streaming/) — must propagate
+            // so the caller can see StreamAbortedException instead of RefioError.LLMError.
+            throw e
         } catch (e: Exception) {
             throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
         }
@@ -131,9 +136,12 @@ class OpenRouterAdapter(
             openrouterMessages.add(mapOf("role" to "system", "content" to sysMsg))
         }
 
-        // Add conversation messages (filter out any system messages as they should be in systemMessages parameter)
+        // Add conversation messages (filter out any system messages as they should be in systemMessages parameter).
+        // Remap "tool" (used by LLMMessageMapper for tool results) to "assistant" — OpenAI-compatible APIs
+        // expect tool_call_id alongside role="tool", which this adapter does not currently emit.
         for (msg in messages.filter { it.role != "system" }) {
-            openrouterMessages.add(mapOf("role" to msg.role, "content" to toOpenAiMessageContent(msg)))
+            val mappedRole = if (msg.role == "tool") "assistant" else msg.role
+            openrouterMessages.add(mapOf("role" to mappedRole, "content" to toOpenAiMessageContent(msg)))
         }
 
         // Build request body
@@ -347,9 +355,12 @@ class OpenRouterAdapter(
             openrouterMessages.add(mapOf("role" to "system", "content" to sysMsg))
         }
 
-        // Add conversation messages (filter out any system messages as they should be in systemMessages parameter)
+        // Add conversation messages (filter out any system messages as they should be in systemMessages parameter).
+        // Remap "tool" (used by LLMMessageMapper for tool results) to "assistant" — OpenAI-compatible APIs
+        // expect tool_call_id alongside role="tool", which this adapter does not currently emit.
         for (msg in messages.filter { it.role != "system" }) {
-            openrouterMessages.add(mapOf("role" to msg.role, "content" to toOpenAiMessageContent(msg)))
+            val mappedRole = if (msg.role == "tool") "assistant" else msg.role
+            openrouterMessages.add(mapOf("role" to mappedRole, "content" to toOpenAiMessageContent(msg)))
         }
 
         // Build request body with stream: true
@@ -474,6 +485,9 @@ class OpenRouterAdapter(
                                     }
                                     finalFinishReason = choice["finish_reason"] as? String
                                 }
+                            } catch (e: CancellationException) {
+                                // Let stream abort (guardrail trip) propagate out of the loop.
+                                throw e
                             } catch (e: Exception) {
                                 logger.warn { "[OPENROUTER] Failed to parse non-prefixed JSON: ${e.message}" }
                             }
@@ -568,6 +582,9 @@ class OpenRouterAdapter(
                                 usage = usage
                             ))
                         }
+                    } catch (e: CancellationException) {
+                        // Let stream abort (guardrail trip) propagate out of the loop.
+                        throw e
                     } catch (e: Exception) {
                         logger.warn { "[OPENROUTER] Failed to parse chunk: $data - ${e.message}" }
                         continue

@@ -1,16 +1,34 @@
 package pl.jclab.refio.core.services.turn
 
-import pl.jclab.refio.core.services.turn.TurnGuardrails.LoopStatus
+/**
+ * Stable signature for an arbitrary `body` argument value, used to make effect
+ * keys for HTTP-style tools sensitive to the actual payload (not just URL).
+ *
+ * Without including the body in the effect key, every call to the same endpoint
+ * with a different `action`/`payload` field would count as the same call. With
+ * it, different bodies produce different keys and each action gets the full
+ * per-target budget.
+ */
+private fun bodySignature(body: Any?): String = when (body) {
+    null -> "_"
+    is String -> body.trim().hashCode().toString()
+    else -> body.toString().hashCode().toString()
+}
 
 /**
- * Guardrails for turn-based loop execution.
- * Protects against infinite loops and excessive error rates.
+ * Hard-abort guardrails for turn-based loop execution.
+ *
+ * All guards here are strictly "abort" — they terminate the turn cleanly when
+ * a real pathology is detected. No soft nudges, no retry loops: the turn loop
+ * either keeps going or it stops. Interfering with a working agent via mid-loop
+ * SYSTEM messages caused more problems than it solved (false positives, token
+ * bloat, model confusion) so that entire layer was removed.
  */
 class TurnGuardrails {
 
     /**
-     * Tool error tracker using sliding window approach.
-     * Tracks error rate over last N operations instead of consecutive failures.
+     * Tool error tracker using a sliding window. Aborts when the recent error
+     * rate exceeds a threshold and enough data points have accumulated.
      */
     class ToolErrorTracker(private val windowSize: Int = 10) {
         private val recentResults = ArrayDeque<Boolean>(windowSize)
@@ -28,7 +46,6 @@ class TurnGuardrails {
         }
 
         fun shouldAbort(threshold: Double = 0.7): Boolean {
-            // Abort if >70% of last operations are errors AND we have enough data
             return recentResults.size >= 5 && getErrorRate() > threshold
         }
 
@@ -40,138 +57,151 @@ class TurnGuardrails {
         }
     }
 
-    /**
-     * Loop detector to prevent infinite loops when model repeatedly calls same tools.
-     *
-     * Consecutive and total-call tracking both use tool name only. This is intentionally
-     * conservative: repeatedly invoking the same tool with different arguments is often
-     * still a loop pattern that should trigger warnings or aborts.
-     *
-     * @param maxConsecutiveRepeats Abort after N consecutive calls to the same tool
-     * @param maxSameToolTotal Abort after N total calls to the same tool
-     * @param warnConsecutiveThreshold Warn after this many consecutive same-tool calls
-     * @param warnTotalThreshold Warn after this many total same-tool calls
-     */
-    class LoopDetector(
-        private val maxConsecutiveRepeats: Int = 5,
-        private val maxSameToolTotal: Int = 15,
-        private val warnConsecutiveThreshold: Int = 3,
-        private val warnTotalThreshold: Int = 8,
-        private val maxHistory: Int = 200
-    ) {
-        private val toolHistory = ArrayDeque<String>(maxHistory)
-        private val toolCallCounts = mutableMapOf<String, Int>()
-
-        /**
-         * Record a tool call and check if it indicates a loop.
-         * @return LoopStatus indicating if we should continue, warn, or abort
-         */
-        fun recordToolCall(toolName: String, arguments: String): LoopStatus {
-            recordHistory(toolName)
-
-            val totalCount = toolCallCounts[toolName] ?: 0
-            val consecutiveCount = countConsecutiveRepeats(toolName)
-
-            return when {
-                consecutiveCount >= maxConsecutiveRepeats -> {
-                    LoopStatus.ABORT("Tool $toolName called $consecutiveCount times consecutively - agent may be stuck")
-                }
-                totalCount >= maxSameToolTotal -> {
-                    LoopStatus.ABORT("Tool $toolName called $totalCount times total - agent may be stuck")
-                }
-                consecutiveCount >= warnConsecutiveThreshold || totalCount >= warnTotalThreshold -> {
-                    LoopStatus.WARN("Tool $toolName called $totalCount times (consecutive: $consecutiveCount)")
-                }
-                else -> LoopStatus.OK
-            }
-        }
-
-        /**
-         * Check if model is stuck producing empty tool calls.
-         */
-        fun recordEmptyToolCalls(): LoopStatus {
-            val toolName = "__EMPTY_TOOL_CALLS__"
-            recordHistory(toolName)
-
-            val count = toolCallCounts[toolName] ?: 0
-            return when {
-                count >= 3 -> LoopStatus.ABORT("Model returned empty tool calls $count times - may be stuck")
-                count >= 2 -> LoopStatus.WARN("Model returned empty tool calls twice")
-                else -> LoopStatus.OK
-            }
-        }
-
-        private fun countConsecutiveRepeats(toolName: String): Int {
-            var count = 0
-            for (entry in toolHistory.reversed()) {
-                if (entry == toolName) {
-                    count++
-                } else {
-                    break
-                }
-            }
-            return count
-        }
-
-        private fun recordHistory(toolName: String) {
-            if (toolHistory.size >= maxHistory) {
-                toolHistory.removeFirst()
-            }
-            toolHistory.addLast(toolName)
-            toolCallCounts[toolName] = (toolCallCounts[toolName] ?: 0) + 1
-        }
-
-        fun getStats(): String {
-            val uniqueTools = toolCallCounts.keys.size
-            val totalCalls = toolHistory.size
-            val mostFrequent = toolCallCounts.maxByOrNull { it.value }
-            return "unique=$uniqueTools, total=$totalCalls, mostFrequent=${mostFrequent?.key?.take(30)}(${mostFrequent?.value})"
-        }
-    }
-
     sealed class LoopStatus {
         object OK : LoopStatus()
-        data class WARN(val message: String) : LoopStatus()
         data class ABORT(val reason: String) : LoopStatus()
     }
 
-    enum class AssistantIntent {
-        IMPLEMENTATION,
-        ANALYSIS,
-        RESPONSE,
-        UNKNOWN
+    /**
+     * Unified repetition tracker. Keyed by `(tool, primary-target)` — e.g. the
+     * edited file path, the shell command, the HTTP URL+body.
+     *
+     * Aborts the turn on two overlapping "stuck on same object" patterns:
+     *
+     *   1. **Count-based** — total invocations of the same (tool, target) crosses
+     *      [abortThreshold]. Catches the "edit→run→edit→run on the same file
+     *      15+ times" pattern.
+     *
+     *   2. **Output-based** — byte-identical normalized tail of a tool's output
+     *      repeated [identicalOutputAbortThreshold] times in a row. Strongest
+     *      "no progress" signal: even if each call is a textual variation, the
+     *      environment keeps reporting the same thing.
+     *
+     * `run_code` is keyed by language only (`run_code@python`) — otherwise each
+     * micro-edit to the script would reset the counter and the tracker could
+     * never fire on the "tweak-and-rerun" failure mode.
+     *
+     * Tools without a meaningful primary target (read_file, grep_search, think,
+     * memory) are not tracked: repetition on pure exploration is normal.
+     */
+    class TurnRepetitionTracker(
+        private val abortThreshold: Int = 15,
+        private val identicalOutputAbortThreshold: Int = 4,
+        private val tailBytesForHash: Int = 800,
+        private val maxHistory: Int = 200
+    ) {
+        private class State {
+            var callCount: Int = 0
+            val outputHashes: ArrayDeque<Int> = ArrayDeque()
+        }
+
+        private val states = mutableMapOf<String, State>()
+        private val callOrder = ArrayDeque<String>(maxHistory)
+
+        /**
+         * Record one tool call and (optionally) its output. Returns [LoopStatus.ABORT]
+         * if the turn should be terminated, [LoopStatus.OK] otherwise.
+         *
+         * `output` should be null for tool calls that failed, or for tools that
+         * don't produce diagnostic output (edits). The output-hash signal is
+         * meaningful only on successful runs — a failing call's error text is
+         * tracked by [ToolErrorTracker] instead.
+         */
+        fun record(toolName: String, args: Map<String, Any?>, output: String? = null): LoopStatus {
+            val key = effectKey(toolName, args) ?: return LoopStatus.OK
+
+            if (callOrder.size >= maxHistory) {
+                val evicted = callOrder.removeFirst()
+                states[evicted]?.let {
+                    it.callCount -= 1
+                    if (it.callCount <= 0) states.remove(evicted)
+                }
+            }
+            callOrder.addLast(key)
+
+            val state = states.getOrPut(key) { State() }
+            state.callCount += 1
+
+            if (state.callCount >= abortThreshold) {
+                return LoopStatus.ABORT(
+                    "Tool $toolName has been invoked ${state.callCount} times on the same target ($key). " +
+                        "The agent is stuck on this object."
+                )
+            }
+
+            if (output != null) {
+                val hash = normalizeTail(output).hashCode()
+                state.outputHashes.addLast(hash)
+                while (state.outputHashes.size > 16) state.outputHashes.removeFirst()
+
+                var identical = 0
+                for (h in state.outputHashes.reversed()) {
+                    if (h == hash) identical++ else break
+                }
+                if (identical >= identicalOutputAbortThreshold) {
+                    return LoopStatus.ABORT(
+                        "Tool $toolName produced byte-identical output $identical times " +
+                            "in a row on the same target ($key). Edits are not changing runtime behaviour."
+                    )
+                }
+            }
+
+            return LoopStatus.OK
+        }
+
+        fun stats(): String {
+            val top = states.entries.sortedByDescending { it.value.callCount }.take(3)
+                .joinToString(", ") { "${it.key}=${it.value.callCount}" }
+            return "tracked=${states.size}, top=$top"
+        }
+
+        private fun effectKey(toolName: String, args: Map<String, Any?>): String? {
+            return when (toolName) {
+                "code_editing", "multi_line_editor", "advance_code_editing", "create_new_file" -> {
+                    val path = args["path"] as? String ?: return null
+                    "$toolName@$path"
+                }
+                "multi_edit" -> {
+                    val edits = args["edits"] as? List<*> ?: return null
+                    val paths = edits.mapNotNull { (it as? Map<*, *>)?.get("path") as? String }.sorted()
+                    if (paths.isEmpty()) return null
+                    "multi_edit@${paths.joinToString(",")}"
+                }
+                "run_terminal_command" -> {
+                    val command = args["command"] as? String ?: return null
+                    "run_terminal_command@${command.trim()}"
+                }
+                "run_code" -> {
+                    // Language-only — see class docs for why we ignore code hash.
+                    val lang = args["language"] as? String ?: return null
+                    "run_code@$lang"
+                }
+                "http_request" -> {
+                    val method = (args["method"] as? String)?.uppercase() ?: "GET"
+                    val url = args["url"] as? String ?: return null
+                    "http_request@$method@$url@${bodySignature(args["body"])}"
+                }
+                else -> null
+            }
+        }
+
+        /**
+         * Tail-only normalization: trim trailing whitespace, take last N bytes,
+         * collapse whitespace, lowercase. Diagnostics live at the bottom of
+         * stderr; the head usually contains variable garbage (timestamps,
+         * ANSI codes, paths). Hashing only the tail keeps the signal stable
+         * across runs.
+         */
+        private fun normalizeTail(output: String): String {
+            val trimmed = output.trimEnd()
+            val tail = if (trimmed.length > tailBytesForHash) {
+                trimmed.takeLast(tailBytesForHash)
+            } else trimmed
+            return tail
+                .replace(Regex("\\s+"), " ")
+                .trim()
+                .lowercase()
+        }
     }
 
-    companion object {
-        /**
-         * Check if agent is stuck in a read-only loop.
-         * Triggers when agent executes only READ tools for N consecutive iterations
-         * without executing any WRITE tool in the current turn (ADR-0044).
-         */
-        fun isReadOnlyLoop(
-            mode: TaskMode,
-            consecutiveReadOnlyIterations: Int,
-            threshold: Int = 3
-        ): Boolean {
-            if (mode != TaskMode.AGENT) return false
-            return consecutiveReadOnlyIterations >= threshold
-        }
-
-        /**
-         * Build nudge message for missing intent field.
-         */
-        fun buildMissingIntentNudgeMessage(): String {
-            return TurnNudgeBuilder.buildMissingIntentNudgeMessage()
-        }
-
-        /**
-         * Build nudge message for invalid format.
-         */
-        fun buildInvalidFormatMessage(mode: TaskMode): String {
-            return TurnNudgeBuilder.buildInvalidFormatMessage(mode.name)
-        }
-    }
 }
-
-// TaskMode import needs to match the actual package
-private typealias TaskMode = pl.jclab.refio.core.db.TaskMode

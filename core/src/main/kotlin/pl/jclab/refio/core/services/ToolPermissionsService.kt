@@ -5,6 +5,7 @@ import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.db.repositories.ConfigRepository
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolMode
+import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.core.logging.dualLogger
 
@@ -41,38 +42,65 @@ data class ToolPermissions(
  * - Przechowywanie i ładowanie uprawnień z DB
  * - Filtrowanie narzędzi na podstawie trybu i uprawnień
  * - Sprawdzanie czy narzędzie wymaga approval
- * - Smart defaults dla nowych narzędzi
+ * - Wyznaczanie smart defaults na podstawie ToolRegistry (single source of truth)
+ *
+ * Defaults są wyznaczane z `Tool.mode`:
+ * - READ_ONLY  → ON w PLAN, ON w AGENT
+ * - WRITE      → OFF w PLAN, ON w AGENT
+ *
+ * Wyjątki od tej reguły (np. `run_terminal_command` = ASK w AGENT, `run_code`
+ * całkowicie OFF) są zadeklarowane w [DEFAULT_OVERRIDES]. Nowo rejestrowane
+ * narzędzia (w tym MCP / plugin) automatycznie dziedziczą defaults z mode –
+ * nie trzeba ich już wpisywać do mapy.
  */
 class ToolPermissionsService(
-    private val configRepository: ConfigRepository
+    private val configRepository: ConfigRepository,
+    private val toolRegistry: ToolRegistry? = null
 ) {
 
     companion object {
         const val CONFIG_KEY = ConfigService.KEY_TOOLS_PERMISSIONS
 
         /**
-         * Domyślne ustawienia dla narzędzi (Smart Defaults)
+         * Override'y dla narzędzi, których defaulty odbiegają od reguły
+         * wyznaczanej na bazie [ToolMode]. Wszystko poza tą mapą liczone
+         * jest automatycznie z mode narzędzia.
          */
-        private val DEFAULT_PERMISSIONS = mapOf(
-            // Read-only tools - zawsze ON w obu trybach
-            "read_file" to ToolPermissionConfig(PermissionLevel.ON, PermissionLevel.ON),
-            "read_directory" to ToolPermissionConfig(PermissionLevel.ON, PermissionLevel.ON),
-            "file_search" to ToolPermissionConfig(PermissionLevel.ON, PermissionLevel.ON),
-            "grep_search" to ToolPermissionConfig(PermissionLevel.ON, PermissionLevel.ON),
-            "view_diff" to ToolPermissionConfig(PermissionLevel.ON, PermissionLevel.ON),
-            "invoke_subagent" to ToolPermissionConfig(PermissionLevel.ON, PermissionLevel.ON),
-
-            // Write tools - OFF w PLAN, ON w AGENT
-            "create_new_file" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ON),
-            "code_editing" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ON),
-            "advance_code_editing" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ON),
-            "multi_line_editor" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ON),
-            "multi_edit" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ON),
+        private val DEFAULT_OVERRIDES: Map<String, ToolPermissionConfig> = mapOf(
             "run_terminal_command" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ASK),
-            "http_request" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ON),
-            "run_code" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.OFF),
-            "llm_call" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ON)
+            "run_code" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.OFF)
         )
+    }
+
+    /**
+     * Wyznacza domyślną konfigurację uprawnień dla danego narzędzia
+     * (single source of truth dla defaults – używane też przez ToolRouter
+     * i UI Settings do populacji tabelki).
+     */
+    fun getDefaultPermissionConfig(tool: Tool): ToolPermissionConfig {
+        DEFAULT_OVERRIDES[tool.name]?.let { return it }
+        return when (tool.mode) {
+            ToolMode.READ_ONLY -> ToolPermissionConfig(PermissionLevel.ON, PermissionLevel.ON)
+            ToolMode.WRITE -> ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ON)
+        }
+    }
+
+    /**
+     * Wyznacza default dla narzędzia po nazwie.
+     * Zwraca null gdy narzędzie nie jest w rejestrze (i nie ma też override'u).
+     */
+    private fun getDefaultPermissionConfig(toolName: String): ToolPermissionConfig? {
+        toolRegistry?.getTool(toolName)?.let { return getDefaultPermissionConfig(it) }
+        return DEFAULT_OVERRIDES[toolName]
+    }
+
+    /**
+     * Buduje pełną mapę default permissions z wszystkich zarejestrowanych tooli.
+     * Gdy brak registry (np. testy bez mocka) – pusta mapa.
+     */
+    private fun buildDefaultsFromRegistry(): Map<String, ToolPermissionConfig> {
+        val tools = toolRegistry?.getAllTools() ?: return emptyMap()
+        return tools.associate { it.name to getDefaultPermissionConfig(it) }
     }
 
     /**
@@ -101,7 +129,7 @@ class ToolPermissionsService(
         }
 
         // Merge with defaults (stored values have priority)
-        return DEFAULT_PERMISSIONS + stored
+        return buildDefaultsFromRegistry() + stored
     }
 
     /**
@@ -193,7 +221,7 @@ class ToolPermissionsService(
      * @param taskId Opcjonalne ID taska
      */
     fun resetToDefaults(taskId: String? = null) {
-        val permissions = ToolPermissions(tools = DEFAULT_PERMISSIONS)
+        val permissions = ToolPermissions(tools = buildDefaultsFromRegistry())
         val json = gson.toJson(permissions)
 
         configRepository.set(
@@ -210,7 +238,7 @@ class ToolPermissionsService(
      * Pobiera domyślne uprawnienie dla narzędzia (używane gdy brak w DB).
      */
     private fun getDefaultPermission(toolName: String, taskMode: TaskMode): PermissionLevel {
-        val config = DEFAULT_PERMISSIONS[toolName] ?: return PermissionLevel.OFF
+        val config = getDefaultPermissionConfig(toolName) ?: return PermissionLevel.OFF
 
         return when (taskMode) {
             TaskMode.CHAT, TaskMode.PLAN -> config.planMode

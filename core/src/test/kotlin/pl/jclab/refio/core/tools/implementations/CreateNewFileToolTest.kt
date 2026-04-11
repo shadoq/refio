@@ -15,6 +15,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertFailsWith
 
 /**
@@ -272,7 +273,7 @@ class CreateNewFileToolTest {
     inner class FileExistsTests {
 
         @Test
-        fun `should return warning when file already exists`() = runBlocking {
+        fun `should fail with recovery when file already exists`() = runBlocking {
             // Given
             Files.writeString(tempDir.resolve("existing.txt"), "old content")
 
@@ -282,10 +283,16 @@ class CreateNewFileToolTest {
                 "content" to "new content"
             ))
 
-            // Then
-            assertTrue(result.success, "Should return success=true even for existing file")
-            assertTrue(result.output!!.contains("Warning") || result.output!!.contains("already exists"))
-            assertEquals("old content", Files.readString(tempDir.resolve("existing.txt")), "File should not be modified")
+            // Then — must be a hard failure so the model does not silently move on.
+            // Prior behaviour returned success=true with a warning, which caused agents
+            // to assume the file had been created and continue with stale state.
+            assertEquals(false, result.success, "Should return success=false when file already exists")
+            assertNotNull(result.error, "Error message must be set")
+            assertTrue(result.error!!.contains("already exists"))
+            assertNotNull(result.recovery, "Recovery instructions must be set")
+            assertTrue(result.recovery!!.contains("read_file"), "Recovery should point at read_file")
+            assertTrue(result.recovery!!.contains("code_editing"), "Recovery should mention code_editing")
+            assertEquals("old content", Files.readString(tempDir.resolve("existing.txt")), "File must not be modified")
         }
 
         @Test
@@ -300,13 +307,13 @@ class CreateNewFileToolTest {
                 "content" to "new content"
             ))
 
-            // Then
-            assertTrue(result.success)
+            // Then — failure path now, but the invariant is the same: file untouched.
+            assertEquals(false, result.success)
             assertEquals(originalContent, Files.readString(tempDir.resolve("file.txt")))
         }
 
         @Test
-        fun `should include filesChanged as empty list when file exists`() = runBlocking {
+        fun `should not report filesChanged when file exists`() = runBlocking {
             // Given
             Files.writeString(tempDir.resolve("existing.txt"), "content")
 
@@ -316,13 +323,14 @@ class CreateNewFileToolTest {
                 "content" to "new"
             ))
 
-            // Then
-            assertNotNull(result.filesChanged)
-            assertTrue(result.filesChanged!!.isEmpty())
+            // Then — error result has no filesChanged at all (null), which still
+            // truthfully signals "nothing was changed" to the agent.
+            assertEquals(false, result.success)
+            assertNull(result.filesChanged)
         }
 
         @Test
-        fun `should have zero bytesWritten when file exists`() = runBlocking {
+        fun `should not report bytesWritten when file exists`() = runBlocking {
             // Given
             Files.writeString(tempDir.resolve("existing.txt"), "content")
 
@@ -332,8 +340,9 @@ class CreateNewFileToolTest {
                 "content" to "new"
             ))
 
-            // Then
-            assertEquals(0, result.bytesWritten)
+            // Then — error result has no bytesWritten metric, again signalling no write happened.
+            assertEquals(false, result.success)
+            assertNull(result.bytesWritten)
         }
     }
 

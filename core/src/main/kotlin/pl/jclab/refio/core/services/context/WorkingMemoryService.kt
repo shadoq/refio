@@ -7,6 +7,10 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Working memory keeps compact, high-value facts across turns.
+ *
+ * @param originId Optional identifier of the source (e.g. subtask id or tool_call id).
+ *                 Surfaced in the rendered section so the LLM can tell which entry came
+ *                 from which run and recognise superseded values across iterations.
  */
 data class WorkingMemoryEntry(
     val iteration: Int,
@@ -15,15 +19,17 @@ data class WorkingMemoryEntry(
     val outputExcerpt: String? = null,
     val importance: Int = 5,
     val timestamp: Instant = Instant.now(),
-    val lastAccessedAt: Instant = Instant.now()
+    val lastAccessedAt: Instant = Instant.now(),
+    val originId: String? = null
 )
 
 class WorkingMemoryService(
     private val maxEntriesPerTask: Int = ConfigService.DEFAULT_WORKING_MEMORY_MAX_FACTS
 ) {
     private val entriesByTask = ConcurrentHashMap<String, ConcurrentHashMap<String, WorkingMemoryEntry>>()
+    private val entriesBySession = ConcurrentHashMap<String, ConcurrentHashMap<String, WorkingMemoryEntry>>()
 
-    fun recordEntries(taskId: String, entries: List<WorkingMemoryEntry>) {
+    fun recordEntries(taskId: String, entries: List<WorkingMemoryEntry>, sessionId: String? = null) {
         if (entries.isEmpty()) return
         val taskEntries = entriesByTask.computeIfAbsent(taskId) { ConcurrentHashMap() }
 
@@ -33,6 +39,31 @@ class WorkingMemoryService(
         }
 
         trimEntries(taskEntries)
+
+        // Also record under sessionId so orchestrator sees all subagent memory
+        if (sessionId != null) {
+            val sessionEntries = entriesBySession.computeIfAbsent(sessionId) { ConcurrentHashMap() }
+            entries.forEach { entry ->
+                val id = buildEntryId(entry)
+                sessionEntries[id] = entry.copy(lastAccessedAt = Instant.now())
+            }
+            trimEntries(sessionEntries)
+        }
+    }
+
+    /**
+     * Build working memory section from session-scoped entries (all agents).
+     * Falls back to task-scoped if sessionId not found.
+     */
+    fun buildSessionMemorySection(sessionId: String, maxTokens: Int): String {
+        val sessionEntries = entriesBySession[sessionId]
+        if (sessionEntries == null || sessionEntries.isEmpty()) return ""
+        return formatEntriesAsSection(sessionEntries, maxTokens)
+    }
+
+    /** Remove session-scoped entries (call on session close). */
+    fun clearSession(sessionId: String) {
+        entriesBySession.remove(sessionId)
     }
 
     fun extractKnowledge(
@@ -41,9 +72,10 @@ class WorkingMemoryService(
         output: String,
         iteration: Int,
         metadata: Map<String, Any?>? = null,
-        codeElementsProvider: ((String) -> CodeElements?)? = null
+        codeElementsProvider: ((String) -> CodeElements?)? = null,
+        originId: String? = null
     ): List<WorkingMemoryEntry> {
-        return when (toolName) {
+        val entries = when (toolName) {
             "read_file" -> buildReadFileEntries(args, output, iteration, metadata, codeElementsProvider)
             "read_directory" -> buildReadDirectoryEntries(args, output, iteration, metadata)
             "file_search" -> buildFileSearchEntries(args, output, iteration, metadata)
@@ -57,26 +89,62 @@ class WorkingMemoryService(
                 buildWriteEntries(toolName, args, output, iteration, metadata)
             else -> buildGenericToolEntries(toolName, args, output, iteration, metadata)
         }
+        return if (originId != null) entries.map { it.copy(originId = originId) } else entries
     }
 
-    fun buildWorkingMemorySection(taskId: String, maxTokens: Int): String {
+    /**
+     * Build the rendered WORKING_MEMORY section for an agent turn prompt.
+     *
+     * @param taskId task whose entries should be rendered
+     * @param maxTokens token budget for this section
+     * @param skipExcerptForOriginIds set of subtask / tool-call ids that are ALREADY
+     *   rendered in full in the RECENT_WORK section of the same prompt. Entries whose
+     *   `originId` is in this set will have their `outputExcerpt` suppressed so the
+     *   same head-of-output doesn't appear twice in the prompt (Bug: WORKING_MEMORY ↔
+     *   RECENT_WORK duplication). The entry's meta line (key + value) is still shown —
+     *   that one is useful as a compact index even when the full result is nearby.
+     */
+    fun buildWorkingMemorySection(
+        taskId: String,
+        maxTokens: Int,
+        skipExcerptForOriginIds: Set<String> = emptySet()
+    ): String {
         if (maxTokens <= 0) return ""
         val taskEntries = entriesByTask[taskId] ?: return ""
         if (taskEntries.isEmpty()) return ""
+        return formatEntriesAsSection(taskEntries, maxTokens, skipExcerptForOriginIds)
+    }
 
-        val maxIteration = taskEntries.values.maxOf { it.iteration }
-        val grouped = taskEntries.values.groupBy { it.key }
+    private fun formatEntriesAsSection(
+        entries: ConcurrentHashMap<String, WorkingMemoryEntry>,
+        maxTokens: Int,
+        skipExcerptForOriginIds: Set<String> = emptySet()
+    ): String {
+        if (entries.isEmpty()) return ""
+
+        val maxIteration = entries.values.maxOf { it.iteration }
+        val grouped = entries.values.groupBy { it.key }
         val sortedKeys = grouped.keys.sortedByDescending { key ->
             grouped[key]?.maxOfOrNull { effectiveImportance(it, maxIteration) } ?: 0
         }
 
         val sb = StringBuilder()
         sb.append("<WORKING_MEMORY>\n")
+        sb.append("<!-- [it#N]=iteration, [ref#X]=tool-call id; newer it# supersedes older -->\n")
         var tokensUsed = ContextTokenEstimator.estimateTokens(sb.toString())
 
         for (key in sortedKeys) {
-            val entries = grouped[key].orEmpty().sortedWith(
-                compareByDescending<WorkingMemoryEntry> { effectiveImportance(it, maxIteration) }.thenByDescending { it.lastAccessedAt }
+            // Sort chronologically (iteration ascending) within a key so the model sees
+            // the narrative flow: "first I tried X → it failed → I tried Y → it worked".
+            // Newest entries sit at the bottom of each group but carry the highest
+            // `it#N` tag, so they're trivially locatable — and reconstructing WHY the
+            // newest entry is correct (by reading older attempts above) is the signal
+            // the agent most often loses when the order is reversed. `effectiveImportance`
+            // and `lastAccessedAt` remain as tie-breakers for entries on the same iteration.
+            val sortedEntries = grouped[key].orEmpty().sortedWith(
+                compareBy<WorkingMemoryEntry> { it.iteration }
+                    .thenByDescending { effectiveImportance(it, maxIteration) }
+                    .thenByDescending { it.lastAccessedAt }
             )
 
             val header = "## $key"
@@ -85,23 +153,68 @@ class WorkingMemoryService(
             sb.append(header).append('\n')
             tokensUsed += headerTokens
 
-            for (entry in entries) {
-                val line = "- ${entry.value}"
-                val lineTokens = ContextTokenEstimator.estimateTokens(line)
-                if (tokensUsed + lineTokens > maxTokens) {
-                    break
+            for (entry in sortedEntries) {
+                val tag = buildEntryTag(entry)
+                val linePrefix = "- $tag "
+                val fullLine = "$linePrefix${entry.value}"
+                val fullLineTokens = ContextTokenEstimator.estimateTokens(fullLine)
+
+                // If the full line fits, use it directly. Otherwise try to shrink
+                // the entry's value with head+tail truncation so the agent at
+                // least sees that the entry exists and the start/end of its
+                // value — instead of the previous behaviour of silently dropping
+                // the entry on the first overflow. Only break (giving up on
+                // the rest of this key's entries) when even a minimally useful
+                // truncated form would not fit.
+                val (effectiveLine, effectiveLineTokens) = if (tokensUsed + fullLineTokens <= maxTokens) {
+                    fullLine to fullLineTokens
+                } else {
+                    val fitted = fitLineWithHeadTailTruncation(
+                        prefix = linePrefix,
+                        value = entry.value,
+                        tokenBudgetLeft = maxTokens - tokensUsed
+                    )
+                    if (fitted == null) break
+                    fitted
                 }
-                sb.append(line).append('\n')
-                tokensUsed += lineTokens
-                entry.outputExcerpt?.takeIf { it.isNotBlank() }?.let { excerpt ->
-                    val excerptLine = "  output: $excerpt"
-                    val excerptTokens = ContextTokenEstimator.estimateTokens(excerptLine)
-                    if (tokensUsed + excerptTokens <= maxTokens) {
-                        sb.append(excerptLine).append('\n')
-                        tokensUsed += excerptTokens
+
+                sb.append(effectiveLine).append('\n')
+                tokensUsed += effectiveLineTokens
+
+                // Skip the outputExcerpt if the same tool-call is already rendered in
+                // RECENT_WORK — otherwise the head of the output would appear twice in
+                // the same prompt. `api_failure` entries are an exception: they're
+                // pinned precisely because the model needs to SEE the failure reason
+                // even when it's also in RECENT_WORK, and api_failure excerpts contain
+                // the specific server error message that wouldn't be summarized into
+                // plain `buildOutputExcerpt` output.
+                val shouldSkipExcerpt = entry.originId != null &&
+                    entry.key != "api_failure" &&
+                    entry.originId in skipExcerptForOriginIds
+
+                entry.outputExcerpt?.takeIf { it.isNotBlank() && !shouldSkipExcerpt }?.let { excerpt ->
+                    val excerptPrefix = "  output: "
+                    val fullExcerptLine = "$excerptPrefix$excerpt"
+                    val fullExcerptTokens = ContextTokenEstimator.estimateTokens(fullExcerptLine)
+                    if (tokensUsed + fullExcerptTokens <= maxTokens) {
+                        sb.append(fullExcerptLine).append('\n')
+                        tokensUsed += fullExcerptTokens
+                    } else {
+                        val fitted = fitLineWithHeadTailTruncation(
+                            prefix = excerptPrefix,
+                            value = excerpt,
+                            tokenBudgetLeft = maxTokens - tokensUsed
+                        )
+                        if (fitted != null) {
+                            sb.append(fitted.first).append('\n')
+                            tokensUsed += fitted.second
+                        }
+                        // If even the truncated excerpt doesn't fit, drop only
+                        // the excerpt — the parent entry's main line is already
+                        // appended above so the agent still knows it exists.
                     }
                 }
-                taskEntries[buildEntryId(entry)] = entry.copy(lastAccessedAt = Instant.now())
+                entries[buildEntryId(entry)] = entry.copy(lastAccessedAt = Instant.now())
             }
 
             sb.append('\n')
@@ -109,6 +222,81 @@ class WorkingMemoryService(
 
         sb.append("</WORKING_MEMORY>")
         return sb.toString().trim()
+    }
+
+    /**
+     * Build a compact origin tag for a working-memory entry.
+     * Format: `[it#N ref#<originId>]`. The full originId is used (not a prefix)
+     * so it matches 1:1 the `id:` shown in tool-result message headers and the
+     * subtask id accepted by `memory(action="get_subtask_output")` — the model
+     * can copy-paste the same identifier across all three places.
+     * If no originId is set: `[it#N]`.
+     */
+    private fun buildEntryTag(entry: WorkingMemoryEntry): String {
+        val ref = entry.originId
+        return if (ref != null) "[it#${entry.iteration} ref#$ref]" else "[it#${entry.iteration}]"
+    }
+
+    /**
+     * Try to fit `prefix + value` into the remaining token budget by head+tail
+     * truncating `value`. Returns the rendered line + its token count if a
+     * minimally useful truncation fits, or null when even that won't fit (in
+     * which case the caller should drop the entry rather than render garbage).
+     *
+     * Replaces the previous "if it doesn't fit, silently drop" behaviour that
+     * caused entries to disappear from WORKING_MEMORY without the agent ever
+     * being told they existed.
+     */
+    private fun fitLineWithHeadTailTruncation(
+        prefix: String,
+        value: String,
+        tokenBudgetLeft: Int
+    ): Pair<String, Int>? {
+        if (tokenBudgetLeft <= 0) return null
+        // Conservative chars-per-token (real ratio is closer to 4 for English /
+        // code; using 3 leaves headroom so we don't overshoot the budget after
+        // re-estimating tokens on the truncated line).
+        val charBudget = (tokenBudgetLeft * 3) - prefix.length
+        if (charBudget < MIN_USEFUL_TRUNCATED_VALUE_CHARS) return null
+
+        val truncatedValue = ToolResultCompression.headTailTruncate(value, charBudget)
+        val candidate = "$prefix$truncatedValue"
+        val candidateTokens = ContextTokenEstimator.estimateTokens(candidate)
+        return if (candidateTokens <= tokenBudgetLeft) candidate to candidateTokens else null
+    }
+
+    companion object {
+        /**
+         * Below this many characters a head+tail truncated working-memory value
+         * conveys nothing useful to the agent — better to drop the line entirely
+         * than render `[head=10]...[tail=10]`.
+         */
+        private const val MIN_USEFUL_TRUNCATED_VALUE_CHARS = 60
+
+        /** Default character budget for `buildOutputExcerpt` when caller doesn't override. */
+        internal const val DEFAULT_OUTPUT_EXCERPT_CHARS = 220
+
+        /**
+         * Character budget for excerpts of pinnable data files (see [isPinnableDataFile]).
+         * Chosen to be ~5× the default so that short-to-medium data files (task inputs,
+         * small CSVs, markdown notes) land in WORKING_MEMORY almost in full, while still
+         * capping the entry so that one giant file can't eat the whole section.
+         */
+        internal const val DATA_FILE_EXCERPT_CHARS = 1_200
+
+        /**
+         * File extensions treated as task-input data (not source code). These get a
+         * higher importance and a larger excerpt budget in WORKING_MEMORY. Source code
+         * extensions are intentionally excluded — they're already covered by RAG.
+         */
+        internal val PINNABLE_DATA_EXTENSIONS: Set<String> = setOf(
+            "txt", "md", "markdown",
+            "csv", "tsv",
+            "json", "jsonl", "ndjson",
+            "yaml", "yml",
+            "toml", "ini", "cfg", "conf",
+            "xml"
+        )
     }
 
     private fun buildReadFileEntries(
@@ -131,15 +319,45 @@ class WorkingMemoryService(
             buildFallbackReadFileSummary(fileName, output, metadata)
         }
 
+        // Data files (.txt/.md/.csv/.json/.yaml/...) carry the actual task input that
+        // the agent will need to reference across MANY turns — like Natan's notes in
+        // the S04E04 filesystem task, where the agent was supposed to parse `rozmowy.txt`,
+        // `transakcje.txt`, `ogłoszenia.txt` and remember what's in them. Code files
+        // already have RAG + project_context as backup, so for them the default
+        // importance=7 is fine.
+        //
+        // For data files we pin at importance=9 (one below the hardcoded api_failure
+        // max of 10) so they survive longer when WORKING_MEMORY is tight, AND we
+        // deliberately give them a LONGER rendered value via a bigger excerpt so the
+        // model can see more of the actual content — not just a skeleton summary.
+        val isDataFile = isPinnableDataFile(fileName)
+        val importance = if (isDataFile) 9 else 7
+        val excerptCharBudget = if (isDataFile) DATA_FILE_EXCERPT_CHARS else null
+        val keyName = if (isDataFile) "data_files_read" else "files_read"
+
         return listOf(
             WorkingMemoryEntry(
-                iteration,
-                "files_read",
-                normalizeValue(value),
-                outputExcerpt = buildOutputExcerpt(output),
-                importance = 7
+                iteration = iteration,
+                key = keyName,
+                value = normalizeValue(value),
+                outputExcerpt = buildOutputExcerpt(
+                    output,
+                    maxChars = excerptCharBudget ?: DEFAULT_OUTPUT_EXCERPT_CHARS
+                ),
+                importance = importance
             )
         )
+    }
+
+    /**
+     * Returns true for file extensions that we want to pin in WORKING_MEMORY with
+     * higher importance and a larger excerpt budget. These are files that typically
+     * contain TASK INPUT DATA the agent has to reference repeatedly — not source code
+     * (which the project RAG already indexes).
+     */
+    private fun isPinnableDataFile(fileName: String): Boolean {
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        return ext in PINNABLE_DATA_EXTENSIONS
     }
 
     private fun buildRichReadFileSummary(fileName: String, elements: CodeElements): String {
@@ -389,7 +607,12 @@ class WorkingMemoryService(
         val binary = metadataBoolean(metadata, "binary")
         val truncated = metadataBoolean(metadata, "truncated")
         val host = url.substringAfter("://", url).substringBefore('/')
-        val value = buildString {
+        // Single consolidated `network` entry: metadata on the first line, structured
+        // facts appended on the same entry instead of a separate `network_results` row.
+        // Previously both entries carried the same `outputExcerpt`, triggering 2×
+        // duplication against RECENT_WORK. See ADR / session analysis for Bug: WM
+        // duplication.
+        val metadataLine = buildString {
             append("http_request $method $host")
             status?.let { append(": status=$it") }
             length?.let { append(", size=$it") }
@@ -397,22 +620,36 @@ class WorkingMemoryService(
             if (truncated == true) append(", truncated")
             savePath?.let { append(", saved=${it.substringAfterLast('/')}") }
         }
+        val facts = extractStructuredFacts(output, maxFacts = 2)
+        val fullValue = if (facts.isNotEmpty()) {
+            "$metadataLine | facts: ${facts.joinToString(" | ")}"
+        } else {
+            metadataLine
+        }
         val entries = mutableListOf(
             WorkingMemoryEntry(
                 iteration,
                 "network",
-                normalizeValue(value),
+                normalizeValue(fullValue),
                 outputExcerpt = buildOutputExcerpt(output),
                 importance = 6
             )
         )
-        extractStructuredFacts(output, maxFacts = 2).takeIf { it.isNotEmpty() }?.let { facts ->
+        // Auto-record API failures so the agent doesn't keep retrying the same
+        // rejected request. We pin these with importance=10 (never evicted) and
+        // a dedicated key so they can't be merged into generic `network` noise.
+        // Includes the response excerpt so the rejection reason is visible —
+        // critical for verify-style endpoints that explain why the answer was wrong.
+        if (status != null && status >= 400) {
+            val failureValue = "FAILED $method $host: status=$status. " +
+                "Do NOT retry the same payload — the server rejected it. " +
+                "Read the response excerpt below for the rejection reason and adjust before retrying."
             entries += WorkingMemoryEntry(
                 iteration,
-                "network_results",
-                normalizeValue("http_request facts: ${facts.joinToString(" | ")}"),
+                "api_failure",
+                normalizeValue(failureValue),
                 outputExcerpt = buildOutputExcerpt(output),
-                importance = 5
+                importance = 10
             )
         }
         return entries
@@ -429,32 +666,32 @@ class WorkingMemoryService(
         val timedOut = metadataBoolean(metadata, "timed_out")
         val outputLength = metadataInt(metadata, "output_length", "partial_output_length")
         val truncated = metadataBoolean(metadata, "truncated")
-        val value = buildString {
+        // Single consolidated `code_execution` entry: metadata + facts on one row,
+        // one outputExcerpt. The previous two-entry design (code_execution + analysis_results)
+        // rendered the same outputExcerpt TWICE for the same subtaskId and triggered
+        // redundant "run_code facts: ... | output: ..." blocks against RECENT_WORK.
+        val metadataLine = buildString {
             append("run_code $language")
             exitCode?.let { append(": exit=$it") }
             if (timedOut == true) append(", timed_out")
             outputLength?.let { append(", output=$it chars") }
             if (truncated == true) append(", truncated")
         }
-        val entries = mutableListOf(
+        val facts = extractStructuredFacts(output, maxFacts = 4)
+        val fullValue = if (facts.isNotEmpty()) {
+            "$metadataLine | facts: ${facts.joinToString(" | ")}"
+        } else {
+            metadataLine
+        }
+        return listOf(
             WorkingMemoryEntry(
                 iteration,
                 "code_execution",
-                normalizeValue(value),
+                normalizeValue(fullValue),
                 outputExcerpt = buildOutputExcerpt(output),
-                importance = 7
+                importance = 8  // matches former analysis_results importance — this is the HIGH-value entry
             )
         )
-        extractStructuredFacts(output, maxFacts = 4).takeIf { it.isNotEmpty() }?.let { facts ->
-            entries += WorkingMemoryEntry(
-                iteration,
-                "analysis_results",
-                normalizeValue("run_code facts: ${facts.joinToString(" | ")}"),
-                outputExcerpt = buildOutputExcerpt(output),
-                importance = 8
-            )
-        }
-        return entries
     }
 
     private fun buildRunTerminalCommandEntries(
@@ -467,31 +704,28 @@ class WorkingMemoryService(
         val exitCode = metadataInt(metadata, "exit_code")
         val timedOut = metadataBoolean(metadata, "timed_out")
         val outputLength = metadataInt(metadata, "output_length", "partial_output_length")
-        val value = buildString {
+        // Single consolidated `command_execution` entry — mirror of run_code consolidation.
+        val metadataLine = buildString {
             append("run_terminal_command ${truncateInline(command, 80)}")
             exitCode?.let { append(": exit=$it") }
             if (timedOut == true) append(", timed_out")
             outputLength?.let { append(", output=$it chars") }
         }
-        val entries = mutableListOf(
+        val facts = extractStructuredFacts(output, maxFacts = 3)
+        val fullValue = if (facts.isNotEmpty()) {
+            "$metadataLine | facts: ${facts.joinToString(" | ")}"
+        } else {
+            metadataLine
+        }
+        return listOf(
             WorkingMemoryEntry(
                 iteration,
                 "command_execution",
-                normalizeValue(value),
+                normalizeValue(fullValue),
                 outputExcerpt = buildOutputExcerpt(output),
                 importance = 6
             )
         )
-        extractStructuredFacts(output, maxFacts = 3).takeIf { it.isNotEmpty() }?.let { facts ->
-            entries += WorkingMemoryEntry(
-                iteration,
-                "command_results",
-                normalizeValue("command facts: ${facts.joinToString(" | ")}"),
-                outputExcerpt = buildOutputExcerpt(output),
-                importance = 6
-            )
-        }
-        return entries
     }
 
     private fun buildInvokeSubagentEntries(
@@ -506,31 +740,28 @@ class WorkingMemoryService(
         val depth = metadataInt(metadata, "depth")
         val childIterations = metadataInt(metadata, "iterations")
         val tokensOut = metadataInt(metadata, "tokens_out")
-        val value = buildString {
+        // Single consolidated `subagent_work` entry — mirror of run_code consolidation.
+        val metadataLine = buildString {
             append("invoke_subagent $name")
             depth?.let { append(": depth=$it") }
             childIterations?.let { append(", iterations=$it") }
             tokensOut?.let { append(", tokens_out=$it") }
         }
-        val entries = mutableListOf(
+        val facts = extractStructuredFacts(output, maxFacts = 2)
+        val fullValue = if (facts.isNotEmpty()) {
+            "$metadataLine | facts: ${facts.joinToString(" | ")}"
+        } else {
+            metadataLine
+        }
+        return listOf(
             WorkingMemoryEntry(
                 iteration,
                 "subagent_work",
-                normalizeValue(value),
+                normalizeValue(fullValue),
                 outputExcerpt = buildOutputExcerpt(output),
                 importance = 7
             )
         )
-        extractStructuredFacts(output, maxFacts = 2).takeIf { it.isNotEmpty() }?.let { facts ->
-            entries += WorkingMemoryEntry(
-                iteration,
-                "subagent_results",
-                normalizeValue("$name facts: ${facts.joinToString(" | ")}"),
-                outputExcerpt = buildOutputExcerpt(output),
-                importance = 7
-            )
-        }
-        return entries
     }
 
     private fun buildWriteEntries(
@@ -715,7 +946,23 @@ class WorkingMemoryService(
         return if (compact.length <= maxChars) compact else compact.take(maxChars - 3) + "..."
     }
 
-    private fun buildOutputExcerpt(output: String, maxChars: Int = 220): String? {
+    /**
+     * Render a compact excerpt of a tool output suitable for WORKING_MEMORY.
+     *
+     * Takes the first non-blank, non-noise lines of [output] and joins them with ` | `
+     * separators. For small budgets (~220 chars) ~8 lines are enough; for pinned
+     * data-file excerpts (~1200 chars) we allow up to 40 lines so a short `.txt` /
+     * `.csv` task-input file can land in WORKING_MEMORY almost in full.
+     */
+    private fun buildOutputExcerpt(output: String, maxChars: Int = DEFAULT_OUTPUT_EXCERPT_CHARS): String? {
+        // Scale maxLines with the char budget so data-file excerpts can carry more
+        // lines of context — important for task-input files (notes, transaction lists)
+        // which have many short lines.
+        val maxLines = when {
+            maxChars >= 1_000 -> 40
+            maxChars >= 500 -> 20
+            else -> 8
+        }
         val cleaned = output.lineSequence()
             .map { it.trim() }
             .filter { it.isNotBlank() }
@@ -725,7 +972,7 @@ class WorkingMemoryService(
                     it.startsWith("Base64:") ||
                     it.startsWith("[NOTE:")
             }
-            .take(8)
+            .take(maxLines)
             .joinToString(" | ")
             .replace(Regex("\\s+"), " ")
             .trim()

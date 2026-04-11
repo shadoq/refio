@@ -11,32 +11,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Tool approval flow for `ASK` permissions, including session trust and dedicated IntelliJ/CLI prompts.
-- Mid-execution user message handling, so follow-up input can be queued while the agent is running.
-- Regex-based terminal `CommandRule` system with `ALLOW` / `BLOCK` / `ASK` actions.
-- New onboarding documentation in `docs/onboarding.md`.
-- Expanded test coverage for tool approvals, command rules, and mid-execution user input.
+- New approval flow for tools using `ASK` permissions, with clearer prompts in IntelliJ and CLI plus session trust support.
+- Follow-up user messages can now be queued while an agent is still working.
+- Terminal command rules can now explicitly allow, block, or require confirmation for matching commands.
+- New onboarding guide in `docs/onboarding.md`.
+- Broader automated coverage for tool approvals, command rules, and mid-run user input.
 - Multimodal message pipeline for image-aware prompts and provider adapters.
-- MCP prompt listing/fetching support, resource subscriptions, and cache coverage for MCP metadata.
-- Mocked API smoke tests for OpenAI, Anthropic, and Gemini adapter workflows.
+- Expanded MCP support for prompt listing, prompt fetching, resource subscriptions, and cached metadata.
+- Stronger smoke-test coverage for OpenAI, Anthropic, and Gemini adapter workflows.
+- Early multi-agent runtime work, including parallel orchestration, plan tracking, richer traces, and new graph/timeline panels.
+- New system tools for agent coordination, task memory, messaging, and stronger delegation flows.
+- Richer write-tool summaries with diffs, hashes, and clearer next-step or recovery hints.
+- Tools now provide more useful guidance after partial or recoverable failures.
+- Adjustable detail levels for `read_file`, `grep_search`, `file_search`, and `read_directory`.
+- New `delegate_to_strong_model` tool for handing more complex tasks to a stronger model.
+- Optional `STRONG` model slot in configuration for dedicated high-capability delegation.
+- Compact prompt mode that reduces prompt size for smaller-context models.
+- Better visibility into nested agent runs through depth-aware event tracking.
+- One-click session debug export to Markdown from the Debug Panel.
+- Copy-to-clipboard actions in agent execution, timeline, graph, and trace panels.
+- Expanded built-in model definitions, including new Qwen, LFM2, and Nemotron variants.
+- Broader scenario coverage and shared utilities for multi-agent testing.
+- RECENT_WORK now surfaces a marker when older tool steps were omitted due to budget pressure, so the agent knows prior work happened even when it didn't fit.
 
 ### Changed
 
-- Tool permissions now support full `ON` / `ASK` / `OFF` states, with `run_terminal_command` defaulting to `ASK` in AGENT mode.
-- Agent turn execution now better handles tool rejection, mid-run user feedback, transient HTTP failures, and repeated tool loops.
-- `run_terminal_command`, `run_code`, and `http_request` now provide better timeout, retry, and response handling.
-- IntelliJ and CLI/TUI workflows were updated to support tool approvals, queued follow-up input, and project-based session restore.
-- Documentation was refreshed to reflect the current architecture, defaults, and security model.
-- LLM adapters now support injectable HTTP clients/base URLs for deterministic smoke tests and multimodal payload verification.
-- Prompt construction, tool execution nudges, and turn guardrails were tightened around read-before-write and post-write verification flow.
-- RAG indexing/search and config/MCP caches were optimized to reduce unnecessary work on large projects.
+- Tool permissions now fully support `ON`, `ASK`, and `OFF`, with terminal access in AGENT mode defaulting to confirmation first.
+- Agent turns recover better from rejected tools, mid-run user feedback, transient HTTP issues, and repetitive tool loops.
+- `run_terminal_command`, `run_code`, and `http_request` now behave more reliably around timeouts, retries, and response handling.
+- IntelliJ and CLI/TUI flows were updated around approvals, queued follow-up input, and project session restore.
+- Documentation was refreshed to match the current architecture, defaults, and security model.
+- LLM adapters now better support deterministic smoke tests and multimodal payload verification.
+- Prompt construction and tool guidance now enforce a tighter read-before-write, verify-after-write workflow.
+- RAG indexing, search, and config/MCP caching were optimized to reduce wasted work on larger projects.
+- Context management was refined with better working-memory decay, section budgeting, and RAG tuning.
+- Tool execution now surfaces clearer next steps and avoids unnecessary extra summarization for structured write results.
+- Write tools now return cleaner diffs and more actionable recovery information.
+- The system agent prompt was heavily condensed to reduce token usage without dropping rules.
+- Read-only tools can now execute in parallel during subagent runs in more cases, speeding up analysis.
+- Small data files avoid unnecessary LLM summarization, reducing destructive paraphrasing.
+- Delegation tool ordering was adjusted to better prioritize the stronger-model path.
+- Reloaded system messages now preserve chronological order more accurately.
+- Agent timeline and settings panels were refined for clearer nested-run visibility and more stable replay behavior.
+- Nested agent events are now easier to read in the timeline view.
+- Model settings now expose a clearer option for configuring a dedicated strong delegation model.
+- RECENT_WORK selection is now fully budget-driven and no longer hard-caps the number of visible tool steps; older entries gracefully step down through FULL → DETAILED → SUMMARY compression until the token budget is exhausted.
+- Failed tool calls are now included in RECENT_WORK (marked `status="failed"`) so the agent can see its own prior errors rather than re-running the same failing approach under the impression it hadn't tried yet.
+- WORKING_MEMORY entries inside each group now render oldest → newest, giving the model the narrative flow of past attempts instead of inverted order.
+- `context.recent_work.full_data_limit` now acts as a minimum floor rather than a hard cap — budget decides how many recent entries receive full-fidelity content.
 
 ### Fixed
 
-- `http_request` egress validation, regex safety checks, and tool approval/session-trust race conditions.
-- Subagent recursion tracking, `CoreApiRouter` shutdown cleanup, and file-write locking edge cases.
-- `read_file` media handling for images/PDFs and multimodal handoff into provider-specific request payloads.
-- Kotlin/Gradle module configuration cleanup for shared plugin setup and more stable local builds.
+- Fixed `http_request` egress validation, regex safety checks, and several tool-approval/session-trust race conditions.
+- Fixed edge cases around subagent recursion tracking, `CoreApiRouter` shutdown cleanup, and file-write locking.
+- Improved `read_file` handling for images and PDFs, including multimodal handoff to provider-specific payloads.
+- Cleaned up Kotlin/Gradle module configuration for more stable shared plugin setup and local builds.
+- Fixed weaker models silently ending a turn after returning plain text instead of the required JSON envelope — a short guard now nudges them back to format so they can recover. Also addresses related `ConfigService` edge cases.
+- Fixed chat message ordering issues when streaming output and tool results interleave.
+- Fixed a tier-boundary gap in RECENT_WORK budget-to-entries mapping that caused mid-range token budgets to map to a lower detail level than intended.
 
 ## [0.0.1.5] - 2025-04-02
 
