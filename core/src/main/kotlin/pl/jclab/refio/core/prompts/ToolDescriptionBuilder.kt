@@ -18,7 +18,8 @@ import pl.jclab.refio.core.utils.GsonInstance.prettyGson
  */
 class ToolDescriptionBuilder(
     private val toolRegistry: ToolRegistry,
-    private val toolPermissionsService: ToolPermissionsService? = null
+    private val toolPermissionsService: ToolPermissionsService? = null,
+    var compactMode: Boolean = false
 ) {
     private val gson = prettyGson
 
@@ -115,6 +116,7 @@ class ToolDescriptionBuilder(
 
     /**
      * Build human-readable tool description with parameter schema.
+     * In compact mode: only required params listed, no examples, shorter descriptions.
      */
     private fun buildToolDescription(
         number: Int,
@@ -122,6 +124,10 @@ class ToolDescriptionBuilder(
         description: String,
         schema: Map<String, Any>
     ): String {
+        if (compactMode) {
+            return buildCompactToolDescription(number, name, description, schema)
+        }
+
         val sb = StringBuilder()
         sb.append("$number. **$name** - $description\n")
 
@@ -160,6 +166,48 @@ class ToolDescriptionBuilder(
 
         if (exampleParams.isNotEmpty()) {
             sb.append("   - Example: {\"tool\": \"$name\", \"args\": ${gson.toJson(exampleParams)}}\n")
+        }
+
+        return sb.toString()
+    }
+
+    /**
+     * Compact tool description: required params only, truncated descriptions, no examples.
+     * Saves ~40-50% tokens per tool compared to full format.
+     */
+    private fun buildCompactToolDescription(
+        number: Int,
+        name: String,
+        description: String,
+        schema: Map<String, Any>
+    ): String {
+        val sb = StringBuilder()
+        // Truncate description to first sentence
+        val shortDesc = description.substringBefore(". ").substringBefore(".\n").take(120)
+        sb.append("$number. **$name** — $shortDesc\n")
+
+        @Suppress("UNCHECKED_CAST")
+        val properties = (schema["properties"] as? Map<String, Map<String, Any>>) ?: emptyMap()
+        @Suppress("UNCHECKED_CAST")
+        val required = (schema["required"] as? List<String>) ?: emptyList()
+
+        if (properties.isNotEmpty()) {
+            // Required params with short description
+            val requiredParams = properties.filter { it.key in required }
+            val optionalParams = properties.filter { it.key !in required }
+
+            requiredParams.forEach { (paramName, paramSchema) ->
+                val paramType = paramSchema["type"]?.toString() ?: "any"
+                val paramDesc = (paramSchema["description"]?.toString() ?: "")
+                    .substringBefore(". ").take(80)
+                sb.append("   - \"$paramName\" ($paramType) — $paramDesc\n")
+            }
+
+            // Optional params as a compact list
+            if (optionalParams.isNotEmpty()) {
+                val optNames = optionalParams.keys.joinToString(", ") { "\"$it\"" }
+                sb.append("   - Optional: $optNames\n")
+            }
         }
 
         return sb.toString()

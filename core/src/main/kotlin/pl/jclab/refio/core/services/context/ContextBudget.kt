@@ -88,11 +88,23 @@ data class ContextBudget(
 
         if (unused <= 0) return this
 
+        // Priority order — sections that get a share of recovered budget first.
+        //
+        // RECENT_WORK and WORKING_MEMORY are the top targets because they hold the
+        // actual work history (tool outputs, prior decisions) and are the first to
+        // truncate when space is tight. Giving them slack from under-used stable
+        // sections (PROJECT_CONTEXT, REFERENCE) means a multi-turn agent session
+        // gets to carry more of its own history forward. CONVERSATION comes next
+        // (user-facing chat), then USER_CONTEXT and RAG_FRAGMENTS as supplementary.
+        //
+        // Bug 2C fix: previously CONVERSATION was first and RECENT_WORK wasn't on
+        // the list at all, so agent work history never benefited from budget slack.
         val priorities = listOf(
+            ContextSection.RECENT_WORK,
+            ContextSection.WORKING_MEMORY,
             ContextSection.CONVERSATION,
             ContextSection.USER_CONTEXT,
-            ContextSection.RAG_FRAGMENTS,
-            ContextSection.WORKING_MEMORY
+            ContextSection.RAG_FRAGMENTS
         )
 
         val redistributed = sectionBudgets.toMutableMap()

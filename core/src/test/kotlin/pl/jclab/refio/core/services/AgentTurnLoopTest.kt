@@ -22,7 +22,6 @@ import pl.jclab.refio.core.tools.base.ToolResult
 import pl.jclab.refio.core.services.turn.TurnFinalizer
 import pl.jclab.refio.core.services.turn.TurnGuardrails
 import pl.jclab.refio.core.services.turn.TurnLLMCaller
-import pl.jclab.refio.core.services.turn.TurnNudgeBuilder
 import pl.jclab.refio.core.services.turn.TurnPromptBuilder
 import pl.jclab.refio.core.services.turn.TurnResponseProcessor
 import pl.jclab.refio.core.services.turn.TurnSubagentValidator
@@ -499,7 +498,10 @@ class AgentTurnLoopTest {
     inner class ErrorHandlingTests {
 
         @Test
-        fun `should retry empty content from model in JSON mode`() = runTest {
+        fun `should fail immediately on empty content in JSON mode`() = runTest {
+            // Nudge-retry loops were removed — an empty-content response now terminates
+            // the turn with a direct error message. That's the tradeoff the simplification
+            // pays: weaker models get less hand-holding, but the control flow stays clean.
             coEvery {
                 llmClient.complete(
                     provider = any(),
@@ -518,73 +520,14 @@ class AgentTurnLoopTest {
                     source = any(),
                     kwargs = any()
                 )
-            } returnsMany listOf(
-                LLMResponse(
-                    content = "",
-                    usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
-                    model = "gpt-4",
-                    provider = "openai",
-                    cost = 0.0,
-                    finishReason = "stop"
-                ),
-                createLLMResponse("""{"response":"Recovered after retry"}""")
+            } returns LLMResponse(
+                content = "",
+                usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
+                model = "gpt-4",
+                provider = "openai",
+                cost = 0.0,
+                finishReason = "stop"
             )
-
-            val result = agentTurnLoop.runTurn(
-                taskId = testTaskId,
-                userInput = "Test",
-                mode = TaskMode.PLAN
-            )
-
-            assertTrue(result.success)
-            assertEquals(2, result.iterations)
-            // Empty-content branch now uses its own dedicated nudge (not the generic invalid-format
-            // nudge) so users see a clearer hint about what went wrong.
-            verify {
-                chatMessageRepository.create(
-                    testTaskId,
-                    MessageRole.SYSTEM,
-                    TurnNudgeBuilder.buildEmptyContentNudgeMessage(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any()
-                )
-            }
-        }
-
-        @Test
-        fun `should fail after repeated empty content in JSON mode`() = runTest {
-            coEvery {
-                llmClient.complete(
-                    provider = any(),
-                    model = any(),
-                    messages = any(),
-                    systemPrompt = any(),
-                    maxTokens = any(),
-                    temperature = any(),
-                    responseFormat = any(),
-                    thinking = any(),
-                    noEgressEnabled = any(),
-                    stream = any(),
-                    onChunk = any(),
-                    taskId = any(),
-                    subtaskId = any(),
-                    source = any(),
-                    kwargs = any()
-                )
-            } returnsMany List(4) {
-                LLMResponse(
-                    content = "",
-                    usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
-                    model = "gpt-4",
-                    provider = "openai",
-                    cost = 0.0,
-                    finishReason = "stop"
-                )
-            }
 
             val result = agentTurnLoop.runTurn(
                 taskId = testTaskId,
@@ -593,55 +536,8 @@ class AgentTurnLoopTest {
             )
 
             assertFalse(result.success)
-            assertTrue(result.response.contains("repeatedly returned empty content", ignoreCase = true))
-        }
-
-        @Test
-        fun `should retry when model returns meaningless json`() = runTest {
-            coEvery {
-                llmClient.complete(
-                    provider = any(),
-                    model = any(),
-                    messages = any(),
-                    systemPrompt = any(),
-                    maxTokens = any(),
-                    temperature = any(),
-                    responseFormat = any(),
-                    thinking = any(),
-                    noEgressEnabled = any(),
-                    stream = any(),
-                    onChunk = any(),
-                    taskId = any(),
-                    subtaskId = any(),
-                    source = any(),
-                    kwargs = any()
-                )
-            } returnsMany listOf(
-                createLLMResponse("""{}"""),
-                createLLMResponse("""{"response":"Recovered"}""")
-            )
-
-            val result = agentTurnLoop.runTurn(
-                taskId = testTaskId,
-                userInput = "Test",
-                mode = TaskMode.PLAN
-            )
-
-            assertTrue(result.success)
-            assertEquals(2, result.iterations)
-            verify {
-                chatMessageRepository.create(
-                    testTaskId,
-                    MessageRole.SYSTEM,
-                    TurnGuardrails.buildInvalidFormatMessage(TaskMode.PLAN),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any(),
-                    any()
-                )
-            }
+            assertEquals(1, result.iterations)
+            assertTrue(result.response.contains("empty content", ignoreCase = true))
         }
 
         @Test
@@ -718,101 +614,11 @@ class AgentTurnLoopTest {
             assertEquals(1, result.iterations)
         }
 
-        @Test
-        fun `should not persist plain text body as ASSISTANT message during plain text nudge`() = runTest {
-            // First response: plain text (will trigger nudge). Second: valid JSON (recovers).
-            coEvery {
-                llmClient.complete(
-                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
-                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
-                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
-                    subtaskId = any(), source = any(), kwargs = any()
-                )
-            } returnsMany listOf(
-                LLMResponse(
-                    content = "```python\nprint('garbage plain text')\n```",
-                    usage = LLMUsage(inputTokens = 100, outputTokens = 20, totalTokens = 120),
-                    model = "gpt-4",
-                    provider = "openai",
-                    cost = 0.0,
-                    finishReason = "stop"
-                ),
-                createLLMResponse("""{"response":"recovered","intent":"response"}""")
-            )
-
-            val result = agentTurnLoop.runTurn(
-                taskId = testTaskId,
-                userInput = "Run task",
-                mode = TaskMode.AGENT
-            )
-
-            assertTrue(result.success)
-            // The plain-text body must NOT be saved as an ASSISTANT message — that would teach
-            // the model to keep emitting markdown on the next turn.
-            verify(exactly = 0) {
-                chatMessageRepository.create(
-                    testTaskId,
-                    MessageRole.ASSISTANT,
-                    match<String> { it.contains("garbage plain text") },
-                    any(), any(), any(), any(), any(), any()
-                )
-            }
-        }
-
-        @Test
-        fun `nudge SYSTEM message is replaced not appended across retries`() = runTest {
-            // Track all created messages so we can count SYSTEM nudges. Capture the slot for the
-            // create() args; mockk will record every invocation.
-            val createdRoles = mutableListOf<MessageRole>()
-            val createdContents = mutableListOf<String>()
-            // Override the default mock to capture role + content.
-            every {
-                chatMessageRepository.create(
-                    any(), capture(createdRoles), capture(createdContents),
-                    any(), any(), any(), any(), any(), any()
-                )
-            } answers {
-                // Each created message gets a unique id so the delete() lookup logic in the
-                // production code can find the previous nudge to replace.
-                createMockMessage(id = "msg-${createdContents.size}")
-            }
-            // Repository.delete is invoked when replacing a previous nudge — keep it relaxed.
-            every { chatMessageRepository.delete(any()) } returns true
-
-            val emptyResponse = LLMResponse(
-                content = "",
-                usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
-                model = "qwen3.5:35b",
-                provider = "ollama",
-                cost = 0.0,
-                finishReason = "stop"
-            )
-            coEvery {
-                llmClient.complete(
-                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
-                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
-                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
-                    subtaskId = any(), source = any(), kwargs = any()
-                )
-            } returnsMany listOf(
-                emptyResponse,
-                emptyResponse,
-                emptyResponse,
-                createLLMResponse("""{"response":"finally","intent":"response"}""")
-            )
-
-            val result = agentTurnLoop.runTurn(
-                taskId = testTaskId,
-                userInput = "Test nudge replace",
-                mode = TaskMode.PLAN
-            )
-
-            assertTrue(result.success, "expected eventual recovery, got: ${result.response}")
-            // We hit the empty-content branch 3 times. Each adds a fresh SYSTEM nudge, but the
-            // PREVIOUS nudge should have been deleted to avoid stacking. So delete() must be
-            // called at least twice (after the 2nd and 3rd nudge).
-            verify(atLeast = 2) { chatMessageRepository.delete(any()) }
-        }
+        // NOTE: the `plain text nudge` and `nudge replaced not appended` tests were removed
+        // together with the nudge-retry machinery. The turn loop no longer injects SYSTEM
+        // messages mid-flight to coax a misbehaving model back into format — an empty or
+        // malformed response simply ends the turn with a clear error. See the "should fail
+        // immediately on empty content in JSON mode" test above for the new behaviour.
     }
 
     @Nested

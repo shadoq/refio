@@ -34,7 +34,8 @@ class TurnPromptBuilder(
     private val projectRoot: Path?,
     private val tokenEstimator: PromptTokenEstimator = PromptTokenEstimator(),
     private val promptCache: PromptCache? = null,
-    private val sectionProviders: List<PromptSectionProvider> = emptyList()
+    private val sectionProviders: List<PromptSectionProvider> = emptyList(),
+    private val configService: pl.jclab.refio.core.services.ConfigService? = null
 ) {
     class StructuredPromptBuilder {
         fun buildSystemPrompt(sections: List<PromptSection>): String {
@@ -354,6 +355,9 @@ $filteredContextPrompt
         taskId: String,
         toolDescriptionsOverride: String? = null
     ): String {
+        // Auto-detect compact mode based on model context size
+        syncCompactMode(mode, taskId)
+
         if (toolDescriptionsOverride != null) {
             return promptsService.getSystemPrompt(
                 type = PromptType.SYSTEM_PLAN,
@@ -398,6 +402,9 @@ $filteredContextPrompt
         toolDescriptionsOverride: String? = null,
         writeToolsExecutedInTurn: Int = 0
     ): String {
+        // Auto-detect compact mode based on model context size
+        syncCompactMode(mode, taskId)
+
         val toolDescriptions = if (toolDescriptionsOverride != null) {
             toolDescriptionsOverride
         } else if (promptCache != null) {
@@ -483,6 +490,11 @@ $iterationInfo
         profileOverrides: TurnProfileOverrides?,
         writeToolsExecutedInTurn: Int = 0
     ): String {
+        // Sync compact mode early — before resolving tool descriptions for any profile.
+        // Without this, subagent tool descriptions are built with compactMode=false
+        // even on small-context models (e.g. Ollama 32k), wasting ~1.5k tokens.
+        syncCompactMode(mode, taskId)
+
         val toolDescriptionsOverride = resolveToolDescriptionsForProfile(mode, taskId, profileOverrides)
 
         if (runProfile == TurnRunProfile.SUBAGENT && profileOverrides?.systemPromptOverride != null) {
@@ -626,6 +638,16 @@ ${warning}
         result = result.replace(Regex("\n{3,}"), "\n\n")
 
         return result.trim()
+    }
+
+    /**
+     * Sync compact mode on ToolDescriptionBuilder based on resolved context size.
+     * When context is small (e.g. Ollama 32k), uses shorter tool descriptions to save tokens.
+     */
+    private fun syncCompactMode(mode: TaskMode, taskId: String) {
+        if (configService == null) return
+        val operation = pl.jclab.refio.core.api.ModelOperation.fromTaskMode(mode)
+        toolDescriptionBuilder.compactMode = configService.isCompactPrompts(operation, taskId)
     }
 
     /**

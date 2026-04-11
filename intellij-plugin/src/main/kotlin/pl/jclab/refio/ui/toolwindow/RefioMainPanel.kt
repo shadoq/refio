@@ -126,6 +126,7 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
         ragViewPanel = RagViewPanel(project)
         turnStateStatusBar = TurnStateStatusBar()
         agentExecutionPanel = pl.jclab.refio.ui.components.agents.AgentExecutionPanel()
+        debugPanel.agentTraceProvider = { agentExecutionPanel.toText() }
 
         // Observe turn state for status bar.
         // turnState may be null initially (AgentTurnLoop created lazily), so re-check on each session change.
@@ -174,14 +175,13 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
             addTab("Chat", chatPanel)
             addTab("Execution", stepsPanel)
             addTab("Context", contextPanel)
-            addTab("RAG", ragViewPanel)
             addTab("Agents", agentExecutionPanel)
-            addTab("Logs", logsPanel)
+            addTab("RAG", ragViewPanel)
             addTab("Debug", debugPanel)
-            addTab("API Logs", apiLogsPanel)
+            addTab("Logs", logsPanel)
+            addTab("API", apiLogsPanel)
             addChangeListener {
-                val selectedTitle = getTitleAt(selectedIndex)
-                if (selectedTitle == "API Logs") {
+                if (selectedIndex >= 0 && getComponentAt(selectedIndex) === apiLogsPanel) {
                     apiLogsPanel.ensureLoaded()
                 }
             }

@@ -100,11 +100,17 @@ class ConfigService(
     }
 
     companion object {
+        const val INHERIT_MODEL_VALUE = "inherit"
+
+        /** Context sizes at or below this threshold trigger compact (shorter) prompts. */
+        const val COMPACT_PROMPT_THRESHOLD = 48_000
+
         // Configuration keys
         const val KEY_DEFAULT_MODEL_CHAT = "default_model.chat"
         const val KEY_DEFAULT_MODEL_PLAN = "default_model.plan"
         const val KEY_DEFAULT_MODEL_AGENT = "default_model.agent"
         const val KEY_WEAK_MODEL = "default_model.weak"  // Cheap model for auxiliary operations (summaries, etc.)
+        const val KEY_STRONG_MODEL = "default_model.strong"  // Powerful model for complex delegation
         const val KEY_MODELS_VISIBILITY = "models.visibility"
 
         // Limits configuration keys
@@ -371,6 +377,12 @@ class ConfigService(
         ModelOperation.CODING -> KEY_DEFAULT_MODEL_AGENT
         ModelOperation.WEAK -> KEY_WEAK_MODEL
         ModelOperation.EMBEDDING -> KEY_EMBEDDING_MODEL
+        ModelOperation.STRONG -> KEY_STRONG_MODEL
+    }
+
+    private fun isInheritedModelConfig(data: ModelConfigData): Boolean {
+        return data.modelId.equals(INHERIT_MODEL_VALUE, ignoreCase = true) &&
+                data.provider.equals(INHERIT_MODEL_VALUE, ignoreCase = true)
     }
 
     private fun fallbackModelForOperation(operation: ModelOperation): Pair<String, String> = when (operation) {
@@ -379,6 +391,7 @@ class ConfigService(
         ModelOperation.CODING -> Pair(FALLBACK_MODEL, FALLBACK_PROVIDER)
         ModelOperation.WEAK -> Pair(FALLBACK_WEAK_MODEL, FALLBACK_WEAK_PROVIDER)
         ModelOperation.EMBEDDING -> Pair(FALLBACK_EMBEDDING_MODEL, FALLBACK_EMBEDDING_PROVIDER)
+        ModelOperation.STRONG -> throw IllegalStateException("STRONG model has no fallback — must be explicitly configured")
     }
 
     /**
@@ -429,6 +442,10 @@ class ConfigService(
                 // Check DB first
                 if (config != null) {
                     val data = gson.fromJson(config.value, ModelConfigData::class.java)
+                    if (isInheritedModelConfig(data)) {
+                        logger.info { "Using inherited weak model -> default model" }
+                        return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
+                    }
                     if (data.modelId != null && data.provider != null) {
                         logger.info { "Using weak model from DB: ${data.modelId}" }
                         return Pair(data.modelId, data.provider)
@@ -463,6 +480,10 @@ class ConfigService(
             ModelOperation.PLAN -> {
                 if (config != null) {
                     val data = gson.fromJson(config.value, ModelConfigData::class.java)
+                    if (isInheritedModelConfig(data)) {
+                        logger.info { "Using inherited plan model -> default model" }
+                        return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
+                    }
                     if (data.modelId != null && data.provider != null) {
                         logger.info { "Using plan model from DB: ${data.modelId}" }
                         return Pair(data.modelId, data.provider)
@@ -480,6 +501,10 @@ class ConfigService(
             ModelOperation.CODING -> {
                 if (config != null) {
                     val data = gson.fromJson(config.value, ModelConfigData::class.java)
+                    if (isInheritedModelConfig(data)) {
+                        logger.info { "Using inherited coding model -> default model" }
+                        return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
+                    }
                     if (data.modelId != null && data.provider != null) {
                         logger.info { "Using coding model from DB: ${data.modelId}" }
                         return Pair(data.modelId, data.provider)
@@ -493,11 +518,69 @@ class ConfigService(
                     return Pair(model, provider)
                 }
             }
+
+            ModelOperation.STRONG -> {
+                if (config != null) {
+                    val data = gson.fromJson(config.value, ModelConfigData::class.java)
+                    if (isInheritedModelConfig(data)) {
+                        logger.info { "Using inherited strong model -> default model" }
+                        return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
+                    }
+                    if (data.modelId != null && data.provider != null) {
+                        logger.info { "Using strong model from DB: ${data.modelId}" }
+                        return Pair(data.modelId, data.provider)
+                    }
+                }
+                val yamlModel = yamlLoader.getDefaultStrongModel()
+                if (yamlModel != null) {
+                    val (provider, model) = parseModelString(yamlModel)
+                    logger.info { "Using strong model from YAML: $model (provider=$provider)" }
+                    return Pair(model, provider)
+                }
+                // No fallback for STRONG — callers should use getStrongModel() which returns null
+                throw IllegalStateException("STRONG model not configured and has no fallback")
+            }
         }
 
         val fallback = fallbackModelForOperation(operation)
         logger.info { "No config found for $operation, using fallback: ${fallback.first}" }
         return fallback
+    }
+
+    /**
+     * Get the configured strong model, or null if not configured.
+     * Unlike other operations, STRONG has no fallback.
+     */
+    fun getStrongModel(
+        taskId: String? = null,
+        projectId: String? = null
+    ): Pair<String, String>? {
+        val key = KEY_STRONG_MODEL
+
+        // 1. Check database
+        val config = getConfigWithPrecedence(key = key, taskId = taskId, projectId = projectId)
+        if (config != null) {
+            val data = gson.fromJson(config.value, ModelConfigData::class.java)
+            if (isInheritedModelConfig(data)) {
+                logger.info { "Using inherited strong model -> default model" }
+                return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
+            }
+            if (data.modelId != null && data.provider != null) {
+                logger.info { "Using strong model from DB: ${data.modelId}" }
+                return Pair(data.modelId, data.provider)
+            }
+        }
+
+        // 2. Check YAML
+        val yamlModel = yamlLoader.getDefaultStrongModel()
+        if (yamlModel != null) {
+            val (provider, model) = parseModelString(yamlModel)
+            logger.info { "Using strong model from YAML: $model (provider=$provider)" }
+            return Pair(model, provider)
+        }
+
+        // 3. No fallback — return null
+        return null
     }
 
     /**
@@ -1643,6 +1726,16 @@ class ConfigService(
             "lmstudio" -> getTyped(ConfigKeys.PROVIDER_LM_STUDIO_CONTEXT_SIZE)
             else -> fallback
         }
+    }
+
+    /**
+     * Whether compact (shorter) system prompts should be used.
+     * Auto-detects based on resolved context size for the operation:
+     * context <= 48000 tokens → compact mode (saves ~40% prompt tokens).
+     */
+    fun isCompactPrompts(operation: ModelOperation? = null, taskId: String? = null): Boolean {
+        val contextSize = resolveContextSizeForBudget(operation, taskId)
+        return contextSize <= COMPACT_PROMPT_THRESHOLD
     }
 
     /**

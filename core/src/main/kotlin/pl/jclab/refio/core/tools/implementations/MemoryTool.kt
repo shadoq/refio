@@ -69,7 +69,7 @@ Use for: key findings, intermediate results, decisions, blockers, recovering dat
             ),
             "limit" to mapOf(
                 "type" to "integer",
-                "description" to "For get_subtask_output: max chars to return (default: 8000, max: 64000)."
+                "description" to "For get_subtask_output: max chars to return (default: 16384, max: 64000)."
             )
         ),
         "required" to listOf("action")
@@ -177,7 +177,7 @@ Use for: key findings, intermediate results, decisions, blockers, recovering dat
             ?: return ToolResult.error("subtask_id required for get_subtask_output")
 
         val offset = (params["offset"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 0
-        val limit = (params["limit"] as? Number)?.toInt()?.coerceIn(1, 64_000) ?: 8_000
+        val limit = (params["limit"] as? Number)?.toInt()?.coerceIn(1, 64_000) ?: 16384
 
         // Try exact id first; if the user passed only the 8-char ref#, fall back
         // to a prefix lookup over the task's subtasks.

@@ -4,24 +4,32 @@ import pl.jclab.refio.core.agents.events.AgentEvent
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
+import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
 import javax.swing.*
 import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeModel
 import javax.swing.tree.DefaultTreeCellRenderer
 
 /**
- * Hierarchical trace view for a single session:
+ * Hierarchical trace view for a single session with subagent nesting support:
  *
  *   Session <id>   (N turns · X tokens · $Y · Zs)
  *   ├── Turn 1  (mode=AGENT · 1200ms)
  *   │     ├── [LLM]  qwen3:9b  12345 in / 321 out  $0.0012  820ms
  *   │     ├── [Tool] read_file  45ms  OK
  *   │     └── [Tool] grep_search  120ms  OK
- *   ├── Turn 2  …
+ *   ├── Subagent: code-reviewer  (run abc12345 · depth=1)
+ *   │     ├── Turn 1  (mode=AGENT · 500ms)
+ *   │     │     ├── [LLM]  qwen3:9b  …
+ *   │     │     └── [Tool] file_search  …
+ *   │     └── Turn 2  …
  *   └── Models: qwen3:9b — 3 calls · 34k in / 2k out · $0.0123
  *
  * Built by consuming AgentEvent.TurnStarted / TurnEnded / LLMCallCompleted / ToolCalled.
+ * Events carrying runId/parentRunId/depth are grouped into sub-trees per runId.
  */
 class SessionTracePanel : JPanel(BorderLayout()) {
 
@@ -47,6 +55,7 @@ class SessionTracePanel : JPanel(BorderLayout()) {
                         TraceKind.TOOL_ERR -> Color(200, 50, 50)
                         TraceKind.SESSION -> Color(200, 160, 40)
                         TraceKind.MODELS -> Color(120, 120, 120)
+                        TraceKind.SUBAGENT -> Color(0, 140, 180)
                     }
                 }
                 return c
@@ -54,8 +63,21 @@ class SessionTracePanel : JPanel(BorderLayout()) {
         }
     }
 
-    private val header = JLabel("  Session Trace").apply {
-        font = font.deriveFont(Font.BOLD, 12f)
+    private val copyButton = JButton("Copy").apply {
+        font = font.deriveFont(10f)
+        toolTipText = "Copy trace to clipboard"
+        addActionListener { copyTraceToClipboard() }
+    }
+
+    private val header = JPanel(BorderLayout()).apply {
+        val label = JLabel("  Session Trace").apply {
+            font = font.deriveFont(Font.BOLD, 12f)
+        }
+        val buttons = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+            add(copyButton)
+        }
+        add(label, BorderLayout.WEST)
+        add(buttons, BorderLayout.EAST)
         border = BorderFactory.createEmptyBorder(6, 8, 6, 8)
     }
 
@@ -79,8 +101,12 @@ class SessionTracePanel : JPanel(BorderLayout()) {
     )
     private val modelStats = linkedMapOf<String, ModelStats>()
 
-    // Map iteration → tree node so child events attach to correct turn
-    private val turnNodes = mutableMapOf<Int, DefaultMutableTreeNode>()
+    // Map "runId:iteration" → tree node so child events attach to correct turn
+    private val turnNodes = mutableMapOf<String, DefaultMutableTreeNode>()
+    // Map runId → subagent container node (for depth > 0 runs)
+    private val runNodes = mutableMapOf<String, DefaultMutableTreeNode>()
+    // Track which runId is the top-level one (depth == 0)
+    private var primaryRunId: String? = null
     private var modelsNode: DefaultMutableTreeNode? = null
 
     init {
@@ -98,6 +124,8 @@ class SessionTracePanel : JPanel(BorderLayout()) {
         SwingUtilities.invokeLater {
             root.removeAllChildren()
             turnNodes.clear()
+            runNodes.clear()
+            primaryRunId = null
             modelsNode = null
             modelStats.clear()
             totalTurns = 0
@@ -116,10 +144,28 @@ class SessionTracePanel : JPanel(BorderLayout()) {
         when (event) {
             is AgentEvent.TurnStarted -> {
                 SwingUtilities.invokeLater {
+                    val runId = event.runId ?: event.correlationId
+                    val depth = event.depth
+                    val turnKey = "$runId:${event.iteration}"
+
+                    // Determine the parent container for this turn
+                    val parentContainer = if (depth > 0) {
+                        getOrCreateRunNode(runId, depth, event.correlationId)
+                    } else {
+                        if (primaryRunId == null) primaryRunId = runId
+                        root
+                    }
+
                     val label = "Turn ${event.iteration}/${event.maxIterations}  (${event.mode})  …"
                     val turnNode = DefaultMutableTreeNode(TraceNode(label, TraceKind.TURN))
-                    turnNodes[event.iteration] = turnNode
-                    insertBeforeModels(turnNode)
+                    turnNodes[turnKey] = turnNode
+
+                    if (parentContainer === root) {
+                        insertBeforeModels(turnNode)
+                    } else {
+                        parentContainer.add(turnNode)
+                        treeModel.nodeStructureChanged(parentContainer)
+                    }
                     tree.expandPath(javax.swing.tree.TreePath(turnNode.path))
                     totalTurns++
                     updateRootLabel()
@@ -127,7 +173,9 @@ class SessionTracePanel : JPanel(BorderLayout()) {
             }
             is AgentEvent.TurnEnded -> {
                 SwingUtilities.invokeLater {
-                    val node = turnNodes[event.iteration] ?: return@invokeLater
+                    val runId = event.runId ?: event.correlationId
+                    val turnKey = "$runId:${event.iteration}"
+                    val node = turnNodes[turnKey] ?: return@invokeLater
                     val existing = node.userObject as? TraceNode
                     val mode = existing?.label?.substringAfter("(")?.substringBefore(")") ?: ""
                     node.userObject = TraceNode(
@@ -141,7 +189,9 @@ class SessionTracePanel : JPanel(BorderLayout()) {
             }
             is AgentEvent.LLMCallCompleted -> {
                 SwingUtilities.invokeLater {
-                    val parent = turnNodes[event.iteration] ?: root
+                    val runId = event.runId ?: event.correlationId
+                    val turnKey = "$runId:${event.iteration}"
+                    val parent = turnNodes[turnKey] ?: root
                     val label = "[LLM] ${shortenModel(event.model)}  " +
                         "${event.tokensIn} in / ${event.tokensOut} out  " +
                         "${formatCost(event.costUsd)}  ${formatDuration(event.durationMs)}"
@@ -166,7 +216,9 @@ class SessionTracePanel : JPanel(BorderLayout()) {
             }
             is AgentEvent.ToolCalled -> {
                 SwingUtilities.invokeLater {
-                    val parent = turnNodes[event.iteration] ?: root
+                    val runId = event.runId ?: event.correlationId
+                    val turnKey = "$runId:${event.iteration}"
+                    val parent = turnNodes[turnKey] ?: root
                     val status = if (event.success) "OK" else "ERR"
                     val label = "[Tool] ${event.toolName}  ${formatDuration(event.durationMs)}  $status  — ${event.argumentsPreview.take(60)}"
                     val kind = if (event.success) TraceKind.TOOL_OK else TraceKind.TOOL_ERR
@@ -178,7 +230,35 @@ class SessionTracePanel : JPanel(BorderLayout()) {
                     updateRootLabel()
                 }
             }
+            is AgentEvent.StreamAborted -> {
+                SwingUtilities.invokeLater {
+                    val runId = event.runId ?: event.correlationId
+                    val turnKey = "$runId:${event.iteration}"
+                    val parent = turnNodes[turnKey] ?: root
+                    val label = "[Stream aborted] ${event.code}  — ${event.reason.take(80)}  " +
+                        "(partial=${event.partialLength} chars)"
+                    parent.add(DefaultMutableTreeNode(TraceNode(label, TraceKind.TOOL_ERR)))
+                    treeModel.nodeStructureChanged(parent)
+                    tree.expandPath(javax.swing.tree.TreePath(parent.path))
+                    updateRootLabel()
+                }
+            }
             else -> { /* ignore non-trace events */ }
+        }
+    }
+
+    /**
+     * Get or create a container node for a subagent run (depth > 0).
+     * The node label includes the correlationId (which equals runId) so the user
+     * can identify different subagent invocations.
+     */
+    private fun getOrCreateRunNode(runId: String, depth: Int, correlationId: String): DefaultMutableTreeNode {
+        return runNodes.getOrPut(runId) {
+            val label = "Subagent run ${runId.take(8)}  (depth=$depth)"
+            val node = DefaultMutableTreeNode(TraceNode(label, TraceKind.SUBAGENT))
+            insertBeforeModels(node)
+            tree.expandPath(javax.swing.tree.TreePath(node.path))
+            node
         }
     }
 
@@ -223,6 +303,47 @@ class SessionTracePanel : JPanel(BorderLayout()) {
         treeModel.nodeChanged(root)
     }
 
+    fun toText(): String {
+        val sb = StringBuilder()
+        fun walk(node: DefaultMutableTreeNode, indent: String) {
+            val isRoot = node === root
+            val prefix = if (isRoot) "" else indent
+            sb.appendLine("$prefix${node.userObject}")
+            val childCount = node.childCount
+            for (i in 0 until childCount) {
+                val child = node.getChildAt(i) as DefaultMutableTreeNode
+                val isLast = i == childCount - 1
+                val branch = if (isLast) "└── " else "├── "
+                val nextIndent = indent + if (isLast) "    " else "│   "
+                if (isRoot) {
+                    sb.appendLine("$branch${child.userObject}")
+                    walkChildren(child, if (isLast) "    " else "│   ", sb)
+                } else {
+                    sb.appendLine("$indent$branch${child.userObject}")
+                    walkChildren(child, nextIndent, sb)
+                }
+            }
+        }
+        walk(root, "")
+        return sb.toString().trimEnd()
+    }
+
+    private fun copyTraceToClipboard() {
+        val sel = StringSelection(toText())
+        Toolkit.getDefaultToolkit().systemClipboard.setContents(sel, null)
+    }
+
+    private fun walkChildren(node: DefaultMutableTreeNode, indent: String, sb: StringBuilder) {
+        val gc = node.childCount
+        for (j in 0 until gc) {
+            val child = node.getChildAt(j) as DefaultMutableTreeNode
+            val isLast = j == gc - 1
+            val branch = if (isLast) "└── " else "├── "
+            sb.appendLine("$indent$branch${child.userObject}")
+            walkChildren(child, indent + if (isLast) "    " else "│   ", sb)
+        }
+    }
+
     private fun formatCost(cost: Double): String =
         if (cost <= 0.0) "$0" else "$%.4f".format(cost)
 
@@ -240,5 +361,5 @@ class SessionTracePanel : JPanel(BorderLayout()) {
         override fun toString(): String = label
     }
 
-    private enum class TraceKind { SESSION, TURN, LLM, TOOL_OK, TOOL_ERR, MODELS }
+    private enum class TraceKind { SESSION, TURN, LLM, TOOL_OK, TOOL_ERR, MODELS, SUBAGENT }
 }

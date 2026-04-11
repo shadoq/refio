@@ -92,7 +92,8 @@ class AgentEventBus {
                 it is AgentEvent.TurnStarted ||
                 it is AgentEvent.TurnEnded ||
                 it is AgentEvent.LLMCallCompleted ||
-                it is AgentEvent.ToolCalled
+                it is AgentEvent.ToolCalled ||
+                it is AgentEvent.StreamAborted
             )
         }
 

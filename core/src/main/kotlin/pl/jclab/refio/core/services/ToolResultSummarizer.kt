@@ -29,9 +29,10 @@ enum class SummaryContextType {
     DATA_FILE,
 
     /**
-     * run_code / run_terminal_command — deterministic program output. Preserve every
-     * number, identifier, and error message verbatim; never collapse lists; keep
-     * head + tail when too long. The summarizer must NOT rephrase.
+     * run_code / run_terminal_command / http_request — deterministic program or
+     * protocol output. Preserve every number, identifier, status code, and error
+     * message verbatim; never collapse lists; keep head + tail when too long.
+     * The summarizer must NOT rephrase.
      */
     RAW_OUTPUT,
 
@@ -126,15 +127,35 @@ class ToolResultSummarizer(
             )
         }
 
-        // Higher skip threshold for RAW_OUTPUT (run_code, run_terminal_command).
+        // Higher skip threshold for RAW_OUTPUT (run_code, run_terminal_command, http_request).
         // These tool outputs typically contain literal data the model needs to read
-        // verbatim (IDs, counts, error bodies). Below 4KB the cost-benefit is clearly
-        // negative — observed production traces show 506-char outputs triggering 80s+
-        // WEAK calls for 8 chars of "compression" while paraphrasing critical IDs.
+        // verbatim (IDs, counts, error bodies, HTTP status codes, response JSON). Below
+        // 4KB the cost-benefit is clearly negative — observed production traces show
+        // 506-char outputs triggering 80s+ WEAK calls for 8 chars of "compression"
+        // while paraphrasing critical IDs.
         if (contextType == SummaryContextType.RAW_OUTPUT && rawOutput.length < RAW_OUTPUT_SKIP_THRESHOLD) {
             logger.info {
                 "[SUMMARIZER_SKIP] Tool $toolName output (${rawOutput.length} chars) below " +
                     "RAW_OUTPUT_SKIP_THRESHOLD ($RAW_OUTPUT_SKIP_THRESHOLD), keeping raw."
+            }
+            return ToolResultSummary(
+                summary = rawOutput,
+                wasSummarized = false,
+                tokensIn = 0,
+                tokensOut = 0,
+                cost = 0.0
+            )
+        }
+
+        // Higher skip threshold for DATA_FILE (read_file on .md, .json, .csv, etc.).
+        // The WEAK model summarizer is destructive for structured data under 4KB:
+        // it paraphrases numbers, drops samples, and produces "no class definitions"
+        // commentary. Observed in documentation-engineer sessions where 19 extra LLM
+        // calls were made for small doc files, each taking 20-35s on Ollama.
+        if (contextType == SummaryContextType.DATA_FILE && rawOutput.length < DATA_FILE_SKIP_THRESHOLD) {
+            logger.info {
+                "[SUMMARIZER_SKIP] Tool $toolName output (${rawOutput.length} chars) below " +
+                    "DATA_FILE_SKIP_THRESHOLD ($DATA_FILE_SKIP_THRESHOLD), keeping raw."
             }
             return ToolResultSummary(
                 summary = rawOutput,
@@ -410,9 +431,9 @@ Guidelines:
      * - read_file on a code file → CODE_ANALYSIS (preserve classes/functions)
      * - read_file on a data file (.json/.csv/.txt/.log/.md) → DATA_FILE
      *   (preserve structure, never rephrase numbers/IDs)
-     * - run_code / run_terminal_command → RAW_OUTPUT (preserve every number,
-     *   ID, error verbatim — these are deterministic program outputs that the
-     *   model needs to read literally)
+     * - run_code / run_terminal_command / http_request → RAW_OUTPUT (preserve every
+     *   number, ID, status code, error verbatim — these are deterministic program or
+     *   protocol outputs that the model needs to read literally)
      */
     private fun getContextTypeForTool(
         toolName: String,
@@ -425,7 +446,7 @@ Guidelines:
                 else SummaryContextType.CODE_ANALYSIS
             }
             "grep_search", "file_search" -> SummaryContextType.SEARCH_RESULT
-            "run_code", "run_terminal_command" -> SummaryContextType.RAW_OUTPUT
+            "run_code", "run_terminal_command", "http_request" -> SummaryContextType.RAW_OUTPUT
             else -> SummaryContextType.GENERAL
         }
     }
@@ -533,15 +554,25 @@ Guidelines:
          * it could possibly save. Acts as a lower bound on TOOL_SUMMARY_MIN_LENGTH —
          * raising the config above this is fine, lowering it below has no effect.
          */
-        const val GLOBAL_MIN_SKIP_THRESHOLD = 512
+        const val GLOBAL_MIN_SKIP_THRESHOLD = 1_024
 
         /**
-         * Below this size, RAW_OUTPUT (run_code / run_terminal_command) is NEVER
-         * summarized. The summarizer LLM call costs more than the saved tokens —
-         * see TurnToolExecutor traces where 506-char outputs triggered 80s+ calls
-         * for 8 chars of "compression". Not configurable on purpose.
+         * Below this size, RAW_OUTPUT (run_code / run_terminal_command / http_request)
+         * is NEVER summarized. The summarizer LLM call costs more than the saved
+         * tokens — see TurnToolExecutor traces where 506-char outputs triggered 80s+
+         * calls for 8 chars of "compression". http_request responses (JSON bodies,
+         * HTTP status codes, error payloads) have the same characteristics and are
+         * routed through the same path. Not configurable on purpose.
          */
-        const val RAW_OUTPUT_SKIP_THRESHOLD = 4_000
+        const val RAW_OUTPUT_SKIP_THRESHOLD = 4_096
+
+        /**
+         * Below this size, DATA_FILE (read_file on .md/.json/.csv etc.) is NEVER
+         * summarized. The WEAK model summarizer is destructive for small structured
+         * data files — it paraphrases numbers, drops samples, and wastes 20-35s per
+         * call on local models. Matches RAW_OUTPUT_SKIP_THRESHOLD.
+         */
+        const val DATA_FILE_SKIP_THRESHOLD = 4_096
 
         /** Trailing bytes of stdout copied verbatim into the head of a deterministic RAW_OUTPUT summary. */
         const val RAW_OUTPUT_TAIL_BYTES = 1_500
@@ -562,10 +593,17 @@ Guidelines:
          * File extensions treated as DATA_FILE rather than CODE_ANALYSIS.
          * These are structured/text files where code-style summarization
          * ("no classes found, no imports detected") is actively misleading.
+         *
+         * NOTE: html/htm are intentionally NOT in this set. HTML pages are
+         * frequently read by agents to extract IDs, form fields, or table
+         * data, and the WEAK summarizer collapses them to "this is a login
+         * form" or similar paraphrases that destroy the structural content
+         * the agent actually needs. HTML flows through structure-aware
+         * compression in ToolResultCompression instead.
          */
         val DATA_FILE_EXTENSIONS = setOf(
             "json", "csv", "tsv", "txt", "log", "md", "markdown",
-            "yaml", "yml", "xml", "html", "htm", "ini", "conf", "cfg",
+            "yaml", "yml", "xml", "ini", "conf", "cfg",
             "properties", "toml", "env", "sql"
         )
     }

@@ -97,7 +97,9 @@ class ToolResultPersistenceTest {
             wasSummarized = false,
             isDataProducing = false
         )
-        assertEquals(2000, content.length, "Fallback should truncate to 2000 chars")
+        assertTrue(content.length <= 2000, "Fallback should truncate to at most 2000 chars, got ${content.length}")
+        assertTrue(content.length < raw.length, "Content should be shorter than raw input")
+        assertTrue(content.contains("omitted"), "Truncated content should contain omitted marker")
         assertFalse(isSummarized)
     }
 
@@ -110,7 +112,9 @@ class ToolResultPersistenceTest {
             wasSummarized = false,
             isDataProducing = true
         )
-        assertEquals(2000, content.length, "Data-producing but not summarized should fallback to truncation")
+        assertTrue(content.length <= 2000, "Data-producing but not summarized should truncate to at most 2000 chars, got ${content.length}")
+        assertTrue(content.length < raw.length, "Content should be shorter than raw input")
+        assertTrue(content.contains("omitted"), "Truncated content should contain omitted marker")
         assertFalse(isSummarized)
     }
 

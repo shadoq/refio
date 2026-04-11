@@ -6,6 +6,8 @@ import java.awt.Color
 import java.awt.Component
 import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
 import java.text.SimpleDateFormat
 import java.util.*
 import javax.swing.*
@@ -92,8 +94,17 @@ class EventTimelinePanel : JPanel(BorderLayout()) {
 
         add(JScrollPane(table), BorderLayout.CENTER)
 
-        val footer = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
-            add(footerLabel)
+        val copyButton = JButton("Copy").apply {
+            font = font.deriveFont(10f)
+            toolTipText = "Copy events to clipboard"
+            addActionListener { copyEventsToClipboard() }
+        }
+        val footer = JPanel(BorderLayout()).apply {
+            add(footerLabel, BorderLayout.CENTER)
+            val buttons = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+                add(copyButton)
+            }
+            add(buttons, BorderLayout.EAST)
         }
         add(footer, BorderLayout.SOUTH)
         updateFooter()
@@ -123,30 +134,42 @@ class EventTimelinePanel : JPanel(BorderLayout()) {
                 time, "FAIL", "-", "${event.sourceAgentId.take(8)}: ${event.error.take(80)}",
                 "-", "-", "-", "-", "FAIL"
             )
-            is AgentEvent.TurnStarted -> arrayOf(
-                time, "TURN", "${event.iteration}/${event.maxIterations}",
-                "turn started (${event.mode})", "-", "-", "-", "-", "…"
-            )
-            is AgentEvent.TurnEnded -> arrayOf(
-                time, "TURN-END", "${event.iteration}",
-                "turn ended", "-", "-", "-", formatDuration(event.durationMs), "OK"
-            )
-            is AgentEvent.LLMCallCompleted -> arrayOf(
-                time, "LLM", "${event.iteration}",
-                "gen (${event.finishReason ?: "-"})",
-                shortenModel(event.model),
-                "${event.tokensIn} / ${event.tokensOut}",
-                formatCost(event.costUsd),
-                formatDuration(event.durationMs),
-                "OK"
-            )
-            is AgentEvent.ToolCalled -> arrayOf(
-                time, "TOOL", "${event.iteration}",
-                "${event.toolName} — ${event.argumentsPreview.take(70)}",
-                "-", "-", "-",
-                formatDuration(event.durationMs),
-                if (event.success) "OK" else "ERR"
-            )
+            is AgentEvent.TurnStarted -> {
+                val depthPrefix = if (event.depth > 0) "d${event.depth}:" else ""
+                arrayOf(
+                    time, "TURN", "$depthPrefix${event.iteration}/${event.maxIterations}",
+                    "turn started (${event.mode})", "-", "-", "-", "-", "…"
+                )
+            }
+            is AgentEvent.TurnEnded -> {
+                val depthPrefix = if (event.depth > 0) "d${event.depth}:" else ""
+                arrayOf(
+                    time, "TURN-END", "$depthPrefix${event.iteration}",
+                    "turn ended", "-", "-", "-", formatDuration(event.durationMs), "OK"
+                )
+            }
+            is AgentEvent.LLMCallCompleted -> {
+                val depthPrefix = if (event.depth > 0) "d${event.depth}:" else ""
+                arrayOf(
+                    time, "LLM", "$depthPrefix${event.iteration}",
+                    "gen (${event.finishReason ?: "-"})",
+                    shortenModel(event.model),
+                    "${event.tokensIn} / ${event.tokensOut}",
+                    formatCost(event.costUsd),
+                    formatDuration(event.durationMs),
+                    "OK"
+                )
+            }
+            is AgentEvent.ToolCalled -> {
+                val depthPrefix = if (event.depth > 0) "d${event.depth}:" else ""
+                arrayOf(
+                    time, "TOOL", "$depthPrefix${event.iteration}",
+                    "${event.toolName} — ${event.argumentsPreview.take(70)}",
+                    "-", "-", "-",
+                    formatDuration(event.durationMs),
+                    if (event.success) "OK" else "ERR"
+                )
+            }
             is AgentEvent.DataRequest -> arrayOf(
                 time, "MSG", "-",
                 "${event.sourceAgentId.take(8)} → ${event.targetAgentId?.take(8) ?: "parent"}: ${event.query.take(80)}",
@@ -214,6 +237,26 @@ class EventTimelinePanel : JPanel(BorderLayout()) {
             "tokens in/out: $sessionTokensIn / $sessionTokensOut · " +
             "cost: ${formatCost(sessionCost)} · " +
             "events: ${model.rowCount}"
+    }
+
+    fun toText(): String = buildString {
+        // Header
+        appendLine("| ${columns.joinToString(" | ")} |")
+        appendLine("| ${columns.joinToString(" | ") { "---" }} |")
+        // Rows
+        for (row in 0 until model.rowCount) {
+            val cells = (0 until model.columnCount).map { col -> model.getValueAt(row, col)?.toString() ?: "-" }
+            appendLine("| ${cells.joinToString(" | ")} |")
+        }
+        // Footer
+        val sid = currentSessionId?.take(8) ?: "-"
+        appendLine()
+        appendLine("Session: $sid · tokens in/out: $sessionTokensIn / $sessionTokensOut · cost: ${formatCost(sessionCost)} · events: ${model.rowCount}")
+    }
+
+    private fun copyEventsToClipboard() {
+        val sel = StringSelection(toText().trimEnd())
+        Toolkit.getDefaultToolkit().systemClipboard.setContents(sel, null)
     }
 
     private fun formatCost(cost: Double): String =

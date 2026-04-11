@@ -4,9 +4,13 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import pl.jclab.refio.core.agents.events.AgentEventBus
+import pl.jclab.refio.core.agents.testutil.DAGGenerator
 import pl.jclab.refio.core.db.TaskMode
+import kotlin.random.Random
 import kotlin.test.assertContains
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
+import kotlin.test.fail
 
 class MultiAgentRunnerCycleDetectionTest {
 
@@ -153,6 +157,99 @@ class MultiAgentRunnerCycleDetectionTest {
                 }
             }
             assertContains(ex.message!!, "Circular dependency")
+        }
+    }
+
+    @Nested
+    inner class PropertyBasedValidation {
+
+        @Test
+        fun `random graphs — validateDependencies matches independent topo sort`() {
+            val random = Random(42) // Fixed seed for reproducibility
+            var cyclesDetected = 0
+            var validGraphs = 0
+
+            repeat(500) { i ->
+                val specs = DAGGenerator.randomGraph(1, 20, 3, random)
+
+                // Independent check: try topological sort
+                val isDAG = isTopologicallySortable(specs)
+
+                try {
+                    runner.validateDependencies(specs)
+                    // If validation succeeds, graph must be a DAG
+                    assertTrue(isDAG,
+                        "Iteration $i: validateDependencies passed but graph has cycle: " +
+                        specs.map { "${it.name}->[${it.dependsOn.joinToString()}]" })
+                    validGraphs++
+                } catch (e: IllegalArgumentException) {
+                    // If validation fails, it should be because of cycle or unknown dep
+                    val msg = e.message ?: ""
+                    assertTrue(
+                        msg.contains("Circular dependency") || msg.contains("unknown agent"),
+                        "Iteration $i: unexpected error: $msg"
+                    )
+                    if (msg.contains("Circular dependency")) {
+                        // At least one agent name from graph should be in the message
+                        val anyAgentMentioned = specs.any { msg.contains(it.name) }
+                        assertTrue(anyAgentMentioned,
+                            "Cycle error should mention at least one agent name")
+                        cyclesDetected++
+                    }
+                }
+            }
+
+            // Sanity: we should have found both valid and cyclic graphs
+            assertTrue(validGraphs > 0, "Should have found at least some valid graphs")
+            assertTrue(cyclesDetected > 0, "Should have found at least some cycles")
+        }
+
+        @Test
+        fun `guaranteed valid DAGs — validateDependencies never throws`() {
+            val random = Random(42)
+            repeat(500) { i ->
+                val specs = DAGGenerator.randomDAG(1, 20, 3, random)
+                try {
+                    runner.validateDependencies(specs)
+                } catch (e: Exception) {
+                    fail("Iteration $i: DAG validation should never throw, but got: ${e.message}\n" +
+                        "Specs: ${specs.map { "${it.name}->[${it.dependsOn.joinToString()}]" }}")
+                }
+            }
+        }
+
+        /**
+         * Independent topological sort using Kahn's algorithm.
+         * Returns true if the graph is a DAG (no cycles).
+         */
+        private fun isTopologicallySortable(specs: List<AgentSpec>): Boolean {
+            val names = specs.map { it.name }.toSet()
+            // Check for unknown dependencies first
+            for (spec in specs) {
+                for (dep in spec.dependsOn) {
+                    if (dep !in names) return false
+                }
+            }
+
+            val inDegree = specs.associate { it.name to it.dependsOn.size }.toMutableMap()
+            val adjacency = mutableMapOf<String, MutableList<String>>()
+            for (spec in specs) {
+                for (dep in spec.dependsOn) {
+                    adjacency.getOrPut(dep) { mutableListOf() }.add(spec.name)
+                }
+            }
+
+            val queue = ArrayDeque(inDegree.filter { it.value == 0 }.keys)
+            var sorted = 0
+            while (queue.isNotEmpty()) {
+                val node = queue.removeFirst()
+                sorted++
+                for (neighbor in adjacency[node] ?: emptyList()) {
+                    inDegree[neighbor] = inDegree[neighbor]!! - 1
+                    if (inDegree[neighbor] == 0) queue.add(neighbor)
+                }
+            }
+            return sorted == specs.size
         }
     }
 }

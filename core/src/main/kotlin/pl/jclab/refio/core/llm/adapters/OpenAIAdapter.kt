@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.llm.adapters
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import pl.jclab.refio.core.llm.BaseLLMAdapter
@@ -560,6 +561,10 @@ class OpenAIAdapter(
             } else {
                 executeStandard(apiKeyToUse, requestBody, requestJson, startTime, definition, logPrefix)
             }
+        } catch (e: CancellationException) {
+            // Stream aborted by a guardrail (see core/llm/streaming/) — must propagate
+            // so the caller can see StreamAbortedException instead of RefioError.LLMError.
+            throw e
         } catch (e: Exception) {
             throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
         }
@@ -877,6 +882,9 @@ class OpenAIAdapter(
                         if (finishReason != null) {
                             finalFinishReason = finishReason
                         }
+                    } catch (e: CancellationException) {
+                        // Let stream abort (guardrail trip) propagate out of the loop.
+                        throw e
                     } catch (e: Exception) {
                         logger.warn { "$logPrefix Failed to parse chunk: $data - ${e.message}" }
                         continue
@@ -1096,6 +1104,9 @@ class OpenAIAdapter(
                         if (finalUsage == null) {
                             finalUsage = mapUsage(eventData["usage"])
                         }
+                    } catch (e: CancellationException) {
+                        // Let stream abort (guardrail trip) propagate out of the loop.
+                        throw e
                     } catch (e: Exception) {
                         logger.warn { "$logPrefix Failed to parse Responses chunk: $payload - ${e.message}" }
                         continue

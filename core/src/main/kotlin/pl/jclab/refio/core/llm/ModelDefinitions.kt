@@ -2578,6 +2578,168 @@ object ModelDefinitions {
             active = true
         ),
 
+        // Qwen 3.5 - Multimodal (vision+language), 256K context, tool use
+        "qwen3.5:0.8b" to ModelDefinition(
+            id = "qwen3.5:0.8b",
+            name = "Qwen 3.5 0.8B",
+            provider = "ollama",
+            description = "Ultra-lightweight multimodal model with 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "qwen3.5:2b" to ModelDefinition(
+            id = "qwen3.5:2b",
+            name = "Qwen 3.5 2B",
+            provider = "ollama",
+            description = "Compact multimodal model with 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "qwen3.5:4b" to ModelDefinition(
+            id = "qwen3.5:4b",
+            name = "Qwen 3.5 4B",
+            provider = "ollama",
+            description = "Balanced multimodal model with 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "qwen3.5:9b" to ModelDefinition(
+            id = "qwen3.5:9b",
+            name = "Qwen 3.5 9B",
+            provider = "ollama",
+            description = "High-capability multimodal model with 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "qwen3.5:27b" to ModelDefinition(
+            id = "qwen3.5:27b",
+            name = "Qwen 3.5 27B",
+            provider = "ollama",
+            description = "Large multimodal model with strong coding and reasoning",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "qwen3.5:35b" to ModelDefinition(
+            id = "qwen3.5:35b",
+            name = "Qwen 3.5 35B MoE",
+            provider = "ollama",
+            description = "MoE multimodal model (35B total, 3B active) with 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "qwen3.5:122b" to ModelDefinition(
+            id = "qwen3.5:122b",
+            name = "Qwen 3.5 122B MoE",
+            provider = "ollama",
+            description = "Large MoE multimodal model (122B total, 10B active) with 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
         "qwen3-coder:30b" to ModelDefinition(
             id = "qwen3-coder:30b",
             name = "Qwen 3 Coder 30B",
@@ -2613,6 +2775,30 @@ object ModelDefinitions {
             ),
             modelType = ModelType.TEXT,
             maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        // Qwen 3 Coder Next - 80B MoE (3B active), 256K context, agentic coding
+        "qwen3-coder-next:latest" to ModelDefinition(
+            id = "qwen3-coder-next:latest",
+            name = "Qwen 3 Coder Next 80B MoE",
+            provider = "ollama",
+            description = "80B MoE (3B active) agentic coding model with 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 256_000,
             maxOutputTokens = null,
             costPer1MInput = 0.0,
             costPer1MOutput = 0.0,
@@ -3617,8 +3803,58 @@ object ModelDefinitions {
         ),
 
         // ═══════════════════════════════════════════════════════════════════
+        // LIQUID AI FAMILY
+        // ═══════════════════════════════════════════════════════════════════
+
+        // LFM2 - 24B MoE (2B active), 32K context, hybrid architecture for on-device deployment
+        "lfm2:24b" to ModelDefinition(
+            id = "lfm2:24b",
+            name = "LFM2 24B MoE",
+            provider = "ollama",
+            description = "24B MoE (2B active) hybrid model for efficient on-device deployment",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 32_768,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = false,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        // ═══════════════════════════════════════════════════════════════════
         // REASONING MODELS
         // ═══════════════════════════════════════════════════════════════════
+
+        // Nemotron Cascade 2 - NVIDIA 30B MoE (3B active), 256K context, reasoning
+        "nemotron-cascade-2:30b" to ModelDefinition(
+            id = "nemotron-cascade-2:30b",
+            name = "Nemotron Cascade 2 30B MoE",
+            provider = "ollama",
+            description = "NVIDIA 30B MoE (3B active) reasoning model with 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.REASONING
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = false,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
 
         "gpt-oss:20b" to ModelDefinition(
             id = "gpt-oss:20b",

@@ -280,6 +280,12 @@ class ToolPermissionsServiceTest {
                 mockk<Tool> { every { name } returns "view_diff"; every { mode } returns ToolMode.READ_ONLY },
             )
 
+            // Register all read-only tools in the registry so getPermission can resolve defaults
+            val allKnownTools = allTools + readOnlyTools.filter { rt -> allTools.none { it.name == rt.name } }
+            val byName = allKnownTools.associateBy { it.name }
+            every { toolRegistry.getAllTools() } returns allKnownTools
+            every { toolRegistry.getTool(any()) } answers { byName[firstArg<String>()] }
+
             // When/Then
             listOf(TaskMode.CHAT, TaskMode.PLAN, TaskMode.AGENT).forEach { mode ->
                 val result = service.filterAvailableTools(readOnlyTools, mode)

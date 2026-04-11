@@ -11,6 +11,7 @@ import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.api.CoreApiClient
 import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.config.ModelPresetConfig
+import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.services.logging.dualLogger
 import pl.jclab.refio.services.notification.NotificationService
 import kotlinx.coroutines.CoroutineScope
@@ -31,6 +32,7 @@ import javax.swing.table.DefaultTableModel
  * @param planModel Model for planning operations (null = use defaultModel)
  * @param codingModel Model for coding operations (null = use defaultModel)
  * @param weakModel Model for auxiliary operations like summaries (null = use defaultModel)
+ * @param strongModel Model for strong delegation operations (null = use defaultModel)
  * @param visibleModels Additional models to show in dropdown (besides the ones used in preset)
  */
 data class ModelPreset(
@@ -40,13 +42,14 @@ data class ModelPreset(
     val planModel: String,
     val codingModel: String,
     val weakModel: String,
+    val strongModel: String,
     val visibleModels: List<String> = emptyList()
 ) {
     /**
      * Get all unique models used in this preset (for visibility settings).
      */
     fun getAllUsedModels(): Set<String> {
-        return setOfNotNull(defaultModel, planModel, codingModel, weakModel) + visibleModels
+        return setOfNotNull(defaultModel, planModel, codingModel, weakModel, strongModel) + visibleModels
     }
 
     companion object {
@@ -56,116 +59,85 @@ data class ModelPreset(
          */
         val PRESETS = listOf(
             ModelPreset(
-                name = "OpenAI Mini models",
-                description = "OpenAI Mini-tier cloud models for most tasks",
-                defaultModel = "openai/gpt-4.1-mini",
-                planModel = "openai/gpt-4.1-mini",
-                codingModel = "openai/gpt-5.1-codex-mini",
-                weakModel = "openai/gpt-4.1-nano",
-                visibleModels = listOf(
-                    "openai/gpt-4.1-mini",
-                    "openai/gpt-4.1-nano",
-                    "openai/gpt-5-mini",
-                    "openai/gpt-5-nano",
-                    "openai/gpt-5.1-codex-mini",
-                    "openai/o3-mini",
-                    "openai/o4-mini",
-                )
+                name = "OpenAI Balanced",
+                description = "OpenAI GPT-5.4 mini-tier preset for daily work and lower cost",
+                defaultModel = "openai/gpt-5.4-mini",
+                planModel = "openai/gpt-5.4-mini",
+                codingModel = "openai/gpt-5.4-mini",
+                weakModel = "openai/gpt-5-nano",
+                strongModel = "openai/gpt-5.4",
             ),
             ModelPreset(
-                name = "OpenAI coding models (4.1/5.1-codex)",
-                description = "OpenAI cloud models for coding tasks",
-                defaultModel = "openai/gpt-4.1",
-                planModel = "openai/gpt-4.1",
-                codingModel = "openai/gpt-5.1-codex",
-                weakModel = "openai/gpt-4.1",
-                visibleModels = listOf(
-                    "openai/gpt-4.1",
-                    "openai/gpt-5",
-                    "openai/gpt-5.1-codex",
-                    "openai/gpt-5.1",
-                    "openai/gpt-5.2",
-                )
+                name = "OpenAI Max",
+                description = "OpenAI flagship GPT-5.4 preset for demanding coding and agent tasks",
+                defaultModel = "openai/gpt-5.4",
+                planModel = "openai/gpt-5.4",
+                codingModel = "openai/gpt-5.4",
+                weakModel = "openai/gpt-5.4-mini",
+                strongModel = "openai/gpt-5.4",
             ),
             ModelPreset(
-                name = "Anthropic medium models",
-                description = "Anthropic medium models for coding tasks",
-                defaultModel = "anthropic/claude-sonnet-4-5-20250929",
-                planModel = "anthropic/claude-sonnet-4-5-20250929",
-                codingModel = "anthropic/claude-sonnet-4-5-20250929",
-                weakModel = "anthropic/claude-haiku-4-5-20251001",
-                visibleModels = listOf(
-                    "anthropic/claude-sonnet-4-5-20250929",
-                    "anthropic/claude-haiku-4-5-20251001",
-                )
+                name = "Anthropic Balanced",
+                description = "Anthropic preset based on the newest Sonnet and Haiku models currently defined in registry",
+                defaultModel = "anthropic/claude-sonnet-4-5",
+                planModel = "anthropic/claude-sonnet-4-5",
+                codingModel = "anthropic/claude-sonnet-4-5",
+                weakModel = "anthropic/claude-haiku-4-5",
+                strongModel = "anthropic/claude-sonnet-4-5",
             ),
             ModelPreset(
-                name = "Local Qwen2.5 Coder 14b",
-                description = "Local models Qwen2.5",
-                defaultModel = "ollama/qwen2.5-coder:14b",
-                planModel = "ollama/qwen2.5-coder:14b",
-                codingModel = "ollama/qwen2.5-coder:14b",
-                weakModel = "ollama/qwen2.5-coder:14b",
-                visibleModels = listOf(
-                    "ollama/qwen2.5:3b",
-                    "ollama/qwen2.5:7b",
-                    "ollama/qwen2.5-coder:7b",
-                    "ollama/qwen2.5:14b",
-                    "ollama/qwen2.5-coder:14b",
-                )
+                name = "Ollama Qwen 3.5 Small",
+                description = "Local Qwen3.5 preset for smaller hardware and general development work",
+                defaultModel = "ollama/qwen3.5:9b",
+                planModel = "ollama/qwen3.5:9b",
+                codingModel = "ollama/qwen3.5:9b",
+                weakModel = "ollama/qwen3.5:9b",
+                strongModel = "ollama/qwen3.5:35b",
             ),
             ModelPreset(
-                name = "Local Qwen3 14b",
-                description = "Local models Qwen2.5",
-                defaultModel = "ollama/qwen3:14b",
-                planModel = "ollama/qwen3:14b",
-                codingModel = "ollama/qwen3:14b",
-                weakModel = "ollama/qwen3:14b",
-                visibleModels = listOf(
-                    "ollama/qwen3:8b",
-                    "ollama/qwen3:14b",
-                    "ollama/qwen3:30b",
-                    "ollama/qwen3:32b",
-                    "ollama/qwen3-coder:30b",
-                )
+                name = "Ollama Qwen 3.5 Large",
+                description = "Local Qwen3.5 preset for stronger reasoning and coding on larger hardware",
+                defaultModel = "ollama/qwen3.5:35b",
+                planModel = "ollama/qwen3.5:35b",
+                codingModel = "ollama/qwen3.5:35b",
+                weakModel = "ollama/qwen3.5:9b",
+                strongModel = "ollama/qwen3.5:35b",
             ),
             ModelPreset(
-                name = "Local Qwen3 Coder 30b",
-                description = "Local models Qwen3",
-                defaultModel = "ollama/qwen3:14b",
-                planModel = "ollama/qwen3:14b",
-                codingModel = "ollama/qwen3:14b",
-                weakModel = "ollama/qwen3:14b",
-                visibleModels = listOf(
-                    "ollama/qwen3:8b",
-                    "ollama/qwen3:14b",
-                    "ollama/qwen3:30b",
-                    "ollama/qwen3:32b",
-                    "ollama/qwen3-coder:30b",
-                )
+                name = "Ollama Qwen 3.5 XL",
+                description = "Local Qwen3.5 preset for the strongest available local reasoning profile",
+                defaultModel = "ollama/qwen3.5:35b",
+                planModel = "ollama/qwen3.5:122b",
+                codingModel = "ollama/qwen3.5:35b",
+                weakModel = "ollama/qwen3.5:9b",
+                strongModel = "ollama/qwen3.5:122b",
             ),
             ModelPreset(
-                name = "Local Gemma3 12b",
+                name = "Ollama Gemma 3",
                 description = "Local Gemma3 12b",
                 defaultModel = "ollama/gemma3:12b",
                 planModel = "ollama/gemma3:12b",
                 codingModel = "ollama/gemma3:12b",
                 weakModel = "ollama/gemma3:12b",
-                visibleModels = listOf(
-                    "ollama/gemma3:12b",
-                    "ollama/gemma3:27b",
-                )
+                strongModel = "ollama/gemma3:27b",
             ),
             ModelPreset(
-                name = "Local GPT OSS 20b",
+                name = "Ollama Gemma 4",
+                description = "Local Gemma4 preset using compact experts for default work and larger variants for stronger tasks",
+                defaultModel = "ollama/gemma4:e4b",
+                planModel = "ollama/gemma4:31b",
+                codingModel = "ollama/gemma4:31b",
+                weakModel = "ollama/gemma4:e2b",
+                strongModel = "ollama/gemma4:31b",
+            ),
+            ModelPreset(
+                name = "Ollama GPT-OSS",
                 description = "Local GPT OSS 20b",
                 defaultModel = "ollama/gpt-oss:20b",
                 planModel = "ollama/gpt-oss:20b",
                 codingModel = "ollama/gpt-oss:20b",
                 weakModel = "ollama/gpt-oss:20b",
-                visibleModels = listOf(
-                    "ollama/gpt-oss:20b",
-                )
+                strongModel = "ollama/gpt-oss:20b",
             ),
         )
     }
@@ -178,6 +150,7 @@ private fun ModelPresetConfig.toModelPreset(): ModelPreset = ModelPreset(
     planModel = planModel ?: defaultModel,
     codingModel = codingModel ?: defaultModel,
     weakModel = weakModel ?: defaultModel,
+    strongModel = strongModel ?: defaultModel,
     visibleModels = visibleModels ?: emptyList()
 )
 
@@ -192,6 +165,8 @@ class ModelsSettingsPanel(
 
     companion object {
         private const val MODEL_VISIBILITY_INITIALIZED_KEY = "model_visibility_initialized"
+        private const val INHERIT_LABEL = "Inherit"
+        private const val NOT_CONFIGURED_LABEL = "Not configured"
     }
 
     private val logger = dualLogger("ModelsSettingsPanel")
@@ -204,6 +179,12 @@ class ModelsSettingsPanel(
     private val codingModelCombo = JComboBox<String>()
     private val weakModelCombo = JComboBox<String>()
     private val embeddingModelCombo = JComboBox<String>()
+    private val strongModelCombo = JComboBox<String>()
+
+    private data class StoredModelConfig(
+        val modelId: String? = null,
+        val provider: String? = null
+    )
 
     // Flag to prevent saving when dropdowns are updated programmatically
     private var isUpdatingDropdowns = false
@@ -403,7 +384,8 @@ class ModelsSettingsPanel(
                                 append("Default: ${value.defaultModel}<br>")
                                 append("Plan: ${value.planModel}<br>")
                                 append("Coding: ${value.codingModel}<br>")
-                                append("Weak: ${value.weakModel}")
+                                append("Weak: ${value.weakModel}<br>")
+                                append("Strong: ${value.strongModel}")
                                 append("</html>")
                             }
                         }
@@ -433,8 +415,7 @@ class ModelsSettingsPanel(
      * Apply a model preset - sets all model slots and updates model visibility.
      *
      * Steps:
-     * 1. Hide all models (like "Hide All" button)
-     * 2. Show only models from preset.visibleModels
+     * 1. Update model visibility when preset.visibleModels is explicitly provided
      * 3. Set default models for each operation slot
      */
     private fun applyPreset(preset: ModelPreset) {
@@ -442,95 +423,90 @@ class ModelsSettingsPanel(
 
         coroutineScope.launch {
             try {
-                // Step 1: Get all models and hide them
+                // Step 1: Get all models
                 val allModels = coreApiClient?.getModelsWithVisibility() ?: emptyList()
-                logger.info { "Updating visibility for ${allModels.size} models (preset)" }
+                logger.info { "Applying preset against ${allModels.size} available models" }
 
-                // Step 2: Show only models from preset
-                val modelsToShow = preset.getAllUsedModels()
-                logger.info { "Showing ${modelsToShow.size} models from preset: $modelsToShow" }
-
-                val visibleModelIds = mutableSetOf<String>()
-                for (modelFullId in modelsToShow) {
-                    // modelFullId format: "provider/modelId" -> need to find matching model.id
+                fun findMatchingModel(modelFullId: String): pl.jclab.refio.core.api.ModelInfo? {
                     val parts = modelFullId.split("/", limit = 2)
-                    if (parts.size == 2) {
-                        val provider = parts[0]
-                        val modelId = parts[1]
+                    if (parts.size != 2) {
+                        logger.warn { "Invalid preset model id: $modelFullId" }
+                        return null
+                    }
 
-                        // Find model by provider and modelId
-                        val matchingModel = allModels.find { model ->
-                            model.provider.equals(provider, ignoreCase = true) &&
-                                    (model.id == modelId || model.id.equals(modelFullId, ignoreCase = true))
-                        }
+                    val provider = parts[0]
+                    val modelId = parts[1]
+                    return allModels.find { model ->
+                        model.provider.equals(provider, ignoreCase = true) &&
+                                (model.id == modelId || model.id.equals(modelFullId, ignoreCase = true))
+                    }
+                }
 
+                // Step 2: Update visibility only when visibleModels is explicitly defined
+                if (preset.visibleModels.isNotEmpty()) {
+                    logger.info { "Updating visible models from preset: ${preset.visibleModels}" }
+
+                    val visibleModelIds = mutableSetOf<String>()
+                    for (modelFullId in preset.visibleModels) {
+                        val matchingModel = findMatchingModel(modelFullId)
                         if (matchingModel != null) {
                             visibleModelIds.add(matchingModel.id)
                             logger.info { "Enabled model: ${matchingModel.id}" }
                         } else {
-                            logger.warn { "Model not found: $modelFullId (may not be installed)" }
+                            logger.warn { "Visible preset model not found: $modelFullId (may not be installed)" }
                         }
                     }
+
+                    val visibilityMap = buildVisibilityMap(allModels, visibleModelIds)
+                    markModelVisibilityInitialized()
+                    coreApiClient?.updateModelsVisibility(visibilityMap)
+                } else {
+                    logger.info { "Preset has empty visibleModels; keeping current model visibility unchanged" }
                 }
 
-                val visibilityMap = buildVisibilityMap(allModels, visibleModelIds)
-                markModelVisibilityInitialized()
-                coreApiClient?.updateModelsVisibility(visibilityMap)
-
                 // Step 3: Set default models for each operation
-                val defaultParts = preset.defaultModel.split("/", limit = 2)
-                if (defaultParts.size == 2) {
+                val defaultMatch = findMatchingModel(preset.defaultModel)
+                if (defaultMatch != null) {
                     coreApiClient?.setDefaultModel(
                         request = pl.jclab.refio.core.api.SetDefaultModelRequest(
                             operation = ModelOperation.DEFAULT,
-                            modelId = defaultParts[1],
-                            provider = defaultParts[0]
+                            modelId = defaultMatch.id,
+                            provider = defaultMatch.provider
                         ),
                         taskId = null
                     )
+                } else {
+                    logger.warn { "Default preset model not available; leaving current DEFAULT model unchanged: ${preset.defaultModel}" }
                 }
 
-                // Plan model (fallback to default if not specified)
-                val planModel = preset.planModel
-                val planParts = planModel.split("/", limit = 2)
-                if (planParts.size == 2) {
-                    coreApiClient?.setDefaultModel(
-                        request = pl.jclab.refio.core.api.SetDefaultModelRequest(
-                            operation = ModelOperation.PLAN,
-                            modelId = planParts[1],
-                            provider = planParts[0]
-                        ),
-                        taskId = null
-                    )
+                suspend fun applySpecializedModel(operation: ModelOperation, modelFullId: String) {
+                    val match = findMatchingModel(modelFullId)
+                    if (match != null) {
+                        coreApiClient?.setDefaultModel(
+                            request = pl.jclab.refio.core.api.SetDefaultModelRequest(
+                                operation = operation,
+                                modelId = match.id,
+                                provider = match.provider
+                            ),
+                            taskId = null
+                        )
+                    } else {
+                        logger.warn { "Preset model not available for $operation; falling back to inherit: $modelFullId" }
+                        coreApiClient?.setDefaultModel(
+                            request = pl.jclab.refio.core.api.SetDefaultModelRequest(
+                                operation = operation,
+                                modelId = pl.jclab.refio.core.services.ConfigService.INHERIT_MODEL_VALUE,
+                                provider = pl.jclab.refio.core.services.ConfigService.INHERIT_MODEL_VALUE
+                            ),
+                            taskId = null
+                        )
+                    }
                 }
 
-                // Coding model (fallback to default if not specified)
-                val codingModel = preset.codingModel
-                val codingParts = codingModel.split("/", limit = 2)
-                if (codingParts.size == 2) {
-                    coreApiClient?.setDefaultModel(
-                        request = pl.jclab.refio.core.api.SetDefaultModelRequest(
-                            operation = ModelOperation.CODING,
-                            modelId = codingParts[1],
-                            provider = codingParts[0]
-                        ),
-                        taskId = null
-                    )
-                }
-
-                // Weak model (fallback to default if not specified)
-                val weakModel = preset.weakModel
-                val weakParts = weakModel.split("/", limit = 2)
-                if (weakParts.size == 2) {
-                    coreApiClient?.setDefaultModel(
-                        request = pl.jclab.refio.core.api.SetDefaultModelRequest(
-                            operation = ModelOperation.WEAK,
-                            modelId = weakParts[1],
-                            provider = weakParts[0]
-                        ),
-                        taskId = null
-                    )
-                }
+                applySpecializedModel(ModelOperation.PLAN, preset.planModel)
+                applySpecializedModel(ModelOperation.CODING, preset.codingModel)
+                applySpecializedModel(ModelOperation.WEAK, preset.weakModel)
+                applySpecializedModel(ModelOperation.STRONG, preset.strongModel)
 
                 logger.info { "Preset '${preset.name}' applied successfully" }
 
@@ -549,7 +525,8 @@ class ModelsSettingsPanel(
                         append("Default: ${preset.defaultModel}\n")
                         append("Plan: ${preset.planModel}\n")
                         append("Coding: ${preset.codingModel}\n")
-                        append("Weak: ${preset.weakModel}")
+                        append("Weak: ${preset.weakModel}\n")
+                        append("Strong: ${preset.strongModel}")
                     }
                     NotificationService.showInfo(
                         project = null,
@@ -657,6 +634,20 @@ class ModelsSettingsPanel(
                 isEnabled = true
             }, gbc)
 
+            // Strong model (delegation)
+            gbc.gridx = 0
+            gbc.gridy++
+            gbc.weightx = 0.0
+            add(JLabel("Strong Model (delegation):"), gbc)
+            gbc.gridx++
+            gbc.weightx = 1.0
+            add(strongModelCombo.apply {
+                addActionListener {
+                    onModelSelectionChanged("strong", selectedItem as? String)
+                }
+                isEnabled = true
+            }, gbc)
+
             // Description
             gbc.gridx = 0
             gbc.gridy++
@@ -669,7 +660,8 @@ class ModelsSettingsPanel(
                             "• Plan: used in Planning mode<br>" +
                             "• Coding: used in Agent mode for coding tasks<br>" +
                             "• Weak: cheaper model for auxiliary tasks (summaries, simple questions)<br>" +
-                            "• Embedding: model for generating embeddings (RAG search) - prefer Ollama for free local embeddings" +
+                            "• Embedding: model for generating embeddings (RAG search) - prefer Ollama for free local embeddings<br>" +
+                            "• Strong: powerful model for complex delegation (optional, agent delegates hard tasks to it)" +
                             "</font></html>"
                 ), gbc
             )
@@ -984,6 +976,7 @@ class ModelsSettingsPanel(
                 val agentModel = coreApiClient?.getDefaultModel(ModelOperation.CODING)
                 val weakModel = coreApiClient?.getDefaultModel(ModelOperation.WEAK)
                 val embeddingModel = coreApiClient?.getDefaultModel(ModelOperation.EMBEDDING)
+                val defaultModelSettings = coreApiClient?.getConfig("default_model", "app")?.settings ?: emptyMap()
 
                 ApplicationManager.getApplication().invokeLater {
                     // Set flag to prevent saving during programmatic update
@@ -991,9 +984,30 @@ class ModelsSettingsPanel(
                     try {
                         // Set dropdown values (format: provider/modelId)
                         chatModel?.let { selectModelInCombo(defaultModelCombo, "${it.provider}/${it.modelId}") }
-                        planModel?.let { selectModelInCombo(planModelCombo, "${it.provider}/${it.modelId}") }
-                        agentModel?.let { selectModelInCombo(codingModelCombo, "${it.provider}/${it.modelId}") }
-                        weakModel?.let { selectModelInCombo(weakModelCombo, "${it.provider}/${it.modelId}") }
+                        selectStoredOrEffectiveModel(
+                            combo = planModelCombo,
+                            storedConfig = defaultModelSettings["plan"] as? String,
+                            effectiveValue = planModel?.let { "${it.provider}/${it.modelId}" },
+                            defaultToInherit = true
+                        )
+                        selectStoredOrEffectiveModel(
+                            combo = codingModelCombo,
+                            storedConfig = defaultModelSettings["agent"] as? String,
+                            effectiveValue = agentModel?.let { "${it.provider}/${it.modelId}" },
+                            defaultToInherit = true
+                        )
+                        selectStoredOrEffectiveModel(
+                            combo = weakModelCombo,
+                            storedConfig = defaultModelSettings["weak"] as? String,
+                            effectiveValue = weakModel?.let { "${it.provider}/${it.modelId}" },
+                            defaultToInherit = true
+                        )
+                        selectStoredOrEffectiveModel(
+                            combo = strongModelCombo,
+                            storedConfig = defaultModelSettings["strong"] as? String,
+                            effectiveValue = null,
+                            defaultToInherit = true
+                        )
 
                         // Set embedding model or default to Ollama nomic-embed-text
                         val embeddingValue =
@@ -1020,6 +1034,39 @@ class ModelsSettingsPanel(
             }
         }
         logger.warn { "Model not found in combo: $value" }
+    }
+
+    private fun selectStoredOrEffectiveModel(
+        combo: JComboBox<String>,
+        storedConfig: String?,
+        effectiveValue: String?,
+        defaultToInherit: Boolean = false
+    ) {
+        val parsed = parseStoredModelConfig(storedConfig)
+        when {
+            parsed == null && defaultToInherit -> {
+                selectModelInCombo(combo, INHERIT_LABEL)
+            }
+            parsed?.modelId.equals(pl.jclab.refio.core.services.ConfigService.INHERIT_MODEL_VALUE, ignoreCase = true) &&
+                    parsed?.provider.equals(pl.jclab.refio.core.services.ConfigService.INHERIT_MODEL_VALUE, ignoreCase = true) -> {
+                selectModelInCombo(combo, INHERIT_LABEL)
+            }
+            parsed?.modelId != null && parsed.provider != null -> {
+                selectModelInCombo(combo, "${parsed.provider}/${parsed.modelId}")
+            }
+            effectiveValue != null -> {
+                selectModelInCombo(combo, effectiveValue)
+            }
+        }
+    }
+
+    private fun parseStoredModelConfig(value: String?): StoredModelConfig? {
+        if (value.isNullOrBlank()) {
+            return null
+        }
+        return runCatching {
+            gson.fromJson(value, StoredModelConfig::class.java)
+        }.getOrNull()
     }
 
     private fun formatContextSize(size: Int): String {
@@ -1079,6 +1126,10 @@ class ModelsSettingsPanel(
             return
         }
 
+        if (modelId == NOT_CONFIGURED_LABEL) {
+            return
+        }
+
         // Skip saving if we're updating dropdowns programmatically
         if (isUpdatingDropdowns) {
             logger.debug { "Skipping save (programmatic update): $modelType -> $modelId" }
@@ -1104,10 +1155,24 @@ class ModelsSettingsPanel(
                     "coding" -> ModelOperation.CODING
                     "weak" -> ModelOperation.WEAK
                     "embedding" -> ModelOperation.EMBEDDING
+                    "strong" -> ModelOperation.STRONG
                     else -> {
                         logger.error { "Unknown modelType: $modelType" }
                         return@launch
                     }
+                }
+
+                if (modelId == INHERIT_LABEL) {
+                    coreApiClient?.setDefaultModel(
+                        request = pl.jclab.refio.core.api.SetDefaultModelRequest(
+                            operation = operation,
+                            modelId = pl.jclab.refio.core.services.ConfigService.INHERIT_MODEL_VALUE,
+                            provider = pl.jclab.refio.core.services.ConfigService.INHERIT_MODEL_VALUE
+                        ),
+                        taskId = null
+                    )
+                    logger.info { "Model saved: $modelType -> inherit" }
+                    return@launch
                 }
 
                 // Save using proper API
@@ -1154,15 +1219,22 @@ class ModelsSettingsPanel(
             val currentCoding = codingModelCombo.selectedItem as? String
             val currentWeak = weakModelCombo.selectedItem as? String
             val currentEmbedding = embeddingModelCombo.selectedItem as? String
+            val currentStrong = strongModelCombo.selectedItem as? String
 
             // Update dropdowns - use model.id (not model.name) for proper persistence
-            listOf(defaultModelCombo, planModelCombo, codingModelCombo, weakModelCombo).forEach { combo ->
+            listOf(defaultModelCombo, planModelCombo, codingModelCombo, weakModelCombo, strongModelCombo).forEach { combo ->
                 combo.removeAllItems()
                 sortedVisibleModels.forEach { model ->
                     // Format: provider/modelId (e.g., "ollama/qwen2.5:14b")
                     combo.addItem("${model.provider}/${model.id}")
                 }
             }
+
+            // Strong model is optional — add "Not configured" as first option
+            listOf(planModelCombo, codingModelCombo, weakModelCombo, strongModelCombo).forEach { combo ->
+                combo.insertItemAt(INHERIT_LABEL, 0)
+            }
+            strongModelCombo.insertItemAt(NOT_CONFIGURED_LABEL, 1)
 
             logger.debug { "Updated model dropdowns with ${sortedVisibleModels.size} visible models (sorted by provider, then model ID)" }
 
@@ -1177,6 +1249,7 @@ class ModelsSettingsPanel(
             restoreSelection(codingModelCombo, currentCoding)
             restoreSelection(weakModelCombo, currentWeak)
             restoreSelection(embeddingModelCombo, currentEmbedding)
+            restoreSelection(strongModelCombo, currentStrong)
         } finally {
             // Always reset flag
             isUpdatingDropdowns = false

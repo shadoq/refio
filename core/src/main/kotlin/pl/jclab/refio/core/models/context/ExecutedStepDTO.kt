@@ -15,6 +15,9 @@ import java.time.Instant
  * @property result Full raw output from the tool
  * @property summary Summarized output (may be null if not summarized)
  * @property timestamp When the step was completed
+ * @property success Whether the underlying subtask finished successfully.
+ *   Failed steps are still kept in RECENT_WORK so the agent can see its own
+ *   prior errors and avoid re-running the same thing.
  */
 data class ExecutedStepDTO(
     val subtaskId: String,
@@ -23,7 +26,8 @@ data class ExecutedStepDTO(
     val parameters: Map<String, Any>,
     val result: String,
     val summary: String?,
-    val timestamp: Instant
+    val timestamp: Instant,
+    val success: Boolean = true
 ) {
     /**
      * Get the appropriate content for display.

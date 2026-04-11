@@ -399,6 +399,7 @@ mcp:
 | `models.defaults.coding` | `default_model.agent` | `qwen3.5:9b` |
 | `models.defaults.weak` | `default_model.weak` | `qwen3.5:9b` |
 | `models.defaults.embedding` | `models.embedding_model` | `nomic-embed-text` |
+| `models.defaults.strong` | `default_model.strong` | - (optional, no fallback) |
 | `limits.apiCallTimeout` | `limits.api_call_timeout` | `240` |
 | `limits.toolExecutionTimeout` | `limits.tool_execution_timeout` | `240` |
 | `limits.maxContextSize` | `limits.max_context_size` | `128000` |
@@ -467,6 +468,7 @@ models:
     coding: "anthropic/claude-3-5-sonnet-20241022"
     weak: "ollama/qwen3.5:4b"
     embedding: "ollama/nomic-embed-text"
+    strong: "anthropic/claude-3-5-sonnet-20241022"  # optional, enables delegate_to_strong_model tool
 
   visibility:
     "ollama/qwen3.5:9b": true

@@ -92,61 +92,6 @@ class ToolCallParser(
     }
 
     /**
-     * Check if content looks like tool calls but is malformed.
-     */
-    fun shouldRequestRetry(content: String, mode: TaskMode): Boolean {
-        if (mode == TaskMode.CHAT) return false
-
-        val jsonString = extractJsonFromContent(content)
-        if (jsonString == null) {
-            // JSON extraction failed entirely — check if content has tool-call patterns
-            // that suggest the LLM intended to call tools but produced malformed JSON
-            return hasLikelyMalformedToolCalls(content)
-        }
-
-        return try {
-            val element = json.parseToJsonElement(jsonString)
-            val obj = element as? JsonObject ?: return false
-            if (obj["error"] != null) return false
-
-            // Check if JSON has NON-EMPTY tool arrays that failed to parse
-            val actionsArray = obj["actions"] as? JsonArray
-            val toolCallsArray = obj["tool_calls"] as? JsonArray
-            val stepsArray = obj["steps"] as? JsonArray
-            val subtasksArray = obj["subtasks"] as? JsonArray
-
-            val hasNonEmptyToolArrays =
-                (actionsArray?.isNotEmpty() == true) ||
-                (toolCallsArray?.isNotEmpty() == true) ||
-                (stepsArray?.isNotEmpty() == true) ||
-                (subtasksArray?.isNotEmpty() == true)
-
-            hasNonEmptyToolArrays
-        } catch (e: Exception) {
-            // JSON parsed but structure check failed — fallback to pattern matching
-            hasLikelyMalformedToolCalls(content)
-        }
-    }
-
-    /**
-     * Heuristic: content looks like it contains tool call JSON but parsing failed.
-     * Detects patterns like {"actions": [{"tool": "..."}]} in raw text.
-     */
-    fun hasLikelyMalformedToolCalls(content: String): Boolean {
-        // Must contain both "actions" and "tool" — strong signal of intended tool calls
-        val hasActionsPattern = content.contains("\"actions\"") || content.contains("\"tool_calls\"")
-        val hasToolPattern = content.contains("\"tool\"")
-        if (!hasActionsPattern || !hasToolPattern) return false
-
-        // Additional check: must have a JSON-like block (starts with {)
-        val hasBraceBlock = content.contains("{") && content.contains("}")
-        if (!hasBraceBlock) return false
-
-        logger.info { "[MALFORMED_TOOL_CALLS] Content has tool-call patterns but JSON extraction failed" }
-        return true
-    }
-
-    /**
      * Extract text response from JSON (for display).
      */
     fun extractTextResponse(content: String): String {
@@ -219,77 +164,6 @@ class ToolCallParser(
             text
         } catch (_: Exception) {
             text
-        }
-    }
-
-    /**
-     * Check if content has explicit empty actions array.
-     */
-    fun hasExplicitEmptyActionsArray(content: String): Boolean {
-        return try {
-            val jsonString = extractJsonFromContent(content) ?: return false
-            val element = json.parseToJsonElement(jsonString)
-            val obj = element as? JsonObject ?: return false
-            val actionsArray = obj["actions"] as? JsonArray
-            actionsArray != null && actionsArray.isEmpty()
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    /**
-     * Check if content is a minimal JSON object with no meaningful payload.
-     */
-    fun isMeaninglessJson(content: String): Boolean {
-        return try {
-            val jsonString = extractJsonFromContent(content) ?: return false
-            val element = json.parseToJsonElement(jsonString)
-            val obj = element as? JsonObject ?: return false
-            val meaningfulKeys = setOf(
-                "actions",
-                "tool_calls",
-                "steps",
-                "subtasks",
-                "response",
-                "content",
-                "plan",
-                "intent",
-                "thinking",
-                "error"
-            )
-
-            obj.isEmpty() || obj.keys.none { it in meaningfulKeys }
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    /**
-     * Extract assistant intent (IMPLEMENTATION/ANALYSIS/UNKNOWN).
-     */
-    fun extractAssistantIntent(content: String): TurnGuardrails.AssistantIntent {
-        return try {
-            val jsonString = extractJsonFromContent(content) ?: return TurnGuardrails.AssistantIntent.UNKNOWN
-            val element = json.parseToJsonElement(jsonString)
-            val obj = element as? JsonObject ?: return TurnGuardrails.AssistantIntent.UNKNOWN
-
-            val rawIntent = (obj["intent"] as? JsonPrimitive)?.content
-                ?: (obj["task_intent"] as? JsonPrimitive)?.content
-                ?: return TurnGuardrails.AssistantIntent.UNKNOWN
-
-            when (rawIntent.trim().lowercase()) {
-                "implementation",
-                "implement" -> TurnGuardrails.AssistantIntent.IMPLEMENTATION
-                "analysis",
-                "analyze" -> TurnGuardrails.AssistantIntent.ANALYSIS
-                "response",
-                "reply",
-                "answer" -> TurnGuardrails.AssistantIntent.RESPONSE
-                "unknown" -> TurnGuardrails.AssistantIntent.UNKNOWN
-                else -> TurnGuardrails.AssistantIntent.UNKNOWN
-            }
-        } catch (e: Exception) {
-            TurnGuardrails.AssistantIntent.UNKNOWN
         }
     }
 

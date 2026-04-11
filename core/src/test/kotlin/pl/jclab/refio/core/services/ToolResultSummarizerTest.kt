@@ -61,7 +61,10 @@ class ToolResultSummarizerTest {
             finishReason = "stop"
         )
 
-        val rawOutput = (1..50).joinToString("\n") { "FILE item-$it" }
+        // Must exceed GLOBAL_MIN_SKIP_THRESHOLD (1024) so the LLM path is actually
+        // taken; otherwise the test would silently stop covering the empty-summary
+        // fallback branch.
+        val rawOutput = (1..150).joinToString("\n") { "FILE item-$it" }
         val result = summarizer.summarizeToolResult("read_directory", rawOutput, "task-1")
 
         assertTrue(result.summary.isNotBlank())

@@ -170,7 +170,13 @@ sealed interface AgentEvent {
         override val correlationId: String,
         val iteration: Int,
         val maxIterations: Int,
-        val mode: String
+        val mode: String,
+        /** Unique identifier for this turn-loop invocation. */
+        val runId: String? = null,
+        /** Parent turn-loop runId (non-null when this is a subagent invocation). */
+        val parentRunId: String? = null,
+        /** Nesting depth (0 = top-level, 1+ = subagent). */
+        val depth: Int = 0
     ) : AgentEvent
 
     /**
@@ -185,7 +191,10 @@ sealed interface AgentEvent {
         override val correlationId: String,
         val iteration: Int,
         val durationMs: Long,
-        val isFinal: Boolean
+        val isFinal: Boolean,
+        val runId: String? = null,
+        val parentRunId: String? = null,
+        val depth: Int = 0
     ) : AgentEvent
 
     /**
@@ -205,7 +214,40 @@ sealed interface AgentEvent {
         val tokensOut: Int,
         val costUsd: Double,
         val durationMs: Long,
-        val finishReason: String?
+        val finishReason: String?,
+        val runId: String? = null,
+        val parentRunId: String? = null,
+        val depth: Int = 0
+    ) : AgentEvent
+
+    /**
+     * Emitted when a streaming LLM call is aborted by a [pl.jclab.refio.core.llm.streaming.StreamGuardrail]
+     * (e.g. repetition loop detected, wall-clock deadline exceeded, output size limit hit).
+     *
+     * Distinct from user-requested cancellation — this is a defensive abort that protects the
+     * session from runaway generations. Carries the guardrail's diagnostic fields so the
+     * Session Trace panel can render the real reason instead of the hardcoded
+     * "Operation cancelled by user" fallback. `partialPreview` is capped to keep the event bus
+     * light — the full partial content stays in logs.
+     */
+    data class StreamAborted(
+        override val id: String,
+        override val sessionId: String,
+        override val sourceAgentId: String,
+        override val timestamp: Long,
+        override val correlationId: String,
+        val iteration: Int,
+        /** Machine-readable guardrail code: REPETITION_LOOP / OUTPUT_TOO_LARGE / WALL_CLOCK_DEADLINE. */
+        val code: String,
+        /** Human-readable reason from the guardrail. */
+        val reason: String,
+        /** Length of the partial stream content accumulated before abort. */
+        val partialLength: Int,
+        /** First ~500 chars of the partial content for quick inspection in the UI. */
+        val partialPreview: String,
+        val runId: String? = null,
+        val parentRunId: String? = null,
+        val depth: Int = 0
     ) : AgentEvent
 
     /**
@@ -224,7 +266,10 @@ sealed interface AgentEvent {
         val durationMs: Long,
         val success: Boolean,
         val errorMessage: String?,
-        val resultPreview: String
+        val resultPreview: String,
+        val runId: String? = null,
+        val parentRunId: String? = null,
+        val depth: Int = 0
     ) : AgentEvent
 }
 

@@ -15,6 +15,7 @@ import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
+import pl.jclab.refio.core.utils.GsonInstance
 import java.nio.file.Files
 import java.util.Base64
 
@@ -26,7 +27,13 @@ private val logger = dualLogger("HttpRequestTool")
  * Parameters:
  * - url: Target URL (required)
  * - method: HTTP method - GET, POST, PUT, DELETE (default: GET)
- * - body: Request body as string (optional, for POST/PUT)
+ * - body: Request body (optional, for POST/PUT). Accepts:
+ *     * String — sent as-is.
+ *     * Map / List / Number / Boolean — auto-serialized to JSON via Gson. This is
+ *       the common LLM failure mode where the model passes the body as a JSON
+ *       object instead of a JSON string. Without coercion, the parameter would
+ *       be silently dropped (HTTP body would be empty) and the server would
+ *       reject the request as "no data sent".
  * - body_file: Path to a file whose contents will be sent as the request body (optional, for POST/PUT).
  *   Use this instead of 'body' when the payload is large or binary (e.g. a JSON dataset, CSV upload,
  *   or binary file). The file is streamed directly without loading its content into LLM context.
@@ -42,6 +49,15 @@ private val logger = dualLogger("HttpRequestTool")
  * Limits:
  * - Response body max 5MB
  * - Timeout 60 seconds
+ *
+ * Sessions / cookies:
+ * - This tool is STATELESS. Each call uses a fresh HTTP client with no cookie jar.
+ *   Cookies are NOT persisted between calls.
+ * - For session-based authentication the agent must manage cookies manually:
+ *   1. Inspect `Set-Cookie` headers in the response (returned in the output header
+ *      summary and in metadata.response_headers).
+ *   2. Pass them back on subsequent calls via the `headers` parameter, e.g.
+ *      `headers: {"Cookie": "session=abc123; csrf=xyz"}`.
  *
  * Success semantics:
  * - success=true whenever an HTTP response is received, regardless of status code.
@@ -62,7 +78,7 @@ class HttpRequestTool(
 ) : Tool {
 
     override val name = "http_request"
-    override val description = "Make HTTP requests (GET/POST/PUT/DELETE). Use save_to_file for large responses."
+    override val description = "Make HTTP requests (GET/POST/PUT/DELETE). Stateless: no cookie jar — for session auth read Set-Cookie from the response and resend it via headers={\"Cookie\":\"...\"} on the next call. The 'body' parameter accepts either a JSON string OR a raw object/array — objects are auto-serialized to JSON. Use save_to_file for large responses."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.DATA_PRODUCING
 
@@ -89,7 +105,7 @@ class HttpRequestTool(
             urlPolicy.validate(url)
             val method = (params["method"] as? String)?.uppercase() ?: "GET"
             val bodyFile = params["body_file"] as? String
-            val body = if (bodyFile != null) null else params["body"] as? String
+            val body = if (bodyFile != null) null else coerceBody(params["body"])
             val rawContentType = params["content_type"] as? String
             // Validate and fallback to default if content_type is invalid
             val contentType = run {
@@ -292,6 +308,50 @@ class HttpRequestTool(
         } catch (e: Exception) {
             logger.error(e) { "HTTP request failed" }
             ToolResult.error("HTTP request failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Coerce a raw `body` parameter into a String suitable for the HTTP request.
+     *
+     * The LLM may pass `body` as either:
+     *  - a String (already-serialized JSON, form data, or plain text), OR
+     *  - a Map / List / primitive (a JSON object that the model embedded directly
+     *    in its tool call instead of escaping into a string).
+     *
+     * Without this coercion the second case silently dropped to `null` (because
+     * `params["body"] as? String` returns null on a Map), so the HTTP request
+     * went out with an empty body and the server reported "no data sent". This
+     * was the actual root cause of multiple stuck-agent reports.
+     *
+     * Strategy:
+     *  - null → null (no body)
+     *  - String → return as-is (don't double-encode)
+     *  - Map/List/Array → serialize via Gson as JSON
+     *  - Number/Boolean → toString (matches JSON literal form)
+     *  - Anything else → try Gson, fall back to toString
+     */
+    internal fun coerceBody(raw: Any?): String? {
+        return when (raw) {
+            null -> null
+            is String -> raw
+            is Map<*, *>, is List<*>, is Array<*> -> {
+                try {
+                    GsonInstance.gson.toJson(raw)
+                } catch (e: Exception) {
+                    logger.warn { "Failed to serialize body of type ${raw::class.simpleName} to JSON via Gson: ${e.message}. Falling back to toString()." }
+                    raw.toString()
+                }
+            }
+            is Number, is Boolean -> raw.toString()
+            else -> {
+                try {
+                    GsonInstance.gson.toJson(raw)
+                } catch (e: Exception) {
+                    logger.warn { "Failed to coerce body of type ${raw::class.simpleName}: ${e.message}. Falling back to toString()." }
+                    raw.toString()
+                }
+            }
         }
     }
 
@@ -510,8 +570,8 @@ class HttpRequestTool(
                     "enum" to ALLOWED_METHODS
                 ),
                 "body" to mapOf(
-                    "type" to "string",
-                    "description" to "Request body as string (for POST/PUT). Mutually exclusive with body_file."
+                    "type" to listOf("string", "object", "array"),
+                    "description" to "Request body for POST/PUT. May be a JSON string OR a raw object/array — objects/arrays are auto-serialized to JSON via Gson. Mutually exclusive with body_file."
                 ),
                 "body_file" to mapOf(
                     "type" to "string",
@@ -519,7 +579,7 @@ class HttpRequestTool(
                 ),
                 "headers" to mapOf(
                     "type" to "object",
-                    "description" to "HTTP headers as key-value pairs.",
+                    "description" to "HTTP headers as key-value pairs. For session auth pass cookies here, e.g. {\"Cookie\": \"session=abc; csrf=xyz\"} — copy values from the Set-Cookie header of a previous response.",
                     "additionalProperties" to mapOf("type" to "string")
                 ),
                 "content_type" to mapOf(
@@ -586,6 +646,7 @@ class HttpRequestTool(
             "www-authenticate",
             "content-type",
             "x-request-id",
+            "set-cookie",
         )
     }
 }

@@ -51,6 +51,24 @@ class AgentGraphPanel : JPanel() {
         repaint()
     }
 
+    fun toText(): String = buildString {
+        if (nodes.isEmpty()) {
+            appendLine("(no agents)")
+            return@buildString
+        }
+        for ((id, node) in nodes) {
+            val indent = "  ".repeat(node.depth)
+            val metrics = buildString {
+                append("iter: ${node.iterationCount}")
+                if (node.durationMs > 0) append(" | ${node.durationMs / 1000}s")
+                if (node.tokensUsed > 0) append(" | ${node.tokensUsed}t")
+                node.providerName?.let { append(" | $it") }
+                if (node.queuePosition > 0) append(" | queued #${node.queuePosition}")
+            }
+            appendLine("${indent}[${node.status}] ${node.agentName}  ($metrics)")
+        }
+    }
+
     override fun getPreferredSize(): Dimension {
         val h = (nodes.size * 54).coerceAtLeast(100)
         return Dimension(250, h)

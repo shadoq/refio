@@ -36,7 +36,7 @@ class ToolRegistry {
         // COMMUNICATE
         "send_message",
         // DELEGATE — only when the agent cannot handle the task itself
-        "invoke_subagent"
+        "delegate_to_strong_model", "invoke_subagent"
     )
 
     /**

@@ -11,6 +11,9 @@ import pl.jclab.refio.core.llm.adapters.OllamaAdapter
 import pl.jclab.refio.core.llm.adapters.OpenAIAdapter
 import pl.jclab.refio.core.llm.adapters.OpenRouterAdapter
 import pl.jclab.refio.core.llm.adapters.ZAIAdapter
+import pl.jclab.refio.core.llm.streaming.StreamAbortedException
+import pl.jclab.refio.core.llm.streaming.StreamGuardrail
+import pl.jclab.refio.core.llm.streaming.StreamGuardrails
 import pl.jclab.refio.core.services.logging.coreLogger
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 
@@ -287,8 +290,34 @@ class LLMClient(
             var finalUsage: LLMUsage? = null
             var finalFinishReason: String? = null
 
+            // Provider-agnostic guardrails — detect repetition loops, runaway output
+            // size, and wall-clock deadlines. Instantiated per-request (stateful).
+            // See core/llm/streaming/StreamGuardrails.kt for details.
+            val guardrails = if (stream) StreamGuardrails.defaults() else null
+
             val streamCallback: ((pl.jclab.refio.core.llm.StreamChunk) -> Unit)? = if (stream) { llmChunk ->
                 contentBuilder.append(llmChunk.delta)
+
+                // Run guardrails BEFORE propagating the chunk downstream, so that
+                // an abort fires on the exact delta that pushed us over the edge
+                // and we don't wake up already-doomed subscribers.
+                if (llmChunk.delta.isNotEmpty()) {
+                    val decision = guardrails!!.check(llmChunk.delta)
+                    if (decision is StreamGuardrail.Decision.Abort) {
+                        val partial = guardrails.accumulatedContent()
+                        logger.warn {
+                            "[LLM_CLIENT] Stream aborted by guardrail: provider=$provider, model=$model, " +
+                                "code=${decision.code}, reason=${decision.reason}, " +
+                                "accumulated=${partial.length} chars, " +
+                                "tailPreview=${partial.takeLast(200).replace("\n", "\\n")}"
+                        }
+                        throw StreamAbortedException(
+                            code = decision.code,
+                            reason = decision.reason,
+                            partialContent = partial
+                        )
+                    }
+                }
 
                 val chunkCost = if (llmChunk.usage != null) {
                     estimateCost(llmChunk.usage, provider, model)

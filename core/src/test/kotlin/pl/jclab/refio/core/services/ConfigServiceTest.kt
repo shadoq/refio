@@ -351,6 +351,45 @@ class ConfigServiceTest {
             assertEquals("gpt-4.1", model)
             assertEquals("openai", provider)
         }
+
+        @Test
+        fun `getDefaultModel for WEAK should inherit DEFAULT when configured`() {
+            // Given
+            val defaultJson = """{"modelId":"gpt-4.1","provider":"openai"}"""
+            val inheritJson = """{"modelId":"inherit","provider":"inherit"}"""
+            every {
+                configRepository.getWithPrecedence(ConfigService.KEY_WEAK_MODEL, any(), any())
+            } returns createConfig(ConfigService.KEY_WEAK_MODEL, inheritJson)
+            every {
+                configRepository.getWithPrecedence(ConfigService.KEY_DEFAULT_MODEL_CHAT, any(), any())
+            } returns createConfig(ConfigService.KEY_DEFAULT_MODEL_CHAT, defaultJson)
+
+            // When
+            val (model, provider) = configService.getDefaultModel(ModelOperation.WEAK)
+
+            // Then
+            assertEquals("gpt-4.1", model)
+            assertEquals("openai", provider)
+        }
+
+        @Test
+        fun `getStrongModel should inherit DEFAULT when configured`() {
+            // Given
+            val defaultJson = """{"modelId":"gpt-4.1","provider":"openai"}"""
+            val inheritJson = """{"modelId":"inherit","provider":"inherit"}"""
+            every {
+                configRepository.getWithPrecedence(ConfigService.KEY_STRONG_MODEL, any(), any())
+            } returns createConfig(ConfigService.KEY_STRONG_MODEL, inheritJson)
+            every {
+                configRepository.getWithPrecedence(ConfigService.KEY_DEFAULT_MODEL_CHAT, any(), any())
+            } returns createConfig(ConfigService.KEY_DEFAULT_MODEL_CHAT, defaultJson)
+
+            // When
+            val result = configService.getStrongModel()
+
+            // Then
+            assertEquals(Pair("gpt-4.1", "openai"), result)
+        }
     }
 
     @Nested

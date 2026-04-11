@@ -33,14 +33,12 @@ private const val RECENT_WORK_DETAILED_LIMIT_TIER_5 = 4
 private const val RECENT_WORK_DETAILED_LIMIT_DEFAULT = 3
 
 // CONVERSATION_HISTORY limits
-private const val CONVERSATION_BUDGET_TIER_HIGH = 5_000
-private const val CONVERSATION_BUDGET_TIER_MEDIUM = 3_500
-private const val CONVERSATION_BUDGET_TIER_LOW = 2_000
-private const val CONVERSATION_MAX_MESSAGES_HIGH = 100
-private const val CONVERSATION_MAX_MESSAGES_MEDIUM = 75
-private const val CONVERSATION_MAX_MESSAGES_LOW = 50
-private const val CONVERSATION_MAX_MESSAGES_DEFAULT = 25
+// We no longer hard-cap by message count (see buildCompressedConversationSection for
+// the rationale — Bug 2B). The per-message truncation budget is derived from a soft
+// cap so each message gets a reasonable slice, but the loop itself runs until the
+// token budget is exhausted, not until a message counter hits a magic number.
 private const val CONVERSATION_MIN_PER_MESSAGE_TOKENS = 128
+private const val CONVERSATION_SOFT_MAX_MESSAGES_FOR_PER_MESSAGE_CAP = 60
 
 /**
  * Configuration for RECENT_WORK section generation.
@@ -355,32 +353,50 @@ class ContextFormatter(
             return true
         }
 
-        val maxMessages = when {
-            budgetTokens >= CONVERSATION_BUDGET_TIER_HIGH -> CONVERSATION_MAX_MESSAGES_HIGH
-            budgetTokens >= CONVERSATION_BUDGET_TIER_MEDIUM -> CONVERSATION_MAX_MESSAGES_MEDIUM
-            budgetTokens >= CONVERSATION_BUDGET_TIER_LOW -> CONVERSATION_MAX_MESSAGES_LOW
-            else -> CONVERSATION_MAX_MESSAGES_DEFAULT
-        }
-        val perMessageTokens = maxOf(CONVERSATION_MIN_PER_MESSAGE_TOKENS, budgetTokens / maxMessages)
+        // Budget-governed message inclusion.
+        //
+        // Bug 2B (observed in the filesystem AGENT session): the previous implementation
+        // capped the number of messages by a tier-based maxMessages constant (25..100)
+        // *even when the token budget could fit hundreds of short messages*. With a 58k
+        // CONVERSATION budget the loop stopped at 25 messages × ~75 tokens ≈ 1875 tokens
+        // used and ~56k tokens of budget wasted — the model saw almost no history and
+        // kept re-deciding the same thing turn after turn.
+        //
+        // New behaviour: iterate most-recent-first until the token budget is exhausted;
+        // no hard message-count ceiling. Per-message truncation still applies so a single
+        // very long message cannot eat the entire budget — each message is capped at
+        // `perMessageTokens` which is sized so that the section can hold at least
+        // `CONVERSATION_SOFT_MAX_MESSAGES` messages even under small budgets.
+        val softMaxMessagesForCap = CONVERSATION_SOFT_MAX_MESSAGES_FOR_PER_MESSAGE_CAP
+        val perMessageTokens = maxOf(CONVERSATION_MIN_PER_MESSAGE_TOKENS, budgetTokens / softMaxMessagesForCap)
 
         val firstMessage = history.firstOrNull()
-        val firstIsSummary = firstMessage?.metadata?.get("type") == CONVERSATION_SUMMARY_METADATA_TYPE
+        val summaryMessage = firstMessage?.takeIf {
+            it.metadata?.get("type") == CONVERSATION_SUMMARY_METADATA_TYPE
+        }
 
-        if (firstIsSummary && firstMessage != null) {
+        if (summaryMessage != null) {
             val summaryBudget = minOf((budgetTokens * 0.5).toInt(), budgetTokens)
-            val summaryContent = ContextTokenEstimator.truncateToTokens(firstMessage.content.trim(), summaryBudget)
+            val summaryContent = ContextTokenEstimator.truncateToTokens(summaryMessage.content.trim(), summaryBudget)
             appendLine("=== SUMMARY ===")
             appendLine(summaryContent)
             appendLine("")
         }
 
-        val remaining = if (firstIsSummary) history.drop(1) else history
-        val recentMessages = remaining.takeLast(maxMessages)
-        for (msg in recentMessages) {
+        val remaining = if (summaryMessage != null) history.drop(1) else history
+        // Walk newest-first so that when we hit the budget ceiling we keep the most
+        // recent context and drop the oldest, then reverse the kept slice back into
+        // chronological order for the model.
+        val rendered = ArrayDeque<String>()
+        for (msg in remaining.asReversed()) {
             val content = ContextTokenEstimator.truncateToTokens(msg.content.trim(), perMessageTokens)
             val line = "[${msg.role.uppercase()}]\n${content.trim()}\n"
-            if (!appendLine(line)) break
+            val lineTokens = ContextTokenEstimator.estimateTokens(line)
+            if (tokensUsed + lineTokens > budgetTokens) break
+            rendered.addFirst(line)
+            tokensUsed += lineTokens
         }
+        parts.addAll(rendered)
 
         parts.add("</CONVERSATION_HISTORY>")
         return parts.joinToString("\n")
@@ -550,6 +566,12 @@ class ContextFormatter(
             ""
         }
 
+        // Mark failed steps so the agent can see in RECENT_WORK that a prior attempt
+        // failed — otherwise it re-runs the same approach under the impression it
+        // has not tried yet. Successful steps intentionally omit the attribute to
+        // keep the tag short (success is the default).
+        val statusAttr = if (!step.success) " status=\"failed\"" else ""
+
         // Add metadata: timestamp, params (truncated), summary
         val timestamp = step.timestamp.toString().take(19)  // ISO format, truncate milliseconds
         val paramsAttr = formatToolParamsAttribute(step.parameters)
@@ -566,6 +588,7 @@ class ContextFormatter(
             append("\"")
             append(tagSuffix)
             append(compressionAttr)
+            append(statusAttr)
             append(subtaskIdAttr)
             append(" timestamp=\"")
             append(timestamp)
@@ -898,10 +921,14 @@ class ContextFormatter(
             budgetTokens >= RECENT_WORK_BUDGET_TIER_1 -> RECENT_WORK_FULL_LIMIT_TIER_1
             budgetTokens >= RECENT_WORK_BUDGET_TIER_2 -> RECENT_WORK_FULL_LIMIT_TIER_2
             budgetTokens >= RECENT_WORK_BUDGET_TIER_3 -> RECENT_WORK_FULL_LIMIT_TIER_3
-            budgetTokens >= RECENT_WORK_BUDGET_TIER_5 -> RECENT_WORK_FULL_LIMIT_TIER_4
+            budgetTokens >= RECENT_WORK_BUDGET_TIER_4 -> RECENT_WORK_FULL_LIMIT_TIER_4
             else -> RECENT_WORK_FULL_LIMIT_DEFAULT
         }
-        val effective = minOf(safeBase, budgetLimit)
+        // `baseLimit` (from config) acts as a floor: the user's minimum guaranteed
+        // number of FULL entries. Budget decides how high we go above it — with a
+        // 131k-token context window we want the larger tier-based value, not the
+        // 5-entry config default capping everything.
+        val effective = maxOf(safeBase, budgetLimit)
         return minOf(stepsCount, effective)
     }
 
@@ -928,7 +955,11 @@ class ContextFormatter(
         val reversedSteps = steps.asReversed()
         val detailedStart = fullLimit + detailedLimit
 
-        // Strict budget handling: most recent tools first, with graceful fallback
+        // Strict budget handling: most recent tools first, with graceful fallback.
+        // Steps that don't fit at any compression level are dropped; a one-line
+        // summary marker at the end (chat-history style) lets the agent know
+        // older tool calls existed but were compressed away. Computed after the
+        // loop based on what actually ended up in `entries`.
         var tokensUsed = 0
 
         val candidates = reversedSteps.mapIndexed { index, step ->
@@ -971,7 +1002,29 @@ class ContextFormatter(
             if (tokensUsed >= budgetTokens) break
         }
 
-        // Sort by original index (descending = most recent first) and extract entries
+        // Compute final dropped count by comparing what we actually emitted against
+        // the total pool. This is more reliable than tracking per-iteration because
+        // the `break` above can exit mid-loop without touching every candidate.
+        val emittedIndices = entries.map { it.first }.toSet()
+        val allCandidates = candidates.map { it.first }
+        val trulyDropped = allCandidates.count { it !in emittedIndices }
+        if (trulyDropped > 0) {
+            val failedDropped = candidates
+                .filter { (i, _, _) -> i !in emittedIndices }
+                .count { (_, step, _) -> !step.success }
+            val failedNote = if (failedDropped > 0) " ($failedDropped failed)" else ""
+            // Use the smallest possible index so the marker sorts last when we
+            // reverse by index below (older = end of list).
+            entries.add(
+                Pair(
+                    Int.MIN_VALUE,
+                    "<!-- $trulyDropped older tool step(s) omitted due to budget$failedNote -->"
+                )
+            )
+        }
+
+        // Sort by original index (descending = most recent first) and extract entries.
+        // The omitted-marker uses Int.MIN_VALUE so it ends up at the bottom (oldest).
         return entries
             .sortedByDescending { it.first }
             .map { it.second }

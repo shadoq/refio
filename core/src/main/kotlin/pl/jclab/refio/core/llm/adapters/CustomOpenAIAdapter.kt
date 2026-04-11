@@ -18,6 +18,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.serialization.gson.gson
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -310,7 +311,7 @@ open class CustomOpenAIAdapter(
                             val data = line.removePrefix("data: ").trim()
                             if (data == "[DONE]") break
 
-                            runCatching {
+                            try {
                                 @Suppress("UNCHECKED_CAST")
                                 val chunk = gson.fromJson(data, Map::class.java) as Map<String, Any?>
                                 @Suppress("UNCHECKED_CAST")
@@ -325,6 +326,13 @@ open class CustomOpenAIAdapter(
                                     onStreamChunk(StreamChunk(delta = content))
                                 }
                                 finalFinishReason = first["finish_reason"] as? String ?: finalFinishReason
+                            } catch (e: CancellationException) {
+                                // Let stream abort (guardrail trip) propagate out of the loop.
+                                // NOTE: replaced an earlier `runCatching { }` here — runCatching
+                                // swallowed CancellationException into a Result and the abort was lost.
+                                throw e
+                            } catch (_: Exception) {
+                                // Match previous behavior of silently skipping malformed chunks.
                             }
                         }
                     }
@@ -380,6 +388,21 @@ open class CustomOpenAIAdapter(
                 rawResponse = mapOf("content" to contentBuilder.toString())
             )
         } catch (e: RefioError) {
+            logger.apiError(
+                provider = provider,
+                model = model,
+                endpoint = "$baseUrl$CHAT_ENDPOINT",
+                requestJson = requestJson,
+                httpStatus = httpStatus,
+                error = e,
+                latencyMs = (System.currentTimeMillis() - startTime).toInt(),
+                taskId = taskId,
+                subtaskId = subtaskId,
+                source = source
+            )
+            throw e
+        } catch (e: CancellationException) {
+            // Guardrail-triggered abort — log and rethrow as-is, do NOT wrap.
             logger.apiError(
                 provider = provider,
                 model = model,

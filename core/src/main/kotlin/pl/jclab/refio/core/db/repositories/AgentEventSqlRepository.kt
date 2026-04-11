@@ -82,7 +82,8 @@ class AgentEventSqlRepository : AgentEventRepository {
             "TurnStarted" to AgentEvent.TurnStarted::class.java,
             "TurnEnded" to AgentEvent.TurnEnded::class.java,
             "LLMCallCompleted" to AgentEvent.LLMCallCompleted::class.java,
-            "ToolCalled" to AgentEvent.ToolCalled::class.java
+            "ToolCalled" to AgentEvent.ToolCalled::class.java,
+            "StreamAborted" to AgentEvent.StreamAborted::class.java
         )
     }
 }
@@ -107,4 +108,5 @@ private fun AgentEvent.eventTypeName(): String = when (this) {
     is AgentEvent.TurnEnded -> "TurnEnded"
     is AgentEvent.LLMCallCompleted -> "LLMCallCompleted"
     is AgentEvent.ToolCalled -> "ToolCalled"
+    is AgentEvent.StreamAborted -> "StreamAborted"
 }

@@ -8,7 +8,7 @@
 
 ## Welcome
 
-**Refio** is a local-first AI coding assistant for IntelliJ IDEA and the terminal (CLI/TUI). Written in Kotlin, built on a modular Gradle architecture, supporting 8 LLM providers (including local models via Ollama/LM Studio), 14 tools, 21 built-in subagents, and a full RAG system. Refio is MIT-licensed, with no telemetry and no vendor lock-in.
+**Refio** is a local-first AI coding assistant for IntelliJ IDEA and the terminal (CLI/TUI). Written in Kotlin, built on a modular Gradle architecture, supporting 8 LLM providers (including local models via Ollama/LM Studio), 15 tools, 21 built-in subagents, and a full RAG system. Refio is MIT-licensed, with no telemetry and no vendor lock-in.
 
 **Core philosophy:** Minimize LLM context through selective context injection (RAG + code analysis), resulting in 50-70% lower API costs and compatibility with smaller context windows of local models.
 
@@ -41,7 +41,7 @@ UI (IntelliJ Swing / TUI Mordant+JLine3)
     -> Domain Routers (12 routers: Task, Chat, Agent, Subtask, Config, Prompts, Tool, RAG, ApiLogs, MultiAgent, ProjectContext, Subagent)
     -> CoreApiRouter (composition root — creates dependencies, exposes routers, zero business logic)
       -> Execution (WorkflowOrchestrator -> ChatService for CHAT | AgentTurnLoop for PLAN/AGENT)
-        -> LLMClient (8 adapters) + ToolRegistry (14 tools) + ContextService (14 providers)
+        -> LLMClient (8 adapters) + ToolRegistry (15 tools) + ContextService (14 providers)
           -> Infrastructure (SQLite via Exposed ORM, Ktor HTTP, Caffeine cache)
 ```
 
@@ -122,7 +122,7 @@ UI (IntelliJ Swing / TUI Mordant+JLine3)
 
 ---
 
-## Tool System (14 tools)
+## Tool System (15 tools)
 
 ### READ_ONLY (6)
 

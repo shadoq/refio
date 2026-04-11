@@ -6,7 +6,10 @@ import kotlinx.coroutines.flow.collect
 import pl.jclab.refio.core.agents.events.AgentEvent
 import pl.jclab.refio.core.agents.events.AgentEventBus
 import java.awt.BorderLayout
+import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
 import javax.swing.*
 
 /**
@@ -35,12 +38,6 @@ class AgentExecutionPanel : JPanel(BorderLayout()), Disposable {
     private var currentSessionId: String? = null
 
     init {
-        val header = JLabel("  Agent Execution").apply {
-            font = font.deriveFont(Font.BOLD, 13f)
-            border = BorderFactory.createEmptyBorder(8, 4, 8, 4)
-        }
-        add(header, BorderLayout.NORTH)
-
         // Multi-agent view: graph (top) + timeline (bottom)
         val graphAndTimeline = JSplitPane(
             JSplitPane.VERTICAL_SPLIT,
@@ -51,9 +48,22 @@ class AgentExecutionPanel : JPanel(BorderLayout()), Disposable {
             dividerLocation = 180
         }
 
+        val copyGraphEventsButton = JButton("Copy").apply {
+            font = font.deriveFont(10f)
+            toolTipText = "Copy graph & events to clipboard"
+            addActionListener { copyGraphAndEventsToClipboard() }
+        }
+        val graphEventsPanel = JPanel(BorderLayout()).apply {
+            val topBar = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 2)).apply {
+                add(copyGraphEventsButton)
+            }
+            add(topBar, BorderLayout.NORTH)
+            add(graphAndTimeline, BorderLayout.CENTER)
+        }
+
         val tabs = JTabbedPane().apply {
             addTab("Trace", tracePanel)
-            addTab("Graph + Events", graphAndTimeline)
+            addTab("Graph + Events", graphEventsPanel)
         }
         add(tabs, BorderLayout.CENTER)
         // No Clear button by design — the panel state is driven entirely by the
@@ -77,16 +87,22 @@ class AgentExecutionPanel : JPanel(BorderLayout()), Disposable {
         currentSessionId = sessionId
         agentNames.clear()
 
-        SwingUtilities.invokeLater {
-            tracePanel.setSession(sessionId)
-            timelinePanel.setSession(sessionId)
-            graphPanel.clear()
-            timelinePanel.clear()
-            tracePanel.clear()
-        }
-
         subscriptionJob = scope.launch {
-            // Replay persisted events first so the panels reflect the saved state
+            // Clear panels on EDT and wait for it to complete before replaying
+            // persisted events. Without this, the clear and replay invokeLater
+            // calls can interleave, causing the clear to wipe replayed data.
+            val latch = java.util.concurrent.CountDownLatch(1)
+            SwingUtilities.invokeLater {
+                tracePanel.setSession(sessionId)
+                timelinePanel.setSession(sessionId)
+                graphPanel.clear()
+                timelinePanel.clear()
+                tracePanel.clear()
+                latch.countDown()
+            }
+            latch.await()
+
+            // Replay persisted events so the panels reflect the saved state
             // before we start consuming live events. Any live events with the same
             // ids arriving later are effectively idempotent because they'd just
             // update the same tree nodes / table rows.
@@ -123,11 +139,17 @@ class AgentExecutionPanel : JPanel(BorderLayout()), Disposable {
                     is AgentEvent.AgentStarted -> event.agentName
                     else -> "Session ${event.sourceAgentId.take(8)}"
                 }
+                val eventDepth = when (event) {
+                    is AgentEvent.TurnStarted -> event.depth
+                    is AgentEvent.LLMCallCompleted -> event.depth
+                    is AgentEvent.ToolCalled -> event.depth
+                    else -> 0
+                }
                 agentNames[event.sourceAgentId] = name
                 graphPanel.addOrUpdateAgent(
                     agentId = event.sourceAgentId,
                     name = name,
-                    depth = 0,
+                    depth = eventDepth,
                     status = AgentNodeStatus.RUNNING
                 )
             }
@@ -169,6 +191,33 @@ class AgentExecutionPanel : JPanel(BorderLayout()), Disposable {
                 else -> {}
             }
         }
+    }
+
+    fun toText(): String = buildString {
+        appendLine("### Session Trace")
+        appendLine()
+        appendLine(tracePanel.toText())
+        appendLine()
+        appendLine("### Agents Graph")
+        appendLine()
+        appendLine(graphPanel.toText())
+        appendLine()
+        appendLine("### Events Timeline")
+        appendLine()
+        appendLine(timelinePanel.toText())
+    }
+
+    private fun copyGraphAndEventsToClipboard() {
+        val sb = StringBuilder()
+        sb.appendLine("## Agents")
+        sb.appendLine()
+        sb.append(graphPanel.toText())
+        sb.appendLine()
+        sb.appendLine("## Events")
+        sb.appendLine()
+        sb.append(timelinePanel.toText())
+        val sel = StringSelection(sb.toString().trimEnd())
+        Toolkit.getDefaultToolkit().systemClipboard.setContents(sel, null)
     }
 
     override fun dispose() {

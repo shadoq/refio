@@ -587,19 +587,55 @@ class ContextService(
             }
         }
 
+        // === EARLY REDISTRIBUTION (Bug 2C fix) ===
+        // Previously `redistributeUnused` was called AFTER WORKING_MEMORY and RECENT_WORK
+        // had already been added, which meant:
+        //   - RECENT_WORK never benefited from unused budget from STABLE_CONTEXT /
+        //     PROJECT_CONTEXT / REFERENCE sections (they often leave 10–30k tokens on
+        //     the table because project context is small relative to total budget)
+        //   - The redistribution flowed only into CONVERSATION / RAG / USER_CONTEXT,
+        //     which in turn couldn't use it because of other caps (Bug 2B).
+        //
+        // New flow: redistribute the unused stable-layer budget BEFORE adding the
+        // accumulated layer, so WORKING_MEMORY and RECENT_WORK see an expanded
+        // budget. The redistribution function targets these two sections (see
+        // `ContextBudget.redistributeUnused` priority list) so this is a natural fit.
+        val budgetAfterStable = budget.redistributeUnused(actualUsage)
+
         // === ACCUMULATED CONTEXT LAYER (grows across turns) ===
         // TIER 1.5: WORKING MEMORY
+        // Bug 2D fix: drop the `remainingTokens / 4` throttle. Previously this hard-
+        // capped WORKING_MEMORY at a quarter of whatever was left even if its own
+        // section budget was much larger, silently starving the section on large
+        // context windows. The section has its own per-entry head+tail truncation
+        // (fitLineWithHeadTailTruncation) so it cannot over-use its allotment.
+        //
+        // Duplication fix: pass the set of subtaskIds that will also be rendered in
+        // RECENT_WORK so WORKING_MEMORY can suppress their outputExcerpt. Before this
+        // the same tool-call head appeared in both sections, wasting tokens and
+        // confusing the model.
         if (taskId != null && workingMemoryService != null) {
-            val workingBudget = minOf(budget.budgetFor(ContextSection.WORKING_MEMORY), remainingTokens / 4)
+            val workingBudget = minOf(
+                budgetAfterStable.budgetFor(ContextSection.WORKING_MEMORY),
+                remainingTokens
+            )
             if (workingBudget > 0) {
-                val workingMemory = workingMemoryService.buildWorkingMemorySection(taskId, workingBudget)
+                val recentWorkSubtaskIds = context.executedSteps.map { it.subtaskId }.toSet()
+                val workingMemory = workingMemoryService.buildWorkingMemorySection(
+                    taskId = taskId,
+                    maxTokens = workingBudget,
+                    skipExcerptForOriginIds = recentWorkSubtaskIds
+                )
                 addSection(ContextSection.WORKING_MEMORY, workingMemory, workingBudget)
             }
         }
 
         // TIER 2: WORK CONTEXT
         if (context.completedFiles.isNotEmpty() || context.executedSteps.isNotEmpty()) {
-            val recentBudget = minOf(budget.budgetFor(ContextSection.RECENT_WORK), remainingTokens)
+            val recentBudget = minOf(
+                budgetAfterStable.budgetFor(ContextSection.RECENT_WORK),
+                remainingTokens
+            )
             val recentBudgetWithBuffer = recentBudget + RECENT_WORK_LAST_ENTRY_TOKEN_BUFFER
             addSection(
                 ContextSection.RECENT_WORK,
@@ -617,7 +653,10 @@ class ContextService(
             userContextParts.add(formatter.buildMcpResourcesSection(context))
         }
         addSection(ContextSection.USER_CONTEXT, userContextParts.joinToString("\n\n"))
-        val redistributedBudget = budget.redistributeUnused(actualUsage)
+        // Second redistribution pass: now that accumulated + ephemeral layers have
+        // reported their actual usage, any budget still unused is pushed into
+        // CONVERSATION / RAG so they can benefit from slack.
+        val redistributedBudget = budgetAfterStable.redistributeUnused(actualUsage)
 
         // TIER 3: SUPPLEMENTARY CONTEXT
         if (context.ragFragments.isNotEmpty()) {
