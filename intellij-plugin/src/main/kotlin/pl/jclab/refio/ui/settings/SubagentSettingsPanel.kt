@@ -227,7 +227,7 @@ class SubagentSettingsPanel(
             )
 
             sorted.forEach { agent ->
-                tableModel.addRow(arrayOf(
+                tableModel.addRow(arrayOf<Any?>(
                     agent.name,
                     agent.description,
                     agent.model,

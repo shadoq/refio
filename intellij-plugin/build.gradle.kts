@@ -1,8 +1,10 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("java")
     id("org.jetbrains.kotlin.jvm")
     id("org.jetbrains.kotlin.plugin.serialization")
-    id("org.jetbrains.intellij")
+    id("org.jetbrains.intellij.platform")
     id("jacoco")
 }
 
@@ -11,11 +13,14 @@ version = providers.gradleProperty("refioVersion").get()
 
 repositories {
     mavenCentral()
+    intellijPlatform {
+        defaultRepositories()
+    }
 }
 
 java {
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(17))
+        languageVersion.set(JavaLanguageVersion.of(21))
     }
 }
 
@@ -25,6 +30,11 @@ java {
 dependencies {
     // Core module (pure Kotlin/JVM, no IntelliJ)
     implementation(project(":core"))
+
+    intellijPlatform {
+        intellijIdea("2026.1")
+        bundledPlugin("org.jetbrains.plugins.terminal")
+    }
 
     // Kotlin Coroutines are already provided by IntelliJ Platform
     implementation("com.google.code.gson:gson:2.10.1")
@@ -86,25 +96,26 @@ dependencies {
     testImplementation("app.cash.turbine:turbine:1.0.0")
 }
 
-// Configure Gradle IntelliJ Plugin
-intellij {
-    version.set("2024.1.7")
-    type.set("IC")
-    plugins.set(listOf("terminal"))
+intellijPlatform {
+    instrumentCode = false
+
+    pluginConfiguration {
+        ideaVersion {
+            sinceBuild = "261"
+            untilBuild = provider { null }
+        }
+    }
 }
 
 tasks {
     withType<JavaCompile> {
-        sourceCompatibility = "17"
-        targetCompatibility = "17"
+        sourceCompatibility = "21"
+        targetCompatibility = "21"
     }
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-        kotlinOptions.jvmTarget = "17"
-    }
-
-    patchPluginXml {
-        sinceBuild.set("241")
-        untilBuild.set("253.*")
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_21)
+        }
     }
 
     signPlugin {
@@ -116,10 +127,6 @@ tasks {
     publishPlugin {
         token.set(System.getenv("PUBLISH_TOKEN"))
     }
-
-    // Disable instrumentCode temporarily (JDK 21 compatibility)
-    named("instrumentCode") { enabled = false }
-    named("instrumentTestCode") { enabled = false }
 
     test {
         useJUnitPlatform()
@@ -167,10 +174,10 @@ tasks {
             "-Didea.log.trace.categories=#pl.jclab.refio.services.core.CoreConnectionManager",
             "-Dgradle.compatibility.update.interval=0"
         )
-        autoReloadPlugins.set(true)
+        autoReload.set(true)
         systemProperty("idea.is.internal", "true")
         doFirst {
-            val sandboxConfigDir = file("$buildDir/idea-sandbox/config")
+            val sandboxConfigDir = layout.buildDirectory.dir("idea-sandbox/config").get().asFile
             val internalStateDb = sandboxConfigDir.resolve("app-internal-state.db")
             if (internalStateDb.exists()) {
                 delete(internalStateDb)

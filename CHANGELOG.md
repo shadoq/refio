@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.1.6] - 2025-04-12
+
 ### Added
 
 - New approval flow for tools using `ASK` permissions, with clearer prompts in IntelliJ and CLI plus session trust support.

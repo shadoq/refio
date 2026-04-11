@@ -945,7 +945,7 @@ class ModelsSettingsPanel(
 
         sortedModels.forEach { model ->
             tableModel.addRow(
-                arrayOf(
+                arrayOf<Any?>(
                     model.provider,
                     model.name,
                     formatContextSize(model.contextSize),

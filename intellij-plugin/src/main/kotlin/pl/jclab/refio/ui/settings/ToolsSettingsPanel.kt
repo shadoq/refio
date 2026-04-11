@@ -347,7 +347,7 @@ class ToolsSettingsPanel(
         model.rowCount = 0
 
         commands.forEach { command ->
-            model.addRow(arrayOf(
+            model.addRow(arrayOf<Any?>(
                 true,
                 command.program,
                 command.aliases.joinToString(", "),
@@ -363,7 +363,7 @@ class ToolsSettingsPanel(
 
     private fun addEmptyWhitelistRow() {
         val model = whitelistTable.model as DefaultTableModel
-        model.addRow(arrayOf(true, "", "", "", "", "", "", "50", false))
+        model.addRow(arrayOf<Any?>(true, "", "", "", "", "", "", "50", false))
         val row = model.rowCount - 1
         whitelistTable.changeSelection(row, 1, false, false)
     }
