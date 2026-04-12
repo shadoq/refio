@@ -13,6 +13,7 @@ import java.time.Instant
  * @property tool Tool name that was executed
  * @property parameters Tool parameters
  * @property result Full raw output from the tool
+ * @property rawResultSize Original size in chars of the raw output before any truncation
  * @property summary Summarized output (may be null if not summarized)
  * @property timestamp When the step was completed
  * @property success Whether the underlying subtask finished successfully.
@@ -25,6 +26,7 @@ data class ExecutedStepDTO(
     val tool: String,
     val parameters: Map<String, Any>,
     val result: String,
+    val rawResultSize: Int = 0,
     val summary: String?,
     val timestamp: Instant,
     val success: Boolean = true

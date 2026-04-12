@@ -210,6 +210,33 @@ class ReadFileTool(
                 }
             }
 
+            // Binary file detection — must come after image/PDF checks
+            if (isBinaryFile(path, mediaType)) {
+                val duration = (System.currentTimeMillis() - startTime).toInt()
+                val mimeDesc = mediaType ?: "unknown"
+                val output = buildString {
+                    append("Binary file: $pathStr\n")
+                    append("  Type: $mimeDesc\n")
+                    append("  Size: $fileSize bytes (${fileSize / 1024} KB)\n")
+                    append("  Extension: .$fileExtension\n\n")
+                    append("This file contains binary data and cannot be read as text.\n")
+                    append("To process it, use run_code (Python) to decode/analyze it programmatically.")
+                }
+                return ToolResult(
+                    success = true,
+                    output = output,
+                    bytesRead = 0,
+                    durationMs = duration,
+                    metadata = mapOf(
+                        "type" to "binary",
+                        "path" to pathStr,
+                        "media_type" to mimeDesc,
+                        "file_size" to fileSize,
+                        "extension" to fileExtension
+                    )
+                )
+            }
+
             // Read file contents
             val allLines = Files.readAllLines(path)
             val totalLineCount = allLines.size
@@ -381,5 +408,43 @@ class ReadFileTool(
 
     private fun isPdf(path: java.nio.file.Path, mediaType: String?): Boolean {
         return path.fileName.toString().endsWith(".pdf", ignoreCase = true) || mediaType == "application/pdf"
+    }
+
+    private val BINARY_MIME_PREFIXES = listOf(
+        "audio/", "video/", "application/octet-stream",
+        "application/zip", "application/gzip", "application/x-tar",
+        "application/x-7z", "application/x-rar",
+        "application/vnd.", "application/x-executable",
+        "model/", "font/"
+    )
+
+    private val BINARY_EXTENSIONS = setOf(
+        "exe", "dll", "so", "dylib", "o", "obj", "bin",
+        "zip", "tar", "gz", "bz2", "7z", "rar", "xz",
+        "mp3", "mp4", "avi", "mov", "wav", "flac", "ogg", "webm",
+        "woff", "woff2", "ttf", "eot",
+        "db", "sqlite", "sqlite3",
+        "class", "jar", "war", "ear",
+        "pyc", "pyo", "pyd",
+        "iso", "img", "dmg"
+    )
+
+    private fun isBinaryFile(path: java.nio.file.Path, mediaType: String?): Boolean {
+        // Layer 1: MIME type
+        if (mediaType != null && BINARY_MIME_PREFIXES.any { mediaType.startsWith(it) }) return true
+
+        // Layer 2: Extension
+        val ext = path.fileName.toString().substringAfterLast('.', "").lowercase()
+        if (ext in BINARY_EXTENSIONS) return true
+
+        // Layer 3: Null-byte heuristic (first 8KB)
+        return try {
+            Files.newInputStream(path).use { stream ->
+                val buf = ByteArray(8192)
+                val read = stream.read(buf)
+                if (read <= 0) return false
+                buf.copyOf(read).any { it == 0.toByte() }
+            }
+        } catch (_: Exception) { false }
     }
 }

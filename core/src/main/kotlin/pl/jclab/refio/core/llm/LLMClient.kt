@@ -293,7 +293,14 @@ class LLMClient(
             // Provider-agnostic guardrails — detect repetition loops, runaway output
             // size, and wall-clock deadlines. Instantiated per-request (stateful).
             // See core/llm/streaming/StreamGuardrails.kt for details.
-            val guardrails = if (stream) StreamGuardrails.defaults() else null
+            val guardrails = if (stream) {
+                val streamingTimeoutSec = configService?.getTyped(
+                    pl.jclab.refio.core.config.ConfigKeys.STREAMING_REQUEST_TIMEOUT
+                ) ?: pl.jclab.refio.core.config.ConfigKeys.STREAMING_REQUEST_TIMEOUT.default
+                // Wall clock = 90% of streaming timeout (10% buffer for cleanup/logging)
+                val wallClockMs = (streamingTimeoutSec * 900L).coerceIn(60_000, 1_800_000)
+                StreamGuardrails.defaults(wallClockMs)
+            } else null
 
             val streamCallback: ((pl.jclab.refio.core.llm.StreamChunk) -> Unit)? = if (stream) { llmChunk ->
                 contentBuilder.append(llmChunk.delta)

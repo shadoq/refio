@@ -182,6 +182,7 @@ internal class TaskContextExtractor {
                                     tool = tool,
                                     parameters = paramsMap,
                                     result = resultText,
+                                    rawResultSize = resultText.length,
                                     summary = summary,
                                     timestamp = Instant.ofEpochMilli(timestamp),
                                     success = prevSubtask.status == TaskStatus.SUCCESS
@@ -213,9 +214,11 @@ internal class TaskContextExtractor {
                 val timestamp = prevSubtask.completedAt ?: prevSubtask.updatedAt
                 val summary = prevSubtask.summary ?: "Completed: ${prevSubtask.kind.name}"
 
-                // Don't truncate - use full rawResult, but limit to reasonable size for display
-                val resultText = if (rawResult.length > 16384) {
-                    rawResult.take(16384) + "\n\n... [${rawResult.length - 16384} chars omitted] ..."
+                // Keep raw data up to 512KB — let RECENT_WORK budget-driven compression decide.
+                // Only truncate truly huge outputs to prevent memory pressure.
+                val maxRawResultChars = 524_288 // 512KB
+                val resultText = if (rawResult.length > maxRawResultChars) {
+                    rawResult.take(maxRawResultChars) + "\n... [truncated from ${rawResult.length} chars]"
                 } else {
                     rawResult
                 }
@@ -227,6 +230,7 @@ internal class TaskContextExtractor {
                         tool = prevSubtask.kind.name,
                         parameters = fallbackParams,
                         result = resultText,
+                        rawResultSize = rawResult.length,
                         summary = summary,
                         timestamp = Instant.ofEpochMilli(timestamp),
                         success = prevSubtask.status == TaskStatus.SUCCESS

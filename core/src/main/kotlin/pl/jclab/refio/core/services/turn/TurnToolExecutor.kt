@@ -69,6 +69,9 @@ class TurnToolExecutor(
         /** Max raw output size (chars) to preserve in-context for DATA_PRODUCING tools */
         const val DATA_PRODUCING_RAW_OUTPUT_BUFFER = 16_000
 
+        /** Max raw output size (chars) for read_file — lazy compression deferred to RECENT_WORK */
+        const val READ_FILE_RAW_OUTPUT_BUFFER = 524_288
+
         /** Max tokens of enriched context to inject into coding tools */
         const val CODING_TOOL_CONTEXT_TOKENS = 8_000
 
@@ -80,11 +83,17 @@ class TurnToolExecutor(
             rawOutput: String,
             summaryText: String,
             wasSummarized: Boolean,
-            isDataProducing: Boolean
+            isDataProducing: Boolean,
+            toolName: String = ""
         ): Pair<String, Boolean> {
             val rawLen = rawOutput.length
             return when {
                 rawLen <= 500 -> rawOutput to false
+
+                // read_file: keep raw up to 512KB, let RECENT_WORK compress lazily
+                toolName == "read_file" && rawLen <= READ_FILE_RAW_OUTPUT_BUFFER ->
+                    rawOutput to false
+
                 isDataProducing && rawLen <= DATA_PRODUCING_RAW_OUTPUT_BUFFER && wasSummarized ->
                     rawOutput to true
                 isDataProducing && wasSummarized ->
@@ -594,7 +603,8 @@ class TurnToolExecutor(
                     rawOutput = outputWithWarnings,
                     summaryText = summaryResult.summary,
                     wasSummarized = summaryResult.wasSummarized,
-                    isDataProducing = isDataProducing
+                    isDataProducing = isDataProducing,
+                    toolName = toolCall.name
                 )
                 if (isDataProducing && outputWithWarnings.length <= DATA_PRODUCING_RAW_OUTPUT_BUFFER && summaryResult.wasSummarized) {
                     logger.info {

@@ -90,12 +90,12 @@ class StreamGuardrails(
          * All thresholds are deliberately loose — the goal is "catch obvious
          * pathology without false positives on healthy long-running streams".
          */
-        fun defaults(): StreamGuardrails {
+        fun defaults(wallClockDeadlineMs: Long = 180_000): StreamGuardrails {
             return StreamGuardrails(
                 guardrails = listOf(
                     RepetitionDetector(),
                     OutputSizeLimiter(),
-                    WallClockDeadline()
+                    WallClockDeadline(deadlineMs = wallClockDeadlineMs)
                 )
             )
         }
