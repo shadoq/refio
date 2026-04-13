@@ -245,7 +245,7 @@ class ModelsSettingsPanel(
         modelsTable = JBTable(object : DefaultTableModel(columnNames, 0) {
             override fun getColumnClass(columnIndex: Int): Class<*> {
                 return when (columnIndex) {
-                    6 -> java.lang.Boolean::class.java  // Show in Dropdown
+                    6 -> Boolean::class.javaObjectType  // Show in Dropdown
                     else -> String::class.java
                 }
             }
@@ -857,7 +857,7 @@ class ModelsSettingsPanel(
             if (model.showInDropdown != defaultVisibility) {
                 // Update DB with smart default
                 try {
-                    coreApiClient?.updateModelVisibility(model.id, defaultVisibility)
+                    coreApiClient.updateModelVisibility(model.id, defaultVisibility)
                     model.copy(showInDropdown = defaultVisibility)
                 } catch (e: Exception) {
                     logger.error(e) { "Failed to set default visibility for ${model.id}" }

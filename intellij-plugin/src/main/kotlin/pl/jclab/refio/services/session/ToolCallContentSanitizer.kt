@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonPrimitive
 
 internal object ToolCallContentSanitizer {
     private val gson = Gson()
+    private val lenientJson = Json { ignoreUnknownKeys = true }
     private val toolCallPatterns = listOf(
         Regex("""(?:\r?\n)?TOOL_CALL:\s*\w+\s*(?:\r?\n)?ARGUMENTS:\s*\{[\s\S]*?\}(?:\r?\n)?""", RegexOption.MULTILINE),
         Regex("""(?:\r?\n)?Tool calls:\s*(?:\r?\n)?TOOL_CALL:[\s\S]*?(?:\r?\n){2,}|(?:\r?\n)?Tool calls:\s*(?:\r?\n)?TOOL_CALL:[\s\S]*$""", RegexOption.MULTILINE),
@@ -44,7 +45,7 @@ internal object ToolCallContentSanitizer {
         if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null
 
         return try {
-            val root = Json { ignoreUnknownKeys = true }.parseToJsonElement(trimmed) as? JsonObject ?: return null
+            val root = lenientJson.parseToJsonElement(trimmed) as? JsonObject ?: return null
 
             if (root.containsKey("plan") || root.containsKey("subtasks")) {
                 return content
@@ -86,7 +87,7 @@ internal object ToolCallContentSanitizer {
         if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return text
 
         return try {
-            val inner = Json { ignoreUnknownKeys = true }.parseToJsonElement(trimmed) as? JsonObject ?: return text
+            val inner = lenientJson.parseToJsonElement(trimmed) as? JsonObject ?: return text
             val payloadKeys = listOf("answer", "content", "response", "result", "output", "text")
             for (key in payloadKeys) {
                 val field = inner[key]

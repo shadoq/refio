@@ -643,7 +643,7 @@ interface Tool {
 }
 ```
 
-### READ_ONLY Tools (7)
+### READ_ONLY Tools (14)
 
 | Tool | Parameters | Description | Limits |
 |------|------------|-------------|--------|
@@ -652,10 +652,17 @@ interface Tool {
 | `file_search` | pattern, path, offset, limit | Glob pattern search | 100 results |
 | `grep_search` | pattern, path, case_sensitive | Regex content search | 500 results |
 | `view_diff` | file1, file2/content2 | Line-by-line diff | - |
-| `invoke_subagent` | subagent_name, goal, context_refs? | Run nested child loop with a specialized subagent (dynamic description: active subagents + allowed tools/inherit) | Depth <= 3 |
-| `delegate_to_strong_model` | task, context?, allow_tools?, response_format? | Delegate complex task to a stronger model (single-shot or tool-enabled sub-agent). Only registered when `models.defaults.strong` is configured. | - |
+| `invoke_subagent` | subagent_name, goal, context_refs? | Run nested child loop with a specialized subagent | Depth <= 3 |
+| `delegate_to_strong_model` | task, context?, allow_tools?, response_format? | Delegate complex task to a stronger model | - |
+| `web_search` | query, max_results? | Search the web (Brave/SerpAPI/DuckDuckGo) | 20 results max |
+| `fetch_webpage` | url, prompt, max_content_chars? | Fetch URL → Markdown → LLM processing | 50K chars max |
+| `code_intelligence` | action, symbol?, path?, language? | Find usages, definitions, list symbols, compiler diagnostics | ctags optional |
+| `monitor_process` | process_id, max_lines? | Read output from background process | 1000 lines max |
+| `ask_user` | question, options? | Ask user a question and wait for response | 10 min timeout |
+| `sleep` | duration_ms | Pause execution | 30s max |
+| `think` | thought | Explicit reasoning slot | - |
 
-### WRITE Tools (8)
+### WRITE Tools (10)
 
 | Tool | Parameters | Description | Cost |
 |------|------------|-------------|------|
@@ -667,6 +674,8 @@ interface Tool {
 | `run_terminal_command` | command | Shell execution (whitelist-protected) | **AGENT: ON (default)** |
 | `http_request` | url, method, headers, body, save_to_file | HTTP requests (GET/POST/PUT/DELETE), 5 MB limit, 60s timeout | Free |
 | `run_code` | language, code | Execute Python/JavaScript/Kotlin Script snippets, 120s timeout | **OFF by default** |
+| `run_process_background` | command | Start command in background, return process_id | Free |
+| `llm_call` | prompt, data?, file_path?, model? | Raw single-turn LLM call | ~$0.01 |
 
 ### Security Layers
 

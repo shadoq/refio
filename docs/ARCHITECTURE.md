@@ -276,7 +276,7 @@ RagSearchResult[]
 
 ## Tools
 
-### READ_ONLY Tools (7)
+### READ_ONLY Tools (14)
 
 | Tool | Parameters | Description |
 |------|------------|-------------|
@@ -287,8 +287,15 @@ RagSearchResult[]
 | `view_diff` | file1, file2 OR content2 | Line-by-line comparison |
 | `invoke_subagent` | subagent_name, goal, context_refs? | Run nested child loop via subagent profile |
 | `delegate_to_strong_model` | task, context?, allow_tools?, response_format? | Delegate complex task to a stronger model (single-shot or tool-enabled sub-agent). Only registered when `models.defaults.strong` is configured. |
+| `web_search` | query, max_results? | Search the web (Brave/SerpAPI/DuckDuckGo) |
+| `fetch_webpage` | url, prompt, max_content_chars? | Fetch URL, convert to Markdown, process with LLM |
+| `code_intelligence` | action, symbol?, path?, language? | Find usages/definitions, list symbols, get diagnostics |
+| `monitor_process` | process_id, max_lines? | Read output from background process |
+| `ask_user` | question, options? | Ask the user a question and wait for response |
+| `sleep` | duration_ms | Pause execution (max 30s) |
+| `think` | thought | Explicit reasoning slot |
 
-### WRITE Tools (8)
+### WRITE Tools (10)
 
 | Tool | Parameters | Description | Cost |
 |------|------------|-------------|------|
@@ -300,6 +307,8 @@ RagSearchResult[]
 | `run_terminal_command` | command | Shell execution (ASK in AGENT, CommandRule-protected) | Free |
 | `http_request` | url, method, headers, body, save_to_file | HTTP requests (GET/POST/PUT/DELETE), 5 MB limit, 60s timeout | Free |
 | `run_code` | language, code | Execute Python/JavaScript/Kotlin Script, 120s timeout | Free |
+| `run_process_background` | command | Start command in background, return process_id | Free |
+| `llm_call` | prompt, data?, file_path?, model? | Raw single-turn LLM call | ~$0.01 |
 
 ### Tool Availability by Mode
 

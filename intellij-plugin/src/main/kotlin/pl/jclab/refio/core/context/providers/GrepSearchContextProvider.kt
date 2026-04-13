@@ -1,6 +1,5 @@
 package pl.jclab.refio.core.context.providers
 
-import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
 import com.intellij.psi.search.GlobalSearchScope
 import pl.jclab.refio.core.config.ConfigKeys
@@ -97,7 +96,7 @@ class GrepSearchContextProvider : BaseContextProvider() {
         val results = mutableListOf<SearchResult>()
 
         try {
-            ReadAction.run<RuntimeException> {
+            com.intellij.openapi.application.runReadAction {
                 logger.debug { "Executing grep search for pattern: $pattern" }
 
                 // Use simplified search approach

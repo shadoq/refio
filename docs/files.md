@@ -177,6 +177,12 @@
 - **FileSearchTool.kt** — Finds files by glob pattern (converted to regex); depth limit 10, result limit 100, offset/limit pagination.
 - **GrepSearchTool.kt** — Regex text search across files with case sensitivity, glob filtering, 2MB exclusion; formatted as `file:lineNumber: content`.
 - **ViewDiffTool.kt** — Compares two files or file vs content using line-by-line diff; unified diff format with add/remove/unchanged counts.
+- **WebSearchTool.kt** — Web search via Brave Search, SerpAPI, or DuckDuckGo Instant Answers; configurable provider/API key via `tools.web_search.*` config; returns titles, URLs, snippets.
+- **FetchWebpageTool.kt** — Fetches URL, converts HTML to Markdown via Jsoup (strips nav/ads/scripts), processes with weak LLM model using user prompt; 50K char content limit.
+- **CodeIntelligenceTool.kt** — IDE-independent code intelligence: `find_usages` (grep), `find_definition` (ctags/grep), `list_symbols` (ctags), `get_diagnostics` (compiler CLI); works in CLI without IntelliJ PSI.
+- **MonitorProcessTool.kt** — Reads stdout from background process by `process_id`; returns lines and running status; auto-removes finished processes.
+- **AskUserTool.kt** — Asks user a question with optional predefined choices; suspends agent loop via `UserQuestionService`; 10-minute timeout.
+- **SleepTool.kt** — Pauses agent execution for up to 30 seconds; uses coroutine `delay()`.
 
 ### Write Tools
 - **CreateNewFileTool.kt** — Creates files with content validation, size limits, file lock; warns on existing file; auto-creates parent dirs.
@@ -187,12 +193,14 @@
 - **RunTerminalCommandTool.kt** — Shell execution with CommandRule-based validation (ALLOW/BLOCK/ASK); legacy whitelist fallback; 120s timeout, 200KB output limit; async I/O to prevent deadlocks; cross-platform shell selection.
 - **HttpRequestTool.kt** — HTTP requests (GET/POST/PUT/DELETE) with optional `save_to_file` for large responses; 5MB response limit, 60s timeout; auto-detects format (CSV, JSON, text) for saved files; header filtering for relevant response headers.
 - **RunCodeTool.kt** — Inline code execution for Python, JavaScript, and Kotlin Script; 120s timeout; sandbox via temporary files; captures stdout/stderr; OFF by default (requires explicit enabling).
+- **RunProcessBackgroundTool.kt** — Starts shell command in background via `ProcessManager`; returns `process_id` immediately; CommandRule security validation; for long-running builds/dev servers.
 
 ### Subagent Integration
 - **InvokeSubagentTool.kt** — Enables agent-to-subagent delegation; validates availability, detects recursion; builds `TurnRequest` with overrides for system prompt, tools, depth.
 
 ## `core/services/` — Core Services
 
+- **ProcessManager.kt** — Manages long-running background processes; `start(command, workingDir)` returns `ManagedProcess` with `processId`; `readOutput()` non-blocking line reader; `stop()` forcibly destroys; cross-platform shell wrapping (cmd.exe/sh).
 - **AgentExecutor.kt** — Orchestrates step-by-step execution: planning → execution → summarization with subtask lifecycle management.
 - **AgentTurnLoop.kt** — Self-directing tool loop for PLAN/AGENT modes (~988 LOC); delegates to `turn/` sub-components for LLM calls, prompt building, tool execution, response processing, guardrails.
 - **TurnLoopConfig.kt** — Configuration for AgentTurnLoop with factory methods for PLAN (25 iterations) and AGENT (50 iterations) presets; includes auto-compaction thresholds, parallel tools, snapshots, retry config, working memory, read-only budget guard (ADR-0044).
@@ -242,6 +250,7 @@
 - **TurnLoopConfigAliases.kt** — Type aliases for turn loop configuration.
 - **TurnPromptAliases.kt** — Type aliases for prompt building.
 - **ToolApprovalService.kt** — Manages user approval flow for tools with `PermissionLevel.ASK`; `ApprovalDecision` sealed class (Approved/Trusted/Rejected); session trust rules via `ConcurrentHashMap` with regex pattern matching; 5-minute approval timeout; `pendingRequests` StateFlow for UI observation.
+- **UserQuestionService.kt** — Suspends agent loop while waiting for user answer; `AskUserRequest` with requestId/taskId/question/options; `Listener` interface for UI; `resolve()`/`cancel()` from UI; `CompletableDeferred` + 10-min timeout; same pattern as `ToolApprovalService`.
 - **ToolRejectedException.kt** — Exception thrown when user rejects tool execution; caught in AgentTurnLoop to record rejection, set `TurnResult(rejectedByUser=true)`, and break the loop returning control to user prompt.
 
 ## `core/services/context/` — Context Building Helpers & Extracted Sub-Services

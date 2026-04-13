@@ -10,13 +10,14 @@ package pl.jclab.refio.core.llm.streaming
  * while it chews through context window budget, and so that downstream code is
  * never handed a 2MB "message" that came from a single LLM turn gone wrong.
  *
- * Set conservatively: 32KB of text is ~8000 tokens, which is larger than
- * any legitimate single agent turn response should be.
+ * Set conservatively: 128KB of text is ~32K tokens, which covers
+ * legitimate large outputs such as single-file HTML apps, full file
+ * regenerations, and detailed analysis reports.
  *
- * @param maxChars Abort threshold in characters. Default 32768 (~8K tokens).
+ * @param maxChars Abort threshold in characters. Default 131072 (~32K tokens).
  */
 class OutputSizeLimiter(
-    private val maxChars: Int = 32_768
+    private val maxChars: Int = 131_072
 ) : StreamGuardrail {
 
     override val name: String = "size-limit"

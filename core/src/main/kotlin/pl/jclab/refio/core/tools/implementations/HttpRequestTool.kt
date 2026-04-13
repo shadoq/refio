@@ -78,7 +78,8 @@ class HttpRequestTool(
 ) : Tool {
 
     override val name = "http_request"
-    override val description = "Make HTTP requests (GET/POST/PUT/DELETE). Stateless: no cookie jar — for session auth read Set-Cookie from the response and resend it via headers={\"Cookie\":\"...\"} on the next call. The 'body' parameter accepts either a JSON string OR a raw object/array — objects are auto-serialized to JSON. Use save_to_file for large responses."
+    override val description = "Make HTTP requests (GET/POST/PUT/DELETE). Stateless — no cookie jar. " +
+        "Body accepts JSON string or raw object (auto-serialized). Use save_to_file for large responses."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.DATA_PRODUCING
 

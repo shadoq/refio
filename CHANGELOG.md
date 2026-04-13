@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`sleep` tool** — Pause agent execution for up to 30 seconds; useful for rate limiting or waiting on external processes.
+- **`ask_user` tool** — Agent can ask the user a question mid-execution and wait for a response; supports free-text and predefined options. Backed by `UserQuestionService` with CompletableDeferred pattern (same as ToolApprovalService).
+- **`web_search` tool** — Search the web via Brave Search, SerpAPI, or DuckDuckGo Instant Answers; configurable provider and API key in `config.yaml`.
+- **`fetch_webpage` tool** — Fetch a URL, convert HTML to Markdown (via Jsoup), then process with the weak LLM model using a custom prompt; for extracting specific information from web pages.
+- **`run_process_background` tool** — Start a shell command in the background and return immediately with a `process_id`; for long-running builds or dev servers.
+- **`monitor_process` tool** — Read stdout from a background process started with `run_process_background`; call repeatedly to stream output.
+- **`code_intelligence` tool** — Analyze code structure without IDE: find symbol usages (grep), find definitions (ctags/grep), list symbols (ctags), run compiler diagnostics; works in CLI and plugin.
+- `ProcessManager` service for managing long-running background processes with start/stop/monitor lifecycle.
+- `UserQuestionService` for suspending the agent loop while waiting for user answers.
+
 ## [0.0.1.6] - 2025-04-12
 
 ### Added

@@ -14,11 +14,11 @@ import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.fileTypes.PlainTextFileType
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
-import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.services.project.SafeVfsAccess
 import java.awt.*
 import java.awt.datatransfer.StringSelection
 import java.awt.event.MouseAdapter
@@ -588,7 +588,7 @@ class CodeBlockPanel(
             }
 
             // Refresh file system
-            VirtualFileManager.getInstance().refreshAndFindFileByNioPath(targetPath)?.let { vFile ->
+            SafeVfsAccess.refreshAndFindFile(project, targetPath, logger)?.let { vFile ->
                 // Open file in editor
                 FileEditorManager.getInstance(project).openFile(vFile, true)
             }
@@ -636,7 +636,7 @@ class CodeBlockPanel(
             }
 
             // Open file in editor
-            VirtualFileManager.getInstance().refreshAndFindFileByNioPath(targetPath)?.let { vFile ->
+            SafeVfsAccess.refreshAndFindFile(project, targetPath, logger)?.let { vFile ->
                 FileEditorManager.getInstance(project).openFile(vFile, true)
             }
         }
@@ -668,8 +668,8 @@ class CodeBlockPanel(
             Files.writeString(tempFile, codeBlock.content, StandardCharsets.UTF_8)
 
             // Get virtual files
-            val existingVFile = VirtualFileManager.getInstance().refreshAndFindFileByNioPath(targetPath)
-            val tempVFile = VirtualFileManager.getInstance().refreshAndFindFileByNioPath(tempFile)
+            val existingVFile = SafeVfsAccess.refreshAndFindFile(project, targetPath, logger)
+            val tempVFile = SafeVfsAccess.refreshAndFindFile(project, tempFile, logger)
 
             if (existingVFile == null || tempVFile == null) {
                 showNotification("Error", "Could not open files for comparison", NotificationType.ERROR)

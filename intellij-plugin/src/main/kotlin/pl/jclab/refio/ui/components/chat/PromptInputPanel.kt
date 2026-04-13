@@ -8,7 +8,6 @@ import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.actionSystem.IdeActions
 import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Caret
 import com.intellij.openapi.editor.EditorModificationUtil
 import com.intellij.openapi.editor.actionSystem.EditorActionHandler
@@ -177,7 +176,7 @@ class PromptInputPanel(
                 updatePromptEditorHeight()
                 onPromptInputChanged()
             }
-        })
+        }, editorShortcutsDisposable)
 
         cs.launch {
             try {
@@ -1334,7 +1333,7 @@ class PromptInputPanel(
         if (editorEx.getUserData(KEY_LISTENERS_INSTALLED) == true) return
         editorEx.putUserData(KEY_LISTENERS_INSTALLED, true)
 
-        val component = editorEx.contentComponent as? JComponent ?: return
+        val component = editorEx.contentComponent
 
         val insertNewlineAction = object : DumbAwareAction() {
             override fun actionPerformed(e: AnActionEvent) {
@@ -1421,7 +1420,7 @@ class PromptInputPanel(
 
     private fun getPromptCaretOffset(): Int {
         return promptEditor.editor?.let { editor ->
-            ReadAction.compute<Int, RuntimeException> { editor.caretModel.offset }
+            com.intellij.openapi.application.runReadAction { editor.caretModel.offset }
         } ?: promptEditor.text.length
     }
 

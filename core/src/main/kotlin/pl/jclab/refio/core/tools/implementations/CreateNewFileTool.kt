@@ -36,12 +36,8 @@ class CreateNewFileTool(
 
     override val name = "create_new_file"
     override val description = "Create a NEW file with given content. FREE. " +
-        "HARD FAILS if the file already exists — does NOT overwrite. " +
-        "MANDATORY: before calling this tool, you MUST have already verified in a PRIOR turn that the path is unused " +
-        "(via file_search or read_directory called ALONE). Do not call this tool in the same actions array as the existence check — " +
-        "tools in one turn run in parallel and the check will not gate the create. " +
-        "Even if the user named the file specifically and it 'looks new', the project may already contain it — always pre-check. " +
-        "On 'File already exists' error: do NOT retry. Switch to read_file + code_editing / multi_edit / multi_line_editor."
+        "HARD FAILS if file already exists. Pre-check path in a PRIOR turn (file_search/read_directory). " +
+        "On 'File already exists' error: switch to read_file + code_editing."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_MODIFYING
 

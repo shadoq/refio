@@ -81,7 +81,7 @@ class SubagentSettingsPanel(
 
             override fun getColumnClass(column: Int): Class<*> {
                 return when (column) {
-                    5 -> java.lang.Boolean::class.java  // Enabled checkbox
+                    5 -> Boolean::class.javaObjectType  // Enabled checkbox
                     else -> String::class.java
                 }
             }
@@ -364,7 +364,7 @@ class SubagentSettingsPanel(
                     if (!isBuiltin && dialog.isOk) {
                         coroutineScope.launch {
                             try {
-                                coreApiClient?.updateSubagent(
+                                coreApiClient.updateSubagent(
                                     name = name,
                                     description = dialog.descriptionField.text,
                                     systemPrompt = dialog.systemPromptArea.text,

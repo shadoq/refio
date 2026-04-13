@@ -34,12 +34,12 @@ class OutputSizeLimiterTest {
 
     @Test
     fun `default limit is sensible`() {
-        // Sanity check on the default — 32KB is the documented value.
+        // Sanity check on the default — 128KB is the documented value.
         val limiter = OutputSizeLimiter()
-        // 20K chars should still be fine
-        assertEquals(StreamGuardrail.Decision.Continue, limiter.onDelta("x", 20_000, "x", 0L))
-        // 40K chars should trip
-        val decision = limiter.onDelta("x", 40_000, "x", 0L)
+        // 100K chars should still be fine
+        assertEquals(StreamGuardrail.Decision.Continue, limiter.onDelta("x", 100_000, "x", 0L))
+        // 140K chars should trip
+        val decision = limiter.onDelta("x", 140_000, "x", 0L)
         assertTrue(decision is StreamGuardrail.Decision.Abort)
     }
 }

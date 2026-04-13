@@ -46,7 +46,7 @@ UI (IntelliJ Swing / TUI Mordant)
     → Domain Routers (12 routers: Task, Chat, Agent, Subtask, Config, Prompts, Tool, RAG, ApiLogs, MultiAgent, ProjectContext, Subagent)
     → CoreApiRouter (composition root — creates dependencies, exposes routers, no business logic)
       → Execution (WorkflowOrchestrator → ChatService for CHAT | AgentTurnLoop for PLAN/AGENT)
-        → LLMClient (8 provider adapters) + ToolRegistry (15 tools) + ContextService (14 providers)
+        → LLMClient (8 provider adapters) + ToolRegistry (24 tools) + ContextService (14 providers)
           → Infrastructure (SQLite via Exposed ORM, Ktor HTTP, Caffeine cache)
 ```
 
@@ -55,8 +55,8 @@ Callers access domain routers directly via `coreApiRouter.taskRouter`, `coreApiR
 ## Three Execution Modes
 
 - **CHAT** — No tools. Conversation-only via WorkflowOrchestrator → ChatService.
-- **PLAN** — Read-only tools (6). AgentTurnLoop with max 25 iterations.
-- **AGENT** — Full read/write tools (15). AgentTurnLoop with max 50 iterations. File snapshots before edits.
+- **PLAN** — Read-only tools (14). AgentTurnLoop with max 25 iterations.
+- **AGENT** — Full read/write tools (24). AgentTurnLoop with max 50 iterations. File snapshots before edits.
 
 Subagents use a nested invocation model (max depth 3) with custom system prompts and tool filtering.
 

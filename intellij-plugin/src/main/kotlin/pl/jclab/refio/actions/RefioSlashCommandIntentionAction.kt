@@ -94,16 +94,16 @@ class RefioSlashCommandIntentionAction(
         }
 
         val options = commands.map { "/${it.name} - ${it.description}" }.toTypedArray()
-        val selected = Messages.showChooseDialog(
+        val selected = Messages.showDialog(
             project,
             "Select a Refio slash command to run for the current selection.",
             "Refio Slash Commands",
-            Messages.getQuestionIcon(),
             options,
-            options.first()
+            0,
+            Messages.getQuestionIcon()
         )
 
-        if (selected == -1) {
+        if (selected < 0) {
             return null
         }
 

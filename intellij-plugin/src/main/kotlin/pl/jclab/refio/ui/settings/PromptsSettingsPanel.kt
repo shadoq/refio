@@ -70,7 +70,7 @@ class PromptsSettingsPanel(
 
             promptsTable = JBTable(object : DefaultTableModel(data, columnNames) {
                 override fun getColumnClass(column: Int): Class<*> {
-                    return if (column == 3) java.lang.Boolean::class.java else String::class.java
+                    return if (column == 3) Boolean::class.javaObjectType else String::class.java
                 }
 
                 override fun isCellEditable(row: Int, column: Int): Boolean {
@@ -118,7 +118,7 @@ class PromptsSettingsPanel(
 
             commandsTable = JBTable(object : DefaultTableModel(data, columnNames) {
                 override fun getColumnClass(column: Int): Class<*> {
-                    return if (column == 2) java.lang.Boolean::class.java else String::class.java
+                    return if (column == 2) Boolean::class.javaObjectType else String::class.java
                 }
 
                 override fun isCellEditable(row: Int, column: Int): Boolean {

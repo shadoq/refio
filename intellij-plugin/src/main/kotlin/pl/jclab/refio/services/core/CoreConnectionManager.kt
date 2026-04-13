@@ -88,8 +88,7 @@ class CoreConnectionManager {
             ContextProviderRegistry.providerFactory = { isIdeEnvironment ->
                 val terminalAvailable = try {
                     val pluginId = com.intellij.openapi.extensions.PluginId.getId("com.intellij.terminal")
-                    val plugin = com.intellij.ide.plugins.PluginManagerCore.getPlugin(pluginId)
-                    plugin?.isEnabled == true
+                    com.intellij.ide.plugins.PluginManagerCore.isPluginInstalled(pluginId)
                 } catch (_: Exception) { false }
 
                 buildList {

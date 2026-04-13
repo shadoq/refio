@@ -1418,7 +1418,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
             """.trimIndent()
             return
         }
-        val promptText = prompt ?: return
+        val promptText = prompt
 
         val structureHtml = buildContextStructureOverview(context)
         val escaped = promptText
@@ -1804,11 +1804,12 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         val html = """
             <html><body style='padding: 5px; word-wrap: break-word;'>
             <b>Context Stability:</b> ~${stabilityPercent}% unchanged from previous turn<br>
-            <div style='background: #E0E0E0; width: 200px; height: 12px; border-radius: 6px; margin-top: 4px;'>
-                <div style='background: $barColor; width: ${stabilityPercent * 2}px; height: 12px; border-radius: 6px;'></div>
-            </div>
+            <table cellpadding='0' cellspacing='0' style='margin-top: 4px;'><tr>
+                <td style='background: $barColor; width: ${stabilityPercent * 2}px; height: 12px;'></td>
+                <td style='background: #E0E0E0; width: ${(100 - stabilityPercent) * 2}px; height: 12px;'></td>
+            </tr></table>
             <br>
-            <span style='font-size: 0.9em; color: #888;'>
+            <span style='color: #888;'>
             Stable context (project info, conventions) is cached and reused across turns.
             </span>
             </body></html>

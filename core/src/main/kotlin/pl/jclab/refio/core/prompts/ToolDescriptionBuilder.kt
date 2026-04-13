@@ -13,8 +13,8 @@ import pl.jclab.refio.core.utils.GsonInstance.prettyGson
  * - CHAT/PLAN: Read-only tools (read_file, grep_search, etc.) filtered by permissions
  * - AGENT: All tools including write operations filtered by permissions
  *
- * Uses ToolRegistry and ToolPermissionsService to dynamically generate descriptions
- * with parameter schemas.
+ * Groups tools by logical sections (Reading & Search, Web, Editing, etc.)
+ * with section headers for better LLM comprehension.
  */
 class ToolDescriptionBuilder(
     private val toolRegistry: ToolRegistry,
@@ -76,20 +76,30 @@ class ToolDescriptionBuilder(
 
     /**
      * Get tool descriptions for a pre-filtered tool list.
-     * Keeps prompts consistent with task-specific constraints (e.g., read-only).
+     * Groups tools by logical sections (Reading, Web, Editing, etc.) with headers.
      */
     fun getToolDescriptionsForTools(mode: TaskMode, tools: List<Tool>): String {
-        val descriptions = tools.mapIndexed { index, tool ->
-            val schema = tool.getParameterSchema()
-            buildToolDescription(index + 1, tool.name, tool.description, schema)
-        }.joinToString("\n\n")
-
         val modeNote = when (mode) {
             TaskMode.CHAT, TaskMode.PLAN -> "READ-ONLY TOOLS (you can use these in ${mode.name} mode):"
             TaskMode.AGENT -> "AVAILABLE TOOLS (read-only and write operations):"
         }
 
-        return "$modeNote\n\n$descriptions"
+        val groups = toolRegistry.getToolsByGroups(tools)
+        var number = 1
+        val sb = StringBuilder()
+        sb.appendLine(modeNote)
+
+        for ((groupName, groupTools) in groups) {
+            sb.appendLine()
+            sb.appendLine("### $groupName")
+            for (tool in groupTools) {
+                val schema = tool.getParameterSchema()
+                sb.append(buildToolDescription(number, tool.name, tool.description, schema))
+                number++
+            }
+        }
+
+        return sb.toString().trimEnd()
     }
 
     /**
@@ -137,16 +147,22 @@ class ToolDescriptionBuilder(
         val required = (schema["required"] as? List<String>) ?: emptyList()
 
         if (properties.isNotEmpty()) {
-            properties.forEach { (paramName, paramSchema) ->
+            val requiredParams = properties.filter { it.key in required }
+            val optionalParams = properties.filter { it.key !in required }
+
+            requiredParams.forEach { (paramName, paramSchema) ->
                 val paramType = paramSchema["type"]?.toString() ?: "any"
                 val paramDesc = paramSchema["description"]?.toString() ?: ""
-                val isRequired = paramName in required
-                val requiredLabel = if (isRequired) "Required" else "Optional"
+                sb.append("   - **\"$paramName\"** ($paramType)")
+                if (paramDesc.isNotBlank()) sb.append(" — $paramDesc")
+                sb.append("\n")
+            }
 
-                sb.append("   - $requiredLabel: \"$paramName\" ($paramType)")
-                if (paramDesc.isNotBlank()) {
-                    sb.append(" - $paramDesc")
-                }
+            optionalParams.forEach { (paramName, paramSchema) ->
+                val paramType = paramSchema["type"]?.toString() ?: "any"
+                val paramDesc = paramSchema["description"]?.toString() ?: ""
+                sb.append("   - \"$paramName\" ($paramType, optional)")
+                if (paramDesc.isNotBlank()) sb.append(" — $paramDesc")
                 sb.append("\n")
             }
         }

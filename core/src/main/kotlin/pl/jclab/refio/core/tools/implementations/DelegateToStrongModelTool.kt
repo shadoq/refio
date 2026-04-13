@@ -40,10 +40,9 @@ class DelegateToStrongModelTool(
 
     override val name = "delegate_to_strong_model"
     override val description = "Delegate a complex task to a stronger, more capable model. " +
-        "Use when the task requires deeper reasoning, you've attempted a solution but the result is unsatisfactory, " +
-        "the problem involves complex architectural decisions or subtle bugs, or you need expert-level analysis. " +
-        "Default: single-shot (text response, no tools). Set allow_tools=true for full agent mode. " +
-        "The strong model receives ONLY what you pass — be explicit in your task description."
+        "Use when deeper reasoning is needed or you're stuck after multiple attempts. " +
+        "Default: single-shot (no tools). Set allow_tools=true for agent mode. " +
+        "The strong model receives ONLY what you pass — be explicit."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.SYSTEM
 

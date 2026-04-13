@@ -474,6 +474,8 @@ class AgentTurnLoop(
         // under context pressure routinely drop format for one iteration; a single short
         // nudge usually brings them back. Without this guard the loop exits as `success=true`
         // on the first plain-text response, silently abandoning mid-task work.
+        // NOTE: Nudges are skipped when the model previously executed tool calls — plain text
+        // after successful tool usage is treated as intentional completion, not format loss.
         var plainTextNudgeCount = 0
         var totalTokensIn = 0
         var totalTokensOut = 0
@@ -1131,6 +1133,12 @@ class AgentTurnLoop(
                         // unable to produce JSON and further retries are wasted turns. Guarded by
                         // `iteration < maxIterations` so we don't nudge on the last possible turn.
                         //
+                        // IMPORTANT: If the model previously executed tool calls (usedTools is
+                        // non-empty), plain text is treated as intentional task completion — not a
+                        // format lapse. Nudging in this case wastes 2-3 iterations regenerating
+                        // the same summary. Incomplete JSON envelopes are still retried regardless,
+                        // as they indicate a truncated response that needs regeneration.
+                        //
                         // We intentionally do NOT persist the plain-text body as an ASSISTANT
                         // message: doing so reinjects the bad output into the next prompt and
                         // trains the model to keep emitting plain text. The model's `thinking`
@@ -1142,12 +1150,18 @@ class AgentTurnLoop(
                         // contradict the intentional simplification in TurnGuardrails.
                         val hasIncompleteJsonEnvelope =
                             jsonEnvelopeInspection.hasJsonEnvelope && !jsonEnvelopeInspection.isComplete
+                        // Skip nudge when the model previously produced valid JSON with tool calls
+                        // and now returns plain text — this is an intentional completion, not a
+                        // format lapse. Only nudge when the model never succeeded with JSON format
+                        // (usedTools is empty) or when the envelope is structurally incomplete
+                        // (truncated response that needs regeneration).
+                        val modelPreviouslyUsedTools = usedTools.isNotEmpty()
                         val requiresFormatRetry =
                             mode == TaskMode.AGENT &&
                                 contentForExtraction.isNotBlank() &&
                                 plainTextNudgeCount < 2 &&
                                 iteration < maxIterations &&
-                                (hasIncompleteJsonEnvelope || !looksLikeJsonResponse)
+                                (hasIncompleteJsonEnvelope || (!looksLikeJsonResponse && !modelPreviouslyUsedTools))
 
                         if (requiresFormatRetry) {
                             plainTextNudgeCount++

@@ -1,7 +1,6 @@
 package pl.jclab.refio.services.session
 
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.project.guessProjectDir
 import pl.jclab.refio.api.CoreApiClient
 import pl.jclab.refio.api.models.Message
 import pl.jclab.refio.api.models.SubtaskDto
@@ -9,6 +8,7 @@ import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.api.ExecuteStepResponse
 import pl.jclab.refio.core.api.UpdateSubtaskRequest
 import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.services.project.SafeVfsAccess
 import java.util.UUID
 
 class SubtaskTracker(
@@ -239,7 +239,7 @@ class SubtaskTracker(
                     "[SUBTASK] Subtask executed: taskId=${currentSession.id}, subtaskId=$subtaskId, " +
                         "status=${executeResponse.status}, durationMs=${executeResponse.durationMs}ms"
                 }
-                project.guessProjectDir()?.refresh(true, true)
+                SafeVfsAccess.refreshProjectRoot(project, logger)
             } else {
                 logger.error { "Failed to execute subtask: $subtaskId" }
             }

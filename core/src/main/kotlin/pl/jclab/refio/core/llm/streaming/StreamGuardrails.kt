@@ -82,7 +82,7 @@ class StreamGuardrails(
          * Current composition:
          * - [RepetitionDetector] with conservative defaults (fires on 4×
          *   consecutive block repetitions, any block size 50–800 chars).
-         * - [OutputSizeLimiter] at 32 KB — prevents runaway continuations.
+         * - [OutputSizeLimiter] at 128 KB — prevents runaway continuations.
          * - [WallClockDeadline] at 180 s — independent of Ktor's request
          *   timeout, so a stuck stream unwinds cleanly without waiting for
          *   the full provider timeout.
