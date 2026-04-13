@@ -211,7 +211,6 @@ class SubagentParser {
             includeFileTree = (map["include_file_tree"] as? Boolean) ?: true,
             includeConversation = (map["include_conversation"] as? Boolean) ?: true,
             includeWorkingMemory = (map["include_working_memory"] as? Boolean) ?: true,
-            includeRag = (map["include_rag"] as? Boolean) ?: true,
             includeDependencies = (map["include_dependencies"] as? Boolean) ?: true,
             maxContextTokens = parseIntSafe(map["max_context_tokens"]),
             includeParentSummary = (map["include_parent_summary"] as? Boolean) ?: false

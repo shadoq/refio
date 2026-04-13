@@ -613,7 +613,6 @@ class ProjectContextRouter(
             analyzedAt = context.contextGeneratedAt.toEpochMilli(),
             contextBuiltAt = context.contextGeneratedAt.toEpochMilli(),
             userRequirements = context.userRequirements,
-            ragFragments = context.ragFragments,
             mcpResources = context.mcpResources.map {
                 MCPResourceResponse(serverId = it.serverId, uri = it.uri, name = it.name, description = it.description, mimeType = it.mimeType)
             },
@@ -659,7 +658,7 @@ class ProjectContextRouter(
     private fun findNextKnownSectionStart(prompt: String, fromIndex: Int): Int? {
         val knownSectionTags = listOf(
             "PROJECT_CONTEXT", "CURRENT_TASK", "USER_REQUIREMENTS", "USER_PROVIDED_CONTEXT",
-            "WORKING_MEMORY", "MCP_RESOURCES", "RAG_FRAGMENTS", "CONVERSATION_HISTORY",
+            "WORKING_MEMORY", "MCP_RESOURCES", "CONVERSATION_HISTORY",
             "RECENT_WORK", "SUBTASKS_STATUS", "KEY_COMPONENTS", "PROJECT_DEPENDENCIES", "CODE_ANALYSIS"
         )
         var nextIndex: Int? = null

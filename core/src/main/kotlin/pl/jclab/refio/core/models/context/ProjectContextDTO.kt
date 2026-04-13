@@ -36,9 +36,6 @@ data class ProjectContextDTO(
     // User requirements (extracted from task description - PHASE 2)
     val userRequirements: Map<String, Any> = emptyMap(),
 
-    // RAG (Retrieval-Augmented Generation) context
-    val ragFragments: List<CodeFragmentDTO> = emptyList(),
-
     // User-provided context (from @ mentions + extracted from messages)
     val userContextRefs: List<ResolvedContextDTO> = emptyList(),
 

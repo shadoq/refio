@@ -13,7 +13,6 @@ class ContextBudgetTest {
             sectionBudgets = mapOf(
                 ContextSection.PROJECT_CONTEXT to 30,
                 ContextSection.USER_CONTEXT to 20,
-                ContextSection.RAG_FRAGMENTS to 20,
                 ContextSection.CONVERSATION to 10,
                 ContextSection.WORKING_MEMORY to 10
             )
@@ -64,8 +63,7 @@ class ContextBudgetTest {
                 ContextSection.RECENT_WORK to 100,
                 ContextSection.WORKING_MEMORY to 100,
                 ContextSection.CONVERSATION to 100,
-                ContextSection.USER_CONTEXT to 100,
-                ContextSection.RAG_FRAGMENTS to 100
+                ContextSection.USER_CONTEXT to 100
             )
         )
 

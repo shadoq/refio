@@ -50,25 +50,6 @@ object NotificationService {
         showNotification(project, title, content, NotificationType.ERROR)
     }
 
-    /**
-     * Show RAG service unavailable notification
-     * (only shown once per circuit breaker open event)
-     */
-    fun showRagUnavailable(project: Project?, providerType: String, endpoint: String) {
-        val title = "RAG Search Unavailable"
-        val content = when (providerType) {
-            "ollama" -> "Cannot connect to Ollama at $endpoint. RAG search is disabled. " +
-                    "Make sure Ollama is running and has the embedding model loaded."
-            "openai" -> "Cannot connect to OpenAI embedding API. RAG search is disabled. " +
-                    "Check your API key and network connection."
-            else -> "Cannot connect to embedding provider ($providerType). RAG search is disabled."
-        }
-
-        showWarning(project, title, content)
-
-        logger.info { "Showed RAG unavailable notification: $providerType at $endpoint" }
-    }
-
     private fun showNotification(
         project: Project?,
         title: String,

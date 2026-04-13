@@ -419,7 +419,6 @@ class TuiObservabilityViewModel(
         "code_analysis" to 3, "framework_analysis" to 3,
         "current_task" to 4, "subtasks" to 4,
         "conversation_history" to 5, "conversation" to 5, "recent_work" to 5,
-        "rag_fragments" to 6, "rag_index" to 6,
         "user_context" to 7, "user_requirements" to 7, "task_requirements" to 7,
         "key_components" to 8, "domain_analysis" to 8,
         "working_memory" to 9, "mcp_resources" to 9,
@@ -437,7 +436,6 @@ class TuiObservabilityViewModel(
             key.startsWith("project") || key == "semantic_summary" -> "project"
             key.startsWith("user") -> "user"
             key == "task_requirements" -> "user"
-            key.startsWith("rag") -> "rag"
             key.startsWith("conversation") || key == "recent_work" -> "conversation"
             key.startsWith("mcp") || key.startsWith("tool") -> "tools"
             else -> "project"
@@ -475,7 +473,6 @@ class TuiObservabilityViewModel(
         "user_context" to "USER_PROVIDED_CONTEXT",
         "working_memory" to "WORKING_MEMORY",
         "mcp_resources" to "MCP_RESOURCES",
-        "rag_fragments" to "RAG_FRAGMENTS",
         "conversation" to "CONVERSATION_HISTORY",
         "recent_work" to "RECENT_WORK",
         "subtasks" to "SUBTASKS_STATUS",

@@ -36,6 +36,14 @@ class ToolCallParser(
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
     private val toolArgumentKeys = listOf("arguments", "args", "tool_args", "toolArgs", "parameters", "params")
 
+    data class JsonEnvelopeInspection(
+        val hasJsonEnvelope: Boolean,
+        val isComplete: Boolean,
+        val isFenced: Boolean,
+        val firstBraceIndex: Int,
+        val closingBraceIndex: Int
+    )
+
     /**
      * Main entry point - parses LLM content into ToolCallData list.
      */
@@ -185,6 +193,51 @@ class ToolCallParser(
         } catch (e: Exception) {
             false
         }
+    }
+
+    fun inspectJsonEnvelope(content: String): JsonEnvelopeInspection {
+        val trimmed = content.trim()
+        if (trimmed.isBlank()) {
+            return JsonEnvelopeInspection(
+                hasJsonEnvelope = false,
+                isComplete = false,
+                isFenced = false,
+                firstBraceIndex = -1,
+                closingBraceIndex = -1
+            )
+        }
+
+        val isFenced = Regex("""^```(?:json)?\s*""", RegexOption.IGNORE_CASE).containsMatchIn(trimmed)
+        val firstBraceIndex = trimmed.indexOf('{')
+        if (firstBraceIndex == -1) {
+            return JsonEnvelopeInspection(
+                hasJsonEnvelope = false,
+                isComplete = false,
+                isFenced = isFenced,
+                firstBraceIndex = -1,
+                closingBraceIndex = -1
+            )
+        }
+
+        var closingBraceIndex = findMatchingBrace(trimmed, firstBraceIndex)
+        val recoveredFromClosedFence = if (closingBraceIndex == -1 && isFenced) {
+            val fencedBody = extractClosedFencedJsonBody(trimmed)
+            if (fencedBody != null && canParseJsonCandidate(fencedBody)) {
+                closingBraceIndex = trimmed.lastIndexOf('}')
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+        return JsonEnvelopeInspection(
+            hasJsonEnvelope = true,
+            isComplete = closingBraceIndex != -1 || recoveredFromClosedFence,
+            isFenced = isFenced,
+            firstBraceIndex = firstBraceIndex,
+            closingBraceIndex = closingBraceIndex
+        )
     }
 
     // ===== Private methods =====
@@ -382,6 +435,26 @@ class ToolCallParser(
 
     private fun extractJsonWithStrategies(content: String): String? {
         val trimmed = content.trim()
+        val closedFencedBody = extractClosedFencedJsonBody(trimmed)
+
+        if (closedFencedBody != null) {
+            try {
+                json.parseToJsonElement(closedFencedBody)
+                logger.info { "[EXTRACT_JSON] Strategy 0: Extracted valid JSON from fenced block body" }
+                return closedFencedBody
+            } catch (e: Exception) {
+                logger.debug { "[EXTRACT_JSON] Strategy 0 failed: ${e.message}" }
+            }
+
+            val repairedFencedBody = TurnJsonUtils.repairMalformedJson(closedFencedBody)
+            try {
+                json.parseToJsonElement(repairedFencedBody)
+                logger.info { "[EXTRACT_JSON] Strategy 0b: Repaired malformed fenced JSON body" }
+                return repairedFencedBody
+            } catch (e: Exception) {
+                logger.debug { "[EXTRACT_JSON] Strategy 0b failed: ${e.message}" }
+            }
+        }
 
         // Strategy 1: Try parsing entire content as JSON directly
         if (trimmed.startsWith("{")) {
@@ -407,11 +480,20 @@ class ToolCallParser(
                 } catch (e: Exception) {
                     logger.debug { "[EXTRACT_JSON] Strategy 2 extraction invalid: ${e.message}" }
                 }
+            } else {
+                val repairedCandidate = TurnJsonUtils.repairMalformedJson(trimmed.substring(firstBraceIndex))
+                try {
+                    json.parseToJsonElement(repairedCandidate)
+                    logger.info { "[EXTRACT_JSON] Strategy 2b: Repaired unmatched-brace JSON fragment" }
+                    return repairedCandidate
+                } catch (e: Exception) {
+                    logger.debug { "[EXTRACT_JSON] Strategy 2b repair failed: ${e.message}" }
+                }
             }
         }
 
         // Strategy 3: JSON in code block ```json ... ```
-        val codeBlockStartPattern = Regex("""```(?:json)?\s*\n""")
+        val codeBlockStartPattern = Regex("""```(?:json)?\s*\n""", RegexOption.IGNORE_CASE)
         val codeBlockMatch = codeBlockStartPattern.find(trimmed)
         if (codeBlockMatch != null) {
             val afterFence = codeBlockMatch.range.last + 1
@@ -429,6 +511,15 @@ class ToolCallParser(
                         } catch (e: Exception) {
                             logger.debug { "[EXTRACT_JSON] Strategy 3 extraction invalid: ${e.message}" }
                         }
+                    }
+                } else {
+                    val repairedCandidate = TurnJsonUtils.repairMalformedJson(trimmed.substring(jsonStartInBlock))
+                    try {
+                        json.parseToJsonElement(repairedCandidate)
+                        logger.info { "[EXTRACT_JSON] Strategy 3b: Repaired incomplete fenced JSON block" }
+                        return repairedCandidate
+                    } catch (e: Exception) {
+                        logger.debug { "[EXTRACT_JSON] Strategy 3b repair failed: ${e.message}" }
                     }
                 }
             }
@@ -470,6 +561,30 @@ class ToolCallParser(
 
         logger.warn { "[EXTRACT_JSON] All strategies failed, content preview: ${trimmed.take(200)}..." }
         return null
+    }
+
+    private fun extractClosedFencedJsonBody(content: String): String? {
+        val startMatch = Regex("""^```(?:json)?\s*""", RegexOption.IGNORE_CASE).find(content) ?: return null
+        val bodyStart = startMatch.range.last + 1
+        val lastFenceIndex = content.lastIndexOf("```")
+        if (lastFenceIndex <= bodyStart) {
+            return null
+        }
+        return content.substring(bodyStart, lastFenceIndex).trim()
+    }
+
+    private fun canParseJsonCandidate(candidate: String): Boolean {
+        return try {
+            json.parseToJsonElement(candidate)
+            true
+        } catch (_: Exception) {
+            try {
+                json.parseToJsonElement(TurnJsonUtils.repairMalformedJson(candidate))
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
     }
 
     private fun extractJsonFromContent(content: String): String? {

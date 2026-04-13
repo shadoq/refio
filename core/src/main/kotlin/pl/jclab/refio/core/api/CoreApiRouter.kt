@@ -778,10 +778,9 @@ class CoreApiRouter(
         logger.info { "Initializing core with dbPath=$dbPath" }
         DatabaseFactory.init(dbPath)
         promptsService.initializeDefaults()
-        if (projectRoot != null && contextService != null) {
+        if (projectRoot != null) {
             val ragComponents = initializeRagSearchService()
             ragComponents?.let { (service, modelId, providerId) ->
-                contextService.updateRagSearchConfig(service, modelId, providerId)
                 // Register on-demand rag_search tool now that the embedding stack is wired.
                 // Done here (not in ToolFactory) because RagSearchService is project-scoped and
                 // only available after embedding model resolution succeeds.

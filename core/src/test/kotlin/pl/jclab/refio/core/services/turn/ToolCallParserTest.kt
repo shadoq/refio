@@ -56,6 +56,49 @@ class ToolCallParserTest {
     }
 
     @Test
+    fun `should recover fenced create new file tool call from malformed envelope with long markdown content`() {
+        val malformed = """
+            ```json
+            {
+              "thinking": "Preparing file",
+              "intent": "implementation",
+              "response": "Creating file",
+              "actions": [
+                {"tool": "create_new_file", "arguments": {"path": "0001-idsx.md", "content": "# Title
+
+            ## Example
+
+            ```javascript
+            const message = "Hello";
+            ```
+
+            Final line
+            "}}
+              ]
+            }
+            ```
+        """.trimIndent()
+
+        val inspection = parser.inspectJsonEnvelope(malformed)
+        assertTrue(inspection.hasJsonEnvelope)
+        assertTrue(inspection.isComplete)
+        assertTrue(inspection.isFenced)
+
+        val toolCalls = parser.extractToolCalls(malformed, TaskMode.AGENT)
+
+        assertEquals(1, toolCalls.size)
+        assertEquals("create_new_file", toolCalls.first().name)
+
+        val arguments = Json.parseToJsonElement(toolCalls.first().arguments).jsonObject
+        assertEquals("0001-idsx.md", arguments["path"]?.jsonPrimitive?.content)
+
+        val content = arguments["content"]?.jsonPrimitive?.content
+        assertNotNull(content)
+        assertTrue(content.contains("""const message = "Hello";"""))
+        assertTrue(content.contains("Final line"))
+    }
+
+    @Test
     fun `should recover generic tool calls with malformed quoted strings in arguments`() {
         val malformed = """
             {
@@ -84,5 +127,62 @@ class ToolCallParserTest {
         assertEquals("notes.txt", arguments["path"]?.jsonPrimitive?.content)
         assertEquals("""before "quoted" value""", arguments["old_string"]?.jsonPrimitive?.content)
         assertEquals("after line 1\nafter line 2", arguments["new_string"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `should detect complete fenced json envelope`() {
+        val content = """
+            ```json
+            {
+              "actions": [],
+              "response": "Done",
+              "intent": "implementation"
+            }
+            ```
+        """.trimIndent()
+
+        val inspection = parser.inspectJsonEnvelope(content)
+
+        assertTrue(inspection.hasJsonEnvelope)
+        assertTrue(inspection.isComplete)
+        assertTrue(inspection.isFenced)
+        assertEquals("Done", parser.extractTextResponse(content))
+    }
+
+    @Test
+    fun `should detect incomplete fenced json envelope`() {
+        val content = """
+            ```json
+            {
+              "actions": [
+                {"tool": "http_request", "args": {"url": "https://example.com"}}
+              ],
+              "response": "Working",
+              "intent": "implementation"
+        """.trimIndent()
+
+        val inspection = parser.inspectJsonEnvelope(content)
+
+        assertTrue(inspection.hasJsonEnvelope)
+        assertFalse(inspection.isComplete)
+        assertTrue(inspection.isFenced)
+        val toolCalls = parser.extractToolCalls(content, TaskMode.AGENT)
+        assertEquals(1, toolCalls.size)
+        assertEquals("http_request", toolCalls.first().name)
+    }
+
+    @Test
+    fun `should detect incomplete raw json envelope`() {
+        val content = """{"actions":[{"tool":"read_file","args":{"path":"a.txt"}}],"response":"Working""""
+            .dropLast(1)
+
+        val inspection = parser.inspectJsonEnvelope(content)
+
+        assertTrue(inspection.hasJsonEnvelope)
+        assertFalse(inspection.isComplete)
+        assertFalse(inspection.isFenced)
+        val toolCalls = parser.extractToolCalls(content, TaskMode.AGENT)
+        assertEquals(1, toolCalls.size)
+        assertEquals("read_file", toolCalls.first().name)
     }
 }

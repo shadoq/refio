@@ -38,7 +38,6 @@ class ContextServiceTest {
     private lateinit var subtaskRepository: SubtaskRepository
     private lateinit var fileAnalyzerService: FileAnalyzerService
     private lateinit var configService: ConfigService
-    private lateinit var ragSearchService: RagSearchService
 
     private lateinit var service: ContextService
 
@@ -55,8 +54,6 @@ class ContextServiceTest {
         every { configService.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
         every { configService.getContextBudget(any(), any()) } returns
             pl.jclab.refio.core.services.context.ContextBudget.forContextSize(32000)
-        ragSearchService = mockk()
-
         projectRoot = Files.createTempDirectory("refio-test")
 
         mockkStatic("org.jetbrains.exposed.sql.transactions.ThreadLocalTransactionManagerKt")
@@ -78,8 +75,7 @@ class ContextServiceTest {
             chatMessageRepository = chatMessageRepository,
             subtaskRepository = subtaskRepository,
             fileAnalyzerService = fileAnalyzerService,
-            configService = configService,
-            ragSearchService = null
+            configService = configService
         )
     }
 
@@ -260,21 +256,6 @@ class ContextServiceTest {
         }
     }
 
-    @Nested
-    inner class UpdateRagSearchConfigTests {
-
-        @Test
-        fun `should update RAG search configuration`() {
-            val newService = mockk<RagSearchService>()
-            service.updateRagSearchConfig(newService, "model-123", "openai")
-        }
-
-        @Test
-        fun `should accept null values`() {
-            service.updateRagSearchConfig(null, null, null)
-        }
-    }
-
     // ---- New Contract Tests ----
 
     @Nested
@@ -378,7 +359,6 @@ class ContextServiceTest {
                 taskId = "task-1"
             )
             assertNotNull(result)
-            assertTrue(result.ragFragments.isEmpty())
         }
 
         @Test
@@ -461,7 +441,6 @@ class ContextServiceTest {
         @Test
         fun `should handle empty optional fields`() {
             val context = createMinimalProjectContextDTO().copy(
-                ragFragments = emptyList(),
                 userContextRefs = emptyList(),
                 mcpResources = emptyList(),
                 conversationHistory = emptyList(),
@@ -689,7 +668,7 @@ class ContextServiceTest {
             val prompt = """
                 <PROJECT_CONTEXT>Project overview</PROJECT_CONTEXT>
                 <CURRENT_TASK>Task info</CURRENT_TASK>
-                <RAG_FRAGMENTS>Some code</RAG_FRAGMENTS>
+                <USER_PROVIDED_CONTEXT>Some code</USER_PROVIDED_CONTEXT>
             """.trimIndent()
 
             val result = service.calculateContextSectionTokens(dummyContext, prompt)

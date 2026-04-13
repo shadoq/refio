@@ -617,12 +617,6 @@ ${warning}
             result = result.replace(Regex("<project_structure>.*?</project_structure>", RegexOption.DOT_MATCHES_ALL), "")
         }
 
-        if (!profile.includeRag) {
-            // Remove RAG fragment sections
-            result = result.replace(Regex("<rag_fragments>.*?</rag_fragments>", RegexOption.DOT_MATCHES_ALL), "")
-            result = result.replace(Regex("<rag_context>.*?</rag_context>", RegexOption.DOT_MATCHES_ALL), "")
-        }
-
         if (!profile.includeDependencies) {
             // Remove dependency sections
             result = result.replace(Regex("<dependencies>.*?</dependencies>", RegexOption.DOT_MATCHES_ALL), "")

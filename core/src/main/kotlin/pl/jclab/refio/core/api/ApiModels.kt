@@ -8,7 +8,6 @@ import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.models.context.CurrentTaskDTO
 import pl.jclab.refio.core.models.context.SubtaskDTO
 import pl.jclab.refio.core.models.context.ExecutedStepDTO
-import pl.jclab.refio.core.models.context.CodeFragmentDTO
 import pl.jclab.refio.core.models.context.ConversationMessageDTO
 import pl.jclab.refio.api.models.ContextReference
 
@@ -416,8 +415,6 @@ data class ProjectContextResponse(
     val contextBuiltAt: Long,
     // User requirements extracted from task description
     val userRequirements: Map<String, Any> = emptyMap(),
-    // RAG (Retrieval-Augmented Generation) fragments
-    val ragFragments: List<CodeFragmentDTO> = emptyList(),
     val mcpResources: List<MCPResourceResponse> = emptyList(),
     // User context references from @mentions (files, selections, providers)
     val userContextRefs: List<UserContextRefDTO> = emptyList(),

@@ -677,15 +677,60 @@ class AgentTurnLoop(
                             llmResponse = llmResponse.copy(content = thinking ?: "", thinking = null)
                             // Fall through to the regular tool-call extraction path.
                         } else {
+                            val canRetryEmptyContent =
+                                mode == TaskMode.AGENT &&
+                                    plainTextNudgeCount < 2 &&
+                                    iteration < maxIterations
+
+                            if (canRetryEmptyContent) {
+                                plainTextNudgeCount++
+                                logger.warn {
+                                    "[FORMAT_RETRY_NUDGE] taskId=$taskId, iteration=$iteration: " +
+                                        "LLM returned empty content in JSON mode. " +
+                                        "Nudge=$plainTextNudgeCount/2, finishReason=${llmResponse.finishReason}"
+                                }
+                                val resolvedThinking = turnResponseProcessor.resolveAssistantThinking(llmResponse)
+                                if (!resolvedThinking.isNullOrBlank()) {
+                                    chatMessageRepository.create(
+                                        taskId = taskId,
+                                        role = MessageRole.ASSISTANT,
+                                        content = "",
+                                        thinking = resolvedThinking,
+                                        toolCalls = null,
+                                        tokensIn = llmResponse.usage.inputTokens,
+                                        tokensOut = llmResponse.usage.outputTokens,
+                                        cost = llmResponse.cost
+                                    )
+                                }
+                                chatMessageRepository.create(
+                                    taskId = taskId,
+                                    role = MessageRole.SYSTEM,
+                                    content = "Your previous reply contained empty content in structured JSON mode. " +
+                                        "Generate the full JSON envelope again from scratch. " +
+                                        "Do not continue or patch the previous output. Reply with JSON only: " +
+                                        "{\"actions\":[{\"tool\":\"NAME\",\"arguments\":{...}}]," +
+                                        "\"response\":\"...\",\"intent\":\"implementation\"}. " +
+                                        "No prose, no markdown fences.",
+                                    toolCalls = null
+                                )
+                                continue
+                            }
+
                             logger.error {
                                 "[TURN_FAILED] Empty content from model in JSON mode " +
                                     "(mode=$mode, finishReason=${llmResponse.finishReason}, thinkingLength=${llmResponse.thinking?.length ?: 0})"
                             }
+                            val response = if (mode == TaskMode.AGENT) {
+                                "The agent returned empty content in structured mode and could not recover after retrying. " +
+                                    "Please rerun with the same task or switch to a more reliable model."
+                            } else {
+                                "Model returned empty content in structured mode. " +
+                                    "The selected model likely does not produce the required JSON envelope — " +
+                                    "try a different model (e.g. one tuned for tool use) or simplify the request."
+                            }
                             val result = TurnResult(
                                 success = false,
-                                response = "Model returned empty content in structured mode. " +
-                                    "The selected model likely does not produce the required JSON envelope — " +
-                                    "try a different model (e.g. one tuned for tool use) or simplify the request.",
+                                response = response,
                                 iterations = iteration,
                                 tokensIn = totalTokensIn,
                                 tokensOut = totalTokensOut,
@@ -698,12 +743,16 @@ class AgentTurnLoop(
 
                     // Check if model invoked tools
                     val contentForExtraction = toolCallParser.preprocessContent(llmResponse.content, taskId)
+                    val jsonEnvelopeInspection = toolCallParser.inspectJsonEnvelope(contentForExtraction)
                     val toolCalls = toolCallParser.extractToolCalls(contentForExtraction, mode, profileOverrides)
+                    val looksLikeJsonResponse =
+                        jsonEnvelopeInspection.hasJsonEnvelope || contentForExtraction.trim().startsWith("[")
 
                     // Check for truncated response with incomplete JSON
                     val isTruncatedWithIncompleteJson =
                         llmResponse.finishReason == "length" &&
-                        contentForExtraction.trim().startsWith("{") &&
+                        jsonEnvelopeInspection.hasJsonEnvelope &&
+                        !jsonEnvelopeInspection.isComplete &&
                         toolCalls.isEmpty()
 
                     if (isTruncatedWithIncompleteJson) {
@@ -1091,16 +1140,25 @@ class AgentTurnLoop(
                         // Nudge message is inlined (short, verbatim) because TurnNudgeBuilder was
                         // removed — reanimating the whole nudge layer for this one case would
                         // contradict the intentional simplification in TurnGuardrails.
-                        if (mode == TaskMode.AGENT &&
-                            !contentForExtraction.trim().let { it.startsWith("{") || it.startsWith("[") } &&
-                            contentForExtraction.isNotBlank() &&
-                            plainTextNudgeCount < 2 &&
-                            iteration < maxIterations
-                        ) {
+                        val hasIncompleteJsonEnvelope =
+                            jsonEnvelopeInspection.hasJsonEnvelope && !jsonEnvelopeInspection.isComplete
+                        val requiresFormatRetry =
+                            mode == TaskMode.AGENT &&
+                                contentForExtraction.isNotBlank() &&
+                                plainTextNudgeCount < 2 &&
+                                iteration < maxIterations &&
+                                (hasIncompleteJsonEnvelope || !looksLikeJsonResponse)
+
+                        if (requiresFormatRetry) {
                             plainTextNudgeCount++
+                            val retryReason = if (hasIncompleteJsonEnvelope) {
+                                "LLM returned incomplete JSON envelope"
+                            } else {
+                                "LLM returned plain text without JSON structure"
+                            }
                             logger.warn {
-                                "[PLAIN_TEXT_NUDGE] taskId=$taskId, iteration=$iteration: " +
-                                    "LLM returned plain text without JSON structure. " +
+                                "[FORMAT_RETRY_NUDGE] taskId=$taskId, iteration=$iteration: " +
+                                    "$retryReason. " +
                                     "Nudge=$plainTextNudgeCount/2, content='${contentForExtraction.take(80)}'"
                             }
                             val resolvedThinking = turnResponseProcessor.resolveAssistantThinking(llmResponse)
@@ -1119,13 +1177,48 @@ class AgentTurnLoop(
                             chatMessageRepository.create(
                                 taskId = taskId,
                                 role = MessageRole.SYSTEM,
-                                content = "Reply with JSON only: " +
-                                    "{\"actions\":[{\"tool\":\"NAME\",\"arguments\":{...}}]," +
-                                    "\"response\":\"...\",\"intent\":\"implementation\"}. " +
-                                    "No prose, no markdown fences.",
+                                content = if (hasIncompleteJsonEnvelope) {
+                                    "Your previous reply contained incomplete JSON. Generate the full JSON envelope again from scratch. " +
+                                        "Do not continue or patch the previous output. Reply with JSON only: " +
+                                        "{\"actions\":[{\"tool\":\"NAME\",\"arguments\":{...}}]," +
+                                        "\"response\":\"...\",\"intent\":\"implementation\"}. " +
+                                        "No prose, no markdown fences."
+                                } else {
+                                    "Reply with JSON only: " +
+                                        "{\"actions\":[{\"tool\":\"NAME\",\"arguments\":{...}}]," +
+                                        "\"response\":\"...\",\"intent\":\"implementation\"}. " +
+                                        "No prose, no markdown fences."
+                                },
                                 toolCalls = null
                             )
                             continue
+                        }
+
+                        if (mode == TaskMode.AGENT && hasIncompleteJsonEnvelope) {
+                            logger.error {
+                                "[MALFORMED_JSON_ENVELOPE] taskId=$taskId, iteration=$iteration: " +
+                                    "assistant returned incomplete JSON after retries exhausted"
+                            }
+                            val result = TurnResult(
+                                success = false,
+                                response = "The agent returned an incomplete JSON envelope and could not recover after retrying. " +
+                                    "Please rerun with the same task or switch to a more reliable model.",
+                                iterations = iteration,
+                                tokensIn = totalTokensIn,
+                                tokensOut = totalTokensOut,
+                                cost = totalCost,
+                                toolsUsed = usedTools.distinct()
+                            )
+                            return turnFinalizer.completeTurn(
+                                taskId,
+                                result,
+                                listener,
+                                runId,
+                                parentRunId,
+                                depth,
+                                persistAssistantMessage = true,
+                                metadata = subagentMetadata
+                            )
                         }
 
                         // Check error rate abort (hard abort — same threshold as tool-calls branch).

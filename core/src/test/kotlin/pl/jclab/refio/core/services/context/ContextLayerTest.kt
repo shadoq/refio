@@ -26,9 +26,8 @@ class ContextLayerTest {
     }
 
     @Test
-    fun `ContextSection EPHEMERAL layer includes user context and RAG`() {
+    fun `ContextSection EPHEMERAL layer includes user context`() {
         assertEquals(ContextLayer.EPHEMERAL, ContextSection.USER_CONTEXT.contextLayer)
-        assertEquals(ContextLayer.EPHEMERAL, ContextSection.RAG_FRAGMENTS.contextLayer)
         assertEquals(ContextLayer.EPHEMERAL, ContextSection.CONVERSATION.contextLayer)
     }
 

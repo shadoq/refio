@@ -24,7 +24,6 @@ class SubagentParserContextProfileTest {
               include_file_tree: false
               include_conversation: true
               include_working_memory: true
-              include_rag: false
               include_dependencies: true
               max_context_tokens: 8000
               include_parent_summary: true
@@ -38,7 +37,6 @@ class SubagentParserContextProfileTest {
         assertFalse(definition.contextProfile.includeFileTree)
         assertTrue(definition.contextProfile.includeConversation)
         assertTrue(definition.contextProfile.includeWorkingMemory)
-        assertFalse(definition.contextProfile.includeRag)
         assertTrue(definition.contextProfile.includeDependencies)
         assertEquals(8000, definition.contextProfile.maxContextTokens)
         assertTrue(definition.contextProfile.includeParentSummary)
@@ -60,7 +58,6 @@ class SubagentParserContextProfileTest {
         assertTrue(definition.contextProfile.includeFileTree)
         assertTrue(definition.contextProfile.includeConversation)
         assertTrue(definition.contextProfile.includeWorkingMemory)
-        assertTrue(definition.contextProfile.includeRag)
         assertTrue(definition.contextProfile.includeDependencies)
         assertEquals(null, definition.contextProfile.maxContextTokens)
         assertFalse(definition.contextProfile.includeParentSummary)
@@ -73,7 +70,6 @@ class SubagentParserContextProfileTest {
             name: partial-agent
             description: Partial profile agent
             context_profile:
-              include_rag: false
               include_parent_summary: true
             ---
 
@@ -83,7 +79,6 @@ class SubagentParserContextProfileTest {
         val definition = parser.parse(content, null, SubagentScope.PROJECT)
 
         // Specified fields
-        assertFalse(definition.contextProfile.includeRag)
         assertTrue(definition.contextProfile.includeParentSummary)
 
         // Default fields

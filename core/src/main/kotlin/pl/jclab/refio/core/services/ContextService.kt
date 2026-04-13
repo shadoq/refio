@@ -20,7 +20,6 @@ import java.nio.file.Path
 import java.time.Instant
 
 private val logger = dualLogger("ContextService")
-private const val MAX_RAG_FRAGMENTS = 15
 private const val CONVERSATION_SUMMARY_METADATA_TYPE = ConversationContextBuilder.CONVERSATION_SUMMARY_METADATA_TYPE
 
 // Context budget limits
@@ -76,12 +75,8 @@ class ContextService(
     private val configService: ConfigService,
     private val workingMemoryService: WorkingMemoryService? = null,
     private val conversationSummaryService: ConversationSummaryService? = null,
-    ragSearchService: RagSearchService? = null,
-    ragSearchModel: String? = null,
-    ragSearchProvider: String? = null
 ) {
     private val projectInstructionsLoader = ProjectInstructionsLoader()
-    private val ragContextLoader = RagContextLoader(configService, ragSearchService, ragSearchModel, ragSearchProvider)
     private val mcpContextLoader = McpContextLoader()
     private val projectContextSummarizer = ProjectContextSummarizer()
     private val conversationContextBuilder = ConversationContextBuilder()
@@ -129,9 +124,6 @@ class ContextService(
         subtaskRepository: SubtaskRepository,
         fileAnalyzerService: FileAnalyzerService? = null,
         configService: ConfigService,
-        ragSearchService: RagSearchService? = null,
-        ragSearchModel: String? = null,
-        ragSearchProvider: String? = null
     ) : this(
         projectAnalyzer = projectAnalyzer,
         taskRepository = taskRepository,
@@ -141,14 +133,7 @@ class ContextService(
         configService = configService,
         workingMemoryService = null,
         conversationSummaryService = null,
-        ragSearchService = ragSearchService,
-        ragSearchModel = ragSearchModel,
-        ragSearchProvider = ragSearchProvider
     )
-
-    fun updateRagSearchConfig(service: RagSearchService?, model: String?, provider: String?) {
-        ragContextLoader.updateRagSearchConfig(service, model, provider)
-    }
 
     /**
      * Build comprehensive project context for LLM using rich DTOs.
@@ -349,11 +334,6 @@ class ContextService(
             )
         }
 
-        // 8. Load hybrid RAG fragments (code + documentation)
-        val ragFragments = ragContextLoader.loadRagFragments(
-            projectRoot = projectRoot,
-            query = query
-        )
         val mcpResources = mcpContextLoader.loadMcpResources(projectRoot, query)
 
         // 9. Resolve user context references (from @ mentions)
@@ -396,9 +376,6 @@ class ContextService(
             // User requirements (extracted from task description - PHASE 2)
             userRequirements = userRequirements,
 
-            // RAG (Retrieval-Augmented Generation) context - unified fragments
-            ragFragments = ragFragments,
-
             // User-provided context (from @ mentions)
             userContextRefs = resolvedUserContext,
 
@@ -433,7 +410,7 @@ class ContextService(
      * ADR 0040 ORDER (2025-12-03):
      * 1. PROJECT CONTEXT FIRST - Agent must know the project before getting the task
      * 2. TASK & REQUIREMENTS - What needs to be done
-     * 3. USER CONTEXT & RAG - Supporting information
+     * 3. USER CONTEXT - Supporting information
      * 4. HISTORY - Previous work and conversation
      */
     /**
@@ -593,7 +570,7 @@ class ContextService(
         //   - RECENT_WORK never benefited from unused budget from STABLE_CONTEXT /
         //     PROJECT_CONTEXT / REFERENCE sections (they often leave 10–30k tokens on
         //     the table because project context is small relative to total budget)
-        //   - The redistribution flowed only into CONVERSATION / RAG / USER_CONTEXT,
+        //   - The redistribution flowed only into CONVERSATION / USER_CONTEXT,
         //     which in turn couldn't use it because of other caps (Bug 2B).
         //
         // New flow: redistribute the unused stable-layer budget BEFORE adding the
@@ -655,14 +632,8 @@ class ContextService(
         addSection(ContextSection.USER_CONTEXT, userContextParts.joinToString("\n\n"))
         // Second redistribution pass: now that accumulated + ephemeral layers have
         // reported their actual usage, any budget still unused is pushed into
-        // CONVERSATION / RAG so they can benefit from slack.
+        // CONVERSATION so they can benefit from slack.
         val redistributedBudget = budgetAfterStable.redistributeUnused(actualUsage)
-
-        // TIER 3: SUPPLEMENTARY CONTEXT
-        if (context.ragFragments.isNotEmpty()) {
-            val ragBudget = minOf(redistributedBudget.budgetFor(ContextSection.RAG_FRAGMENTS), remainingTokens)
-            addSection(ContextSection.RAG_FRAGMENTS, formatter.buildRagFragmentsSection(context), ragBudget)
-        }
 
         if (context.conversationHistory.isNotEmpty()) {
             val conversationBudget = minOf(redistributedBudget.budgetFor(ContextSection.CONVERSATION), remainingTokens)
@@ -747,7 +718,7 @@ class ContextService(
      * @param projectRoot Project root path
      * @param project IntelliJ Project instance (optional)
      * @param userContextRefs User-provided @ mentions
-     * @param query Current user query for RAG
+     * @param query Current user query
      * @return Pair of (projectContextPrompt, messages list)
      */
     suspend fun buildAgentTurnMessages(
@@ -1370,7 +1341,6 @@ class ContextService(
             "USER_PROVIDED_CONTEXT" to "user_context",
             "WORKING_MEMORY" to "working_memory",
             "MCP_RESOURCES" to "mcp_resources",
-            "RAG_FRAGMENTS" to "rag_fragments",
             "CONVERSATION_HISTORY" to "conversation",
             "RECENT_WORK" to "recent_work",
             "SUBTASKS_STATUS" to "subtasks",
@@ -1394,7 +1364,6 @@ class ContextService(
             "user_context" to "User Context",
             "working_memory" to "Working Memory",
             "mcp_resources" to "MCP Resources",
-            "rag_fragments" to "RAG Fragments",
             "conversation" to "Conversation History",
             "recent_work" to "Recent Work",
             "subtasks" to "Subtasks",
@@ -1601,7 +1570,7 @@ class ContextService(
 data class AgentTurnMessagesResult(
     /** Conversation messages ready for LLM (filtered and formatted) */
     val messages: List<LLMMessage>,
-    /** Project context prompt (project analysis, RAG, user @ mentions) */
+    /** Project context prompt (project analysis, user @ mentions) */
     val projectContextPrompt: String,
     /** Size of conversation history before filtering */
     val historySize: Int

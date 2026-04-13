@@ -498,7 +498,7 @@ class AgentTurnLoopTest {
     inner class ErrorHandlingTests {
 
         @Test
-        fun `should fail immediately on empty content in JSON mode`() = runTest {
+        fun `should fail immediately on empty content in PLAN mode`() = runTest {
             // Nudge-retry loops were removed — an empty-content response now terminates
             // the turn with a direct error message. That's the tradeoff the simplification
             // pays: weaker models get less hand-holding, but the control flow stays clean.
@@ -614,11 +614,209 @@ class AgentTurnLoopTest {
             assertEquals(1, result.iterations)
         }
 
+        @Test
+        fun `should retry when content is empty in JSON mode and then succeed`() = runTest {
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                LLMResponse(
+                    content = "",
+                    usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
+                    model = "qwen3.5:122b",
+                    provider = "ollama",
+                    cost = 0.0,
+                    finishReason = "stop"
+                ),
+                createLLMResponse("""{"actions":[],"response":"Recovered after empty content","intent":"implementation"}""")
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Continue",
+                mode = TaskMode.AGENT
+            )
+
+            assertTrue(result.success, "expected empty-content retry recovery, got: ${result.response}")
+            assertEquals(2, result.iterations)
+            assertEquals("Recovered after empty content", result.response)
+            coVerify(exactly = 2) {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            }
+            verify(atLeast = 1) {
+                chatMessageRepository.create(
+                    testTaskId,
+                    MessageRole.SYSTEM,
+                    match {
+                        it.contains("empty content in structured JSON mode") &&
+                            it.contains("Generate the full JSON envelope again from scratch")
+                    },
+                    any(), any(), any(), any(), any(), any()
+                )
+            }
+        }
+
+        @Test
+        fun `should retry when fenced json envelope is incomplete and then succeed`() = runTest {
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                createLLMResponse(
+                    """
+                    ```json
+                    {
+                      "actions": [
+                        {"tool":"http_request","args":{"url":"https://hub.ag3nts.org/verify"}}
+                      ],
+                      response:"Retry me",
+                      "intent":"implementation"
+                    """.trimIndent()
+                ),
+                createLLMResponse("""{"actions":[],"response":"Recovered JSON","intent":"implementation"}""")
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Continue",
+                mode = TaskMode.AGENT
+            )
+
+            assertTrue(result.success, "expected JSON retry recovery, got: ${result.response}")
+            assertEquals(2, result.iterations)
+            assertEquals("Recovered JSON", result.response)
+            coVerify(exactly = 2) {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            }
+            verify(atLeast = 1) {
+                chatMessageRepository.create(
+                    testTaskId,
+                    MessageRole.SYSTEM,
+                    match { it.contains("incomplete JSON") && it.contains("Generate the full JSON envelope again from scratch") },
+                    any(), any(), any(), any(), any(), any()
+                )
+            }
+        }
+
+        @Test
+        fun `should fail instead of finalizing success when incomplete json persists`() = runTest {
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                createLLMResponse("""```json
+{response:"one","intent":"implementation"
+"""),
+                createLLMResponse("""```json
+{response:"two","intent":"implementation"
+"""),
+                createLLMResponse("""```json
+{response:"three","intent":"implementation"
+""")
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Continue",
+                mode = TaskMode.AGENT
+            )
+
+            assertFalse(result.success)
+            assertTrue(result.response.contains("incomplete JSON envelope"))
+            assertEquals(3, result.iterations)
+            coVerify(exactly = 3) {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            }
+        }
+
         // NOTE: the `plain text nudge` and `nudge replaced not appended` tests were removed
         // together with the nudge-retry machinery. The turn loop no longer injects SYSTEM
         // messages mid-flight to coax a misbehaving model back into format — an empty or
         // malformed response simply ends the turn with a clear error. See the "should fail
         // immediately on empty content in JSON mode" test above for the new behaviour.
+        @Test
+        fun `should fail when empty content persists after retries in AGENT mode`() = runTest {
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                LLMResponse(
+                    content = "",
+                    usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
+                    model = "qwen3.5:122b",
+                    provider = "ollama",
+                    cost = 0.0,
+                    finishReason = "stop"
+                ),
+                LLMResponse(
+                    content = "",
+                    usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
+                    model = "qwen3.5:122b",
+                    provider = "ollama",
+                    cost = 0.0,
+                    finishReason = "stop"
+                ),
+                LLMResponse(
+                    content = "",
+                    usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
+                    model = "qwen3.5:122b",
+                    provider = "ollama",
+                    cost = 0.0,
+                    finishReason = "stop"
+                )
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Continue",
+                mode = TaskMode.AGENT
+            )
+
+            assertFalse(result.success)
+            assertTrue(result.response.contains("empty content", ignoreCase = true))
+            assertTrue(result.response.contains("could not recover after retrying", ignoreCase = true))
+            assertEquals(3, result.iterations)
+            coVerify(exactly = 3) {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            }
+        }
+
     }
 
     @Nested

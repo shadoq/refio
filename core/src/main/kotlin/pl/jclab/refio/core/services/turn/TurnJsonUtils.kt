@@ -269,6 +269,18 @@ object TurnJsonUtils {
             i += 1
         }
 
+        if (inString) {
+            out.append('"')
+            inString = false
+        }
+
+        while (stack.isNotEmpty()) {
+            when (stack.removeLast().type) {
+                ContainerType.OBJECT -> out.append('}')
+                ContainerType.ARRAY -> out.append(']')
+            }
+        }
+
         return out.toString()
     }
 
