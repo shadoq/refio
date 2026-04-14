@@ -138,7 +138,7 @@ Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ
 
 - **Split-pane layout** — Chat on the left (55%), active tab on the right (45%). Full-width when no tab is selected.
 - **8 tabs + 2 screens** — F1 Help, F2-F7 tabs (Steps, Context, RAG, Logs, Debug, API), F8 Files, F9 Settings. Tab bar shows mode, cost, and streaming status.
-- **Two input modes** — Raw TTY (real terminal: F-keys, Shift+Tab, single-char dispatch) and line mode (IDE terminal, pipes: /commands, :tab shortcuts).
+- **Two input modes** — Raw TTY (real terminal: F-keys, Shift+Tab, single-char dispatch) and line mode (IDE terminal, pipes: `/prompt`, `:tab` shortcuts).
 - **@context autocomplete** — Type `@` for a popup with context prefixes (file, folder, grep, diff, etc.). 9 of 14 providers available in CLI mode.
 - **Settings screen** — 11 sub-tabs covering providers, models, prompts, context/RAG, MCP, tools, subagents, and more.
 - **Resize-responsive** — UI adapts to terminal window size changes in real time.
@@ -199,7 +199,7 @@ Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ
 |-----|--------|
 | `@` | Open context autocomplete (@file, @folder, @grep, @diff, etc.) |
 | `!` | Open subagent autocomplete (!review, !security, etc.) |
-| `/` | Open slash command autocomplete (/explain, /refactor, etc.) |
+| `/` | Open slash prompt autocomplete (/explain, /refactor, etc.) |
 | Tab / Arrow Down | Next autocomplete candidate |
 | Arrow Up | Previous autocomplete candidate |
 | Enter | Accept autocomplete selection |
@@ -209,7 +209,7 @@ Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ
 
 - **Multi-line input** — input expands up to 4 visible lines as you type
 - **Paste support** — large pastes (>200 chars) show a preview marker
-- **Slash commands** — type `/` at the start for prompt templates (/explain, /test, /fix, /refactor, etc.)
+- **Slash prompts** — type `/` at the start for reusable prompt templates (/explain, /test, /fix, /refactor, etc.). Manage them under **Settings → Prompts**.
 - **System commands** — /help, /quit, /clear, /history, /export, /resend, /rewind, /edit, and more (type `/help` for full list)
 
 ### Architecture

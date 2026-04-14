@@ -39,6 +39,7 @@ class FileSearchTool(
     override val description = "Find files by name pattern (glob syntax)."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
+    override val selectionHint = "Find files by name/path (glob). Also used as pre-check before create_new_file."
 
     override fun validateParams(params: Map<String, Any>) {
         if (params["pattern"] == null || (params["pattern"] as? String).isNullOrBlank()) {

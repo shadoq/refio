@@ -15,6 +15,7 @@ class MonitorProcessTool(
         "If process has finished, returns all remaining output."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
+    override val selectionHint = "Read new output from a background process (pairs with run_process_background)."
 
     override fun validateParams(params: Map<String, Any>) {
         val id = params["process_id"] as? String

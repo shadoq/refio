@@ -1109,7 +1109,7 @@ Layer 7: Secret Redaction
 | Issue | Location | Impact | Status |
 |-------|----------|--------|--------|
 | Symlink Escape | PathSandbox.kt | Can escape project root | Detection in place |
-| Whitelist Coverage | CommandWhitelistDefaults.kt | Missing command entries can block harmless commands | Add via config/UI whitelist |
+| Command Rule Coverage | `CommandRuleDefaults.kt` | Missing rules may require confirmation (`ASK`) for otherwise harmless commands | Add project-specific rules via Tools Settings → Terminal Command Rules |
 
 ---
 
@@ -1227,7 +1227,7 @@ TuiApp (entry point — launchTuiApp())
 │
 ├── Detects interactive mode: System.console() != null
 │   ├── Interactive: alternate screen buffer, raw JLine3 input, F-key navigation
-│   └── Non-interactive: inline rendering, line-based input (/commands, :shortcuts)
+│   └── Non-interactive: inline rendering, line-based input (`/prompt`, `:shortcuts`)
 │
 ├── Three concurrent coroutines:
 │   ├── Render loop — stateFlow.collect { renderer.render(state) }
@@ -1264,7 +1264,7 @@ TuiApp (entry point — launchTuiApp())
 │
 ├── TuiInputHandler (dual-mode input)
 │   ├── Raw mode (real TTY): JLine3 reader, single-char dispatch, escape sequence parsing
-│   ├── Line mode (IDE/pipe): BufferedReader from System.in, /commands, :tab shortcuts
+│   ├── Line mode (IDE/pipe): BufferedReader from System.in, `/prompt`, `:tab` shortcuts
 │   ├── dispatchAction() handles: tab switching, typing, backspace, send, autocomplete
 │   └── Slash commands: /quit, /clear, /help, /mode, /history, /settings, /set section.key value
 │
@@ -1305,7 +1305,7 @@ The Settings screen provides full configuration access via `ConfigRouter`, match
 | General | `general` | Markdown rendering, streaming, advanced view toggles |
 | Providers | `providers` | 8 providers (Ollama, Anthropic, OpenAI, OpenRouter, Gemini, LM Studio, Custom OpenAI, Z.AI) with masked API keys and status indicators |
 | Models | `models` | Model assignments: default, planning, coding, auxiliary, embeddings |
-| Prompts | `prompts` | Custom system prompts and slash commands |
+| Prompts | `prompts` | Custom system prompts and slash prompts (reusable `/name` prompt templates) |
 | Context | `index` | RAG search tuning (similarity threshold, top-k, hybrid search) and indexing settings |
 | MCP | `mcp` | MCP server list with enable/disable and type |
 | Docs | `docs` | Documentation sources for @docs context provider |
@@ -1343,7 +1343,7 @@ The Settings screen provides full configuration access via `ConfigRouter`, match
 | Ctrl+L | **Continue** | Resume current conversation after interruption (e.g. if agent stopped mid-task). |
 | Ctrl+D | **Summarize** | Compact long conversation history to save context window space. Uses LLM to generate a summary of older messages. |
 
-You can also use slash commands for session management:
+You can also use system commands (note: these are TUI session commands, distinct from user-defined slash prompts managed in Settings → Prompts):
 - `/history` — Open session history
 - `/export <path>` — Export conversation to Markdown file
 - `/resend` — Resend last user message
@@ -1390,7 +1390,7 @@ You can also use slash commands for session management:
 |---------|--------|------------|
 | `@` | Context autocomplete | @file, @folder, @codebase, @grep, @diff, @url, @docs, @clipboard, etc. |
 | `!` | Subagent autocomplete | !review, !security, !architect, !docs, and custom subagents |
-| `/` | Slash command autocomplete | /explain, /refactor, /test, /fix, /implement, /optimize, /security-review, etc. |
+| `/` | Slash prompt autocomplete | /explain, /refactor, /test, /fix, /implement, /optimize, /security-review, etc. |
 
 When the autocomplete popup is visible:
 - **Arrow Down / Tab** — Next candidate
@@ -1399,9 +1399,9 @@ When the autocomplete popup is visible:
 - **Escape** — Dismiss
 - **Keep typing** — Filters candidates in real-time
 
-#### Slash Commands Reference
+#### Slash Prompts Reference
 
-**Prompt templates** (sent to LLM with your input as context):
+**Prompt templates** (sent to LLM with your input as context). The feature was previously called "Slash Commands"; the `/name` syntax is unchanged, only the UI/code label changed to reflect that these are prompts, not plugin/CLI commands.
 
 | Command | Description |
 |---------|-------------|

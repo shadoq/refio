@@ -27,6 +27,7 @@ class WebSearchTool(
         "Requires 'tools.web_search.provider' and corresponding API key in config."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
+    override val selectionHint = "Web search — current info, docs, release notes not in the codebase."
 
     override fun validateParams(params: Map<String, Any>) {
         val query = params["query"] as? String

@@ -55,6 +55,8 @@ class ThinkTool : Tool {
             "No side effects. Duplicate thoughts are rejected."
     override val mode: ToolMode = ToolMode.READ_ONLY
     override val category: ToolCategory = ToolCategory.SYSTEM
+    override val selectionHint: String =
+        "Record a reasoning step before retrying a failed call or at a decision point. No side effects."
 
     override fun validateParams(params: Map<String, Any>) {
         val thought = params["thought"] as? String

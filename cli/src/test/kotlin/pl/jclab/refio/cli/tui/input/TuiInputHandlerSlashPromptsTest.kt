@@ -5,11 +5,11 @@ import com.github.ajalt.mordant.terminal.TerminalRecorder
 import io.mockk.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import pl.jclab.refio.api.models.SlashCommand
+import pl.jclab.refio.api.models.SlashPrompt
 import pl.jclab.refio.cli.tui.state.TuiState
 import pl.jclab.refio.cli.tui.state.TuiViewModel
 
-class TuiInputHandlerSlashCommandsTest {
+class TuiInputHandlerSlashPromptsTest {
 
     private val terminal = Terminal(terminalInterface = TerminalRecorder())
     private val handler = TuiInputHandler(terminal)
@@ -20,29 +20,29 @@ class TuiInputHandlerSlashCommandsTest {
         every { viewModel.stateFlow } returns mockk {
             every { value } returns TuiState()
         }
-        every { viewModel.getSlashCommands() } returns SlashCommand.BUILTINS
+        every { viewModel.getSlashPrompts() } returns SlashPrompt.BUILTINS
     }
 
     @Test
-    fun `handleCommand should pass slash command explain to sendMessage`() {
-        // Slash commands (prompt templates) are processed inline in sendMessage(),
+    fun `handleCommand should pass slash prompt explain to sendMessage`() {
+        // Slash prompts (prompt templates) are expanded inline in sendMessage(),
         // not intercepted by handleCommand(). handleCommand always returns false.
         val result = handler.handleCommand("/explain some code here", viewModel)
-        assert(!result) { "Slash commands should not be intercepted by handleCommand" }
+        assert(!result) { "Slash prompts should not be intercepted by handleCommand" }
         verify(exactly = 0) { viewModel.sendMessage(any()) }
     }
 
     @Test
-    fun `handleCommand should pass slash command fix to sendMessage`() {
+    fun `handleCommand should pass slash prompt fix to sendMessage`() {
         val result = handler.handleCommand("/fix this bug", viewModel)
-        assert(!result) { "Slash commands should not be intercepted by handleCommand" }
+        assert(!result) { "Slash prompts should not be intercepted by handleCommand" }
         verify(exactly = 0) { viewModel.sendMessage(any()) }
     }
 
     @Test
-    fun `handleCommand should not handle unknown slash command`() {
-        val result = handler.handleCommand("/nonexistent-command", viewModel)
-        assert(!result) { "Should not handle unknown command" }
+    fun `handleCommand should not handle unknown slash prompt`() {
+        val result = handler.handleCommand("/nonexistent-prompt", viewModel)
+        assert(!result) { "Should not handle unknown prompt" }
         verify(exactly = 0) { viewModel.sendMessage(any()) }
     }
 

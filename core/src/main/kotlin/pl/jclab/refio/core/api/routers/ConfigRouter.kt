@@ -76,13 +76,16 @@ class ConfigRouter(
      * @param provider Optional provider filter (ollama, openai, anthropic)
      * @return List of ModelInfo with visibility settings
      */
-    suspend fun getModelsWithVisibility(provider: String? = null): List<ModelInfo> {
-        logger.info { "[ConfigRouter] Getting models with visibility: provider=${provider ?: "all"}" }
+    suspend fun getModelsWithVisibility(
+        provider: String? = null,
+        fetchIfMissing: Boolean = true
+    ): List<ModelInfo> {
+        logger.info { "[ConfigRouter] Getting models with visibility: provider=${provider ?: "all"}, fetchIfMissing=$fetchIfMissing" }
 
         val models = if (provider != null) {
             getModelsByProvider(provider, configService)
         } else {
-            getAllModels(configService)
+            getAllModels(configService, fetchIfMissing = fetchIfMissing)
         }
 
         // Get visibility settings
@@ -464,6 +467,10 @@ class ConfigRouter(
         logger.info { "[ConfigRouter] Refreshing models for provider: $provider" }
 
         try {
+            // Force fresh fetch: model metadata (e.g. Ollama maxContext) depends on
+            // current provider config and would otherwise be served from stale cache.
+            clearModelsCache()
+
             logger.info { "Fetching models dynamically for $provider" }
             val models = getModelsByProvider(provider, configService)
 
@@ -564,6 +571,7 @@ class ConfigRouter(
     fun initializeProviderKeys() {
         logger.info { "[ConfigRouter] Initializing provider keys on startup" }
         syncProviderKeysToSystemProperties()
+        clearModelsCache()
     }
 
     /**

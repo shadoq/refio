@@ -1,6 +1,6 @@
 package pl.jclab.refio.core.services
 
-import pl.jclab.refio.api.models.SlashCommand
+import pl.jclab.refio.api.models.SlashPrompt
 import pl.jclab.refio.core.db.Prompt
 import pl.jclab.refio.core.db.PromptType
 import pl.jclab.refio.core.db.repositories.PromptsRepository
@@ -18,7 +18,7 @@ private val logger = dualLogger("PromptsService")
  * 2. USER - DB isCustom=true (UI edits) > ~/.refio/prompts/ *.md
  * 3. PROJECT - .refio/prompts/ *.md (highest priority)
  *
- * Slash commands and rules remain in the database.
+ * Slash prompts and rules remain in the database.
  */
 class PromptsService(
     private val promptsRepository: PromptsRepository,
@@ -61,13 +61,13 @@ class PromptsService(
     )
 
     /**
-     * Initialize defaults: seed slash commands to DB and clean up stale system prompt records.
+     * Initialize defaults: seed slash prompts to DB and clean up stale system prompt records.
      * System prompts are now loaded from MD files - no DB seeding needed.
      */
     fun initializeDefaults() {
         logger.info { "Initializing default prompts" }
 
-        initializeBuiltinCommands()
+        initializeBuiltinSlashPrompts()
         cleanupNonCustomSystemPrompts()
 
         logger.info { "Default prompts initialized" }
@@ -90,8 +90,48 @@ class PromptsService(
         }
     }
 
+    /**
+     * Get all system prompts.
+     *
+     * Merges DB custom overrides (isCustom=true) with file-based defaults from PromptRegistry
+     * so the UI always sees the full set of system prompt types, with isCustom flagging overrides.
+     */
     fun getSystemPrompts(): List<Prompt> {
-        return promptsRepository.findSystemPrompts()
+        val dbByType = promptsRepository.findSystemPrompts(enabledOnly = false)
+            .associateBy { it.type }
+
+        return PromptType.SYSTEM_PROMPT_TYPES.mapNotNull { type ->
+            val dbPrompt = dbByType[type]
+            if (dbPrompt != null && dbPrompt.isCustom) {
+                dbPrompt
+            } else {
+                buildDefaultSystemPrompt(type, dbPrompt)
+            }
+        }
+    }
+
+    private fun buildDefaultSystemPrompt(type: PromptType, existing: Prompt?): Prompt? {
+        val displayName = systemPromptNames[type] ?: return null
+        val fileName = promptTypeToName(type) ?: return null
+
+        val projectDef = promptRegistry.getProjectFile(fileName)
+        val userDef = promptRegistry.getUserFile(fileName)
+        val builtin = promptRegistry.getBuiltin(fileName)
+        val def = projectDef ?: userDef ?: builtin ?: return null
+
+        val now = System.currentTimeMillis()
+        return Prompt(
+            id = existing?.id ?: "default:${type.name}",
+            name = displayName,
+            type = type,
+            content = def.content,
+            description = def.description.ifBlank { existing?.description ?: "Default system prompt" },
+            isCustom = false,
+            isEnabled = true,
+            orderIndex = existing?.orderIndex ?: 0,
+            createdAt = existing?.createdAt ?: now,
+            updatedAt = existing?.updatedAt ?: now
+        )
     }
 
     /**
@@ -102,18 +142,18 @@ class PromptsService(
     }
 
     /**
-     * Get all enabled slash commands
+     * Get all enabled slash prompts
      */
-    fun getEnabledCommands(): List<Prompt> {
-        return promptsRepository.findByType(PromptType.SLASH_COMMAND, enabledOnly = true)
+    fun getEnabledSlashPrompts(): List<Prompt> {
+        return promptsRepository.findByType(PromptType.SLASH_PROMPT, enabledOnly = true)
     }
 
     /**
-     * Find slash command by name (e.g., "/refactor")
+     * Find slash prompt by name (e.g., "/refactor")
      */
-    fun findCommand(commandName: String): Prompt? {
-        val normalizedName = if (commandName.startsWith("/")) commandName else "/$commandName"
-        return promptsRepository.findByNameAndType(normalizedName, PromptType.SLASH_COMMAND)
+    fun findSlashPrompt(name: String): Prompt? {
+        val normalizedName = if (name.startsWith("/")) name else "/$name"
+        return promptsRepository.findByNameAndType(normalizedName, PromptType.SLASH_PROMPT)
     }
 
     /**
@@ -147,16 +187,16 @@ class PromptsService(
     }
 
     /**
-     * Create or update a slash command
+     * Create or update a slash prompt
      */
-    fun saveCommand(
+    fun saveSlashPrompt(
         id: String? = null,
         name: String,
         content: String,
         description: String? = null,
         isEnabled: Boolean = true
     ): Prompt {
-        val normalizedName = normalizeCommandName(name)
+        val normalizedName = normalizeSlashPromptName(name)
         return if (id != null && promptsRepository.exists(id)) {
             promptsRepository.update(
                 id = id,
@@ -169,7 +209,7 @@ class PromptsService(
         } else {
             promptsRepository.create(
                 name = normalizedName,
-                type = PromptType.SLASH_COMMAND,
+                type = PromptType.SLASH_PROMPT,
                 content = content,
                 description = description,
                 isCustom = true,
@@ -249,7 +289,7 @@ class PromptsService(
     }
 
     /**
-     * Delete rule or command by ID
+     * Delete rule or slash prompt by ID
      */
     fun delete(id: String): Boolean {
         return promptsRepository.delete(id)
@@ -349,7 +389,7 @@ class PromptsService(
         return systemPromptNames[type]
     }
 
-    private fun normalizeCommandName(name: String): String {
+    private fun normalizeSlashPromptName(name: String): String {
         return if (name.startsWith("/")) name else "/$name"
     }
 
@@ -367,33 +407,33 @@ class PromptsService(
         }
     }
 
-    private fun initializeBuiltinCommands() {
-        SlashCommand.BUILTINS.forEachIndexed { index, command ->
-            val normalizedName = normalizeCommandName(command.name)
-            val existing = promptsRepository.findByNameAndType(normalizedName, PromptType.SLASH_COMMAND)
+    private fun initializeBuiltinSlashPrompts() {
+        SlashPrompt.BUILTINS.forEachIndexed { index, slashPrompt ->
+            val normalizedName = normalizeSlashPromptName(slashPrompt.name)
+            val existing = promptsRepository.findByNameAndType(normalizedName, PromptType.SLASH_PROMPT)
 
             if (existing == null) {
                 promptsRepository.create(
                     name = normalizedName,
-                    type = PromptType.SLASH_COMMAND,
-                    content = command.template,
-                    description = command.description,
+                    type = PromptType.SLASH_PROMPT,
+                    content = slashPrompt.template,
+                    description = slashPrompt.description,
                     isCustom = false,
                     isEnabled = true,
                     orderIndex = index
                 )
-                logger.info { "Created built-in slash command: ${command.name}" }
+                logger.info { "Created built-in slash prompt: ${slashPrompt.name}" }
             } else if (!existing.isCustom) {
                 promptsRepository.update(
                     id = existing.id,
-                    content = command.template,
-                    description = command.description,
+                    content = slashPrompt.template,
+                    description = slashPrompt.description,
                     isEnabled = true,
                     orderIndex = index
                 )
-                logger.debug { "Updated built-in slash command: ${command.name}" }
+                logger.debug { "Updated built-in slash prompt: ${slashPrompt.name}" }
             } else {
-                logger.debug { "Skipping built-in command update because user customized it: ${command.name}" }
+                logger.debug { "Skipping built-in slash prompt update because user customized it: ${slashPrompt.name}" }
             }
         }
     }

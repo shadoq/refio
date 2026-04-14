@@ -962,8 +962,8 @@ class TuiViewModel(
 
     // --- Chat delegations ---
     fun sendMessage(input: String) = chat.sendMessage(input)
-    fun getSlashCommands() = chat.getSlashCommands()
-    fun processSlashCommands(text: String) = chat.processSlashCommands(text)
+    fun getSlashPrompts() = chat.getSlashPrompts()
+    fun processSlashPrompts(text: String) = chat.processSlashPrompts(text)
     fun updateInputBuffer(input: String) = chat.updateInputBuffer(input)
     fun moveCursorLeft() = chat.moveCursorLeft()
     fun moveCursorRight() = chat.moveCursorRight()

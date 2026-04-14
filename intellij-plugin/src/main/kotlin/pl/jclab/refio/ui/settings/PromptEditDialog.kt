@@ -17,11 +17,11 @@ import javax.swing.JLabel
 import javax.swing.JScrollPane
 
 /**
- * Dialog dla dodawania/edycji komendy slash
+ * Dialog for adding/editing a slash prompt
  */
-class CommandEditDialog(
+class PromptEditDialog(
     project: Project?,
-    private val existingCommand: PromptDto? = null
+    private val existingPrompt: PromptDto? = null
 ) : DialogWrapper(project) {
 
     private val nameField = JBTextField(20)
@@ -33,11 +33,11 @@ class CommandEditDialog(
     private val enabledCheckbox = JBCheckBox("Enabled", true)
 
     init {
-        title = if (existingCommand != null) "Edit Command" else "Add Command"
+        title = if (existingPrompt != null) "Edit Prompt" else "Add Prompt"
         init()
 
         // Load existing data
-        existingCommand?.let {
+        existingPrompt?.let {
             nameField.text = it.name
             descriptionField.text = it.description ?: ""
             contentArea.text = it.content
@@ -57,7 +57,7 @@ class CommandEditDialog(
             }
 
             // Name
-            add(JLabel("Command Name (with /):"), gbc)
+            add(JLabel("Prompt Name (with /):"), gbc)
             gbc.gridy++
             add(nameField, gbc)
 
@@ -93,12 +93,12 @@ class CommandEditDialog(
             // Info
             gbc.gridy++
             add(JLabel("<html><font color='gray'>" +
-                "Commands can be used in the prompt input by typing the command name" +
+                "Prompts can be used in the prompt input by typing the prompt name" +
                 "</font></html>"), gbc)
         }
     }
 
-    fun getCommandName(): String {
+    fun getPromptName(): String {
         val name = nameField.text.trim()
         return if (name.startsWith("/")) name else "/$name"
     }
@@ -108,8 +108,8 @@ class CommandEditDialog(
     fun isEnabled(): Boolean = enabledCheckbox.isSelected
 
     override fun doValidate(): ValidationInfo? {
-        if (getCommandName().length <= 1) {  // tylko "/"
-            return ValidationInfo("Command name cannot be empty", nameField)
+        if (getPromptName().length <= 1) {  // only "/"
+            return ValidationInfo("Prompt name cannot be empty", nameField)
         }
         if (getContent().isEmpty()) {
             return ValidationInfo("Content cannot be empty", contentArea)

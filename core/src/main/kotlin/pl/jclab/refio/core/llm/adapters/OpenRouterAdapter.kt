@@ -78,7 +78,11 @@ class OpenRouterAdapter(
             }
         }
         install(HttpTimeout) {
-            requestTimeoutMillis = timeoutMs
+            // Streaming-friendly: requestTimeout is a HARD cap on the whole request
+            // (incl. body read) and would kill long streams mid-flight even while
+            // chunks are still arriving. socketTimeoutMillis (resets per chunk)
+            // detects truly dead connections.
+            requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
             connectTimeoutMillis = 30000
             socketTimeoutMillis = timeoutMs
         }

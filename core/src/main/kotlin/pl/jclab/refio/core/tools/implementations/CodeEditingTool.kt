@@ -41,6 +41,7 @@ class CodeEditingTool(
     override val description = "Search-and-replace edit in an existing file. FREE."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_MODIFYING
+    override val selectionHint = "Small targeted edit in an existing file via exact string match (search/replace)."
 
     override fun validateParams(params: Map<String, Any>) {
         if (params["path"] == null || (params["path"] as? String).isNullOrBlank()) {

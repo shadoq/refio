@@ -20,6 +20,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`code_intelligence` tool** — Analyze code structure without IDE: find symbol usages (grep), find definitions (ctags/grep), list symbols (ctags), run compiler diagnostics; works in CLI and plugin.
 - `ProcessManager` service for managing long-running background processes with start/stop/monitor lifecycle.
 - `UserQuestionService` for suspending the agent loop while waiting for user answers.
+- `CommandLimits` helper for centralized terminal command output/size limits.
+- DB migration `V3RenameSlashCommandToSlashPrompt` that remaps existing `prompts.type='SLASH_COMMAND'` rows to `SLASH_PROMPT` in-place; preserves user-defined and built-in entries.
+
+### Changed
+
+- **Renamed feature "Slash Commands" → "Prompts"** across code and UI. The `/name` invocation syntax is unchanged; these are prompt templates (not plugin/CLI commands), so everything now reflects that:
+  - API model `SlashCommand` → `SlashPrompt` (`core/src/main/kotlin/pl/jclab/refio/api/models/SlashPrompt.kt`)
+  - DB enum `PromptType.SLASH_COMMAND` → `SLASH_PROMPT` (migrated automatically via V3)
+  - Router API: `getEnabledCommands`/`findCommand`/`saveCommand` → `getEnabledSlashPrompts`/`findSlashPrompt`/`saveSlashPrompt`; request model `SaveCommandRequest` → `SaveSlashPromptRequest`
+  - IntelliJ dialog `CommandEditDialog` → `PromptEditDialog`; intention action `RefioSlashCommandIntentionAction` → `RefioSlashPromptIntentionAction`
+  - Settings UI: tab label `Commands` → `Prompts`, column `Command` → `Prompt`
+  - Chat input placeholder now reads `(@context, /prompt, !subagent)`
+  - CLI/TUI methods `getSlashCommands`/`processSlashCommands` → `getSlashPrompts`/`processSlashPrompts`
+- **CommandWhitelist system replaced by unified `CommandRule`** (regex-based `ALLOW` / `BLOCK` / `ASK`). The legacy `CommandWhitelist`, `CommandWhitelistConfig`, `CommandWhitelistDefaults`, and `CommandDenylist` classes were removed; default ruleset is expanded in `CommandRuleDefaults`. Terminal command decisions are now a single-pass regex evaluation with a catch-all `ASK` rule.
+- **Models settings tab no longer auto-refreshes from providers on open.** The panel now reads from the in-memory model cache (or DB visibility settings) and never blocks the UI on slow/unreachable providers. Remote model discovery is triggered only by the **Refresh** button. New `fetchIfMissing: Boolean` parameter was added to `ModelRegistry.getAllModels` / `ConfigRouter.getModelsWithVisibility` / `CoreApiClient.getModelsWithVisibility` (defaults preserve previous behavior for other callers). `ModelRegistry.getCachedModelsSnapshot()` exposes the cache without triggering fetches.
+- **Shorter `listModels` timeout for local providers.** Ollama and LM Studio now use a 3-second per-provider timeout when listing models (down from 15s) since they are localhost services and 15s just extended UI freezes when the daemon wasn't running. Cloud providers keep 15s.
+- **Tools settings tab layout is now responsive.** Fixed column widths (180/320/90/90) were replaced with flexible bounds: `Plan Mode` and `Agent Mode` columns are clamped to 80–110 px, while Tool Name and Description stretch with the panel. The Terminal Command Rules table uses the same flexible layout. Removes the forced 700 px horizontal overflow that cropped column headers on narrow sidebars.
+- Built-in system-agent prompt (`system-agent.md`) refreshed.
+- `ConfigService`, `ConfigYaml`, `ConfigKeys` and `HierarchicalConfigLoader` trimmed (~420 LOC removed) in line with the CommandRule/Whitelist consolidation.
+- `ToolDescriptionBuilder` adjusted for the new tool set and prompt-template renames.
 
 ## [0.0.1.6] - 2025-04-12
 

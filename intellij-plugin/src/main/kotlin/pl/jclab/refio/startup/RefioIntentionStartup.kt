@@ -3,7 +3,7 @@ package pl.jclab.refio.startup
 import com.intellij.codeInsight.intention.IntentionManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
-import pl.jclab.refio.actions.RefioSlashCommandIntentionAction
+import pl.jclab.refio.actions.RefioSlashPromptIntentionAction
 import pl.jclab.refio.services.logging.dualLogger
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -13,10 +13,10 @@ class RefioIntentionStartup : ProjectActivity {
 
     override suspend fun execute(project: Project) {
         if (registered.compareAndSet(false, true)) {
-            IntentionManager.getInstance().addAction(RefioSlashCommandIntentionAction())
-            logger.info { "[STARTUP] Registered Refio slash command intention" }
+            IntentionManager.getInstance().addAction(RefioSlashPromptIntentionAction())
+            logger.info { "[STARTUP] Registered Refio slash prompt intention" }
         } else {
-            logger.debug { "[STARTUP] Refio slash command intention already registered" }
+            logger.debug { "[STARTUP] Refio slash prompt intention already registered" }
         }
     }
 

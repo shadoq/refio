@@ -2,6 +2,11 @@
 
 > For contributors and advanced users. See [README.md](../README.md) for product overview.
 
+> **Recent notable changes** (see [CHANGELOG.md](../CHANGELOG.md) `[Unreleased]`):
+> - "Slash commands" were renamed to "Prompts" (code: `SlashCommand` → `SlashPrompt`, DB enum `SLASH_COMMAND` → `SLASH_PROMPT` with V3 migration). The `/name` invocation syntax is unchanged; UI tab is now **Settings → Prompts**.
+> - Terminal command security uses a single `CommandRule` regex engine (`ALLOW` / `BLOCK` / `ASK`); the legacy `CommandWhitelist` / `CommandDenylist` classes have been removed.
+> - Models settings tab no longer triggers remote provider fetches on open — only the **Refresh** button does. Local providers (Ollama, LM Studio) use a 3 s `listModels` timeout.
+
 ---
 
 ## Project Overview
@@ -550,7 +555,7 @@ See [`docs/config.md`](config.md) for full configuration reference.
 |-------|------------|
 | **PathSandbox** | All file ops restricted to project root |
 | **FileLimits** | Size limits (2MB), excluded directories (24), extensions (34) |
-| **CommandRule System** | Regex-based rules with ALLOW/BLOCK/ASK levels replacing legacy whitelist |
+| **CommandRule System** | Regex-based rules with `ALLOW` / `BLOCK` / `ASK` actions; unified replacement for the removed `CommandWhitelist` / `CommandDenylist`. Defaults in `CommandRuleDefaults`, limits in `CommandLimits`. |
 | **ToolPermissions** | 3-level access control: ON/ASK/OFF per mode (PLAN=read-only, AGENT=read-write) |
 | **No-Egress Mode** | Blocks cloud providers, allows only Ollama/LM Studio |
 | **Secret Redaction** | API keys masked in all logs |
@@ -560,7 +565,7 @@ See [`docs/config.md`](config.md) for full configuration reference.
 | Issue | Description | Mitigation |
 |-------|-------------|------------|
 | Symlink Escape | PathSandbox can be bypassed via symlinks | Detection + logging in place |
-| Whitelist Coverage | Some workflows may require adding project-specific safe commands | Configure in Tools Settings (Terminal Whitelist) |
+| Command Rule Coverage | Some workflows may require adding project-specific safe commands | Configure in Tools Settings → Terminal Command Rules (regex-based `ALLOW` / `BLOCK` / `ASK`) |
 
 ---
 

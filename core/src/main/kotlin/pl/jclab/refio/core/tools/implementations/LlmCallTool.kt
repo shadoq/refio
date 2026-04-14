@@ -56,6 +56,8 @@ class LlmCallTool(
         "Supports vision via image_path/image_base64. CHEAPER than invoke_subagent."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_PRODUCING
+    override val selectionHint =
+        "Single-turn LLM call for analysis/transform/vision. Cheaper than invoke_subagent when no tools needed."
 
     override suspend fun execute(params: Map<String, Any>): ToolResult {
         val userPrompt = params["data"]?.toString()?.trim() ?: ""

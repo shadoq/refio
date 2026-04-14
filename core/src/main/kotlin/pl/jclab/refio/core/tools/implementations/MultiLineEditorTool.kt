@@ -72,6 +72,8 @@ class MultiLineEditorTool(
         "LLM-assisted targeted edits in an existing file (2-10 locations). CHEAP (~\$0.02)."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_MODIFYING
+    override val selectionHint =
+        "Semantic/intent-based edits in an existing file (2-10 locations) where exact strings are hard to match."
 
     private val gson = Gson()
 

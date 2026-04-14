@@ -1,6 +1,5 @@
 package pl.jclab.refio.core.config
 
-import pl.jclab.refio.core.utils.GsonInstance.gson
 
 /**
  * Typed configuration key descriptor.
@@ -427,31 +426,6 @@ object ConfigKeys {
         default = true
     )
 
-    val TERMINAL_WHITELIST = ConfigKey(
-        key = "terminal.whitelist",
-        parser = { it.takeIf { s -> s.isNotBlank() } },
-        default = "",
-        yamlAccessor = { loader ->
-            loader.getTerminalWhitelist()?.let {
-                gson.toJson(it)
-            }
-        }
-    )
-
-    val TERMINAL_WHITELIST_ENABLED = ConfigKey(
-        key = "terminal.whitelist.enabled",
-        parser = String::toBooleanStrictOrNull,
-        default = true,
-        yamlAccessor = { it.getTerminalWhitelistEnabled() }
-    )
-
-    val TERMINAL_WHITELIST_MODE = ConfigKey(
-        key = "terminal.whitelist.mode",
-        parser = { it.trim().uppercase().takeIf { s -> s.isNotBlank() } },
-        default = "WHITELIST_ONLY",
-        yamlAccessor = { it.getTerminalWhitelistMode()?.trim()?.uppercase() }
-    )
-
     // ==================== TOOL SUMMARY ====================
 
     val TOOL_SUMMARY_ENABLED = ConfigKey(
@@ -747,9 +721,6 @@ object ConfigKeys {
             // Tools
             TOOLS_PERMISSIONS,
             TOOL_PERMISSION_RUN_TERMINAL,
-            TERMINAL_WHITELIST,
-            TERMINAL_WHITELIST_ENABLED,
-            TERMINAL_WHITELIST_MODE,
             // Tool summary
             TOOL_SUMMARY_ENABLED,
             TOOL_SUMMARY_MIN_LENGTH,

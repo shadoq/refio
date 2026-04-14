@@ -31,6 +31,8 @@ class CodeIntelligenceTool(
         "Actions: find_usages, find_definition, list_symbols, get_diagnostics."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
+    override val selectionHint =
+        "Code navigation: find_usages, find_definition, list_symbols, get_diagnostics (ctags-based)."
 
     override fun validateParams(params: Map<String, Any>) {
         val action = params["action"] as? String

@@ -17,7 +17,7 @@ import javax.swing.table.DefaultTableModel
 
 /**
  * Prompts Settings Panel
- * Manages system prompts and slash commands with list-based UI
+ * Manages system prompts and slash prompts with list-based UI
  */
 class PromptsSettingsPanel(
     private val onSettingChanged: (section: String, key: String, value: Any) -> Unit,
@@ -28,11 +28,11 @@ class PromptsSettingsPanel(
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private lateinit var promptsTable: JBTable
-    private lateinit var commandsTable: JBTable
+    private lateinit var slashPromptsTable: JBTable
 
     // Cache for full prompt data (used for row -> ID mapping)
     private val promptsCache = mutableListOf<PromptDto>()
-    private val commandsCache = mutableListOf<PromptDto>()
+    private val slashPromptsCache = mutableListOf<PromptDto>()
 
     init {
         border = LCATheme.paddedBorder(16)
@@ -46,10 +46,10 @@ class PromptsSettingsPanel(
         }
         add(headerPanel, BorderLayout.NORTH)
 
-        // Tabbed pane for system prompts + commands
+        // Tabbed pane for system prompts + slash prompts
         val tabbedPane = JBTabbedPane().apply {
             addTab("System Prompts", createPromptsPanel())
-            addTab("Commands", createCommandsPanel())
+            addTab("Prompts", createSlashPromptsPanel())
         }
 
         add(tabbedPane, BorderLayout.CENTER)
@@ -103,20 +103,20 @@ class PromptsSettingsPanel(
         }
     }
 
-    private fun createCommandsPanel(): JPanel {
+    private fun createSlashPromptsPanel(): JPanel {
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
             border = LCATheme.paddedBorder(8)
 
             // Description
             val descLabel =
-                JLabel("<html><font color='gray'>Define slash commands that can be used in the prompt input</font></html>")
+                JLabel("<html><font color='gray'>Define reusable prompts that can be invoked in the chat input by typing /name</font></html>")
             add(descLabel, BorderLayout.NORTH)
 
             // Table
-            val columnNames = arrayOf("Command", "Description", "Enabled")
-            val data = loadCommandsData()
+            val columnNames = arrayOf("Prompt", "Description", "Enabled")
+            val data = loadSlashPromptsData()
 
-            commandsTable = JBTable(object : DefaultTableModel(data, columnNames) {
+            slashPromptsTable = JBTable(object : DefaultTableModel(data, columnNames) {
                 override fun getColumnClass(column: Int): Class<*> {
                     return if (column == 2) Boolean::class.javaObjectType else String::class.java
                 }
@@ -125,23 +125,23 @@ class PromptsSettingsPanel(
                     return false
                 }
             })
-            commandsTable.setShowGrid(true)
-            commandsTable.gridColor = JBColor.LIGHT_GRAY
+            slashPromptsTable.setShowGrid(true)
+            slashPromptsTable.gridColor = JBColor.LIGHT_GRAY
 
-            val scrollPane = JScrollPane(commandsTable).apply {
+            val scrollPane = JScrollPane(slashPromptsTable).apply {
                 preferredSize = Dimension(600, 300)
             }
 
             // Buttons panel
             val buttonsPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
                 add(JButton("Add").apply {
-                    addActionListener { onAddCommand() }
+                    addActionListener { onAddSlashPrompt() }
                 })
                 add(JButton("Edit").apply {
-                    addActionListener { onEditCommand() }
+                    addActionListener { onEditSlashPrompt() }
                 })
                 add(JButton("Delete").apply {
-                    addActionListener { onDeleteCommand() }
+                    addActionListener { onDeleteSlashPrompt() }
                 })
             }
 
@@ -269,22 +269,22 @@ class PromptsSettingsPanel(
         }
     }
 
-    // ========== Commands Actions ==========
+    // ========== Slash Prompts Actions ==========
 
-    private fun onAddCommand() {
+    private fun onAddSlashPrompt() {
         val project = ProjectManager.getInstance().openProjects.firstOrNull()
-        val dialog = CommandEditDialog(project)
+        val dialog = PromptEditDialog(project)
         if (dialog.showAndGet()) {
             coroutineScope.launch {
                 try {
-                    logger.info { "Adding new command: ${dialog.getCommandName()}" }
+                    logger.info { "Adding new slash prompt: ${dialog.getPromptName()}" }
 
                     // Save to backend on IO dispatcher
-                    val command = withContext(Dispatchers.IO) {
-                        coreApiClient?.saveCommand(
-                            SaveCommandRequest(
+                    val saved = withContext(Dispatchers.IO) {
+                        coreApiClient?.saveSlashPrompt(
+                            SaveSlashPromptRequest(
                                 id = null,
-                                name = dialog.getCommandName(),
+                                name = dialog.getPromptName(),
                                 content = dialog.getContent(),
                                 description = dialog.getDescription(),
                                 isEnabled = dialog.isEnabled()
@@ -293,51 +293,51 @@ class PromptsSettingsPanel(
                     }
 
                     // Reload data (already handles IO + invokeLater)
-                    reloadCommands()
+                    reloadSlashPrompts()
 
                     // Notify settings changed on EDT
                     ApplicationManager.getApplication().invokeLater {
-                        onSettingChanged("prompts", "command_added", command.prompt.id)
+                        onSettingChanged("prompts", "slash_prompt_added", saved.prompt.id)
                     }
 
-                    logger.info { "Command added: ${command.prompt.id}" }
+                    logger.info { "Slash prompt added: ${saved.prompt.id}" }
                 } catch (e: Exception) {
-                    logger.error(e) { "Failed to add command" }
+                    logger.error(e) { "Failed to add slash prompt" }
                     ApplicationManager.getApplication().invokeLater {
-                        showError("Failed to add command: ${e.message}")
+                        showError("Failed to add prompt: ${e.message}")
                     }
                 }
             }
         }
     }
 
-    private fun onEditCommand() {
-        val selectedRow = commandsTable.selectedRow
+    private fun onEditSlashPrompt() {
+        val selectedRow = slashPromptsTable.selectedRow
         if (selectedRow < 0) {
-            showError("Select a command to edit")
+            showError("Select a prompt to edit")
             return
         }
 
-        if (selectedRow >= commandsCache.size) {
+        if (selectedRow >= slashPromptsCache.size) {
             showError("Invalid row")
             return
         }
 
-        val existingCommand = commandsCache[selectedRow]
+        val existing = slashPromptsCache[selectedRow]
         val project = ProjectManager.getInstance().openProjects.firstOrNull()
-        val dialog = CommandEditDialog(project, existingCommand)
+        val dialog = PromptEditDialog(project, existing)
 
         if (dialog.showAndGet()) {
             coroutineScope.launch {
                 try {
-                    logger.info { "Updating command: ${existingCommand.name}" }
+                    logger.info { "Updating slash prompt: ${existing.name}" }
 
                     // Save to backend on IO dispatcher
                     val updated = withContext(Dispatchers.IO) {
-                        coreApiClient?.saveCommand(
-                            SaveCommandRequest(
-                                id = existingCommand.id,
-                                name = dialog.getCommandName(),
+                        coreApiClient?.saveSlashPrompt(
+                            SaveSlashPromptRequest(
+                                id = existing.id,
+                                name = dialog.getPromptName(),
                                 content = dialog.getContent(),
                                 description = dialog.getDescription(),
                                 isEnabled = dialog.isEnabled()
@@ -346,41 +346,41 @@ class PromptsSettingsPanel(
                     }
 
                     // Reload data (already handles IO + invokeLater)
-                    reloadCommands()
+                    reloadSlashPrompts()
 
                     // Notify settings changed on EDT
                     ApplicationManager.getApplication().invokeLater {
-                        onSettingChanged("prompts", "command_updated", updated.prompt.id)
+                        onSettingChanged("prompts", "slash_prompt_updated", updated.prompt.id)
                     }
 
-                    logger.info { "Command updated: ${updated.prompt.id}" }
+                    logger.info { "Slash prompt updated: ${updated.prompt.id}" }
                 } catch (e: Exception) {
-                    logger.error(e) { "Failed to update command" }
+                    logger.error(e) { "Failed to update slash prompt" }
                     ApplicationManager.getApplication().invokeLater {
-                        showError("Failed to update command: ${e.message}")
+                        showError("Failed to update prompt: ${e.message}")
                     }
                 }
             }
         }
     }
 
-    private fun onDeleteCommand() {
-        val selectedRow = commandsTable.selectedRow
+    private fun onDeleteSlashPrompt() {
+        val selectedRow = slashPromptsTable.selectedRow
         if (selectedRow < 0) {
-            showError("Select a command to delete")
+            showError("Select a prompt to delete")
             return
         }
 
-        if (selectedRow >= commandsCache.size) {
+        if (selectedRow >= slashPromptsCache.size) {
             showError("Invalid row")
             return
         }
 
-        val command = commandsCache[selectedRow]
+        val target = slashPromptsCache[selectedRow]
 
         val result = JOptionPane.showConfirmDialog(
             this,
-            "Are you sure you want to delete command '${command.name}'?",
+            "Are you sure you want to delete prompt '${target.name}'?",
             "Confirm Deletion",
             JOptionPane.YES_NO_OPTION,
             JOptionPane.WARNING_MESSAGE
@@ -392,27 +392,27 @@ class PromptsSettingsPanel(
 
         coroutineScope.launch {
             try {
-                logger.info { "Deleting command: ${command.name}" }
+                logger.info { "Deleting slash prompt: ${target.name}" }
 
                 // Delete from backend on IO dispatcher
                 withContext(Dispatchers.IO) {
-                    coreApiClient?.deletePrompt(command.id)
+                    coreApiClient?.deletePrompt(target.id)
                         ?: throw Exception("CoreApiClient not available")
                 }
 
                 // Reload data (already handles IO + invokeLater)
-                reloadCommands()
+                reloadSlashPrompts()
 
                 // Notify settings changed on EDT
                 ApplicationManager.getApplication().invokeLater {
-                    onSettingChanged("prompts", "command_deleted", command.name)
+                    onSettingChanged("prompts", "slash_prompt_deleted", target.name)
                 }
 
-                logger.info { "Command deleted: ${command.name}" }
+                logger.info { "Slash prompt deleted: ${target.name}" }
             } catch (e: Exception) {
-                logger.error(e) { "Failed to delete command" }
+                logger.error(e) { "Failed to delete slash prompt" }
                 ApplicationManager.getApplication().invokeLater {
-                    showError("Failed to delete command: ${e.message}")
+                    showError("Failed to delete prompt: ${e.message}")
                 }
             }
         }
@@ -466,48 +466,47 @@ class PromptsSettingsPanel(
     }
 
     /**
-     * Load commands data from API (synchronous for initial UI setup)
+     * Load slash prompts data from API (synchronous for initial UI setup)
      */
-    private fun loadCommandsData(): Array<Array<Any>> {
+    private fun loadSlashPromptsData(): Array<Array<Any>> {
         if (coreApiClient == null) {
-            commandsCache.clear()
+            slashPromptsCache.clear()
             return arrayOf(
-                arrayOf("/example", "Example command description", true)
+                arrayOf("/example", "Example prompt description", true)
             )
         }
 
         return try {
-            val response = coreApiClient.getPromptsByType(PromptType.SLASH_COMMAND)
+            val response = coreApiClient.getPromptsByType(PromptType.SLASH_PROMPT)
 
-            // Update cache during initial load (Bug #6 fix)
-            commandsCache.clear()
-            commandsCache.addAll(response.prompts)
+            slashPromptsCache.clear()
+            slashPromptsCache.addAll(response.prompts)
 
             response.prompts.map { prompt ->
                 arrayOf<Any>(prompt.name, prompt.description ?: "", prompt.isEnabled)
             }.toTypedArray()
         } catch (e: Exception) {
-            logger.error(e) { "Failed to load commands" }
-            commandsCache.clear()  // Clear cache on error
+            logger.error(e) { "Failed to load slash prompts" }
+            slashPromptsCache.clear()
             arrayOf()
         }
     }
 
     /**
-     * Load commands data asynchronously and update cache
+     * Load slash prompts data asynchronously and update cache
      */
-    private suspend fun loadCommandsDataAsync(): List<PromptDto> {
+    private suspend fun loadSlashPromptsDataAsync(): List<PromptDto> {
         if (coreApiClient == null) {
             return emptyList()
         }
 
         return try {
             val response = withContext(Dispatchers.IO) {
-                coreApiClient.getPromptsByType(PromptType.SLASH_COMMAND)
+                coreApiClient.getPromptsByType(PromptType.SLASH_PROMPT)
             }
             response.prompts
         } catch (e: Exception) {
-            logger.error(e) { "Failed to load commands async" }
+            logger.error(e) { "Failed to load slash prompts async" }
             emptyList()
         }
     }
@@ -534,13 +533,13 @@ class PromptsSettingsPanel(
     }
 
     /**
-     * Update commands table with new data (must be called on EDT)
+     * Update slash prompts table with new data (must be called on EDT)
      */
-    private fun updateCommandsTable(prompts: List<PromptDto>) {
-        commandsCache.clear()
-        commandsCache.addAll(prompts)
+    private fun updateSlashPromptsTable(prompts: List<PromptDto>) {
+        slashPromptsCache.clear()
+        slashPromptsCache.addAll(prompts)
 
-        val model = commandsTable.model as DefaultTableModel
+        val model = slashPromptsTable.model as DefaultTableModel
         model.rowCount = 0
         prompts.forEach { prompt ->
             model.addRow(arrayOf<Any>(prompt.name, prompt.description ?: "", prompt.isEnabled))
@@ -558,12 +557,12 @@ class PromptsSettingsPanel(
     }
 
     /**
-     * Reload commands from backend asynchronously
+     * Reload slash prompts from backend asynchronously
      */
-    private suspend fun reloadCommands() {
-        val prompts = loadCommandsDataAsync()
+    private suspend fun reloadSlashPrompts() {
+        val prompts = loadSlashPromptsDataAsync()
         ApplicationManager.getApplication().invokeLater {
-            updateCommandsTable(prompts)
+            updateSlashPromptsTable(prompts)
         }
     }
 
@@ -583,7 +582,7 @@ class PromptsSettingsPanel(
         coroutineScope.launch {
             try {
                 reloadPrompts()
-                reloadCommands()
+                reloadSlashPrompts()
             } catch (e: Exception) {
                 logger.error(e) { "Failed to reload prompts panel" }
             }

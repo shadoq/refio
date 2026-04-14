@@ -61,12 +61,18 @@ class AdvanceCodeEditingTool(
 
     override val name = "advance_code_editing"
     override val description =
-        "LLM-assisted FULL FILE regeneration. EXPENSIVE (~\$0.06). " +
-        "Regenerates entire file from scratch — may introduce bugs in untouched regions. " +
-        "Reserve for: (a) new files from scratch, (b) rewrites >50% of file, (c) structurally broken files. " +
-        "Prefer code_editing (FREE) or multi_line_editor (CHEAP ~\$0.02) for smaller changes."
+        "LLM-assisted FULL FILE generation/regeneration. " +
+        "PREFERRED for: (a) creating new files >50 lines from scratch (HTML pages, classes, scripts), " +
+        "(b) rewrites covering >50% of an existing file, (c) structurally broken files. " +
+        "Generates content via a dedicated LLM call so the agent's own response stays small — " +
+        "avoid stuffing large `content` payloads into `create_new_file`, which inflates the agent " +
+        "response and risks streaming timeouts. " +
+        "For small targeted edits prefer code_editing or multi_line_editor."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_PRODUCING
+    override val selectionHint =
+        "Full-file generation or >50% rewrites (new HTML/classes/scripts, structurally broken files). " +
+        "LLM generates the content so your agent response stays small — use instead of create_new_file for large files."
 
     override fun validateParams(params: Map<String, Any>) {
         // Validate path

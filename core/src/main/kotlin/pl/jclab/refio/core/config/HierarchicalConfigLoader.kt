@@ -167,14 +167,6 @@ class HierarchicalConfigLoader private constructor(
         return getConfig().tools?.permissions
     }
 
-    fun getTerminalWhitelist(): TerminalWhitelistConfig? {
-        return getConfig().terminal?.whitelist
-    }
-
-    fun getTerminalWhitelistEnabled(): Boolean? = getConfig().terminal?.whitelist?.enabled
-
-    fun getTerminalWhitelistMode(): String? = getConfig().terminal?.whitelist?.mode
-
     // ═══════════════════════════════════════════════════════════════════════════════
     // RAG Settings
     // ═══════════════════════════════════════════════════════════════════════════════

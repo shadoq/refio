@@ -70,16 +70,19 @@ class SystemEnvironmentPromptProvider(
             append("user_home: $home\n")
             append("path_separator: \"$pathSep\"\n")
             append("file_separator: \"$fileSep\"\n")
-            append("<platform_rules>\n")
-            append(platformHint)
-            append("\n</platform_rules>\n")
             append("available_tools:\n")
             for ((tool, available) in toolStatus) {
                 append("  - $tool: ${if (available) "yes" else "no"}\n")
             }
+
             append("IMPORTANT: Pick shell commands and flags that match the OS above. ")
             append("Do NOT assume a tool exists unless it is listed as `yes` in available_tools. ")
             append("When uncertain, prefer cross-platform alternatives or use Refio tools instead of raw shell.\n")
+
+            append("\n\n<platform_rules>\n")
+            append(platformHint)
+            append("\n</platform_rules>\n")
+
             append("</system_environment>")
         }
     }

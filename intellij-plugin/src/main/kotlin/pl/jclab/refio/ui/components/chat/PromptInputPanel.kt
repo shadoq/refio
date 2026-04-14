@@ -33,7 +33,7 @@ import kotlinx.coroutines.withContext
 import pl.jclab.refio.api.models.CodeSnippet
 import pl.jclab.refio.api.models.ContextReference
 import pl.jclab.refio.api.models.ExecutionMode
-import pl.jclab.refio.api.models.SlashCommand
+import pl.jclab.refio.api.models.SlashPrompt
 import pl.jclab.refio.api.models.TaskMode
 import pl.jclab.refio.core.context.ContextProviderRegistry
 import pl.jclab.refio.core.context.ContextSubmenuItem
@@ -46,7 +46,7 @@ import pl.jclab.refio.services.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.ui.completion.RefioCompletionContributor
 import pl.jclab.refio.ui.components.autocomplete.AutocompletePopup
-import pl.jclab.refio.ui.components.autocomplete.CommandAutocompleteItem
+import pl.jclab.refio.ui.components.autocomplete.PromptAutocompleteItem
 import pl.jclab.refio.ui.components.autocomplete.ContextAutocompleteItem
 import pl.jclab.refio.ui.components.autocomplete.ContextValidator
 import pl.jclab.refio.ui.components.input.InputPanelContainer
@@ -111,7 +111,7 @@ class PromptInputPanel(
 
     // Autocomplete
     private var contextAutocomplete: AutocompletePopup<ContextAutocompleteItem>
-    private var commandAutocomplete: AutocompletePopup<CommandAutocompleteItem>
+    private var promptAutocomplete: AutocompletePopup<PromptAutocompleteItem>
 
     // Current submenu provider ID (for tracking which provider's submenu is shown)
     private var currentSubmenuProviderId: String? = null
@@ -132,8 +132,8 @@ class PromptInputPanel(
     // Job for autocomplete coroutines (cancel previous when starting new)
     private var autocompleteJob: kotlinx.coroutines.Job? = null
 
-    // Cached slash commands (loaded once, used for prepending templates)
-    private var cachedSlashCommands: List<SlashCommand> = emptyList()
+    // Cached slash prompts (loaded once, used for prepending templates)
+    private var cachedSlashPrompts: List<SlashPrompt> = emptyList()
 
     // Context references
     private val contextReferences = mutableListOf<ContextReference>()
@@ -163,8 +163,8 @@ class PromptInputPanel(
             handleContextSelection(item)
         }
 
-        commandAutocomplete = AutocompletePopup { item ->
-            insertSlashCommand(item.command)
+        promptAutocomplete = AutocompletePopup { item ->
+            insertSlashPrompt(item.slashPrompt)
         }
 
         promptEditor = createPromptEditor()
@@ -180,9 +180,9 @@ class PromptInputPanel(
 
         cs.launch {
             try {
-                loadSlashCommands()
+                loadSlashPrompts()
             } catch (e: Exception) {
-                logger.warn(e) { "Failed to preload slash commands" }
+                logger.warn(e) { "Failed to preload slash prompts" }
             }
         }
 
@@ -642,12 +642,12 @@ class PromptInputPanel(
             return
         }
 
-        // VALIDATE SLASH COMMAND FIRST (before clearing editor)
-        // Process slash command: prepend template to user text
-        val slashProcessedText = processSlashCommand(text)
+        // VALIDATE SLASH PROMPT FIRST (before clearing editor)
+        // Expand slash prompt: prepend its template to the user text
+        val slashProcessedText = processSlashPrompt(text)
         if (slashProcessedText == null) {
-            // Validation failed (slash command not at start) - don't send, keep text in editor
-            logger.warn { "Slash command validation failed, message not sent" }
+            // Validation failed (slash prompt not at start) - don't send, keep text in editor
+            logger.warn { "Slash prompt validation failed, message not sent" }
             return
         }
         val processedText = applyPromptTemplateVariables(slashProcessedText)
@@ -756,11 +756,11 @@ class PromptInputPanel(
     }
 
     /**
-     * Process all slash commands in text.
-     * Replaces each "/command" with its template, supporting multiple commands.
+     * Process all slash prompts in text.
+     * Replaces each "/name" with its template, supporting multiple slash prompts.
      * Format: "text /cmd1 more text /cmd2 end" -> "text TEMPLATE1 more text TEMPLATE2 end"
      *
-     * @return Processed text with all commands replaced
+     * @return Processed text with all slash prompts replaced
      */
     /**
      * Build message text with inlined context refs for mid-execution messages.
@@ -784,11 +784,11 @@ class PromptInputPanel(
         return sb.toString()
     }
 
-    private fun processSlashCommand(text: String): String? {
-        // Find all slash commands using regex
-        // Only match /command after whitespace or at start of text (not in URLs like https://example.com/path)
-        val commandRegex = Regex("""(?<=\s|^)/([\w-]+)""")
-        val matches = commandRegex.findAll(text).toList()
+    private fun processSlashPrompt(text: String): String? {
+        // Find all slash prompts using regex.
+        // Only match /name after whitespace or at start of text (not in URLs like https://example.com/path)
+        val slashRegex = Regex("""(?<=\s|^)/([\w-]+)""")
+        val matches = slashRegex.findAll(text).toList()
 
         if (matches.isEmpty()) {
             return text
@@ -798,25 +798,25 @@ class PromptInputPanel(
         var offset = 0  // Track position shift after replacements
 
         for (match in matches) {
-            val commandName = match.groupValues[1]
-            val command = cachedSlashCommands.find { it.name.equals(commandName, ignoreCase = true) }
+            val promptName = match.groupValues[1]
+            val slashPrompt = cachedSlashPrompts.find { it.name.equals(promptName, ignoreCase = true) }
 
-            if (command == null) {
-                logger.warn { "Slash command not found: /$commandName, skipping" }
+            if (slashPrompt == null) {
+                logger.warn { "Slash prompt not found: /$promptName, skipping" }
                 continue
             }
 
             // Build template with variable substitution
-            var template = command.template
+            var template = slashPrompt.template
 
             // Replace {selection} variable if present
-            if ("selection" in command.variables) {
+            if ("selection" in slashPrompt.variables) {
                 val editor = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).selectedTextEditor
                 val selection = editor?.selectionModel?.selectedText ?: ""
                 template = template.replace("{selection}", selection)
             }
 
-            // Replace command with template
+            // Replace the slash prompt with its template
             val originalStart = match.range.first + offset
             val originalEnd = match.range.last + 1 + offset
 
@@ -825,7 +825,7 @@ class PromptInputPanel(
             // Update offset for next replacement
             offset += template.length - match.value.length
 
-            logger.info { "Replaced slash command /$commandName at position ${match.range.first} with template" }
+            logger.info { "Replaced slash prompt /$promptName at position ${match.range.first} with template" }
         }
 
         return result
@@ -1236,7 +1236,7 @@ class PromptInputPanel(
         ensureEnterActionHandlerInstalled()
         return EditorTextField(project, PlainTextFileType.INSTANCE).apply {
             setOneLineMode(false)
-            setPlaceholder("Type a message... (@context, /command, !subagent)")
+            setPlaceholder("Type a message... (@context, /prompt, !subagent)")
             font = LCATheme.editorFont
             preferredSize = Dimension(0, 90)
             minimumSize = Dimension(0, 70)
@@ -1269,7 +1269,7 @@ class PromptInputPanel(
                 }
 
                 contextAutocomplete.attach(editorEx)
-                commandAutocomplete.attach(editorEx)
+                promptAutocomplete.attach(editorEx)
 
                 installEditorKeyBindings(editorEx)
                 updatePromptEditorHeight()
@@ -1415,7 +1415,7 @@ class PromptInputPanel(
 
         return isNativeLookupVisible ||
                 (contextAutocomplete.isVisible()) ||
-                (commandAutocomplete.isVisible())
+                (promptAutocomplete.isVisible())
     }
 
     private fun getPromptCaretOffset(): Int {
@@ -1531,12 +1531,12 @@ class PromptInputPanel(
             // / autocomplete - only when "/" is the FIRST character in input
             beforeCaret.startsWith("/") && beforeCaret.all { it.isLetterOrDigit() || it == '/' } -> {
                 // Use native IntelliJ completion (RefioCompletionContributor) instead of custom popup
-                commandAutocomplete.hide()
+                promptAutocomplete.hide()
             }
 
             else -> {
                 contextAutocomplete.hide()
-                commandAutocomplete.hide()
+                promptAutocomplete.hide()
             }
         }
     }
@@ -1704,22 +1704,22 @@ class PromptInputPanel(
     }
 
     /**
-     * Load slash commands from backend and cache them
+     * Load slash prompts from backend and cache them
      */
-    private suspend fun loadSlashCommands(): List<SlashCommand> = withContext(Dispatchers.IO) {
-        val fallback = SlashCommand.BUILTINS
+    private suspend fun loadSlashPrompts(): List<SlashPrompt> = withContext(Dispatchers.IO) {
+        val fallback = SlashPrompt.BUILTINS
 
         return@withContext try {
             val client = coreApiClient ?: CoreApiClient(sessionManager.apiRouter)
-            val response = client.getPromptsByType(pl.jclab.refio.core.db.PromptType.SLASH_COMMAND)
+            val response = client.getPromptsByType(pl.jclab.refio.core.db.PromptType.SLASH_PROMPT)
 
-            val commands = response.prompts
+            val slashPrompts = response.prompts
                 .filter { it.isEnabled }
                 .map { prompt ->
-                    SlashCommand(
+                    SlashPrompt(
                         id = prompt.id,
                         name = prompt.name.removePrefix("/"),
-                        description = prompt.description ?: "Custom command",
+                        description = prompt.description ?: "Custom prompt",
                         template = prompt.content,
                         variables = extractVariablesFromTemplate(prompt.content),
                         category = "custom",
@@ -1727,18 +1727,18 @@ class PromptInputPanel(
                     )
                 }
 
-            val resolved = if (commands.isEmpty()) {
+            val resolved = if (slashPrompts.isEmpty()) {
                 fallback
             } else {
-                commands
+                slashPrompts
             }
 
-            cachedSlashCommands = resolved
-            logger.info { "Loaded ${commands.size} slash commands from database (enabled only)" }
+            cachedSlashPrompts = resolved
+            logger.info { "Loaded ${slashPrompts.size} slash prompts from database (enabled only)" }
             resolved
         } catch (e: Exception) {
-            logger.error(e) { "Failed to load slash commands from database, using built-ins" }
-            cachedSlashCommands = fallback
+            logger.error(e) { "Failed to load slash prompts from database, using built-ins" }
+            cachedSlashPrompts = fallback
             fallback
         }
     }
@@ -1879,16 +1879,16 @@ class PromptInputPanel(
 
 
     /**
-     * Insert slash command name (not template)
-     * Template will be prepended when sending the message
+     * Insert slash prompt name (not template).
+     * Template will be prepended when sending the message.
      */
-    private fun insertSlashCommand(command: SlashCommand) {
-        // Replace typed prefix with full command name + space
-        val commandText = "/${command.name} "
-        promptEditor.text = commandText
-        promptEditor.editor?.caretModel?.moveToOffset(commandText.length)
+    private fun insertSlashPrompt(slashPrompt: SlashPrompt) {
+        // Replace typed prefix with full prompt name + space
+        val promptText = "/${slashPrompt.name} "
+        promptEditor.text = promptText
+        promptEditor.editor?.caretModel?.moveToOffset(promptText.length)
 
-        logger.info { "Inserted slash command: /${command.name}" }
+        logger.info { "Inserted slash prompt: /${slashPrompt.name}" }
     }
 
     /**

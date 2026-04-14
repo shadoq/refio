@@ -33,6 +33,8 @@ get_subtask_output (recover full raw output of a past tool call by subtask id / 
 Use for: key findings, intermediate results, decisions, blockers, recovering data lost to summarization."""
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.SYSTEM
+    override val selectionHint =
+        "Cross-turn working memory: write/read findings, list keys, recover truncated subtask output."
 
     override fun getParameterSchema(): Map<String, Any> = mapOf(
         "type" to "object",

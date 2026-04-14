@@ -5,18 +5,11 @@ import pl.jclab.refio.core.config.ConfigKey
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.config.ConfigYaml
 import pl.jclab.refio.core.config.HierarchicalConfigLoader
-import pl.jclab.refio.core.config.TerminalCommandConfig
-import pl.jclab.refio.core.config.TerminalConfig
-import pl.jclab.refio.core.config.TerminalWhitelistConfig
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.db.repositories.ConfigRepository
 import pl.jclab.refio.core.llm.getModelConfigFromCache
 import pl.jclab.refio.core.services.context.ContextBudget
 import pl.jclab.refio.core.services.context.ContextSection
-import pl.jclab.refio.core.tools.security.AllowedCommand
-import pl.jclab.refio.core.tools.security.CommandWhitelistConfig
-import pl.jclab.refio.core.tools.security.CommandWhitelistDefaults
-import pl.jclab.refio.core.tools.security.WhitelistMode
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Path
@@ -178,9 +171,6 @@ class ConfigService(
         // Tools configuration keys
         const val KEY_TOOLS_PERMISSIONS = "tools.permissions"
         const val KEY_TOOL_PERMISSION_RUN_TERMINAL = "tools.permission_run_terminal_command"
-        const val KEY_TERMINAL_WHITELIST = "terminal.whitelist"
-        const val KEY_TERMINAL_WHITELIST_ENABLED = "terminal.whitelist.enabled"
-        const val KEY_TERMINAL_WHITELIST_MODE = "terminal.whitelist.mode"
 
         // Tool result summarization configuration keys
         const val KEY_TOOL_SUMMARY_ENABLED = "tool_summary.enabled"
@@ -1104,7 +1094,6 @@ class ConfigService(
             limits = buildLimitsConfig(),
             advanced = buildAdvancedConfig(),
             tools = buildToolsConfig(),
-            terminal = buildTerminalConfig(),
             rag = buildRagConfig(),
             ui = buildUiConfig()
         )
@@ -1227,32 +1216,6 @@ class ConfigService(
         }
 
         return pl.jclab.refio.core.config.ToolsConfig(permissions = yamlPermissions)
-    }
-
-    private fun buildTerminalConfig(): TerminalConfig {
-        val whitelist = getTerminalWhitelistConfig()
-        val yamlCommands = whitelist.allowedCommands.map { command ->
-            TerminalCommandConfig(
-                program = command.program,
-                description = command.description.ifBlank { null },
-                aliases = command.aliases.ifEmpty { null },
-                blockedFlags = command.blockedFlags.ifEmpty { null },
-                blockedSubcommands = command.blockedSubcommands.ifEmpty { null },
-                blockedArgPatterns = command.blockedArgPatterns.ifEmpty { null },
-                allowedSubcommands = command.allowedSubcommands.ifEmpty { null },
-                maxArgs = command.maxArgs,
-                requireConfirmation = command.requireConfirmation
-            )
-        }
-
-        return TerminalConfig(
-            whitelist = TerminalWhitelistConfig(
-                enabled = whitelist.enabled,
-                mode = whitelist.mode.name,
-                globalBlockedPatterns = whitelist.globalBlockedPatterns,
-                commands = yamlCommands
-            )
-        )
     }
 
     private fun buildRagConfig(): pl.jclab.refio.core.config.RagConfig {
@@ -1439,102 +1402,6 @@ class ConfigService(
         )
         invalidateConfigCache(KEY_TOOL_PERMISSION_RUN_TERMINAL)
         invalidateConfigCache(KEY_TOOL_PERMISSION_RUN_TERMINAL)
-    }
-
-    fun getTerminalWhitelistConfig(): CommandWhitelistConfig {
-        val defaults = CommandWhitelistConfig(
-            enabled = true,
-            mode = WhitelistMode.WHITELIST_ONLY,
-            allowedCommands = CommandWhitelistDefaults.DEFAULT_COMMANDS,
-            globalBlockedPatterns = CommandWhitelistDefaults.DEFAULT_BLOCKED_PATTERNS
-        )
-
-        val fromYaml = yamlLoader.getTerminalWhitelist()?.let { yaml ->
-            CommandWhitelistConfig(
-                enabled = yaml.enabled ?: defaults.enabled,
-                mode = parseWhitelistMode(yaml.mode) ?: defaults.mode,
-                allowedCommands = yaml.commands?.map { toDomainAllowedCommand(it) } ?: emptyList(),
-                globalBlockedPatterns = yaml.globalBlockedPatterns ?: emptyList()
-            )
-        }
-
-        var merged = mergeTerminalWhitelistConfigs(defaults, fromYaml)
-
-        val dbConfig = getConfigWithPrecedence(KEY_TERMINAL_WHITELIST)
-        if (dbConfig != null) {
-            val parsed = runCatching { gson.fromJson(dbConfig.value, CommandWhitelistConfig::class.java) }.getOrNull()
-            if (parsed != null) {
-                merged = mergeTerminalWhitelistConfigs(merged, parsed)
-            } else {
-                logger.warn { "Failed to parse DB terminal whitelist config JSON" }
-            }
-        }
-
-        getConfigWithPrecedence(KEY_TERMINAL_WHITELIST_ENABLED)?.value?.toBooleanStrictOrNull()?.let { enabled ->
-            merged = merged.copy(enabled = enabled)
-        }
-        parseWhitelistMode(getConfigWithPrecedence(KEY_TERMINAL_WHITELIST_MODE)?.value)?.let { mode ->
-            merged = merged.copy(mode = mode)
-        }
-
-        return merged
-    }
-
-    fun setTerminalWhitelistConfig(config: CommandWhitelistConfig, scope: ConfigScope) {
-        require(scope != ConfigScope.TASK) { "TASK scope is not supported for terminal whitelist config" }
-
-        val projectId = if (scope == ConfigScope.PROJECT) {
-            resolveProjectId(null)
-                ?: throw IllegalArgumentException("PROJECT scope requires default projectId")
-        } else {
-            null
-        }
-
-        configRepository.set(
-            key = KEY_TERMINAL_WHITELIST,
-            value = gson.toJson(config),
-            scope = scope,
-            projectId = projectId,
-            taskId = null,
-            description = "Terminal whitelist configuration"
-        )
-        configRepository.set(
-            key = KEY_TERMINAL_WHITELIST_ENABLED,
-            value = config.enabled.toString(),
-            scope = scope,
-            projectId = projectId,
-            taskId = null,
-            description = "Terminal whitelist enabled"
-        )
-        configRepository.set(
-            key = KEY_TERMINAL_WHITELIST_MODE,
-            value = config.mode.name,
-            scope = scope,
-            projectId = projectId,
-            taskId = null,
-            description = "Terminal whitelist mode"
-        )
-        invalidateConfigCache(KEY_TERMINAL_WHITELIST)
-        invalidateConfigCache(KEY_TERMINAL_WHITELIST_ENABLED)
-        invalidateConfigCache(KEY_TERMINAL_WHITELIST_MODE)
-        invalidateConfigCache(KEY_TERMINAL_WHITELIST)
-        invalidateConfigCache(KEY_TERMINAL_WHITELIST_ENABLED)
-        invalidateConfigCache(KEY_TERMINAL_WHITELIST_MODE)
-    }
-
-    fun addAllowedCommand(command: AllowedCommand, scope: ConfigScope) {
-        val current = getTerminalWhitelistConfig()
-        val programKey = command.program.lowercase()
-        val updatedCommands = current.allowedCommands
-            .filterNot { it.program.lowercase() == programKey } + command
-        setTerminalWhitelistConfig(current.copy(allowedCommands = updatedCommands), scope)
-    }
-
-    fun removeAllowedCommand(program: String, scope: ConfigScope) {
-        val current = getTerminalWhitelistConfig()
-        val targetKey = program.lowercase()
-        val updatedCommands = current.allowedCommands.filterNot { it.program.lowercase() == targetKey }
-        setTerminalWhitelistConfig(current.copy(allowedCommands = updatedCommands), scope)
     }
 
     /**
@@ -1947,36 +1814,6 @@ class ConfigService(
             }
         }
 
-        yamlConfig.terminal?.whitelist?.let { whitelist ->
-            if (configRepository.get(KEY_TERMINAL_WHITELIST, ConfigScope.APP) == null) {
-                val domainConfig = CommandWhitelistConfig(
-                    enabled = whitelist.enabled ?: true,
-                    mode = parseWhitelistMode(whitelist.mode) ?: WhitelistMode.WHITELIST_ONLY,
-                    allowedCommands = whitelist.commands?.map { toDomainAllowedCommand(it) } ?: emptyList(),
-                    globalBlockedPatterns = whitelist.globalBlockedPatterns ?: emptyList()
-                )
-                configRepository.set(
-                    key = KEY_TERMINAL_WHITELIST,
-                    value = gson.toJson(domainConfig),
-                    scope = ConfigScope.APP,
-                    taskId = null,
-                    description = "Terminal whitelist configuration"
-                )
-                logger.info { "Loaded terminal whitelist config from YAML" }
-            }
-            if (configRepository.get(KEY_TERMINAL_WHITELIST_ENABLED, ConfigScope.APP) == null && whitelist.enabled != null) {
-                set(KEY_TERMINAL_WHITELIST_ENABLED, whitelist.enabled.toString())
-                logger.info { "Loaded terminal whitelist enabled from YAML: ${whitelist.enabled}" }
-            }
-            if (configRepository.get(KEY_TERMINAL_WHITELIST_MODE, ConfigScope.APP) == null && whitelist.mode != null) {
-                val mode = parseWhitelistMode(whitelist.mode)
-                if (mode != null) {
-                    set(KEY_TERMINAL_WHITELIST_MODE, mode.name)
-                    logger.info { "Loaded terminal whitelist mode from YAML: ${mode.name}" }
-                }
-            }
-        }
-
         logger.info { "Finished loading configuration from YAML" }
     }
 
@@ -2029,27 +1866,6 @@ class ConfigService(
                 logger.info { "Initialized default: $key = $value" }
                 initializedCount++
             }
-        }
-
-        if (configRepository.get(KEY_TERMINAL_WHITELIST_ENABLED, ConfigScope.APP) == null) {
-            configRepository.set(
-                key = KEY_TERMINAL_WHITELIST_ENABLED,
-                value = "true",
-                scope = ConfigScope.APP,
-                taskId = null,
-                description = "Terminal whitelist enabled"
-            )
-            initializedCount++
-        }
-        if (configRepository.get(KEY_TERMINAL_WHITELIST_MODE, ConfigScope.APP) == null) {
-            configRepository.set(
-                key = KEY_TERMINAL_WHITELIST_MODE,
-                value = WhitelistMode.WHITELIST_ONLY.name,
-                scope = ConfigScope.APP,
-                taskId = null,
-                description = "Terminal whitelist mode"
-            )
-            initializedCount++
         }
 
         logger.info { "Finished initializing defaults: $initializedCount keys set" }
@@ -2278,66 +2094,9 @@ class ConfigService(
             }
         }
 
-        yamlConfig.terminal?.whitelist?.let { whitelist ->
-            val domainConfig = CommandWhitelistConfig(
-                enabled = whitelist.enabled ?: true,
-                mode = parseWhitelistMode(whitelist.mode) ?: WhitelistMode.WHITELIST_ONLY,
-                allowedCommands = whitelist.commands?.map { toDomainAllowedCommand(it) } ?: emptyList(),
-                globalBlockedPatterns = whitelist.globalBlockedPatterns ?: emptyList()
-            )
-            setTerminalWhitelistConfig(domainConfig, ConfigScope.APP)
-            updatedCount++
-            logger.info { "Reloaded terminal whitelist from YAML" }
-        }
-
         logger.info { "Finished reloading configuration from YAML: $updatedCount keys updated" }
         configCache.invalidateAll()
         return updatedCount
-    }
-
-    private fun mergeTerminalWhitelistConfigs(
-        base: CommandWhitelistConfig,
-        override: CommandWhitelistConfig?
-    ): CommandWhitelistConfig {
-        if (override == null) {
-            return base
-        }
-
-        val commandsByProgram = linkedMapOf<String, AllowedCommand>()
-        base.allowedCommands.forEach { command ->
-            commandsByProgram[command.program.lowercase()] = command
-        }
-        override.allowedCommands.forEach { command ->
-            commandsByProgram[command.program.lowercase()] = command
-        }
-
-        return base.copy(
-            enabled = override.enabled,
-            mode = override.mode,
-            allowedCommands = commandsByProgram.values.toList(),
-            globalBlockedPatterns = (base.globalBlockedPatterns + override.globalBlockedPatterns).distinct()
-        )
-    }
-
-    private fun toDomainAllowedCommand(command: TerminalCommandConfig): AllowedCommand {
-        return AllowedCommand(
-            program = command.program,
-            description = command.description.orEmpty(),
-            aliases = command.aliases ?: emptyList(),
-            blockedFlags = command.blockedFlags ?: emptyList(),
-            blockedSubcommands = command.blockedSubcommands ?: emptyList(),
-            blockedArgPatterns = command.blockedArgPatterns ?: emptyList(),
-            allowedSubcommands = command.allowedSubcommands ?: emptyList(),
-            maxArgs = command.maxArgs ?: 50,
-            requireConfirmation = command.requireConfirmation ?: false
-        )
-    }
-
-    private fun parseWhitelistMode(value: String?): WhitelistMode? {
-        if (value.isNullOrBlank()) {
-            return null
-        }
-        return runCatching { WhitelistMode.valueOf(value.trim().uppercase()) }.getOrNull()
     }
 
     private fun resolveProjectId(projectId: String?): String? = projectId ?: defaultProjectId

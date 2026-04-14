@@ -64,11 +64,6 @@ data class ConfigYaml(
     val tools: ToolsConfig? = null,
 
     /**
-     * Terminal command whitelist configuration
-     */
-    val terminal: TerminalConfig? = null,
-
-    /**
      * RAG indexing configuration
      */
     val rag: RagConfig? = null,
@@ -338,7 +333,6 @@ data class ConfigYaml(
                 limits = mergeLimits(base.limits, override.limits),
                 advanced = mergeAdvanced(base.advanced, override.advanced),
                 tools = mergeTools(base.tools, override.tools),
-                terminal = mergeTerminal(base.terminal, override.terminal),
                 rag = mergeRag(base.rag, override.rag),
                 ui = mergeUi(base.ui, override.ui),
                 prompts = mergePrompts(base.prompts, override.prompts),
@@ -461,45 +455,6 @@ data class ConfigYaml(
 
             val mergedPermissions = (base.permissions ?: emptyMap()) + (override.permissions ?: emptyMap())
             return ToolsConfig(permissions = mergedPermissions)
-        }
-
-        private fun mergeTerminal(base: TerminalConfig?, override: TerminalConfig?): TerminalConfig? {
-            if (base == null) return override
-            if (override == null) return base
-
-            val baseWhitelist = base.whitelist
-            val overrideWhitelist = override.whitelist
-            if (baseWhitelist == null && overrideWhitelist == null) {
-                return TerminalConfig()
-            }
-
-            val mergedCommands = mergeTerminalCommands(
-                baseWhitelist?.commands,
-                overrideWhitelist?.commands
-            )
-
-            val mergedWhitelist = TerminalWhitelistConfig(
-                enabled = overrideWhitelist?.enabled ?: baseWhitelist?.enabled,
-                mode = overrideWhitelist?.mode ?: baseWhitelist?.mode,
-                globalBlockedPatterns = ((baseWhitelist?.globalBlockedPatterns ?: emptyList()) +
-                    (overrideWhitelist?.globalBlockedPatterns ?: emptyList())).distinct(),
-                commands = mergedCommands
-            )
-
-            return TerminalConfig(whitelist = mergedWhitelist)
-        }
-
-        private fun mergeTerminalCommands(
-            base: List<TerminalCommandConfig>?,
-            override: List<TerminalCommandConfig>?
-        ): List<TerminalCommandConfig>? {
-            if (base == null) return override
-            if (override == null) return base
-
-            val byProgram = linkedMapOf<String, TerminalCommandConfig>()
-            base.forEach { byProgram[it.program.lowercase()] = it }
-            override.forEach { byProgram[it.program.lowercase()] = it }
-            return byProgram.values.toList()
         }
 
         private fun mergePrompts(base: PromptsConfig?, override: PromptsConfig?): PromptsConfig? {
@@ -735,65 +690,6 @@ data class ConfigYaml(
                         sb.appendLine()
                     }
                 }
-            }
-
-            // Terminal whitelist
-            config.terminal?.whitelist?.let { whitelist ->
-                sb.appendLine("# Terminal Command Whitelist")
-                sb.appendLine("terminal:")
-                sb.appendLine("  whitelist:")
-                whitelist.enabled?.let { sb.appendLine("    enabled: $it") }
-                whitelist.mode?.let { sb.appendLine("    mode: ${yamlDoubleQuoted(it)}") }
-                whitelist.globalBlockedPatterns?.let { patterns ->
-                    if (patterns.isNotEmpty()) {
-                        sb.appendLine("    globalBlockedPatterns:")
-                        patterns.forEach { pattern ->
-                            sb.appendLine("      - ${yamlDoubleQuoted(pattern)}")
-                        }
-                    }
-                }
-                whitelist.commands?.let { commands ->
-                    if (commands.isNotEmpty()) {
-                        sb.appendLine("    commands:")
-                        commands.forEach { command ->
-                            sb.appendLine("      - program: ${yamlDoubleQuoted(command.program)}")
-                            command.description?.let { sb.appendLine("        description: ${yamlDoubleQuoted(it)}") }
-                            command.aliases?.let { aliases ->
-                                if (aliases.isNotEmpty()) {
-                                    sb.appendLine("        aliases:")
-                                    aliases.forEach { alias -> sb.appendLine("          - ${yamlDoubleQuoted(alias)}") }
-                                }
-                            }
-                            command.allowedSubcommands?.let { subs ->
-                                if (subs.isNotEmpty()) {
-                                    sb.appendLine("        allowedSubcommands:")
-                                    subs.forEach { sub -> sb.appendLine("          - ${yamlDoubleQuoted(sub)}") }
-                                }
-                            }
-                            command.blockedSubcommands?.let { subs ->
-                                if (subs.isNotEmpty()) {
-                                    sb.appendLine("        blockedSubcommands:")
-                                    subs.forEach { sub -> sb.appendLine("          - ${yamlDoubleQuoted(sub)}") }
-                                }
-                            }
-                            command.blockedFlags?.let { flags ->
-                                if (flags.isNotEmpty()) {
-                                    sb.appendLine("        blockedFlags:")
-                                    flags.forEach { flag -> sb.appendLine("          - ${yamlDoubleQuoted(flag)}") }
-                                }
-                            }
-                            command.blockedArgPatterns?.let { argPatterns ->
-                                if (argPatterns.isNotEmpty()) {
-                                    sb.appendLine("        blockedArgPatterns:")
-                                    argPatterns.forEach { argPattern -> sb.appendLine("          - ${yamlDoubleQuoted(argPattern)}") }
-                                }
-                            }
-                            command.maxArgs?.let { sb.appendLine("        maxArgs: $it") }
-                            command.requireConfirmation?.let { sb.appendLine("        requireConfirmation: $it") }
-                        }
-                    }
-                }
-                sb.appendLine()
             }
 
             // RAG
@@ -1067,25 +963,6 @@ tools:
       planMode: "OFF"
       agentMode: "ON"          # Enabled by default in AGENT mode
 
-# Terminal command whitelist configuration
-terminal:
-  whitelist:
-    enabled: true
-    mode: "WHITELIST_ONLY"     # WHITELIST_ONLY | WHITELIST_PLUS_DENY
-    globalBlockedPatterns:
-      - "\\|\\s*(sh|bash|zsh|powershell|cmd)\\b"
-      - "\\$\\("
-      - "`[^`]+`"
-    commands:
-      - program: "git"
-        allowedSubcommands: ["status", "log", "diff", "add", "commit"]
-        blockedSubcommands: ["push", "remote"]
-        blockedFlags: ["--force", "--no-verify"]
-        blockedArgPatterns: [".*\\.env$"]
-      - program: "gradle"
-        aliases: ["gradlew", "gradlew.bat"]
-        blockedFlags: ["--init-script"]
-
 # ─────────────────────────────────────────────────────────────────────────────
 # RAG (Retrieval-Augmented Generation) Configuration
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1329,33 +1206,6 @@ data class AdvancedConfig(
 @Serializable
 data class ToolsConfig(
     val permissions: Map<String, ToolPermissionConfig>? = null
-)
-
-@Serializable
-data class TerminalConfig(
-    val whitelist: TerminalWhitelistConfig? = null
-)
-
-@Serializable
-data class TerminalWhitelistConfig(
-    val enabled: Boolean? = null,
-    val mode: String? = null,
-    val globalBlockedPatterns: List<String>? = null,
-    @SerialName("commands")
-    val commands: List<TerminalCommandConfig>? = null
-)
-
-@Serializable
-data class TerminalCommandConfig(
-    val program: String,
-    val description: String? = null,
-    val aliases: List<String>? = null,
-    val blockedFlags: List<String>? = null,
-    val blockedSubcommands: List<String>? = null,
-    val blockedArgPatterns: List<String>? = null,
-    val allowedSubcommands: List<String>? = null,
-    val maxArgs: Int? = null,
-    val requireConfirmation: Boolean? = null
 )
 
 @Serializable

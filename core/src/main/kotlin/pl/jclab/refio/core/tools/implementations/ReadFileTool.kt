@@ -47,6 +47,9 @@ class ReadFileTool(
         "For normal source files: just pass `path`."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
+    override val selectionHint =
+        "Read a file. Whole-file by default; use offset/limit only for huge files (logs, generated code). " +
+        "Do NOT re-read a file you just wrote — the write tool result already contains the diff."
 
     override fun validateParams(params: Map<String, Any>) {
         if (params["path"] == null || (params["path"] as? String).isNullOrBlank()) {

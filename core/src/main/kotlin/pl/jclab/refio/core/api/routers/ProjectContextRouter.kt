@@ -305,9 +305,13 @@ class ProjectContextRouter(
         contextSectionTokens: Map<String, ContextSectionTokenInfo>
     ): RuntimePromptPreview {
         val toolDescriptions = toolDescriptionBuilder.getToolDescriptions(TaskMode.AGENT, task.id)
+        val toolSelectionMatrix = toolDescriptionBuilder.getToolSelectionMatrix(TaskMode.AGENT, task.id)
         val baseSystemPromptRaw = promptsService.getSystemPrompt(
             type = PromptType.SYSTEM_AGENT,
-            variables = mapOf("tool_descriptions" to toolDescriptions)
+            variables = mapOf(
+                "tool_descriptions" to toolDescriptions,
+                "tool_selection_matrix" to toolSelectionMatrix
+            )
         )
         // Apply the same section providers used by TurnPromptBuilder in runtime
         // so the preview reflects the real prompt (including <system_environment>).

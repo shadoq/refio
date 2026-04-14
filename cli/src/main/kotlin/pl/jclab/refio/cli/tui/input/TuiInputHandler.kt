@@ -666,17 +666,17 @@ class TuiInputHandler(private val terminal: Terminal) {
     }
 
     /**
-     * Handle slash commands (prompt templates only).
+     * Handle slash prompts (prompt templates only).
      * Returns true if the input was handled.
      *
      * All system operations (history, settings, export, etc.) are accessed
-     * through GUI keybindings and screens, not slash commands.
-     * Slash commands: /explain, /refactor, etc. — prompt templates from SlashCommand.BUILTINS
+     * through GUI keybindings and screens, not slash prompts.
+     * Slash prompts: /explain, /refactor, etc. — prompt templates from SlashPrompt.BUILTINS
      */
     internal fun handleCommand(input: String, viewModel: TuiViewModel): Boolean {
-        // Slash commands (prompt templates) are NOT handled here.
-        // They are processed inline in TuiViewModel.sendMessage() — same as the plugin.
-        // Unknown /commands are passed through as normal messages.
+        // Slash prompts (prompt templates) are NOT handled here.
+        // They are expanded inline in TuiViewModel.sendMessage() — same as the plugin.
+        // Unknown /names are passed through as normal messages.
         return false
     }
 }

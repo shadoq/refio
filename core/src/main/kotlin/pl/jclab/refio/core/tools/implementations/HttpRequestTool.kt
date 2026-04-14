@@ -82,6 +82,7 @@ class HttpRequestTool(
         "Body accepts JSON string or raw object (auto-serialized). Use save_to_file for large responses."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.DATA_PRODUCING
+    override val selectionHint = "HTTP requests (GET/POST/PUT/DELETE). Use save_to_file for large responses."
 
     override fun validateParams(params: Map<String, Any>) {
         val url = params["url"] as? String

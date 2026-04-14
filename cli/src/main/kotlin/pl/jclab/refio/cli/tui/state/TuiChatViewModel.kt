@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import mu.KotlinLogging
-import pl.jclab.refio.api.models.SlashCommand
+import pl.jclab.refio.api.models.SlashPrompt
 import pl.jclab.refio.cli.tui.input.TuiContextValidator
 import pl.jclab.refio.core.agents.events.AgentEvent
 import pl.jclab.refio.core.agents.events.AgentEventBus
@@ -224,31 +224,31 @@ class TuiChatViewModel(
         }
     }
 
-    // --- Slash commands (prompt templates) ---
+    // --- Slash prompts (prompt templates) ---
 
-    fun getSlashCommands(): List<SlashCommand> {
-        return SlashCommand.BUILTINS
+    fun getSlashPrompts(): List<SlashPrompt> {
+        return SlashPrompt.BUILTINS
     }
 
     /**
-     * Process slash commands inline (same as plugin's PromptInputPanel.processSlashCommand).
-     * Replaces each "/command" with its template, supporting multiple commands anywhere in text.
-     * Only matches /command after whitespace or at start (not in URLs like https://example.com).
+     * Expand slash prompts inline (same as plugin's PromptInputPanel.processSlashPrompt).
+     * Replaces each "/name" with its template, supporting multiple occurrences anywhere in text.
+     * Only matches /name after whitespace or at start (not in URLs like https://example.com).
      */
-    fun processSlashCommands(text: String): String {
-        val commandRegex = Regex("""(?<=\s|^)/([\w-]+)""")
-        val matches = commandRegex.findAll(text).toList()
+    fun processSlashPrompts(text: String): String {
+        val slashRegex = Regex("""(?<=\s|^)/([\w-]+)""")
+        val matches = slashRegex.findAll(text).toList()
         if (matches.isEmpty()) return text
 
-        val commands = getSlashCommands()
+        val slashPrompts = getSlashPrompts()
         var result = text
         var offset = 0
 
         for (match in matches) {
-            val commandName = match.groupValues[1]
-            val cmd = commands.find { it.name.equals(commandName, ignoreCase = true) } ?: continue
+            val promptName = match.groupValues[1]
+            val sp = slashPrompts.find { it.name.equals(promptName, ignoreCase = true) } ?: continue
 
-            var template = cmd.template
+            var template = sp.template
 
             // Substitute template variables
             template = template
@@ -583,8 +583,8 @@ class TuiChatViewModel(
             return
         }
 
-        // Process slash commands inline (like the plugin does)
-        val processedInput = processSlashCommands(input)
+        // Expand slash prompts inline (like the plugin does)
+        val processedInput = processSlashPrompts(input)
 
         // Validate context references before sending
         val contextWarning = validateContextReferences(processedInput)
@@ -880,10 +880,10 @@ class TuiChatViewModel(
     private var cachedSubagentNames: List<String> = emptyList()
     private var subagentCacheTime: Long = 0
 
-    /** Built-in slash commands for autocomplete */
+    /** Built-in slash prompts for autocomplete */
     private val builtinCommandNames: List<String> by lazy {
         try {
-            pl.jclab.refio.api.models.SlashCommand.BUILTINS.map { "/${it.name}" }
+            pl.jclab.refio.api.models.SlashPrompt.BUILTINS.map { "/${it.name}" }
         } catch (_: Exception) {
             listOf("/explain", "/fix", "/test", "/refactor", "/optimize", "/simplify",
                 "/document", "/security-review", "/translate", "/implement")

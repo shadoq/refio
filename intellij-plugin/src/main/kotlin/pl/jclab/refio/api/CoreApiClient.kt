@@ -6,7 +6,6 @@ import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.models.api.ChatRequest
 import pl.jclab.refio.core.models.api.ChatResponse
 import pl.jclab.refio.core.models.api.SetToolPermissionRequest
-import pl.jclab.refio.core.tools.security.CommandWhitelistConfig
 import pl.jclab.refio.services.logging.dualLogger
 
 private val logger = dualLogger("CoreApiClient")
@@ -146,9 +145,12 @@ class CoreApiClient(internal val router: CoreApiRouter) {
         return router.configRouter.getModels(provider)
     }
 
-    suspend fun getModelsWithVisibility(provider: String? = null): List<ModelInfo> {
-        logger.info { "[CoreApiClient] Getting models with visibility" }
-        return router.configRouter.getModelsWithVisibility(provider)
+    suspend fun getModelsWithVisibility(
+        provider: String? = null,
+        fetchIfMissing: Boolean = true
+    ): List<ModelInfo> {
+        logger.info { "[CoreApiClient] Getting models with visibility (fetchIfMissing=$fetchIfMissing)" }
+        return router.configRouter.getModelsWithVisibility(provider, fetchIfMissing)
     }
 
     suspend fun getDefaultModel(operation: ModelOperation, taskId: String? = null): GetDefaultModelResponse {
@@ -181,12 +183,12 @@ class CoreApiClient(internal val router: CoreApiRouter) {
         return router.promptsRouter.getEnabledRules()
     }
 
-    fun getEnabledCommands(): PromptsListResponse {
-        return router.promptsRouter.getEnabledCommands()
+    fun getEnabledSlashPrompts(): PromptsListResponse {
+        return router.promptsRouter.getEnabledSlashPrompts()
     }
 
-    fun findCommand(commandName: String): PromptResponse? {
-        return router.promptsRouter.findCommand(commandName)
+    fun findSlashPrompt(name: String): PromptResponse? {
+        return router.promptsRouter.findSlashPrompt(name)
     }
 
     fun saveRule(request: SaveRuleRequest): PromptResponse {
@@ -194,9 +196,9 @@ class CoreApiClient(internal val router: CoreApiRouter) {
         return router.promptsRouter.saveRule(request)
     }
 
-    fun saveCommand(request: SaveCommandRequest): PromptResponse {
-        logger.info { "[CoreApiClient] Saving command: ${request.name}" }
-        return router.promptsRouter.saveCommand(request)
+    fun saveSlashPrompt(request: SaveSlashPromptRequest): PromptResponse {
+        logger.info { "[CoreApiClient] Saving slash prompt: ${request.name}" }
+        return router.promptsRouter.saveSlashPrompt(request)
     }
 
     fun updateSystemPrompt(request: UpdateSystemPromptRequest): PromptResponse? {
@@ -309,18 +311,6 @@ class CoreApiClient(internal val router: CoreApiRouter) {
 
     suspend fun resetToolPermissions(taskId: String? = null) {
         router.toolRouter.resetToolPermissions(taskId)
-    }
-
-    fun getTerminalWhitelistConfig(): CommandWhitelistConfig {
-        return router.configService.getTerminalWhitelistConfig()
-    }
-
-    fun setTerminalWhitelistConfig(config: CommandWhitelistConfig, scope: String = "app") {
-        val configScope = when (scope.lowercase()) {
-            "project" -> ConfigScope.PROJECT
-            else -> ConfigScope.APP
-        }
-        router.configService.setTerminalWhitelistConfig(config, configScope)
     }
 
     // ========================================================================

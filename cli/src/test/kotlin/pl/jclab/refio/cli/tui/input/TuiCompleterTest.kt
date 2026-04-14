@@ -23,7 +23,7 @@ class TuiCompleterTest {
     @Test
     fun `should complete slash commands from prompt templates`() {
         val candidates = complete("/")
-        // Only prompt templates (SlashCommand.BUILTINS), no system commands
+        // Only prompt templates (SlashPrompt.BUILTINS), no system commands
         assertFalse(candidates.contains("/help"), "System commands should not appear")
         assertFalse(candidates.contains("/quit"), "System commands should not appear")
     }

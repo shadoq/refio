@@ -11,7 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import pl.jclab.refio.api.models.CodeSnippet
-import pl.jclab.refio.api.models.SlashCommand
+import pl.jclab.refio.api.models.SlashPrompt
 import pl.jclab.refio.api.models.TaskMode
 import pl.jclab.refio.services.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
@@ -19,14 +19,14 @@ import pl.jclab.refio.ui.components.chat.PromptInputPanel
 import java.awt.Container
 import javax.swing.SwingUtilities
 
-class RefioSlashCommandIntentionAction(
-    private val command: SlashCommand? = null
+class RefioSlashPromptIntentionAction(
+    private val slashPrompt: SlashPrompt? = null
 ) : IntentionAction {
 
-    private val logger = dualLogger("RefioSlashCommandIntentionAction")
+    private val logger = dualLogger("RefioSlashPromptIntentionAction")
     private val cs = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    override fun getText(): String = command?.let { "Refio: /${it.name}" } ?: "Refio: Run Slash Command..."
+    override fun getText(): String = slashPrompt?.let { "Refio: /${it.name}" } ?: "Refio: Run Prompt..."
 
     override fun getFamilyName(): String = "Refio"
 
@@ -37,7 +37,7 @@ class RefioSlashCommandIntentionAction(
     override fun invoke(project: Project, editor: Editor?, file: PsiFile?) {
         val ed = editor ?: return
         val vFile = file?.virtualFile ?: return
-        val selectedCommand = command ?: chooseCommand(project) ?: return
+        val selected = slashPrompt ?: choosePrompt(project) ?: return
 
         val selectionModel = ed.selectionModel
         if (!selectionModel.hasSelection()) return
@@ -56,12 +56,12 @@ class RefioSlashCommandIntentionAction(
             language = vFile.extension
         )
 
-        val targetMode = resolveTargetMode(selectedCommand.category)
+        val targetMode = resolveTargetMode(selected.category)
 
         cs.launch {
             try {
                 val sessionManager = SessionManager.getInstance(project)
-                sessionManager.createSession("/${selectedCommand.name}", targetMode)
+                sessionManager.createSession("/${selected.name}", targetMode)
 
                 SwingUtilities.invokeLater {
                     val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("Refio")
@@ -69,35 +69,35 @@ class RefioSlashCommandIntentionAction(
                         val panel = findPromptInputPanel(toolWindow.component)
                         if (panel != null) {
                             panel.addCodeSnippet(snippet)
-                            panel.sendPrompt("/${selectedCommand.name}")
+                            panel.sendPrompt("/${selected.name}")
                         } else {
                             logger.warn { "PromptInputPanel not found in Refio tool window" }
                         }
                     }
                 }
             } catch (e: Exception) {
-                logger.error(e) { "Failed to invoke /${selectedCommand.name} intention" }
+                logger.error(e) { "Failed to invoke /${selected.name} intention" }
             }
         }
     }
 
     override fun startInWriteAction(): Boolean = false
 
-    private fun chooseCommand(project: Project): SlashCommand? {
-        val commands = SlashCommand.BUILTINS.filter { it.showInEditor }
-        if (commands.isEmpty()) {
-            logger.warn { "No slash commands available for editor intention" }
+    private fun choosePrompt(project: Project): SlashPrompt? {
+        val available = SlashPrompt.BUILTINS.filter { it.showInEditor }
+        if (available.isEmpty()) {
+            logger.warn { "No slash prompts available for editor intention" }
             return null
         }
-        if (commands.size == 1) {
-            return commands.first()
+        if (available.size == 1) {
+            return available.first()
         }
 
-        val options = commands.map { "/${it.name} - ${it.description}" }.toTypedArray()
+        val options = available.map { "/${it.name} - ${it.description}" }.toTypedArray()
         val selected = Messages.showDialog(
             project,
-            "Select a Refio slash command to run for the current selection.",
-            "Refio Slash Commands",
+            "Select a Refio prompt to run for the current selection.",
+            "Refio Prompts",
             options,
             0,
             Messages.getQuestionIcon()
@@ -107,7 +107,7 @@ class RefioSlashCommandIntentionAction(
             return null
         }
 
-        return commands[selected]
+        return available[selected]
     }
 
     private fun resolveTargetMode(category: String): TaskMode {

@@ -35,11 +35,19 @@ class CreateNewFileTool(
 ) : Tool {
 
     override val name = "create_new_file"
-    override val description = "Create a NEW file with given content. FREE. " +
+    override val description = "Create a NEW SMALL file (config, stub, short snippet) " +
+        "where the agent already has the full content ready. " +
+        "Strongly prefer `advance_code_editing` for code files > ~50 lines, HTML pages, full classes, " +
+        "or any content generated from scratch — that tool uses a dedicated LLM call so your agent " +
+        "response stays small and avoids streaming timeouts. Stuffing hundreds of lines into `content` " +
+        "here inflates the agent response, wastes tokens, and risks truncation. " +
         "HARD FAILS if file already exists. Pre-check path in a PRIOR turn (file_search/read_directory). " +
         "On 'File already exists' error: switch to read_file + code_editing."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_MODIFYING
+    override val selectionHint =
+        "Small new files (configs, stubs, short snippets) where you already have the full content. " +
+        "For >~50 lines, HTML/classes, or generated code, prefer advance_code_editing."
 
     override fun validateParams(params: Map<String, Any>) {
         if (params["path"] == null || (params["path"] as? String).isNullOrBlank()) {

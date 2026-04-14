@@ -424,7 +424,7 @@ class ModelsSettingsPanel(
         coroutineScope.launch {
             try {
                 // Step 1: Get all models
-                val allModels = coreApiClient?.getModelsWithVisibility() ?: emptyList()
+                val allModels = coreApiClient?.getModelsWithVisibility(fetchIfMissing = false) ?: emptyList()
                 logger.info { "Applying preset against ${allModels.size} available models" }
 
                 fun findMatchingModel(modelFullId: String): pl.jclab.refio.core.api.ModelInfo? {
@@ -511,7 +511,7 @@ class ModelsSettingsPanel(
                 logger.info { "Preset '${preset.name}' applied successfully" }
 
                 // Step 4: Reload UI to reflect changes
-                val updatedModels = coreApiClient?.getModelsWithVisibility() ?: emptyList()
+                val updatedModels = coreApiClient?.getModelsWithVisibility(fetchIfMissing = false) ?: emptyList()
                 val visibleCount = updatedModels.count { it.showInDropdown }
 
                 ApplicationManager.getApplication().invokeLater {
@@ -732,7 +732,7 @@ class ModelsSettingsPanel(
                 coreApiClient?.updateModelsVisibility(visibilityMap)
 
                 // Reload models from database and update UI
-                val models = coreApiClient?.getModelsWithVisibility() ?: emptyList()
+                val models = coreApiClient?.getModelsWithVisibility(fetchIfMissing = false) ?: emptyList()
                 ApplicationManager.getApplication().invokeLater {
                     populateModelsTable(models)
                     logger.info { "All models shown successfully" }
@@ -769,7 +769,7 @@ class ModelsSettingsPanel(
                 coreApiClient?.updateModelsVisibility(visibilityMap)
 
                 // Reload models from database and update UI
-                val models = coreApiClient?.getModelsWithVisibility() ?: emptyList()
+                val models = coreApiClient?.getModelsWithVisibility(fetchIfMissing = false) ?: emptyList()
                 ApplicationManager.getApplication().invokeLater {
                     populateModelsTable(models)
                     logger.info { "All models hidden successfully" }
@@ -797,9 +797,11 @@ class ModelsSettingsPanel(
 
         coroutineScope.launch {
             try {
-                logger.info { "Loading models from backend" }
+                logger.info { "Loading models from cache (no remote fetch)" }
 
-                val models = coreApiClient.getModelsWithVisibility()
+                // Cache-only: never trigger remote provider fetches when opening the panel.
+                // User must press the Refresh button to pull fresh model lists.
+                val models = coreApiClient.getModelsWithVisibility(fetchIfMissing = false)
 
                 // Apply smart defaults if this is the first time (no visibility settings yet)
                 val modelsWithDefaults = applySmartDefaults(models)
@@ -1099,7 +1101,7 @@ class ModelsSettingsPanel(
                 logger.info { "Model visibility saved: $modelId -> $showInDropdown" }
 
                 // Refresh dropdowns with updated visibility
-                val models = coreApiClient?.getModelsWithVisibility() ?: emptyList()
+                val models = coreApiClient?.getModelsWithVisibility(fetchIfMissing = false) ?: emptyList()
                 ApplicationManager.getApplication().invokeLater {
                     updateModelDropdowns(models)
                 }
@@ -1319,8 +1321,9 @@ class ModelsSettingsPanel(
 
         coroutineScope.launch {
             try {
-                // Just reload all models with visibility settings
-                val allModels = coreApiClient?.getModelsWithVisibility() ?: emptyList()
+                // ProvidersSettingsPanel already fetched the affected provider; reuse the cache here
+                // instead of triggering another full remote refresh.
+                val allModels = coreApiClient?.getModelsWithVisibility(fetchIfMissing = false) ?: emptyList()
 
                 ApplicationManager.getApplication().invokeLater {
                     populateModelsTable(allModels)

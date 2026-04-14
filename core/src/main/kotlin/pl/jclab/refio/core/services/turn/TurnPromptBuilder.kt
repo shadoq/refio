@@ -385,9 +385,14 @@ $filteredContextPrompt
             logger.error { "[PLAN_PROMPT] Tool descriptions are EMPTY! This will cause LLM to return error." }
         }
 
+        val toolSelectionMatrix = toolDescriptionBuilder.getToolSelectionMatrix(mode, taskId)
+
         return promptsService.getSystemPrompt(
             type = PromptType.SYSTEM_PLAN,
-            variables = mapOf("tool_descriptions" to toolDescriptions)
+            variables = mapOf(
+                "tool_descriptions" to toolDescriptions,
+                "tool_selection_matrix" to toolSelectionMatrix
+            )
         )
     }
 
@@ -421,9 +426,14 @@ $filteredContextPrompt
 
         val iterationInfo = buildIterationInfo(currentIteration, maxIterations, writeToolsExecutedInTurn)
 
+        val toolSelectionMatrix = toolDescriptionBuilder.getToolSelectionMatrix(mode, taskId)
+
         val basePrompt = promptsService.getSystemPrompt(
             type = PromptType.SYSTEM_AGENT,
-            variables = mapOf("tool_descriptions" to toolDescriptions)
+            variables = mapOf(
+                "tool_descriptions" to toolDescriptions,
+                "tool_selection_matrix" to toolSelectionMatrix
+            )
         )
 
         return if (iterationInfo.isNotEmpty()) {

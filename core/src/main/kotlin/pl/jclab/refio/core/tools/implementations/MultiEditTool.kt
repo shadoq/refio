@@ -41,6 +41,7 @@ class MultiEditTool(
     override val description = "Atomic search-and-replace across multiple files. FREE."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_MODIFYING
+    override val selectionHint = "Atomic search/replace across multiple files or multiple sites in one file."
 
     override fun validateParams(params: Map<String, Any>) {
         @Suppress("UNCHECKED_CAST")

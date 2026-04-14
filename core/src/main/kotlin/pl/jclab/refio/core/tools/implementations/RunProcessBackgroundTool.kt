@@ -7,14 +7,12 @@ import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
 import pl.jclab.refio.core.tools.security.CommandRuleMatcher
-import pl.jclab.refio.core.tools.security.CommandWhitelist
 import pl.jclab.refio.core.tools.security.RuleAction
 
 class RunProcessBackgroundTool(
     private val sandbox: PathSandbox,
     private val processManager: ProcessManager,
-    private val whitelist: CommandWhitelist,
-    private val commandRuleMatcher: CommandRuleMatcher? = null
+    private val commandRuleMatcher: CommandRuleMatcher
 ) : Tool {
     override val name = "run_process_background"
     override val description = "Start a command in the background and return immediately with a process_id. " +
@@ -22,6 +20,8 @@ class RunProcessBackgroundTool(
         "Use when you need to run long commands (build, test, dev server) without blocking."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.EXECUTION
+    override val selectionHint =
+        "Start a long-running command in the background (build, test, dev server); pair with monitor_process."
 
     override fun validateParams(params: Map<String, Any>) {
         val cmd = params["command"] as? String
@@ -32,7 +32,7 @@ class RunProcessBackgroundTool(
         val command = params["command"] as? String
             ?: return ToolResult.error("Missing 'command'")
 
-        val ruleAction = commandRuleMatcher?.match(command)?.action
+        val ruleAction = commandRuleMatcher.match(command).action
         if (ruleAction == RuleAction.BLOCK) {
             return ToolResult.error("Command blocked by security rules: $command")
         }

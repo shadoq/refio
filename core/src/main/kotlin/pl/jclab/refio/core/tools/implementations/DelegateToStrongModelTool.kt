@@ -45,6 +45,8 @@ class DelegateToStrongModelTool(
         "The strong model receives ONLY what you pass — be explicit."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.SYSTEM
+    override val selectionHint =
+        "Escalate to a stronger model when stuck after 4+ consecutive failures on the same operation."
 
     override suspend fun execute(params: Map<String, Any>): ToolResult {
         val taskId = params["_task_id"]?.toString()

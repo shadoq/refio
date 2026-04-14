@@ -5,7 +5,7 @@ import pl.jclab.refio.core.logging.dualLogger
 private val logger = dualLogger("CommandRuleMatcher")
 
 /**
- * Simple regex-based command rule. Replaces the complex AllowedCommand model.
+ * Simple regex-based command rule.
  *
  * @param pattern Regex matching the full command string
  * @param action What to do when command matches

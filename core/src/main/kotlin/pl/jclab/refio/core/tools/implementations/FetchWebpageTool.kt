@@ -29,6 +29,8 @@ class FetchWebpageTool(
         "For raw HTTP/API access use http_request instead."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
+    override val selectionHint =
+        "Fetch URL, convert HTML→Markdown, extract info via AI. For raw HTTP/API use http_request."
 
     override fun validateParams(params: Map<String, Any>) {
         val url = params["url"] as? String

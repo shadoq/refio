@@ -1,12 +1,12 @@
 package pl.jclab.refio.api.models
 
 /**
- * Slash command definition.
- * Stored in PromptsTable with kind = 'command'.
+ * Slash prompt definition - reusable prompt template invoked via `/name` in chat input.
+ * Stored in PromptsTable with type = SLASH_PROMPT.
  */
-data class SlashCommand(
+data class SlashPrompt(
     val id: String,
-    val name: String,              // Command name (without /)
+    val name: String,              // Prompt name (without /)
     val description: String,       // Shown in autocomplete
     val template: String,          // Prompt template
     val variables: List<String> = emptyList(),  // Template variables
@@ -187,13 +187,13 @@ Then adapt your questions based on their answer, always asking one at a time.
         """.trimIndent()
 
         /**
-         * Built-in commands organized by category.
+         * Built-in slash prompts organized by category.
          */
         val BUILTINS = listOf(
             // =====================================================================
             // UNDERSTANDING
             // =====================================================================
-            SlashCommand(
+            SlashPrompt(
                 id = "explain",
                 name = "explain",
                 description = "Explain what this code does, how it works, and what to watch out for",
@@ -249,7 +249,7 @@ Then adapt your questions based on their answer, always asking one at a time.
             // =====================================================================
             // IMPROVEMENT
             // =====================================================================
-            SlashCommand(
+            SlashPrompt(
                 id = "refactor",
                 name = "refactor",
                 description = "Suggest focused refactoring with concrete safe changes",
@@ -300,7 +300,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 showInEditor = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "simplify",
                 name = "simplify",
                 description = "Simplify code while preserving behavior",
@@ -343,7 +343,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 showInEditor = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "optimize",
                 name = "optimize",
                 description = "Analyze performance and propose practical optimizations",
@@ -392,7 +392,7 @@ Then adapt your questions based on their answer, always asking one at a time.
             // =====================================================================
             // TESTING
             // =====================================================================
-            SlashCommand(
+            SlashPrompt(
                 id = "test",
                 name = "test",
                 description = "Generate high-value unit tests",
@@ -438,7 +438,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 showInEditor = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "test-integration",
                 name = "test-integration",
                 description = "Generate integration tests for real component collaboration",
@@ -477,7 +477,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 isBuiltin = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "test-edge-cases",
                 name = "test-edge-cases",
                 description = "Generate tests focused on edge cases and boundaries",
@@ -513,7 +513,7 @@ Then adapt your questions based on their answer, always asking one at a time.
             // =====================================================================
             // FIXING
             // =====================================================================
-            SlashCommand(
+            SlashPrompt(
                 id = "fix",
                 name = "fix",
                 description = "Fix a bug with root cause analysis and regression check",
@@ -555,7 +555,7 @@ Then adapt your questions based on their answer, always asking one at a time.
             // =====================================================================
             // DOCUMENTATION
             // =====================================================================
-            SlashCommand(
+            SlashPrompt(
                 id = "document",
                 name = "document",
                 description = "Add useful KDoc and non-obvious inline documentation",
@@ -585,7 +585,7 @@ Then adapt your questions based on their answer, always asking one at a time.
             // =====================================================================
             // TRANSLATION
             // =====================================================================
-            SlashCommand(
+            SlashPrompt(
                 id = "translate-comments",
                 name = "translate-comments",
                 description = "Translate comments and docs to professional English",
@@ -609,7 +609,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 isBuiltin = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "translate-messages",
                 name = "translate-messages",
                 description = "Translate user-facing messages and logs to English",
@@ -639,7 +639,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 isBuiltin = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "translate-all",
                 name = "translate-all",
                 description = "Translate all human-readable text in code to English",
@@ -672,7 +672,7 @@ Then adapt your questions based on their answer, always asking one at a time.
             // =====================================================================
             // ENHANCEMENT
             // =====================================================================
-            SlashCommand(
+            SlashPrompt(
                 id = "add-logging",
                 name = "add-logging",
                 description = "Add useful structured logging without noise",
@@ -705,7 +705,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 isBuiltin = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "add-error-handling",
                 name = "add-error-handling",
                 description = "Add meaningful error handling at real failure points",
@@ -738,7 +738,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 isBuiltin = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "add-validation",
                 name = "add-validation",
                 description = "Add input validation at real system boundaries",
@@ -775,7 +775,7 @@ Then adapt your questions based on their answer, always asking one at a time.
             // =====================================================================
             // REFACTORING
             // =====================================================================
-            SlashCommand(
+            SlashPrompt(
                 id = "extract-method",
                 name = "extract-method",
                 description = "Extract selected logic into a well-named method",
@@ -808,7 +808,7 @@ Then adapt your questions based on their answer, always asking one at a time.
             // =====================================================================
             // SECURITY
             // =====================================================================
-            SlashCommand(
+            SlashPrompt(
                 id = "security-review",
                 name = "security-review",
                 description = "Review code for realistic security issues with severity",
@@ -855,7 +855,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 showInEditor = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "threat-model",
                 name = "threat-model",
                 description = "Perform a lightweight STRIDE threat model",
@@ -905,7 +905,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 isBuiltin = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "security-fix",
                 name = "security-fix",
                 description = "Fix visible security issues with safe-by-default changes",
@@ -943,7 +943,7 @@ Then adapt your questions based on their answer, always asking one at a time.
             // =====================================================================
             // ANALYSIS
             // =====================================================================
-            SlashCommand(
+            SlashPrompt(
                 id = "analyze",
                 name = "analyze",
                 description = "Perform a deep code quality analysis",
@@ -988,7 +988,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 isBuiltin = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "architecture",
                 name = "architecture",
                 description = "Review the architecture role, boundaries, and coupling",
@@ -1027,7 +1027,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 isBuiltin = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "implementation-analysis",
                 name = "implementation-analysis",
                 description = "Analyze a topic and prepare an implementation-ready markdown document",
@@ -1095,7 +1095,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 isBuiltin = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "code-review",
                 name = "code-review",
                 description = "Review code like a pull request",
@@ -1134,7 +1134,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 showInEditor = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "dependencies",
                 name = "dependencies",
                 description = "Analyze dependencies, hidden coupling, and decoupling options",
@@ -1174,7 +1174,7 @@ Then adapt your questions based on their answer, always asking one at a time.
             // =====================================================================
             // IMPLEMENTATION
             // =====================================================================
-            SlashCommand(
+            SlashPrompt(
                 id = "implement",
                 name = "implement",
                 description = "Implement a requested change with plan, code, and verification",
@@ -1224,7 +1224,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 isBuiltin = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "migrate",
                 name = "migrate",
                 description = "Migrate code to a new API, pattern, or framework version",
@@ -1266,7 +1266,7 @@ Then adapt your questions based on their answer, always asking one at a time.
             // =====================================================================
             // UI
             // =====================================================================
-            SlashCommand(
+            SlashPrompt(
                 id = "ui-review",
                 name = "ui-review",
                 description = "Review UI for usability, layout, and maintainability",
@@ -1302,7 +1302,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 isBuiltin = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "ui-improve",
                 name = "ui-improve",
                 description = "Improve a UI component with concrete code changes",
@@ -1337,7 +1337,7 @@ Then adapt your questions based on their answer, always asking one at a time.
             // =====================================================================
             // CLEANUP
             // =====================================================================
-            SlashCommand(
+            SlashPrompt(
                 id = "clean",
                 name = "clean",
                 description = "Clean up code without changing behavior",
@@ -1371,7 +1371,7 @@ Then adapt your questions based on their answer, always asking one at a time.
                 isBuiltin = true
             ),
 
-            SlashCommand(
+            SlashPrompt(
                 id = "decompose",
                 name = "decompose",
                 description = "Split a large file into smaller focused parts",
@@ -1417,7 +1417,7 @@ Then adapt your questions based on their answer, always asking one at a time.
             // =====================================================================
             // CREATION
             // =====================================================================
-            SlashCommand(
+            SlashPrompt(
                 id = "create-agent",
                 name = "create-agent",
                 description = "Create a custom AI subagent through guided conversation",

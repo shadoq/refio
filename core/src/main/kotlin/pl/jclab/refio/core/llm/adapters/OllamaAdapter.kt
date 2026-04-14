@@ -88,8 +88,13 @@ class OllamaAdapter(
         install(HttpTimeout) {
             val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
                 ?: ConfigKeys.TOOL_EXECUTION_TIMEOUT.default.toLong() * 1000L
-            requestTimeoutMillis = timeoutMs
-            connectTimeoutMillis = 30000
+            // Streaming-friendly: requestTimeout is a HARD cap on the whole request
+            // including reading the response body. For long streaming responses
+            // (large models, big outputs) this kills the call mid-stream even
+            // when chunks are still arriving. Rely on socketTimeoutMillis instead —
+            // it resets per chunk and detects truly dead connections.
+            requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
+            connectTimeoutMillis = 30_000
             socketTimeoutMillis = timeoutMs
         }
     }

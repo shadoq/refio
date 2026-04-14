@@ -31,6 +31,8 @@ class InvokeSubagentTool(
         get() = buildDynamicDescription()
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
+    override val selectionHint =
+        "Delegate a sub-task to a specialized subagent (EXPENSIVE). Dispatch multiple in parallel for independent work."
 
     override suspend fun execute(params: Map<String, Any>): ToolResult {
         val taskId = params["_task_id"]?.toString()

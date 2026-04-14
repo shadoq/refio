@@ -36,6 +36,7 @@ class ReadDirectoryTool(
     override val description = "List files and directories."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
+    override val selectionHint = "List directory contents."
 
     override fun validateParams(params: Map<String, Any>) {
         // Path is optional - defaults to "."

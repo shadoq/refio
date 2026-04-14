@@ -11,7 +11,7 @@ private val logger = dualLogger("PromptsRepository")
 
 /**
  * Repository for Prompts database operations
- * Manages system prompts, rules, and slash commands
+ * Manages system prompts, rules, and slash prompts
  */
 class PromptsRepository {
 

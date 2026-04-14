@@ -44,6 +44,9 @@ class RagSearchTool(
             "Prefer grep_search for exact identifiers and rag_search for concepts."
     override val mode: ToolMode = ToolMode.READ_ONLY
     override val category: ToolCategory = ToolCategory.DATA_PRODUCING
+    override val selectionHint: String =
+        "Semantic search over indexed code/docs. Use for concepts without good keywords; " +
+        "prefer grep_search when you know an exact identifier."
 
     override fun validateParams(params: Map<String, Any>) {
         val query = params["query"] as? String

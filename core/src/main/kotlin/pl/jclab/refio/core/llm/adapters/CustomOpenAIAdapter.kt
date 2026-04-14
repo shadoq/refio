@@ -86,7 +86,11 @@ open class CustomOpenAIAdapter(
         install(HttpTimeout) {
             val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
                 ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
-            requestTimeoutMillis = timeoutMs
+            // Streaming-friendly: requestTimeout is a HARD cap on the whole request
+            // (incl. body read) and would kill long streams mid-flight even while
+            // chunks are still arriving. socketTimeoutMillis (resets per chunk)
+            // detects truly dead connections.
+            requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
             connectTimeoutMillis = 30_000L
             socketTimeoutMillis = timeoutMs
         }
