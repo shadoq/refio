@@ -200,9 +200,9 @@ class ConfigService(
         const val KEY_PROVIDER_LM_STUDIO_API_KEY = "providers.lmstudio.lmstudio_api_key"
         const val KEY_PROVIDER_LM_STUDIO_BASE_URL = "providers.lmstudio.lmstudio_base_url"
         const val KEY_PROVIDER_LM_STUDIO_CONTEXT_SIZE = "providers.lmstudio.lmstudio_context_size"
-        const val KEY_PROVIDER_CUSTOM_OPENAI_API_KEY = "providers.custom_openai.custom_openai_api_key"
-        const val KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL = "providers.custom_openai.custom_openai_base_url"
-        const val KEY_PROVIDER_CUSTOM_OPENAI_MODEL = "providers.custom_openai.custom_openai_model"
+        const val KEY_PROVIDER_CUSTOM_OPENAI_API_KEY = "providers.generic_openai.generic_openai_api_key"
+        const val KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL = "providers.generic_openai.generic_openai_base_url"
+        const val KEY_PROVIDER_CUSTOM_OPENAI_MODEL = "providers.generic_openai.generic_openai_model"
         const val KEY_PROVIDER_ZAI_API_KEY = "providers.zai.zai_api_key"
         const val KEY_PROVIDER_ZAI_BASE_URL = "providers.zai.zai_base_url"
 
@@ -402,134 +402,56 @@ class ConfigService(
         projectId: String? = null
     ): Pair<String, String> {
         val key = configKeyForOperation(operation)
+        val config = getConfigWithPrecedence(key = key, taskId = taskId, projectId = projectId)
+        val label = operation.name.lowercase()
 
-        // 1. Check database first
-        val config = getConfigWithPrecedence(
-            key = key,
-            taskId = taskId,
-            projectId = projectId
-        )
-
-        when (operation) {
-            ModelOperation.EMBEDDING -> {
-                // Check DB first
-                if (config?.value != null) {
-                    val (provider, model) = parseModelString(config.value)
-                    logger.info { "Using embedding model from DB: $model (provider=$provider)" }
-                    return Pair(model, provider)
-                }
-                // Check YAML
-                val yamlModel = yamlLoader.getDefaultEmbeddingModel()
-                if (yamlModel != null) {
-                    val (provider, model) = parseModelString(yamlModel)
-                    logger.info { "Using embedding model from YAML: $model (provider=$provider)" }
-                    return Pair(model, provider)
-                }
-                return fallbackModelForOperation(operation)
+        // Embedding uses plain "provider/model" string format in DB, unlike the others (JSON ModelConfigData).
+        if (operation == ModelOperation.EMBEDDING) {
+            if (config?.value != null) {
+                val (provider, model) = parseModelString(config.value)
+                logger.info { "Using embedding model from DB: $model (provider=$provider)" }
+                return Pair(model, provider)
             }
-
-            ModelOperation.WEAK -> {
-                // Check DB first
-                if (config != null) {
-                    val data = gson.fromJson(config.value, ModelConfigData::class.java)
-                    if (isInheritedModelConfig(data)) {
-                        logger.info { "Using inherited weak model -> default model" }
-                        return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
-                    }
-                    if (data.modelId != null && data.provider != null) {
-                        logger.info { "Using weak model from DB: ${data.modelId}" }
-                        return Pair(data.modelId, data.provider)
-                    }
-                }
-                // Check YAML
-                val yamlModel = yamlLoader.getDefaultWeakModel()
-                if (yamlModel != null) {
-                    val (provider, model) = parseModelString(yamlModel)
-                    logger.info { "Using weak model from YAML: $model (provider=$provider)" }
-                    return Pair(model, provider)
-                }
+            val yamlModel = yamlLoader.getDefaultEmbeddingModel()
+            if (yamlModel != null) {
+                val (provider, model) = parseModelString(yamlModel)
+                logger.info { "Using embedding model from YAML: $model (provider=$provider)" }
+                return Pair(model, provider)
             }
+            return fallbackModelForOperation(operation)
+        }
 
-            ModelOperation.DEFAULT -> {
-                if (config != null) {
-                    val data = gson.fromJson(config.value, ModelConfigData::class.java)
-                    if (data.modelId != null && data.provider != null) {
-                        logger.info { "Using chat model from DB: ${data.modelId}" }
-                        return Pair(data.modelId, data.provider)
-                    }
-                }
-                // Check YAML
-                val yamlModel = yamlLoader.getDefaultChatModel()
-                if (yamlModel != null) {
-                    val (provider, model) = parseModelString(yamlModel)
-                    logger.info { "Using chat model from YAML: $model (provider=$provider)" }
-                    return Pair(model, provider)
-                }
+        // All non-embedding operations: JSON ModelConfigData in DB, optional inheritance → DEFAULT.
+        if (config != null) {
+            val data = gson.fromJson(config.value, ModelConfigData::class.java)
+            // DEFAULT cannot inherit (would recurse forever).
+            if (operation != ModelOperation.DEFAULT && isInheritedModelConfig(data)) {
+                logger.info { "Using inherited $label model -> default model" }
+                return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
             }
+            if (data.modelId != null && data.provider != null) {
+                logger.info { "Using $label model from DB: ${data.modelId}" }
+                return Pair(data.modelId, data.provider)
+            }
+        }
 
-            ModelOperation.PLAN -> {
-                if (config != null) {
-                    val data = gson.fromJson(config.value, ModelConfigData::class.java)
-                    if (isInheritedModelConfig(data)) {
-                        logger.info { "Using inherited plan model -> default model" }
-                        return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
-                    }
-                    if (data.modelId != null && data.provider != null) {
-                        logger.info { "Using plan model from DB: ${data.modelId}" }
-                        return Pair(data.modelId, data.provider)
-                    }
-                }
-                // Check YAML
-                val yamlModel = yamlLoader.getDefaultPlanModel()
-                if (yamlModel != null) {
-                    val (provider, model) = parseModelString(yamlModel)
-                    logger.info { "Using plan model from YAML: $model (provider=$provider)" }
-                    return Pair(model, provider)
-                }
-            }
+        val yamlModel = when (operation) {
+            ModelOperation.DEFAULT -> yamlLoader.getDefaultChatModel()
+            ModelOperation.PLAN -> yamlLoader.getDefaultPlanModel()
+            ModelOperation.CODING -> yamlLoader.getDefaultCodingModel()
+            ModelOperation.WEAK -> yamlLoader.getDefaultWeakModel()
+            ModelOperation.STRONG -> yamlLoader.getDefaultStrongModel()
+            ModelOperation.EMBEDDING -> error("unreachable")
+        }
+        if (yamlModel != null) {
+            val (provider, model) = parseModelString(yamlModel)
+            logger.info { "Using $label model from YAML: $model (provider=$provider)" }
+            return Pair(model, provider)
+        }
 
-            ModelOperation.CODING -> {
-                if (config != null) {
-                    val data = gson.fromJson(config.value, ModelConfigData::class.java)
-                    if (isInheritedModelConfig(data)) {
-                        logger.info { "Using inherited coding model -> default model" }
-                        return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
-                    }
-                    if (data.modelId != null && data.provider != null) {
-                        logger.info { "Using coding model from DB: ${data.modelId}" }
-                        return Pair(data.modelId, data.provider)
-                    }
-                }
-                // Check YAML
-                val yamlModel = yamlLoader.getDefaultCodingModel()
-                if (yamlModel != null) {
-                    val (provider, model) = parseModelString(yamlModel)
-                    logger.info { "Using coding model from YAML: $model (provider=$provider)" }
-                    return Pair(model, provider)
-                }
-            }
-
-            ModelOperation.STRONG -> {
-                if (config != null) {
-                    val data = gson.fromJson(config.value, ModelConfigData::class.java)
-                    if (isInheritedModelConfig(data)) {
-                        logger.info { "Using inherited strong model -> default model" }
-                        return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
-                    }
-                    if (data.modelId != null && data.provider != null) {
-                        logger.info { "Using strong model from DB: ${data.modelId}" }
-                        return Pair(data.modelId, data.provider)
-                    }
-                }
-                val yamlModel = yamlLoader.getDefaultStrongModel()
-                if (yamlModel != null) {
-                    val (provider, model) = parseModelString(yamlModel)
-                    logger.info { "Using strong model from YAML: $model (provider=$provider)" }
-                    return Pair(model, provider)
-                }
-                // No fallback for STRONG — callers should use getStrongModel() which returns null
-                throw IllegalStateException("STRONG model not configured and has no fallback")
-            }
+        if (operation == ModelOperation.STRONG) {
+            // No fallback for STRONG — callers should use getStrongModel() which returns null.
+            throw IllegalStateException("STRONG model not configured and has no fallback")
         }
 
         val fallback = fallbackModelForOperation(operation)
@@ -599,34 +521,30 @@ class ConfigService(
             }
         }
 
-        when (operation) {
-            ModelOperation.WEAK -> {
-                setWeakModel(modelId, provider)
-                logger.info { "Set weak model to $provider/$modelId" }
-                return
-            }
-            ModelOperation.EMBEDDING -> {
-                setEmbeddingModel("$provider/$modelId")
-                logger.info { "Set embedding model to $provider/$modelId" }
-                return
-            }
-            else -> {
-                val key = configKeyForOperation(operation)
-                val scope = if (taskId != null) ConfigScope.TASK else ConfigScope.APP
-                val valueJson = gson.toJson(ModelConfigData(modelId, provider))
-
-                configRepository.set(
-                    key = key,
-                    value = valueJson,
-                    scope = scope,
-                    taskId = taskId,
-                    description = "Default model for $operation operation"
-                )
-                invalidateConfigCache(key)
-
-                logger.info { "Set ${scope.name} config $key = $modelId" }
-            }
+        if (operation == ModelOperation.EMBEDDING) {
+            setEmbeddingModel("$provider/$modelId")
+            logger.info { "Set embedding model to $provider/$modelId" }
+            return
         }
+
+        val key = configKeyForOperation(operation)
+        // WEAK is app-scoped (no per-task weak model); other operations honour taskId.
+        val scope = if (operation != ModelOperation.WEAK && taskId != null) ConfigScope.TASK else ConfigScope.APP
+        val effectiveTaskId = if (scope == ConfigScope.TASK) taskId else null
+        val description = if (operation == ModelOperation.WEAK) {
+            "Cheap model for auxiliary operations"
+        } else {
+            "Default model for $operation operation"
+        }
+        configRepository.set(
+            key = key,
+            value = gson.toJson(ModelConfigData(modelId, provider)),
+            scope = scope,
+            taskId = effectiveTaskId,
+            description = description
+        )
+        invalidateConfigCache(key)
+        logger.info { "Set ${scope.name} config $key = $modelId" }
     }
 
     /**
@@ -687,31 +605,8 @@ class ConfigService(
      * @param showInDropdown true to show model in dropdown, false to hide
      */
     fun setModelVisibility(modelId: String, showInDropdown: Boolean) {
-        // Get current visibility map
-        val config = configRepository.get(KEY_MODELS_VISIBILITY, ConfigScope.APP)
-        @Suppress("UNCHECKED_CAST")
-        val visibilityMap = if (config != null) {
-            gson.fromJson(config.value, Map::class.java) as? Map<String, Boolean> ?: emptyMap()
-        } else {
-            emptyMap()
-        }
-
-        // Update map with new value
-        val updatedMap = visibilityMap.toMutableMap()
-        updatedMap[modelId] = showInDropdown
-
-        // Save back to config
-        val valueJson = gson.toJson(updatedMap)
-        configRepository.set(
-            key = KEY_MODELS_VISIBILITY,
-            value = valueJson,
-            scope = ConfigScope.APP,
-            taskId = null,
-            description = "Model visibility settings"
-        )
-
+        setModelsVisibility(getModelsVisibility().toMutableMap().apply { put(modelId, showInDropdown) })
         logger.info { "Updated model visibility: $modelId -> $showInDropdown" }
-        invalidateConfigCache(KEY_MODELS_VISIBILITY)
     }
 
     /**
@@ -841,262 +736,39 @@ class ConfigService(
         invalidateConfigCache(key)
     }
 
-    /**
-     * Get API call timeout in milliseconds.
-     *
-     * @param taskId Optional task ID for task-level override
-     * @return Timeout in milliseconds (default: 120000ms = 120s)
-     */
-    /**
-     * Get tool execution timeout in milliseconds.
-     *
-     * @param taskId Optional task ID for task-level override
-     * @return Timeout in milliseconds (default: 120000ms = 120s)
-     */
-    /**
-     * Get maximum context size in tokens.
-     *
-     * @param taskId Optional task ID for task-level override
-     * @return Max context size in tokens (default: 128000)
-     */
-    /**
-     * Get maximum output size in tokens.
-     *
-     * @param taskId Optional task ID for task-level override
-     * @return Max output size in tokens (default: 8192)
-     */
-    /**
-     * Get maximum file size in MB.
-     *
-     * @param taskId Optional task ID for task-level override
-     * @return Max file size in MB (default: 10)
-     */
     // ==================== UI CONFIGURATION ====================
 
-    /**
-     * Get thinking enabled setting.
-     *
-     * @param taskId Optional task ID for task-level override
-     * @return true if thinking is enabled (default: false)
-     */
-    /**
-     * Set thinking enabled setting.
-     *
-     * @param enabled true to enable thinking display
-     * @param taskId Optional task ID for task-level config
-     */
     fun setThinkingEnabled(enabled: Boolean, taskId: String? = null) {
-        val scope = if (taskId != null) ConfigScope.TASK else ConfigScope.APP
-        configRepository.set(
-            key = KEY_UI_THINKING_ENABLED,
-            value = enabled.toString(),
-            scope = scope,
-            taskId = taskId,
-            description = "Show LLM thinking process in UI"
-        )
-        invalidateConfigCache(KEY_UI_THINKING_ENABLED)
-        invalidateConfigCache(KEY_UI_THINKING_ENABLED)
+        setTyped(ConfigKeys.UI_THINKING_ENABLED, enabled, taskScope(taskId), taskId)
     }
 
-    /**
-     * Get no-egress enabled setting.
-     *
-     * @param taskId Optional task ID for task-level override
-     * @return true if no-egress is enabled (default: false)
-     */
-    /**
-     * Set no-egress enabled setting.
-     *
-     * @param enabled true to block external network calls
-     * @param taskId Optional task ID for task-level config
-     */
     fun setNoEgressEnabled(enabled: Boolean, taskId: String? = null) {
-        val scope = if (taskId != null) ConfigScope.TASK else ConfigScope.APP
-        configRepository.set(
-            key = KEY_UI_NO_EGRESS_ENABLED,
-            value = enabled.toString(),
-            scope = scope,
-            taskId = taskId,
-            description = "Block external network calls"
-        )
-        invalidateConfigCache(KEY_UI_NO_EGRESS_ENABLED)
-        invalidateConfigCache(KEY_UI_NO_EGRESS_ENABLED)
+        setTyped(ConfigKeys.UI_NO_EGRESS_ENABLED, enabled, taskScope(taskId), taskId)
     }
 
-    /**
-     * Get execution mode setting.
-     *
-     * @param taskId Optional task ID for task-level override
-     * @return Execution mode (AUTO/INTERACTIVE, default: AUTO)
-     */
-    /**
-     * Set execution mode setting.
-     *
-     * @param mode Execution mode (AUTO/INTERACTIVE)
-     * @param taskId Optional task ID for task-level config
-     */
     fun setExecutionMode(mode: String, taskId: String? = null) {
-        val scope = if (taskId != null) ConfigScope.TASK else ConfigScope.APP
-        configRepository.set(
-            key = KEY_UI_EXECUTION_MODE,
-            value = mode,
-            scope = scope,
-            taskId = taskId,
-            description = "Execution mode (AUTO/INTERACTIVE)"
-        )
-        invalidateConfigCache(KEY_UI_EXECUTION_MODE)
-        invalidateConfigCache(KEY_UI_EXECUTION_MODE)
+        setTyped(ConfigKeys.UI_EXECUTION_MODE, mode, taskScope(taskId), taskId)
     }
 
-    /**
-     * Get selected mode setting.
-     *
-     * @param taskId Optional task ID for task-level override
-     * @return Selected mode (CHAT/PLAN/AGENT, default: CHAT)
-     */
-    /**
-     * Set selected mode setting.
-     *
-     * @param mode Selected mode (CHAT/PLAN/AGENT)
-     * @param taskId Optional task ID for task-level config
-     */
-    fun setSelectedMode(mode: String, taskId: String? = null) {
-        val scope = if (taskId != null) ConfigScope.TASK else ConfigScope.APP
-        configRepository.set(
-            key = KEY_UI_SELECTED_MODE,
-            value = mode,
-            scope = scope,
-            taskId = taskId,
-            description = "Selected task mode"
-        )
-        invalidateConfigCache(KEY_UI_SELECTED_MODE)
-        invalidateConfigCache(KEY_UI_SELECTED_MODE)
-    }
-
-    /**
-     * Get selected model setting.
-     *
-     * @param taskId Optional task ID for task-level override
-     * @return Selected model (default: empty string)
-     */
-    /**
-     * Set selected model setting.
-     *
-     * @param model Selected model (provider/model format)
-     * @param taskId Optional task ID for task-level config
-     */
     fun setSelectedModel(model: String, taskId: String? = null) {
-        val scope = if (taskId != null) ConfigScope.TASK else ConfigScope.APP
-        configRepository.set(
-            key = KEY_UI_SELECTED_MODEL,
-            value = model,
-            scope = scope,
-            taskId = taskId,
-            description = "Selected model in UI"
-        )
-        invalidateConfigCache(KEY_UI_SELECTED_MODEL)
-        invalidateConfigCache(KEY_UI_SELECTED_MODEL)
+        setTyped(ConfigKeys.UI_SELECTED_MODEL, model, taskScope(taskId), taskId)
     }
 
     // ==================== MODELS CONFIGURATION ====================
 
-    /**
-     * Get weak model for auxiliary operations.
-     *
-     * @return Pair of (model_id, provider) for weak model
-     */
     fun getWeakModel(): Pair<String, String> = getDefaultModel(ModelOperation.WEAK)
 
-    /**
-     * Set weak model for auxiliary operations.
-     *
-     * @param modelId Model identifier
-     * @param provider Provider name
-     */
-    fun setWeakModel(modelId: String, provider: String) {
-        val valueJson = gson.toJson(ModelConfigData(modelId, provider))
-        configRepository.set(
-            key = KEY_WEAK_MODEL,
-            value = valueJson,
-            scope = ConfigScope.APP,
-            taskId = null,
-            description = "Cheap model for auxiliary operations"
-        )
-        invalidateConfigCache(KEY_WEAK_MODEL)
-        invalidateConfigCache(KEY_WEAK_MODEL)
-    }
-
-    /**
-     * Get embedding model.
-     *
-     * @return Embedding model (default: "ollama/nomic-embed-text")
-     */
     fun getEmbeddingModel(): String {
         val (modelId, provider) = getDefaultModel(ModelOperation.EMBEDDING)
         return "$provider/$modelId"
     }
 
-    /**
-     * Set embedding model.
-     *
-     * @param model Embedding model (provider/model format)
-     */
     fun setEmbeddingModel(model: String) {
-        configRepository.set(
-            key = KEY_EMBEDDING_MODEL,
-            value = model,
-            scope = ConfigScope.APP,
-            taskId = null,
-            description = "Model for embeddings"
-        )
-        invalidateConfigCache(KEY_EMBEDDING_MODEL)
-        invalidateConfigCache(KEY_EMBEDDING_MODEL)
+        setTyped(ConfigKeys.EMBEDDING_MODEL, model)
     }
 
-    /**
-     * Get configured Ollama endpoint with hierarchical lookup.
-     *
-     * Priority:
-     * 1. Database value
-     * 2. YAML config
-     * 3. System property OLLAMA_BASE_URL
-     * 4. System property OLLAMA_ENDPOINT (legacy)
-     * 5. Default: http://localhost:11434
-     */
-    /**
-     * Reload configuration from YAML files.
-     * Call this when you need to refresh cached config.
-     */
-    fun reloadYamlConfig(): ConfigYaml {
-        return yamlLoader.reloadConfig()
-    }
-
-    /**
-     * Get the merged YAML configuration.
-     * Useful for debugging or exporting current config state.
-     */
     fun getYamlConfig(): ConfigYaml {
         return yamlLoader.getConfig()
-    }
-
-    /**
-     * Build a ConfigYaml object from current database values.
-     * Used for exporting current configuration to YAML file.
-     *
-     * @param includeApiKeys If true, includes API keys (masked). If false, omits them.
-     * @return ConfigYaml object with current settings
-     */
-    fun buildConfigYamlFromCurrentSettings(includeApiKeys: Boolean = false): ConfigYaml {
-        return ConfigYaml(
-            general = buildGeneralConfig(),
-            providers = buildProvidersConfig(includeApiKeys),
-            models = buildModelsConfig(),
-            limits = buildLimitsConfig(),
-            advanced = buildAdvancedConfig(),
-            tools = buildToolsConfig(),
-            rag = buildRagConfig(),
-            ui = buildUiConfig()
-        )
     }
 
     fun normalizeZAIBaseUrl(baseUrl: String?): String {
@@ -1109,144 +781,6 @@ class ConfigService(
         }
     }
 
-    private fun buildGeneralConfig(): pl.jclab.refio.core.config.GeneralConfig {
-        return pl.jclab.refio.core.config.GeneralConfig(
-            formatMarkdown = getTyped(ConfigKeys.FORMAT_MARKDOWN),
-            streamingEnabled = getTyped(ConfigKeys.STREAMING_ENABLED),
-            advancedView = getTyped(ConfigKeys.ADVANCED_VIEW)
-        )
-    }
-
-    private fun buildProvidersConfig(includeApiKeys: Boolean): pl.jclab.refio.core.config.ProvidersConfig {
-        val ollamaEndpoint = get(KEY_PROVIDER_OLLAMA_ENDPOINT)
-        val lmstudioBaseUrl = get(KEY_PROVIDER_LM_STUDIO_BASE_URL)
-        val customOpenAIBaseUrl = get(KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL)
-
-        return pl.jclab.refio.core.config.ProvidersConfig(
-            ollama = pl.jclab.refio.core.config.OllamaConfig(
-                endpoint = ollamaEndpoint ?: getTyped(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT),
-                contextSize = getTyped(ConfigKeys.PROVIDER_OLLAMA_CONTEXT_SIZE),
-                keepAlive = getTyped(ConfigKeys.PROVIDER_OLLAMA_KEEP_ALIVE)
-            ),
-            anthropic = if (includeApiKeys) {
-                pl.jclab.refio.core.config.AnthropicConfig(
-                    apiKey = get(KEY_PROVIDER_ANTHROPIC_API_KEY)
-                )
-            } else null,
-            openai = if (includeApiKeys) {
-                pl.jclab.refio.core.config.OpenAIConfig(
-                    apiKey = get(KEY_PROVIDER_OPENAI_API_KEY)
-                )
-            } else null,
-            openrouter = if (includeApiKeys) {
-                pl.jclab.refio.core.config.OpenRouterConfig(
-                    apiKey = get(KEY_PROVIDER_OPENROUTER_API_KEY)
-                )
-            } else null,
-            gemini = if (includeApiKeys) {
-                pl.jclab.refio.core.config.GeminiConfig(
-                    apiKey = get(KEY_PROVIDER_GEMINI_API_KEY)
-                )
-            } else null,
-            lmstudio = pl.jclab.refio.core.config.LMStudioConfig(
-                apiKey = if (includeApiKeys) get(KEY_PROVIDER_LM_STUDIO_API_KEY) else null,
-                baseUrl = lmstudioBaseUrl,
-                contextSize = getTyped(ConfigKeys.PROVIDER_LM_STUDIO_CONTEXT_SIZE)
-            ),
-            customOpenai = pl.jclab.refio.core.config.CustomOpenAIConfig(
-                apiKey = if (includeApiKeys) get(KEY_PROVIDER_CUSTOM_OPENAI_API_KEY) else null,
-                baseUrl = customOpenAIBaseUrl,
-                model = get(KEY_PROVIDER_CUSTOM_OPENAI_MODEL)
-            ),
-            zai = pl.jclab.refio.core.config.ZAIConfig(
-                apiKey = if (includeApiKeys) get(KEY_PROVIDER_ZAI_API_KEY) else null,
-                baseUrl = get(KEY_PROVIDER_ZAI_BASE_URL) ?: DEFAULT_ZAI_BASE_URL
-            )
-        )
-    }
-
-    private fun buildModelsConfig(): pl.jclab.refio.core.config.ModelsConfig {
-        val (chatModel, chatProvider) = getDefaultModel(ModelOperation.DEFAULT)
-        val (planModel, planProvider) = getDefaultModel(ModelOperation.PLAN)
-        val (codingModel, codingProvider) = getDefaultModel(ModelOperation.CODING)
-        val (weakModel, weakProvider) = getDefaultModel(ModelOperation.WEAK)
-        val (embeddingModel, embeddingProvider) = getDefaultModel(ModelOperation.EMBEDDING)
-
-        return pl.jclab.refio.core.config.ModelsConfig(
-            defaults = pl.jclab.refio.core.config.ModelDefaultsConfig(
-                chat = "$chatProvider/$chatModel",
-                plan = "$planProvider/$planModel",
-                coding = "$codingProvider/$codingModel",
-                weak = "$weakProvider/$weakModel",
-                embedding = "$embeddingProvider/$embeddingModel"
-            ),
-            visibility = getModelsVisibility()
-        )
-    }
-
-    private fun buildLimitsConfig(): pl.jclab.refio.core.config.LimitsConfig {
-        return pl.jclab.refio.core.config.LimitsConfig(
-            apiCallTimeout = getTyped(ConfigKeys.API_CALL_TIMEOUT),
-            toolExecutionTimeout = getTyped(ConfigKeys.TOOL_EXECUTION_TIMEOUT),
-            streamingReadTimeout = getTyped(ConfigKeys.STREAMING_READ_TIMEOUT),
-            streamingRequestTimeout = getTyped(ConfigKeys.STREAMING_REQUEST_TIMEOUT),
-            maxContextSize = getTyped(ConfigKeys.MAX_CONTEXT_SIZE),
-            maxOutputSize = getTyped(ConfigKeys.MAX_OUTPUT_SIZE),
-            maxFileSize = getTyped(ConfigKeys.MAX_FILE_SIZE)
-        )
-    }
-
-    private fun buildAdvancedConfig(): pl.jclab.refio.core.config.AdvancedConfig {
-        return pl.jclab.refio.core.config.AdvancedConfig(
-            noEgressDefault = getTyped(ConfigKeys.NO_EGRESS_DEFAULT),
-            readOnlyMode = getTyped(ConfigKeys.READ_ONLY_MODE),
-            autoOptimizePercentage = getTyped(ConfigKeys.AUTO_OPTIMIZE_PERCENTAGE)
-        )
-    }
-
-    private fun buildToolsConfig(): pl.jclab.refio.core.config.ToolsConfig {
-        val permissions = getToolsPermissions()
-        if (permissions.isEmpty()) return pl.jclab.refio.core.config.ToolsConfig()
-
-        val yamlPermissions = permissions.mapValues { (_, enabled) ->
-            pl.jclab.refio.core.config.ToolPermissionConfig(
-                planMode = if (enabled) "ON" else "OFF",
-                agentMode = if (enabled) "ON" else "OFF"
-            )
-        }
-
-        return pl.jclab.refio.core.config.ToolsConfig(permissions = yamlPermissions)
-    }
-
-    private fun buildRagConfig(): pl.jclab.refio.core.config.RagConfig {
-        return pl.jclab.refio.core.config.RagConfig(
-            enabled = getTyped(ConfigKeys.RAG_ENABLED),
-            indexOnStartup = getTyped(ConfigKeys.RAG_INDEX_ON_STARTUP),
-            autoIndexOnContextBuild = getTyped(ConfigKeys.RAG_AUTO_INDEX_ON_CONTEXT),
-            maxFileSizeMB = getTyped(ConfigKeys.RAG_MAX_FILE_SIZE_MB),
-            maxChunksPerFile = getTyped(ConfigKeys.RAG_MAX_CHUNKS_PER_FILE),
-            indexBatchSize = getTyped(ConfigKeys.RAG_INDEX_BATCH_SIZE),
-            embeddingsBatchSize = getTyped(ConfigKeys.RAG_EMBEDDINGS_BATCH_SIZE),
-            cacheTtlMs = getTyped(ConfigKeys.RAG_CACHE_TTL_MS),
-            maxConcurrentJobs = getTyped(ConfigKeys.RAG_MAX_CONCURRENT_JOBS),
-            ignoredDirectories = getTyped(ConfigKeys.RAG_IGNORED_DIRECTORIES),
-            searchSimilarityThreshold = getTyped(ConfigKeys.RAG_SEARCH_SIMILARITY_THRESHOLD),
-            searchTopK = getTyped(ConfigKeys.RAG_SEARCH_TOP_K),
-            searchHybridEnabled = getTyped(ConfigKeys.RAG_SEARCH_HYBRID_ENABLED),
-            searchSemanticWeight = getTyped(ConfigKeys.RAG_SEARCH_SEMANTIC_WEIGHT),
-            searchIncludeContextChunks = getTyped(ConfigKeys.RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS)
-        )
-    }
-
-    private fun buildUiConfig(): pl.jclab.refio.core.config.UiConfig {
-        return pl.jclab.refio.core.config.UiConfig(
-            thinkingEnabled = getTyped(ConfigKeys.UI_THINKING_ENABLED),
-            noEgressEnabled = getTyped(ConfigKeys.UI_NO_EGRESS_ENABLED),
-            executionMode = getTyped(ConfigKeys.UI_EXECUTION_MODE),
-            selectedMode = getTyped(ConfigKeys.UI_SELECTED_MODE),
-            selectedModel = getTyped(ConfigKeys.UI_SELECTED_MODEL)
-        )
-    }
 
     /**
      * Export current configuration to a YAML file.
@@ -1255,160 +789,11 @@ class ConfigService(
      * @param includeApiKeys If true, includes API keys (masked for security)
      */
     fun exportToYaml(file: java.io.File, includeApiKeys: Boolean = false) {
-        val config = buildConfigYamlFromCurrentSettings(includeApiKeys)
+        val config = ConfigYamlBuilder(this, configRepository).build(includeApiKeys)
         ConfigYaml.saveToFile(config, file, withComments = true)
         logger.info { "Exported configuration to: ${file.absolutePath}" }
     }
 
-    // ==================== GENERAL CONFIGURATION ====================
-
-    /**
-     * Get format markdown setting.
-     *
-     * @return true if markdown formatting is enabled (default: true)
-     */
-    /**
-     * Get streaming enabled setting.
-     *
-     * @return true if streaming is enabled (default: true)
-     */
-    // ==================== RAG CONFIGURATION ====================
-
-    /**
-     * Get advanced view setting.
-     *
-     * @return true if advanced view is enabled (default: false)
-     */
-    // ==================== ADVANCED CONFIGURATION ====================
-
-    /**
-     * Get auto-optimize percentage.
-     *
-     * @return Auto-optimize percentage (default: 85)
-     */
-    /**
-     * Get no-egress default setting.
-     *
-     * @return true if no-egress is default (default: false)
-     */
-    /**
-     * Get read-only mode setting.
-     *
-     * @return true if read-only mode is enabled (default: false)
-     */
-    // ==================== PROVIDER CONFIGURATION ====================
-
-    /**
-     * Get Ollama context size.
-     *
-     * @return Ollama context size in tokens (default: 32768)
-     */
-    /**
-     * Get Ollama keep_alive duration.
-     *
-     * @return Ollama keep_alive in seconds (default: 1800 = 30 minutes)
-     */
-    /**
-     * Set Ollama context size.
-     *
-     * @param contextSize Context size in tokens
-     */
-    fun setOllamaContextSize(contextSize: Int) {
-        configRepository.set(
-            key = KEY_PROVIDER_OLLAMA_CONTEXT_SIZE,
-            value = contextSize.toString(),
-            scope = ConfigScope.APP,
-            taskId = null,
-            description = "Ollama context size in tokens"
-        )
-        invalidateConfigCache(KEY_PROVIDER_OLLAMA_CONTEXT_SIZE)
-        invalidateConfigCache(KEY_PROVIDER_OLLAMA_CONTEXT_SIZE)
-    }
-
-    /**
-     * Get LM Studio context size.
-     *
-     * @return LM Studio context size in tokens (default: 32768)
-     */
-    /**
-     * Set LM Studio context size.
-     *
-     * @param contextSize Context size in tokens
-     */
-    fun setLMStudioContextSize(contextSize: Int) {
-        configRepository.set(
-            key = KEY_PROVIDER_LM_STUDIO_CONTEXT_SIZE,
-            value = contextSize.toString(),
-            scope = ConfigScope.APP,
-            taskId = null,
-            description = "LM Studio context size in tokens"
-        )
-        invalidateConfigCache(KEY_PROVIDER_LM_STUDIO_CONTEXT_SIZE)
-        invalidateConfigCache(KEY_PROVIDER_LM_STUDIO_CONTEXT_SIZE)
-    }
-
-    // ==================== TOOLS CONFIGURATION ====================
-
-    /**
-     * Get tool permissions map.
-     *
-     * @return Map of tool_name -> enabled
-     */
-    fun getToolsPermissions(): Map<String, Boolean> {
-        val config = configRepository.get(KEY_TOOLS_PERMISSIONS, ConfigScope.APP)
-        if (config != null) {
-            @Suppress("UNCHECKED_CAST")
-            val permissionsMap = gson.fromJson(config.value, Map::class.java) as? Map<String, Boolean>
-            return permissionsMap ?: emptyMap()
-        }
-        return emptyMap()
-    }
-
-    /**
-     * Set tool permissions map.
-     *
-     * @param permissions Map of tool_name -> enabled
-     */
-    fun setToolsPermissions(permissions: Map<String, Boolean>) {
-        val valueJson = gson.toJson(permissions)
-        configRepository.set(
-            key = KEY_TOOLS_PERMISSIONS,
-            value = valueJson,
-            scope = ConfigScope.APP,
-            taskId = null,
-            description = "Tool permissions"
-        )
-        invalidateConfigCache(KEY_TOOLS_PERMISSIONS)
-        invalidateConfigCache(KEY_TOOLS_PERMISSIONS)
-    }
-
-    /**
-     * Get run terminal command permission.
-     *
-     * @return true if run_terminal_command is allowed (default: true)
-     */
-    /**
-     * Set run terminal command permission.
-     *
-     * @param allowed true to allow run_terminal_command tool
-     */
-    fun setRunTerminalCommandAllowed(allowed: Boolean) {
-        configRepository.set(
-            key = KEY_TOOL_PERMISSION_RUN_TERMINAL,
-            value = allowed.toString(),
-            scope = ConfigScope.APP,
-            taskId = null,
-            description = "Allow run_terminal_command tool"
-        )
-        invalidateConfigCache(KEY_TOOL_PERMISSION_RUN_TERMINAL)
-        invalidateConfigCache(KEY_TOOL_PERMISSION_RUN_TERMINAL)
-    }
-
-    /**
-     * Get enabled overrides for builtin subagents.
-     *
-     * @return Map of subagent name -> enabled flag
-     */
     fun getBuiltinSubagentEnabledOverrides(): Map<String, Boolean> {
         val config = configRepository.get(KEY_SUBAGENTS_BUILTIN_ENABLED, ConfigScope.APP)
         if (config != null) {
@@ -1445,103 +830,9 @@ class ConfigService(
             description = "Builtin subagent enabled overrides"
         )
         invalidateConfigCache(KEY_SUBAGENTS_BUILTIN_ENABLED)
-        invalidateConfigCache(KEY_SUBAGENTS_BUILTIN_ENABLED)
-    }
-
-    // ==================== TOOL RESULT SUMMARIZATION ====================
-
-    /**
-     * Check if tool result summarization is enabled.
-     *
-     * @return true if tool summarization is enabled (default: true)
-     */
-    /**
-     * Set tool result summarization enabled setting.
-     *
-     * @param enabled true to enable tool summarization
-     */
-    fun setToolSummaryEnabled(enabled: Boolean) {
-        configRepository.set(
-            key = KEY_TOOL_SUMMARY_ENABLED,
-            value = enabled.toString(),
-            scope = ConfigScope.APP,
-            taskId = null,
-            description = "Enable tool result summarization"
-        )
-        invalidateConfigCache(KEY_TOOL_SUMMARY_ENABLED)
-        invalidateConfigCache(KEY_TOOL_SUMMARY_ENABLED)
-    }
-
-    /**
-     * Get minimum output length for summarization.
-     * Tool outputs shorter than this will not be summarized.
-     *
-     * @return Minimum length in characters (default: 500)
-     */
-    /**
-     * Set minimum output length for summarization.
-     *
-     * @param length Minimum length in characters
-     */
-    fun setToolSummaryMinLength(length: Int) {
-        configRepository.set(
-            key = KEY_TOOL_SUMMARY_MIN_LENGTH,
-            value = length.toString(),
-            scope = ConfigScope.APP,
-            taskId = null,
-            description = "Minimum tool output length for summarization"
-        )
-        invalidateConfigCache(KEY_TOOL_SUMMARY_MIN_LENGTH)
-        invalidateConfigCache(KEY_TOOL_SUMMARY_MIN_LENGTH)
     }
 
     // ==================== CONTEXT CONFIGURATION (ADR 0017) ====================
-
-    /**
-     * Get recent work full data limit.
-     * Number of recent tool executions to show with full data.
-     *
-     * @return Full data limit (default: 2)
-     */
-    /**
-     * Set recent work full data limit.
-     *
-     * @param limit Number of recent tool executions with full data
-     */
-    fun setRecentWorkFullDataLimit(limit: Int) {
-        configRepository.set(
-            key = KEY_RECENT_WORK_FULL_DATA_LIMIT,
-            value = limit.toString(),
-            scope = ConfigScope.APP,
-            taskId = null,
-            description = "Number of recent tool executions with full data"
-        )
-        invalidateConfigCache(KEY_RECENT_WORK_FULL_DATA_LIMIT)
-        invalidateConfigCache(KEY_RECENT_WORK_FULL_DATA_LIMIT)
-    }
-
-    /**
-     * Get recent work summary max length.
-     * Maximum length for truncated tool outputs.
-     *
-     * @return Summary max length in characters (default: 150)
-     */
-    /**
-     * Set recent work summary max length.
-     *
-     * @param length Maximum length in characters
-     */
-    fun setRecentWorkSummaryMaxLength(length: Int) {
-        configRepository.set(
-            key = KEY_RECENT_WORK_SUMMARY_MAX_LENGTH,
-            value = length.toString(),
-            scope = ConfigScope.APP,
-            taskId = null,
-            description = "Maximum length for truncated tool outputs"
-        )
-        invalidateConfigCache(KEY_RECENT_WORK_SUMMARY_MAX_LENGTH)
-        invalidateConfigCache(KEY_RECENT_WORK_SUMMARY_MAX_LENGTH)
-    }
 
     /**
      * Resolve context budget for prompt building.
@@ -1627,193 +918,8 @@ class ConfigService(
             logger.info { "No YAML config file found or failed to parse, skipping" }
             return
         }
-
         logger.info { "Loading configuration from YAML file (only missing keys)" }
-
-        // Load default models (only if not set)
-        yamlConfig.models?.defaults?.let { defaults ->
-            defaults.chat?.let { model ->
-                if (configRepository.get(KEY_DEFAULT_MODEL_CHAT, ConfigScope.APP) == null) {
-                    val (provider, modelId) = parseModelString(model)
-                    try {
-                        setDefaultModel(ModelOperation.DEFAULT, modelId, provider)
-                        logger.info { "Loaded default chat model from YAML: $modelId" }
-                    } catch (e: Exception) {
-                        logger.warn { "Failed to set chat model from YAML: ${e.message}" }
-                    }
-                }
-            }
-
-            defaults.plan?.let { model ->
-                if (configRepository.get(KEY_DEFAULT_MODEL_PLAN, ConfigScope.APP) == null) {
-                    val (provider, modelId) = parseModelString(model)
-                    try {
-                        setDefaultModel(ModelOperation.PLAN, modelId, provider)
-                        logger.info { "Loaded default plan model from YAML: $modelId" }
-                    } catch (e: Exception) {
-                        logger.warn { "Failed to set plan model from YAML: ${e.message}" }
-                    }
-                }
-            }
-
-            defaults.coding?.let { model ->
-                if (configRepository.get(KEY_DEFAULT_MODEL_AGENT, ConfigScope.APP) == null) {
-                    val (provider, modelId) = parseModelString(model)
-                    try {
-                        setDefaultModel(ModelOperation.CODING, modelId, provider)
-                        logger.info { "Loaded default coding model from YAML: $modelId" }
-                    } catch (e: Exception) {
-                        logger.warn { "Failed to set coding model from YAML: ${e.message}" }
-                    }
-                }
-            }
-        }
-
-        // Load model visibility (merge with existing)
-        yamlConfig.models?.visibility?.let { visibility ->
-            val existingVisibility = getModelsVisibility().toMutableMap()
-            var hasChanges = false
-
-            visibility.forEach { (modelId, show) ->
-                if (!existingVisibility.containsKey(modelId)) {
-                    existingVisibility[modelId] = show
-                    hasChanges = true
-                    logger.info { "Loaded model visibility from YAML: $modelId -> $show" }
-                }
-            }
-
-            if (hasChanges) {
-                val valueJson = gson.toJson(existingVisibility)
-                configRepository.set(
-                    key = KEY_MODELS_VISIBILITY,
-                    value = valueJson,
-                    scope = ConfigScope.APP,
-                    taskId = null,
-                    description = "Model visibility settings"
-                )
-            }
-        }
-
-        // Load provider configs (only if not set)
-        yamlConfig.providers?.let { providers ->
-            providers.ollama?.endpoint?.let { endpoint ->
-                if (configRepository.get(KEY_PROVIDER_OLLAMA_ENDPOINT, ConfigScope.APP) == null) {
-                    set(KEY_PROVIDER_OLLAMA_ENDPOINT, endpoint)
-                    logger.info { "Loaded Ollama endpoint from YAML: $endpoint" }
-                }
-            }
-
-            providers.anthropic?.apiKey?.let { apiKey ->
-                if (configRepository.get(KEY_PROVIDER_ANTHROPIC_API_KEY, ConfigScope.APP) == null) {
-                    set(KEY_PROVIDER_ANTHROPIC_API_KEY, apiKey)
-                    logger.info { "Loaded Anthropic API key from YAML" }
-                }
-            }
-
-            providers.openai?.apiKey?.let { apiKey ->
-                if (configRepository.get(KEY_PROVIDER_OPENAI_API_KEY, ConfigScope.APP) == null) {
-                    set(KEY_PROVIDER_OPENAI_API_KEY, apiKey)
-                    logger.info { "Loaded OpenAI API key from YAML" }
-                }
-            }
-
-            providers.openrouter?.apiKey?.let { apiKey ->
-                if (configRepository.get(KEY_PROVIDER_OPENROUTER_API_KEY, ConfigScope.APP) == null) {
-                    set(KEY_PROVIDER_OPENROUTER_API_KEY, apiKey)
-                    logger.info { "Loaded OpenRouter API key from YAML" }
-                }
-            }
-
-            providers.gemini?.apiKey?.let { apiKey ->
-                if (configRepository.get(KEY_PROVIDER_GEMINI_API_KEY, ConfigScope.APP) == null) {
-                    set(KEY_PROVIDER_GEMINI_API_KEY, apiKey)
-                    logger.info { "Loaded Gemini API key from YAML" }
-                }
-            }
-
-            providers.lmstudio?.apiKey?.let { apiKey ->
-                if (configRepository.get(KEY_PROVIDER_LM_STUDIO_API_KEY, ConfigScope.APP) == null) {
-                    set(KEY_PROVIDER_LM_STUDIO_API_KEY, apiKey)
-                    logger.info { "Loaded LM Studio API key from YAML" }
-                }
-            }
-
-            providers.lmstudio?.baseUrl?.let { baseUrl ->
-                if (configRepository.get(KEY_PROVIDER_LM_STUDIO_BASE_URL, ConfigScope.APP) == null) {
-                    set(KEY_PROVIDER_LM_STUDIO_BASE_URL, baseUrl)
-                    logger.info { "Loaded LM Studio base URL from YAML: $baseUrl" }
-                }
-            }
-            providers.customOpenai?.apiKey?.let { apiKey ->
-                if (configRepository.get(KEY_PROVIDER_CUSTOM_OPENAI_API_KEY, ConfigScope.APP) == null) {
-                    set(KEY_PROVIDER_CUSTOM_OPENAI_API_KEY, apiKey)
-                    logger.info { "Loaded Custom OpenAI API key from YAML" }
-                }
-            }
-            providers.customOpenai?.baseUrl?.let { baseUrl ->
-                if (configRepository.get(KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL, ConfigScope.APP) == null) {
-                    set(KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL, baseUrl)
-                    logger.info { "Loaded Custom OpenAI base URL from YAML: $baseUrl" }
-                }
-            }
-            providers.customOpenai?.model?.let { model ->
-                if (configRepository.get(KEY_PROVIDER_CUSTOM_OPENAI_MODEL, ConfigScope.APP) == null) {
-                    set(KEY_PROVIDER_CUSTOM_OPENAI_MODEL, model)
-                    logger.info { "Loaded Custom OpenAI model from YAML: $model" }
-                }
-            }
-            providers.zai?.apiKey?.let { apiKey ->
-                if (configRepository.get(KEY_PROVIDER_ZAI_API_KEY, ConfigScope.APP) == null) {
-                    set(KEY_PROVIDER_ZAI_API_KEY, apiKey)
-                    logger.info { "Loaded Z.AI API key from YAML" }
-                }
-            }
-            providers.zai?.baseUrl?.let { baseUrl ->
-                if (configRepository.get(KEY_PROVIDER_ZAI_BASE_URL, ConfigScope.APP) == null) {
-                    set(KEY_PROVIDER_ZAI_BASE_URL, baseUrl)
-                    logger.info { "Loaded Z.AI base URL from YAML: $baseUrl" }
-                }
-            }
-        }
-
-        // Load limits (only if not set)
-        yamlConfig.limits?.let { limits ->
-            limits.apiCallTimeout?.let { timeout ->
-                if (configRepository.get(KEY_API_CALL_TIMEOUT, ConfigScope.APP) == null) {
-                    set(KEY_API_CALL_TIMEOUT, timeout.toString())
-                    logger.info { "Loaded API call timeout from YAML: $timeout" }
-                }
-            }
-
-            limits.toolExecutionTimeout?.let { timeout ->
-                if (configRepository.get(KEY_TOOL_EXECUTION_TIMEOUT, ConfigScope.APP) == null) {
-                    set(KEY_TOOL_EXECUTION_TIMEOUT, timeout.toString())
-                    logger.info { "Loaded tool execution timeout from YAML: $timeout" }
-                }
-            }
-
-            limits.maxContextSize?.let { size ->
-                if (configRepository.get(KEY_MAX_CONTEXT_SIZE, ConfigScope.APP) == null) {
-                    set(KEY_MAX_CONTEXT_SIZE, size.toString())
-                    logger.info { "Loaded max context size from YAML: $size" }
-                }
-            }
-
-            limits.maxOutputSize?.let { size ->
-                if (configRepository.get(KEY_MAX_OUTPUT_SIZE, ConfigScope.APP) == null) {
-                    set(KEY_MAX_OUTPUT_SIZE, size.toString())
-                    logger.info { "Loaded max output size from YAML: $size" }
-                }
-            }
-
-            limits.maxFileSize?.let { size ->
-                if (configRepository.get(KEY_MAX_FILE_SIZE, ConfigScope.APP) == null) {
-                    set(KEY_MAX_FILE_SIZE, size.toString())
-                    logger.info { "Loaded max file size from YAML: $size" }
-                }
-            }
-        }
-
+        applyYaml(yamlConfig, overwrite = false)
         logger.info { "Finished loading configuration from YAML" }
     }
 
@@ -1825,8 +931,6 @@ class ConfigService(
      */
     fun initializeDefaults() {
         logger.info { "Initializing default configuration values (only missing keys)" }
-
-        migrateProviderKeysToLowercase()
 
         val defaults = listOf(
             Triple(KEY_UI_THINKING_ENABLED, "false", "Show LLM thinking process in UI"),
@@ -1872,56 +976,7 @@ class ConfigService(
         configCache.invalidateAll()
     }
 
-    private fun migrateProviderKeysToLowercase() {
-        val legacyToCanonical = listOf(
-            "providers.Ollama.ollama_endpoint" to KEY_PROVIDER_OLLAMA_ENDPOINT,
-            "providers.Anthropic.anthropic_api_key" to KEY_PROVIDER_ANTHROPIC_API_KEY,
-            "providers.OpenAI.openai_api_key" to KEY_PROVIDER_OPENAI_API_KEY,
-            "providers.OpenRouter.openrouter_api_key" to KEY_PROVIDER_OPENROUTER_API_KEY,
-            "providers.Gemini.gemini_api_key" to KEY_PROVIDER_GEMINI_API_KEY,
-            "providers.LMStudio.lmstudio_api_key" to KEY_PROVIDER_LM_STUDIO_API_KEY,
-            "providers.LMStudio.lmstudio_base_url" to KEY_PROVIDER_LM_STUDIO_BASE_URL,
-            "providers.CustomOpenAI.custom_openai_api_key" to KEY_PROVIDER_CUSTOM_OPENAI_API_KEY,
-            "providers.CustomOpenAI.custom_openai_base_url" to KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL,
-            "providers.CustomOpenAI.custom_openai_model" to KEY_PROVIDER_CUSTOM_OPENAI_MODEL,
-            "providers.ZAI.zai_api_key" to KEY_PROVIDER_ZAI_API_KEY,
-            "providers.ZAI.zai_base_url" to KEY_PROVIDER_ZAI_BASE_URL,
-            "ollama_endpoint" to KEY_PROVIDER_OLLAMA_ENDPOINT,
-            "anthropic_api_key" to KEY_PROVIDER_ANTHROPIC_API_KEY,
-            "openai_api_key" to KEY_PROVIDER_OPENAI_API_KEY,
-            "openrouter_api_key" to KEY_PROVIDER_OPENROUTER_API_KEY,
-            "gemini_api_key" to KEY_PROVIDER_GEMINI_API_KEY,
-            "lmstudio_api_key" to KEY_PROVIDER_LM_STUDIO_API_KEY,
-            "lmstudio_base_url" to KEY_PROVIDER_LM_STUDIO_BASE_URL,
-            "custom_openai_api_key" to KEY_PROVIDER_CUSTOM_OPENAI_API_KEY,
-            "custom_openai_base_url" to KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL,
-            "custom_openai_model" to KEY_PROVIDER_CUSTOM_OPENAI_MODEL,
-            "zai_api_key" to KEY_PROVIDER_ZAI_API_KEY,
-            "zai_base_url" to KEY_PROVIDER_ZAI_BASE_URL
-        )
-
-        legacyToCanonical.forEach { (legacyKey, canonicalKey) ->
-            val legacyConfig = configRepository.get(legacyKey, ConfigScope.APP) ?: return@forEach
-            val canonicalConfig = configRepository.get(canonicalKey, ConfigScope.APP)
-
-            if (canonicalConfig == null) {
-                configRepository.set(
-                    key = canonicalKey,
-                    value = legacyConfig.value,
-                    scope = ConfigScope.APP,
-                    taskId = null,
-                    description = legacyConfig.description
-                )
-                logger.info { "Migrated provider key: $legacyKey -> $canonicalKey" }
-            } else {
-                logger.info { "Skipping provider key migration for $legacyKey (canonical already set)" }
-            }
-
-            configRepository.delete(legacyKey, ConfigScope.APP)
-        }
-    }
-
-    /**
+/**
      * Reload all configuration from YAML file, overwriting existing DB values.
      * Called manually via Settings UI "Reload from Local Config" button.
      *
@@ -1934,172 +989,103 @@ class ConfigService(
             ?: throw IllegalStateException("No YAML config file found at ${pl.jclab.refio.core.config.ConfigYaml.getConfigPath().absolutePath}")
 
         logger.info { "Reloading all configuration from YAML file (overwriting DB)" }
-        var updatedCount = 0
-
-        // Reload default models
-        yamlConfig.models?.defaults?.let { defaults ->
-            defaults.chat?.let { model ->
-                val (provider, modelId) = parseModelString(model)
-                try {
-                    setDefaultModel(ModelOperation.DEFAULT, modelId, provider)
-                    updatedCount++
-                    logger.info { "Reloaded default chat model from YAML: $modelId" }
-                } catch (e: Exception) {
-                    logger.warn { "Failed to set chat model from YAML: ${e.message}" }
-                }
-            }
-
-            defaults.plan?.let { model ->
-                val (provider, modelId) = parseModelString(model)
-                try {
-                    setDefaultModel(ModelOperation.PLAN, modelId, provider)
-                    updatedCount++
-                    logger.info { "Reloaded default plan model from YAML: $modelId" }
-                } catch (e: Exception) {
-                    logger.warn { "Failed to set plan model from YAML: ${e.message}" }
-                }
-            }
-
-            defaults.coding?.let { model ->
-                val (provider, modelId) = parseModelString(model)
-                try {
-                    setDefaultModel(ModelOperation.CODING, modelId, provider)
-                    updatedCount++
-                    logger.info { "Reloaded default coding model from YAML: $modelId" }
-                } catch (e: Exception) {
-                    logger.warn { "Failed to set coding model from YAML: ${e.message}" }
-                }
-            }
-        }
-
-        // Reload model visibility (replace existing)
-        yamlConfig.models?.visibility?.let { visibility ->
-            val valueJson = gson.toJson(visibility)
-            configRepository.set(
-                key = KEY_MODELS_VISIBILITY,
-                value = valueJson,
-                scope = ConfigScope.APP,
-                taskId = null,
-                description = "Model visibility settings"
-            )
-            updatedCount++
-            logger.info { "Reloaded model visibility from YAML: ${visibility.size} entries" }
-        }
-
-        // Reload provider configs
-        yamlConfig.providers?.let { providers ->
-            providers.ollama?.endpoint?.let { endpoint ->
-                set(KEY_PROVIDER_OLLAMA_ENDPOINT, endpoint)
-                updatedCount++
-                logger.info { "Reloaded Ollama endpoint from YAML: $endpoint" }
-            }
-
-            providers.anthropic?.apiKey?.let { apiKey ->
-                set(KEY_PROVIDER_ANTHROPIC_API_KEY, apiKey)
-                updatedCount++
-                logger.info { "Reloaded Anthropic API key from YAML" }
-            }
-
-            providers.openai?.apiKey?.let { apiKey ->
-                set(KEY_PROVIDER_OPENAI_API_KEY, apiKey)
-                updatedCount++
-                logger.info { "Reloaded OpenAI API key from YAML" }
-            }
-
-            providers.openrouter?.apiKey?.let { apiKey ->
-                set(KEY_PROVIDER_OPENROUTER_API_KEY, apiKey)
-                updatedCount++
-                logger.info { "Reloaded OpenRouter API key from YAML" }
-            }
-
-            providers.gemini?.apiKey?.let { apiKey ->
-                set(KEY_PROVIDER_GEMINI_API_KEY, apiKey)
-                updatedCount++
-                logger.info { "Reloaded Gemini API key from YAML" }
-            }
-
-            providers.lmstudio?.apiKey?.let { apiKey ->
-                set(KEY_PROVIDER_LM_STUDIO_API_KEY, apiKey)
-                updatedCount++
-                logger.info { "Reloaded LM Studio API key from YAML" }
-            }
-
-            providers.lmstudio?.baseUrl?.let { baseUrl ->
-                set(KEY_PROVIDER_LM_STUDIO_BASE_URL, baseUrl)
-                updatedCount++
-                logger.info { "Reloaded LM Studio base URL from YAML: $baseUrl" }
-            }
-
-            providers.customOpenai?.apiKey?.let { apiKey ->
-                set(KEY_PROVIDER_CUSTOM_OPENAI_API_KEY, apiKey)
-                updatedCount++
-                logger.info { "Reloaded Custom OpenAI API key from YAML" }
-            }
-
-            providers.customOpenai?.baseUrl?.let { baseUrl ->
-                set(KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL, baseUrl)
-                updatedCount++
-                logger.info { "Reloaded Custom OpenAI base URL from YAML: $baseUrl" }
-            }
-
-            providers.customOpenai?.model?.let { model ->
-                set(KEY_PROVIDER_CUSTOM_OPENAI_MODEL, model)
-                updatedCount++
-                logger.info { "Reloaded Custom OpenAI model from YAML: $model" }
-            }
-
-            providers.zai?.apiKey?.let { apiKey ->
-                set(KEY_PROVIDER_ZAI_API_KEY, apiKey)
-                updatedCount++
-                logger.info { "Reloaded Z.AI API key from YAML" }
-            }
-
-            providers.zai?.baseUrl?.let { baseUrl ->
-                set(KEY_PROVIDER_ZAI_BASE_URL, baseUrl)
-                updatedCount++
-                logger.info { "Reloaded Z.AI base URL from YAML: $baseUrl" }
-            }
-        }
-
-        // Reload limits
-        yamlConfig.limits?.let { limits ->
-            limits.apiCallTimeout?.let { timeout ->
-                set(KEY_API_CALL_TIMEOUT, timeout.toString())
-                updatedCount++
-                logger.info { "Reloaded API call timeout from YAML: $timeout" }
-            }
-
-            limits.toolExecutionTimeout?.let { timeout ->
-                set(KEY_TOOL_EXECUTION_TIMEOUT, timeout.toString())
-                updatedCount++
-                logger.info { "Reloaded tool execution timeout from YAML: $timeout" }
-            }
-
-            limits.maxContextSize?.let { size ->
-                set(KEY_MAX_CONTEXT_SIZE, size.toString())
-                updatedCount++
-                logger.info { "Reloaded max context size from YAML: $size" }
-            }
-
-            limits.maxOutputSize?.let { size ->
-                set(KEY_MAX_OUTPUT_SIZE, size.toString())
-                updatedCount++
-                logger.info { "Reloaded max output size from YAML: $size" }
-            }
-
-            limits.maxFileSize?.let { size ->
-                set(KEY_MAX_FILE_SIZE, size.toString())
-                updatedCount++
-                logger.info { "Reloaded max file size from YAML: $size" }
-            }
-        }
-
+        val updatedCount = applyYaml(yamlConfig, overwrite = true)
         logger.info { "Finished reloading configuration from YAML: $updatedCount keys updated" }
         configCache.invalidateAll()
         return updatedCount
     }
 
+    /**
+     * Walk a [ConfigYaml] snapshot and apply it to DB.
+     * @param overwrite true = `reload` semantics (overwrite all, count updates);
+     *                  false = `load-if-missing` semantics (skip keys already present).
+     * @return Number of keys written.
+     */
+    private fun applyYaml(yamlConfig: pl.jclab.refio.core.config.ConfigYaml, overwrite: Boolean): Int {
+        val verb = if (overwrite) "Reloaded" else "Loaded"
+        var count = 0
+
+        fun apply(key: String, value: String?, label: String) {
+            if (value == null) return
+            if (!overwrite && configRepository.get(key, ConfigScope.APP) != null) return
+            set(key, value)
+            count++
+            logger.info { "$verb $label from YAML: $value" }
+        }
+
+        fun applyDefaultModel(key: String, op: ModelOperation, model: String?, label: String) {
+            if (model == null) return
+            if (!overwrite && configRepository.get(key, ConfigScope.APP) != null) return
+            val (provider, modelId) = parseModelString(model)
+            try {
+                setDefaultModel(op, modelId, provider)
+                count++
+                logger.info { "$verb default $label model from YAML: $modelId" }
+            } catch (e: Exception) {
+                logger.warn { "Failed to set $label model from YAML: ${e.message}" }
+            }
+        }
+
+        yamlConfig.models?.defaults?.let { d ->
+            applyDefaultModel(KEY_DEFAULT_MODEL_CHAT, ModelOperation.DEFAULT, d.chat, "chat")
+            applyDefaultModel(KEY_DEFAULT_MODEL_PLAN, ModelOperation.PLAN, d.plan, "plan")
+            applyDefaultModel(KEY_DEFAULT_MODEL_AGENT, ModelOperation.CODING, d.coding, "coding")
+        }
+
+        yamlConfig.models?.visibility?.let { visibility ->
+            val finalMap = if (overwrite) {
+                visibility
+            } else {
+                // load-if-missing: only add entries not yet present
+                val existing = getModelsVisibility().toMutableMap()
+                val additions = visibility.filterKeys { !existing.containsKey(it) }
+                if (additions.isEmpty()) return@let
+                additions.forEach { (id, show) -> logger.info { "Loaded model visibility from YAML: $id -> $show" } }
+                existing.apply { putAll(additions) }
+            }
+            configRepository.set(
+                key = KEY_MODELS_VISIBILITY,
+                value = gson.toJson(finalMap),
+                scope = ConfigScope.APP,
+                taskId = null,
+                description = "Model visibility settings"
+            )
+            if (overwrite) {
+                count++
+                logger.info { "Reloaded model visibility from YAML: ${visibility.size} entries" }
+            }
+        }
+
+        yamlConfig.providers?.let { p ->
+            apply(KEY_PROVIDER_OLLAMA_ENDPOINT, p.ollama?.endpoint, "Ollama endpoint")
+            apply(KEY_PROVIDER_ANTHROPIC_API_KEY, p.anthropic?.apiKey, "Anthropic API key")
+            apply(KEY_PROVIDER_OPENAI_API_KEY, p.openai?.apiKey, "OpenAI API key")
+            apply(KEY_PROVIDER_OPENROUTER_API_KEY, p.openrouter?.apiKey, "OpenRouter API key")
+            apply(KEY_PROVIDER_GEMINI_API_KEY, p.gemini?.apiKey, "Gemini API key")
+            apply(KEY_PROVIDER_LM_STUDIO_API_KEY, p.lmstudio?.apiKey, "LM Studio API key")
+            apply(KEY_PROVIDER_LM_STUDIO_BASE_URL, p.lmstudio?.baseUrl, "LM Studio base URL")
+            apply(KEY_PROVIDER_CUSTOM_OPENAI_API_KEY, p.genericOpenai?.apiKey, "Custom OpenAI API key")
+            apply(KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL, p.genericOpenai?.baseUrl, "Custom OpenAI base URL")
+            apply(KEY_PROVIDER_CUSTOM_OPENAI_MODEL, p.genericOpenai?.model, "Custom OpenAI model")
+            apply(KEY_PROVIDER_ZAI_API_KEY, p.zai?.apiKey, "Z.AI API key")
+            apply(KEY_PROVIDER_ZAI_BASE_URL, p.zai?.baseUrl, "Z.AI base URL")
+        }
+
+        yamlConfig.limits?.let { l ->
+            apply(KEY_API_CALL_TIMEOUT, l.apiCallTimeout?.toString(), "API call timeout")
+            apply(KEY_TOOL_EXECUTION_TIMEOUT, l.toolExecutionTimeout?.toString(), "tool execution timeout")
+            apply(KEY_MAX_CONTEXT_SIZE, l.maxContextSize?.toString(), "max context size")
+            apply(KEY_MAX_OUTPUT_SIZE, l.maxOutputSize?.toString(), "max output size")
+            apply(KEY_MAX_FILE_SIZE, l.maxFileSize?.toString(), "max file size")
+        }
+
+        return count
+    }
+
     private fun resolveProjectId(projectId: String?): String? = projectId ?: defaultProjectId
+
+    private fun taskScope(taskId: String?): ConfigScope =
+        if (taskId != null) ConfigScope.TASK else ConfigScope.APP
 
     private fun invalidateConfigCache(key: String) {
         configCache.invalidateByPrefix("typed:$key:")
@@ -2142,27 +1128,6 @@ class ConfigService(
         }
         // Auto-enable for longer turns (>5 iterations) where hallucinations are more likely
         return iterationCount >= 5
-    }
-
-    /**
-     * Set orchestration enabled setting (US-028).
-     *
-     * @param enabled true to enable orchestration, false to disable
-     * @param taskId Optional task ID for task-level config
-     */
-    fun setOrchestrationEnabled(enabled: Boolean, taskId: String? = null) {
-        val scope = if (taskId != null) ConfigScope.TASK
-                    else ConfigScope.APP
-        configRepository.set(
-            key = KEY_ORCHESTRATION_ENABLED,
-            value = enabled.toString(),
-            scope = scope,
-            taskId = taskId,
-            description = "Enable intelligent orchestration with reflection and plan adaptation"
-        )
-
-        logger.info { "Set orchestration_enabled = $enabled (scope=${scope.name})" }
-        invalidateConfigCache(KEY_ORCHESTRATION_ENABLED)
     }
 
     /**

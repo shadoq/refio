@@ -43,7 +43,8 @@ class OllamaAdapter(
     private val configService: pl.jclab.refio.core.services.ConfigService? = null,
     private val taskId: String? = null,
     private val subtaskId: String? = null,
-    private val source: String? = null
+    private val source: String? = null,
+    httpClientOverride: HttpClient? = null
 ) : BaseLLMAdapter(model, "ollama") {
 
     private val logger = dualLogger("OllamaAdapter")
@@ -65,38 +66,10 @@ class OllamaAdapter(
         get() = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
             ?: ConfigKeys.TOOL_EXECUTION_TIMEOUT.default.toLong() * 1000L
 
-    private val client = HttpClient(CIO) {
-        install(ContentNegotiation) {
-            gson {
-                setPrettyPrinting()
-                serializeNulls()
-            }
-        }
-        install(Logging) {
-            level = LogLevel.INFO
-            logger = object : KtorLogger {
-                override fun log(message: String) {
-                    this@OllamaAdapter.logger.debug { message }
-                }
-            }
-            sanitizeHeader { header ->
-                header.equals(HttpHeaders.Authorization, ignoreCase = true) ||
-                        header.equals("x-api-key", ignoreCase = true) ||
-                        header.equals("x-goog-api-key", ignoreCase = true)
-            }
-        }
-        install(HttpTimeout) {
-            val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
-                ?: ConfigKeys.TOOL_EXECUTION_TIMEOUT.default.toLong() * 1000L
-            // Streaming-friendly: requestTimeout is a HARD cap on the whole request
-            // including reading the response body. For long streaming responses
-            // (large models, big outputs) this kills the call mid-stream even
-            // when chunks are still arriving. Rely on socketTimeoutMillis instead —
-            // it resets per chunk and detects truly dead connections.
-            requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
-            connectTimeoutMillis = 30_000
-            socketTimeoutMillis = timeoutMs
-        }
+    private val client = httpClientOverride ?: run {
+        val socketTimeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+            ?: ConfigKeys.TOOL_EXECUTION_TIMEOUT.default.toLong() * 1000L
+        LLMKtorClientFactory.create(socketTimeoutMs, logger)
     }
 
     override suspend fun chat(
@@ -770,13 +743,18 @@ class OllamaAdapter(
             val modelConfigs = modelsData.mapNotNull { modelData ->
                 val modelName = modelData["name"] as? String ?: return@mapNotNull null
 
-                // Get definition from registry or create fallback with configured context size
+                // Get definition from registry or synthesize for unknown models (new releases).
                 val baseDefinition = pl.jclab.refio.core.llm.ModelDefinitions.getDefinition("ollama", modelName)
-                    ?: pl.jclab.refio.core.llm.ModelDefinitions.createFallback(
-                        provider = "ollama",
-                        modelId = modelName,
-                        maxContext = contextSize  // Use configured context size
-                    )
+                    ?: run {
+                        logger.warn {
+                            "[OLLAMA] Model $modelName not in registry — using synthetic definition with defaults (context=$contextSize)"
+                        }
+                        pl.jclab.refio.core.llm.ModelDefinitions.syntheticDefinitionFor(
+                            provider = "ollama",
+                            modelId = modelName,
+                            maxContext = contextSize
+                        )
+                    }
 
                 // Always override maxContext with configured value for Ollama models
                 val definition = baseDefinition.copy(maxContext = contextSize)

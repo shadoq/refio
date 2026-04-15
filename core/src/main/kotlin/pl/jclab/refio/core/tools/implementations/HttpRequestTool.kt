@@ -109,21 +109,23 @@ class HttpRequestTool(
             val bodyFile = params["body_file"] as? String
             val body = if (bodyFile != null) null else coerceBody(params["body"])
             val rawContentType = params["content_type"] as? String
-            // Validate and fallback to default if content_type is invalid
-            val contentType = run {
-                if (rawContentType == null) return@run "application/json"
+            // No fallback: invalid content_type is a caller bug, not something to paper over.
+            val contentType = if (rawContentType == null) {
+                "application/json"
+            } else {
                 val parts = rawContentType.split("/", limit = 2)
                 if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) {
-                    logger.warn { "Invalid content_type '$rawContentType', falling back to application/json" }
-                    return@run "application/json"
+                    return@withContext ToolResult.error(
+                        "Invalid content_type '$rawContentType' (expected 'type/subtype')"
+                    )
                 }
-                // Final check: try parsing to catch any edge cases
                 try {
                     ContentType.parse(rawContentType)
                     rawContentType
                 } catch (e: Exception) {
-                    logger.warn { "Unparseable content_type '$rawContentType', falling back to application/json" }
-                    "application/json"
+                    return@withContext ToolResult.error(
+                        "Unparseable content_type '$rawContentType': ${e.message}"
+                    )
                 }
             }
             val saveToFile = params["save_to_file"] as? String

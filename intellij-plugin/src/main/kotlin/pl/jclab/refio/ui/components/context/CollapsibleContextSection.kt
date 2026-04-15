@@ -5,7 +5,7 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import pl.jclab.refio.core.api.ContextSectionTokenInfo
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.ui.theme.LCATheme
 import java.awt.BorderLayout
 import java.awt.Color

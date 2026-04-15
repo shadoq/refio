@@ -41,9 +41,9 @@ import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.core.logging.dualLogger
 import java.util.UUID
 
-open class CustomOpenAIAdapter(
+open class GenericOpenAIAdapter(
     model: String,
-    private val providerName: String = "custom_openai",
+    private val providerName: String = "generic_openai",
     private val configService: ConfigService? = null,
     private val taskId: String? = null,
     private val subtaskId: String? = null,
@@ -51,7 +51,8 @@ open class CustomOpenAIAdapter(
     private val baseUrlOverride: String? = null,
     private val apiKeyOverride: String? = null,
     private val requireApiKey: Boolean = false,
-    private val defaultBaseUrl: String? = null
+    private val defaultBaseUrl: String? = null,
+    httpClientOverride: HttpClient? = null
 ) : BaseLLMAdapter(model, providerName) {
 
     companion object {
@@ -63,37 +64,12 @@ open class CustomOpenAIAdapter(
         private var zaiNextAllowedAtMs: Long = 0L
     }
 
-    private val logger = dualLogger("CustomOpenAIAdapter")
+    private val logger = dualLogger("GenericOpenAIAdapter")
 
-    private val client = HttpClient(CIO) {
-        install(ContentNegotiation) {
-            gson {
-                setPrettyPrinting()
-                serializeNulls()
-            }
-        }
-        install(Logging) {
-            level = LogLevel.INFO
-            logger = object : KtorLogger {
-                override fun log(message: String) {
-                    this@CustomOpenAIAdapter.logger.debug { message }
-                }
-            }
-            sanitizeHeader { header ->
-                header.equals(HttpHeaders.Authorization, ignoreCase = true)
-            }
-        }
-        install(HttpTimeout) {
-            val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
-                ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
-            // Streaming-friendly: requestTimeout is a HARD cap on the whole request
-            // (incl. body read) and would kill long streams mid-flight even while
-            // chunks are still arriving. socketTimeoutMillis (resets per chunk)
-            // detects truly dead connections.
-            requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
-            connectTimeoutMillis = 30_000L
-            socketTimeoutMillis = timeoutMs
-        }
+    private val client: HttpClient = httpClientOverride ?: run {
+        val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+            ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
+        LLMKtorClientFactory.create(timeoutMs, logger)
     }
 
     private fun resolveBaseUrl(): String {
@@ -140,15 +116,7 @@ open class CustomOpenAIAdapter(
     ): LLMResponse {
         val baseUrl = resolveBaseUrl()
         val apiKey = resolveApiKey()
-        val requestMessages = buildList<Map<String, Any>> {
-            systemMessages.filter { it.isNotBlank() }.forEach { add(mapOf("role" to "system", "content" to it)) }
-            // Remap "tool" (used by LLMMessageMapper for tool results) to "assistant" — OpenAI-compatible
-            // APIs require tool_call_id alongside role="tool", which this adapter does not currently emit.
-            messages.filter { it.role != "system" }.forEach {
-                val mappedRole = if (it.role == "tool") "assistant" else it.role
-                add(mapOf("role" to mappedRole, "content" to toOpenAiMessageContent(it)))
-            }
-        }
+        val requestMessages = OpenAICompatibleHelpers.buildMessages(this, systemMessages, messages)
         val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId) ?: ConfigKeys.MAX_OUTPUT_SIZE.default
         val effectiveMaxTokens = when {
             maxTokens != null && maxTokens > 0 -> minOf(maxTokens, maxOutputLimit)
@@ -162,10 +130,7 @@ open class CustomOpenAIAdapter(
             put("temperature", temperature)
             put("max_tokens", effectiveMaxTokens)
             if (streaming) put("stream", true)
-            (kwargs["top_p"] as? Number)?.let { put("top_p", it) }
-            (kwargs["frequency_penalty"] as? Number)?.let { put("frequency_penalty", it) }
-            (kwargs["presence_penalty"] as? Number)?.let { put("presence_penalty", it) }
-            kwargs["stop"]?.let { put("stop", it) }
+            with(OpenAICompatibleHelpers) { addCommonKwargs(kwargs) }
             kwargs["response_format"]?.let { put("response_format", it) }
         }
         val requestJson = gson.toJson(requestBody)
@@ -304,41 +269,17 @@ open class CustomOpenAIAdapter(
                         httpStatus = httpResponse.status.value
                         if (httpStatus !in 200..299) {
                             val errorBody = httpResponse.body<String>()
-                            throw mapHttpError(httpStatus ?: 500, errorBody)
+                            throw mapHttpError(httpStatus, errorBody)
                         }
 
-                        val channel: io.ktor.utils.io.ByteReadChannel = httpResponse.body()
-                        while (!channel.isClosedForRead) {
-                            val line = channel.readUTF8Line(limit = Int.MAX_VALUE) ?: continue
-                            if (line.isBlank() || !line.startsWith("data: ")) continue
-
-                            val data = line.removePrefix("data: ").trim()
-                            if (data == "[DONE]") break
-
-                            try {
-                                @Suppress("UNCHECKED_CAST")
-                                val chunk = gson.fromJson(data, Map::class.java) as Map<String, Any?>
-                                @Suppress("UNCHECKED_CAST")
-                                val choices = chunk["choices"] as? List<Map<String, Any?>> ?: emptyList()
-                                val first = choices.firstOrNull() ?: emptyMap()
-                                @Suppress("UNCHECKED_CAST")
-                                val delta = first["delta"] as? Map<String, Any?>
-                                toolCallAccumulator.consumeDelta(delta)
-                                val content = delta?.get("content") as? String
-                                if (!content.isNullOrEmpty()) {
-                                    contentBuilder.append(content)
-                                    onStreamChunk(StreamChunk(delta = content))
-                                }
-                                finalFinishReason = first["finish_reason"] as? String ?: finalFinishReason
-                            } catch (e: CancellationException) {
-                                // Let stream abort (guardrail trip) propagate out of the loop.
-                                // NOTE: replaced an earlier `runCatching { }` here — runCatching
-                                // swallowed CancellationException into a Result and the abort was lost.
-                                throw e
-                            } catch (_: Exception) {
-                                // Match previous behavior of silently skipping malformed chunks.
+                        finalFinishReason = OpenAICompatibleHelpers.consumeChatCompletionsSSE(
+                            channel = httpResponse.body(),
+                            toolCallAccumulator = toolCallAccumulator,
+                            onContent = { delta ->
+                                contentBuilder.append(delta)
+                                onStreamChunk(StreamChunk(delta = delta))
                             }
-                        }
+                        )
                     }
                 }
             }
@@ -500,7 +441,12 @@ open class CustomOpenAIAdapter(
             val modelId = modelData["id"] as? String ?: return@mapNotNull null
             val contextLength = (modelData["context_length"] as? Number)?.toInt() ?: DEFAULT_CONTEXT_SIZE
             val definition = ModelDefinitions.getDefinition(providerName, modelId)
-                ?: ModelDefinitions.createFallback(providerName, modelId, contextLength)
+                ?: run {
+                    logger.warn {
+                        "[$providerName] Model $modelId not in registry — using synthetic definition (context=$contextLength)"
+                    }
+                    ModelDefinitions.syntheticDefinitionFor(providerName, modelId, contextLength)
+                }
             definition.toModelConfig()
         }
     }

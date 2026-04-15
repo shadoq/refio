@@ -14,7 +14,7 @@ import pl.jclab.refio.core.config.ConfigKeys as TypedConfigKeys
 import pl.jclab.refio.core.services.ConfigKeyUtil
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.services.core.CoreConnectionManager
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.ui.theme.LCATheme
 import java.awt.BorderLayout
 import java.awt.Dimension

@@ -2,13 +2,20 @@ package pl.jclab.refio.services.session
 
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
+import pl.jclab.refio.core.session.SessionStateManager
+import pl.jclab.refio.core.session.MessageDispatcher
+import pl.jclab.refio.core.session.SubtaskTracker
+import pl.jclab.refio.core.session.SessionLifecycleService
+import pl.jclab.refio.core.session.ExecutionMonitor
+import pl.jclab.refio.core.session.PromptStateTracker
+import pl.jclab.refio.core.session.IncrementalToolCallStreamFilter
 import io.ktor.util.reflect.*
 import pl.jclab.refio.api.models.*
 import pl.jclab.refio.core.api.UIAdapter
 import pl.jclab.refio.core.utils.ProjectIdGenerator
 import pl.jclab.refio.services.core.CoreConnectionManager
 import pl.jclab.refio.services.execution.StepExecutionService
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 import pl.jclab.refio.ui.components.toolbar.StatusBar
@@ -176,10 +183,6 @@ class SessionManager(private val project: Project) {
         coreManager.getOrCreateProjectRouter(projectRoot, project)
     }
 
-    private val coreApiClient: pl.jclab.refio.api.CoreApiClient by lazy {
-        pl.jclab.refio.api.CoreApiClient(projectRouter)
-    }
-
     private val configService: pl.jclab.refio.core.services.ConfigService
         get() = projectRouter.configService
 
@@ -240,7 +243,6 @@ class SessionManager(private val project: Project) {
 
     private fun initializeServices() {
         executionMonitor = ExecutionMonitor(
-            project = project,
             projectRouter = projectRouter,
             stateManager = stateManager,
             stepExecutionService = stepExecutionService,
@@ -251,10 +253,9 @@ class SessionManager(private val project: Project) {
         )
 
         subtaskTracker = SubtaskTracker(
-            project = project,
             projectRouter = projectRouter,
-            coreApiClient = coreApiClient,
             stateManager = stateManager,
+            vfsRefresher = pl.jclab.refio.services.project.IntelliJVfsRefresher(project),
             loadMessages = { messageDispatcher.loadMessages() },
             executeCurrentStep = { subtaskId -> executionMonitor.executeCurrentStep(subtaskId) },
             showApprovalMessageForNextSubtask = { executionMonitor.showApprovalMessageForNextSubtask() }
@@ -268,9 +269,7 @@ class SessionManager(private val project: Project) {
         promptStateTracker = PromptStateTracker(stateManager)
 
         lifecycleService = SessionLifecycleService(
-            project = project,
             projectRouter = projectRouter,
-            coreApiClient = coreApiClient,
             configService = configService,
             stateManager = stateManager,
             modeSwitchMutex = modeSwitchMutex,
@@ -392,7 +391,7 @@ class SessionManager(private val project: Project) {
         // 2) Clear related execution data (subtasks/logs/snapshots)
         projectRouter.subtaskRouter.deleteAllSubtasks(session.id)
         projectRouter.apiLogsRouter.deleteApiLogsByTaskId(session.id)
-        projectRouter.deleteSnapshotsByTaskId(session.id)
+        projectRouter.snapshotRouter.deleteSnapshotsByTaskId(session.id)
 
         // 3) Clear planning state if in PLAN mode (plans are tied to session)
         if (session.mode == TaskMode.PLAN) {

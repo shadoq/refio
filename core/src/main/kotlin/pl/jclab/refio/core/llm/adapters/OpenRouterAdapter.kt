@@ -42,7 +42,8 @@ class OpenRouterAdapter(
     private val subtaskId: String? = null,
     private val source: String? = null,
     private val appName: String = "Refio",
-    private val siteUrl: String = "https://github.com/shadoq/refio"
+    private val siteUrl: String = "https://github.com/shadoq/refio",
+    httpClientOverride: HttpClient? = null
 ) : BaseLLMAdapter(model, "openrouter") {
 
     private val logger = dualLogger("OpenRouterAdapter")
@@ -57,36 +58,8 @@ class OpenRouterAdapter(
         get() = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
             ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
 
-    private val client = HttpClient(CIO) {
-        install(ContentNegotiation) {
-            gson {
-                setPrettyPrinting()
-                serializeNulls()
-            }
-        }
-        install(Logging) {
-            level = LogLevel.INFO
-            logger = object : KtorLogger {
-                override fun log(message: String) {
-                    this@OpenRouterAdapter.logger.debug { message }
-                }
-            }
-            sanitizeHeader { header ->
-                header.equals(HttpHeaders.Authorization, ignoreCase = true) ||
-                    header.equals("x-api-key", ignoreCase = true) ||
-                    header.equals("x-goog-api-key", ignoreCase = true)
-            }
-        }
-        install(HttpTimeout) {
-            // Streaming-friendly: requestTimeout is a HARD cap on the whole request
-            // (incl. body read) and would kill long streams mid-flight even while
-            // chunks are still arriving. socketTimeoutMillis (resets per chunk)
-            // detects truly dead connections.
-            requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
-            connectTimeoutMillis = 30000
-            socketTimeoutMillis = timeoutMs
-        }
-    }
+    private val client: HttpClient = httpClientOverride
+        ?: LLMKtorClientFactory.create(timeoutMs, logger)
 
     override suspend fun chat(
         messages: List<LLMMessage>,
@@ -174,11 +147,7 @@ class OpenRouterAdapter(
                 logger.info { "[OPENROUTER] Enabled thinking mode for $model" }
             }
 
-            // Additional parameters
-            (kwargs["top_p"] as? Number)?.let { put("top_p", it) }
-            (kwargs["frequency_penalty"] as? Number)?.let { put("frequency_penalty", it) }
-            (kwargs["presence_penalty"] as? Number)?.let { put("presence_penalty", it) }
-            kwargs["stop"]?.let { put("stop", it) }
+            with(OpenAICompatibleHelpers) { addCommonKwargs(kwargs) }
 
             // OpenRouter-specific parameters
             (kwargs["provider"] as? Map<*, *>)?.let { put("provider", it) }
@@ -394,11 +363,7 @@ class OpenRouterAdapter(
                 logger.info { "[OPENROUTER] Enabled thinking mode for $model" }
             }
 
-            // Additional parameters
-            (kwargs["top_p"] as? Number)?.let { put("top_p", it) }
-            (kwargs["frequency_penalty"] as? Number)?.let { put("frequency_penalty", it) }
-            (kwargs["presence_penalty"] as? Number)?.let { put("presence_penalty", it) }
-            kwargs["stop"]?.let { put("stop", it) }
+            with(OpenAICompatibleHelpers) { addCommonKwargs(kwargs) }
 
             // OpenRouter-specific parameters
             (kwargs["provider"] as? Map<*, *>)?.let { put("provider", it) }

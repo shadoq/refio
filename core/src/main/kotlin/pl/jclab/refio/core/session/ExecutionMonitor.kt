@@ -1,6 +1,6 @@
-package pl.jclab.refio.services.session
+package pl.jclab.refio.core.session
 
-import com.intellij.openapi.project.Project
+import pl.jclab.refio.core.session.SessionStateManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,15 +17,14 @@ import pl.jclab.refio.core.services.execution.unified.StepPlan
 import pl.jclab.refio.core.services.execution.unified.StepResult
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
-import pl.jclab.refio.services.execution.StepExecutionService
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.session.ExecutionStateController
+import pl.jclab.refio.core.logging.dualLogger
 import java.util.UUID
 
 class ExecutionMonitor(
-    private val project: Project,
     private val projectRouter: CoreApiRouter,
     private val stateManager: SessionStateManager,
-    private val stepExecutionService: StepExecutionService,
+    private val stepExecutionService: ExecutionStateController,
     private val scope: CoroutineScope,
     private val loadMessages: suspend () -> Unit,
     private val loadSubtasks: suspend () -> Unit,

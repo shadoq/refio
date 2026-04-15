@@ -1,4 +1,4 @@
-package pl.jclab.refio.services.session
+package pl.jclab.refio.core.session
 
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -7,7 +7,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
-internal object ToolCallContentSanitizer {
+object ToolCallContentSanitizer {
     private val gson = Gson()
     private val lenientJson = Json { ignoreUnknownKeys = true }
     private val toolCallPatterns = listOf(

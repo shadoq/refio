@@ -9,7 +9,7 @@ import com.intellij.util.ui.UIUtil
 import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.api.models.SubtaskDto
 import pl.jclab.refio.services.execution.StepExecutionService
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.ui.components.common.PromptDialog
 import kotlinx.coroutines.*

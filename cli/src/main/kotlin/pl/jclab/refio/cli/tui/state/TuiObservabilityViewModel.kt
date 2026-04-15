@@ -327,17 +327,15 @@ class TuiObservabilityViewModel(
                 }
 
                 // Always load indexed files for the RAG files table
-                try {
-                    val files = r.ragRouter.getRagIndexedFiles()
-                    _ragIndexedFiles.value = files.map { f ->
-                        TuiRagFile(
-                            filePath = f.filePath,
-                            chunks = f.chunksCount,
-                            embeddings = f.embeddingsCount,
-                            sizeBytes = f.fileSize
-                        )
-                    }
-                } catch (_: Exception) {}
+                val files = r.ragRouter.getRagIndexedFiles()
+                _ragIndexedFiles.value = files.map { f ->
+                    TuiRagFile(
+                        filePath = f.filePath,
+                        chunks = f.chunksCount,
+                        embeddings = f.embeddingsCount,
+                        sizeBytes = f.fileSize
+                    )
+                }
             } catch (e: Exception) {
                 logger.debug(e) { "RAG stats not available (indexing may not be configured)" }
             }
@@ -350,7 +348,7 @@ class TuiObservabilityViewModel(
         scope.launch {
             val r = getRouter() ?: return@launch
             try {
-                val source = r.addDocumentationSource(url, depth)
+                val source = r.ragRouter.addDocumentationSource(url, depth)
                 addSystemMessageFn("Added documentation source: $url (ID: ${source.id})")
             } catch (e: Exception) {
                 addSystemMessageFn("Failed to add docs: ${e.message}")
@@ -362,7 +360,7 @@ class TuiObservabilityViewModel(
         scope.launch {
             val r = getRouter() ?: return@launch
             try {
-                r.deleteDocumentationSource(docId)
+                r.ragRouter.deleteDocumentationSource(docId)
                 addSystemMessageFn("Deleted documentation source #$docId")
             } catch (e: Exception) {
                 addSystemMessageFn("Failed to delete docs: ${e.message}")
@@ -375,7 +373,7 @@ class TuiObservabilityViewModel(
             val r = getRouter() ?: return@launch
             try {
                 addSystemMessageFn("Indexing documentation #$docId...")
-                r.indexDocumentation(docId).collect { progress ->
+                r.ragRouter.indexDocumentation(docId).collect { progress ->
                     _ragIndexingStatus.value = progress.statusMessage
                     _ragIndexingProgress.value = progress.progressPercent / 100.0
                 }

@@ -1,6 +1,6 @@
-package pl.jclab.refio.services.session
+package pl.jclab.refio.core.session
 
-import com.intellij.openapi.project.Project
+import pl.jclab.refio.core.session.SessionStateManager
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -10,7 +10,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import org.junit.jupiter.api.Test
-import pl.jclab.refio.api.CoreApiClient
 import pl.jclab.refio.api.models.ExecutionMode
 import pl.jclab.refio.api.models.Session
 import pl.jclab.refio.api.models.TaskMode
@@ -26,9 +25,7 @@ class SessionLifecycleServiceTest {
 
     @Test
     fun `switchMode updates session mode`() = runBlocking {
-        val project = mockk<Project>(relaxed = true)
         val projectRouter = mockk<CoreApiRouter>()
-        val coreApiClient = mockk<CoreApiClient>(relaxed = true)
         val configService = mockk<ConfigService>(relaxed = true)
         val stateManager = SessionStateManager()
         val mutex = Mutex()
@@ -58,9 +55,7 @@ class SessionLifecycleServiceTest {
         )
 
         val service = SessionLifecycleService(
-            project = project,
             projectRouter = projectRouter,
-            coreApiClient = coreApiClient,
             configService = configService,
             stateManager = stateManager,
             modeSwitchMutex = mutex,
@@ -76,9 +71,7 @@ class SessionLifecycleServiceTest {
 
     @Test
     fun `getAvailableModels returns only visible models`() = runBlocking {
-        val project = mockk<Project>(relaxed = true)
         val projectRouter = mockk<CoreApiRouter>()
-        val coreApiClient = mockk<CoreApiClient>(relaxed = true)
         val configService = mockk<ConfigService>(relaxed = true)
         val stateManager = SessionStateManager()
         val mutex = Mutex()
@@ -90,9 +83,7 @@ class SessionLifecycleServiceTest {
         )
 
         val service = SessionLifecycleService(
-            project = project,
             projectRouter = projectRouter,
-            coreApiClient = coreApiClient,
             configService = configService,
             stateManager = stateManager,
             modeSwitchMutex = mutex,
@@ -108,9 +99,7 @@ class SessionLifecycleServiceTest {
 
     @Test
     fun `getAvailableModels falls back to all models when none are visible`() = runBlocking {
-        val project = mockk<Project>(relaxed = true)
         val projectRouter = mockk<CoreApiRouter>()
-        val coreApiClient = mockk<CoreApiClient>(relaxed = true)
         val configService = mockk<ConfigService>(relaxed = true)
         val stateManager = SessionStateManager()
         val mutex = Mutex()
@@ -122,9 +111,7 @@ class SessionLifecycleServiceTest {
         )
 
         val service = SessionLifecycleService(
-            project = project,
             projectRouter = projectRouter,
-            coreApiClient = coreApiClient,
             configService = configService,
             stateManager = stateManager,
             modeSwitchMutex = mutex,

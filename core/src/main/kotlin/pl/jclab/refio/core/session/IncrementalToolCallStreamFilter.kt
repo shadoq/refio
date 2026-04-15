@@ -1,6 +1,6 @@
-package pl.jclab.refio.services.session
+package pl.jclab.refio.core.session
 
-internal class IncrementalToolCallStreamFilter(
+class IncrementalToolCallStreamFilter(
     private val tailSize: Int = 128
 ) {
     private var filteredAccumulated = ""

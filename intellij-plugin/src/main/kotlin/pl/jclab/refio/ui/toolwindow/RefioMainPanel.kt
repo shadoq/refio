@@ -1,7 +1,7 @@
 package pl.jclab.refio.ui.toolwindow
 
 import com.intellij.openapi.Disposable
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
@@ -21,7 +21,7 @@ import pl.jclab.refio.ui.components.rag.RagViewPanel
 import pl.jclab.refio.ui.execution.TurnStateStatusBar
 import pl.jclab.refio.ui.settings.ApiLogsPanel
 import pl.jclab.refio.ui.settings.SettingsView
-import pl.jclab.refio.api.CoreApiClient
+import pl.jclab.refio.core.api.CoreApiRouter
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.actionSystem.Separator
@@ -57,7 +57,7 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
     private val cs = CoroutineScope(SupervisorJob())
     private val sessionManager = SessionManager.getInstance(project)
     private val stepExecutionService = StepExecutionService.getInstance(project)
-    private val coreApiClient = pl.jclab.refio.api.CoreApiClient(sessionManager.apiRouter)
+    private val coreApiClient: pl.jclab.refio.core.api.CoreApiRouter = sessionManager.apiRouter
 
     private val chatView: ChatView
     private val promptInputPanel: PromptInputPanel
@@ -207,7 +207,7 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
         // Load advanced view setting from config on startup
         cs.launch {
             try {
-                val config = coreApiClient.getConfig(section = "general", scope = "app")
+                val config = coreApiClient.configRouter.getConfig(section = "general", scope = "app")
                 val advancedView = (config.settings["advanced_view"] as? String).toBoolean()
 
                 // Apply setting on EDT

@@ -3,7 +3,7 @@ package pl.jclab.refio.ui.components.toolbar
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBPanel
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.ui.theme.LCATheme
 import kotlinx.coroutines.CoroutineScope

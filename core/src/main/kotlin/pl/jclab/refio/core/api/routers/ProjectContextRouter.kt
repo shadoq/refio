@@ -622,7 +622,6 @@ class ProjectContextRouter(
             },
             userContextRefs = userContextRefDTOs,
             conversationHistory = conversationDTOs,
-            previousSubtasks = context.executedSteps.map { it.displayContent },
             domainAnalysis = context.domainAnalysis,
             directoryCount = context.structure.directoryCount,
             maxDepth = context.structure.maxDepth,

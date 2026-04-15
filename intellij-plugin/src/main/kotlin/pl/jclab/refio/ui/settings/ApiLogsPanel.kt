@@ -7,7 +7,7 @@ import com.intellij.util.ui.JBUI
 import pl.jclab.refio.core.db.ApiLog
 import pl.jclab.refio.core.db.ApiLogStatistics
 import pl.jclab.refio.ui.theme.LCATheme
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.*
 import java.awt.*
 import java.awt.event.MouseAdapter
@@ -25,7 +25,7 @@ import javax.swing.table.DefaultTableModel
  * Displays API call logs with filtering, export, and management capabilities
  */
 class ApiLogsPanel(
-    private val coreApiClient: pl.jclab.refio.api.CoreApiClient?,
+    private val coreApiClient: pl.jclab.refio.core.api.CoreApiRouter?,
     private val autoLoadOnInit: Boolean = true
 ) : JBPanel<ApiLogsPanel>(BorderLayout()) {
 
@@ -250,17 +250,17 @@ class ApiLogsPanel(
                 logger.info { "Loading API logs..." }
 
                 // Load statistics
-                val stats = coreApiClient?.router?.getApiLogStatistics()
+                val stats = coreApiClient?.apiLogsRouter?.getApiLogStatistics()
                 statistics = stats
 
                 // Load logs
-                val logs = coreApiClient?.router?.getRecentApiLogs(50) ?: emptyList()
+                val logs = coreApiClient?.apiLogsRouter?.getRecentApiLogs(50) ?: emptyList()
                 allLogs = logs
 
                 // Load filter options
-                val providers = coreApiClient?.router?.getDistinctProviders() ?: emptyList()
-                val models = coreApiClient?.router?.getDistinctModels() ?: emptyList()
-                val sources = coreApiClient?.router?.getDistinctSources() ?: emptyList()
+                val providers = coreApiClient?.apiLogsRouter?.getDistinctProviders() ?: emptyList()
+                val models = coreApiClient?.apiLogsRouter?.getDistinctModels() ?: emptyList()
+                val sources = coreApiClient?.apiLogsRouter?.getDistinctSources() ?: emptyList()
 
                 ApplicationManager.getApplication().invokeLater {
                     updateStatistics(stats)
@@ -379,7 +379,7 @@ class ApiLogsPanel(
                 val model = if (selectedModel == "All") null else selectedModel
                 val source = if (selectedSource == "All") null else selectedSource
 
-                val filteredLogs = coreApiClient?.router?.getFilteredApiLogs(
+                val filteredLogs = coreApiClient?.apiLogsRouter?.getFilteredApiLogs(
                     provider = provider,
                     model = model,
                     source = source,
@@ -425,7 +425,7 @@ class ApiLogsPanel(
         coroutineScope.launch {
             try {
                 logger.info { "Exporting all API logs to CSV..." }
-                val csvContent = coreApiClient?.router?.exportAllApiLogsToCsv()
+                val csvContent = coreApiClient?.apiLogsRouter?.exportAllApiLogsToCsv()
                     ?: throw IllegalStateException("Failed to export logs")
 
                 ApplicationManager.getApplication().invokeLater {
@@ -444,7 +444,7 @@ class ApiLogsPanel(
         coroutineScope.launch {
             try {
                 logger.info { "Exporting all API logs to JSON..." }
-                val jsonContent = coreApiClient?.router?.exportAllApiLogsToJson()
+                val jsonContent = coreApiClient?.apiLogsRouter?.exportAllApiLogsToJson()
                     ?: throw IllegalStateException("Failed to export logs")
 
                 ApplicationManager.getApplication().invokeLater {
@@ -494,7 +494,7 @@ class ApiLogsPanel(
         coroutineScope.launch {
             try {
                 logger.info { "Deleting all API logs..." }
-                val deleted = coreApiClient?.router?.deleteAllApiLogs()
+                val deleted = coreApiClient?.apiLogsRouter?.deleteAllApiLogs()
                     ?: throw IllegalStateException("Failed to delete logs")
 
                 ApplicationManager.getApplication().invokeLater {

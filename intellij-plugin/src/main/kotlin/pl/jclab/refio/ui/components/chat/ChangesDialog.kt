@@ -88,7 +88,7 @@ class ChangesDialog(
         coroutineScope.launch {
             val snapshotContent = try {
                 val router = pl.jclab.refio.services.core.CoreConnectionManager.getInstance().getApiRouter()
-                router.getSnapshotFileContent(snapshotId!!, filePath)
+                router.snapshotRouter.getSnapshotFileContent(snapshotId!!, filePath)
             } catch (e: Exception) {
                 null
             }

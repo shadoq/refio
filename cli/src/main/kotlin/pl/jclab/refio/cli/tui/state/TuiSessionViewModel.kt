@@ -157,21 +157,9 @@ class TuiSessionViewModel(
         val r = getRouter() ?: return
         scope.launch(Dispatchers.IO) {
             try {
-                val tasks = r.taskRouter.listTasks().tasks
-                _sessions.value = tasks.map { task ->
-                    TuiSessionEntry(
-                        id = task.id,
-                        name = task.name,
-                        mode = task.mode,
-                        status = task.status,
-                        tokensIn = task.tokensIn,
-                        tokensOut = task.tokensOut,
-                        costUsd = task.costUsd,
-                        createdAt = task.createdAt,
-                        updatedAt = task.updatedAt,
-                        pinned = task.pinned
-                    )
-                }.sortedByDescending { it.updatedAt }
+                _sessions.value = r.taskRouter.listTasks().tasks
+                    .map(TuiSessionEntry::fromTaskResponse)
+                    .sortedByDescending { it.updatedAt }
             } catch (e: Exception) {
                 logger.warn(e) { "Failed to load sessions" }
             }
@@ -336,45 +324,25 @@ class TuiSessionViewModel(
     // Subtask operations
     // =============================================
 
-    fun approveSubtask(subtaskId: String) {
+    private fun updateSubtaskApproval(subtaskId: String, status: ApprovalStatus) {
         scope.launch {
             val r = getRouter() ?: return@launch
             val tid = getTaskId() ?: return@launch
-            try {
-                r.subtaskRouter.updateSubtask(tid, subtaskId, UpdateSubtaskRequest(approvalStatus = ApprovalStatus.APPROVED))
-                loadSubtasksFromDb(r, tid)
-            } catch (e: Exception) {
-                logger.warn(e) { "Failed to approve subtask: $subtaskId" }
-                updateSubtaskStatus(subtaskId, "APPROVED") // fallback to local
-            }
+            r.subtaskRouter.updateSubtask(tid, subtaskId, UpdateSubtaskRequest(approvalStatus = status))
+            loadSubtasksFromDb(r, tid)
         }
     }
 
-    fun skipSubtask(subtaskId: String) {
-        scope.launch {
-            val r = getRouter() ?: return@launch
-            val tid = getTaskId() ?: return@launch
-            try {
-                r.subtaskRouter.updateSubtask(tid, subtaskId, UpdateSubtaskRequest(approvalStatus = ApprovalStatus.SKIPPED))
-                loadSubtasksFromDb(r, tid)
-            } catch (e: Exception) {
-                logger.warn(e) { "Failed to skip subtask: $subtaskId" }
-                updateSubtaskStatus(subtaskId, "SKIPPED") // fallback to local
-            }
-        }
-    }
+    fun approveSubtask(subtaskId: String) = updateSubtaskApproval(subtaskId, ApprovalStatus.APPROVED)
+
+    fun skipSubtask(subtaskId: String) = updateSubtaskApproval(subtaskId, ApprovalStatus.SKIPPED)
 
     fun deleteSubtask(subtaskId: String) {
         scope.launch {
             val r = getRouter() ?: return@launch
             val tid = getTaskId() ?: return@launch
-            try {
-                r.subtaskRouter.deleteSubtask(tid, subtaskId)
-                loadSubtasksFromDb(r, tid)
-            } catch (e: Exception) {
-                logger.warn(e) { "Failed to delete subtask: $subtaskId" }
-                _subtasks.update { it.filter { s -> s.id != subtaskId } } // fallback
-            }
+            r.subtaskRouter.deleteSubtask(tid, subtaskId)
+            loadSubtasksFromDb(r, tid)
         }
     }
 
@@ -386,19 +354,8 @@ class TuiSessionViewModel(
         scope.launch {
             val r = getRouter() ?: return@launch
             val tid = getTaskId() ?: return@launch
-            try {
-                r.subtaskRouter.swapSubtaskOrder(tid, current.id, above.id)
-                loadSubtasksFromDb(r, tid)
-            } catch (e: Exception) {
-                logger.warn(e) { "Failed to swap subtask order" }
-                // Fallback to local swap
-                _subtasks.update { l ->
-                    l.toMutableList().apply {
-                        val item = removeAt(index)
-                        add(index - 1, item)
-                    }
-                }
-            }
+            r.subtaskRouter.swapSubtaskOrder(tid, current.id, above.id)
+            loadSubtasksFromDb(r, tid)
         }
         _selectedStepIndex.update { (it - 1).coerceAtLeast(0) }
     }
@@ -411,18 +368,8 @@ class TuiSessionViewModel(
         scope.launch {
             val r = getRouter() ?: return@launch
             val tid = getTaskId() ?: return@launch
-            try {
-                r.subtaskRouter.swapSubtaskOrder(tid, current.id, below.id)
-                loadSubtasksFromDb(r, tid)
-            } catch (e: Exception) {
-                logger.warn(e) { "Failed to swap subtask order" }
-                _subtasks.update { l ->
-                    l.toMutableList().apply {
-                        val item = removeAt(index)
-                        add(index + 1, item)
-                    }
-                }
-            }
+            r.subtaskRouter.swapSubtaskOrder(tid, current.id, below.id)
+            loadSubtasksFromDb(r, tid)
         }
         _selectedStepIndex.update { (it + 1).coerceAtMost(list.size - 1) }
     }
@@ -431,17 +378,8 @@ class TuiSessionViewModel(
         scope.launch {
             val r = getRouter() ?: return@launch
             val tid = getTaskId() ?: return@launch
-            try {
-                r.subtaskRouter.deletePendingSubtasks(tid)
-                loadSubtasksFromDb(r, tid)
-            } catch (e: Exception) {
-                logger.warn(e) { "Failed to cancel all pending" }
-                _subtasks.update { list ->
-                    list.map {
-                        if (it.status in listOf("NEW", "PENDING", "APPROVED")) it.copy(status = "SKIPPED") else it
-                    }
-                }
-            }
+            r.subtaskRouter.deletePendingSubtasks(tid)
+            loadSubtasksFromDb(r, tid)
         }
     }
 
@@ -647,7 +585,7 @@ class TuiSessionViewModel(
      * (e.g. no providers configured, endpoints unreachable).
      */
     private fun getStaticModelList(): List<String> {
-        val providers = listOf("openai", "anthropic", "openrouter", "gemini", "ollama", "lmstudio", "custom_openai", "zai")
+        val providers = listOf("openai", "anthropic", "openrouter", "gemini", "ollama", "lmstudio", "generic_openai", "zai")
         val result = mutableListOf<String>()
         for (provider in providers) {
             val definitions = pl.jclab.refio.core.llm.ModelDefinitions.getProviderDefinitions(provider)
@@ -680,9 +618,7 @@ class TuiSessionViewModel(
             val newId = createNewTaskInDb(r)
             setTaskId(newId)
             mode.value = newMode
-            try {
-                r.configRouter.updateConfig("ui", "app", null, mapOf("selected_mode" to newMode))
-            } catch (_: Exception) {}
+            persistUiSetting("selected_mode", newMode)
             updateDebugInfo(newId, newMode)
             addSystemMessage("Mode switched to $newMode (new session)")
             return
@@ -706,13 +642,7 @@ class TuiSessionViewModel(
         }
 
         mode.value = newMode
-
-        // Persist to config (same key as IntelliJ: ui.selected_mode)
-        try {
-            getRouter()?.configRouter?.updateConfig("ui", "app", null, mapOf("selected_mode" to newMode))
-        } catch (e: Exception) {
-            logger.debug(e) { "Failed to persist selected mode" }
-        }
+        persistUiSetting("selected_mode", newMode)
 
         // Clear plan/step state when switching to CHAT (no tools in chat mode)
         if (newMode == "CHAT") {
@@ -725,34 +655,23 @@ class TuiSessionViewModel(
         addSystemMessage("Mode switched to $newMode")
     }
 
+    private fun persistUiSetting(key: String, value: String) {
+        getRouter()?.configRouter?.updateConfig("ui", "app", null, mapOf(key to value))
+    }
+
     fun toggleThinking() {
         _thinkingEnabled.update { !it }
-        // Persist to config
-        try {
-            getRouter()?.configRouter?.updateConfig("ui", "app", null, mapOf("thinking_enabled" to _thinkingEnabled.value.toString()))
-        } catch (e: Exception) {
-            logger.debug(e) { "Failed to persist thinking state" }
-        }
+        persistUiSetting("thinking_enabled", _thinkingEnabled.value.toString())
     }
 
     fun toggleNoEgress() {
         _noEgressEnabled.update { !it }
-        // Persist to config
-        try {
-            getRouter()?.configRouter?.updateConfig("ui", "app", null, mapOf("no_egress_enabled" to _noEgressEnabled.value.toString()))
-        } catch (e: Exception) {
-            logger.debug(e) { "Failed to persist no-egress state" }
-        }
+        persistUiSetting("no_egress_enabled", _noEgressEnabled.value.toString())
     }
 
     fun toggleExecutionMode() {
         _executionMode.update { if (it == "AUTO") "INTERACTIVE" else "AUTO" }
-        // Persist to config (same key as IntelliJ: ui.execution_mode)
-        try {
-            getRouter()?.configRouter?.updateConfig("ui", "app", null, mapOf("execution_mode" to _executionMode.value))
-        } catch (e: Exception) {
-            logger.debug(e) { "Failed to persist execution mode" }
-        }
+        persistUiSetting("execution_mode", _executionMode.value)
     }
 
     // =============================================

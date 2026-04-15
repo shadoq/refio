@@ -11,7 +11,7 @@ import pl.jclab.refio.api.models.ExecutionMode
 import pl.jclab.refio.api.models.Session
 import pl.jclab.refio.api.models.TaskMode
 import pl.jclab.refio.api.models.TaskStatus
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
 import kotlinx.coroutines.*
 import java.awt.BorderLayout

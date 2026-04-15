@@ -1,4 +1,4 @@
-package pl.jclab.refio.services.session
+package pl.jclab.refio.core.session
 
 import kotlin.test.Test
 import kotlin.test.assertEquals

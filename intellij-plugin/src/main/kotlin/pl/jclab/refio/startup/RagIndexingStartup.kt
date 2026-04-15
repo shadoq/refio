@@ -6,7 +6,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.services.core.CoreConnectionManager
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.rag.BackgroundIndexingTask
 
 class RagIndexingStartup : ProjectActivity {

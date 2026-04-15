@@ -17,7 +17,7 @@ import com.intellij.openapi.ui.Messages
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import pl.jclab.refio.ui.theme.LCATheme
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.project.SafeVfsAccess
 import java.awt.*
 import java.awt.datatransfer.StringSelection

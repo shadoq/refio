@@ -14,7 +14,7 @@ import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.services.turn.PromptSnapshot
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.services.core.CoreConnectionManager
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.notification.NotificationService
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo

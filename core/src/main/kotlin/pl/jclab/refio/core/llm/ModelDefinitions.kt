@@ -4180,15 +4180,19 @@ object ModelDefinitions {
     }
 
     /**
-     * Create fallback ModelDefinition for unknown models.
-     * Used when model is available from API but not in our registry.
+     * Create synthetic ModelDefinition for models not yet in registry.
+     *
+     * Semantyka: provider API zwraca model którego nie ma w naszym statycznym rejestrze
+     * (nowy release). Tworzymy best-effort definicję z defaultami — **nie jest to
+     * silent default**, callery muszą zalogować WARN. Zgodne z regułą "no fallbacks":
+     * to nie fallback w execution path, tylko enumeracja zewnętrznych zasobów.
      *
      * @param provider Provider name
      * @param modelId Model identifier
      * @param maxContext Context window size (default: 32768)
-     * @return ModelDefinition with basic configuration
+     * @return ModelDefinition with conservative defaults
      */
-    fun createFallback(
+    fun syntheticDefinitionFor(
         provider: String,
         modelId: String,
         maxContext: Int = DEFAULT_CONTEXT_SIZE
@@ -4197,7 +4201,7 @@ object ModelDefinitions {
             id = modelId,
             name = modelId,
             provider = provider,
-            description = "Unknown model (fallback configuration)",
+            description = "Unknown model (synthetic definition)",
             capabilities = listOf(ModelCapability.CHAT_COMPLETION),
             modelType = ModelType.TEXT,
             maxContext = maxContext,

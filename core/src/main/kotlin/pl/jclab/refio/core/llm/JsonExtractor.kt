@@ -192,7 +192,7 @@ object JsonExtractor {
                 ?: "Execution plan"
         }
 
-        logger.info { "[JSON] Normalized to ${(subtasks as? List<*>)?.size ?: 0} subtasks" }
+        logger.info { "[JSON] Normalized to ${subtasks.size} subtasks" }
 
         return mapOf(
             "plan" to planDescription,

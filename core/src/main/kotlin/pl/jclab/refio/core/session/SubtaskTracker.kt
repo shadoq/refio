@@ -1,21 +1,19 @@
-package pl.jclab.refio.services.session
+package pl.jclab.refio.core.session
 
-import com.intellij.openapi.project.Project
-import pl.jclab.refio.api.CoreApiClient
+import pl.jclab.refio.core.session.SessionStateManager
+import pl.jclab.refio.core.session.VfsRefresher
 import pl.jclab.refio.api.models.Message
 import pl.jclab.refio.api.models.SubtaskDto
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.api.ExecuteStepResponse
 import pl.jclab.refio.core.api.UpdateSubtaskRequest
-import pl.jclab.refio.services.logging.dualLogger
-import pl.jclab.refio.services.project.SafeVfsAccess
+import pl.jclab.refio.core.logging.dualLogger
 import java.util.UUID
 
 class SubtaskTracker(
-    private val project: Project,
     private val projectRouter: CoreApiRouter,
-    private val coreApiClient: CoreApiClient,
     private val stateManager: SessionStateManager,
+    private val vfsRefresher: VfsRefresher,
     private val loadMessages: suspend () -> Unit,
     private val executeCurrentStep: suspend (String) -> ExecuteStepResponse?,
     private val showApprovalMessageForNextSubtask: suspend () -> Unit
@@ -228,7 +226,7 @@ class SubtaskTracker(
 
             if (subtask.status == "PENDING") {
                 logger.info { "[SUBTASK] Preparing PENDING subtask: taskId=${currentSession.id}, subtaskId=$subtaskId" }
-                coreApiClient.prepareStep(currentSession.id, subtaskId)
+                projectRouter.agentRouter.planSubtaskStep(currentSession.id, subtaskId)
                 loadSubtasks()
             }
 
@@ -239,7 +237,7 @@ class SubtaskTracker(
                     "[SUBTASK] Subtask executed: taskId=${currentSession.id}, subtaskId=$subtaskId, " +
                         "status=${executeResponse.status}, durationMs=${executeResponse.durationMs}ms"
                 }
-                SafeVfsAccess.refreshProjectRoot(project, logger)
+                vfsRefresher.refreshProjectRoot()
             } else {
                 logger.error { "Failed to execute subtask: $subtaskId" }
             }
@@ -345,7 +343,7 @@ class SubtaskTracker(
 
         logger.info { "[PREPARE] Found PENDING subtask: ${pendingSubtask.id} (${pendingSubtask.description})" }
 
-        val prepareResponse = coreApiClient.prepareStep(currentSession.id, pendingSubtask.id)
+        val prepareResponse = projectRouter.agentRouter.planSubtaskStep(currentSession.id, pendingSubtask.id)
         val tools = prepareResponse.tools.joinToString(", ") { it.name }
         logger.info {
             "[PREPARE] Prepared step: taskId=${currentSession.id}, subtaskId=${pendingSubtask.id}, tools=$tools"

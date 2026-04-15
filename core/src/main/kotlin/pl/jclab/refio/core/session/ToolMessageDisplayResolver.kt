@@ -1,11 +1,11 @@
-package pl.jclab.refio.services.session
+package pl.jclab.refio.core.session
 
-internal data class ToolMessageDisplay(
+data class ToolMessageDisplay(
     val content: String,
     val toolStreamContent: String?
 )
 
-internal object ToolMessageDisplayResolver {
+object ToolMessageDisplayResolver {
     fun resolve(
         role: String,
         content: String,

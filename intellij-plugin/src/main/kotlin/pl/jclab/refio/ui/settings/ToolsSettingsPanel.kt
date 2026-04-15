@@ -3,11 +3,11 @@ package pl.jclab.refio.ui.settings
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.table.JBTable
-import pl.jclab.refio.api.CoreApiClient
+import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.api.ToolDefinitionInfo
 import pl.jclab.refio.core.tools.security.CommandRule
 import pl.jclab.refio.core.tools.security.CommandRuleDefaults
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.ui.theme.LCATheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -27,7 +27,7 @@ private val logger = dualLogger("ToolsSettingsPanel")
  */
 class ToolsSettingsPanel(
     private val onSettingChanged: (section: String, key: String, value: Any) -> Unit,
-    private val coreApiClient: CoreApiClient?
+    private val coreApiClient: CoreApiRouter?
 ) : JBPanel<ToolsSettingsPanel>(BorderLayout()) {
 
     private lateinit var toolsTable: JBTable
@@ -263,7 +263,7 @@ class ToolsSettingsPanel(
 
         coroutineScope.launch {
             try {
-                val definitions = coreApiClient.getAvailableToolDefinitions()
+                val definitions = coreApiClient.toolRouter.getAvailableToolDefinitions()
                 SwingUtilities.invokeLater {
                     populateTableFromBackend(definitions)
                     loadToolPermissions()
@@ -298,7 +298,10 @@ class ToolsSettingsPanel(
             try {
                 logger.info { "Loading tool permissions from backend" }
 
-                val permissions = coreApiClient.getToolPermissions()
+                val response = coreApiClient.toolRouter.getToolPermissions(null)
+                val permissions = response.tools.associate { tool ->
+                    tool.toolName to (tool.planMode to tool.agentMode)
+                }
 
                 applyPermissions(permissions)
             } catch (e: Exception) {
@@ -346,10 +349,12 @@ class ToolsSettingsPanel(
 
         coroutineScope.launch {
             try {
-                coreApiClient?.setToolPermission(
+                coreApiClient?.toolRouter?.setToolPermission(
                     toolName = toolName,
-                    planMode = planMode.uppercase(),
-                    agentMode = agentMode.uppercase()
+                    request = pl.jclab.refio.core.models.api.SetToolPermissionRequest(
+                        planMode = planMode.uppercase(),
+                        agentMode = agentMode.uppercase()
+                    )
                 )
 
                 logger.info { "Saved permission for $toolName" }

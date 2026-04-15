@@ -567,27 +567,27 @@ object ConfigKeys {
     )
 
     val PROVIDER_CUSTOM_OPENAI_API_KEY = ConfigKey<String?>(
-        key = "providers.custom_openai.custom_openai_api_key",
+        key = "providers.generic_openai.generic_openai_api_key",
         parser = { it.takeIf { s -> s.isNotBlank() } },
         default = null,
         serializer = { it ?: "" },
-        yamlAccessor = { it.getCustomOpenAIApiKey() }
+        yamlAccessor = { it.getGenericOpenAIApiKey() }
     )
 
     val PROVIDER_CUSTOM_OPENAI_BASE_URL = ConfigKey<String?>(
-        key = "providers.custom_openai.custom_openai_base_url",
+        key = "providers.generic_openai.generic_openai_base_url",
         parser = { it.takeIf { s -> s.isNotBlank() } },
         default = null,
         serializer = { it ?: "" },
-        yamlAccessor = { it.getCustomOpenAIBaseUrl() }
+        yamlAccessor = { it.getGenericOpenAIBaseUrl() }
     )
 
     val PROVIDER_CUSTOM_OPENAI_MODEL = ConfigKey<String?>(
-        key = "providers.custom_openai.custom_openai_model",
+        key = "providers.generic_openai.generic_openai_model",
         parser = { it.takeIf { s -> s.isNotBlank() } },
         default = null,
         serializer = { it ?: "" },
-        yamlAccessor = { it.getCustomOpenAIModel() }
+        yamlAccessor = { it.getGenericOpenAIModel() }
     )
 
     val PROVIDER_ZAI_API_KEY = ConfigKey<String?>(

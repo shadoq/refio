@@ -7,7 +7,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import pl.jclab.refio.core.llm.adapters.AnthropicAdapter
-import pl.jclab.refio.core.llm.adapters.CustomOpenAIAdapter
+import pl.jclab.refio.core.llm.adapters.GenericOpenAIAdapter
 import pl.jclab.refio.core.llm.adapters.GeminiAdapter
 import pl.jclab.refio.core.llm.adapters.LMStudioAdapter
 import pl.jclab.refio.core.llm.adapters.OllamaAdapter
@@ -230,7 +230,7 @@ suspend fun getAllModels(
 
         data class ProviderFetch(val name: String, val models: List<ModelConfig>)
 
-        val providerNames = listOf("ollama", "openai", "anthropic", "openrouter", "gemini", "lmstudio", "custom_openai", "zai")
+        val providerNames = listOf("ollama", "openai", "anthropic", "openrouter", "gemini", "lmstudio", "generic_openai", "zai")
 
         val results = coroutineScope {
             providerNames.map { name ->
@@ -244,9 +244,9 @@ suspend fun getAllModels(
                                 "openrouter" -> OpenRouterAdapter(configService = configService).listModels()
                                 "gemini" -> GeminiAdapter(configService = configService).listModels()
                                 "lmstudio" -> LMStudioAdapter(configService = configService).listModels()
-                                "custom_openai" -> CustomOpenAIAdapter(
+                                "generic_openai" -> GenericOpenAIAdapter(
                                     model = configService?.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_MODEL) ?: "custom-openai",
-                                    providerName = "custom_openai",
+                                    providerName = "generic_openai",
                                     configService = configService
                                 ).listModels()
                                 "zai" -> ZAIAdapter(
@@ -330,10 +330,10 @@ suspend fun getModelsByProvider(
                     val adapter = LMStudioAdapter(configService = configService)
                     adapter.listModels()
                 }
-                "custom_openai" -> {
-                    val adapter = CustomOpenAIAdapter(
+                "generic_openai" -> {
+                    val adapter = GenericOpenAIAdapter(
                         model = configService?.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_MODEL) ?: "custom-openai",
-                        providerName = "custom_openai",
+                        providerName = "generic_openai",
                         configService = configService
                     )
                     adapter.listModels()

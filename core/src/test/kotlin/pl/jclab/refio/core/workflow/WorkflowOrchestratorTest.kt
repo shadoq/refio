@@ -2,18 +2,22 @@ package pl.jclab.refio.core.workflow
 
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import kotlin.test.assertEquals
 import org.junit.jupiter.api.Test
 import pl.jclab.refio.api.models.ExecutionMode
 import pl.jclab.refio.api.models.TaskMode
 import pl.jclab.refio.core.api.ExecuteStepResponse
+import pl.jclab.refio.core.api.PlanningRequest
+import pl.jclab.refio.core.api.routers.AgentRouter
 import pl.jclab.refio.core.models.api.ChatCosts
+import pl.jclab.refio.core.models.api.ChatRequest
 import pl.jclab.refio.core.models.api.ChatResponse
-import pl.jclab.refio.core.workflow.executors.ChatExecutor
-import pl.jclab.refio.core.workflow.executors.PlanExecutor
-import pl.jclab.refio.core.workflow.executors.StepExecutor
-import pl.jclab.refio.core.workflow.executors.SubagentExecutor
+import pl.jclab.refio.core.services.ChatService
+import pl.jclab.refio.core.services.PlanningService
+import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
+import pl.jclab.refio.core.subagents.SubagentRouter
 import pl.jclab.refio.core.workflow.models.IntentResult
 import pl.jclab.refio.core.workflow.models.UIState
 import pl.jclab.refio.core.workflow.models.WorkflowIntent
@@ -22,17 +26,17 @@ import pl.jclab.refio.core.workflow.models.WorkflowRequest
 class WorkflowOrchestratorTest {
 
     private val intentRouter = mockk<IntentRouter>()
-    private val chatExecutor = mockk<ChatExecutor>()
-    private val planExecutor = mockk<PlanExecutor>()
-    private val stepExecutor = mockk<StepExecutor>()
-    private val subagentExecutor = mockk<SubagentExecutor>()
+    private val chatService = mockk<ChatService>()
+    private val planningService = mockk<PlanningService>()
+    private val agentRouter = mockk<AgentRouter>()
+    private val subagentRouter = mockk<SubagentRouter>()
 
     private val orchestrator = WorkflowOrchestrator(
         intentRouter = intentRouter,
-        chatExecutor = chatExecutor,
-        planExecutor = planExecutor,
-        stepExecutor = stepExecutor,
-        subagentExecutor = subagentExecutor,
+        chatService = chatService,
+        planningService = planningService,
+        agentRouter = agentRouter,
+        subagentRouter = subagentRouter,
         userInteraction = null
     )
 
@@ -63,12 +67,14 @@ class WorkflowOrchestratorTest {
         )
 
         coEvery { intentRouter.determineIntent(uiState, any(), any()) } returns intent
-        coEvery { chatExecutor.execute(intent, any(), any()) } returns IntentResult.ChatResult(response)
+        coEvery { chatService.chat(any<ChatRequest>(), any(), any()) } returns response
 
         val result = orchestrator.execute(request)
 
         assertEquals(IntentResult.ChatResult(response), result)
-        coVerify(exactly = 1) { chatExecutor.execute(intent, any(), any()) }
+        coVerify(exactly = 1) {
+            chatService.chat(match { it.taskId == "task-1" && it.input == "hello" }, any(), any())
+        }
     }
 
     @Test
@@ -93,14 +99,20 @@ class WorkflowOrchestratorTest {
         )
 
         coEvery { intentRouter.determineIntent(uiState, any(), any()) } returnsMany listOf(stepIntent, planIntent)
-        coEvery { stepExecutor.execute(stepIntent, any()) } returns IntentResult.StepResult(
-            ExecuteStepResponse(status = "success", summary = "ok", durationMs = 1, error = null)
-        )
+        every {
+            agentRouter.executeSubtaskStepWithListener(
+                "task-1",
+                "subtask-1",
+                any<ExecutionEventListener>()
+            )
+        } returns ExecuteStepResponse(status = "success", summary = "ok", durationMs = 1, error = null)
 
         val result = orchestrator.execute(request)
 
         assertEquals("success", (result as IntentResult.StepResult).response.status)
-        coVerify(exactly = 1) { stepExecutor.execute(stepIntent, any()) }
-        coVerify(exactly = 0) { planExecutor.execute(any(), any(), any()) }
+        coVerify(exactly = 1) {
+            agentRouter.executeSubtaskStepWithListener("task-1", "subtask-1", any<ExecutionEventListener>())
+        }
+        coVerify(exactly = 0) { planningService.createPlan(any(), any<PlanningRequest>(), any(), any()) }
     }
 }

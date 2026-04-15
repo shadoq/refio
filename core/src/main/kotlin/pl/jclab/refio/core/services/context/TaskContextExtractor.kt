@@ -57,71 +57,47 @@ internal class TaskContextExtractor {
     }
 
     /**
-     * Build previous subtasks data for context.
-     * Returns pair of (subtask summaries, completed file paths).
-     * Based on Python context_service.py lines 1087-1105
+     * Extract distinct file paths referenced by completed subtasks
+     * (looks at tool args in `paramsJson` and `stepPlanJson`).
      */
-    fun buildPreviousSubtasksData(
+    fun buildCompletedFiles(
         subtasks: List<Subtask>,
         limit: Int = 10
-    ): Pair<List<String>, List<String>> {
+    ): List<String> {
         val completedFiles = mutableSetOf<String>()
-        val previousSubtasks = mutableSetOf<String>()
-
         val completed = subtasks.filter { it.status == TaskStatus.SUCCESS }
         val gson = GsonInstance.gson
+        val pathKeys = listOf("path", "file_path", "file", "target", "source", "files")
 
-        for (prevSubtask in completed.takeLast(limit)) {
-            val summary = prevSubtask.result ?: "No summary available."
-            previousSubtasks.add("- ${prevSubtask.description}: $summary")
-
-            // Extract file paths from tool arguments (try multiple field names)
-            val filePaths = mutableSetOf<String>()
-
-            // Try paramsJson first
-            prevSubtask.paramsJson?.let { json ->
-                try {
-                    val params = gson.fromJson(json, Map::class.java)
-                    // Try various common field names for file paths
-                    val possibleKeys = listOf("path", "file_path", "file", "target", "source", "files")
-                    for (key in possibleKeys) {
-                        when (val value = params?.get(key)) {
-                            is String -> filePaths.add(value)
-                            is List<*> -> value.filterIsInstance<String>().forEach { filePaths.add(it) }
-                        }
-                    }
-                } catch (e: Exception) {
-                    // Ignore parse errors
+        fun extractFromMap(map: Map<*, *>?) {
+            if (map == null) return
+            for (key in pathKeys) {
+                when (val value = map[key]) {
+                    is String -> completedFiles.add(value)
+                    is List<*> -> value.filterIsInstance<String>().forEach { completedFiles.add(it) }
                 }
             }
+        }
 
-            // Also try stepPlanJson (might contain file references)
+        for (prevSubtask in completed.takeLast(limit)) {
+            prevSubtask.paramsJson?.let { json ->
+                try {
+                    extractFromMap(gson.fromJson(json, Map::class.java))
+                } catch (_: Exception) {
+                }
+            }
             prevSubtask.stepPlanJson?.let { json ->
                 try {
                     val plan = gson.fromJson(json, Map::class.java)
-                    // Look for files in tool_calls
                     @Suppress("UNCHECKED_CAST")
-                    val toolCalls = plan?.get("tool_calls") as? List<Map<*, *>>
-                    toolCalls?.forEach { call ->
-                        @Suppress("UNCHECKED_CAST")
-                        val args = call["args"] as? Map<*, *>
-                        val possibleKeys = listOf("path", "file_path", "file", "target", "source")
-                        for (key in possibleKeys) {
-                            when (val value = args?.get(key)) {
-                                is String -> filePaths.add(value)
-                                is List<*> -> value.filterIsInstance<String>().forEach { filePaths.add(it) }
-                            }
-                        }
+                    (plan?.get("tool_calls") as? List<Map<*, *>>)?.forEach { call ->
+                        extractFromMap(call["args"] as? Map<*, *>)
                     }
-                } catch (e: Exception) {
-                    // Ignore parse errors
+                } catch (_: Exception) {
                 }
             }
-
-            completedFiles.addAll(filePaths)
         }
-
-        return Pair(previousSubtasks.toList(), completedFiles.toList())
+        return completedFiles.toList()
     }
 
     /**

@@ -4,7 +4,7 @@ import pl.jclab.refio.core.api.StreamCallback
 import pl.jclab.refio.core.api.StreamChunk
 import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.llm.adapters.AnthropicAdapter
-import pl.jclab.refio.core.llm.adapters.CustomOpenAIAdapter
+import pl.jclab.refio.core.llm.adapters.GenericOpenAIAdapter
 import pl.jclab.refio.core.llm.adapters.GeminiAdapter
 import pl.jclab.refio.core.llm.adapters.LMStudioAdapter
 import pl.jclab.refio.core.llm.adapters.OllamaAdapter
@@ -451,7 +451,7 @@ class LLMClient(
                 "anthropic" -> AnthropicAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
                 "gemini" -> GeminiAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
                 "lmstudio" -> LMStudioAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
-                "custom_openai" -> CustomOpenAIAdapter(model = model, providerName = "custom_openai", configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
+                "generic_openai" -> GenericOpenAIAdapter(model = model, providerName = "generic_openai", configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
                 "zai" -> ZAIAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
                 "openrouter" -> OpenRouterAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
                 else -> {
@@ -490,7 +490,7 @@ class LLMClient(
      * Get list of supported providers.
      */
     fun getSupportedProviders(): List<String> {
-        return listOf("ollama", "openai", "anthropic", "gemini", "openrouter", "lmstudio", "custom_openai", "zai")
+        return listOf("ollama", "openai", "anthropic", "gemini", "openrouter", "lmstudio", "generic_openai", "zai")
     }
 
     /**

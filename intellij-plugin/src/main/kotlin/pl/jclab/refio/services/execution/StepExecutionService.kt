@@ -3,8 +3,9 @@ package pl.jclab.refio.services.execution
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import pl.jclab.refio.api.models.ExecutionMode
+import pl.jclab.refio.core.session.ExecutionStateController
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,7 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * - Handles execution completion/cancellation
  */
 @Service(Service.Level.PROJECT)
-class StepExecutionService(private val project: Project) {
+class StepExecutionService(private val project: Project) : ExecutionStateController {
 
     private val logger = dualLogger("StepExecutionService")
 
@@ -42,7 +43,7 @@ class StepExecutionService(private val project: Project) {
     /**
      * Start interactive execution - no polling, UI updates via listener.
      */
-    fun startInteractiveExecution(taskId: String) {
+    override fun startInteractiveExecution(taskId: String) {
         logger.info { "Starting INTERACTIVE mode for task: $taskId" }
         _isExecuting.value = true
         // UI updates handled by ExecutionEventListener in SessionManager
@@ -51,7 +52,7 @@ class StepExecutionService(private val project: Project) {
     /**
      * Stop execution
      */
-    fun stopExecution() {
+    override fun stopExecution() {
         logger.info { "Stopping execution" }
         _isExecuting.value = false
         executionJob?.cancel()
@@ -70,7 +71,7 @@ class StepExecutionService(private val project: Project) {
     /**
      * Mark execution as complete (called by UI listener).
      */
-    fun markComplete() {
+    override fun markComplete() {
         _isExecuting.value = false
         GlobalMetrics.clearCurrentOperation()
         logger.info { "[EXECUTION] Marked execution complete" }

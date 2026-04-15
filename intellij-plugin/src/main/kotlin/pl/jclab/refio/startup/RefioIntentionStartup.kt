@@ -4,7 +4,7 @@ import com.intellij.codeInsight.intention.IntentionManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
 import pl.jclab.refio.actions.RefioSlashPromptIntentionAction
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.util.concurrent.atomic.AtomicBoolean
 
 class RefioIntentionStartup : ProjectActivity {

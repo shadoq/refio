@@ -37,4 +37,18 @@ sealed class RefioError(
         val provider: String,
         val key: String
     ) : RefioError("Provider '$provider' is not configured. Missing: $key")
+
+    /**
+     * Thrown when provider returns a response that doesn't match expected structure.
+     *
+     * `bodyPreview` is the first ~500 chars of raw JSON body (for debugging).
+     */
+    data class MalformedResponse(
+        val provider: String,
+        val model: String,
+        val reason: String,
+        val bodyPreview: String
+    ) : RefioError(
+        "Malformed response from $provider/$model: $reason. Preview: $bodyPreview"
+    )
 }

@@ -1,13 +1,14 @@
-package pl.jclab.refio.services.session
+package pl.jclab.refio.core.session
 
 import pl.jclab.refio.api.models.Message
+import pl.jclab.refio.core.session.SessionStateManager
 import pl.jclab.refio.api.models.ToolCallDisplayInfo
 import pl.jclab.refio.api.models.ToolCallResult
 import pl.jclab.refio.api.models.ToolCallStatus
 import pl.jclab.refio.api.models.ToolDisplayType
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.db.ToolCallData
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import java.util.UUID
 
 class MessageDispatcher(
@@ -29,9 +30,10 @@ class MessageDispatcher(
             logger.info { "[MESSAGES] loadMessages response: taskId=${currentSession.id}, count=${response.count}" }
             val toolResultPathByToolCallId = response.messages
                 .mapNotNull { coreMsg ->
-                    if (coreMsg.role != "tool" || coreMsg.toolCallId.isNullOrBlank()) return@mapNotNull null
+                    val toolCallId = coreMsg.toolCallId
+                    if (coreMsg.role != "tool" || toolCallId.isNullOrBlank()) return@mapNotNull null
                     val path = extractPathFromMetadata(coreMsg.metadata) ?: return@mapNotNull null
-                    coreMsg.toolCallId!! to path
+                    toolCallId to path
                 }
                 .toMap()
 

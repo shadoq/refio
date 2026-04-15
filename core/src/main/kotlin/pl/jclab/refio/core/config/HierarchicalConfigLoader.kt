@@ -110,9 +110,9 @@ class HierarchicalConfigLoader private constructor(
     fun getLMStudioApiKey(): String? = getConfig().providers?.lmstudio?.apiKey
     fun getLMStudioBaseUrl(): String? = getConfig().providers?.lmstudio?.baseUrl
     fun getLMStudioContextSize(): Int? = getConfig().providers?.lmstudio?.contextSize
-    fun getCustomOpenAIApiKey(): String? = getConfig().providers?.customOpenai?.apiKey
-    fun getCustomOpenAIBaseUrl(): String? = getConfig().providers?.customOpenai?.baseUrl
-    fun getCustomOpenAIModel(): String? = getConfig().providers?.customOpenai?.model
+    fun getGenericOpenAIApiKey(): String? = getConfig().providers?.genericOpenai?.apiKey
+    fun getGenericOpenAIBaseUrl(): String? = getConfig().providers?.genericOpenai?.baseUrl
+    fun getGenericOpenAIModel(): String? = getConfig().providers?.genericOpenai?.model
     fun getZAIApiKey(): String? = getConfig().providers?.zai?.apiKey
     fun getZAIBaseUrl(): String? = getConfig().providers?.zai?.baseUrl
 

@@ -9,9 +9,9 @@ import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import pl.jclab.refio.ui.theme.LCATheme
-import pl.jclab.refio.api.CoreApiClient
+import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,7 +37,7 @@ import javax.swing.event.DocumentListener
  */
 class ProvidersSettingsPanel(
     private val onSettingChanged: (section: String, key: String, value: Any) -> Unit,
-    private val coreApiClient: CoreApiClient?
+    private val coreApiClient: CoreApiRouter?
 ) : JBPanel<ProvidersSettingsPanel>(BorderLayout()), Disposable {
 
     private val logger = dualLogger("ProvidersSettingsPanel")
@@ -225,11 +225,11 @@ class ProvidersSettingsPanel(
 
         providersPanel.add(
             createProviderCard(
-                providerName = "custom_openai",
+                providerName = "generic_openai",
                 fields = listOf(
-                    ProviderField("API Key", FieldType.PASSWORD, "custom_openai_api_key"),
-                    ProviderField("Base URL", FieldType.TEXT, "custom_openai_base_url"),
-                    ProviderField("Model", FieldType.TEXT, "custom_openai_model")
+                    ProviderField("API Key", FieldType.PASSWORD, "generic_openai_api_key"),
+                    ProviderField("Base URL", FieldType.TEXT, "generic_openai_base_url"),
+                    ProviderField("Model", FieldType.TEXT, "generic_openai_model")
                 ),
                 initialStatus = ProviderStatus.NEEDS_CONFIG,
                 description = "OpenAI-compatible provider with custom base URL and optional default model."
@@ -447,7 +447,7 @@ class ProvidersSettingsPanel(
                 val config = buildProviderConfig(providerName, state.fields)
 
                 // Call backend API
-                val result = coreApiClient?.testProviderConnection(
+                val result = coreApiClient?.configRouter?.testProviderConnection(
                     provider = toProviderKey(providerName),
                     config = config
                 ) ?: throw Exception("CoreApiClient not available")
@@ -545,10 +545,10 @@ class ProvidersSettingsPanel(
                 "context_size" to getFieldValue(fields["lmstudio_context_size"]).ifEmpty { DEFAULT_CONTEXT_SIZE.toString() }
             )
 
-            "custom_openai" -> mapOf(
-                "api_key" to getFieldValue(fields["custom_openai_api_key"]),
-                "base_url" to getFieldValue(fields["custom_openai_base_url"]),
-                "model" to getFieldValue(fields["custom_openai_model"])
+            "generic_openai" -> mapOf(
+                "api_key" to getFieldValue(fields["generic_openai_api_key"]),
+                "base_url" to getFieldValue(fields["generic_openai_base_url"]),
+                "model" to getFieldValue(fields["generic_openai_model"])
             )
 
             "zai" -> mapOf(
@@ -611,7 +611,7 @@ class ProvidersSettingsPanel(
             try {
                 logger.info { "Refreshing models list for $providerName" }
 
-                val models = coreApiClient?.refreshProviderModels(
+                val models = coreApiClient?.configRouter?.refreshProviderModels(
                     provider = toProviderKey(providerName)
                 ) ?: emptyList()
 
@@ -658,7 +658,7 @@ class ProvidersSettingsPanel(
             try {
                 logger.info { "Loading providers configuration" }
 
-                val config = coreApiClient.getConfig(section = "providers", scope = "app")
+                val config = coreApiClient.configRouter.getConfig(section = "providers", scope = "app")
 
                 ApplicationManager.getApplication().invokeLater {
                     applyProvidersConfig(config.settings)
@@ -713,7 +713,7 @@ class ProvidersSettingsPanel(
             "Gemini" -> "gemini"
             "LMStudio" -> "lmstudio"
             "ZAI" -> "zai"
-            "custom_openai" -> "custom_openai"
+            "generic_openai" -> "generic_openai"
             else -> providerName.lowercase()
         }
     }

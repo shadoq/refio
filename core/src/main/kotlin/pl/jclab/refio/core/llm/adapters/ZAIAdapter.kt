@@ -9,7 +9,7 @@ class ZAIAdapter(
     taskId: String? = null,
     subtaskId: String? = null,
     source: String? = null
-) : CustomOpenAIAdapter(
+) : GenericOpenAIAdapter(
     model = model,
     providerName = "zai",
     configService = configService,

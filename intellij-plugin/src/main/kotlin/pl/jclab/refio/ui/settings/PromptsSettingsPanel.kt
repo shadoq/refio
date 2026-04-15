@@ -5,11 +5,11 @@ import com.intellij.openapi.project.ProjectManager
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.*
 import com.intellij.ui.table.JBTable
-import pl.jclab.refio.api.CoreApiClient
+import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.core.api.*
 import pl.jclab.refio.core.db.PromptType
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.*
 import java.awt.*
 import javax.swing.*
@@ -21,7 +21,7 @@ import javax.swing.table.DefaultTableModel
  */
 class PromptsSettingsPanel(
     private val onSettingChanged: (section: String, key: String, value: Any) -> Unit,
-    private val coreApiClient: CoreApiClient?
+    private val coreApiClient: CoreApiRouter?
 ) : JBPanel<PromptsSettingsPanel>(BorderLayout()) {
 
     private val logger = dualLogger("PromptsSettingsPanel")
@@ -175,7 +175,7 @@ class PromptsSettingsPanel(
             try {
                 // Get default content on IO dispatcher
                 val defaultContent = withContext(Dispatchers.IO) {
-                    coreApiClient?.getDefaultSystemPromptContent(promptType)
+                    coreApiClient?.promptsRouter?.getDefaultSystemPromptContent(promptType)
                         ?: throw Exception("CoreApiClient not available")
                 }
 
@@ -207,11 +207,11 @@ class PromptsSettingsPanel(
             withContext(Dispatchers.IO) {
                 if (useDefault) {
                     // Reset to default
-                    coreApiClient?.resetSystemPromptToDefault(type)
+                    coreApiClient?.promptsRouter?.resetSystemPromptToDefault(type)
                         ?: throw Exception("CoreApiClient not available")
                 } else {
                     // Update with custom content
-                    coreApiClient?.updateSystemPrompt(
+                    coreApiClient?.promptsRouter?.updateSystemPrompt(
                         UpdateSystemPromptRequest(
                             type = type,
                             content = customContent
@@ -281,7 +281,7 @@ class PromptsSettingsPanel(
 
                     // Save to backend on IO dispatcher
                     val saved = withContext(Dispatchers.IO) {
-                        coreApiClient?.saveSlashPrompt(
+                        coreApiClient?.promptsRouter?.saveSlashPrompt(
                             SaveSlashPromptRequest(
                                 id = null,
                                 name = dialog.getPromptName(),
@@ -334,7 +334,7 @@ class PromptsSettingsPanel(
 
                     // Save to backend on IO dispatcher
                     val updated = withContext(Dispatchers.IO) {
-                        coreApiClient?.saveSlashPrompt(
+                        coreApiClient?.promptsRouter?.saveSlashPrompt(
                             SaveSlashPromptRequest(
                                 id = existing.id,
                                 name = dialog.getPromptName(),
@@ -396,7 +396,7 @@ class PromptsSettingsPanel(
 
                 // Delete from backend on IO dispatcher
                 withContext(Dispatchers.IO) {
-                    coreApiClient?.deletePrompt(target.id)
+                    coreApiClient?.promptsRouter?.deletePrompt(target.id)
                         ?: throw Exception("CoreApiClient not available")
                 }
 
@@ -430,7 +430,7 @@ class PromptsSettingsPanel(
         }
 
         return try {
-            val response = coreApiClient.getSystemPrompts()
+            val response = coreApiClient.promptsRouter.getSystemPrompts()
             promptsCache.clear()
             promptsCache.addAll(response.prompts)
 
@@ -458,7 +458,7 @@ class PromptsSettingsPanel(
         }
 
         return try {
-            withContext(Dispatchers.IO) { coreApiClient.getSystemPrompts().prompts }
+            withContext(Dispatchers.IO) { coreApiClient.promptsRouter.getSystemPrompts().prompts }
         } catch (e: Exception) {
             logger.error(e) { "Failed to load system prompts async" }
             emptyList()
@@ -477,7 +477,7 @@ class PromptsSettingsPanel(
         }
 
         return try {
-            val response = coreApiClient.getPromptsByType(PromptType.SLASH_PROMPT)
+            val response = coreApiClient.promptsRouter.getPromptsByType(PromptType.SLASH_PROMPT)
 
             slashPromptsCache.clear()
             slashPromptsCache.addAll(response.prompts)
@@ -502,7 +502,7 @@ class PromptsSettingsPanel(
 
         return try {
             val response = withContext(Dispatchers.IO) {
-                coreApiClient.getPromptsByType(PromptType.SLASH_PROMPT)
+                coreApiClient.promptsRouter.getPromptsByType(PromptType.SLASH_PROMPT)
             }
             response.prompts
         } catch (e: Exception) {

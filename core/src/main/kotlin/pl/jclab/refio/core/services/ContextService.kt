@@ -195,8 +195,8 @@ class ContextService(
             }
         }.takeLast(CONTEXT_CONVERSATION_HISTORY_LIMIT)
 
-        // 6. Build previous subtasks data (PHASE 3)
-        val (previousSubtaskSummaries, completedFiles) = taskContextExtractor.buildPreviousSubtasksData(subtasks)
+        // 6. Build completed files data
+        val completedFiles = taskContextExtractor.buildCompletedFiles(subtasks)
 
         // 6a. Build structured executed steps for RECENT_WORK (ADR 0041)
         val executedSteps = taskContextExtractor.buildExecutedSteps(subtasks)
@@ -370,7 +370,6 @@ class ContextService(
 
             // Work history (from PHASE 3)
             completedFiles = completedFiles,
-            previousSubtasks = previousSubtaskSummaries,
             executedSteps = executedSteps,
 
             // User requirements (extracted from task description - PHASE 2)

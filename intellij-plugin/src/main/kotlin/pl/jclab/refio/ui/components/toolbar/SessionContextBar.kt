@@ -6,7 +6,7 @@ import pl.jclab.refio.api.models.ExecutionMode
 import pl.jclab.refio.api.models.Session
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.services.execution.StepExecutionService
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.*
 import java.awt.Dimension
 import java.awt.FlowLayout

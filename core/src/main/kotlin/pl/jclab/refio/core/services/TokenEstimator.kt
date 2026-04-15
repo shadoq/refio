@@ -32,7 +32,7 @@ class PromptTokenEstimator {
             "gemini" to 1.05,
             "openrouter" to 1.0,
             "lmstudio" to 1.0,
-            "custom_openai" to 1.0,
+            "generic_openai" to 1.0,
             "zai" to 1.0
         )
     }
@@ -133,7 +133,7 @@ class PromptTokenEstimator {
             "openai" -> 128000
             "gemini" -> 1000000
             "zai" -> 128000
-            "ollama", "lmstudio", "openrouter", "custom_openai" -> 32768
+            "ollama", "lmstudio", "openrouter", "generic_openai" -> 32768
             else -> 128000
         }
     }

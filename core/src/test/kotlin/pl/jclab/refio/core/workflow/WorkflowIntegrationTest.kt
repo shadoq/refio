@@ -11,18 +11,20 @@ import org.junit.jupiter.api.Test
 import pl.jclab.refio.api.models.ExecutionMode
 import pl.jclab.refio.api.models.TaskMode
 import pl.jclab.refio.core.api.ExecuteStepResponse
+import pl.jclab.refio.core.api.PlanningRequest
+import pl.jclab.refio.core.api.routers.AgentRouter
 import pl.jclab.refio.core.db.ApprovalStatus
 import pl.jclab.refio.core.db.Subtask
 import pl.jclab.refio.core.db.SubtaskKind
 import pl.jclab.refio.core.db.TaskStatus
 import pl.jclab.refio.core.db.repositories.SubtaskRepository
 import pl.jclab.refio.core.models.api.ChatCosts
+import pl.jclab.refio.core.models.api.ChatRequest
 import pl.jclab.refio.core.models.api.ChatResponse
+import pl.jclab.refio.core.services.ChatService
+import pl.jclab.refio.core.services.PlanningService
+import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
 import pl.jclab.refio.core.subagents.SubagentRouter
-import pl.jclab.refio.core.workflow.executors.ChatExecutor
-import pl.jclab.refio.core.workflow.executors.PlanExecutor
-import pl.jclab.refio.core.workflow.executors.StepExecutor
-import pl.jclab.refio.core.workflow.executors.SubagentExecutor
 import pl.jclab.refio.core.workflow.models.IntentResult
 import pl.jclab.refio.core.workflow.models.UIState
 import pl.jclab.refio.core.workflow.models.WorkflowIntent
@@ -37,11 +39,10 @@ class WorkflowIntegrationTest {
     private val subtaskRepository = mockk<SubtaskRepository>()
     private val subagentRouter = mockk<SubagentRouter>()
 
-    // WorkflowOrchestrator dependencies
-    private val chatExecutor = mockk<ChatExecutor>()
-    private val planExecutor = mockk<PlanExecutor>()
-    private val stepExecutor = mockk<StepExecutor>()
-    private val subagentExecutor = mockk<SubagentExecutor>()
+    // WorkflowOrchestrator dependencies (now services, not executors)
+    private val chatService = mockk<ChatService>()
+    private val planningService = mockk<PlanningService>()
+    private val agentRouter = mockk<AgentRouter>()
 
     private lateinit var intentRouter: IntentRouter
     private lateinit var orchestrator: WorkflowOrchestrator
@@ -55,10 +56,10 @@ class WorkflowIntegrationTest {
 
         orchestrator = WorkflowOrchestrator(
             intentRouter = intentRouter,
-            chatExecutor = chatExecutor,
-            planExecutor = planExecutor,
-            stepExecutor = stepExecutor,
-            subagentExecutor = subagentExecutor,
+            chatService = chatService,
+            planningService = planningService,
+            agentRouter = agentRouter,
+            subagentRouter = subagentRouter,
             userInteraction = null
         )
     }
@@ -230,10 +231,8 @@ class WorkflowIntegrationTest {
                 costs = ChatCosts(tokensIn = 50, tokensOut = 100, usdEst = 0.001)
             )
 
-            // IntentRouter will create Chat intent, which orchestrator routes to chatExecutor
-            coEvery {
-                chatExecutor.execute(any<WorkflowIntent.Chat>(), any(), any())
-            } returns IntentResult.ChatResult(chatResponse)
+            // Orchestrator now calls chatService.chat directly.
+            coEvery { chatService.chat(any<ChatRequest>(), any(), any()) } returns chatResponse
 
             // When
             val result = orchestrator.execute(request)
@@ -244,7 +243,9 @@ class WorkflowIntegrationTest {
             assertEquals(50, result.response.costs.tokensIn)
             assertEquals(100, result.response.costs.tokensOut)
 
-            coVerify(exactly = 1) { chatExecutor.execute(any<WorkflowIntent.Chat>(), any(), any()) }
+            coVerify(exactly = 1) {
+                chatService.chat(match<ChatRequest> { it.taskId == "task-1" }, any(), any())
+            }
         }
 
         @Test
@@ -269,8 +270,8 @@ class WorkflowIntegrationTest {
                 costs = ChatCosts(tokensIn = 5, tokensOut = 5, usdEst = 0.0)
             )
             coEvery {
-                chatExecutor.execute(match<WorkflowIntent.Chat> { it.taskId == "task-42" }, any(), any())
-            } returns IntentResult.ChatResult(response)
+                chatService.chat(match<ChatRequest> { it.taskId == "task-42" }, any(), any())
+            } returns response
 
             // When
             val result = orchestrator.execute(request)
@@ -309,9 +310,13 @@ class WorkflowIntegrationTest {
                 durationMs = 500,
                 error = null
             )
-            coEvery {
-                stepExecutor.execute(any<WorkflowIntent.ExecuteStep>(), any())
-            } returns IntentResult.StepResult(stepResponse)
+            every {
+                agentRouter.executeSubtaskStepWithListener(
+                    "task-1",
+                    "s1",
+                    any<ExecutionEventListener>()
+                )
+            } returns stepResponse
 
             // When
             val result = orchestrator.execute(request)
@@ -322,7 +327,9 @@ class WorkflowIntegrationTest {
             assertEquals("Step completed", result.response.summary)
 
             // Should execute only one step and stop (AUTO stops after plan intent follows)
-            coVerify(exactly = 1) { stepExecutor.execute(any(), any()) }
+            coVerify(exactly = 1) {
+                agentRouter.executeSubtaskStepWithListener("task-1", "s1", any<ExecutionEventListener>())
+            }
         }
     }
 }

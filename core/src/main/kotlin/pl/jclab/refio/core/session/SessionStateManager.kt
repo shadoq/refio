@@ -1,4 +1,4 @@
-package pl.jclab.refio.services.session
+package pl.jclab.refio.core.session
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -12,8 +12,15 @@ import pl.jclab.refio.api.models.SubtaskDto
 import pl.jclab.refio.core.api.ContextSectionTokenInfo
 import pl.jclab.refio.core.api.PlanResponse
 import pl.jclab.refio.core.api.PlanSpecStepResponse
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
+/**
+ * UI-agnostic session state holder.
+ *
+ * Trzyma 13 StateFlow reprezentujących **execution state** sesji (active session, history, mode,
+ * pending tools, subtasks). Żadne pole nie jest UI-specific — Plugin i TUI obserwują tę samą
+ * instancję. Przeniesione z `:intellij-plugin/services/session/` w Sprint 2 §2.
+ */
 class SessionStateManager {
 
     private val logger = dualLogger("SessionStateManager")

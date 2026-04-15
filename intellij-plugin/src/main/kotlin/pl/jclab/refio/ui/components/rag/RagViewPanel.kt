@@ -11,7 +11,7 @@ import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.core.db.RagContentType
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.services.core.CoreConnectionManager
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collectLatest

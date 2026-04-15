@@ -5,8 +5,8 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
-import pl.jclab.refio.api.CoreApiClient
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.api.CoreApiRouter
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.ui.theme.LCATheme
 import java.awt.BorderLayout
 import java.awt.FlowLayout
@@ -22,7 +22,7 @@ import javax.swing.*
  */
 class AdvancedSettingsPanel(
     private val onSettingChanged: (section: String, key: String, value: Any) -> Unit,
-    private val coreApiClient: CoreApiClient?
+    private val coreApiClient: CoreApiRouter?
 ) : JBPanel<AdvancedSettingsPanel>(BorderLayout()) {
 
     private val logger = dualLogger("AdvancedSettingsPanel")
@@ -393,8 +393,8 @@ class AdvancedSettingsPanel(
 
         try {
             logger.info { "Loading advanced configuration" }
-            val advancedConfig = coreApiClient.getConfig(section = "advanced", scope = "app")
-            val limitsConfig = coreApiClient.getConfig(section = "limits", scope = "app")
+            val advancedConfig = coreApiClient.configRouter.getConfig(section = "advanced", scope = "app")
+            val limitsConfig = coreApiClient.configRouter.getConfig(section = "limits", scope = "app")
 
             applyAdvancedConfig(advancedConfig.settings)
             applyLimitsConfig(limitsConfig.settings)

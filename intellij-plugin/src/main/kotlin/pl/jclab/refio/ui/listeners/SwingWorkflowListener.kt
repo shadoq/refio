@@ -5,8 +5,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import pl.jclab.refio.api.models.Message
 import pl.jclab.refio.core.workflow.WorkflowEventListener
-import pl.jclab.refio.services.session.SessionStateManager
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.session.SessionStateManager
+import pl.jclab.refio.core.logging.dualLogger
 import java.util.UUID
 
 private val logger = dualLogger("SwingWorkflowListener")

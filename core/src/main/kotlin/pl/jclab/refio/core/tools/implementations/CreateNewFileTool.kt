@@ -1,13 +1,11 @@
 package pl.jclab.refio.core.tools.implementations
 
 import pl.jclab.refio.core.tools.DiffUtils
-import pl.jclab.refio.core.tools.FileLockManager
 import pl.jclab.refio.core.tools.PathSandbox
-import pl.jclab.refio.core.tools.base.Tool
+import pl.jclab.refio.core.tools.base.FileTool
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
-import pl.jclab.refio.core.tools.normalizePath
 import pl.jclab.refio.core.tools.security.FileLimits
 import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Files
@@ -30,9 +28,9 @@ private val logger = dualLogger("CreateNewFileTool")
  * - Returns warning (success=true) if file already exists (use code_editing instead)
  */
 class CreateNewFileTool(
-    private val sandbox: PathSandbox,
+    sandbox: PathSandbox,
     private val limits: FileLimits
-) : Tool {
+) : FileTool(sandbox) {
 
     override val name = "create_new_file"
     override val description = "Create a NEW SMALL file (config, stub, short snippet) " +
@@ -50,9 +48,7 @@ class CreateNewFileTool(
         "For >~50 lines, HTML/classes, or generated code, prefer advance_code_editing."
 
     override fun validateParams(params: Map<String, Any>) {
-        if (params["path"] == null || (params["path"] as? String).isNullOrBlank()) {
-            throw IllegalArgumentException("Parameter 'path' is required and cannot be empty")
-        }
+        validatePathParam(params)
         if (params["content"] == null) {
             throw IllegalArgumentException("Parameter 'content' is required")
         }
@@ -62,30 +58,21 @@ class CreateNewFileTool(
         val startTime = System.currentTimeMillis()
 
         try {
-            // Extract parameters with safe casting
-            val pathStr = params["path"] as? String
-                ?: return ToolResult.error("Missing required parameter: 'path'")
+            val pathStr = validatePathParam(params)
             val content = params["content"] as? String
                 ?: return ToolResult.error("Missing required parameter: 'content'")
 
-            // Check content size
             if (content.length > limits.maxFileSize) {
                 return ToolResult.error(
                     "Content too large: ${content.length} bytes (max ${limits.maxFileSize} bytes)"
                 )
             }
 
-            // Normalize path for security (bare filenames → "./file.txt", backslash → forward slash)
-            val normalizedPathStr = normalizePath(pathStr)
-
-            // Resolve and validate path
-            val path = sandbox.resolve(normalizedPathStr)
+            val path = resolveSandboxPath(pathStr)
 
             logger.info { "Creating file: relative='$pathStr', absolute='${path.toAbsolutePath()}', contentSize=${content.length} chars, lineCount=${content.lines().size}" }
 
-            return FileLockManager.withFileLock(path.toAbsolutePath().toString()) {
-                // Re-validate path inside lock to close TOCTOU window
-                sandbox.revalidateBeforeIO(path)
+            return withLockedFile(path) {
 
                 // Check if file already exists.
                 // We return success=false (a real failure) rather than a soft warning, because
@@ -93,7 +80,7 @@ class CreateNewFileTool(
                 // creation succeeded and continue with stale assumptions about file content.
                 if (path.exists()) {
                     logger.warn { "File already exists: $pathStr (resolved to ${path.toAbsolutePath()})" }
-                    return@withFileLock ToolResult.error(
+                    return@withLockedFile ToolResult.error(
                         message = "File already exists: $pathStr. create_new_file refuses to overwrite.",
                         recovery = "DO NOT retry create_new_file for this path. Instead: " +
                             "1) read_file($pathStr) to inspect current content, " +
@@ -113,7 +100,7 @@ class CreateNewFileTool(
                 // Check if parent is a directory
                 val parent = path.parent
                 if (parent != null && parent.exists() && !parent.isDirectory()) {
-                    return@withFileLock ToolResult.error("Parent path exists but is not a directory: ${parent.fileName}")
+                    return@withLockedFile ToolResult.error("Parent path exists but is not a directory: ${parent.fileName}")
                 }
 
                 // Create parent directories if needed

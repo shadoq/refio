@@ -6,7 +6,7 @@ import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBTabbedPane
 import pl.jclab.refio.services.notification.NotificationService
 import pl.jclab.refio.ui.theme.LCATheme
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.*
 import java.awt.BorderLayout
 import java.awt.FlowLayout
@@ -23,7 +23,7 @@ import javax.swing.*
  */
 class SettingsView(
     private val project: Project,
-    private val coreApiClient: pl.jclab.refio.api.CoreApiClient?,
+    private val coreApiClient: pl.jclab.refio.core.api.CoreApiRouter?,
     private val onBack: () -> Unit
 ) : JBPanel<SettingsView>(BorderLayout()) {
 
@@ -170,7 +170,7 @@ class SettingsView(
 
             // Call backend API
             val settings = mapOf(key to value)
-            coreApiClient.updateConfig(
+            coreApiClient.configRouter.updateConfig(
                 section = section,
                 scope = "app",
                 taskId = null,
@@ -245,7 +245,7 @@ class SettingsView(
             try {
                 logger.info { "Exporting configuration to user config: ${configPath.absolutePath}" }
 
-                val configService = coreApiClient?.router?.configService
+                val configService = coreApiClient?.configService
                     ?: throw IllegalStateException("ConfigService not available")
 
                 configService.exportToYaml(configPath, includeApiKeys)
@@ -302,7 +302,7 @@ class SettingsView(
             try {
                 logger.info { "Exporting configuration to project config: ${configPath.absolutePath}" }
 
-                val configService = coreApiClient?.router?.configService
+                val configService = coreApiClient?.configService
                     ?: throw IllegalStateException("ConfigService not available")
 
                 // Export without API keys for project config
@@ -359,7 +359,7 @@ class SettingsView(
             try {
                 logger.info { "Reloading configuration from YAML file: ${configPath.absolutePath}" }
 
-                val configService = coreApiClient?.router?.configService
+                val configService = coreApiClient?.configService
                     ?: throw IllegalStateException("ConfigService not available")
 
                 val updatedCount = configService.reloadFromYaml()
@@ -407,7 +407,7 @@ class SettingsView(
                 logger.info { "Resetting all settings to defaults" }
 
                 // Call backend API
-                coreApiClient?.resetAllSettingsToDefaults()
+                coreApiClient?.configRouter?.resetAllSettingsToDefaults()
 
                 ApplicationManager.getApplication().invokeLater {
                     // Reload all panels

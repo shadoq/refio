@@ -6,10 +6,10 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
-import pl.jclab.refio.api.CoreApiClient
+import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.subagents.models.SubagentInfo
 import pl.jclab.refio.core.subagents.models.SubagentScope
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.ui.theme.LCATheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,7 +30,7 @@ private val logger = dualLogger("SubagentSettingsPanel")
  */
 class SubagentSettingsPanel(
     private val onSettingChanged: (section: String, key: String, value: Any) -> Unit,
-    private val coreApiClient: CoreApiClient?
+    private val coreApiClient: CoreApiRouter?
 ) : JBPanel<SubagentSettingsPanel>(BorderLayout()), Disposable {
 
     private lateinit var subagentsTable: JBTable
@@ -197,7 +197,7 @@ class SubagentSettingsPanel(
             try {
                 logger.info { "Loading subagents (including disabled and builtin)" }
                 // includeDisabled = true to show all subagents in admin panel
-                val subagents = coreApiClient.listSubagents(includeDisabled = true)
+                val subagents = coreApiClient.subagentRouter?.listSubagents(includeDisabled = true) ?: emptyList()
 
                 ApplicationManager.getApplication().invokeLater {
                     populateTable(subagents)
@@ -254,7 +254,7 @@ class SubagentSettingsPanel(
 
         coroutineScope.launch {
             try {
-                coreApiClient?.updateSubagent(name, enabled = enabled)
+                coreApiClient?.subagentRouter?.updateSubagent(name, enabled = enabled)
                 logger.info { "Subagent enabled updated: $name -> $enabled" }
 
                 ApplicationManager.getApplication().invokeLater {
@@ -286,7 +286,7 @@ class SubagentSettingsPanel(
         if (dialog.isOk) {
             coroutineScope.launch {
                 try {
-                    coreApiClient?.createSubagent(
+                    coreApiClient?.subagentRouter?.createSubagent(
                         name = dialog.nameField.text,
                         description = dialog.descriptionField.text,
                         systemPrompt = dialog.systemPromptArea.text,
@@ -338,7 +338,7 @@ class SubagentSettingsPanel(
         // Load full subagent definition
         coroutineScope.launch {
             try {
-                val subagent = coreApiClient?.getSubagent(name)
+                val subagent = coreApiClient?.subagentRouter?.getSubagent(name)
                 if (subagent == null) {
                     ApplicationManager.getApplication().invokeLater {
                         JOptionPane.showMessageDialog(
@@ -364,7 +364,7 @@ class SubagentSettingsPanel(
                     if (!isBuiltin && dialog.isOk) {
                         coroutineScope.launch {
                             try {
-                                coreApiClient.updateSubagent(
+                                coreApiClient.subagentRouter?.updateSubagent(
                                     name = name,
                                     description = dialog.descriptionField.text,
                                     systemPrompt = dialog.systemPromptArea.text,
@@ -372,7 +372,7 @@ class SubagentSettingsPanel(
                                     model = dialog.modelCombo.selectedItem as String,
                                     enabled = dialog.enabledCheck.isSelected,
                                     priority = dialog.prioritySpinner.value as Int
-                                )
+                                ) ?: throw IllegalStateException("SubagentRouter not available")
 
                                 logger.info { "Subagent updated: $name" }
 
@@ -438,7 +438,7 @@ class SubagentSettingsPanel(
 
         coroutineScope.launch {
             try {
-                coreApiClient?.deleteSubagent(name)
+                coreApiClient?.subagentRouter?.deleteSubagent(name)
 
                 logger.info { "Subagent deleted: $name" }
 
@@ -463,7 +463,7 @@ class SubagentSettingsPanel(
     private fun onRefreshSubagents() {
         coroutineScope.launch {
             try {
-                coreApiClient?.refreshSubagents()
+                coreApiClient?.subagentRouter?.refresh()
                 ApplicationManager.getApplication().invokeLater {
                     loadSubagents()
                 }

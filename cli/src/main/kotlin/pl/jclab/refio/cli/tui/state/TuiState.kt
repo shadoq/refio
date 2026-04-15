@@ -258,7 +258,22 @@ data class TuiSessionEntry(
     val createdAt: Long,
     val updatedAt: Long,
     val pinned: Boolean = false
-)
+) {
+    companion object {
+        fun fromTaskResponse(t: pl.jclab.refio.core.api.TaskResponse) = TuiSessionEntry(
+            id = t.id,
+            name = t.name,
+            mode = t.mode,
+            status = t.status,
+            tokensIn = t.tokensIn,
+            tokensOut = t.tokensOut,
+            costUsd = t.costUsd,
+            createdAt = t.createdAt,
+            updatedAt = t.updatedAt,
+            pinned = t.pinned
+        )
+    }
+}
 
 data class TuiSubtask(
     val id: String,
@@ -278,7 +293,27 @@ data class TuiSubtask(
     val startedAt: Long? = null,
     val finishedAt: Long? = null,
     val resultSummary: String? = null
-)
+) {
+    companion object {
+        fun fromSubtaskResponse(st: pl.jclab.refio.core.api.SubtaskResponse) = TuiSubtask(
+            id = st.id,
+            name = st.description,
+            description = st.description,
+            status = st.status,
+            toolName = st.kind,
+            tokensIn = st.tokensIn.toLong(),
+            tokensOut = st.tokensOut.toLong(),
+            costUsd = st.costUsd,
+            order = st.orderIndex,
+            model = st.model,
+            provider = st.provider,
+            startedAt = st.startedAt,
+            finishedAt = st.finishedAt,
+            resultSummary = st.resultSummary,
+            error = st.errorMessage
+        )
+    }
+}
 
 data class TuiPlan(
     val taskId: String,

@@ -558,11 +558,9 @@ class TuiViewModel(
         if (tcJson != null && tcJson.isNotBlank()) return TuiMessageType.TOOL_CALL
         val meta = msg.metadata
         if (meta != null) {
-            try {
-                if (meta.contains("\"orchestrator_question\"")) return TuiMessageType.ORCHESTRATOR_QUESTION
-                if (meta.contains("\"execution_summary\"")) return TuiMessageType.EXECUTION_SUMMARY
-                if (meta.contains("\"plan\"")) return TuiMessageType.PLAN
-            } catch (_: Exception) {}
+            if (meta.contains("\"orchestrator_question\"")) return TuiMessageType.ORCHESTRATOR_QUESTION
+            if (meta.contains("\"execution_summary\"")) return TuiMessageType.EXECUTION_SUMMARY
+            if (meta.contains("\"plan\"")) return TuiMessageType.PLAN
         }
         return TuiMessageType.TEXT
     }
@@ -579,25 +577,7 @@ class TuiViewModel(
         try {
             val response = r.subtaskRouter.getSubtasks(tid)
             if (response.subtasks.isNotEmpty()) {
-                session.setSubtasks(response.subtasks.map { st ->
-                    TuiSubtask(
-                        id = st.id,
-                        name = st.description,
-                        description = st.description,
-                        status = st.status,
-                        toolName = st.kind,
-                        tokensIn = st.tokensIn.toLong(),
-                        tokensOut = st.tokensOut.toLong(),
-                        costUsd = st.costUsd,
-                        order = st.orderIndex,
-                        model = st.model,
-                        provider = st.provider,
-                        startedAt = st.startedAt,
-                        finishedAt = st.finishedAt,
-                        resultSummary = st.resultSummary,
-                        error = st.errorMessage
-                    )
-                })
+                session.setSubtasks(response.subtasks.map(TuiSubtask::fromSubtaskResponse))
                 logger.info { "Loaded ${response.subtasks.size} subtasks from DB" }
             }
         } catch (e: Exception) {

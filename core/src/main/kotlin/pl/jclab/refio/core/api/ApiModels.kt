@@ -420,8 +420,6 @@ data class ProjectContextResponse(
     val userContextRefs: List<UserContextRefDTO> = emptyList(),
     // Conversation history
     val conversationHistory: List<ConversationMessageDTO> = emptyList(),
-    // Previous subtask summaries
-    val previousSubtasks: List<String> = emptyList(),
     // Domain analysis scores
     val domainAnalysis: Map<String, Any> = emptyMap(),
     // Project structure details

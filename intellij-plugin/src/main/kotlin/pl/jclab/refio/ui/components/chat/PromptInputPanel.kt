@@ -42,7 +42,7 @@ import pl.jclab.refio.core.context.ProviderType
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 import pl.jclab.refio.services.execution.StepExecutionService
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.ui.completion.RefioCompletionContributor
 import pl.jclab.refio.ui.components.autocomplete.AutocompletePopup
@@ -52,7 +52,7 @@ import pl.jclab.refio.ui.components.autocomplete.ContextValidator
 import pl.jclab.refio.ui.components.input.InputPanelContainer
 import pl.jclab.refio.ui.components.input.SnippetsContainer
 import pl.jclab.refio.ui.theme.LCATheme
-import pl.jclab.refio.api.CoreApiClient
+import pl.jclab.refio.core.api.CoreApiRouter
 import java.awt.*
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
@@ -76,7 +76,7 @@ import javax.swing.BoxLayout as SwingBoxLayout
 class PromptInputPanel(
     private val project: Project,
     private val chatView: ChatView? = null,
-    private val coreApiClient: CoreApiClient? = null
+    private val coreApiClient: CoreApiRouter? = null
 ) : JBPanel<PromptInputPanel>(GridBagLayout()) {
 
     companion object {
@@ -731,10 +731,10 @@ class PromptInputPanel(
     }
 
     private fun loadNoEgressDefault() {
-        val client = coreApiClient ?: CoreApiClient(sessionManager.apiRouter)
+        val client = coreApiClient ?: sessionManager.apiRouter
         cs.launch {
             try {
-                val config = client.getConfig(section = "advanced", scope = "app")
+                val config = client.configRouter.getConfig(section = "advanced", scope = "app")
                 val noEgressDefault = (config.settings["no_egress_default"] as? String).toBoolean()
 
                 if (noEgressDefault) {
@@ -1710,8 +1710,8 @@ class PromptInputPanel(
         val fallback = SlashPrompt.BUILTINS
 
         return@withContext try {
-            val client = coreApiClient ?: CoreApiClient(sessionManager.apiRouter)
-            val response = client.getPromptsByType(pl.jclab.refio.core.db.PromptType.SLASH_PROMPT)
+            val client = coreApiClient ?: sessionManager.apiRouter
+            val response = client.promptsRouter.getPromptsByType(pl.jclab.refio.core.db.PromptType.SLASH_PROMPT)
 
             val slashPrompts = response.prompts
                 .filter { it.isEnabled }
@@ -2418,8 +2418,8 @@ class PromptInputPanel(
     private fun loadExecutionModeDefault() {
         cs.launch {
             try {
-                val client = coreApiClient ?: CoreApiClient(sessionManager.apiRouter)
-                val executionModeStr = client.getConfigValue("ui", "execution_mode")
+                val client = coreApiClient ?: sessionManager.apiRouter
+                val executionModeStr = client.configService.get("ui.execution_mode", pl.jclab.refio.core.db.ConfigScope.APP, null)
 
                 // Default to INTERACTIVE if not specified in config
                 val isInteractive = if (executionModeStr != null) {

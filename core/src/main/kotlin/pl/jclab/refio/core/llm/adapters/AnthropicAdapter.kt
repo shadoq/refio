@@ -62,37 +62,10 @@ class AnthropicAdapter(
     private val baseUrl: String
         get() = baseUrlOverride ?: DEFAULT_BASE_URL
 
-    private val client = httpClientOverride ?: HttpClient(CIO) {
-        install(ContentNegotiation) {
-            gson {
-                setPrettyPrinting()
-                serializeNulls()
-            }
-        }
-        install(Logging) {
-            level = LogLevel.INFO
-            logger = object : KtorLogger {
-                override fun log(message: String) {
-                    this@AnthropicAdapter.logger.debug { message }
-                }
-            }
-            sanitizeHeader { header ->
-                header.equals(HttpHeaders.Authorization, ignoreCase = true) ||
-                    header.equals("x-api-key", ignoreCase = true) ||
-                    header.equals("x-goog-api-key", ignoreCase = true)
-            }
-        }
-        install(HttpTimeout) {
-            val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
-                ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
-            // Streaming-friendly: requestTimeout is a HARD cap on the whole request
-            // (incl. body read) and would kill long streams mid-flight even while
-            // chunks are still arriving. socketTimeoutMillis (resets per chunk)
-            // detects truly dead connections.
-            requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
-            connectTimeoutMillis = 30000
-            socketTimeoutMillis = timeoutMs
-        }
+    private val client = httpClientOverride ?: run {
+        val socketTimeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+            ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
+        LLMKtorClientFactory.create(socketTimeoutMs, logger)
     }
 
     override suspend fun chat(
@@ -783,12 +756,14 @@ class AnthropicAdapter(
                     return@mapNotNull null
                 }
 
-                // Get static definition from ModelDefinitions or create fallback
+                // Get static definition from ModelDefinitions or synthesize for unknown models.
                 val definition = pl.jclab.refio.core.llm.ModelDefinitions.getDefinition("anthropic", modelId)
                     ?: run {
-                        logger.debug { "[ANTHROPIC] Model $modelId not in registry, using fallback" }
+                        logger.warn {
+                            "[ANTHROPIC] Model $modelId not in registry — using synthetic definition (context=200000)"
+                        }
 
-                        pl.jclab.refio.core.llm.ModelDefinitions.createFallback(
+                        pl.jclab.refio.core.llm.ModelDefinitions.syntheticDefinitionFor(
                             provider = "anthropic",
                             modelId = modelId,
                             maxContext = 200_000  // Claude models typically have 200K context

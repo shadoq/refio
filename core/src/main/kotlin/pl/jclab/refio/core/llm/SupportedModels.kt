@@ -232,7 +232,7 @@ object SupportedModels {
                 supported
             }
 
-            "custom_openai" -> {
+            "generic_openai" -> {
                 val supported = CUSTOM_OPENAI_SUPPORTED.any { it.matches(modelId) }
                 if (!supported) {
                     logger.debug { "[WHITELIST] Custom OpenAI model not supported: $modelId" }

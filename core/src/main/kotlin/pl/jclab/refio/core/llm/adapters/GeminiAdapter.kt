@@ -60,37 +60,10 @@ class GeminiAdapter(
 
     private val ownsHttpClient = httpClientOverride == null
 
-    private val client = httpClientOverride ?: HttpClient(CIO) {
-        install(ContentNegotiation) {
-            gson {
-                setPrettyPrinting()
-                serializeNulls()
-            }
-        }
-        install(Logging) {
-            level = LogLevel.INFO
-            logger = object : KtorLogger {
-                override fun log(message: String) {
-                    this@GeminiAdapter.logger.debug { message }
-                }
-            }
-            sanitizeHeader { header ->
-                header.equals(HttpHeaders.Authorization, ignoreCase = true) ||
-                    header.equals("x-api-key", ignoreCase = true) ||
-                    header.equals("x-goog-api-key", ignoreCase = true)
-            }
-        }
-        install(HttpTimeout) {
-            val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
-                ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
-            // Streaming-friendly: requestTimeout is a HARD cap on the whole request
-            // (incl. body read) and would kill long streams mid-flight even while
-            // chunks are still arriving. socketTimeoutMillis (resets per chunk)
-            // detects truly dead connections.
-            requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
-            connectTimeoutMillis = 30_000
-            socketTimeoutMillis = timeoutMs
-        }
+    private val client = httpClientOverride ?: run {
+        val socketTimeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+            ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
+        LLMKtorClientFactory.create(socketTimeoutMs, logger)
     }
 
     override suspend fun chat(
@@ -570,7 +543,12 @@ class GeminiAdapter(
                 }
 
                 val definition = pl.jclab.refio.core.llm.ModelDefinitions.getDefinition("gemini", shortId)
-                    ?: pl.jclab.refio.core.llm.ModelDefinitions.createFallback("gemini", shortId)
+                    ?: run {
+                        logger.warn {
+                            "[GEMINI] Model $shortId not in registry — using synthetic definition with defaults"
+                        }
+                        pl.jclab.refio.core.llm.ModelDefinitions.syntheticDefinitionFor("gemini", shortId)
+                    }
                 definition.toModelConfig()
             }
         } catch (e: Exception) {

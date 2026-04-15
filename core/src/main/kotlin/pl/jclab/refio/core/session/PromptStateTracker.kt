@@ -1,8 +1,8 @@
-package pl.jclab.refio.services.session
+package pl.jclab.refio.core.session
 
 import pl.jclab.refio.api.models.ContextReference
 import pl.jclab.refio.core.api.ContextSectionTokenInfo
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 class PromptStateTracker(
     private val stateManager: SessionStateManager

@@ -5,8 +5,8 @@ import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBPanel
 import pl.jclab.refio.api.models.MultiAgentStrategy
 import pl.jclab.refio.ui.theme.LCATheme
-import pl.jclab.refio.api.CoreApiClient
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.api.CoreApiRouter
+import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.*
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
@@ -22,7 +22,7 @@ import javax.swing.JSeparator
  */
 class GeneralSettingsPanel(
     private val onSettingChanged: (section: String, key: String, value: Any) -> Unit,
-    private val coreApiClient: CoreApiClient?
+    private val coreApiClient: CoreApiRouter?
 ) : JBPanel<GeneralSettingsPanel>(GridBagLayout()) {
 
     private val logger = dualLogger("GeneralSettingsPanel")
@@ -263,10 +263,10 @@ class GeneralSettingsPanel(
         try {
             logger.info { "Loading general configuration" }
 
-            val config = coreApiClient.getConfig(section = "general", scope = "app")
+            val config = coreApiClient.configRouter.getConfig(section = "general", scope = "app")
             applyGeneralConfig(config.settings)
 
-            val uiConfig = coreApiClient.getConfig(section = "ui", scope = "app")
+            val uiConfig = coreApiClient.configRouter.getConfig(section = "ui", scope = "app")
             applyUiConfig(uiConfig.settings)
         } catch (e: Exception) {
             logger.error(e) { "Failed to load general config" }

@@ -363,7 +363,7 @@ data class ConfigYaml(
                 openrouter = override.openrouter ?: base.openrouter,
                 gemini = override.gemini ?: base.gemini,
                 lmstudio = override.lmstudio ?: base.lmstudio,
-                customOpenai = override.customOpenai ?: base.customOpenai,
+                genericOpenai = override.genericOpenai ?: base.genericOpenai,
                 zai = override.zai ?: base.zai
             )
         }
@@ -601,11 +601,11 @@ data class ConfigYaml(
                     lmstudio.contextSize?.let { sb.appendLine("    contextSize: $it") }
                 }
 
-                providers.customOpenai?.let { customOpenai ->
-                    sb.appendLine("  custom_openai:")
-                    customOpenai.apiKey?.let { sb.appendLine("    apiKey: \"$it\"") }
-                    customOpenai.baseUrl?.let { sb.appendLine("    baseUrl: \"$it\"") }
-                    customOpenai.model?.let { sb.appendLine("    model: \"$it\"") }
+                providers.genericOpenai?.let { genericOpenai ->
+                    sb.appendLine("  generic_openai:")
+                    genericOpenai.apiKey?.let { sb.appendLine("    apiKey: \"$it\"") }
+                    genericOpenai.baseUrl?.let { sb.appendLine("    baseUrl: \"$it\"") }
+                    genericOpenai.model?.let { sb.appendLine("    model: \"$it\"") }
                 }
 
                 providers.zai?.let { zai ->
@@ -1090,8 +1090,8 @@ data class ProvidersConfig(
     val openrouter: OpenRouterConfig? = null,
     val gemini: GeminiConfig? = null,
     val lmstudio: LMStudioConfig? = null,
-    @SerialName("custom_openai")
-    val customOpenai: CustomOpenAIConfig? = null,
+    @SerialName("generic_openai")
+    val genericOpenai: GenericOpenAIConfig? = null,
     val zai: ZAIConfig? = null
 )
 
@@ -1130,7 +1130,7 @@ data class LMStudioConfig(
 )
 
 @Serializable
-data class CustomOpenAIConfig(
+data class GenericOpenAIConfig(
     val apiKey: String? = null,
     val baseUrl: String? = null,
     val model: String? = null

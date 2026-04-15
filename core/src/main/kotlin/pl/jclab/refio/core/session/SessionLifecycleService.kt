@@ -1,13 +1,12 @@
-package pl.jclab.refio.services.session
+package pl.jclab.refio.core.session
 
-import com.intellij.openapi.project.Project
+import pl.jclab.refio.core.session.SessionStateManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.jetbrains.exposed.sql.transactions.transaction
-import pl.jclab.refio.api.CoreApiClient
 import pl.jclab.refio.api.models.ExecutionMode
 import pl.jclab.refio.api.models.Session
 import pl.jclab.refio.api.models.TaskMode
@@ -18,12 +17,10 @@ import pl.jclab.refio.core.api.UpdateTaskRequest
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 
 class SessionLifecycleService(
-    private val project: Project,
     private val projectRouter: CoreApiRouter,
-    private val coreApiClient: CoreApiClient,
     private val configService: ConfigService,
     private val stateManager: SessionStateManager,
     private val modeSwitchMutex: Mutex,
@@ -43,15 +40,15 @@ class SessionLifecycleService(
         subtaskTracker: SubtaskTracker,
         _executionMonitor: ExecutionMonitor
     ) {
-        loadUIState()
-
         scope.launchSafe {
+            loadUIState()
+
             try {
                 val taskResponse = projectRouter.taskRouter.getLastSessionForProject(projectId)
                 if (taskResponse != null) {
                     logger.info { "Found last session for project: ${taskResponse.id}" }
 
-                    val executionModeStr = runBlocking(Dispatchers.IO) {
+                    val executionModeStr = withContext(Dispatchers.IO) {
                         transaction {
                             configService.get(ConfigService.KEY_UI_EXECUTION_MODE)
                         }
@@ -399,7 +396,7 @@ class SessionLifecycleService(
         }
 
         try {
-            val selectedModel = coreApiClient.getConfigValue("ui", "selected_model")
+            val selectedModel = configService.get("ui.selected_model", ConfigScope.APP, null)
                 ?.takeIf { it.isNotBlank() }
                 ?: "auto"
 
@@ -439,8 +436,7 @@ class SessionLifecycleService(
         logger.info { "Thinking mode set to: $enabled" }
         val activeSession = stateManager.getActiveSession()
         if (activeSession != null) {
-            val session = activeSession
-            stateManager.setActiveSession(session.copy(thinkingEnabled = enabled))
+            stateManager.setActiveSession(activeSession.copy(thinkingEnabled = enabled))
         } else {
             setUiSettingDefaults(ConfigService.KEY_UI_THINKING_ENABLED, enabled.toString())
         }
@@ -452,8 +448,7 @@ class SessionLifecycleService(
         logger.info { "No-egress mode set to: $enabled" }
         val activeSession = stateManager.getActiveSession()
         if (activeSession != null) {
-            val session = activeSession
-            stateManager.setActiveSession(session.copy(noEgressEnabled = enabled))
+            stateManager.setActiveSession(activeSession.copy(noEgressEnabled = enabled))
         } else {
             setUiSettingDefaults(ConfigService.KEY_UI_NO_EGRESS_ENABLED, enabled.toString())
         }
@@ -556,47 +551,27 @@ class SessionLifecycleService(
 
         // Launch in background coroutine for non-blocking save
         scope.launch(Dispatchers.IO) {
-            persistSessionSettingsBlocking(session.id, settings)
+            persistSessionSettingsSuspending(session.id, settings)
         }
     }
 
     /**
-     * Synchronous version of persistSessionSettings for use in non-suspend contexts.
-     * Should be called within runBlocking or coroutine scope.
+     * Suspend version used from `scope.launch(Dispatchers.IO)`. The previous `runBlocking`
+     * was redundant — the launch context already dispatches on IO.
      */
-    private fun persistSessionSettingsBlocking(taskId: String, settings: SessionSettings) {
+    private suspend fun persistSessionSettingsSuspending(taskId: String, settings: SessionSettings) {
         try {
-            logger.debug { "Persisting session settings (blocking): taskId=$taskId" }
-            runBlocking(Dispatchers.IO) {
-                setUiSettingDefaults(
-                    ConfigService.KEY_UI_SELECTED_MODEL,
-                    settings.selectedModel ?: "auto",
-                )
-                setUiSettingDefaults(
-                    ConfigService.KEY_UI_THINKING_ENABLED,
-                    settings.thinkingEnabled.toString(),
-                )
-                setUiSettingDefaults(
-                    ConfigService.KEY_UI_NO_EGRESS_ENABLED,
-                    settings.noEgressEnabled.toString(),
-                )
-                setUiSettingDefaults(
-                    ConfigService.KEY_UI_EXECUTION_MODE,
-                    settings.executionMode.name,
-                )
-
-                configService.set(
-                    ConfigService.KEY_UI_SELECTED_MODE,
-                    selectedMode.name,
-                    ConfigScope.APP
-                )
-            }
+            logger.debug { "Persisting session settings: taskId=$taskId" }
+            // Caller already dispatches on Dispatchers.IO via scope.launch.
+            setUiSettingDefaults(ConfigService.KEY_UI_SELECTED_MODEL, settings.selectedModel ?: "auto")
+            setUiSettingDefaults(ConfigService.KEY_UI_THINKING_ENABLED, settings.thinkingEnabled.toString())
+            setUiSettingDefaults(ConfigService.KEY_UI_NO_EGRESS_ENABLED, settings.noEgressEnabled.toString())
+            setUiSettingDefaults(ConfigService.KEY_UI_EXECUTION_MODE, settings.executionMode.name)
+            configService.set(ConfigService.KEY_UI_SELECTED_MODE, selectedMode.name, ConfigScope.APP)
 
             projectRouter.taskRouter.updateTask(
                 taskId,
-                pl.jclab.refio.core.api.UpdateTaskRequest(
-                    uiState = settings.toJson()
-                )
+                pl.jclab.refio.core.api.UpdateTaskRequest(uiState = settings.toJson())
             )
         } catch (e: Exception) {
             if (isTaskNotFoundException(e)) {
@@ -607,8 +582,8 @@ class SessionLifecycleService(
         }
     }
 
-    private fun loadUIState() {
-        val modeStr = runBlocking(Dispatchers.IO) {
+    private suspend fun loadUIState() {
+        val modeStr = withContext(Dispatchers.IO) {
             transaction {
                 configService.get(ConfigService.KEY_UI_SELECTED_MODE)
             }
@@ -867,8 +842,8 @@ class SessionLifecycleService(
         return pl.jclab.refio.core.utils.GsonInstance.gson.toJson(payload)
     }
 
-    private fun loadExecutionModePreference(): ExecutionMode {
-        val executionModeStr = runBlocking(Dispatchers.IO) {
+    private suspend fun loadExecutionModePreference(): ExecutionMode {
+        val executionModeStr = withContext(Dispatchers.IO) {
             transaction {
                 configService.get(ConfigService.KEY_UI_EXECUTION_MODE)
             }

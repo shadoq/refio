@@ -91,7 +91,7 @@ abstract class BaseLLMAdapter(
     val model: String,
     val provider: String
 ) {
-    protected fun toOpenAiMessageContent(message: LLMMessage): Any {
+    internal fun toOpenAiMessageContent(message: LLMMessage): Any {
         val normalizedParts = normalizeMessageParts(message)
         if (normalizedParts.size == 1 && normalizedParts.first() is LLMContentPart.Text) {
             return (normalizedParts.first() as LLMContentPart.Text).text

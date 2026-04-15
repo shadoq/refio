@@ -45,7 +45,8 @@ class LMStudioAdapter(
     private val configService: ConfigService? = null,
     private val taskId: String? = null,
     private val subtaskId: String? = null,
-    private val source: String? = null
+    private val source: String? = null,
+    httpClientOverride: HttpClient? = null
 ) : BaseLLMAdapter(model, "lmstudio") {
 
     companion object {
@@ -60,38 +61,8 @@ class LMStudioAdapter(
         get() = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
             ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
 
-    private val client = HttpClient(CIO) {
-        install(ContentNegotiation) {
-            gson {
-                setPrettyPrinting()
-                serializeNulls()
-            }
-        }
-        install(Logging) {
-            level = LogLevel.INFO
-            logger = object : KtorLogger {
-                override fun log(message: String) {
-                    this@LMStudioAdapter.logger.debug { message }
-                }
-            }
-            sanitizeHeader { header ->
-                header.equals(HttpHeaders.Authorization, ignoreCase = true) ||
-                    header.equals("x-api-key", ignoreCase = true) ||
-                    header.equals("x-goog-api-key", ignoreCase = true)
-            }
-        }
-        install(HttpTimeout) {
-            val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
-                ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
-            // Streaming-friendly: requestTimeout is a HARD cap on the whole request
-            // (incl. body read) and would kill long streams mid-flight even while
-            // chunks are still arriving. socketTimeoutMillis (resets per chunk)
-            // detects truly dead connections.
-            requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
-            connectTimeoutMillis = 30000
-            socketTimeoutMillis = timeoutMs
-        }
-    }
+    private val client: HttpClient = httpClientOverride
+        ?: LLMKtorClientFactory.create(timeout, logger)
 
     private fun resolveBaseUrl(): String {
         return baseUrl
@@ -121,38 +92,16 @@ class LMStudioAdapter(
         val resolvedBaseUrl = resolveBaseUrl()
         val apiKey = resolveApiKey()
 
-        val lmMessages = mutableListOf<Map<String, Any>>()
+        val lmMessages = OpenAICompatibleHelpers.buildMessages(this, systemMessages, messages)
 
-        // Add system messages from systemMessages parameter
-        systemMessages.filter { it.isNotBlank() }.forEach { sysMsg ->
-            lmMessages.add(mapOf("role" to "system", "content" to sysMsg))
-        }
-
-        // Add conversation messages (filter out any system messages as they should be in systemMessages parameter).
-        // Remap "tool" (used by LLMMessageMapper for tool results) to "assistant" — LM Studio uses the
-        // OpenAI-compatible chat schema where role="tool" requires tool_call_id, which this adapter does not emit.
-        messages.filter { it.role != "system" }.forEach { msg ->
-            val mappedRole = if (msg.role == "tool") "assistant" else msg.role
-            lmMessages.add(mapOf("role" to mappedRole, "content" to toOpenAiMessageContent(msg)))
-        }
-
-        val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)
-            ?: ConfigKeys.MAX_OUTPUT_SIZE.default
-        val requestedMaxTokens = when {
-            maxTokens != null && maxTokens > 0 -> minOf(maxTokens, maxOutputLimit)
-            else -> maxOutputLimit
-        }
-        val modelLimit = pl.jclab.refio.core.llm.ModelDefinitions
-            .getDefinition("lmstudio", model)
-            ?.maxOutputTokens
-        val effectiveMaxTokens = if (modelLimit != null && modelLimit > 0 && requestedMaxTokens > modelLimit) {
-            logger.warn {
-                "[LMStudio] Requested max_tokens=$requestedMaxTokens exceeds model limit ($modelLimit) for $model - clamping to safe value"
-            }
-            modelLimit
-        } else {
-            requestedMaxTokens
-        }
+        val effectiveMaxTokens = OpenAICompatibleHelpers.resolveEffectiveMaxTokens(
+            requested = maxTokens,
+            configLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId) ?: ConfigKeys.MAX_OUTPUT_SIZE.default,
+            modelLimit = pl.jclab.refio.core.llm.ModelDefinitions.getDefinition("lmstudio", model)?.maxOutputTokens,
+            providerTag = "LMStudio",
+            model = model,
+            log = { logger.warn(it) }
+        )
 
         val requestBody = buildMap<String, Any> {
             put("model", model)
@@ -162,16 +111,11 @@ class LMStudioAdapter(
             if (streaming) put("stream", true)
 
             // LM Studio uses OpenAI-compatible API which doesn't support thinking parameter
-            // Log if thinking was requested for user awareness
             val thinking = kwargs["thinking"] as? Boolean ?: false
             if (thinking) {
                 logger.info { "[LMStudio] Thinking mode requested but not supported by OpenAI-compatible API - parameter ignored" }
             }
-
-            (kwargs["top_p"] as? Number)?.let { put("top_p", it) }
-            (kwargs["frequency_penalty"] as? Number)?.let { put("frequency_penalty", it) }
-            (kwargs["presence_penalty"] as? Number)?.let { put("presence_penalty", it) }
-            kwargs["stop"]?.let { put("stop", it) }
+            with(OpenAICompatibleHelpers) { addCommonKwargs(kwargs) }
         }
 
         val requestJson = gson.toJson(requestBody)
@@ -356,49 +300,18 @@ class LMStudioAdapter(
                         subtaskId = subtaskId,
                         source = source
                     )
-                    throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus ?: 500, errorMessage)
+                    throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, errorMessage)
                 }
 
-                val channel: io.ktor.utils.io.ByteReadChannel = httpResponse.body()
-                while (!channel.isClosedForRead) {
-                    if (pl.jclab.refio.core.services.monitoring.GlobalMetrics.isCancelled()) {
-                        finalFinishReason = "cancelled"
-                        break
+                finalFinishReason = OpenAICompatibleHelpers.consumeChatCompletionsSSE(
+                    channel = httpResponse.body(),
+                    toolCallAccumulator = toolCallAccumulator,
+                    checkCancelled = { pl.jclab.refio.core.services.monitoring.GlobalMetrics.isCancelled() },
+                    onContent = { delta ->
+                        contentBuilder.append(delta)
+                        onStreamChunk(StreamChunk(delta = delta, finishReason = null))
                     }
-
-                    val line = channel.readUTF8Line(limit = Int.MAX_VALUE) ?: continue
-                    if (line.isBlank() || !line.startsWith("data: ")) continue
-
-                    val data = line.removePrefix("data: ").trim()
-                    if (data == "[DONE]") break
-
-                    try {
-                        @Suppress("UNCHECKED_CAST")
-                        val chunk = gson.fromJson(data, Map::class.java) as Map<String, Any?>
-                        @Suppress("UNCHECKED_CAST")
-                        val choices = chunk["choices"] as? List<Map<String, Any?>> ?: emptyList()
-                        val first = choices.firstOrNull() ?: emptyMap()
-                        @Suppress("UNCHECKED_CAST")
-                        val delta = first["delta"] as? Map<String, Any?>
-                        toolCallAccumulator.consumeDelta(delta)
-                        val content = delta?.get("content") as? String
-                        val finishReason = first["finish_reason"] as? String
-
-                        if (!content.isNullOrEmpty()) {
-                            contentBuilder.append(content)
-                            onStreamChunk(StreamChunk(delta = content, finishReason = null))
-                        }
-
-                        if (finishReason != null) {
-                            finalFinishReason = finishReason
-                        }
-                    } catch (e: CancellationException) {
-                        // Let stream abort (guardrail trip) propagate out of the loop.
-                        throw e
-                    } catch (_: Exception) {
-                        continue
-                    }
-                }
+                )
             }
 
             if (contentBuilder.isEmpty()) {
@@ -540,13 +453,18 @@ class LMStudioAdapter(
                 // Get context length from model data or use configured context size
                 val modelContextLength = (modelData["context_length"] as? Number)?.toInt() ?: contextSize
 
-                // Get definition from registry or create fallback
+                // Get definition from registry or synthesize for unknown models.
                 val baseDefinition = pl.jclab.refio.core.llm.ModelDefinitions.getDefinition("lmstudio", modelId)
-                    ?: pl.jclab.refio.core.llm.ModelDefinitions.createFallback(
-                        provider = "lmstudio",
-                        modelId = modelId,
-                        maxContext = modelContextLength
-                    )
+                    ?: run {
+                        logger.warn {
+                            "[LMSTUDIO] Model $modelId not in registry — using synthetic definition (context=$modelContextLength)"
+                        }
+                        pl.jclab.refio.core.llm.ModelDefinitions.syntheticDefinitionFor(
+                            provider = "lmstudio",
+                            modelId = modelId,
+                            maxContext = modelContextLength
+                        )
+                    }
 
                 // Always override maxContext with configured/model-reported value for LM Studio models
                 val definition = baseDefinition.copy(maxContext = modelContextLength)

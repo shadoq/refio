@@ -2,15 +2,19 @@ package pl.jclab.refio.core.workflow
 
 import kotlinx.coroutines.CancellationException
 import pl.jclab.refio.api.models.ExecutionMode
+import pl.jclab.refio.core.api.PlanningRequest
 import pl.jclab.refio.core.api.StreamCallback
+import pl.jclab.refio.core.api.routers.AgentRouter
+import pl.jclab.refio.core.db.TaskMode
+import pl.jclab.refio.core.models.api.ChatRequest
+import pl.jclab.refio.core.models.api.LLMParams
+import pl.jclab.refio.core.services.ChatService
+import pl.jclab.refio.core.services.PlanningService
+import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 import pl.jclab.refio.core.services.orchestration.UserInteraction
-import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
-import pl.jclab.refio.core.workflow.executors.ChatExecutor
-import pl.jclab.refio.core.workflow.executors.PlanExecutor
-import pl.jclab.refio.core.workflow.executors.StepExecutor
-import pl.jclab.refio.core.workflow.executors.SubagentExecutor
+import pl.jclab.refio.core.subagents.SubagentRouter
 import pl.jclab.refio.core.workflow.models.IntentResult
 import pl.jclab.refio.core.workflow.models.WorkflowIntent
 import pl.jclab.refio.core.workflow.models.WorkflowRequest
@@ -19,14 +23,17 @@ import pl.jclab.refio.core.logging.dualLogger
 private val logger = dualLogger("WorkflowOrchestrator")
 
 /**
- * Orchestrates workflow intent routing and execution using adapter executors.
+ * Orchestrates workflow intent routing and execution.
+ *
+ * Dispatches directly to domain services (ChatService/PlanningService/AgentRouter/SubagentRouter) —
+ * no adapter executors. AUTO mode loops through intent resolution until a non-step intent resolves.
  */
 class WorkflowOrchestrator(
     private val intentRouter: IntentRouter,
-    private val chatExecutor: ChatExecutor,
-    private val planExecutor: PlanExecutor,
-    private val stepExecutor: StepExecutor,
-    private val subagentExecutor: SubagentExecutor?,
+    private val chatService: ChatService,
+    private val planningService: PlanningService,
+    private val agentRouter: AgentRouter,
+    private val subagentRouter: SubagentRouter?,
     private val userInteraction: UserInteraction? = null
 ) {
     suspend fun execute(
@@ -69,49 +76,78 @@ class WorkflowOrchestrator(
                         listener.onChatStarted()
                         val onChunk = if (stream) streamCallback(listener) else null
                         logger.info { "[WORKFLOW] Chat execution start: stream=$stream (taskId=$taskLabel)" }
-                        val response = chatExecutor.execute(intent, stream, onChunk)
-                        val output = (response as IntentResult.ChatResult).response.output
-                        logger.info { "[WORKFLOW] Chat execution complete: outputChars=${output.length} (taskId=$taskLabel)" }
-                        listener.onStreamComplete(output)
-                        response
+                        val chatRequest = ChatRequest(
+                            taskId = intent.taskId,
+                            mode = TaskMode.CHAT,
+                            input = intent.input,
+                            contextRefs = intent.contextRefs,
+                            params = LLMParams(
+                                model = intent.model,
+                                provider = intent.provider
+                            )
+                        )
+                        val response = chatService.chat(chatRequest, stream, onChunk)
+                        logger.info { "[WORKFLOW] Chat execution complete: outputChars=${response.output.length} (taskId=$taskLabel)" }
+                        listener.onStreamComplete(response.output)
+                        IntentResult.ChatResult(response)
                     }
 
                     is WorkflowIntent.Plan -> {
                         listener.onPlanningStarted()
                         val onChunk = if (stream) streamCallback(listener) else null
                         logger.info { "[WORKFLOW] Plan execution start: stream=$stream (taskId=$taskLabel)" }
-                        val response = planExecutor.execute(intent, stream, onChunk)
-                        val plan = (response as IntentResult.PlanResult).response.plan
-                        logger.info { "[WORKFLOW] Plan execution complete: planChars=${plan.length} (taskId=$taskLabel)" }
-                        listener.onStreamComplete(plan)
-                        response
+                        val planningRequest = PlanningRequest(
+                            input = intent.input,
+                            contextRefs = intent.contextRefs,
+                            model = intent.model,
+                            provider = intent.provider,
+                            interactive = intent.interactive
+                        )
+                        val response = planningService.createPlan(intent.taskId, planningRequest, stream, onChunk)
+                        logger.info { "[WORKFLOW] Plan execution complete: planChars=${response.plan.length} (taskId=$taskLabel)" }
+                        listener.onStreamComplete(response.plan)
+                        IntentResult.PlanResult(response)
                     }
 
                     is WorkflowIntent.ExecuteStep -> {
                         listener.onStepStarted(intent.subtaskId)
                         logger.info { "[WORKFLOW] Step execution start: subtaskId=${intent.subtaskId} (taskId=$taskLabel)" }
-                        val response = stepExecutor.execute(
-                            intent = intent,
-                            listener = executionListener(listener)
+                        val execListener = executionListener(listener)
+                        // Two paths kept intentionally — StepExecutor previously branched on listener == null.
+                        val response = agentRouter.executeSubtaskStepWithListener(
+                            intent.taskId,
+                            intent.subtaskId,
+                            execListener
                         )
                         executedStep = true
                         logger.info { "[WORKFLOW] Step execution complete: subtaskId=${intent.subtaskId} (taskId=$taskLabel)" }
-                        response
+                        IntentResult.StepResult(response)
                     }
 
                     is WorkflowIntent.Subagent -> {
-                        val executor = subagentExecutor
+                        val router = subagentRouter
                             ?: throw IllegalStateException("Subagent execution not available")
                         listener.onSubagentStarted(intent.name)
                         val onChunk = if (stream) streamCallback(listener) else null
                         logger.info { "[WORKFLOW] Subagent execution start: name=${intent.name}, stream=$stream (taskId=$taskLabel)" }
-                        val response = executor.execute(intent, stream, onChunk)
-                        val output = (response as IntentResult.SubagentResult).response.response
-                        logger.info {
-                            "[WORKFLOW] Subagent execution complete: name=${intent.name}, outputChars=${output.length} (taskId=$taskLabel)"
+                        // parentModel only when both provider and model are set — lifted verbatim from SubagentExecutor.
+                        val parentModel = intent.model?.let { model ->
+                            intent.provider?.let { provider -> "$provider/$model" }
                         }
-                        listener.onStreamComplete(output)
-                        response
+                        val response = router.invoke(
+                            taskId = intent.taskId,
+                            name = intent.name,
+                            prompt = intent.prompt,
+                            contextRefs = intent.contextRefs,
+                            stream = stream,
+                            onChunk = onChunk,
+                            parentModel = parentModel
+                        )
+                        logger.info {
+                            "[WORKFLOW] Subagent execution complete: name=${intent.name}, outputChars=${response.response.length} (taskId=$taskLabel)"
+                        }
+                        listener.onStreamComplete(response.response)
+                        IntentResult.SubagentResult(response)
                     }
 
                     is WorkflowIntent.AnswerQuestion -> {
@@ -123,7 +159,6 @@ class WorkflowOrchestrator(
                         interaction.provideResponse(intent.questionId, intent.answer)
                         IntentResult.AnswerResult(intent.taskId)
                     }
-
                 }
 
                 lastResult = result

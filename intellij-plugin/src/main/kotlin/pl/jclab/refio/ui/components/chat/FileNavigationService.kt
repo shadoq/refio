@@ -18,7 +18,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import pl.jclab.refio.api.models.ContextReference
 import pl.jclab.refio.api.models.ContextType
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.project.SafeVfsAccess
 import java.nio.file.Files
 import java.nio.file.Paths
@@ -215,7 +215,7 @@ internal class FileNavigationService(
         return try {
             logger.info { "[SNAPSHOT] Loading snapshot content for: snapshotId=$snapshotId, filePath=$filePath" }
             val router = coreManager.getApiRouter()
-            val content = router.getSnapshotFileContent(snapshotId, filePath)
+            val content = router.snapshotRouter.getSnapshotFileContent(snapshotId, filePath)
             if (content != null) {
                 logger.info { "[SNAPSHOT] Loaded successfully: ${content.length} chars" }
             } else {
