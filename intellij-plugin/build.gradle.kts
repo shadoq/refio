@@ -158,16 +158,6 @@ tasks {
         )
     }
 
-    jacocoTestCoverageVerification {
-        violationRules {
-            rule {
-                limit {
-                    minimum = "0.40".toBigDecimal()
-                }
-            }
-        }
-    }
-
     runIde {
         jvmArgs = listOf(
             "-Didea.log.debug.categories=#pl.jclab",

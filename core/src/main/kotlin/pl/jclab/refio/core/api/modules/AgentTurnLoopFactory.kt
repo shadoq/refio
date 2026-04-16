@@ -1,12 +1,8 @@
 package pl.jclab.refio.core.api.modules
 
 import pl.jclab.refio.core.config.ConfigKeys
-import pl.jclab.refio.core.db.repositories.ChatMessageRepository
-import pl.jclab.refio.core.db.repositories.SubtaskRepository
-import pl.jclab.refio.core.db.repositories.TaskRepository
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.services.*
-import pl.jclab.refio.core.services.context.WorkingMemoryService
 import pl.jclab.refio.core.services.turn.*
 import pl.jclab.refio.core.tools.base.ToolRegistry
 
@@ -17,24 +13,26 @@ import pl.jclab.refio.core.tools.base.ToolRegistry
  * Returns null when pre-requisites (toolRegistry, toolExecutor) are not available.
  */
 internal class AgentTurnLoopFactory(
+    private val persistence: PersistenceModule,
+    private val support: SupportServicesModule,
     private val llmClient: LLMClient,
-    private val chatMessageRepository: ChatMessageRepository,
-    private val taskRepository: TaskRepository,
-    private val subtaskRepository: SubtaskRepository,
     private val configService: ConfigService,
     private val promptsService: PromptsService,
     private val toolDescriptionBuilder: pl.jclab.refio.core.prompts.ToolDescriptionBuilder,
     private val contextService: ContextService?,
-    private val workingMemoryService: WorkingMemoryService,
-    private val workingMemoryIntegration: WorkingMemoryIntegration,
     private val snapshotService: SnapshotService?,
     private val toolApprovalService: ToolApprovalService,
     private val toolPermissionsService: ToolPermissionsService,
-    private val hookService: pl.jclab.refio.core.services.hooks.HookService,
     private val agentEventBus: pl.jclab.refio.core.agents.events.AgentEventBus,
     private val promptSectionProviders: List<PromptSectionProvider>,
-    private val projectRoot: java.nio.file.Path?
+    private val projectRoot: java.nio.file.Path?,
 ) {
+    private val chatMessageRepository get() = persistence.chatMessageRepository
+    private val taskRepository get() = persistence.taskRepository
+    private val subtaskRepository get() = persistence.subtaskRepository
+    private val workingMemoryService get() = support.workingMemoryService
+    private val workingMemoryIntegration get() = support.workingMemoryIntegration
+    private val hookService get() = support.hookService
 
     fun build(toolRegistry: ToolRegistry?, toolExecutor: ToolExecutor?): AgentTurnLoop? {
         if (toolRegistry == null || toolExecutor == null) return null

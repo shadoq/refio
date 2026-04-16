@@ -50,7 +50,7 @@ class SessionLifecycleService(
 
                     val executionModeStr = withContext(Dispatchers.IO) {
                         transaction {
-                            configService.get(ConfigService.KEY_UI_EXECUTION_MODE)
+                            configService.get(ConfigKeys.UI_EXECUTION_MODE.key)
                         }
                     }
                     val executionMode = try {
@@ -438,7 +438,7 @@ class SessionLifecycleService(
         if (activeSession != null) {
             stateManager.setActiveSession(activeSession.copy(thinkingEnabled = enabled))
         } else {
-            setUiSettingDefaults(ConfigService.KEY_UI_THINKING_ENABLED, enabled.toString())
+            setUiSettingDefaults(ConfigKeys.UI_THINKING_ENABLED.key, enabled.toString())
         }
         saveCurrentSessionState()
     }
@@ -450,7 +450,7 @@ class SessionLifecycleService(
         if (activeSession != null) {
             stateManager.setActiveSession(activeSession.copy(noEgressEnabled = enabled))
         } else {
-            setUiSettingDefaults(ConfigService.KEY_UI_NO_EGRESS_ENABLED, enabled.toString())
+            setUiSettingDefaults(ConfigKeys.UI_NO_EGRESS_ENABLED.key, enabled.toString())
         }
         saveCurrentSessionState()
     }
@@ -458,13 +458,13 @@ class SessionLifecycleService(
     fun setMultiAgentEnabled(enabled: Boolean) {
         stateManager.setMultiAgentEnabled(enabled)
         logger.info { "Multi-agent mode set to: $enabled" }
-        setUiSettingDefaults(ConfigService.KEY_UI_ORCHESTRATION_ENABLED, enabled.toString())
+        setUiSettingDefaults(ConfigKeys.UI_ORCHESTRATION_ENABLED.key, enabled.toString())
     }
 
     fun setMultiAgentStrategy(strategy: pl.jclab.refio.api.models.MultiAgentStrategy) {
         stateManager.setMultiAgentStrategy(strategy)
         logger.info { "Multi-agent strategy set to: $strategy" }
-        setUiSettingDefaults(ConfigService.KEY_UI_MULTI_AGENT_STRATEGY, strategy.name)
+        setUiSettingDefaults(ConfigKeys.UI_MULTI_AGENT_STRATEGY.key, strategy.name)
     }
 
     suspend fun getAvailableModels(): List<String> {
@@ -563,11 +563,11 @@ class SessionLifecycleService(
         try {
             logger.debug { "Persisting session settings: taskId=$taskId" }
             // Caller already dispatches on Dispatchers.IO via scope.launch.
-            setUiSettingDefaults(ConfigService.KEY_UI_SELECTED_MODEL, settings.selectedModel ?: "auto")
-            setUiSettingDefaults(ConfigService.KEY_UI_THINKING_ENABLED, settings.thinkingEnabled.toString())
-            setUiSettingDefaults(ConfigService.KEY_UI_NO_EGRESS_ENABLED, settings.noEgressEnabled.toString())
-            setUiSettingDefaults(ConfigService.KEY_UI_EXECUTION_MODE, settings.executionMode.name)
-            configService.set(ConfigService.KEY_UI_SELECTED_MODE, selectedMode.name, ConfigScope.APP)
+            setUiSettingDefaults(ConfigKeys.UI_SELECTED_MODEL.key, settings.selectedModel ?: "auto")
+            setUiSettingDefaults(ConfigKeys.UI_THINKING_ENABLED.key, settings.thinkingEnabled.toString())
+            setUiSettingDefaults(ConfigKeys.UI_NO_EGRESS_ENABLED.key, settings.noEgressEnabled.toString())
+            setUiSettingDefaults(ConfigKeys.UI_EXECUTION_MODE.key, settings.executionMode.name)
+            configService.set(ConfigKeys.UI_SELECTED_MODE.key, selectedMode.name, ConfigScope.APP)
 
             projectRouter.taskRouter.updateTask(
                 taskId,
@@ -585,7 +585,7 @@ class SessionLifecycleService(
     private suspend fun loadUIState() {
         val modeStr = withContext(Dispatchers.IO) {
             transaction {
-                configService.get(ConfigService.KEY_UI_SELECTED_MODE)
+                configService.get(ConfigKeys.UI_SELECTED_MODE.key)
             }
         }
         selectedMode = runCatching { TaskMode.valueOf(modeStr ?: TaskMode.CHAT.name) }
@@ -634,21 +634,21 @@ class SessionLifecycleService(
         var hasAny = false
 
         val selectedModel = configService.get(
-            ConfigService.KEY_UI_SELECTED_MODEL,
+            ConfigKeys.UI_SELECTED_MODEL.key,
             scope,
             taskId = taskId,
             projectId = projectId
         )?.also { hasAny = true }
 
         val thinkingEnabled = configService.get(
-            ConfigService.KEY_UI_THINKING_ENABLED,
+            ConfigKeys.UI_THINKING_ENABLED.key,
             scope,
             taskId = taskId,
             projectId = projectId
         )?.also { hasAny = true }?.toBoolean()
 
         val noEgressEnabled = configService.get(
-            ConfigService.KEY_UI_NO_EGRESS_ENABLED,
+            ConfigKeys.UI_NO_EGRESS_ENABLED.key,
             scope,
             taskId = taskId,
             projectId = projectId
@@ -661,21 +661,21 @@ class SessionLifecycleService(
             }
 
         val executionModeValue = configService.get(
-            ConfigService.KEY_UI_EXECUTION_MODE,
+            ConfigKeys.UI_EXECUTION_MODE.key,
             scope,
             taskId = taskId,
             projectId = projectId
         )?.also { hasAny = true }
 
         val multiAgentEnabled = configService.get(
-            ConfigService.KEY_UI_ORCHESTRATION_ENABLED,
+            ConfigKeys.UI_ORCHESTRATION_ENABLED.key,
             scope,
             taskId = taskId,
             projectId = projectId
         )?.also { hasAny = true }?.toBoolean()
 
         @Suppress("UNUSED_VARIABLE") val _intentClassificationEnabled = configService.get(
-            ConfigService.KEY_UI_INTENT_CLASSIFICATION_ENABLED,
+            ConfigKeys.UI_INTENT_CLASSIFICATION_ENABLED.key,
             scope,
             taskId = taskId,
             projectId = projectId
@@ -686,7 +686,7 @@ class SessionLifecycleService(
         }
 
         val multiAgentStrategyValue = configService.get(
-            ConfigService.KEY_UI_MULTI_AGENT_STRATEGY,
+            ConfigKeys.UI_MULTI_AGENT_STRATEGY.key,
             scope,
             taskId = taskId,
             projectId = projectId
@@ -732,24 +732,24 @@ class SessionLifecycleService(
             // Use withContext instead of runBlocking to avoid blocking the coroutine
             kotlinx.coroutines.withContext(Dispatchers.IO) {
                 setUiSettingDefaults(
-                    ConfigService.KEY_UI_SELECTED_MODEL,
+                    ConfigKeys.UI_SELECTED_MODEL.key,
                     settings.selectedModel ?: "auto",
                 )
                 setUiSettingDefaults(
-                    ConfigService.KEY_UI_THINKING_ENABLED,
+                    ConfigKeys.UI_THINKING_ENABLED.key,
                     settings.thinkingEnabled.toString(),
                 )
                 setUiSettingDefaults(
-                    ConfigService.KEY_UI_NO_EGRESS_ENABLED,
+                    ConfigKeys.UI_NO_EGRESS_ENABLED.key,
                     settings.noEgressEnabled.toString(),
                 )
                 setUiSettingDefaults(
-                    ConfigService.KEY_UI_EXECUTION_MODE,
+                    ConfigKeys.UI_EXECUTION_MODE.key,
                     settings.executionMode.name,
                 )
 
                 configService.set(
-                    ConfigService.KEY_UI_SELECTED_MODE,
+                    ConfigKeys.UI_SELECTED_MODE.key,
                     selectedMode.name,
                     ConfigScope.APP
                 )
@@ -845,7 +845,7 @@ class SessionLifecycleService(
     private suspend fun loadExecutionModePreference(): ExecutionMode {
         val executionModeStr = withContext(Dispatchers.IO) {
             transaction {
-                configService.get(ConfigService.KEY_UI_EXECUTION_MODE)
+                configService.get(ConfigKeys.UI_EXECUTION_MODE.key)
             }
         }
         return parseExecutionMode(executionModeStr)

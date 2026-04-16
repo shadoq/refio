@@ -3,6 +3,7 @@ package pl.jclab.refio.ui.components.debug
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
+import pl.jclab.refio.core.api.SubtaskResponse
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.services.core.CoreConnectionManager
 import pl.jclab.refio.services.logging.LogLevel

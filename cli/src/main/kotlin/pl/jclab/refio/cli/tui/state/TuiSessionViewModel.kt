@@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
 import mu.KotlinLogging
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.api.ModelOperation
+import pl.jclab.refio.core.api.SubtaskResponse
 import pl.jclab.refio.core.api.TurnRequest
 import pl.jclab.refio.core.api.UpdateSubtaskRequest
 import pl.jclab.refio.core.api.UpdateTaskRequest
@@ -32,22 +33,19 @@ class TuiSessionViewModel(
     internal val mode: MutableStateFlow<String>,
     internal val model: MutableStateFlow<String?>,
     internal val projectPath: Path,
-    internal val projectId: String
+    internal val projectId: String,
+    internal val stateManager: pl.jclab.refio.core.session.SessionStateManager
 ) {
     // --- StateFlows owned by this sub-VM ---
 
-    /** Exposed as internal for coordinator wiring (workflowListener, clearSteps callback). */
-    internal val _stepsInternal = MutableStateFlow<List<TuiStep>>(emptyList())
-    val steps: StateFlow<List<TuiStep>> = _stepsInternal.asStateFlow()
+    /** Subtasks sourced from core [pl.jclab.refio.core.session.SessionStateManager]. */
+    val subtasks: StateFlow<List<SubtaskResponse>> = stateManager.subtasks
 
-    private val _subtasks = MutableStateFlow<List<TuiSubtask>>(emptyList())
-    val subtasks: StateFlow<List<TuiSubtask>> = _subtasks.asStateFlow()
+    private val _activePlan = MutableStateFlow<List<SubtaskResponse>?>(null)
+    val activePlan: StateFlow<List<SubtaskResponse>?> = _activePlan.asStateFlow()
 
-    private val _activePlan = MutableStateFlow<TuiPlan?>(null)
-    val activePlan: StateFlow<TuiPlan?> = _activePlan.asStateFlow()
-
-    private val _isPaused = MutableStateFlow(false)
-    val isPaused: StateFlow<Boolean> = _isPaused.asStateFlow()
+    /** Paused flag sourced from core [pl.jclab.refio.core.session.SessionStateManager]. */
+    val isPaused: StateFlow<Boolean> = stateManager.isPaused
 
     private val _pendingPlanApproval = MutableStateFlow<TuiPlanApproval?>(null)
     val pendingPlanApproval: StateFlow<TuiPlanApproval?> = _pendingPlanApproval.asStateFlow()
@@ -61,8 +59,8 @@ class TuiSessionViewModel(
     internal val _executionMode = MutableStateFlow("AUTO")
     val executionMode: StateFlow<String> = _executionMode.asStateFlow()
 
-    private val _sessions = MutableStateFlow<List<TuiSessionEntry>>(emptyList())
-    val sessions: StateFlow<List<TuiSessionEntry>> = _sessions.asStateFlow()
+    private val _sessions = MutableStateFlow<List<pl.jclab.refio.core.api.TaskResponse>>(emptyList())
+    val sessions: StateFlow<List<pl.jclab.refio.core.api.TaskResponse>> = _sessions.asStateFlow()
 
     private val _selectedHistoryIndex = MutableStateFlow(0)
     val selectedHistoryIndex: StateFlow<Int> = _selectedHistoryIndex.asStateFlow()
@@ -85,11 +83,9 @@ class TuiSessionViewModel(
     private val _totalTokens = MutableStateFlow(0L)
     val totalTokens: StateFlow<Long> = _totalTokens.asStateFlow()
 
-    private val _thinkingEnabled = MutableStateFlow(false)
-    val thinkingEnabled: StateFlow<Boolean> = _thinkingEnabled.asStateFlow()
-
-    private val _noEgressEnabled = MutableStateFlow(false)
-    val noEgressEnabled: StateFlow<Boolean> = _noEgressEnabled.asStateFlow()
+    /** Thinking/no-egress flags sourced from core [pl.jclab.refio.core.session.SessionStateManager]. */
+    val thinkingEnabled: StateFlow<Boolean> = stateManager.thinkingEnabled
+    val noEgressEnabled: StateFlow<Boolean> = stateManager.noEgressEnabled
 
     // --- Callbacks to parent TuiViewModel ---
 
@@ -142,11 +138,11 @@ class TuiSessionViewModel(
     var resolveContextWindow: (String?) -> Unit = {}
 
     fun setNoEgressEnabled(enabled: Boolean) {
-        _noEgressEnabled.value = enabled
+        stateManager.setNoEgressEnabled(enabled)
     }
 
     fun setThinkingEnabled(enabled: Boolean) {
-        _thinkingEnabled.value = enabled
+        stateManager.setThinkingEnabled(enabled)
     }
 
     // =============================================
@@ -158,7 +154,6 @@ class TuiSessionViewModel(
         scope.launch(Dispatchers.IO) {
             try {
                 _sessions.value = r.taskRouter.listTasks().tasks
-                    .map(TuiSessionEntry::fromTaskResponse)
                     .sortedByDescending { it.updatedAt }
             } catch (e: Exception) {
                 logger.warn(e) { "Failed to load sessions" }
@@ -222,7 +217,7 @@ class TuiSessionViewModel(
         _selectedHistoryIndex.value = 0
     }
 
-    private fun filteredSessions(): List<TuiSessionEntry> {
+    private fun filteredSessions(): List<pl.jclab.refio.core.api.TaskResponse> {
         val filter = _historyFilter.value
         return if (filter == "*") _sessions.value
         else _sessions.value.filter { it.mode == filter }
@@ -235,7 +230,7 @@ class TuiSessionViewModel(
         setTaskId(newId)
         clearMessages()
         clearSteps()
-        _subtasks.value = emptyList()
+        stateManager.setSubtasks(emptyList())
         _activePlan.value = null
         _pendingPlanApproval.value = null
         clearContextSections()
@@ -289,29 +284,29 @@ class TuiSessionViewModel(
         _executionStatus.value = status
     }
 
-    fun setSubtasks(subtasks: List<TuiSubtask>) {
-        _subtasks.value = subtasks
+    fun setSubtasks(subtasks: List<SubtaskResponse>) {
+        stateManager.setSubtasks(subtasks)
     }
 
     fun updateSubtaskStatus(subtaskId: String, status: String, error: String? = null) {
-        _subtasks.update { list ->
-            list.map {
-                if (it.id == subtaskId) it.copy(status = status, error = error) else it
+        stateManager.setSubtasks(
+            stateManager.getSubtasks().map {
+                if (it.id == subtaskId) it.copy(status = status, errorMessage = error) else it
             }
-        }
+        )
     }
 
-    fun setPendingPlanApproval(plan: TuiPlan) {
+    fun setPendingPlanApproval(taskId: String, steps: List<SubtaskResponse>) {
         _pendingPlanApproval.value = TuiPlanApproval(
-            taskId = plan.taskId,
-            plan = plan
+            taskId = taskId,
+            steps = steps,
         )
     }
 
     fun approvePlan() {
         val approval = _pendingPlanApproval.value ?: return
-        _activePlan.value = approval.plan
-        _subtasks.value = approval.plan.steps
+        _activePlan.value = approval.steps
+        stateManager.setSubtasks(approval.steps)
         _pendingPlanApproval.value = null
     }
 
@@ -348,7 +343,7 @@ class TuiSessionViewModel(
 
     fun moveStepUp(index: Int) {
         if (index <= 0) return
-        val list = _subtasks.value
+        val list = stateManager.getSubtasks()
         val current = list.getOrNull(index) ?: return
         val above = list.getOrNull(index - 1) ?: return
         scope.launch {
@@ -361,7 +356,7 @@ class TuiSessionViewModel(
     }
 
     fun moveStepDown(index: Int) {
-        val list = _subtasks.value
+        val list = stateManager.getSubtasks()
         if (index >= list.size - 1) return
         val current = list.getOrNull(index) ?: return
         val below = list.getOrNull(index + 1) ?: return
@@ -384,19 +379,21 @@ class TuiSessionViewModel(
     }
 
     fun executeStep(index: Int) {
-        val subtask = _subtasks.value.getOrNull(index) ?: return
+        val subtask = stateManager.getSubtasks().getOrNull(index) ?: return
         if (subtask.status !in listOf("NEW", "PENDING", "APPROVED")) {
-            addSystemMessage("Step '${subtask.name}' is ${subtask.status}, cannot execute")
+            addSystemMessage("Step '${subtask.description}' is ${subtask.status}, cannot execute")
             return
         }
         scope.launch {
             val r = getRouter() ?: return@launch
             val tid = getTaskId() ?: return@launch
             try {
-                _executionStatus.value = "Executing: ${subtask.name}"
-                _subtasks.update { list ->
-                    list.map { if (it.id == subtask.id) it.copy(status = "RUNNING") else it }
-                }
+                _executionStatus.value = "Executing: ${subtask.description}"
+                stateManager.setSubtasks(
+                    stateManager.getSubtasks().map {
+                        if (it.id == subtask.id) it.copy(status = "RUNNING") else it
+                    }
+                )
                 val result = r.agentRouter.executeSubtaskStep(tid, subtask.id)
                 loadSubtasksFromDb(r, tid)
                 loadMessagesFromDb(r, tid)
@@ -404,9 +401,11 @@ class TuiSessionViewModel(
                 _executionStatus.value = "Idle"
             } catch (e: Exception) {
                 logger.error(e) { "Failed to execute step: ${subtask.id}" }
-                _subtasks.update { list ->
-                    list.map { if (it.id == subtask.id) it.copy(status = "FAILED", error = e.message) else it }
-                }
+                stateManager.setSubtasks(
+                    stateManager.getSubtasks().map {
+                        if (it.id == subtask.id) it.copy(status = "FAILED", errorMessage = e.message) else it
+                    }
+                )
                 _executionStatus.value = "Error"
                 addSystemMessage("Step execution failed: ${e.message}")
             }
@@ -484,16 +483,16 @@ class TuiSessionViewModel(
     }
 
     fun togglePause() {
-        val wasPaused = _isPaused.value
-        _isPaused.update { !it }
+        val wasPaused = stateManager.getIsPaused()
+        stateManager.setPaused(!wasPaused)
         // On resume, check for pending subtasks needing approval
         if (wasPaused) {
-            val subtasks = _subtasks.value
+            val subtasks = stateManager.getSubtasks()
             val nextPending = subtasks.indexOfFirst { it.status in listOf("NEW", "PENDING") }
             if (nextPending >= 0) {
                 setActiveTab(TuiTab.STEPS)
                 selectStep(nextPending)
-                addSystemMessage("Resumed. Next step awaiting approval: ${subtasks[nextPending].name}")
+                addSystemMessage("Resumed. Next step awaiting approval: ${subtasks[nextPending].description}")
             } else {
                 addSystemMessage("Resumed. No pending steps.")
             }
@@ -501,7 +500,7 @@ class TuiSessionViewModel(
     }
 
     fun selectStep(index: Int) {
-        _selectedStepIndex.value = index.coerceIn(0, (_subtasks.value.size - 1).coerceAtLeast(0))
+        _selectedStepIndex.value = index.coerceIn(0, (stateManager.getSubtasks().size - 1).coerceAtLeast(0))
     }
 
     fun selectStepUp() {
@@ -509,7 +508,7 @@ class TuiSessionViewModel(
     }
 
     fun selectStepDown() {
-        _selectedStepIndex.update { (it + 1).coerceAtMost((_subtasks.value.size - 1).coerceAtLeast(0)) }
+        _selectedStepIndex.update { (it + 1).coerceAtMost((stateManager.getSubtasks().size - 1).coerceAtLeast(0)) }
     }
 
     // =============================================
@@ -634,7 +633,7 @@ class TuiSessionViewModel(
             val newId = createNewTaskInDb(r)
             setTaskId(newId)
             clearMessages()
-            _subtasks.value = emptyList()
+            stateManager.setSubtasks(emptyList())
             clearSteps()
             _activePlan.value = null
             _pendingPlanApproval.value = null
@@ -646,7 +645,7 @@ class TuiSessionViewModel(
 
         // Clear plan/step state when switching to CHAT (no tools in chat mode)
         if (newMode == "CHAT") {
-            _subtasks.value = emptyList()
+            stateManager.setSubtasks(emptyList())
             _activePlan.value = null
             _pendingPlanApproval.value = null
         }
@@ -660,13 +659,15 @@ class TuiSessionViewModel(
     }
 
     fun toggleThinking() {
-        _thinkingEnabled.update { !it }
-        persistUiSetting("thinking_enabled", _thinkingEnabled.value.toString())
+        val next = !stateManager.thinkingEnabled.value
+        stateManager.setThinkingEnabled(next)
+        persistUiSetting("thinking_enabled", next.toString())
     }
 
     fun toggleNoEgress() {
-        _noEgressEnabled.update { !it }
-        persistUiSetting("no_egress_enabled", _noEgressEnabled.value.toString())
+        val next = !stateManager.noEgressEnabled.value
+        stateManager.setNoEgressEnabled(next)
+        persistUiSetting("no_egress_enabled", next.toString())
     }
 
     fun toggleExecutionMode() {

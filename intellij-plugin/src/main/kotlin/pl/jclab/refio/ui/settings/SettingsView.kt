@@ -1,5 +1,7 @@
 package pl.jclab.refio.ui.settings
 
+import pl.jclab.refio.core.config.ConfigKeys
+
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBPanel
@@ -148,7 +150,7 @@ class SettingsView(
     /**
      * Auto-save mechanism - overloaded version that accepts full config key from ConfigService.
      *
-     * @param fullKey Full configuration key from ConfigService constants (e.g. ConfigService.KEY_API_CALL_TIMEOUT)
+     * @param fullKey Full configuration key from ConfigService constants (e.g. ConfigKeys.API_CALL_TIMEOUT.key)
      * @param value New value for the setting
      */
     fun onSettingChanged(fullKey: String, value: Any) {

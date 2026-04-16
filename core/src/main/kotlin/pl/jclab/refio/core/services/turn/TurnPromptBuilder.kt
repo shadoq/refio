@@ -157,7 +157,6 @@ $stickyRequirements
                 val turnResult = contextService.buildAgentTurnMessages(
                     taskId = taskId,
                     projectRoot = projectRoot,
-                    project = null,
                     userContextRefs = allContextRefs,
                     query = lastUserMessage
                 )

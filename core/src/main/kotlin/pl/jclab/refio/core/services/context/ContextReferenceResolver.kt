@@ -27,7 +27,12 @@ private val logger = dualLogger("ContextReferenceResolver")
 class ContextReferenceResolver(
     private val fileAnalyzerService: FileAnalyzerService? = null,
     private val configService: ConfigService,
-    private val chatMessageRepository: ChatMessageRepository
+    private val chatMessageRepository: ChatMessageRepository,
+    /**
+     * Opaque platform project handle (IntelliJ Project or null for CLI). Passed
+     * down to IDE-specific context providers via [ContextProviderExtras].
+     */
+    private val platformProject: Any? = null,
 ) {
 
     /**
@@ -36,16 +41,14 @@ class ContextReferenceResolver(
      *
      * @param refs Raw user context references from PromptInputPanel
      * @param projectRoot Project root path
-     * @param project IntelliJ Project instance (optional)
      * @return List of ResolvedContextDTO ready for LLM
      */
     internal suspend fun resolveAndConvertUserContextRefs(
         refs: List<ContextReference>,
         projectRoot: Path,
-        project: Any?,
         currentQuery: String?
     ): List<ResolvedContextDTO> {
-        val resolved = resolveUserContextReferences(refs, projectRoot, project, currentQuery)
+        val resolved = resolveUserContextReferences(refs, projectRoot, currentQuery)
 
         return resolved.mapNotNull { ref ->
             val content = ref.content
@@ -86,8 +89,6 @@ class ContextReferenceResolver(
      * Resolve user-provided context references (@file, @folder, @selection, etc.)
      * using ContextProviderRegistry as SINGLE SOURCE OF TRUTH.
      *
-     * INTERNAL: This is now private. Use buildProjectContext() with userContextRefs parameter.
-     *
      * Flow:
      * 1. For each ContextReference, determine provider ID
      * 2. Get provider from ContextProviderRegistry
@@ -96,13 +97,11 @@ class ContextReferenceResolver(
      *
      * @param refs User context references from PromptInputPanel
      * @param projectRoot Project root path for PathSandbox validation
-     * @param project IntelliJ Project instance (nullable for core-only usage)
      * @return List of resolved references with loaded content
      */
     private suspend fun resolveUserContextReferences(
         refs: List<ContextReference>,
         projectRoot: Path,
-        project: Any? = null,
         currentQuery: String? = null
     ): List<ContextReference> = withContext(Dispatchers.IO) {
         logger.info { "[CONTEXT] Resolving ${refs.size} user context reference(s)" }
@@ -113,35 +112,32 @@ class ContextReferenceResolver(
             try {
                 when (ref.type) {
                     ContextType.PROVIDER -> {
-                        // Modern flow: direct provider reference
-                        resolveProviderReference(ref, projectRoot, project, pathSandbox, currentQuery)
+                        resolveProviderReference(ref, projectRoot, pathSandbox, currentQuery)
                     }
-                    // Legacy types: map to providers for backwards compatibility
                     ContextType.FILE -> {
-                        resolveLegacyFileReference(ref, projectRoot, project, pathSandbox)
+                        resolveLegacyFileReference(ref, projectRoot, pathSandbox)
                     }
 
                     ContextType.FOLDER -> {
-                        resolveLegacyFolderReference(ref, projectRoot, project, pathSandbox)
+                        resolveLegacyFolderReference(ref, projectRoot, pathSandbox)
                     }
 
                     ContextType.SELECTION -> {
-                        // Selection already has content, just validate size
                         ref.copy(
                             estimatedTokens = (ref.content?.length ?: 0) / 4
                         )
                     }
 
                     ContextType.OPEN -> {
-                        resolveLegacyOpenReference(ref, projectRoot, project, pathSandbox)
+                        resolveLegacyOpenReference(ref, projectRoot, pathSandbox)
                     }
 
                     ContextType.RULES -> {
-                        resolveLegacyRulesReference(ref, projectRoot, project, pathSandbox)
+                        resolveLegacyRulesReference(ref, projectRoot, pathSandbox)
                     }
 
                     ContextType.DOCS -> {
-                        resolveDocsReference(ref, projectRoot, project, currentQuery)
+                        resolveDocsReference(ref, projectRoot, currentQuery)
                     }
                 }
             } catch (e: Exception) {
@@ -160,7 +156,6 @@ class ContextReferenceResolver(
     private suspend fun resolveProviderReference(
         ref: ContextReference,
         projectRoot: Path,
-        project: Any?,
         pathSandbox: PathSandbox,
         currentQuery: String?
     ): ContextReference {
@@ -191,7 +186,7 @@ class ContextReferenceResolver(
         }
 
         val extras = ContextProviderExtras(
-            project = project,
+            project = platformProject,
             fullInput = fullInput,
             workspacePath = projectRoot.toString()
         )
@@ -250,7 +245,6 @@ class ContextReferenceResolver(
     private suspend fun resolveDocsReference(
         ref: ContextReference,
         projectRoot: Path,
-        project: Any?,
         currentQuery: String?
     ): ContextReference {
         val provider = ContextProviderRegistry.getProvider("docs")
@@ -263,7 +257,7 @@ class ContextReferenceResolver(
         }
 
         val extras = ContextProviderExtras(
-            project = project,
+            project = platformProject,
             fullInput = currentQuery ?: ref.path,
             workspacePath = projectRoot.toString()
         )
@@ -300,7 +294,6 @@ class ContextReferenceResolver(
     private suspend fun resolveLegacyFileReference(
         ref: ContextReference,
         projectRoot: Path,
-        project: Any?,
         pathSandbox: PathSandbox
     ): ContextReference {
         logger.debug { "[CONTEXT] Resolving legacy FILE reference: ${ref.path}" }
@@ -315,7 +308,7 @@ class ContextReferenceResolver(
         }
 
         val extras = ContextProviderExtras(
-            project = project,
+            project = platformProject,
             fullInput = ref.path,
             workspacePath = projectRoot.toString()
         )
@@ -362,7 +355,6 @@ class ContextReferenceResolver(
     private suspend fun resolveLegacyFolderReference(
         ref: ContextReference,
         projectRoot: Path,
-        project: Any?,
         pathSandbox: PathSandbox
     ): ContextReference {
         logger.debug { "[CONTEXT] Resolving legacy FOLDER reference: ${ref.path}" }
@@ -377,7 +369,7 @@ class ContextReferenceResolver(
         }
 
         val extras = ContextProviderExtras(
-            project = project,
+            project = platformProject,
             fullInput = ref.path,
             workspacePath = projectRoot.toString()
         )
@@ -409,7 +401,6 @@ class ContextReferenceResolver(
     private suspend fun resolveLegacyOpenReference(
         ref: ContextReference,
         projectRoot: Path,
-        project: Any?,
         pathSandbox: PathSandbox
     ): ContextReference {
         logger.debug { "[CONTEXT] Resolving legacy OPEN reference" }
@@ -424,7 +415,7 @@ class ContextReferenceResolver(
         }
 
         val extras = ContextProviderExtras(
-            project = project,
+            project = platformProject,
             fullInput = "",
             workspacePath = projectRoot.toString()
         )
@@ -465,7 +456,6 @@ class ContextReferenceResolver(
     private suspend fun resolveLegacyRulesReference(
         ref: ContextReference,
         projectRoot: Path,
-        project: Any?,
         pathSandbox: PathSandbox
     ): ContextReference {
         logger.debug { "[CONTEXT] Resolving legacy RULES reference" }
@@ -487,7 +477,7 @@ class ContextReferenceResolver(
         }
 
         val extras = ContextProviderExtras(
-            project = project,
+            project = platformProject,
             fullInput = rulesPath,
             workspacePath = projectRoot.toString()
         )

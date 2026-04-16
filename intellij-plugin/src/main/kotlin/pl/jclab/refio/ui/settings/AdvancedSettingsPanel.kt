@@ -90,7 +90,7 @@ class AdvancedSettingsPanel(
                     return@addItemListener
                 }
                 val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                    pl.jclab.refio.core.services.ConfigService.KEY_NO_EGRESS_DEFAULT
+                    pl.jclab.refio.core.config.ConfigKeys.NO_EGRESS_DEFAULT.key
                 )
                 onSettingChanged(section, key, isSelected)
             }
@@ -102,7 +102,7 @@ class AdvancedSettingsPanel(
                     return@addItemListener
                 }
                 val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                    pl.jclab.refio.core.services.ConfigService.KEY_READ_ONLY_MODE
+                    pl.jclab.refio.core.config.ConfigKeys.READ_ONLY_MODE.key
                 )
                 onSettingChanged(section, key, isSelected)
             }
@@ -156,7 +156,7 @@ class AdvancedSettingsPanel(
                         return@addChangeListener
                     }
                     val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.services.ConfigService.KEY_TOOL_EXECUTION_TIMEOUT
+                        pl.jclab.refio.core.config.ConfigKeys.TOOL_EXECUTION_TIMEOUT.key
                     )
                     onSettingChanged(section, key, toolExecutionSlider.value)
                 }
@@ -186,7 +186,7 @@ class AdvancedSettingsPanel(
                         return@addChangeListener
                     }
                     val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.services.ConfigService.KEY_API_CALL_TIMEOUT
+                        pl.jclab.refio.core.config.ConfigKeys.API_CALL_TIMEOUT.key
                     )
                     onSettingChanged(section, key, apiCallSlider.value)
                 }
@@ -214,7 +214,7 @@ class AdvancedSettingsPanel(
                         }
                         val value = text.toIntOrNull() ?: 10
                         val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                            pl.jclab.refio.core.services.ConfigService.KEY_MAX_FILE_SIZE
+                            pl.jclab.refio.core.config.ConfigKeys.MAX_FILE_SIZE.key
                         )
                         onSettingChanged(section, key, value)
                     }
@@ -235,7 +235,7 @@ class AdvancedSettingsPanel(
                         }
                         val value = text.toIntOrNull() ?: 128000
                         val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                            pl.jclab.refio.core.services.ConfigService.KEY_MAX_CONTEXT_SIZE
+                            pl.jclab.refio.core.config.ConfigKeys.MAX_CONTEXT_SIZE.key
                         )
                         onSettingChanged(section, key, value)
                     }
@@ -256,7 +256,7 @@ class AdvancedSettingsPanel(
                         }
                         val value = text.toIntOrNull() ?: 8192
                         val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                            pl.jclab.refio.core.services.ConfigService.KEY_MAX_OUTPUT_SIZE
+                            pl.jclab.refio.core.config.ConfigKeys.MAX_OUTPUT_SIZE.key
                         )
                         onSettingChanged(section, key, value)
                     }
@@ -290,7 +290,7 @@ class AdvancedSettingsPanel(
                         return@addChangeListener
                     }
                     val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.services.ConfigService.KEY_AUTO_OPTIMIZE_PERCENTAGE
+                        pl.jclab.refio.core.config.ConfigKeys.AUTO_OPTIMIZE_PERCENTAGE.key
                     )
                     onSettingChanged(section, key, autoOptimizeSlider.value)
                 }

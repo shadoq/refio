@@ -189,6 +189,12 @@ class ModelsSettingsPanel(
     // Flag to prevent saving when dropdowns are updated programmatically
     private var isUpdatingDropdowns = false
 
+    // Last models shown in the table — used by Show All / Hide All to update
+    // visibility in place instead of refetching from the backend (the model-registry
+    // cache may have been invalidated by a concurrent provider settings save, which
+    // would make fetchIfMissing=false return an empty list).
+    private var currentModels: List<pl.jclab.refio.core.api.ModelInfo> = emptyList()
+
     init {
         border = LCATheme.paddedBorder(LCATheme.margin)
 
@@ -714,72 +720,36 @@ class ModelsSettingsPanel(
         }
     }
 
-    private fun onShowAllModels() {
-        val tableModel = modelsTable.model as DefaultTableModel
-        val rowCount = tableModel.rowCount
+    private fun onShowAllModels() = setAllModelsVisibility(showInDropdown = true)
 
-        if (rowCount == 0) {
-            logger.warn { "No models to show" }
+    private fun onHideAllModels() = setAllModelsVisibility(showInDropdown = false)
+
+    private fun setAllModelsVisibility(showInDropdown: Boolean) {
+        val snapshot = currentModels
+        if (snapshot.isEmpty()) {
+            logger.warn { if (showInDropdown) "No models to show" else "No models to hide" }
             return
         }
 
-        logger.info { "Showing all $rowCount models" }
+        logger.info { "${if (showInDropdown) "Showing" else "Hiding"} all ${snapshot.size} models" }
 
         coroutineScope.launch {
             try {
-                val visibilityMap = buildVisibilityMapFromTable(showInDropdown = true)
+                val visibilityMap = snapshot.associate { it.id to showInDropdown }
                 markModelVisibilityInitialized()
                 coreApiClient?.configRouter?.updateModelsVisibility(visibilityMap)
 
-                // Reload models from database and update UI
-                val models = coreApiClient?.configRouter?.getModelsWithVisibility(fetchIfMissing = false) ?: emptyList()
+                val updatedModels = snapshot.map { it.copy(showInDropdown = showInDropdown) }
                 ApplicationManager.getApplication().invokeLater {
-                    populateModelsTable(models)
-                    logger.info { "All models shown successfully" }
+                    populateModelsTable(updatedModels)
+                    logger.info { "All models ${if (showInDropdown) "shown" else "hidden"} successfully" }
                 }
             } catch (e: Exception) {
-                logger.error(e) { "Failed to show all models" }
+                logger.error(e) { "Failed to update visibility for all models" }
                 ApplicationManager.getApplication().invokeLater {
                     JOptionPane.showMessageDialog(
                         this@ModelsSettingsPanel,
-                        "Failed to show all models:\n${e.message}",
-                        "Error",
-                        JOptionPane.ERROR_MESSAGE
-                    )
-                }
-            }
-        }
-    }
-
-    private fun onHideAllModels() {
-        val tableModel = modelsTable.model as DefaultTableModel
-        val rowCount = tableModel.rowCount
-
-        if (rowCount == 0) {
-            logger.warn { "No models to hide" }
-            return
-        }
-
-        logger.info { "Hiding all $rowCount models" }
-
-        coroutineScope.launch {
-            try {
-                val visibilityMap = buildVisibilityMapFromTable(showInDropdown = false)
-                markModelVisibilityInitialized()
-                coreApiClient?.configRouter?.updateModelsVisibility(visibilityMap)
-
-                // Reload models from database and update UI
-                val models = coreApiClient?.configRouter?.getModelsWithVisibility(fetchIfMissing = false) ?: emptyList()
-                ApplicationManager.getApplication().invokeLater {
-                    populateModelsTable(models)
-                    logger.info { "All models hidden successfully" }
-                }
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to hide all models" }
-                ApplicationManager.getApplication().invokeLater {
-                    JOptionPane.showMessageDialog(
-                        this@ModelsSettingsPanel,
-                        "Failed to hide all models:\n${e.message}",
+                        "Failed to update models visibility:\n${e.message}",
                         "Error",
                         JOptionPane.ERROR_MESSAGE
                     )
@@ -936,6 +906,8 @@ class ModelsSettingsPanel(
     }
 
     private fun populateModelsTable(models: List<pl.jclab.refio.core.api.ModelInfo>) {
+        currentModels = models
+
         val tableModel = modelsTable.model as DefaultTableModel
         tableModel.rowCount = 0  // Clear table
 
@@ -1256,19 +1228,6 @@ class ModelsSettingsPanel(
             // Always reset flag
             isUpdatingDropdowns = false
         }
-    }
-
-    private fun buildVisibilityMapFromTable(showInDropdown: Boolean): Map<String, Boolean> {
-        val tableModel = modelsTable.model as DefaultTableModel
-        val rowCount = tableModel.rowCount
-        val visibilityMap = HashMap<String, Boolean>(rowCount)
-
-        for (row in 0 until rowCount) {
-            val modelId = tableModel.getValueAt(row, 7) as String
-            visibilityMap[modelId] = showInDropdown
-        }
-
-        return visibilityMap
     }
 
     private fun buildVisibilityMap(

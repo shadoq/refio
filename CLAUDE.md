@@ -25,7 +25,8 @@ Local-first AI coding assistant for IntelliJ IDEA and the terminal. Kotlin/JVM p
 
 # Quality
 ./gradlew :intellij-plugin:check           # Includes detectSensitiveLogging task
-./gradlew :intellij-plugin:jacocoTestReport # Coverage report (40% minimum)
+./gradlew :core:jacocoTestCoverageVerification # Coverage gate (35% minimum instructions, wired into :core:check)
+./gradlew :intellij-plugin:jacocoTestReport    # Plugin coverage report (HTML/XML only, no threshold — tests live in :core)
 ```
 
 ## Module Architecture
@@ -50,7 +51,7 @@ UI (IntelliJ Swing / TUI Mordant)
           → Infrastructure (SQLite via Exposed ORM, Ktor HTTP, Caffeine cache)
 ```
 
-Callers access domain routers directly via `coreApiRouter.taskRouter`, `coreApiRouter.chatRouter`, etc. CoreApiRouter itself is a thin composition root (~987 LOC) with no facade methods.
+Callers access domain routers directly via `coreApiRouter.taskRouter`, `coreApiRouter.chatRouter`, etc. CoreApiRouter itself is a thin composition root (~300 LOC) with no facade methods.
 
 ## Three Execution Modes
 
@@ -100,7 +101,7 @@ JUnit 5 + MockK + Turbine (Flow testing). Tests mirror source structure under `s
 
 ## Important Patterns
 
-- **Thin router pattern**: CoreApiRouter is a composition root (~987 LOC) that creates dependencies and exposes 12 domain routers. Callers use domain routers directly (e.g., `coreApiRouter.taskRouter.createTask()`). No facade methods — zero business logic in CoreApiRouter.
+- **Thin router pattern**: CoreApiRouter is a composition root (~300 LOC) that creates dependencies and exposes 12 domain routers. Callers use domain routers directly (e.g., `coreApiRouter.taskRouter.createTask()`). No facade methods — zero business logic in CoreApiRouter.
 - **StateFlow reactivity**: SessionManager exposes 11 StateFlows; UI observes via `Flow.collect`.
 - **Separate source trees**: Each module has its own `src/main/kotlin`. When adding new core files, ensure they don't depend on IntelliJ Platform APIs — the `:core` module has no IntelliJ dependency.
 - **Security layers**: PathSandbox restricts file ops to project root; CommandRule (regex-based ALLOW/BLOCK/ASK) replaces legacy CommandWhitelist for terminal commands; FileLimits enforces size/extension restrictions. ToolPermissionsService provides 3-level (ON/ASK/OFF) per-mode access control. ToolApprovalService handles user approval flow with session trust rules.

@@ -37,6 +37,10 @@ class BackgroundIndexingTask(
         indicator.text2 = ""
         indicator.fraction = 0.0
 
+        // runBlocking is intentional: Task.Backgroundable.run() is synchronous in the IntelliJ 241+ API
+        // we target; ProgressManager blocks the caller on this method until it returns. Cancellation is
+        // propagated through job?.cancel() in onCancel() and through indicator.isCanceled checks inside
+        // the coroutine body.
         runBlocking {
             job = launch(Dispatchers.IO) {
                 runIndexingStage(router, indicator)

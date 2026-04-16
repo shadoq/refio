@@ -18,6 +18,7 @@ import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.services.AgentExecutor
 import pl.jclab.refio.core.services.AgentTurnLoop
 import pl.jclab.refio.core.services.ConfigService
+import pl.jclab.refio.core.services.turn.TurnEventListener
 import pl.jclab.refio.core.services.ContextService
 import pl.jclab.refio.core.services.TurnResult
 import pl.jclab.refio.core.db.PromptType
@@ -48,7 +49,6 @@ private val logger = dualLogger("AgentRouter")
  * @property promptsService Prompts service
  * @property contextService Context service (for execution summaries)
  * @property projectRoot Project root path (for execution summaries)
- * @property ideProject IntelliJ project instance (for context building)
  */
 class AgentRouter(
     private val agentExecutor: AgentExecutor?,
@@ -60,7 +60,6 @@ class AgentRouter(
     private val promptsService: pl.jclab.refio.core.services.PromptsService,
     private val contextService: ContextService?,
     private val projectRoot: Path?,
-    private val ideProject: Any?,
     private val toolDescriptionBuilder: pl.jclab.refio.core.prompts.ToolDescriptionBuilder,
     private val agentTurnLoop: pl.jclab.refio.core.services.AgentTurnLoop? = null
 ) : Router {
@@ -428,8 +427,7 @@ _Execution time: ${result.durationMs}ms_
         // Build full project context using ContextService
         val projectContext = contextService.buildProjectContext(
             projectRoot = projectRoot,
-            taskId = taskId,
-            project = ideProject
+            taskId = taskId
         )
 
         // Calculate statistics
@@ -730,7 +728,7 @@ _Execution time: ${result.durationMs}ms_
     suspend fun runTurn(
         request: TurnRequest,
         streamCallback: StreamCallback? = null,
-        listener: AgentTurnLoop.TurnEventListener? = null
+        listener: TurnEventListener? = null
     ): TurnResult {
         val turnLoop = agentTurnLoop
             ?: throw IllegalStateException("AgentTurnLoop not available - toolRegistry is not configured")

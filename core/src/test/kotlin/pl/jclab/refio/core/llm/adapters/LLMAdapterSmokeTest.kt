@@ -58,7 +58,7 @@ class LLMAdapterSmokeTest {
     @Test
     fun `openai smoke test should send multimodal request and parse response`() = runTest {
         val configService = mockProviderConfig(
-            key = ConfigService.KEY_PROVIDER_OPENAI_API_KEY,
+            key = ConfigKeys.PROVIDER_OPENAI_API_KEY.key,
             apiKey = "test-openai-key"
         )
 
@@ -124,7 +124,7 @@ class LLMAdapterSmokeTest {
     @Test
     fun `anthropic smoke test should send multimodal request and parse response`() = runTest {
         val configService = mockProviderConfig(
-            key = ConfigService.KEY_PROVIDER_ANTHROPIC_API_KEY,
+            key = ConfigKeys.PROVIDER_ANTHROPIC_API_KEY.key,
             apiKey = "test-anthropic-key"
         )
 
@@ -188,7 +188,7 @@ class LLMAdapterSmokeTest {
     @Test
     fun `gemini smoke test should send multimodal request and parse response`() = runTest {
         val configService = mockProviderConfig(
-            key = ConfigService.KEY_PROVIDER_GEMINI_API_KEY,
+            key = ConfigKeys.PROVIDER_GEMINI_API_KEY.key,
             apiKey = "test-gemini-key"
         )
 

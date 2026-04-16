@@ -8,7 +8,7 @@ import kotlinx.coroutines.sync.withLock
 import pl.jclab.refio.api.models.ContextReference
 import pl.jclab.refio.api.models.Message
 import pl.jclab.refio.api.models.Session
-import pl.jclab.refio.api.models.SubtaskDto
+import pl.jclab.refio.core.api.SubtaskResponse
 import pl.jclab.refio.core.api.ContextSectionTokenInfo
 import pl.jclab.refio.core.api.PlanResponse
 import pl.jclab.refio.core.api.PlanSpecStepResponse
@@ -35,8 +35,8 @@ class SessionStateManager {
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
     val messages: StateFlow<List<Message>> = _messages.asStateFlow()
 
-    private val _subtasks = MutableStateFlow<List<SubtaskDto>>(emptyList())
-    val subtasks: StateFlow<List<SubtaskDto>> = _subtasks.asStateFlow()
+    private val _subtasks = MutableStateFlow<List<SubtaskResponse>>(emptyList())
+    val subtasks: StateFlow<List<SubtaskResponse>> = _subtasks.asStateFlow()
 
     // Plan state (for PLAN mode sessions)
     private val _activePlan = MutableStateFlow<PlanResponse?>(null)
@@ -96,7 +96,7 @@ class SessionStateManager {
         _messages.value = emptyList()
     }
 
-    fun setSubtasks(subtasks: List<SubtaskDto>) {
+    fun setSubtasks(subtasks: List<SubtaskResponse>) {
         _subtasks.value = subtasks
     }
 
@@ -166,7 +166,7 @@ class SessionStateManager {
 
     fun getActiveSession(): Session? = _activeSession.value
 
-    fun getSubtasks(): List<SubtaskDto> = _subtasks.value
+    fun getSubtasks(): List<SubtaskResponse> = _subtasks.value
 
     fun getSelectedModel(): String = _selectedModel.value
 

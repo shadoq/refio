@@ -2,7 +2,7 @@ package pl.jclab.refio.core.llm
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import pl.jclab.refio.core.services.ConfigService
+import pl.jclab.refio.core.config.ConfigKeys
 
 /**
  * Base classes for LLM adapters in Refio.
@@ -267,7 +267,7 @@ abstract class BaseLLMAdapter(
             if (maxTokensKey != null) {
                 val baseMaxTokens = (mutableParams[maxTokensKey] as? Number)?.toInt()
                     ?: definition.maxOutputTokens
-                    ?: ConfigService.DEFAULT_MAX_OUTPUT_SIZE
+                    ?: ConfigKeys.MAX_OUTPUT_SIZE.default
                 val adjustedMaxTokens = (baseMaxTokens * definition.reasoningTokensMultiplier).toInt()
                 mutableParams[maxTokensKey] = adjustedMaxTokens
             }

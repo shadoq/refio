@@ -323,7 +323,7 @@ class ExecutionMonitor(
     private fun isStreamingEnabled(): Boolean {
         return try {
             val streamingConfig = projectRouter.configService.get(
-                key = pl.jclab.refio.core.services.ConfigService.KEY_STREAMING_ENABLED,
+                key = pl.jclab.refio.core.config.ConfigKeys.STREAMING_ENABLED.key,
                 scope = pl.jclab.refio.core.db.ConfigScope.APP
             )
             streamingConfig?.toBoolean() ?: true

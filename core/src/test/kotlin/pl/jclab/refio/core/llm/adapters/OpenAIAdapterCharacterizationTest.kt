@@ -208,7 +208,7 @@ class OpenAIAdapterCharacterizationTest {
         val configService = mockk<ConfigService>()
         every { configService.get(any(), any(), any(), any()) } returns null
         every {
-            configService.get(ConfigService.KEY_PROVIDER_OPENAI_API_KEY, ConfigScope.APP, any(), any())
+            configService.get(ConfigKeys.PROVIDER_OPENAI_API_KEY.key, ConfigScope.APP, any(), any())
         } returns "test-openai-key"
         every { configService.getTyped(ConfigKeys.API_CALL_TIMEOUT, any()) } returns ConfigKeys.API_CALL_TIMEOUT.default
         every { configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, any()) } returns ConfigKeys.MAX_OUTPUT_SIZE.default

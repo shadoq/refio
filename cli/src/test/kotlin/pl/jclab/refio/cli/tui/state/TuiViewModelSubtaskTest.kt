@@ -6,57 +6,36 @@ import org.junit.jupiter.api.Assertions.*
 /**
  * Tests subtask state management in TuiState (pure state tests).
  * ViewModel methods that call router are tested via integration tests.
+ *
+ * Uses core [pl.jclab.refio.core.api.SubtaskResponse] directly — TUI no longer has
+ * its own subtask/plan DTOs (DTO de-duplication, 2026-04-16).
  */
 class TuiViewModelSubtaskTest {
 
     @Test
-    fun `TuiSubtask should have correct default values`() {
-        val subtask = TuiSubtask(id = "s1", name = "test step")
-        assertEquals("NEW", subtask.status)
-        assertEquals("", subtask.description)
-        assertNull(subtask.toolName)
-        assertNull(subtask.error)
-        assertEquals(0L, subtask.tokensIn)
-        assertEquals(0L, subtask.tokensOut)
-        assertEquals(0.0, subtask.costUsd)
-    }
-
-    @Test
-    fun `TuiSubtask copy should update status`() {
-        val original = TuiSubtask(id = "s1", name = "test", status = "NEW")
+    fun `SubtaskResponse copy should update status`() {
+        val original = subtaskFixture(id = "s1", description = "test", status = "NEW")
         val updated = original.copy(status = "RUNNING")
         assertEquals("NEW", original.status)
         assertEquals("RUNNING", updated.status)
     }
 
     @Test
-    fun `TuiSubtask copy should update error`() {
-        val original = TuiSubtask(id = "s1", name = "test", status = "RUNNING")
-        val failed = original.copy(status = "FAILED", error = "Connection timeout")
+    fun `SubtaskResponse copy should update errorMessage`() {
+        val original = subtaskFixture(id = "s1", description = "test", status = "RUNNING")
+        val failed = original.copy(status = "FAILED", errorMessage = "Connection timeout")
         assertEquals("FAILED", failed.status)
-        assertEquals("Connection timeout", failed.error)
+        assertEquals("Connection timeout", failed.errorMessage)
     }
 
     @Test
-    fun `TuiPlan should track read and write steps`() {
-        val plan = TuiPlan(
-            taskId = "t1",
-            steps = listOf(
-                TuiSubtask(id = "s1", name = "read", toolName = "read_file"),
-                TuiSubtask(id = "s2", name = "edit", toolName = "code_editing")
-            ),
-            totalReadSteps = 1,
-            totalWriteSteps = 1
+    fun `TuiPlanApproval should carry plan steps`() {
+        val steps = listOf(
+            subtaskFixture(id = "s1", description = "read", kind = "read_file"),
+            subtaskFixture(id = "s2", description = "edit", kind = "code_editing"),
         )
-        assertEquals(2, plan.steps.size)
-        assertEquals(1, plan.totalReadSteps)
-        assertEquals(1, plan.totalWriteSteps)
-    }
-
-    @Test
-    fun `TuiPlanApproval should be visible by default`() {
-        val plan = TuiPlan(taskId = "t1", steps = emptyList())
-        val approval = TuiPlanApproval(taskId = "t1", plan = plan)
+        val approval = TuiPlanApproval(taskId = "t1", steps = steps)
+        assertEquals(2, approval.steps.size)
         assertTrue(approval.isVisible)
     }
 
@@ -73,11 +52,11 @@ class TuiViewModelSubtaskTest {
     }
 
     @Test
-    fun `subtask list operations should work correctly`() {
+    fun `subtask list counts should work correctly`() {
         val subtasks = listOf(
-            TuiSubtask(id = "s1", name = "a", status = "COMPLETED"),
-            TuiSubtask(id = "s2", name = "b", status = "RUNNING"),
-            TuiSubtask(id = "s3", name = "c", status = "NEW")
+            subtaskFixture(id = "s1", description = "a", status = "COMPLETED"),
+            subtaskFixture(id = "s2", description = "b", status = "RUNNING"),
+            subtaskFixture(id = "s3", description = "c", status = "NEW"),
         )
         val completed = subtasks.count { it.status == "COMPLETED" }
         val running = subtasks.count { it.status == "RUNNING" }
@@ -88,7 +67,7 @@ class TuiViewModelSubtaskTest {
     @Test
     fun `subtask status update should be immutable`() {
         val list = listOf(
-            TuiSubtask(id = "s1", name = "test", status = "NEW")
+            subtaskFixture(id = "s1", description = "test", status = "NEW"),
         )
         val updated = list.map {
             if (it.id == "s1") it.copy(status = "APPROVED") else it

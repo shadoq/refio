@@ -1,78 +1,53 @@
 package pl.jclab.refio.core.llm.adapters
 
 import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.plugins.HttpRequestTimeoutException
-import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.plugins.logging.LogLevel
-import io.ktor.client.plugins.logging.Logger as KtorLogger
-import io.ktor.client.plugins.logging.Logging
-import io.ktor.client.request.get
-import io.ktor.client.request.header
-import io.ktor.client.request.post
-import io.ktor.client.request.preparePost
-import io.ktor.client.request.setBody
-import io.ktor.http.ContentType
-import io.ktor.http.HttpHeaders
-import io.ktor.http.contentType
-import io.ktor.serialization.gson.gson
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.errors.RefioError
-import pl.jclab.refio.core.llm.BaseLLMAdapter
-import pl.jclab.refio.core.llm.LLMMessage
-import pl.jclab.refio.core.llm.LLMResponse
-import pl.jclab.refio.core.llm.LLMUsage
-import pl.jclab.refio.core.llm.ModelConfig
-import pl.jclab.refio.core.llm.ModelDefinitions
-import pl.jclab.refio.core.llm.StreamChunk
-import pl.jclab.refio.core.llm.toModelConfig
-import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.core.services.ConfigService
-import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
-import pl.jclab.refio.core.utils.GsonInstance.gson
-import pl.jclab.refio.core.logging.dualLogger
-import java.util.UUID
 
+/**
+ * Open, generic OpenAI-compatible chat adapter for:
+ * - `provider: custom_openai` (any OpenAI-compatible endpoint),
+ * - `provider: zai` via the [ZAIAdapter] subclass (adds rate-limit serialization).
+ *
+ * Most logic lives in [OpenAICompatibleAdapter]; this class only supplies the
+ * per-provider config keys, enforces `api_key` when required, and (for `zai`)
+ * serializes requests through a mutex with retry after HTTP 429.
+ */
 open class GenericOpenAIAdapter(
     model: String,
-    private val providerName: String = "generic_openai",
-    private val configService: ConfigService? = null,
-    private val taskId: String? = null,
-    private val subtaskId: String? = null,
-    private val source: String? = null,
+    providerName: String = "generic_openai",
+    configService: ConfigService? = null,
+    taskId: String? = null,
+    subtaskId: String? = null,
+    source: String? = null,
     private val baseUrlOverride: String? = null,
     private val apiKeyOverride: String? = null,
-    private val requireApiKey: Boolean = false,
+    requireApiKey: Boolean = false,
     private val defaultBaseUrl: String? = null,
-    httpClientOverride: HttpClient? = null
-) : BaseLLMAdapter(model, providerName) {
+    httpClientOverride: HttpClient? = null,
+) : OpenAICompatibleAdapter(
+    model = model,
+    providerName = providerName,
+    configService = configService,
+    taskId = taskId,
+    subtaskId = subtaskId,
+    source = source,
+    requireApiKey = requireApiKey,
+    httpClientOverride = httpClientOverride,
+) {
 
     companion object {
-        private const val CHAT_ENDPOINT = "/chat/completions"
-        private const val MODELS_ENDPOINT = "/models"
         private const val ZAI_COOLDOWN_MS = 5_000L
         private const val ZAI_RATE_LIMIT_RETRY_DELAY_MS = 15_000L
         private val zaiRequestMutex = Mutex()
         private var zaiNextAllowedAtMs: Long = 0L
     }
 
-    private val logger = dualLogger("GenericOpenAIAdapter")
-
-    private val client: HttpClient = httpClientOverride ?: run {
-        val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
-            ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
-        LLMKtorClientFactory.create(timeoutMs, logger)
-    }
-
-    private fun resolveBaseUrl(): String {
+    override fun resolveBaseUrl(): String {
         val configured = baseUrlOverride?.takeIf { it.isNotBlank() }
             ?: when (providerName) {
                 "zai" -> configService?.getTyped(ConfigKeys.PROVIDER_ZAI_BASE_URL)
@@ -88,7 +63,7 @@ open class GenericOpenAIAdapter(
             ?: throw RefioError.ProviderNotConfigured(providerName, "base_url")
     }
 
-    private fun resolveApiKey(): String? {
+    override fun resolveApiKey(): String? {
         val key = apiKeyOverride?.takeIf { it.isNotBlank() }
             ?: when (providerName) {
                 "zai" -> configService?.getTyped(ConfigKeys.PROVIDER_ZAI_API_KEY)
@@ -105,415 +80,55 @@ open class GenericOpenAIAdapter(
         return key
     }
 
-    override suspend fun chat(
-        messages: List<LLMMessage>,
-        systemMessages: List<String>,
-        maxTokens: Int?,
-        temperature: Double,
-        streaming: Boolean,
-        onStreamChunk: ((StreamChunk) -> Unit)?,
-        kwargs: Map<String, Any>
-    ): LLMResponse {
-        val baseUrl = resolveBaseUrl()
-        val apiKey = resolveApiKey()
-        val requestMessages = OpenAICompatibleHelpers.buildMessages(this, systemMessages, messages)
-        val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId) ?: ConfigKeys.MAX_OUTPUT_SIZE.default
-        val effectiveMaxTokens = when {
-            maxTokens != null && maxTokens > 0 -> minOf(maxTokens, maxOutputLimit)
-            else -> maxOutputLimit
+    override suspend fun <T> withProviderRateLimit(endpoint: String, block: suspend () -> T): T {
+        if (providerName != "zai") return block()
+        return zaiRequestMutex.withLock {
+            val now = System.currentTimeMillis()
+            val waitMs = (zaiNextAllowedAtMs - now).coerceAtLeast(0L)
+            if (waitMs > 0) {
+                logger.info { "[ZAI] Waiting ${waitMs}ms before next request: $endpoint" }
+                delay(waitMs)
+            }
+            try {
+                block()
+            } finally {
+                zaiNextAllowedAtMs = System.currentTimeMillis() + ZAI_COOLDOWN_MS
+            }
         }
-        val requestId = UUID.randomUUID().toString()
-        val requestBody = buildMap<String, Any> {
-            put("request_id", requestId)
-            put("model", model)
-            put("messages", requestMessages)
-            put("temperature", temperature)
-            put("max_tokens", effectiveMaxTokens)
-            if (streaming) put("stream", true)
-            with(OpenAICompatibleHelpers) { addCommonKwargs(kwargs) }
-            kwargs["response_format"]?.let { put("response_format", it) }
-        }
-        val requestJson = gson.toJson(requestBody)
-        val startTime = System.currentTimeMillis()
-        val logPrefix = "[${providerName.uppercase()}][$requestId]"
+    }
 
+    override suspend fun <T> executeWithRateLimitRetry(endpoint: String, block: suspend () -> T): T {
+        if (providerName != "zai") return block()
         return try {
-            if (streaming && onStreamChunk != null) {
-                executeStreaming(baseUrl, apiKey, requestBody, requestJson, startTime, onStreamChunk, logPrefix)
-            } else {
-                executeStandard(baseUrl, apiKey, requestBody, requestJson, startTime, logPrefix)
+            block()
+        } catch (e: RefioError.LLMRateLimit) {
+            logger.warn {
+                "[ZAI] Rate limit hit for $endpoint. Waiting ${ZAI_RATE_LIMIT_RETRY_DELAY_MS}ms before retry"
             }
-        } catch (e: HttpRequestTimeoutException) {
-            throw RefioError.LLMTimeout(providerName, model, configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L) ?: 0L, e)
+            zaiNextAllowedAtMs = maxOf(
+                zaiNextAllowedAtMs,
+                System.currentTimeMillis() + ZAI_RATE_LIMIT_RETRY_DELAY_MS
+            )
+            delay(ZAI_RATE_LIMIT_RETRY_DELAY_MS)
+            block()
         }
     }
 
-    private suspend fun executeStandard(
-        baseUrl: String,
-        apiKey: String?,
-        requestBody: Map<String, Any>,
-        requestJson: String,
-        startTime: Long,
-        logPrefix: String
-    ): LLMResponse {
-        var httpStatus: Int? = null
-
-        try {
-            logger.info { "$logPrefix Request start: endpoint=$baseUrl$CHAT_ENDPOINT, body=${SecureLogger.redactAndTruncate(requestJson)}" }
-            val response = executeWithZaiRateLimitRetry("$baseUrl$CHAT_ENDPOINT") {
-                withProviderRateLimit("$baseUrl$CHAT_ENDPOINT") {
-                    client.post("$baseUrl$CHAT_ENDPOINT") {
-                        contentType(ContentType.Application.Json)
-                        apiKey?.let { header(HttpHeaders.Authorization, "Bearer $it") }
-                        setBody(requestBody)
-                    }
-                }
-            }
-
-            httpStatus = response.status.value
-            val rawResponse: Map<String, Any?> = response.body()
-            ensureSuccess(httpStatus, rawResponse, baseUrl)
-
-            val usage = extractUsage(rawResponse)
-            @Suppress("UNCHECKED_CAST")
-            val choices = rawResponse["choices"] as? List<Map<String, Any?>> ?: emptyList()
-            val firstChoice = choices.firstOrNull() ?: emptyMap()
-            @Suppress("UNCHECKED_CAST")
-            val message = firstChoice["message"] as? Map<String, Any?> ?: emptyMap()
-            val content = message["content"] as? String ?: ""
-            val normalizedToolCallsJson = if (content.isBlank()) {
-                ToolCallContentNormalizer.fromOpenAiToolCalls(message["tool_calls"])
-            } else {
-                null
-            }
-
-            logger.apiResponse(
-                provider = provider,
-                model = model,
-                endpoint = "$baseUrl$CHAT_ENDPOINT",
-                requestJson = requestJson,
-                responseJson = gson.toJson(rawResponse),
-                httpStatus = httpStatus,
-                inputTokens = usage.inputTokens,
-                outputTokens = usage.outputTokens,
-                costUsd = 0.0,
-                latencyMs = (System.currentTimeMillis() - startTime).toInt(),
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-
-            return LLMResponse(
-                content = normalizedToolCallsJson ?: content,
-                usage = usage,
-                model = model,
-                provider = provider,
-                cost = 0.0,
-                finishReason = firstChoice["finish_reason"] as? String,
-                rawResponse = rawResponse
-            )
-        } catch (e: RefioError) {
-            logger.apiError(
-                provider = provider,
-                model = model,
-                endpoint = "$baseUrl$CHAT_ENDPOINT",
-                requestJson = requestJson,
-                httpStatus = httpStatus,
-                error = e,
-                latencyMs = (System.currentTimeMillis() - startTime).toInt(),
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-            throw e
-        } catch (e: Exception) {
-            logger.apiError(
-                provider = provider,
-                model = model,
-                endpoint = "$baseUrl$CHAT_ENDPOINT",
-                requestJson = requestJson,
-                httpStatus = httpStatus,
-                error = e,
-                latencyMs = (System.currentTimeMillis() - startTime).toInt(),
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-            throw RefioError.LLMError(providerName, model, e)
-        }
-    }
-
-    private suspend fun executeStreaming(
-        baseUrl: String,
-        apiKey: String?,
-        requestBody: Map<String, Any>,
-        requestJson: String,
-        startTime: Long,
-        onStreamChunk: (StreamChunk) -> Unit,
-        logPrefix: String
-    ): LLMResponse {
-        val contentBuilder = StringBuilder()
-        val toolCallAccumulator = ToolCallContentNormalizer.OpenAiStreamingToolCallAccumulator()
-        var httpStatus: Int? = null
-        var finalFinishReason: String? = null
-
-        try {
-            logger.info { "$logPrefix Request start: endpoint=$baseUrl$CHAT_ENDPOINT, body=${SecureLogger.redactAndTruncate(requestJson)}" }
-            executeWithZaiRateLimitRetry("$baseUrl$CHAT_ENDPOINT") {
-                withProviderRateLimit("$baseUrl$CHAT_ENDPOINT") {
-                    client.preparePost("$baseUrl$CHAT_ENDPOINT") {
-                        contentType(ContentType.Application.Json)
-                        apiKey?.let { header(HttpHeaders.Authorization, "Bearer $it") }
-                        setBody(requestBody)
-                    }.execute { httpResponse ->
-                        httpStatus = httpResponse.status.value
-                        if (httpStatus !in 200..299) {
-                            val errorBody = httpResponse.body<String>()
-                            throw mapHttpError(httpStatus, errorBody)
-                        }
-
-                        finalFinishReason = OpenAICompatibleHelpers.consumeChatCompletionsSSE(
-                            channel = httpResponse.body(),
-                            toolCallAccumulator = toolCallAccumulator,
-                            onContent = { delta ->
-                                contentBuilder.append(delta)
-                                onStreamChunk(StreamChunk(delta = delta))
-                            }
-                        )
-                    }
-                }
-            }
-
-            if (contentBuilder.isEmpty()) {
-                toolCallAccumulator.toCanonicalJson()?.let { contentBuilder.append(it) }
-            }
-
-            @Suppress("UNCHECKED_CAST")
-            val inputTokensEstimate = (requestBody["messages"] as? List<Map<String, Any?>>)?.sumOf {
-                when (val content = it["content"]) {
-                    is String -> content.length
-                    is List<*> -> content.sumOf { part ->
-                        @Suppress("UNCHECKED_CAST")
-                        val partMap = part as? Map<String, Any?>
-                        (partMap?.get("text") as? String)?.length ?: 0
-                    }
-                    else -> 0
-                }
-            } ?: 0
-            val usage = LLMUsage(
-                inputTokens = inputTokensEstimate,
-                outputTokens = contentBuilder.length / 4,
-                totalTokens = inputTokensEstimate + contentBuilder.length / 4
-            )
-            onStreamChunk(StreamChunk(delta = "", finishReason = finalFinishReason, usage = usage))
-
-            logger.apiResponse(
-                provider = provider,
-                model = model,
-                endpoint = "$baseUrl$CHAT_ENDPOINT",
-                requestJson = requestJson,
-                responseJson = gson.toJson(mapOf("content" to contentBuilder.toString())),
-                httpStatus = httpStatus ?: 200,
-                inputTokens = usage.inputTokens,
-                outputTokens = usage.outputTokens,
-                costUsd = 0.0,
-                latencyMs = (System.currentTimeMillis() - startTime).toInt(),
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-
-            return LLMResponse(
-                content = contentBuilder.toString(),
-                usage = usage,
-                model = model,
-                provider = provider,
-                cost = 0.0,
-                finishReason = finalFinishReason,
-                rawResponse = mapOf("content" to contentBuilder.toString())
-            )
-        } catch (e: RefioError) {
-            logger.apiError(
-                provider = provider,
-                model = model,
-                endpoint = "$baseUrl$CHAT_ENDPOINT",
-                requestJson = requestJson,
-                httpStatus = httpStatus,
-                error = e,
-                latencyMs = (System.currentTimeMillis() - startTime).toInt(),
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-            throw e
-        } catch (e: CancellationException) {
-            // Guardrail-triggered abort — log and rethrow as-is, do NOT wrap.
-            logger.apiError(
-                provider = provider,
-                model = model,
-                endpoint = "$baseUrl$CHAT_ENDPOINT",
-                requestJson = requestJson,
-                httpStatus = httpStatus,
-                error = e,
-                latencyMs = (System.currentTimeMillis() - startTime).toInt(),
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-            throw e
-        } catch (e: Exception) {
-            logger.apiError(
-                provider = provider,
-                model = model,
-                endpoint = "$baseUrl$CHAT_ENDPOINT",
-                requestJson = requestJson,
-                httpStatus = httpStatus,
-                error = e,
-                latencyMs = (System.currentTimeMillis() - startTime).toInt(),
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-            throw RefioError.LLMError(providerName, model, e)
-        }
-    }
-
-    open suspend fun listModels(): List<ModelConfig> = withContext(Dispatchers.IO) {
-        val baseUrl = resolveBaseUrl()
-        val apiKey = resolveApiKey()
-        val startTime = System.currentTimeMillis()
-
-        try {
-            logger.info { "[${providerName.uppercase()}] Request start: endpoint=$baseUrl$MODELS_ENDPOINT" }
-            val response = withProviderRateLimit("$baseUrl$MODELS_ENDPOINT") {
-                client.get("$baseUrl$MODELS_ENDPOINT") {
-                    apiKey?.let { header(HttpHeaders.Authorization, "Bearer $it") }
-                }
-            }
-            val rawBody = response.body<String>()
-
-            if (response.status.value !in 200..299) {
-                throw mapHttpError(response.status.value, rawBody)
-            }
-
-            parseModelsPayload(rawBody)
-        } catch (e: RefioError) {
-            logger.apiError(
-                provider = provider,
-                model = "models",
-                endpoint = "$baseUrl$MODELS_ENDPOINT",
-                requestJson = "",
-                httpStatus = null,
-                error = e,
-                latencyMs = (System.currentTimeMillis() - startTime).toInt(),
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-            throw e
-        } catch (e: Exception) {
-            logger.apiError(
-                provider = provider,
-                model = "models",
-                endpoint = "$baseUrl$MODELS_ENDPOINT",
-                requestJson = "",
-                httpStatus = null,
-                error = e,
-                latencyMs = (System.currentTimeMillis() - startTime).toInt(),
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
-            throw RefioError.LLMError(providerName, model, e)
-        }
-    }
-
-    internal fun parseModelsPayload(rawBody: String): List<ModelConfig> {
-        val parsed = gson.fromJson(rawBody, Any::class.java)
-        val modelsData: List<*> = when (parsed) {
-            is Map<*, *> -> parsed["data"] as? List<*> ?: emptyList<Any?>()
-            is List<*> -> parsed
-            else -> emptyList<Any?>()
-        }
-
-        return modelsData.mapNotNull { item ->
-            val modelData = item as? Map<*, *> ?: return@mapNotNull null
-            val modelId = modelData["id"] as? String ?: return@mapNotNull null
-            val contextLength = (modelData["context_length"] as? Number)?.toInt() ?: DEFAULT_CONTEXT_SIZE
-            val definition = ModelDefinitions.getDefinition(providerName, modelId)
-                ?: run {
-                    logger.warn {
-                        "[$providerName] Model $modelId not in registry — using synthetic definition (context=$contextLength)"
-                    }
-                    ModelDefinitions.syntheticDefinitionFor(providerName, modelId, contextLength)
-                }
-            definition.toModelConfig()
-        }
-    }
-
-    override fun estimateCost(usage: LLMUsage): Double = 0.0
-
-    override suspend fun close() {
-        client.close()
-    }
-
-    private fun extractUsage(rawResponse: Map<String, Any?>): LLMUsage {
-        @Suppress("UNCHECKED_CAST")
-        val usageMap = rawResponse["usage"] as? Map<String, Any?> ?: emptyMap()
-        val promptTokens = (usageMap["prompt_tokens"] as? Number)?.toInt() ?: 0
-        val completionTokens = (usageMap["completion_tokens"] as? Number)?.toInt() ?: 0
-        val totalTokens = (usageMap["total_tokens"] as? Number)?.toInt() ?: promptTokens + completionTokens
-        return LLMUsage(promptTokens, completionTokens, totalTokens)
-    }
-
-    @Suppress("UNUSED_PARAMETER")
-    private fun ensureSuccess(httpStatus: Int, rawResponse: Map<String, Any?>, _baseUrl: String) {
-        if (httpStatus in 200..299) return
-
-        val message = (rawResponse["error"] as? Map<*, *>)?.get("message") as? String
-            ?: "OpenAI-compatible API error (HTTP $httpStatus)"
-        val code = (rawResponse["error"] as? Map<*, *>)?.get("code")?.toString()
-        throw mapHttpError(httpStatus, message, code)
-    }
-
-    private fun mapHttpError(httpStatus: Int, message: String): RefioError {
-        val parsed = parseProviderError(message)
-        return mapHttpError(
-            httpStatus = httpStatus,
-            message = parsed.message ?: message,
-            businessCode = parsed.code
-        )
-    }
-
-    private fun mapHttpError(httpStatus: Int, message: String, businessCode: String?): RefioError {
-        val zaiMessage = if (providerName == "zai") {
+    override fun mapHttpError(httpStatus: Int, rawBody: String): RefioError {
+        val parsed = parseProviderError(rawBody)
+        val message = parsed.message ?: rawBody
+        val businessCode = parsed.code
+        val finalMessage = if (providerName == "zai") {
             buildZAIErrorMessage(httpStatus, businessCode, message)
         } else {
             message
         }
-
         return when (httpStatus) {
-            401, 403 -> RefioError.LLMAuthentication(providerName, model, IllegalStateException(zaiMessage))
-            429 -> RefioError.LLMRateLimit(providerName, null, IllegalStateException(zaiMessage))
-            434 -> RefioError.LLMAuthentication(providerName, model, IllegalStateException(zaiMessage))
-            else -> RefioError.LLMError(providerName, model, IllegalStateException(zaiMessage))
+            401, 403 -> RefioError.LLMAuthentication(providerName, model, IllegalStateException(finalMessage))
+            429 -> RefioError.LLMRateLimit(providerName, null, IllegalStateException(finalMessage))
+            434 -> RefioError.LLMAuthentication(providerName, model, IllegalStateException(finalMessage))
+            else -> RefioError.LLMError(providerName, model, IllegalStateException(finalMessage))
         }
-    }
-
-    internal data class ProviderErrorPayload(
-        val code: String? = null,
-        val message: String? = null
-    )
-
-    internal fun parseProviderError(rawBody: String): ProviderErrorPayload {
-        return runCatching {
-            val parsed = gson.fromJson(rawBody, Map::class.java)
-            val error = parsed?.get("error") as? Map<*, *>
-            ProviderErrorPayload(
-                code = error?.get("code")?.toString(),
-                message = error?.get("message")?.toString()
-            )
-        }.getOrDefault(ProviderErrorPayload(message = rawBody))
     }
 
     internal fun buildZAIErrorMessage(httpStatus: Int, businessCode: String?, message: String): String {
@@ -571,44 +186,4 @@ open class GenericOpenAIAdapter(
         }
     }
 
-    private suspend fun <T> withProviderRateLimit(endpoint: String, block: suspend () -> T): T {
-        if (providerName != "zai") {
-            return block()
-        }
-
-        return zaiRequestMutex.withLock {
-            val now = System.currentTimeMillis()
-            val waitMs = (zaiNextAllowedAtMs - now).coerceAtLeast(0L)
-            if (waitMs > 0) {
-                logger.info { "[ZAI] Waiting ${waitMs}ms before next request: $endpoint" }
-                delay(waitMs)
-            }
-
-            try {
-                block()
-            } finally {
-                zaiNextAllowedAtMs = System.currentTimeMillis() + ZAI_COOLDOWN_MS
-            }
-        }
-    }
-
-    private suspend fun <T> executeWithZaiRateLimitRetry(endpoint: String, block: suspend () -> T): T {
-        if (providerName != "zai") {
-            return block()
-        }
-
-        return try {
-            block()
-        } catch (e: RefioError.LLMRateLimit) {
-            logger.warn {
-                "[ZAI] Rate limit hit for $endpoint. Waiting ${ZAI_RATE_LIMIT_RETRY_DELAY_MS}ms before retry"
-            }
-            zaiNextAllowedAtMs = maxOf(
-                zaiNextAllowedAtMs,
-                System.currentTimeMillis() + ZAI_RATE_LIMIT_RETRY_DELAY_MS
-            )
-            delay(ZAI_RATE_LIMIT_RETRY_DELAY_MS)
-            block()
-        }
-    }
 }

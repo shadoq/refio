@@ -407,7 +407,7 @@ class OpenAIAdapter(
         try {
             // Get API key from ConfigService (single source of truth)
             val apiKeyToUse = configService?.get(
-                key = pl.jclab.refio.core.services.ConfigService.KEY_PROVIDER_OPENAI_API_KEY,
+                key = ConfigKeys.PROVIDER_OPENAI_API_KEY.key,
                 scope = pl.jclab.refio.core.db.ConfigScope.APP
             )
                 ?: System.getProperty("OPENAI_API_KEY")
@@ -1322,7 +1322,7 @@ class OpenAIAdapter(
         try {
             // Get API key from ConfigService (single source of truth)
             val apiKeyToUse = configService?.get(
-                key = pl.jclab.refio.core.services.ConfigService.KEY_PROVIDER_OPENAI_API_KEY,
+                key = ConfigKeys.PROVIDER_OPENAI_API_KEY.key,
                 scope = pl.jclab.refio.core.db.ConfigScope.APP
             )
                 ?: System.getProperty("OPENAI_API_KEY")

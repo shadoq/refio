@@ -43,12 +43,14 @@ sealed class RefioError(
      *
      * `bodyPreview` is the first ~500 chars of raw JSON body (for debugging).
      */
-    data class MalformedResponse(
+    class MalformedResponse(
         val provider: String,
         val model: String,
         val reason: String,
-        val bodyPreview: String
+        val bodyPreview: String,
+        cause: Throwable? = null,
     ) : RefioError(
-        "Malformed response from $provider/$model: $reason. Preview: $bodyPreview"
+        "Malformed response from $provider/$model: $reason. Preview: ${bodyPreview.take(500)}",
+        cause,
     )
 }

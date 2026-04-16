@@ -1,5 +1,7 @@
 package pl.jclab.refio.core.services
 
+import pl.jclab.refio.core.config.ConfigKeys
+
 import io.mockk.every
 import io.mockk.mockk
 import org.junit.jupiter.api.AfterEach
@@ -164,8 +166,8 @@ class ConfigServiceTest {
         @Test
         fun `ORCHESTRATION_ENABLED should return false when explicitly disabled`() {
             every {
-                configRepository.getWithPrecedence(ConfigService.KEY_ORCHESTRATION_ENABLED, any(), any())
-            } returns createConfig(ConfigService.KEY_ORCHESTRATION_ENABLED, "false")
+                configRepository.getWithPrecedence(ConfigKeys.ORCHESTRATION_ENABLED.key, any(), any())
+            } returns createConfig(ConfigKeys.ORCHESTRATION_ENABLED.key, "false")
             val result: Boolean = configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.ORCHESTRATION_ENABLED)
             assertEquals(false, result)
         }
@@ -185,14 +187,14 @@ class ConfigServiceTest {
         fun `MAX_CONSECUTIVE_TOOL_ERRORS should return default when no config`() {
             every { configRepository.getWithPrecedence(any(), any(), any()) } returns null
             val result: Int = configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS)
-            assertEquals(ConfigService.DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS, result)
+            assertEquals(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.default, result)
         }
 
         @Test
         fun `MAX_CONSECUTIVE_TOOL_ERRORS should parse integer from config`() {
             every {
-                configRepository.getWithPrecedence(ConfigService.KEY_MAX_CONSECUTIVE_TOOL_ERRORS, any(), any())
-            } returns createConfig(ConfigService.KEY_MAX_CONSECUTIVE_TOOL_ERRORS, "7")
+                configRepository.getWithPrecedence(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.key, any(), any())
+            } returns createConfig(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.key, "7")
             val result: Int = configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS)
             assertEquals(7, result)
         }
@@ -200,17 +202,17 @@ class ConfigServiceTest {
         @Test
         fun `MAX_CONSECUTIVE_TOOL_ERRORS should use default for invalid values`() {
             every {
-                configRepository.getWithPrecedence(ConfigService.KEY_MAX_CONSECUTIVE_TOOL_ERRORS, any(), any())
-            } returns createConfig(ConfigService.KEY_MAX_CONSECUTIVE_TOOL_ERRORS, "not-a-number")
+                configRepository.getWithPrecedence(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.key, any(), any())
+            } returns createConfig(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.key, "not-a-number")
             val result: Int = configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS)
-            assertEquals(ConfigService.DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS, result)
+            assertEquals(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.default, result)
         }
 
         @Test
         fun `MAX_CONSECUTIVE_TOOL_ERRORS should parse zero from config`() {
             every {
-                configRepository.getWithPrecedence(ConfigService.KEY_MAX_CONSECUTIVE_TOOL_ERRORS, any(), any())
-            } returns createConfig(ConfigService.KEY_MAX_CONSECUTIVE_TOOL_ERRORS, "0")
+                configRepository.getWithPrecedence(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.key, any(), any())
+            } returns createConfig(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.key, "0")
             val result: Int = configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS)
             assertEquals(0, result)
         }
@@ -219,7 +221,7 @@ class ConfigServiceTest {
         fun `MAX_ITERATIONS should return default when no config`() {
             every { configRepository.getWithPrecedence(any(), any(), any()) } returns null
             val result: Int = configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.MAX_ITERATIONS)
-            assertEquals(ConfigService.DEFAULT_MAX_ITERATIONS, result)
+            assertEquals(ConfigKeys.MAX_ITERATIONS.default, result)
         }
     }
 
@@ -230,8 +232,8 @@ class ConfigServiceTest {
         fun `shouldVerifyTask should respect explicit true setting`() {
             // Given
             every {
-                configRepository.getWithPrecedence(ConfigService.KEY_TASK_VERIFICATION_ENABLED, any(), any())
-            } returns createConfig(ConfigService.KEY_TASK_VERIFICATION_ENABLED, "true")
+                configRepository.getWithPrecedence(ConfigKeys.TASK_VERIFICATION_ENABLED.key, any(), any())
+            } returns createConfig(ConfigKeys.TASK_VERIFICATION_ENABLED.key, "true")
 
             // When
             val result = configService.shouldVerifyTask(iterationCount = 1)
@@ -244,8 +246,8 @@ class ConfigServiceTest {
         fun `shouldVerifyTask should respect explicit false setting`() {
             // Given
             every {
-                configRepository.getWithPrecedence(ConfigService.KEY_TASK_VERIFICATION_ENABLED, any(), any())
-            } returns createConfig(ConfigService.KEY_TASK_VERIFICATION_ENABLED, "false")
+                configRepository.getWithPrecedence(ConfigKeys.TASK_VERIFICATION_ENABLED.key, any(), any())
+            } returns createConfig(ConfigKeys.TASK_VERIFICATION_ENABLED.key, "false")
 
             // When
             val result = configService.shouldVerifyTask(iterationCount = 100)
@@ -341,8 +343,8 @@ class ConfigServiceTest {
             // Given
             val json = """{"modelId":"gpt-4.1","provider":"openai"}"""
             every {
-                configRepository.getWithPrecedence(ConfigService.KEY_DEFAULT_MODEL_CHAT, any(), any())
-            } returns createConfig(ConfigService.KEY_DEFAULT_MODEL_CHAT, json)
+                configRepository.getWithPrecedence(ConfigKeys.DEFAULT_MODEL_CHAT.key, any(), any())
+            } returns createConfig(ConfigKeys.DEFAULT_MODEL_CHAT.key, json)
 
             // When
             val (model, provider) = configService.getDefaultModel(ModelOperation.DEFAULT)
@@ -358,11 +360,11 @@ class ConfigServiceTest {
             val defaultJson = """{"modelId":"gpt-4.1","provider":"openai"}"""
             val inheritJson = """{"modelId":"inherit","provider":"inherit"}"""
             every {
-                configRepository.getWithPrecedence(ConfigService.KEY_WEAK_MODEL, any(), any())
-            } returns createConfig(ConfigService.KEY_WEAK_MODEL, inheritJson)
+                configRepository.getWithPrecedence(ConfigKeys.WEAK_MODEL.key, any(), any())
+            } returns createConfig(ConfigKeys.WEAK_MODEL.key, inheritJson)
             every {
-                configRepository.getWithPrecedence(ConfigService.KEY_DEFAULT_MODEL_CHAT, any(), any())
-            } returns createConfig(ConfigService.KEY_DEFAULT_MODEL_CHAT, defaultJson)
+                configRepository.getWithPrecedence(ConfigKeys.DEFAULT_MODEL_CHAT.key, any(), any())
+            } returns createConfig(ConfigKeys.DEFAULT_MODEL_CHAT.key, defaultJson)
 
             // When
             val (model, provider) = configService.getDefaultModel(ModelOperation.WEAK)
@@ -378,11 +380,11 @@ class ConfigServiceTest {
             val defaultJson = """{"modelId":"gpt-4.1","provider":"openai"}"""
             val inheritJson = """{"modelId":"inherit","provider":"inherit"}"""
             every {
-                configRepository.getWithPrecedence(ConfigService.KEY_STRONG_MODEL, any(), any())
-            } returns createConfig(ConfigService.KEY_STRONG_MODEL, inheritJson)
+                configRepository.getWithPrecedence(ConfigKeys.STRONG_MODEL.key, any(), any())
+            } returns createConfig(ConfigKeys.STRONG_MODEL.key, inheritJson)
             every {
-                configRepository.getWithPrecedence(ConfigService.KEY_DEFAULT_MODEL_CHAT, any(), any())
-            } returns createConfig(ConfigService.KEY_DEFAULT_MODEL_CHAT, defaultJson)
+                configRepository.getWithPrecedence(ConfigKeys.DEFAULT_MODEL_CHAT.key, any(), any())
+            } returns createConfig(ConfigKeys.DEFAULT_MODEL_CHAT.key, defaultJson)
 
             // When
             val result = configService.getStrongModel()
@@ -398,7 +400,7 @@ class ConfigServiceTest {
         @Test
         fun `getBuiltinSubagentEnabledOverrides should return empty map when no config`() {
             // Given
-            every { configRepository.get(ConfigService.KEY_SUBAGENTS_BUILTIN_ENABLED, ConfigScope.APP) } returns null
+            every { configRepository.get(ConfigKeys.SUBAGENTS_BUILTIN_ENABLED.key, ConfigScope.APP) } returns null
 
             // When
             val overrides = configService.getBuiltinSubagentEnabledOverrides()
@@ -412,8 +414,8 @@ class ConfigServiceTest {
             // Given
             val json = """{"security-reviewer":true,"code-analyzer":false}"""
             every {
-                configRepository.get(ConfigService.KEY_SUBAGENTS_BUILTIN_ENABLED, ConfigScope.APP)
-            } returns createConfig(ConfigService.KEY_SUBAGENTS_BUILTIN_ENABLED, json)
+                configRepository.get(ConfigKeys.SUBAGENTS_BUILTIN_ENABLED.key, ConfigScope.APP)
+            } returns createConfig(ConfigKeys.SUBAGENTS_BUILTIN_ENABLED.key, json)
 
             // When
             val overrides = configService.getBuiltinSubagentEnabledOverrides()

@@ -69,7 +69,7 @@ class ContextSettingsPanel(
     private lateinit var bm25BField: JBTextField
     private lateinit var embeddingModelField: JBTextField
     private lateinit var indexStatsLabel: JLabel
-    private val defaultIgnorePathsText = ConfigService.DEFAULT_RAG_IGNORED_DIRECTORIES.joinToString("\n")
+    private val defaultIgnorePathsText = pl.jclab.refio.core.config.ConfigKeys.RAG_IGNORED_DIRECTORIES.default.joinToString("\n")
     private var indexJob: Job? = null
     private var embeddingJob: Job? = null
     private var searchSettingsSaveJob: Job? = null
@@ -701,21 +701,21 @@ class ContextSettingsPanel(
 
         SwingUtilities.invokeLater {
             val (thresholdSection, thresholdKey) = ConfigKeyUtil.split(
-                ConfigService.KEY_RAG_SEARCH_SIMILARITY_THRESHOLD
+                pl.jclab.refio.core.config.ConfigKeys.RAG_SEARCH_SIMILARITY_THRESHOLD.key
             )
             onSettingChanged(thresholdSection, thresholdKey, threshold)
 
-            val (topKSection, topKKey) = ConfigKeyUtil.split(ConfigService.KEY_RAG_SEARCH_TOP_K)
+            val (topKSection, topKKey) = ConfigKeyUtil.split(pl.jclab.refio.core.config.ConfigKeys.RAG_SEARCH_TOP_K.key)
             onSettingChanged(topKSection, topKKey, topK)
 
-            val (hybridSection, hybridKey) = ConfigKeyUtil.split(ConfigService.KEY_RAG_SEARCH_HYBRID_ENABLED)
+            val (hybridSection, hybridKey) = ConfigKeyUtil.split(pl.jclab.refio.core.config.ConfigKeys.RAG_SEARCH_HYBRID_ENABLED.key)
             onSettingChanged(hybridSection, hybridKey, hybridEnabled)
 
-            val (weightSection, weightKey) = ConfigKeyUtil.split(ConfigService.KEY_RAG_SEARCH_SEMANTIC_WEIGHT)
+            val (weightSection, weightKey) = ConfigKeyUtil.split(pl.jclab.refio.core.config.ConfigKeys.RAG_SEARCH_SEMANTIC_WEIGHT.key)
             onSettingChanged(weightSection, weightKey, semanticWeight)
 
             val (contextSection, contextKey) = ConfigKeyUtil.split(
-                ConfigService.KEY_RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS
+                pl.jclab.refio.core.config.ConfigKeys.RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS.key
             )
             onSettingChanged(contextSection, contextKey, includeContextChunks)
         }

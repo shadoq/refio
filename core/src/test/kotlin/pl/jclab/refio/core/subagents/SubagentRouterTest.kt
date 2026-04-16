@@ -50,7 +50,6 @@ class SubagentRouterTest {
             toolPermissionsService = toolPermissionsService,
             chatMessageRepository = chatMessageRepository,
             contextService = null,
-            ideProject = null,
             runTurnCallback = null
         )
     }

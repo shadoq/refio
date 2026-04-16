@@ -1,5 +1,7 @@
 package pl.jclab.refio.ui.settings
 
+import pl.jclab.refio.core.config.ConfigKeys
+
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBPanel
@@ -62,7 +64,7 @@ class GeneralSettingsPanel(
                 if (!isUpdatingProgrammatically) {
                     val isSelected = event.stateChange == ItemEvent.SELECTED
                     val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.services.ConfigService.KEY_FORMAT_MARKDOWN
+                        pl.jclab.refio.core.config.ConfigKeys.FORMAT_MARKDOWN.key
                     )
                     onSettingChanged(section, key, isSelected)
                 }
@@ -83,7 +85,7 @@ class GeneralSettingsPanel(
                 if (!isUpdatingProgrammatically) {
                     val isSelected = event.stateChange == ItemEvent.SELECTED
                     val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.services.ConfigService.KEY_STREAMING_ENABLED
+                        pl.jclab.refio.core.config.ConfigKeys.STREAMING_ENABLED.key
                     )
                     onSettingChanged(section, key, isSelected)
                 }
@@ -104,7 +106,7 @@ class GeneralSettingsPanel(
                 if (!isUpdatingProgrammatically) {
                     val isSelected = event.stateChange == ItemEvent.SELECTED
                     val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.services.ConfigService.KEY_ADVANCED_VIEW
+                        pl.jclab.refio.core.config.ConfigKeys.ADVANCED_VIEW.key
                     )
                     onSettingChanged(section, key, isSelected)
                 }
@@ -137,7 +139,7 @@ class GeneralSettingsPanel(
                 if (!isUpdatingProgrammatically) {
                     val isSelected = event.stateChange == ItemEvent.SELECTED
                     val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.services.ConfigService.KEY_UI_ORCHESTRATION_ENABLED
+                        pl.jclab.refio.core.config.ConfigKeys.UI_ORCHESTRATION_ENABLED.key
                     )
                     onSettingChanged(section, key, isSelected)
                     multiAgentStrategyCombo.isEnabled = isSelected
@@ -181,7 +183,7 @@ class GeneralSettingsPanel(
                 if (!isUpdatingProgrammatically) {
                     val strategy = selectedItem as? MultiAgentStrategy ?: return@addActionListener
                     val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.services.ConfigService.KEY_UI_MULTI_AGENT_STRATEGY
+                        ConfigKeys.UI_MULTI_AGENT_STRATEGY.key
                     )
                     onSettingChanged(section, key, strategy.name)
                 }

@@ -396,7 +396,7 @@ class TuiChatViewModel(
                     for (p in prompts.prompts.take(5)) {
                         appendLine()
                         appendLine("--- ${p.type} ${if (p.isEnabled) "✓" else "✗"} ---")
-                        val content = p.content ?: "(empty)"
+                        val content = p.content
                         appendLine(content.take(500))
                         if (content.length > 500) appendLine("... (${content.length} chars)")
                     }
@@ -651,7 +651,7 @@ class TuiChatViewModel(
                         // Finalize stream with the full response
                         workflowListener.onStreamComplete(response.output)
                         // Update metrics
-                        response.costs?.let { costs ->
+                        response.costs.let { costs ->
                             onUpdateTotalTokens((costs.tokensIn + costs.tokensOut).toLong())
                             onUpdateTotalCost(costs.usdEst)
                         }
@@ -660,110 +660,14 @@ class TuiChatViewModel(
                     CoreTaskMode.PLAN, CoreTaskMode.AGENT -> {
                         onUpdateExecutionStatus(if (taskMode == CoreTaskMode.PLAN) "Planning..." else "Agent executing...")
 
-                        // Track temp tool message IDs for real-time updates
-                        val toolCallMessageIds = mutableMapOf<String, String>()
-
-                        val turnListener = object : AgentTurnLoop.TurnEventListener {
-                            override fun onTurnStarted(
-                                taskId: String,
-                                mode: pl.jclab.refio.core.db.TaskMode,
-                                runId: String,
-                                parentRunId: String?,
-                                depth: Int
-                            ) {
-                                logger.info { "[TURN] Started: mode=$mode, depth=$depth" }
-                            }
-
-                            override fun onToolExecutionStarted(taskId: String, toolCall: ToolCallData) {
-                                logger.info { "[TURN] Tool started: ${toolCall.name}" }
-                                workflowListener.onToolStarted(toolCall.name)
-
-                                // Add temporary tool message for real-time display
-                                val tempId = "temp-${toolCall.id}"
-                                val argsSummary = try {
-                                    val args = toolCall.arguments
-                                    if (args.length <= 120) args else "${args.take(120)}..."
-                                } catch (_: Exception) { "" }
-
-                                _messages.update { messages ->
-                                    messages + TuiChatMessage(
-                                        id = tempId,
-                                        timestamp = System.currentTimeMillis(),
-                                        role = "tool",
-                                        content = "Running ${toolCall.name}...",
-                                        messageType = TuiMessageType.TOOL_CALL,
-                                        toolName = toolCall.name,
-                                        isStreaming = true,
-                                        metadata = mapOf("args" to argsSummary)
-                                    )
-                                }
-                                toolCallMessageIds[toolCall.id] = tempId
-
-                                // Reload subtasks from DB for steps panel
-                                scope.launch {
-                                    try { onLoadSubtasksFromDb(r, tid) } catch (_: Exception) {}
-                                }
-                            }
-
-                            override fun onToolStreamChunk(
-                                taskId: String,
-                                toolCallId: String,
-                                delta: String,
-                                accumulated: String
-                            ) {
-                                val msgId = toolCallMessageIds[toolCallId] ?: return
-                                _messages.update { messages ->
-                                    messages.map { msg ->
-                                        if (msg.id == msgId) msg.copy(content = accumulated, isStreaming = true)
-                                        else msg
-                                    }
-                                }
-                            }
-
-                            override fun onToolExecutionCompleted(
-                                taskId: String,
-                                toolCall: ToolCallData,
-                                result: String,
-                                success: Boolean
-                            ) {
-                                logger.info { "[TURN] Tool completed: ${toolCall.name}, success=$success" }
-                                val msgId = toolCallMessageIds.remove(toolCall.id) ?: return
-                                val resultSummary = if (result.isNotBlank()) {
-                                    val trimmed = result.trim()
-                                    if (trimmed.length <= 200) trimmed else "${trimmed.take(200)}..."
-                                } else if (success) "Done" else "Failed"
-
-                                _messages.update { messages ->
-                                    messages.map { msg ->
-                                        if (msg.id == msgId) msg.copy(
-                                            content = resultSummary,
-                                            isStreaming = false,
-                                            metadata = msg.metadata + ("success" to success)
-                                        )
-                                        else msg
-                                    }
-                                }
-
-                                // Reload subtasks for steps panel
-                                scope.launch {
-                                    try { onLoadSubtasksFromDb(r, tid) } catch (_: Exception) {}
-                                }
-                            }
-
-                            override fun onStreamChunk(taskId: String, delta: String, accumulated: String) {
-                                // Handled by streamCallback
-                            }
-
-                            override fun onTurnCompleted(
-                                taskId: String,
-                                result: TurnResult,
-                                runId: String,
-                                parentRunId: String?,
-                                depth: Int
-                            ) {
-                                logger.info { "[TURN] Completed: success=${result.success}" }
-                            }
-                        }
+                        val turnListener = TuiToolCallListener(
+                            scope = scope,
+                            messagesState = _messages,
+                            onToolStarted = { toolName -> workflowListener.onToolStarted(toolName) },
+                            onReloadSubtasks = {
+                                try { onLoadSubtasksFromDb(r, tid) } catch (_: Exception) {}
+                            },
+                        )
 
                         val turnRequest = TurnRequest(
                             taskId = tid,
@@ -801,6 +705,22 @@ class TuiChatViewModel(
 
                 // Refresh API logs from database
                 onRefreshApiLogs(r)
+            } catch (e: pl.jclab.refio.core.errors.RefioError.MalformedResponse) {
+                logger.error(e) {
+                    "Malformed response from provider=${e.provider}/${e.model}: reason=${e.reason}, " +
+                            "bodyPreview=${e.bodyPreview.take(500)}"
+                }
+                _isStreaming.value = false
+                onUpdateExecutionStatus("Error")
+                _messages.update { messages ->
+                    messages + TuiChatMessage(
+                        id = UUID.randomUUID().toString(),
+                        timestamp = System.currentTimeMillis(),
+                        role = "system",
+                        content = "Provider ${e.provider} returned an invalid response — check CLI logs for details.",
+                        messageType = TuiMessageType.AGENT_FAILED
+                    )
+                }
             } catch (e: Exception) {
                 logger.error(e) { "Workflow error" }
                 _isStreaming.value = false

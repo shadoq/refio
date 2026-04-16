@@ -25,11 +25,11 @@ class CoreApiRouterProjectHandleTest {
     }
 
     @Test
-    fun `should construct with legacy ideProject null`() {
+    fun `should construct with legacy platformProjectOverride null`() {
         // Traditional construction — backward compat
         val router = CoreApiRouter(
             projectRoot = Path.of("/tmp/test"),
-            ideProject = null
+            platformProjectOverride = null
         )
 
         assertFalse(router.hasIdeProject())

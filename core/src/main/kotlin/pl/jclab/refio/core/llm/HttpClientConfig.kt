@@ -1,5 +1,7 @@
 package pl.jclab.refio.core.llm
 
+import pl.jclab.refio.core.config.ConfigKeys
+
 /**
  * HTTP client configuration for LLM adapters.
  * Loaded from database (ConfigService) and passed to adapters.
@@ -57,13 +59,13 @@ data class HttpClientConfig(
             }
 
             // Load timeout values (stored in seconds, convert to ms)
-            val apiCallTimeoutSec = configService.get(pl.jclab.refio.core.services.ConfigService.KEY_API_CALL_TIMEOUT)?.toIntOrNull() ?: 60
-            val toolTimeoutSec = configService.get(pl.jclab.refio.core.services.ConfigService.KEY_TOOL_EXECUTION_TIMEOUT)?.toIntOrNull() ?: 240
+            val apiCallTimeoutSec = configService.get(ConfigKeys.API_CALL_TIMEOUT.key)?.toIntOrNull() ?: 60
+            val toolTimeoutSec = configService.get(ConfigKeys.TOOL_EXECUTION_TIMEOUT.key)?.toIntOrNull() ?: 240
 
             // Load other limits
-            val maxRetries = configService.get(pl.jclab.refio.core.services.ConfigService.KEY_MAX_RETRIES)?.toIntOrNull() ?: 3
-            val retryDelay = configService.get(pl.jclab.refio.core.services.ConfigService.KEY_RETRY_DELAY_MS)?.toLongOrNull() ?: 1000
-            val rateLimit = configService.get(pl.jclab.refio.core.services.ConfigService.KEY_RATE_LIMIT_RPM)?.toIntOrNull() ?: 60
+            val maxRetries = configService.get(ConfigKeys.MAX_RETRIES.key)?.toIntOrNull() ?: 3
+            val retryDelay = configService.get(ConfigKeys.RETRY_DELAY_MS.key)?.toLongOrNull() ?: 1000
+            val rateLimit = configService.get(ConfigKeys.RATE_LIMIT_RPM.key)?.toIntOrNull() ?: 60
 
             return HttpClientConfig(
                 requestTimeoutMs = apiCallTimeoutSec.toLong() * 1000,  // Convert sec to ms

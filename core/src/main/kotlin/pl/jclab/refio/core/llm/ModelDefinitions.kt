@@ -1020,6 +1020,52 @@ object ModelDefinitions {
      */
     val ANTHROPIC_MODELS = mapOf(
         // Sonnet models (latest, most capable)
+        "claude-sonnet-4-6" to ModelDefinition(
+            id = "claude-sonnet-4-6",
+            name = "Claude Sonnet 4.6",
+            provider = "anthropic",
+            description = "Best combination of speed and intelligence with extended and adaptive thinking, 1M context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 64_000,
+            costPer1MInput = 3.00,
+            costPer1MOutput = 15.00,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            active = true
+        ),
+
+        "anthropic.claude-sonnet-4-6" to ModelDefinition(
+            id = "anthropic.claude-sonnet-4-6",
+            name = "Claude Sonnet 4.6 (Bedrock)",
+            provider = "anthropic",
+            description = "AWS Bedrock alias for Claude Sonnet 4.6",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 64_000,
+            costPer1MInput = 3.00,
+            costPer1MOutput = 15.00,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            active = true
+        ),
+
         "claude-sonnet-4-5-20250929" to ModelDefinition(
             id = "claude-sonnet-4-5-20250929",
             name = "Claude Sonnet 4.5",
@@ -1159,6 +1205,52 @@ object ModelDefinitions {
         ),
 
         // Opus models (premium intelligence)
+        "claude-opus-4-7" to ModelDefinition(
+            id = "claude-opus-4-7",
+            name = "Claude Opus 4.7",
+            provider = "anthropic",
+            description = "Most capable Claude model for complex reasoning and agentic coding, 1M context with adaptive thinking",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 5.00,
+            costPer1MOutput = 25.00,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            active = true
+        ),
+
+        "anthropic.claude-opus-4-7" to ModelDefinition(
+            id = "anthropic.claude-opus-4-7",
+            name = "Claude Opus 4.7 (Bedrock)",
+            provider = "anthropic",
+            description = "AWS Bedrock alias for Claude Opus 4.7 (research preview on Bedrock)",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 5.00,
+            costPer1MOutput = 25.00,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            active = true
+        ),
+
         "anthropic.claude-opus-4-6-v1" to ModelDefinition(
             id = "anthropic.claude-opus-4-6-v1",
             name = "Claude Opus 4.6",
@@ -2740,6 +2832,53 @@ object ModelDefinitions {
             active = true
         ),
 
+        // Qwen 3.6 - 35B MoE (3B active), 256K context, multimodal with tool use
+        "qwen3.6:latest" to ModelDefinition(
+            id = "qwen3.6:latest",
+            name = "Qwen 3.6 35B MoE",
+            provider = "ollama",
+            description = "Latest Qwen 3.6 MoE (35B total, 3B active) multimodal model with 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "qwen3.6:35b-a3b" to ModelDefinition(
+            id = "qwen3.6:35b-a3b",
+            name = "Qwen 3.6 35B MoE (A3B)",
+            provider = "ollama",
+            description = "Qwen 3.6 MoE (35B total, 3B active) multimodal model with 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
         "qwen3-coder:30b" to ModelDefinition(
             id = "qwen3-coder:30b",
             name = "Qwen 3 Coder 30B",
@@ -3736,6 +3875,118 @@ object ModelDefinitions {
             active = true
         ),
 
+        // MedGemma - Gemma 3 variants trained for medical text and image comprehension, 128K context
+        "medgemma:latest" to ModelDefinition(
+            id = "medgemma:latest",
+            name = "MedGemma 4B",
+            provider = "ollama",
+            description = "Gemma 3 variant fine-tuned for medical text and image comprehension",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = false,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "medgemma:4b" to ModelDefinition(
+            id = "medgemma:4b",
+            name = "MedGemma 4B",
+            provider = "ollama",
+            description = "4B Gemma 3 variant for medical text and image comprehension",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = false,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "medgemma:27b" to ModelDefinition(
+            id = "medgemma:27b",
+            name = "MedGemma 27B",
+            provider = "ollama",
+            description = "27B Gemma 3 variant for medical text and image comprehension",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = false,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        // MedGemma 1.5 - updated MedGemma 4B with improved medical performance, 128K context
+        "medgemma1.5:latest" to ModelDefinition(
+            id = "medgemma1.5:latest",
+            name = "MedGemma 1.5 4B",
+            provider = "ollama",
+            description = "Updated MedGemma 4B with improved medical text and image comprehension",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = false,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "medgemma1.5:4b" to ModelDefinition(
+            id = "medgemma1.5:4b",
+            name = "MedGemma 1.5 4B",
+            provider = "ollama",
+            description = "4B updated MedGemma with improved medical text and image comprehension",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = false,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
         "gemma2:2b" to ModelDefinition(
             id = "gemma2:2b",
             name = "Gemma 2 2B",
@@ -3798,6 +4049,62 @@ object ModelDefinitions {
             supportsReasoning = false,
             supportsStreaming = true,
             supportsFunctionCalling = false,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        // ═══════════════════════════════════════════════════════════════════
+        // ZHIPU GLM FAMILY (Ollama cloud variants)
+        // ═══════════════════════════════════════════════════════════════════
+
+        // GLM-5.1 - next-generation flagship for agentic engineering with strong coding
+        "glm-5.1:cloud" to ModelDefinition(
+            id = "glm-5.1:cloud",
+            name = "GLM-5.1 (Cloud)",
+            provider = "ollama",
+            description = "Flagship agentic engineering model with strong coding capabilities, 198K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 198_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        // ═══════════════════════════════════════════════════════════════════
+        // MINIMAX FAMILY (Ollama cloud variants)
+        // ═══════════════════════════════════════════════════════════════════
+
+        // MiniMax M2.7 - coding, agentic workflows, and professional productivity
+        "minimax-m2.7:cloud" to ModelDefinition(
+            id = "minimax-m2.7:cloud",
+            name = "MiniMax M2.7 (Cloud)",
+            provider = "ollama",
+            description = "MiniMax M2-series model for coding, agentic workflows, and professional productivity, 200K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 200_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
             defaultParams = mapOf("temperature" to 0.7),
             active = true
         ),

@@ -70,7 +70,8 @@ internal object OpenAICompatibleHelpers {
         channel: ByteReadChannel,
         toolCallAccumulator: ToolCallContentNormalizer.OpenAiStreamingToolCallAccumulator,
         onContent: (String) -> Unit,
-        checkCancelled: () -> Boolean = { false }
+        checkCancelled: () -> Boolean = { false },
+        onRawChunk: ((Map<String, Any?>) -> Unit)? = null,
     ): String? {
         var finishReason: String? = null
         while (!channel.isClosedForRead) {
@@ -85,6 +86,7 @@ internal object OpenAICompatibleHelpers {
             try {
                 @Suppress("UNCHECKED_CAST")
                 val chunk = gson.fromJson(data, Map::class.java) as Map<String, Any?>
+                onRawChunk?.invoke(chunk)
                 @Suppress("UNCHECKED_CAST")
                 val choices = chunk["choices"] as? List<Map<String, Any?>> ?: emptyList()
                 val first = choices.firstOrNull() ?: emptyMap()
@@ -95,8 +97,11 @@ internal object OpenAICompatibleHelpers {
                 (first["finish_reason"] as? String)?.let { finishReason = it }
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
-                // Match historical behavior: silently skip malformed chunks.
+            } catch (e: Exception) {
+                // Rethrow errors thrown by onRawChunk (e.g. mid-stream provider error
+                // envelopes from OpenRouter). Malformed chunks raise generic exceptions
+                // that match historical behavior — those we silently skip.
+                if (e is IllegalStateException) throw e
             }
         }
         return finishReason

@@ -21,6 +21,7 @@ import io.ktor.http.*
 import io.ktor.serialization.gson.*
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.errors.LLMErrorMapper
+import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.core.services.OllamaRequestGate
 import pl.jclab.refio.core.logging.dualLogger
@@ -219,7 +220,7 @@ class OllamaAdapter(
             put("options", buildMap {
                 put("temperature", temperature)
 
-                val contextSize = configService?.get(ConfigService.KEY_PROVIDER_OLLAMA_CONTEXT_SIZE)?.toIntOrNull()
+                val contextSize = configService?.get(ConfigKeys.PROVIDER_OLLAMA_CONTEXT_SIZE.key)?.toIntOrNull()
                     ?: DEFAULT_CONTEXT_SIZE
                 put("num_ctx", contextSize)
 
@@ -338,6 +339,14 @@ class OllamaAdapter(
             )
 
             // Parse response
+            if (response["message"] !is Map<*, *>) {
+                throw RefioError.MalformedResponse(
+                    provider = provider,
+                    model = model,
+                    reason = "Missing or non-object 'message' in Ollama response",
+                    bodyPreview = gson.toJson(response)
+                )
+            }
             @Suppress("UNCHECKED_CAST")
             val messageMap = response["message"] as? Map<String, Any?> ?: emptyMap()
             var rawContent = messageMap["content"] as? String ?: ""
@@ -734,7 +743,7 @@ class OllamaAdapter(
 
             // Get context size from ConfigService (global setting for all Ollama models)
             val contextSize =
-                configService?.get(pl.jclab.refio.core.services.ConfigService.KEY_PROVIDER_OLLAMA_CONTEXT_SIZE)
+                configService?.get(ConfigKeys.PROVIDER_OLLAMA_CONTEXT_SIZE.key)
                     ?.toIntOrNull()
                     ?: DEFAULT_CONTEXT_SIZE
 

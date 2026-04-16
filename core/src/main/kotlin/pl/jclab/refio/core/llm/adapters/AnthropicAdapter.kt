@@ -23,6 +23,7 @@ import io.ktor.http.*
 import io.ktor.serialization.gson.*
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.errors.LLMErrorMapper
+import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.core.logging.dualLogger
 import java.util.UUID
@@ -101,7 +102,7 @@ class AnthropicAdapter(
     ): LLMResponse {
         // Get API key from ConfigService (single source of truth)
         val apiKeyToUse = configService?.get(
-            key = pl.jclab.refio.core.services.ConfigService.KEY_PROVIDER_ANTHROPIC_API_KEY,
+            key = ConfigKeys.PROVIDER_ANTHROPIC_API_KEY.key,
             scope = pl.jclab.refio.core.db.ConfigScope.APP
         )
             ?: System.getProperty("ANTHROPIC_API_KEY")
@@ -320,6 +321,14 @@ class AnthropicAdapter(
             )
 
             // Parse response (handle content blocks including thinking)
+            if (response["content"] !is List<*>) {
+                throw RefioError.MalformedResponse(
+                    provider = provider,
+                    model = model,
+                    reason = "Missing or non-list 'content' in Anthropic response",
+                    bodyPreview = gson.toJson(response)
+                )
+            }
             @Suppress("UNCHECKED_CAST")
             val contentBlocks = response["content"] as? List<Map<String, Any?>> ?: emptyList()
 
@@ -720,7 +729,7 @@ class AnthropicAdapter(
         try {
             // Get API key from ConfigService (single source of truth)
             val apiKeyToUse = configService?.get(
-                key = pl.jclab.refio.core.services.ConfigService.KEY_PROVIDER_ANTHROPIC_API_KEY,
+                key = ConfigKeys.PROVIDER_ANTHROPIC_API_KEY.key,
                 scope = pl.jclab.refio.core.db.ConfigScope.APP
             )
                 ?: System.getProperty("ANTHROPIC_API_KEY")

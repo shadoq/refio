@@ -17,9 +17,9 @@ class TuiHistoryScreenInteractiveTest {
     private val viewModel = mockk<TuiViewModel>(relaxed = true)
 
     private val sessions = listOf(
-        TuiSessionEntry("id1", "Session 1", "CHAT", "SUCCESS", 100, 50, 0.01, 1000L, 2000L),
-        TuiSessionEntry("id2", "Session 2", "AGENT", "RUNNING", 200, 100, 0.02, 1100L, 2100L, pinned = true),
-        TuiSessionEntry("id3", "Session 3", "PLAN", "SUCCESS", 50, 25, 0.005, 900L, 1900L)
+        taskResponseFixture(id = "id1", name = "Session 1", mode = "CHAT", tokensIn = 100, tokensOut = 50, costUsd = 0.01, createdAt = 1000L, updatedAt = 2000L),
+        taskResponseFixture(id = "id2", name = "Session 2", mode = "AGENT", status = "RUNNING", tokensIn = 200, tokensOut = 100, costUsd = 0.02, createdAt = 1100L, updatedAt = 2100L, pinned = true),
+        taskResponseFixture(id = "id3", name = "Session 3", mode = "PLAN", tokensIn = 50, tokensOut = 25, costUsd = 0.005, createdAt = 900L, updatedAt = 1900L),
     )
 
     @BeforeEach

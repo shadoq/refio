@@ -11,6 +11,7 @@ import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
+import pl.jclab.refio.core.services.TurnLoopConfig
 import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("TurnLLMCaller")
@@ -42,7 +43,7 @@ class TurnLLMCaller(
     suspend fun callLLM(
         taskId: String,
         mode: TaskMode,
-        prompt: LLMCallPrompt,
+        prompt: TurnPrompt,
         streamCallback: StreamCallback? = null,
         model: String? = null,
         provider: String? = null,
@@ -153,14 +154,6 @@ class TurnLLMCaller(
         return if (override != null && override > 0) override else config.maxIterations
     }
 }
-
-/**
- * Prompt for LLM call.
- */
-data class LLMCallPrompt(
-    val systemPrompt: String,
-    val messages: List<LLMMessage>
-)
 
 /**
  * Selected model and provider.

@@ -1,8 +1,13 @@
 package pl.jclab.refio.cli.tui.state
 
+import pl.jclab.refio.core.api.SubtaskResponse
+
 /**
  * Unified TUI state — all data needed to render the full UI.
  * Pure data classes, no Compose/Swing dependencies.
+ *
+ * Subtasks / plan use the core [SubtaskResponse] type directly — no TUI-specific
+ * projection (DTO de-duplication, 2026-04-16).
  */
 data class TuiState(
     val screen: TuiScreen = TuiScreen.MAIN,
@@ -10,9 +15,8 @@ data class TuiState(
     val messages: List<TuiChatMessage> = emptyList(),
     val isStreaming: Boolean = false,
     val agents: List<TuiAgentState> = emptyList(),
-    val steps: List<TuiStep> = emptyList(),
-    val subtasks: List<TuiSubtask> = emptyList(),
-    val activePlan: TuiPlan? = null,
+    val subtasks: List<SubtaskResponse> = emptyList(),
+    val activePlan: List<SubtaskResponse>? = null,
     val isPaused: Boolean = false,
     val pendingPlanApproval: TuiPlanApproval? = null,
     val selectedStepIndex: Int = 0,
@@ -22,7 +26,7 @@ data class TuiState(
     val debugInfo: TuiDebugInfo = TuiDebugInfo(),
     val pendingApprovals: List<TuiPendingApproval> = emptyList(),
     val pendingToolApproval: TuiToolApprovalRequest? = null,
-    val sessions: List<TuiSessionEntry> = emptyList(),
+    val sessions: List<pl.jclab.refio.core.api.TaskResponse> = emptyList(),
     val activeSessionId: String? = null,
     val selectedHistoryIndex: Int = 0,
     val historyFilter: String = "*", // *, CHAT, PLAN, AGENT
@@ -158,14 +162,6 @@ data class TuiAgentState(
     val costUsd: Double = 0.0
 )
 
-data class TuiStep(
-    val id: String,
-    val name: String,
-    val status: String,
-    val details: String = "",
-    val expanded: Boolean = false
-)
-
 data class TuiContextSection(
     val name: String,
     val category: String,
@@ -247,85 +243,10 @@ data class TuiToolApprovalRequest(
     val arguments: Map<String, Any>
 )
 
-data class TuiSessionEntry(
-    val id: String,
-    val name: String,
-    val mode: String,
-    val status: String,
-    val tokensIn: Int,
-    val tokensOut: Int,
-    val costUsd: Double,
-    val createdAt: Long,
-    val updatedAt: Long,
-    val pinned: Boolean = false
-) {
-    companion object {
-        fun fromTaskResponse(t: pl.jclab.refio.core.api.TaskResponse) = TuiSessionEntry(
-            id = t.id,
-            name = t.name,
-            mode = t.mode,
-            status = t.status,
-            tokensIn = t.tokensIn,
-            tokensOut = t.tokensOut,
-            costUsd = t.costUsd,
-            createdAt = t.createdAt,
-            updatedAt = t.updatedAt,
-            pinned = t.pinned
-        )
-    }
-}
-
-data class TuiSubtask(
-    val id: String,
-    val name: String,
-    val description: String = "",
-    val status: String = "NEW", // NEW, PENDING, APPROVED, RUNNING, COMPLETED, FAILED, SKIPPED
-    val toolName: String? = null,
-    val toolArgs: String? = null,
-    val result: String? = null,
-    val error: String? = null,
-    val tokensIn: Long = 0,
-    val tokensOut: Long = 0,
-    val costUsd: Double = 0.0,
-    val order: Int = 0,
-    val model: String? = null,
-    val provider: String? = null,
-    val startedAt: Long? = null,
-    val finishedAt: Long? = null,
-    val resultSummary: String? = null
-) {
-    companion object {
-        fun fromSubtaskResponse(st: pl.jclab.refio.core.api.SubtaskResponse) = TuiSubtask(
-            id = st.id,
-            name = st.description,
-            description = st.description,
-            status = st.status,
-            toolName = st.kind,
-            tokensIn = st.tokensIn.toLong(),
-            tokensOut = st.tokensOut.toLong(),
-            costUsd = st.costUsd,
-            order = st.orderIndex,
-            model = st.model,
-            provider = st.provider,
-            startedAt = st.startedAt,
-            finishedAt = st.finishedAt,
-            resultSummary = st.resultSummary,
-            error = st.errorMessage
-        )
-    }
-}
-
-data class TuiPlan(
-    val taskId: String,
-    val steps: List<TuiSubtask>,
-    val totalReadSteps: Int = 0,
-    val totalWriteSteps: Int = 0
-)
-
 data class TuiPlanApproval(
     val taskId: String,
-    val plan: TuiPlan,
-    val isVisible: Boolean = true
+    val steps: List<SubtaskResponse>,
+    val isVisible: Boolean = true,
 )
 
 data class TuiFileEntry(

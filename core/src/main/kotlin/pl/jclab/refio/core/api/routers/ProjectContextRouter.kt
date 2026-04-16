@@ -25,7 +25,6 @@ private val logger = dualLogger("ProjectContextRouter")
 class ProjectContextRouter(
     private val contextService: ContextService?,
     private val projectRoot: Path?,
-    private val ideProject: Any?,
     private val taskRepository: TaskRepository,
     private val chatMessageRepository: ChatMessageRepository,
     private val promptsService: PromptsService,
@@ -76,7 +75,6 @@ class ProjectContextRouter(
             val context = contextService.buildProjectContext(
                 projectRoot = projectRoot,
                 taskId = taskId,
-                project = ideProject,
                 query = effectiveQuery,
                 userContextRefs = userContextRefs
             )
@@ -362,7 +360,7 @@ class ProjectContextRouter(
         if (contextService != null && projectRoot != null) {
             return try {
                 val turnMessages = contextService.buildAgentTurnMessages(
-                    taskId = taskId, projectRoot = projectRoot, project = null,
+                    taskId = taskId, projectRoot = projectRoot,
                     userContextRefs = userContextRefs, query = query
                 ).messages.toMutableList()
                 appendPendingUserMessage(turnMessages, pendingUserInput)

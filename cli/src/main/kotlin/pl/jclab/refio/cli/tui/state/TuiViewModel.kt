@@ -66,6 +66,18 @@ class TuiViewModel(
     // --- Infrastructure ---
     private var bootstrap: StandaloneCoreBootstrap? = null
     private var router: CoreApiRouter? = null
+    /**
+     * Core session facade — created after router is up in [initialize]. Sub-VMs read it through
+     * [getCoreSession] so they can observe [pl.jclab.refio.core.session.SessionStateManager] flows
+     * instead of keeping their own copies of execution state.
+     */
+    /**
+     * Shared session execution state. Created eagerly so sub-VMs can bind their observers
+     * before [CoreSessionService] is wired up in [initialize].
+     */
+    internal val sessionStateManager = pl.jclab.refio.core.session.SessionStateManager()
+    private var coreSession: pl.jclab.refio.core.session.CoreSessionService? = null
+    fun getCoreSession(): pl.jclab.refio.core.session.CoreSessionService? = coreSession
     var taskId: String? = null
         private set
     val agentEventBus = AgentEventBus()
@@ -86,7 +98,8 @@ class TuiViewModel(
         mode = _mode,
         model = _model,
         projectPath = projectPath,
-        projectId = projectId
+        projectId = projectId,
+        stateManager = sessionStateManager
     )
 
     // chat needs workflowListener but workflowListener needs chat._messages.
@@ -107,7 +120,6 @@ class TuiViewModel(
         agentColorIndex = 0,
         messagesState = chat._messages,
         streamingState = chat._isStreaming,
-        stepsState = session._stepsInternal,
         scope = scope,
         viewModel = this
     )
@@ -161,7 +173,6 @@ class TuiViewModel(
         chat._autocompleteCandidates.map { Unit },
         chat._autocompleteSelectedIndex.map { Unit },
         // Session sub-VM flows
-        session.steps.map { Unit },
         session.subtasks.map { Unit },
         session.activePlan.map { Unit },
         session.isPaused.map { Unit },
@@ -251,7 +262,6 @@ class TuiViewModel(
         sessionTokensIn = chat._messages.value.sumOf { it.tokensIn.toLong() },
         sessionTokensOut = chat._messages.value.sumOf { it.tokensOut.toLong() },
         // Session sub-VM
-        steps = session.steps.value,
         subtasks = session.subtasks.value,
         activePlan = session.activePlan.value,
         isPaused = session.isPaused.value,
@@ -318,6 +328,13 @@ class TuiViewModel(
             val r = boot.initialize()
             bootstrap = boot
             router = r
+            coreSession = pl.jclab.refio.core.session.CoreSessionServiceFactory.create(
+                projectRouter = r,
+                projectId = projectId,
+                projectPath = projectPath,
+                scope = scope,
+                stateManager = sessionStateManager,
+            )
             _isInitialized.value = true
 
             // Wire sub-VM callbacks
@@ -455,7 +472,7 @@ class TuiViewModel(
         session.onStreamChunk = { delta -> workflowListener.onStreamChunk(delta) }
         session.onStreamComplete = { response -> workflowListener.onStreamComplete(response) }
         session.clearMessages = { chat._messages.value = emptyList() }
-        session.clearSteps = { session._stepsInternal.value = emptyList() }
+        session.clearSteps = { /* no-op: steps removed, subtasks flow owns UI state */ }
         session.clearContextSections = { obs._contextSections.value = emptyList() }
         session.clearInputBuffer = { chat._inputBuffer.value = "" }
         session.setStreaming = { chat._isStreaming.value = it }
@@ -577,7 +594,7 @@ class TuiViewModel(
         try {
             val response = r.subtaskRouter.getSubtasks(tid)
             if (response.subtasks.isNotEmpty()) {
-                session.setSubtasks(response.subtasks.map(TuiSubtask::fromSubtaskResponse))
+                session.setSubtasks(response.subtasks)
                 logger.info { "Loaded ${response.subtasks.size} subtasks from DB" }
             }
         } catch (e: Exception) {
@@ -1006,7 +1023,7 @@ class TuiViewModel(
 
     // --- Session delegations ---
     fun updateExecutionStatus(status: String) = session.updateExecutionStatus(status)
-    fun setSubtasks(subtasks: List<TuiSubtask>) = session.setSubtasks(subtasks)
+    fun setSubtasks(subtasks: List<pl.jclab.refio.core.api.SubtaskResponse>) = session.setSubtasks(subtasks)
     fun updateSubtaskStatus(subtaskId: String, status: String, error: String? = null) = session.updateSubtaskStatus(subtaskId, status, error)
     fun cycleMode() = session.cycleMode()
     fun toggleThinking() = session.toggleThinking()

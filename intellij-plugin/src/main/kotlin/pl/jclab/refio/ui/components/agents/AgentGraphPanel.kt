@@ -44,6 +44,34 @@ class AgentGraphPanel : JPanel() {
         }
     }
 
+    /** Raise iteration count to at least [iteration] (TurnStarted events use 1-based monotonic iteration). */
+    fun bumpIterations(agentId: String, iteration: Int) {
+        nodes[agentId]?.apply {
+            if (iteration > iterationCount) {
+                iterationCount = iteration
+                repaint()
+            }
+        }
+    }
+
+    fun addTokens(agentId: String, delta: Long) {
+        if (delta <= 0) return
+        nodes[agentId]?.apply {
+            tokensUsed += delta
+            repaint()
+        }
+    }
+
+    fun addDuration(agentId: String, deltaMs: Long) {
+        if (deltaMs <= 0) return
+        nodes[agentId]?.apply {
+            durationMs += deltaMs
+            repaint()
+        }
+    }
+
+    fun iterationsOf(agentId: String): Int = nodes[agentId]?.iterationCount ?: 0
+
     fun clear() {
         nodes.clear()
         removeAll()

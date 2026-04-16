@@ -4,20 +4,7 @@ import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.config.*
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.db.repositories.ConfigRepository
-import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_ZAI_BASE_URL
-import pl.jclab.refio.core.services.ConfigService.Companion.KEY_PROVIDER_ANTHROPIC_API_KEY
-import pl.jclab.refio.core.services.ConfigService.Companion.KEY_PROVIDER_CUSTOM_OPENAI_API_KEY
-import pl.jclab.refio.core.services.ConfigService.Companion.KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL
-import pl.jclab.refio.core.services.ConfigService.Companion.KEY_PROVIDER_CUSTOM_OPENAI_MODEL
-import pl.jclab.refio.core.services.ConfigService.Companion.KEY_PROVIDER_GEMINI_API_KEY
-import pl.jclab.refio.core.services.ConfigService.Companion.KEY_PROVIDER_LM_STUDIO_API_KEY
-import pl.jclab.refio.core.services.ConfigService.Companion.KEY_PROVIDER_LM_STUDIO_BASE_URL
-import pl.jclab.refio.core.services.ConfigService.Companion.KEY_PROVIDER_OLLAMA_ENDPOINT
-import pl.jclab.refio.core.services.ConfigService.Companion.KEY_PROVIDER_OPENAI_API_KEY
-import pl.jclab.refio.core.services.ConfigService.Companion.KEY_PROVIDER_OPENROUTER_API_KEY
-import pl.jclab.refio.core.services.ConfigService.Companion.KEY_PROVIDER_ZAI_API_KEY
-import pl.jclab.refio.core.services.ConfigService.Companion.KEY_PROVIDER_ZAI_BASE_URL
-import pl.jclab.refio.core.services.ConfigService.Companion.KEY_TOOLS_PERMISSIONS
+import pl.jclab.refio.core.llm.adapters.ZAIUrls
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.core.config.ConfigKeys
 
@@ -50,9 +37,9 @@ internal class ConfigYamlBuilder(
     )
 
     private fun buildProviders(includeApiKeys: Boolean): ProvidersConfig {
-        val ollamaEndpoint = configService.get(KEY_PROVIDER_OLLAMA_ENDPOINT)
-        val lmstudioBaseUrl = configService.get(KEY_PROVIDER_LM_STUDIO_BASE_URL)
-        val customOpenAIBaseUrl = configService.get(KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL)
+        val ollamaEndpoint = configService.get(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT.key)
+        val lmstudioBaseUrl = configService.get(ConfigKeys.PROVIDER_LM_STUDIO_BASE_URL.key)
+        val customOpenAIBaseUrl = configService.get(ConfigKeys.PROVIDER_CUSTOM_OPENAI_BASE_URL.key)
 
         return ProvidersConfig(
             ollama = OllamaConfig(
@@ -60,23 +47,23 @@ internal class ConfigYamlBuilder(
                 contextSize = configService.getTyped(ConfigKeys.PROVIDER_OLLAMA_CONTEXT_SIZE),
                 keepAlive = configService.getTyped(ConfigKeys.PROVIDER_OLLAMA_KEEP_ALIVE)
             ),
-            anthropic = if (includeApiKeys) AnthropicConfig(apiKey = configService.get(KEY_PROVIDER_ANTHROPIC_API_KEY)) else null,
-            openai = if (includeApiKeys) OpenAIConfig(apiKey = configService.get(KEY_PROVIDER_OPENAI_API_KEY)) else null,
-            openrouter = if (includeApiKeys) OpenRouterConfig(apiKey = configService.get(KEY_PROVIDER_OPENROUTER_API_KEY)) else null,
-            gemini = if (includeApiKeys) GeminiConfig(apiKey = configService.get(KEY_PROVIDER_GEMINI_API_KEY)) else null,
+            anthropic = if (includeApiKeys) AnthropicConfig(apiKey = configService.get(ConfigKeys.PROVIDER_ANTHROPIC_API_KEY.key)) else null,
+            openai = if (includeApiKeys) OpenAIConfig(apiKey = configService.get(ConfigKeys.PROVIDER_OPENAI_API_KEY.key)) else null,
+            openrouter = if (includeApiKeys) OpenRouterConfig(apiKey = configService.get(ConfigKeys.PROVIDER_OPENROUTER_API_KEY.key)) else null,
+            gemini = if (includeApiKeys) GeminiConfig(apiKey = configService.get(ConfigKeys.PROVIDER_GEMINI_API_KEY.key)) else null,
             lmstudio = LMStudioConfig(
-                apiKey = if (includeApiKeys) configService.get(KEY_PROVIDER_LM_STUDIO_API_KEY) else null,
+                apiKey = if (includeApiKeys) configService.get(ConfigKeys.PROVIDER_LM_STUDIO_API_KEY.key) else null,
                 baseUrl = lmstudioBaseUrl,
                 contextSize = configService.getTyped(ConfigKeys.PROVIDER_LM_STUDIO_CONTEXT_SIZE)
             ),
             genericOpenai = GenericOpenAIConfig(
-                apiKey = if (includeApiKeys) configService.get(KEY_PROVIDER_CUSTOM_OPENAI_API_KEY) else null,
+                apiKey = if (includeApiKeys) configService.get(ConfigKeys.PROVIDER_CUSTOM_OPENAI_API_KEY.key) else null,
                 baseUrl = customOpenAIBaseUrl,
-                model = configService.get(KEY_PROVIDER_CUSTOM_OPENAI_MODEL)
+                model = configService.get(ConfigKeys.PROVIDER_CUSTOM_OPENAI_MODEL.key)
             ),
             zai = ZAIConfig(
-                apiKey = if (includeApiKeys) configService.get(KEY_PROVIDER_ZAI_API_KEY) else null,
-                baseUrl = configService.get(KEY_PROVIDER_ZAI_BASE_URL) ?: DEFAULT_ZAI_BASE_URL
+                apiKey = if (includeApiKeys) configService.get(ConfigKeys.PROVIDER_ZAI_API_KEY.key) else null,
+                baseUrl = configService.get(ConfigKeys.PROVIDER_ZAI_BASE_URL.key) ?: ZAIUrls.DEFAULT
             )
         )
     }
@@ -117,7 +104,7 @@ internal class ConfigYamlBuilder(
     )
 
     private fun buildTools(): ToolsConfig {
-        val config = configRepository.get(KEY_TOOLS_PERMISSIONS, ConfigScope.APP)
+        val config = configRepository.get(ConfigKeys.TOOLS_PERMISSIONS.key, ConfigScope.APP)
         @Suppress("UNCHECKED_CAST")
         val permissions: Map<String, Boolean> = if (config != null) {
             (gson.fromJson(config.value, Map::class.java) as? Map<String, Boolean>) ?: emptyMap()

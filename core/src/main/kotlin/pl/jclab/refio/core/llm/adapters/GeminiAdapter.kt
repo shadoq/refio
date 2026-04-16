@@ -27,6 +27,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import io.ktor.utils.io.ByteReadChannel
 import pl.jclab.refio.core.errors.LLMErrorMapper
+import pl.jclab.refio.core.errors.RefioError
 import java.util.UUID
 
 /**
@@ -76,7 +77,7 @@ class GeminiAdapter(
         kwargs: Map<String, Any>
     ): LLMResponse {
         val apiKey = configService?.get(
-            key = pl.jclab.refio.core.services.ConfigService.KEY_PROVIDER_GEMINI_API_KEY,
+            key = ConfigKeys.PROVIDER_GEMINI_API_KEY.key,
             scope = pl.jclab.refio.core.db.ConfigScope.APP
         )
             ?: System.getProperty("GEMINI_API_KEY")
@@ -237,6 +238,14 @@ class GeminiAdapter(
                 throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, "Gemini API error (HTTP $httpStatus)")
             }
 
+            if (rawResponse["candidates"] !is List<*>) {
+                throw RefioError.MalformedResponse(
+                    provider = provider,
+                    model = model,
+                    reason = "Missing or non-list 'candidates' in Gemini response",
+                    bodyPreview = gson.toJson(rawResponse)
+                )
+            }
             val usage = extractUsage(rawResponse)
             val cost = estimateCost(usage)
             val content = extractContent(rawResponse)
@@ -520,7 +529,7 @@ class GeminiAdapter(
      */
     suspend fun listModels(): List<ModelConfig> = withContext(Dispatchers.IO) {
         val apiKey = configService?.get(
-            key = pl.jclab.refio.core.services.ConfigService.KEY_PROVIDER_GEMINI_API_KEY,
+            key = ConfigKeys.PROVIDER_GEMINI_API_KEY.key,
             scope = pl.jclab.refio.core.db.ConfigScope.APP
         )
             ?: System.getProperty("GEMINI_API_KEY")

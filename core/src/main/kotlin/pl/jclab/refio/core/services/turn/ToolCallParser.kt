@@ -705,11 +705,26 @@ class ToolCallParser(
             if (isToolAllowedByProfile(toolCall.name, profileOverrides)) {
                 toolCall
             } else {
-                val message = toolCall.error
-                    ?: "Tool '${toolCall.name}' is not allowed for current run profile"
+                val message = toolCall.error ?: buildProfileBlockedError(toolCall.name, profileOverrides)
                 toolCall.copy(error = message)
             }
         }
+    }
+
+    /** Mirror of [pl.jclab.refio.core.services.turn.TurnToolExecutor.buildProfileBlockedError]. */
+    private fun buildProfileBlockedError(
+        toolName: String,
+        profileOverrides: TurnProfileOverrides,
+    ): String {
+        val allowed = profileOverrides.allowedTools?.takeIf { it.isNotEmpty() }
+        val disallowed = profileOverrides.disallowedTools?.takeIf { it.isNotEmpty() }
+        val scope = profileOverrides.subagentName?.let { "subagent '$it'" } ?: "current run profile"
+        val details = when {
+            allowed != null -> "Your available tools are: ${allowed.joinToString(", ")}. Pick one of these or produce a final response."
+            disallowed != null -> "This tool is on the blocklist for this profile (${disallowed.joinToString(", ")}). Use a different approach."
+            else -> "Check the <available_tools> section and use only tools listed there."
+        }
+        return "Tool '$toolName' is not available to the $scope. $details"
     }
 
     private fun isToolAllowedByProfile(toolName: String, profileOverrides: TurnProfileOverrides): Boolean {

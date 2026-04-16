@@ -146,22 +146,5 @@ class ConfigYamlRoundtripTest {
         assertEquals(first, second)
     }
 
-    /**
-     * Use reflection-free path: write YAML content and load via public load() methods.
-     * loadFromPath is private, but load() / loadProjectConfig() use it — we hijack
-     * project config path by writing to arbitrary file then using saveToFile + our
-     * local loader to avoid filesystem dependencies on home dir.
-     */
-    private fun loadFromFile(file: File): ConfigYaml? {
-        if (!file.exists()) return null
-        return try {
-            val yamlContent = file.readText()
-            // Call package-private decoder through reflection on companion.
-            val method = ConfigYaml.Companion::class.java.getDeclaredMethod("decodeYamlContent", String::class.java)
-            method.isAccessible = true
-            method.invoke(ConfigYaml.Companion, yamlContent) as ConfigYaml
-        } catch (e: Exception) {
-            null
-        }
-    }
+    private fun loadFromFile(file: File): ConfigYaml? = ConfigYamlIO.loadFromPath(file)
 }

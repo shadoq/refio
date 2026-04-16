@@ -1125,7 +1125,7 @@ class AgentTurnLoopTest {
         @Test
         fun `should notify listener on turn start`() = runTest {
             // Given
-            val listener = mockk<AgentTurnLoop.TurnEventListener>(relaxed = true)
+            val listener = mockk<pl.jclab.refio.core.services.turn.TurnEventListener>(relaxed = true)
 
             // When
             agentTurnLoop.runTurn(
@@ -1142,7 +1142,7 @@ class AgentTurnLoopTest {
         @Test
         fun `should notify listener on turn completion`() = runTest {
             // Given
-            val listener = mockk<AgentTurnLoop.TurnEventListener>(relaxed = true)
+            val listener = mockk<pl.jclab.refio.core.services.turn.TurnEventListener>(relaxed = true)
 
             // When
             agentTurnLoop.runTurn(

@@ -68,9 +68,9 @@ class TuiAppTest {
                 TuiChatMessage("1", 1000L, "user", "Hello"),
                 TuiChatMessage("2", 2000L, "assistant", "Plan created")
             ),
-            steps = listOf(
-                TuiStep("s1", "Analyze code", "RUNNING"),
-                TuiStep("s2", "Write tests", "PENDING")
+            subtasks = listOf(
+                pl.jclab.refio.cli.tui.state.subtaskFixture(id = "s1", description = "Analyze code", status = "RUNNING"),
+                pl.jclab.refio.cli.tui.state.subtaskFixture(id = "s2", description = "Write tests", status = "PENDING"),
             )
         )
         renderer.render(state)

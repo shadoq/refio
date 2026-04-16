@@ -75,13 +75,20 @@ class ContextService(
     private val configService: ConfigService,
     private val workingMemoryService: WorkingMemoryService? = null,
     private val conversationSummaryService: ConversationSummaryService? = null,
+    /**
+     * Opaque platform project handle (IntelliJ Project or null for CLI). Propagated
+     * to IDE-specific context providers via [ContextProviderExtras]. Injected once
+     * at construction because it is stable for the lifetime of a [ContextService]
+     * (CoreApiRouter is per-project).
+     */
+    private val platformProject: Any? = null,
 ) {
     private val projectInstructionsLoader = ProjectInstructionsLoader()
     private val mcpContextLoader = McpContextLoader()
     private val projectContextSummarizer = ProjectContextSummarizer()
     private val conversationContextBuilder = ConversationContextBuilder()
     private val taskContextExtractor = TaskContextExtractor()
-    private val contextReferenceResolver = ContextReferenceResolver(fileAnalyzerService, configService, chatMessageRepository)
+    private val contextReferenceResolver = ContextReferenceResolver(fileAnalyzerService, configService, chatMessageRepository, platformProject)
     private val pruner: ContextPruner = ContextPruner(configService)
     private val formatter: ContextFormatter = ContextFormatter(configService)
 
@@ -147,7 +154,6 @@ class ContextService(
     suspend fun buildProjectContext(
         projectRoot: Path,
         taskId: String,
-        project: Any? = null,
         query: String? = null,
         userContextRefs: List<ContextReference> = emptyList()
     ): ProjectContextDTO {
@@ -339,7 +345,7 @@ class ContextService(
         // 9. Resolve user context references (from @ mentions)
         val resolvedUserContext = if (dedupedUserContextRefs.isNotEmpty()) {
             logger.info { "[CONTEXT] Resolving ${dedupedUserContextRefs.size} user context reference(s)" }
-            contextReferenceResolver.resolveAndConvertUserContextRefs(dedupedUserContextRefs, projectRoot, project, query)
+            contextReferenceResolver.resolveAndConvertUserContextRefs(dedupedUserContextRefs, projectRoot, query)
         } else {
             emptyList()
         }
@@ -715,7 +721,6 @@ class ContextService(
      *
      * @param taskId Task ID
      * @param projectRoot Project root path
-     * @param project IntelliJ Project instance (optional)
      * @param userContextRefs User-provided @ mentions
      * @param query Current user query
      * @return Pair of (projectContextPrompt, messages list)
@@ -723,7 +728,6 @@ class ContextService(
     suspend fun buildAgentTurnMessages(
         taskId: String,
         projectRoot: Path,
-        project: Any? = null,
         userContextRefs: List<ContextReference> = emptyList(),
         query: String? = null
     ): AgentTurnMessagesResult {
@@ -762,7 +766,6 @@ class ContextService(
             val projectContext = buildProjectContext(
                 projectRoot = projectRoot,
                 taskId = taskId,
-                project = project,
                 query = query,
                 userContextRefs = userContextRefs
             )
@@ -1418,7 +1421,7 @@ class ContextService(
             val openTag = "<$tagName>"
             val closeTag = "</$tagName>"
             val sectionChars = content.length + openTag.length + if (hasClosingTag) closeTag.length else 0
-            val tokens = (sectionChars / 4).toInt().coerceAtLeast(1)
+            val tokens = (sectionChars / 4).coerceAtLeast(1)
 
             result[key] = ContextSectionTokenInfo(
                 name = sectionNames[key] ?: key,

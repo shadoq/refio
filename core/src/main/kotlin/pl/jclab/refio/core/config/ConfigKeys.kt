@@ -19,7 +19,13 @@ data class ConfigKey<T>(
     val parser: (String) -> T?,
     val default: T,
     val serializer: (T) -> String = { it.toString() },
-    val yamlAccessor: ((HierarchicalConfigLoader) -> Any?)? = null
+    val yamlAccessor: ((HierarchicalConfigLoader) -> Any?)? = null,
+    /**
+     * Optional validator invoked by [pl.jclab.refio.core.services.ConfigValidator] at startup
+     * and after YAML reloads. Return `false` to reject a value — the startup then fails loud
+     * with the offending key/value, rather than silently using a broken config.
+     */
+    val validator: (T) -> Boolean = { true }
 )
 
 /**
@@ -68,7 +74,8 @@ object ConfigKeys {
         key = "limits.api_call_timeout",
         parser = String::toIntOrNull,
         default = 360,
-        yamlAccessor = { it.getApiCallTimeout() }
+        yamlAccessor = { it.getApiCallTimeout() },
+        validator = { it > 0 }
     )
 
     val STREAMING_READ_TIMEOUT = ConfigKey(
@@ -96,21 +103,24 @@ object ConfigKeys {
         key = "limits.max_context_size",
         parser = String::toIntOrNull,
         default = 128000,
-        yamlAccessor = { it.getMaxContextSize() }
+        yamlAccessor = { it.getMaxContextSize() },
+        validator = { it in 1024..4_194_304 }
     )
 
     val MAX_OUTPUT_SIZE = ConfigKey(
         key = "limits.max_output_size",
         parser = String::toIntOrNull,
         default = 16384,
-        yamlAccessor = { it.getMaxOutputSize() }
+        yamlAccessor = { it.getMaxOutputSize() },
+        validator = { it > 0 }
     )
 
     val MAX_FILE_SIZE = ConfigKey(
         key = "limits.max_file_size",
         parser = String::toIntOrNull,
         default = 10,
-        yamlAccessor = { it.getMaxFileSize() }
+        yamlAccessor = { it.getMaxFileSize() },
+        validator = { it > 0 }
     )
 
     val MAX_RETRIES = ConfigKey(
@@ -165,6 +175,12 @@ object ConfigKeys {
         key = "ui.intent_classification_enabled",
         parser = String::toBooleanStrictOrNull,
         default = false
+    )
+
+    val UI_MULTI_AGENT_STRATEGY = ConfigKey(
+        key = "ui.multi_agent_strategy",
+        parser = { it.trim().uppercase().takeIf { s -> s.isNotBlank() } },
+        default = "SINGLE"
     )
 
     val UI_EXECUTION_MODE = ConfigKey(
@@ -228,6 +244,18 @@ object ConfigKeys {
         key = "default_model.weak",
         parser = { it.takeIf { s -> s.isNotBlank() } },
         default = "qwen2.5:7b"
+    )
+
+    val STRONG_MODEL = ConfigKey<String?>(
+        key = "default_model.strong",
+        parser = { it.takeIf { s -> s.isNotBlank() } },
+        default = null
+    )
+
+    val OLLAMA_MAX_CONCURRENT = ConfigKey(
+        key = "providers.ollama_max_concurrent",
+        parser = String::toIntOrNull,
+        default = 1
     )
 
     // ==================== RAG ====================
@@ -359,7 +387,8 @@ object ConfigKeys {
         key = "rag.search_semantic_weight",
         parser = String::toFloatOrNull,
         default = 0.7f,
-        yamlAccessor = { it.getRagSearchSemanticWeight() }
+        yamlAccessor = { it.getRagSearchSemanticWeight() },
+        validator = { it in 0f..1f }
     )
 
     val RAG_SEARCH_INCLUDE_CONTEXT_CHUNKS = ConfigKey(
@@ -471,7 +500,8 @@ object ConfigKeys {
     val CONTEXT_BUDGET_INPUT_RATIO = ConfigKey(
         key = "context.budget.input_ratio",
         parser = String::toDoubleOrNull,
-        default = 0.85
+        default = 0.85,
+        validator = { it > 0.0 && it <= 1.0 }
     )
 
     val WORKING_MEMORY_MAX_FACTS = ConfigKey(
@@ -681,6 +711,7 @@ object ConfigKeys {
             UI_NO_EGRESS_ENABLED,
             UI_ORCHESTRATION_ENABLED,
             UI_INTENT_CLASSIFICATION_ENABLED,
+            UI_MULTI_AGENT_STRATEGY,
             UI_EXECUTION_MODE,
             UI_SELECTED_MODE,
             UI_SELECTED_MODEL,
@@ -691,6 +722,7 @@ object ConfigKeys {
             DEFAULT_MODEL_PLAN,
             DEFAULT_MODEL_AGENT,
             WEAK_MODEL,
+            STRONG_MODEL,
             // RAG
             RAG_ENABLED,
             RAG_AUTO_INDEX_ON_CONTEXT,
@@ -738,6 +770,7 @@ object ConfigKeys {
             PROVIDER_OLLAMA_ENDPOINT,
             PROVIDER_OLLAMA_CONTEXT_SIZE,
             PROVIDER_OLLAMA_KEEP_ALIVE,
+            OLLAMA_MAX_CONCURRENT,
             PROVIDER_ANTHROPIC_API_KEY,
             PROVIDER_OPENAI_API_KEY,
             PROVIDER_OPENROUTER_API_KEY,

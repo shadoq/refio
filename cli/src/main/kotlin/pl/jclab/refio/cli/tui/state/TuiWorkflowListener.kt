@@ -28,7 +28,6 @@ class TuiWorkflowListener(
     private val agentColorIndex: Int,
     private val messagesState: MutableStateFlow<List<TuiChatMessage>>,
     private val streamingState: MutableStateFlow<Boolean>,
-    private val stepsState: MutableStateFlow<List<TuiStep>>,
     private val scope: CoroutineScope,
     private var viewModel: TuiViewModel? = null
 ) : WorkflowEventListener {
@@ -191,21 +190,11 @@ class TuiWorkflowListener(
 
     override fun onToolStarted(toolName: String) {
         viewModel?.updateExecutionStatus("Tool: $toolName")
-        stepsState.update { steps ->
-            val existing = steps.indexOfLast { it.id == "tool-$toolName" && it.status == "RUNNING" }
-            if (existing >= 0) steps // already tracking this tool
-            else steps + TuiStep(
-                id = "tool-$toolName-${System.currentTimeMillis()}",
-                name = toolName,
-                status = "RUNNING"
-            )
-        }
-        // Also update subtask status if we're tracking subtasks
+        // Update subtask execution status if subtasks are being tracked
         viewModel?.let { vm ->
             val subtasks = vm.stateFlow.value.subtasks
             val running = subtasks.indexOfFirst { it.status == "RUNNING" }
             if (running >= 0) {
-                // Currently executing subtask — update execution status with step count
                 val total = subtasks.size
                 val completed = subtasks.count { it.status in listOf("COMPLETED", "SKIPPED", "FAILED") }
                 vm.updateExecutionStatus("Executing step ${completed + 1}/$total: $toolName")
@@ -214,27 +203,10 @@ class TuiWorkflowListener(
     }
 
     override fun onStepStarted(subtaskId: String) {
-        stepsState.update { steps ->
-            val existing = steps.indexOfLast { it.id == subtaskId }
-            if (existing >= 0) {
-                steps.toMutableList().also { it[existing] = it[existing].copy(status = "RUNNING") }
-            } else {
-                steps + TuiStep(id = subtaskId, name = subtaskId, status = "RUNNING")
-            }
-        }
-        // Update corresponding subtask status
         viewModel?.updateSubtaskStatus(subtaskId, "RUNNING")
     }
 
     override fun onIntentCompleted(intent: WorkflowIntent, result: IntentResult) {
-        // Mark last RUNNING step as completed
-        stepsState.update { steps ->
-            val running = steps.indexOfLast { it.status == "RUNNING" }
-            if (running >= 0) {
-                steps.toMutableList().also { it[running] = it[running].copy(status = "COMPLETED") }
-            } else steps
-        }
-
         // In INTERACTIVE mode, auto-switch to Steps tab for next approval
         val vm = viewModel ?: return
         val state = vm.stateFlow.value
@@ -244,7 +216,7 @@ class TuiWorkflowListener(
             if (nextPending >= 0) {
                 vm.setActiveTab(TuiTab.STEPS)
                 vm.selectStep(nextPending)
-                vm.addSystemMessage("Step completed. Next step awaiting approval: ${subtasks[nextPending].name}")
+                vm.addSystemMessage("Step completed. Next step awaiting approval: ${subtasks[nextPending].description}")
             }
         }
     }
@@ -252,10 +224,6 @@ class TuiWorkflowListener(
     override fun onWorkflowComplete(result: IntentResult) {
         viewModel?.updateExecutionStatus("Idle")
         streamingState.value = false
-        // Mark all remaining RUNNING steps as completed
-        stepsState.update { steps ->
-            steps.map { if (it.status == "RUNNING") it.copy(status = "COMPLETED") else it }
-        }
         // Extract per-message metrics from result and update last assistant message
         val costs = extractCosts(result)
         if (costs != null) {

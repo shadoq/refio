@@ -38,7 +38,6 @@ class AgentRouterTest {
     private lateinit var llmClient: LLMClient
     private lateinit var promptsService: PromptsService
     private lateinit var contextService: ContextService
-    private var ideProject: Any? = null
     private lateinit var toolDescriptionBuilder: ToolDescriptionBuilder
     private lateinit var agentRouter: AgentRouter
 
@@ -52,7 +51,6 @@ class AgentRouterTest {
         llmClient = mockk()
         promptsService = mockk()
         contextService = mockk()
-        ideProject = null // Platform-independent test
         toolDescriptionBuilder = mockk()
         agentRouter = AgentRouter(
             agentExecutor = agentExecutor,
@@ -64,7 +62,6 @@ class AgentRouterTest {
             promptsService = promptsService,
             contextService = contextService,
             projectRoot = Paths.get("D:/test"),
-            ideProject = ideProject,
             toolDescriptionBuilder = toolDescriptionBuilder
         )
     }
@@ -233,7 +230,6 @@ class AgentRouterTest {
             promptsService = promptsService,
             contextService = contextService,
             projectRoot = Paths.get("D:/test"),
-            ideProject = ideProject,
             toolDescriptionBuilder = toolDescriptionBuilder
         )
 

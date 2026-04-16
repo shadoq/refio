@@ -118,4 +118,20 @@ tasks {
             csv.required.set(false)
         }
     }
+
+    jacocoTestCoverageVerification {
+        dependsOn(test)
+        violationRules {
+            rule {
+                limit {
+                    counter = "INSTRUCTION"
+                    minimum = "0.35".toBigDecimal()
+                }
+            }
+        }
+    }
+
+    check {
+        dependsOn(jacocoTestCoverageVerification)
+    }
 }

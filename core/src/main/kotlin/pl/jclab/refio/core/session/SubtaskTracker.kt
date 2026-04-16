@@ -3,7 +3,7 @@ package pl.jclab.refio.core.session
 import pl.jclab.refio.core.session.SessionStateManager
 import pl.jclab.refio.core.session.VfsRefresher
 import pl.jclab.refio.api.models.Message
-import pl.jclab.refio.api.models.SubtaskDto
+import pl.jclab.refio.core.api.SubtaskResponse
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.api.ExecuteStepResponse
 import pl.jclab.refio.core.api.UpdateSubtaskRequest
@@ -21,7 +21,7 @@ class SubtaskTracker(
 
     private val logger = dualLogger("SubtaskTracker")
 
-    fun updateSubtasks(subtasks: List<SubtaskDto>) {
+    fun updateSubtasks(subtasks: List<SubtaskResponse>) {
         stateManager.setSubtasks(subtasks)
         logger.debug { "Updated subtasks: ${subtasks.size} items" }
     }
@@ -34,38 +34,7 @@ class SubtaskTracker(
             val response = projectRouter.subtaskRouter.getSubtasks(currentSession.id)
             logger.info { "[SUBTASK] loadSubtasks response: taskId=${currentSession.id}, count=${response.subtasks.size}" }
 
-            val subtasks = response.subtasks.map { coreSubtask ->
-                SubtaskDto(
-                    id = coreSubtask.id,
-                    taskId = coreSubtask.taskId,
-                    orderIndex = coreSubtask.orderIndex,
-                    kind = coreSubtask.kind,
-                    status = coreSubtask.status,
-                    approvalStatus = coreSubtask.approvalStatus,
-                    requiresApproval = coreSubtask.requiresApproval,
-                    approvedByUser = coreSubtask.approvedByUser,
-                    description = coreSubtask.description,
-                    paramsJson = coreSubtask.paramsJson,
-                    stepPlanJson = coreSubtask.stepPlanJson,
-                    summary = coreSubtask.summary,
-                    result = coreSubtask.result,
-                    startedAt = coreSubtask.startedAt,
-                    finishedAt = coreSubtask.finishedAt,
-                    errorCode = coreSubtask.errorCode,
-                    errorMessage = coreSubtask.errorMessage,
-                    tokensIn = coreSubtask.tokensIn,
-                    tokensOut = coreSubtask.tokensOut,
-                    costUsd = coreSubtask.costUsd,
-                    latencyMs = coreSubtask.latencyMs,
-                    model = coreSubtask.model,
-                    provider = coreSubtask.provider,
-                    resultSummary = coreSubtask.resultSummary,
-                    createdAt = coreSubtask.createdAt,
-                    updatedAt = coreSubtask.updatedAt,
-                    completedAt = coreSubtask.completedAt
-                )
-            }
-
+            val subtasks = response.subtasks
             val currentSubtasks = stateManager.getSubtasks()
             if (!areSubtasksEqual(currentSubtasks, subtasks)) {
                 stateManager.setSubtasks(subtasks)
@@ -353,7 +322,7 @@ class SubtaskTracker(
         return prepareResponse
     }
 
-    private fun areSubtasksEqual(current: List<SubtaskDto>, new: List<SubtaskDto>): Boolean {
+    private fun areSubtasksEqual(current: List<SubtaskResponse>, new: List<SubtaskResponse>): Boolean {
         if (current.size != new.size) return false
         return current.zip(new).all { (a, b) ->
             a.id == b.id &&

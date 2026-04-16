@@ -1,0 +1,225 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Refio Configuration File
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Location:
+#   User config:    ~/.refio/config.yaml (Linux/macOS) or %USERPROFILE%\.refio\config.yaml (Windows)
+#   Project config: <project_root>/.refio/config.yaml
+#
+# Configuration Hierarchy (lowest to highest priority):
+#   1. Built-in defaults (hardcoded)
+#   2. User config file (~/.refio/config.yaml)
+#   3. Project config file (<project>/.refio/config.yaml)
+#   4. Database overrides (changes made in Settings UI)
+#
+# All fields are optional. Missing fields use built-in defaults.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# General Settings
+# ─────────────────────────────────────────────────────────────────────────────
+general:
+  formatMarkdown: true          # Format responses as markdown
+  streamingEnabled: true        # Stream LLM responses in real-time
+  advancedView: false           # Show advanced UI tabs (Steps, Context, RAG, Debug)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LLM Provider Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+providers:
+  ollama:
+    endpoint: "http://localhost:11434"
+    contextSize: 32768          # Context window size in tokens
+
+  anthropic:
+    apiKey: ""                  # sk-ant-...
+
+  openai:
+    apiKey: ""                  # sk-...
+
+  openrouter:
+    apiKey: ""                  # sk-or-...
+
+  gemini:
+    apiKey: ""                  # AIza...
+
+  lmstudio:
+    baseUrl: "http://localhost:1234/v1"
+    contextSize: 32768
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Model Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+models:
+  # Default models per operation mode (format: "provider/model-id")
+  defaults:
+    chat: "ollama/qwen2.5:7b"       # Default chat/conversation model
+    plan: "ollama/qwen2.5:7b"       # Model for planning operations
+    coding: "ollama/qwen2.5-coder:7b"  # Model for coding/agent tasks
+    weak: "ollama/qwen2.5:3b"       # Cheap model for auxiliary operations
+    embedding: "ollama/nomic-embed-text"  # Model for embeddings (RAG)
+
+  # Model visibility in dropdown (format: "provider/model-id": true/false)
+  visibility:
+    "ollama/qwen2.5:7b": true
+    "ollama/qwen2.5:14b": true
+    "ollama/qwen2.5-coder:7b": true
+    "openai/gpt-4o-mini": true
+    "openai/gpt-4o": false          # Hidden by default (expensive)
+    "anthropic/claude-3-5-sonnet-20241022": true
+    "anthropic/claude-3-opus-20240229": false  # Hidden by default (expensive)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# System Limits
+# ─────────────────────────────────────────────────────────────────────────────
+limits:
+  apiCallTimeout: 240           # API call timeout in seconds
+  toolExecutionTimeout: 240     # Tool execution timeout in seconds
+  streamingReadTimeout: 240     # Streaming read timeout in seconds
+  streamingRequestTimeout: 1800 # Total streaming request timeout in seconds
+  maxContextSize: 128000        # Maximum context size in tokens
+  maxOutputSize: 16384          # Maximum output size in tokens
+  maxFileSize: 10               # Maximum file size in MB
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Advanced Settings
+# ─────────────────────────────────────────────────────────────────────────────
+advanced:
+  noEgressDefault: false        # Block external network calls by default
+  readOnlyMode: false           # Prevent all file write operations
+  autoOptimizePercentage: 85    # Auto-optimize context at this % of limit
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tool Permissions
+# ─────────────────────────────────────────────────────────────────────────────
+tools:
+  # Permission format: { planMode: "ON"|"OFF", agentMode: "ON"|"OFF" }
+  permissions:
+    read_file:
+      planMode: "ON"
+      agentMode: "ON"
+    read_directory:
+      planMode: "ON"
+      agentMode: "ON"
+    file_search:
+      planMode: "ON"
+      agentMode: "ON"
+    grep_search:
+      planMode: "ON"
+      agentMode: "ON"
+    view_diff:
+      planMode: "ON"
+      agentMode: "ON"
+    create_new_file:
+      planMode: "OFF"
+      agentMode: "ON"
+    code_editing:
+      planMode: "OFF"
+      agentMode: "ON"
+    advance_code_editing:
+      planMode: "OFF"
+      agentMode: "ON"
+    multi_edit:
+      planMode: "OFF"
+      agentMode: "ON"
+    run_terminal_command:
+      planMode: "OFF"
+      agentMode: "ON"          # Enabled by default in AGENT mode
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RAG (Retrieval-Augmented Generation) Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+rag:
+  enabled: true                 # Enable RAG features
+  indexOnStartup: true          # Index project at IDE startup
+  autoIndexOnContextBuild: true # Auto-index when building context
+  maxFileSizeMB: 2              # Max file size for indexing
+  maxChunksPerFile: 100         # Max chunks per file
+  indexBatchSize: 10            # Files per indexing batch
+  embeddingsBatchSize: 50       # Embeddings per batch
+  cacheTtlMs: 300000            # RAG cache TTL (5 minutes)
+  maxConcurrentJobs: 4          # Max concurrent indexing jobs
+
+  # Directories to ignore during indexing
+  ignoredDirectories:
+    - ".git"
+    - ".idea"
+    - ".vscode"
+    - "node_modules"
+    - "build"
+    - "dist"
+    - "__pycache__"
+    - ".venv"
+    - "target"
+    - "out"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UI State (persisted between sessions)
+# ─────────────────────────────────────────────────────────────────────────────
+ui:
+  thinkingEnabled: false        # Show LLM thinking process
+  noEgressEnabled: false        # Block external network calls
+  orchestrationEnabled: true    # Enable orchestration toggle
+  intentClassificationEnabled: false # Enable LLM intent classification
+  executionMode: "AUTO"         # AUTO or INTERACTIVE
+  selectedMode: "CHAT"          # CHAT, PLAN, or AGENT
+  selectedModel: ""             # Currently selected model (empty = auto)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PROJECT-SPECIFIC SETTINGS (only in <project>/.refio/config.yaml)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Custom Prompts (project-specific)
+# ─────────────────────────────────────────────────────────────────────────────
+# prompts:
+#   systemChat: |
+#     You are a helpful coding assistant for this specific project.
+#     Always follow the project's coding conventions.
+#
+#   systemPlan: |
+#     You are a planning assistant. Create detailed plans for tasks.
+#
+#   systemAgent: |
+#     You are an autonomous coding agent.
+#
+#   commands:
+#     - name: "fix"
+#       description: "Fix code issues"
+#       content: "Analyze and fix any issues in the selected code."
+#       enabled: true
+#
+#     - name: "refactor"
+#       description: "Refactor code"
+#       content: "Refactor the selected code for better readability."
+#       enabled: true
+#
+#   rules:
+#     - name: "coding-style"
+#       content: "Always use 4-space indentation."
+#       enabled: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MCP Server Configuration (project-specific)
+# ─────────────────────────────────────────────────────────────────────────────
+# mcp:
+#   servers:
+#     - id: "github"
+#       displayName: "GitHub"
+#       type: "STDIO"
+#       command: "npx"
+#       args: ["-y", "@modelcontextprotocol/server-github"]
+#       accessMode: "READ"
+#       enabled: true
+#       env:
+#         - name: "GITHUB_TOKEN"
+#           value: ""
+#           isSecret: true
+#
+#     - id: "filesystem"
+#       displayName: "Filesystem"
+#       type: "STDIO"
+#       command: "npx"
+#       args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed"]
+#       accessMode: "READ_WRITE"
+#       enabled: true

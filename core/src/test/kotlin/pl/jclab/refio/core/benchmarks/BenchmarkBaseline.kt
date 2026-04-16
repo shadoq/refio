@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import pl.jclab.refio.core.config.ConfigYaml
+import pl.jclab.refio.core.config.ConfigYamlIO
 import pl.jclab.refio.core.config.GeneralConfig
 import pl.jclab.refio.core.config.LimitsConfig
 import pl.jclab.refio.core.config.OllamaConfig
@@ -95,15 +96,8 @@ class BenchmarkBaseline {
         reportBenchmark("model_definitions_synthetic_5_models", samples)
     }
 
-    /**
-     * Używa reflection aby obejść private decodeYamlContent — docelowo w Sprint 3
-     * będzie publiczny lub zastąpiony przez Kaml `@Serializable`.
-     */
-    private fun decodePrivate(file: File): ConfigYaml {
-        val method = ConfigYaml.Companion::class.java.getDeclaredMethod("decodeYamlContent", String::class.java)
-        method.isAccessible = true
-        return method.invoke(ConfigYaml.Companion, file.readText()) as ConfigYaml
-    }
+    private fun decodePrivate(file: File): ConfigYaml =
+        checkNotNull(ConfigYamlIO.loadFromPath(file)) { "Failed to load benchmark config from $file" }
 
     private fun reportBenchmark(name: String, samplesNs: List<Long>) {
         val sorted = samplesNs.sorted()

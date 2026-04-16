@@ -8,6 +8,7 @@ import pl.jclab.refio.core.db.repositories.RagRepository
 import pl.jclab.refio.core.db.repositories.SnapshotRepository
 import pl.jclab.refio.core.db.repositories.SubtaskRepository
 import pl.jclab.refio.core.db.repositories.TaskRepository
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.services.*
 import pl.jclab.refio.core.services.analysis.*
 import pl.jclab.refio.core.services.analysis.project.RichProjectAnalysisEngine
@@ -22,8 +23,8 @@ import pl.jclab.refio.core.services.context.WorkingMemoryService
  */
 internal class AnalysisStack(
     projectRoot: java.nio.file.Path?,
-    configService: ConfigService,
-    ragRepository: RagRepository,
+    private val configService: ConfigService,
+    private val ragRepository: RagRepository,
     snapshotRepository: SnapshotRepository,
     analysisReportRepository: ProjectAnalysisReportRepository,
     taskRepository: TaskRepository,
@@ -32,8 +33,13 @@ internal class AnalysisStack(
     workingMemoryService: WorkingMemoryService,
     conversationSummaryService: ConversationSummaryService,
     scope: CoroutineScope,
-    embeddingProviderFactory: (providerId: String) -> EmbeddingProvider
+    private val embeddingProviderFactory: EmbeddingProviderFactory,
+    platformProject: Any? = null,
 ) {
+    private val logger = dualLogger("AnalysisStack")
+
+    private val embeddingProviderById: (providerId: String) -> EmbeddingProvider =
+        { providerId -> embeddingProviderFactory.forProvider(providerId) }
     val languageAnalyzers: List<LanguageAnalyzer> = listOf(
         KotlinLanguageAnalyzer(),
         JavaLanguageAnalyzer(),
@@ -49,7 +55,7 @@ internal class AnalysisStack(
     val embeddingsService: EmbeddingsService? = if (projectRoot != null) {
         EmbeddingsService(
             configService = configService,
-            providerFactory = embeddingProviderFactory
+            providerFactory = embeddingProviderById
         )
     } else null
 
@@ -92,11 +98,26 @@ internal class AnalysisStack(
             fileAnalyzerService = fileAnalyzerService,
             configService = configService,
             workingMemoryService = workingMemoryService,
-            conversationSummaryService = conversationSummaryService
+            conversationSummaryService = conversationSummaryService,
+            platformProject = platformProject,
         )
     } else null
 
     val snapshotService: SnapshotService? = if (projectRoot != null) {
         SnapshotService(snapshotRepository, projectRoot)
     } else null
+
+    /**
+     * Lazy `rag_search` backend — resolves the configured embedding provider on first
+     * access and returns null (with a WARN) if that fails.
+     */
+    val ragSearchService: RagSearchService? by lazy {
+        try {
+            val (providerId, _) = embeddingProviderFactory.resolve(configService.getEmbeddingModel())
+            RagSearchService(ragRepository, embeddingProviderFactory.forProvider(providerId))
+        } catch (e: Exception) {
+            logger.warn(e) { "Failed to initialize RagSearchService: ${e.message}" }
+            null
+        }
+    }
 }

@@ -4,30 +4,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.Flow
 import pl.jclab.refio.core.db.*
-import pl.jclab.refio.core.db.repositories.*
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.services.*
-import pl.jclab.refio.core.config.ConfigKeys
-import pl.jclab.refio.core.services.analysis.EmbeddingsService
 import pl.jclab.refio.core.services.turn.*
-import pl.jclab.refio.core.services.analysis.FileAnalyzerService
-import pl.jclab.refio.core.services.analysis.CppLanguageAnalyzer
-import pl.jclab.refio.core.services.analysis.CssLanguageAnalyzer
-import pl.jclab.refio.core.services.analysis.GoLanguageAnalyzer
-import pl.jclab.refio.core.services.analysis.HtmlLanguageAnalyzer
-import pl.jclab.refio.core.services.analysis.JavaLanguageAnalyzer
-import pl.jclab.refio.core.services.analysis.KotlinLanguageAnalyzer
-import pl.jclab.refio.core.services.analysis.PythonLanguageAnalyzer
-import pl.jclab.refio.core.services.analysis.RustLanguageAnalyzer
-import pl.jclab.refio.core.services.analysis.TypeScriptLanguageAnalyzer
-import pl.jclab.refio.core.services.analysis.project.RichProjectAnalysisEngine
-import pl.jclab.refio.core.services.context.WorkingMemoryService
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.utils.ProjectIdGenerator
-import pl.jclab.refio.core.workflow.IntentRouter
-import pl.jclab.refio.core.workflow.WorkflowOrchestrator
 import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("CoreApiRouter")
@@ -44,9 +26,9 @@ private val logger = dualLogger("CoreApiRouter")
 class CoreApiRouter(
     private val toolRegistry: ToolRegistry? = null,
     private val projectRoot: java.nio.file.Path? = null,
-    private val ideProject: Any? = null,
+    private val platformProjectOverride: Any? = null,
     private val llmClientOverride: LLMClient? = null,
-    /** Platform-agnostic project handle. When provided, ideProject is derived from platformProject. */
+    /** Platform-agnostic project handle. When provided, platformProject is derived from projectHandle.platformProject. */
     val projectHandle: pl.jclab.refio.core.project.ProjectHandle? = null,
     /** Callback to invalidate codebase context cache after RAG operations. Set by plugin layer. */
     private val codebaseCacheInvalidator: (projectRoot: String) -> Unit = {}
@@ -55,79 +37,58 @@ class CoreApiRouter(
     private val routerProjectPath: String? = projectHandle?.rootPath?.toAbsolutePath()?.normalize()?.toString()
         ?: projectRoot?.toAbsolutePath()?.normalize()?.toString()
 
-    /** Resolved IDE project — from projectHandle.platformProject or direct ideProject param */
-    private val resolvedIdeProject: Any?
-        get() = ideProject ?: projectHandle?.platformProject
+    /** Resolved platform-specific project — from projectHandle.platformProject or direct override */
+    private val resolvedPlatformProject: Any?
+        get() = platformProjectOverride ?: projectHandle?.platformProject
 
-    // Repositories
-    private val chatMessageRepository = ChatMessageRepository()
-    private val subtaskRepository = SubtaskRepository()
-    private val configRepository = ConfigRepository()
-    private val apiLogRepository = ApiLogRepository()
-    private val promptsRepository = PromptsRepository()
-    private val ragRepository = RagRepository()
-    private val documentationRepository = DocumentationRepository()
-    private val snapshotRepository = SnapshotRepository()
-    private val projectAnalysisReportRepository = ProjectAnalysisReportRepository()
-    private val agentSessionRepository = pl.jclab.refio.core.db.repositories.AgentSessionRepository()
-    private val agentInstanceRepository = pl.jclab.refio.core.db.repositories.AgentInstanceRepository()
+    // Persistence layer — all repositories centralized in PersistenceModule.
+    private val persistence = pl.jclab.refio.core.api.modules.PersistenceModule()
 
-    // Multi-agent infrastructure
+    // Multi-agent event bus — persists events so Session Trace / Timeline / Graph can replay history.
     val agentEventBus = pl.jclab.refio.core.agents.events.AgentEventBus().apply {
-        // Persist all events so Session Trace / Timeline / Graph can be replayed
-        // when the user reloads a session from history.
-        setRepository(pl.jclab.refio.core.db.repositories.AgentEventSqlRepository())
+        setRepository(persistence.agentEventSqlRepository)
     }
 
-    // Hook system
-    private val hookExecutor = pl.jclab.refio.core.services.hooks.HookExecutor()
-    private val hookService = pl.jclab.refio.core.services.hooks.HookService(
-        configProvider = { pl.jclab.refio.core.config.HierarchicalConfigLoader.getInstance(projectRoot).getHooks() },
-        hookExecutor = hookExecutor
+    // Core services (public for cross-module access by plugin services)
+    val taskRepository get() = persistence.taskRepository
+    val configService = ConfigService(
+        configRepository = persistence.configRepository,
+        defaultProjectId = routerProjectId
     )
+    private val promptRegistry = pl.jclab.refio.core.prompts.PromptRegistry(projectRoot)
+    val promptsService = PromptsService(persistence.promptsRepository, promptRegistry)
+    val toolPermissionsService = ToolPermissionsService(
+        configRepository = persistence.configRepository,
+        toolRegistry = toolRegistry
+    )
+    val toolApprovalService = ToolApprovalService()
+    val llmClient = llmClientOverride ?: LLMClient(configService)
 
-    // Single source of truth for prompt section providers.
-    // IMPORTANT: this same list must be used by both TurnPromptBuilder (runtime)
-    // and ProjectContextRouter (preview) so the Context panel shows the actual
-    // prompt the model receives. Previously preview used a stripped-down path
-    // and e.g. <system_environment> was invisible in the Context panel even
-    // though the real agent call included it.
+    // Support services (hooks, working memory, agent plans, conversation summary, user interaction, queue).
+    private val supportServices = pl.jclab.refio.core.api.modules.SupportServicesModule(
+        projectRoot = projectRoot,
+        chatMessageRepository = persistence.chatMessageRepository,
+        llmClient = llmClient,
+        promptsService = promptsService,
+        configService = configService,
+    )
+    private val workingMemoryService get() = supportServices.workingMemoryService
+    val agentPlanService get() = supportServices.agentPlanService
+    private val conversationSummaryService get() = supportServices.conversationSummaryService
+    val userInteraction get() = supportServices.userInteraction
+    val pendingUserMessageQueue get() = supportServices.pendingUserMessageQueue
+
+    /**
+     * Shared between [pl.jclab.refio.core.services.turn.TurnPromptBuilder] (runtime)
+     * and [pl.jclab.refio.core.api.routers.ProjectContextRouter] (preview) so the
+     * Context panel mirrors the exact system prompt the model receives.
+     */
     val promptSectionProviders: List<pl.jclab.refio.core.services.turn.PromptSectionProvider> by lazy {
         listOf(
             AgentPlansSectionProvider(agentPlanService),
             pl.jclab.refio.core.services.turn.providers.SystemEnvironmentPromptProvider(projectRoot)
         )
     }
-
-    // Services (public for cross-module access by plugin services)
-    val taskRepository = TaskRepository()
-    val configService = ConfigService(
-        configRepository = configRepository,
-        defaultProjectId = routerProjectId
-    )
-    private val promptRegistry = pl.jclab.refio.core.prompts.PromptRegistry(projectRoot)
-    val promptsService = PromptsService(promptsRepository, promptRegistry)
-    val toolPermissionsService = ToolPermissionsService(
-        configRepository = configRepository,
-        toolRegistry = toolRegistry
-    )
-    val toolApprovalService = ToolApprovalService()
-    val pendingUserMessageQueue = PendingUserMessageQueue(chatMessageRepository)
-    val llmClient = llmClientOverride ?: LLMClient(configService)
-    private val workingMemoryService = WorkingMemoryService()
-    private val workingMemoryIntegration = WorkingMemoryIntegration(workingMemoryService)
-    val agentPlanService = AgentPlanService()
-    private val conversationSummaryService = ConversationSummaryService(
-        llmClient = llmClient,
-        promptsService = promptsService,
-        configService = configService,
-        chatMessageRepository = chatMessageRepository
-    )
-
-    // User interaction service (public for UI to detect waiting state)
-    val userInteraction = pl.jclab.refio.core.services.orchestration.UserInteraction(
-        chatMessageRepository = chatMessageRepository
-    )
 
     /**
      * Get the ToolRegistry for this router.
@@ -138,33 +99,34 @@ class CoreApiRouter(
     }
 
     fun hasIdeProject(): Boolean {
-        return resolvedIdeProject != null
+        return resolvedPlatformProject != null
     }
 
     private val routerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val embeddingProviderFactory = pl.jclab.refio.core.api.modules.EmbeddingProviderFactory(configService)
 
     // Analysis stack — embeddings / RAG / analyzer / context / snapshot.
     // Null-valued fields when projectRoot is absent (app-level router).
     private val analysisStack = pl.jclab.refio.core.api.modules.AnalysisStack(
         projectRoot = projectRoot,
         configService = configService,
-        ragRepository = ragRepository,
-        snapshotRepository = snapshotRepository,
-        analysisReportRepository = projectAnalysisReportRepository,
+        ragRepository = persistence.ragRepository,
+        snapshotRepository = persistence.snapshotRepository,
+        analysisReportRepository = persistence.projectAnalysisReportRepository,
         taskRepository = taskRepository,
-        chatMessageRepository = chatMessageRepository,
-        subtaskRepository = subtaskRepository,
+        chatMessageRepository = persistence.chatMessageRepository,
+        subtaskRepository = persistence.subtaskRepository,
         workingMemoryService = workingMemoryService,
         conversationSummaryService = conversationSummaryService,
         scope = routerScope,
-        embeddingProviderFactory = ::embeddingProviderFor
+        embeddingProviderFactory = embeddingProviderFactory,
+        platformProject = resolvedPlatformProject,
     )
-    private val embeddingsService get() = analysisStack.embeddingsService
-    private val fileAnalyzerService get() = analysisStack.fileAnalyzerService
-    private val richProjectAnalysisEngine get() = analysisStack.richProjectAnalysisEngine
     val projectAnalyzer get() = analysisStack.projectAnalyzer
     private val contextService get() = analysisStack.contextService
     private val snapshotService get() = analysisStack.snapshotService
+    private val ragSearchService get() = analysisStack.ragSearchService
 
     // Tool description builder (needs ToolRegistry and ToolPermissionsService)
     private val toolDescriptionBuilder = pl.jclab.refio.core.prompts.ToolDescriptionBuilder(
@@ -172,21 +134,8 @@ class CoreApiRouter(
         toolPermissionsService = toolPermissionsService
     )
 
-    private val chatService = ChatService(
-        taskRepository = taskRepository,
-        chatMessageRepository = chatMessageRepository,
-        configService = configService,
-        llmClient = llmClient,
-        promptsService = promptsService,
-        toolDescriptionBuilder = toolDescriptionBuilder,
-        contextService = contextService,
-        projectRoot = projectRoot,
-        ideProject = resolvedIdeProject
-    )
-    private val planningService = PlanningService(
-        taskRepository = taskRepository,
-        chatMessageRepository = chatMessageRepository,
-        subtaskRepository = subtaskRepository,
+    private val chatPlanning = pl.jclab.refio.core.api.modules.ChatPlanningModule(
+        persistence = persistence,
         configService = configService,
         llmClient = llmClient,
         promptsService = promptsService,
@@ -195,79 +144,44 @@ class CoreApiRouter(
         toolPermissionsService = toolPermissionsService,
         contextService = contextService,
         projectRoot = projectRoot,
-        ideProject = resolvedIdeProject
     )
 
-    // Agent execution services (optional if toolRegistry not provided)
-    private val stepPlanner: StepPlanner? = if (toolRegistry != null) {
-        StepPlanner(
-            taskRepository,
-            subtaskRepository,
-            toolRegistry,
-            llmClient,
-            promptsService,
-            toolDescriptionBuilder,
-            configService,
-            toolPermissionsService,
-            contextService,
-            projectRoot
-        )
-    } else null
-
-    private val stepSummarizer = StepSummarizer(
+    // Agent execution stack (StepPlanner, ToolExecutor, AgentExecutor) — null
+    // when toolRegistry is absent (app-level router without a project selected).
+    private val agentExecutionModule = pl.jclab.refio.core.api.modules.AgentExecutionModule(
+        persistence = persistence,
         llmClient = llmClient,
-        promptsService = promptsService,
         configService = configService,
-        taskRepository = taskRepository
+        promptsService = promptsService,
+        toolDescriptionBuilder = toolDescriptionBuilder,
+        toolPermissionsService = toolPermissionsService,
+        toolApprovalService = toolApprovalService,
+        contextService = contextService,
+        snapshotService = snapshotService,
+        projectRoot = projectRoot,
+        toolRegistry = toolRegistry
     )
-
-    private val toolExecutor: ToolExecutor? = if (toolRegistry != null) {
-        ToolExecutor(
-            toolRegistry = toolRegistry,
-            taskRepository = taskRepository,
-            subtaskRepository = subtaskRepository,
-            snapshotService = snapshotService,
-            toolPermissionsService = toolPermissionsService,
-            mode = TaskMode.AGENT,
-            executionMode = pl.jclab.refio.api.models.ExecutionMode.AUTO
-        )
-    } else null
-
-    private val agentExecutor: AgentExecutor? = if (toolExecutor != null && stepPlanner != null) {
-        AgentExecutor(
-            taskRepository = taskRepository,
-            subtaskRepository = subtaskRepository,
-            toolExecutor = toolExecutor,
-            llmClient = llmClient,
-            promptsService = promptsService,
-            configService = configService,
-            stepPlanner = stepPlanner
-        )
-    } else null
+    private val toolExecutor get() = agentExecutionModule.toolExecutor
+    private val agentExecutor get() = agentExecutionModule.agentExecutor
 
     /**
-     * AgentTurnLoop - Turn-based execution loop implementing Codex CLI-style pattern.
-     * Optional service (requires toolRegistry).
-     * Wiring lives in [pl.jclab.refio.core.api.modules.AgentTurnLoopFactory].
+     * AgentTurnLoop — Turn-based execution loop implementing the Codex CLI-style pattern.
+     * Null when [toolRegistry] or [toolExecutor] are unavailable (app-level router).
      */
     private val agentTurnLoop: AgentTurnLoop? = pl.jclab.refio.core.api.modules.AgentTurnLoopFactory(
+        persistence = persistence,
+        support = supportServices,
         llmClient = llmClient,
-        chatMessageRepository = chatMessageRepository,
-        taskRepository = taskRepository,
-        subtaskRepository = subtaskRepository,
         configService = configService,
         promptsService = promptsService,
         toolDescriptionBuilder = toolDescriptionBuilder,
         contextService = contextService,
-        workingMemoryService = workingMemoryService,
-        workingMemoryIntegration = workingMemoryIntegration,
         snapshotService = snapshotService,
         toolApprovalService = toolApprovalService,
         toolPermissionsService = toolPermissionsService,
-        hookService = hookService,
         agentEventBus = agentEventBus,
         promptSectionProviders = promptSectionProviders,
-        projectRoot = projectRoot
+        projectRoot = projectRoot,
     ).build(toolRegistry, toolExecutor)
 
     /**
@@ -285,278 +199,67 @@ class CoreApiRouter(
     val lastPromptSnapshot: kotlinx.coroutines.flow.StateFlow<pl.jclab.refio.core.services.turn.PromptSnapshot?>?
         get() = agentTurnLoop?.lastPromptSnapshot
 
-    // ========== RAG Services ==========
-
-    private val ragSearchService: RagSearchService? by lazy {
-        try {
-            val embeddingModelSetting = configService.getEmbeddingModel()
-            val (providerId, _) = resolveEmbeddingProvider(embeddingModelSetting)
-            val embeddingProvider = embeddingProviderFor(providerId)
-            RagSearchService(ragRepository, embeddingProvider)
-        } catch (e: Exception) {
-            logger.warn(e) { "Failed to initialize RagSearchService: ${e.message}" }
-            null
-        }
-    }
-
     // ========== Domain Routers (RFC 0005) - Public API ==========
+    // All 12 router lazy vals + workflow plumbing live in [DomainRouters] so
+    // composition-root concerns stay separated from public API wiring.
 
-    /**
-     * Chat operations router (messages, summarization).
-     * Direct access for clients that want to bypass facade methods.
-     */
-    val chatRouter by lazy {
-        pl.jclab.refio.core.api.routers.ChatRouter(
-            chatService = chatService,
-            chatMessageRepository = chatMessageRepository,
-            taskRepository = taskRepository
-        )
-    }
-
-    /**
-     * Configuration router (models, settings).
-     * Direct access for clients that want to bypass facade methods.
-     */
-    val configRouter by lazy {
-        pl.jclab.refio.core.api.routers.ConfigRouter(
-            configService = configService,
-            llmClient = llmClient,
-            configRepository = configRepository
-        )
-    }
-
-    /**
-     * Tool management router (permissions, registry).
-     * Direct access for clients that want to bypass facade methods.
-     */
-    val toolRouter by lazy {
-        pl.jclab.refio.core.api.routers.ToolRouter(
-            toolRegistry = toolRegistry,
-            toolPermissionsService = toolPermissionsService
-        )
-    }
-
-    /**
-     * Agent execution router (step planning, execution).
-     * Direct access for clients that want to bypass facade methods.
-     */
-    val agentRouter by lazy {
-        pl.jclab.refio.core.api.routers.AgentRouter(
-            agentExecutor = agentExecutor,
-            taskRepository = taskRepository,
-            subtaskRepository = subtaskRepository,
-            chatMessageRepository = chatMessageRepository,
-            configService = configService,
-            llmClient = llmClient,
-            promptsService = promptsService,
-            contextService = contextService,
-            projectRoot = projectRoot,
-            ideProject = resolvedIdeProject,
-            toolDescriptionBuilder = toolDescriptionBuilder,
-            agentTurnLoop = agentTurnLoop
-        )
-    }
-
-    /**
-     * RAG operations router (indexing, search).
-     * Direct access for clients that want to bypass facade methods.
-     */
-    val ragRouter by lazy {
-        pl.jclab.refio.core.api.routers.RagRouter(
-            ragRepository = ragRepository,
-            documentationRepository = documentationRepository,
-            ragSearchService = ragSearchService,
-            embeddingsService = embeddingsService,
-            fileAnalyzerService = fileAnalyzerService,
-            projectRoot = projectRoot,
-            configService = configService,
-            embeddingProviderFactory = { model -> createEmbeddingProvider(model) },
-            codebaseCacheInvalidator = codebaseCacheInvalidator
-        )
-    }
-
-    /**
-     * Task management router (CRUD, queries).
-     * Direct access for clients that want to bypass facade methods.
-     */
-    val taskRouter by lazy {
-        pl.jclab.refio.core.api.routers.TaskRouter(
-            taskRepository = taskRepository,
-            configService = configService,
-            defaultProjectId = routerProjectId,
-            defaultProjectPath = routerProjectPath
-        )
-    }
-
-    /**
-     * Subtask management router (CRUD, approval, ordering).
-     * Direct access for clients that want to bypass facade methods.
-     */
-    val subtaskRouter by lazy {
-        pl.jclab.refio.core.api.routers.SubtaskRouter(
-            subtaskRepository = subtaskRepository
-        )
-    }
-
-    /**
-     * Prompts management router (system prompts, rules, slash commands).
-     * Direct access for clients that want to bypass facade methods.
-     */
-    val promptsRouter by lazy {
-        pl.jclab.refio.core.api.routers.PromptsRouter(
-            promptsService = promptsService
-        )
-    }
-
-    /**
-     * API logs management router (logging, statistics, export).
-     * Direct access for clients that want to bypass facade methods.
-     */
-    val apiLogsRouter by lazy {
-        pl.jclab.refio.core.api.routers.ApiLogsRouter(
-            apiLogRepository = apiLogRepository
-        )
-    }
-
-    /**
-     * Subagent management router (subagent definitions, execution).
-     * Direct access for clients that want to bypass facade methods.
-     */
-    val subagentRouter: pl.jclab.refio.core.subagents.SubagentRouter? by lazy {
-        if (projectRoot != null && toolRegistry != null) {
-            pl.jclab.refio.core.subagents.SubagentRouter(
-                projectRoot = projectRoot,
-                toolRegistry = toolRegistry,
-                configService = configService,
-                llmClient = llmClient,
-                toolPermissionsService = toolPermissionsService,
-                chatMessageRepository = chatMessageRepository,
-                contextService = contextService,
-                ideProject = resolvedIdeProject,
-                runTurnCallback = { request, callback ->
-                    agentRouter.runTurn(
-                        request = request,
-                        streamCallback = callback,
-                        listener = null
-                    )
-                }
-            )
-        } else {
-            null
-        }
-    }
-
-    /**
-     * File snapshot router (pre-edit backups, rollback).
-     */
-    val snapshotRouter by lazy {
-        pl.jclab.refio.core.api.routers.SnapshotRouter(
-            snapshotService = snapshotService,
-            snapshotRepository = snapshotRepository
-        )
-    }
-
-    /**
-     * Project context and analysis router (context panel, prompt preview).
-     */
-    val projectContextRouter by lazy {
-        pl.jclab.refio.core.api.routers.ProjectContextRouter(
-            contextService = contextService,
-            projectRoot = projectRoot,
-            ideProject = resolvedIdeProject,
-            taskRepository = taskRepository,
-            chatMessageRepository = chatMessageRepository,
-            promptsService = promptsService,
-            toolDescriptionBuilder = toolDescriptionBuilder,
-            projectAnalyzer = projectAnalyzer,
-            richProjectAnalysisEngine = richProjectAnalysisEngine,
-            promptSectionProviders = promptSectionProviders
-        )
-    }
-
-    /**
-     * Workflow orchestrator — dispatches intents directly to domain services.
-     */
-    val workflowOrchestrator by lazy {
-        val intentRouter = IntentRouter(
-            subtaskRepository = subtaskRepository,
-            subagentRouter = subagentRouter
-        )
-        WorkflowOrchestrator(
-            intentRouter = intentRouter,
-            chatService = chatService,
-            planningService = planningService,
-            agentRouter = agentRouter,
-            subagentRouter = subagentRouter,
-            userInteraction = userInteraction
-        )
-    }
-
-    /**
-     * Multi-agent runner for parallel agent orchestration.
-     */
     val multiAgentRunner by lazy {
         pl.jclab.refio.core.agents.MultiAgentRunner(agentEventBus)
     }
 
-    /**
-     * Multi-agent session management router.
-     */
-    val multiAgentRouter by lazy {
-        pl.jclab.refio.core.api.routers.MultiAgentRouter(
-            defaultProjectId = routerProjectId,
-            defaultProjectPath = routerProjectPath,
-            agentSessionRepository = agentSessionRepository,
-            agentInstanceRepository = agentInstanceRepository,
-            multiAgentRunner = multiAgentRunner,
-            createTaskFn = { request -> taskRouter.createTask(request) },
-            runTurnFn = { request, callback -> agentRouter.runTurn(request, callback) }
-        )
-    }
+    private val domainRouters = pl.jclab.refio.core.api.modules.DomainRouters(
+        persistence = persistence,
+        analysisStack = analysisStack,
+        chatPlanning = chatPlanning,
+        configService = configService,
+        promptsService = promptsService,
+        llmClient = llmClient,
+        toolRegistry = toolRegistry,
+        toolPermissionsService = toolPermissionsService,
+        toolDescriptionBuilder = toolDescriptionBuilder,
+        agentExecutor = agentExecutor,
+        agentTurnLoop = agentTurnLoop,
+        userInteraction = userInteraction,
+        multiAgentRunner = multiAgentRunner,
+        projectRoot = projectRoot,
+        promptSectionProviders = promptSectionProviders,
+        routerProjectId = routerProjectId,
+        routerProjectPath = routerProjectPath,
+        embeddingProviderFactory = embeddingProviderFactory::create,
+        codebaseCacheInvalidator = codebaseCacheInvalidator,
+    )
+
+    val chatRouter get() = domainRouters.chatRouter
+    val configRouter get() = domainRouters.configRouter
+    val toolRouter get() = domainRouters.toolRouter
+    val agentRouter get() = domainRouters.agentRouter
+    val ragRouter get() = domainRouters.ragRouter
+    val taskRouter get() = domainRouters.taskRouter
+    val subtaskRouter get() = domainRouters.subtaskRouter
+    val promptsRouter get() = domainRouters.promptsRouter
+    val apiLogsRouter get() = domainRouters.apiLogsRouter
+    val subagentRouter get() = domainRouters.subagentRouter
+    val snapshotRouter get() = domainRouters.snapshotRouter
+    val projectContextRouter get() = domainRouters.projectContextRouter
+    val workflowOrchestrator get() = domainRouters.workflowOrchestrator
+    val multiAgentRouter get() = domainRouters.multiAgentRouter
+    val orchestrationDispatcher get() = domainRouters.orchestrationDispatcher
+
+    // Internal accessors for modules in `api.modules` package
+    internal val toolRegistryOrNull: ToolRegistry? get() = toolRegistry
+    internal val projectRootOrNull: java.nio.file.Path? get() = projectRoot
+    internal val persistenceInternal get() = persistence
+    internal val workingMemoryServiceInternal get() = workingMemoryService
+    internal val ragSearchServiceInternal get() = ragSearchService
+    internal val embeddingProviderFactoryInternal get() = embeddingProviderFactory
 
     init {
-        if (toolRegistry != null && projectRoot != null) {
-            val runTurnCallback: suspend (pl.jclab.refio.core.api.TurnRequest, pl.jclab.refio.core.services.turn.TurnEventListener?, pl.jclab.refio.core.api.StreamCallback?) -> pl.jclab.refio.core.services.TurnResult =
-                { request, turnEventListener, streamCallback ->
-                    agentRouter.runTurn(
-                        request = request,
-                        streamCallback = streamCallback,
-                        listener = turnEventListener?.let {
-                            pl.jclab.refio.core.services.AgentTurnLoop.TurnEventListener.fromTurnEventListener(it)
-                        }
-                    )
-                }
-
-            pl.jclab.refio.core.api.modules.SystemToolsRegistrar(
-                configService = configService,
-                llmClient = llmClient,
-                agentPlanService = agentPlanService,
-                workingMemoryService = workingMemoryService,
-                subtaskRepository = subtaskRepository,
-                agentEventBus = agentEventBus,
-                subagentRouterProvider = { subagentRouter },
-                runTurnCallback = runTurnCallback
-            ).register(toolRegistry)
-        }
-
-        // Apply Ollama concurrency from config
-        val ollamaMaxConcurrent = configService.get(ConfigService.KEY_OLLAMA_MAX_CONCURRENT)?.toIntOrNull()
-        if (ollamaMaxConcurrent != null && ollamaMaxConcurrent > 0) {
-            OllamaRequestGate.maxConcurrentPerEndpoint = ollamaMaxConcurrent
-            logger.info { "CoreApiRouter: Ollama maxConcurrent set to $ollamaMaxConcurrent" }
-        }
-
-        logger.info { "CoreApiRouter initialized with services" }
-        if (contextService != null) {
-            logger.info { "CoreApiRouter: ContextService initialized with projectRoot=$projectRoot" }
-        } else {
-            logger.warn { "CoreApiRouter: ContextService NOT available (projectRoot not provided)" }
-        }
-        logger.info { "CoreApiRouter: ideProject available=${resolvedIdeProject != null}, projectHandle=${projectHandle != null}" }
-        if (toolRegistry != null) {
-            logger.info { "CoreApiRouter: Agent execution services initialized" }
-        } else {
-            logger.warn { "CoreApiRouter: Agent execution services NOT available (toolRegistry not provided)" }
+        pl.jclab.refio.core.api.modules.CoreApiRouterBootstrap.registerSystemTools(this)
+        pl.jclab.refio.core.api.modules.CoreApiRouterBootstrap.applyOllamaConcurrency(configService)
+        logger.info {
+            "CoreApiRouter init: projectRoot=$projectRoot, contextService=${contextService != null}, " +
+                "tools=${toolRegistry != null}, platformProject=${resolvedPlatformProject != null}, " +
+                "projectHandle=${projectHandle != null}"
         }
     }
 
@@ -567,108 +270,24 @@ class CoreApiRouter(
      *
      * Shares the same database but creates project-specific tools and services.
      * Used by StandaloneCoreBootstrap and CoreConnectionManager.
-     *
-     * @param projectRoot Project root directory
-     * @param projectHandle Platform-agnostic project handle (optional)
-     * @param ideProject Platform-specific project instance (optional)
-     * @return Configured project-level CoreApiRouter
      */
     fun createProjectRouter(
         projectRoot: java.nio.file.Path,
         projectHandle: pl.jclab.refio.core.project.ProjectHandle? = null,
-        ideProject: Any? = null
-    ): CoreApiRouter {
-        val toolRegistry = ToolRegistry()
+        platformProject: Any? = null
+    ): CoreApiRouter = pl.jclab.refio.core.api.modules.ProjectRouterFactory.create(
+        projectRoot = projectRoot,
+        projectHandle = projectHandle,
+        platformProject = platformProject,
+        llmClient = llmClient,
+        configService = configService,
+        promptsService = promptsService,
+        taskRepository = taskRepository,
+    )
 
-        val maxFileSizeBytes = configService.getTyped(ConfigKeys.MAX_FILE_SIZE).toLong() * 1024 * 1024
-        val fileLimits = pl.jclab.refio.core.tools.security.FileLimits(maxFileSize = maxFileSizeBytes)
-
-        val toolFactory = pl.jclab.refio.core.tools.base.ToolFactory(
-            projectRoot = projectRoot,
-            toolRegistry = toolRegistry,
-            llmClient = llmClient,
-            configService = configService,
-            promptsService = promptsService,
-            taskRepository = taskRepository,
-            fileLimits = fileLimits
-        )
-        val tools = toolFactory.createAllTools()
-        tools.forEach { tool -> toolRegistry.register(tool) }
-
-        return CoreApiRouter(
-            toolRegistry = toolRegistry,
-            projectRoot = projectRoot,
-            ideProject = ideProject,
-            projectHandle = projectHandle
-        )
-    }
-
-    /**
-     * Initialize core components (database, etc.)
-     */
+    /** Initialize core components (database, prompt defaults, RAG tool). */
     fun initialize(dbPath: String = "database.sqlite") {
-        logger.info { "Initializing core with dbPath=$dbPath" }
-        DatabaseFactory.init(dbPath)
-        promptsService.initializeDefaults()
-        if (projectRoot != null && toolRegistry != null) {
-            val service = ragSearchService
-            if (service != null) {
-                try {
-                    val embeddingModelSetting = configService.getEmbeddingModel()
-                    val (providerId, modelId) = resolveEmbeddingProvider(embeddingModelSetting)
-                    val ragTool = pl.jclab.refio.core.tools.implementations.RagSearchTool(
-                        ragSearchService = service,
-                        embeddingModel = modelId,
-                        projectRoot = projectRoot
-                    )
-                    toolRegistry.register(ragTool)
-                    logger.info { "Registered rag_search tool (model=$modelId, provider=$providerId)" }
-                } catch (e: IllegalArgumentException) {
-                    logger.debug { "rag_search tool already registered" }
-                } catch (e: Exception) {
-                    logger.warn(e) { "Failed to register rag_search tool: ${e.message}" }
-                }
-            }
-        }
-    }
-
-    /**
-     * Create embedding provider based on model name.
-     * Supports formats: "provider/modelId" (e.g., "ollama/nomic-embed-text") or just "modelId".
-     */
-    private fun createEmbeddingProvider(model: String): EmbeddingProvider {
-        val (providerId, _) = resolveEmbeddingProvider(model)
-        return embeddingProviderFor(providerId)
-    }
-
-    private fun resolveEmbeddingProvider(model: String): Pair<String, String> {
-        return if (model.contains("/")) {
-            val parts = model.split("/", limit = 2)
-            parts[0].lowercase() to parts[1]
-        } else {
-            val provider = when {
-                model.startsWith("text-embedding") -> "openai"
-                model in setOf("nomic-embed-text", "mxbai-embed-large", "all-minilm", "all-MiniLM-L6-v2") -> "ollama"
-                else -> "openai"
-            }
-            provider to model
-        }
-    }
-
-    private fun embeddingProviderFor(providerId: String): EmbeddingProvider {
-        return when (providerId.lowercase()) {
-            "ollama" -> {
-                val ollamaEndpoint = configService.getTyped(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT)
-                OllamaEmbeddingProvider(ollamaEndpoint)
-            }
-
-            "openai" -> OpenAIEmbeddingProvider()
-
-            else -> {
-                logger.warn { "Unknown embedding provider: $providerId, defaulting to OpenAI" }
-                OpenAIEmbeddingProvider()
-            }
-        }
+        pl.jclab.refio.core.api.modules.CoreApiRouterBootstrap.initializeCore(this, dbPath)
     }
 
     fun close() {

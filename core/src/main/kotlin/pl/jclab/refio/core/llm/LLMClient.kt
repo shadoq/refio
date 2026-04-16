@@ -194,7 +194,7 @@ class LLMClient(
             // Even for local providers, verify the endpoint is actually localhost
             val endpoint = when (providerLower) {
                 "ollama" -> configService?.getTyped(pl.jclab.refio.core.config.ConfigKeys.PROVIDER_OLLAMA_ENDPOINT) ?: "http://localhost:11434"
-                "lmstudio" -> configService?.get(pl.jclab.refio.core.services.ConfigService.KEY_PROVIDER_LM_STUDIO_BASE_URL) ?: "http://localhost:1234"
+                "lmstudio" -> configService?.get(pl.jclab.refio.core.config.ConfigKeys.PROVIDER_LM_STUDIO_BASE_URL.key) ?: "http://localhost:1234"
                 else -> ""
             }
             if (endpoint.isNotBlank() && !isLocalEndpoint(endpoint)) {
