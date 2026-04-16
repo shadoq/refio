@@ -25,7 +25,6 @@ enum class ContextSection(val defaultPriority: ContextPriority) {
     PROJECT_INSTRUCTIONS(ContextPriority.HIGH),
     RECENT_WORK(ContextPriority.NORMAL),
     USER_CONTEXT(ContextPriority.HIGH),
-    RAG_FRAGMENTS(ContextPriority.NORMAL),
     CONVERSATION(ContextPriority.NORMAL),
     REFERENCE(ContextPriority.LOW);
 
@@ -33,13 +32,13 @@ enum class ContextSection(val defaultPriority: ContextPriority) {
      * Context layer classification for caching and incremental building.
      * - STABLE: project info, conventions, key files — cached, invalidated on project file change
      * - ACCUMULATED: working memory, modified files — grows across turns
-     * - EPHEMERAL: current query, RAG, user refs — rebuilt every turn
+     * - EPHEMERAL: current query, user refs — rebuilt every turn
      */
     val contextLayer: ContextLayer
         get() = when (this) {
             SYSTEM_PROMPT, TOOL_DESCRIPTIONS, PROJECT_CONTEXT, PROJECT_INSTRUCTIONS, REFERENCE -> ContextLayer.STABLE
             WORKING_MEMORY, RECENT_WORK, AGENT_PLANS -> ContextLayer.ACCUMULATED
-            USER_CONTEXT, RAG_FRAGMENTS, CONVERSATION -> ContextLayer.EPHEMERAL
+            USER_CONTEXT, CONVERSATION -> ContextLayer.EPHEMERAL
         }
 }
 

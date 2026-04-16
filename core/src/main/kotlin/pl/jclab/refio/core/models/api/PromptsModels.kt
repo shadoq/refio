@@ -34,9 +34,9 @@ data class SaveRuleRequest(
 )
 
 /**
- * Request to create or update a slash command
+ * Request to create or update a slash prompt
  */
-data class SaveCommandRequest(
+data class SaveSlashPromptRequest(
     val id: String? = null,
     val name: String,  // e.g., "/refactor" or "refactor" (will be normalized)
     val content: String,

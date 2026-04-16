@@ -45,7 +45,18 @@ class SystemEnvironmentPromptProvider(
         val cwd = projectRoot?.toAbsolutePath()?.toString() ?: System.getProperty("user.dir")
         val home = System.getProperty("user.home")
         val platformHint = when {
-            isWindows -> "Windows — use Windows shell syntax. Prefer PowerShell or Git Bash; avoid GNU-only flags. Paths use backslashes. Use `where` (not `which`) to locate binaries. Avoid `/dev/null` — use `NUL`. `&&` works in cmd/PowerShell; chain with `;` in PowerShell."
+            isWindows -> buildString {
+                append("**CRITICAL: This is a Windows PowerShell environment.**\n")
+                append("SHELL SYNTAX RULES (violations will cause command failures):\n")
+                append("- Do NOT use `&&` to chain commands — use `;` in PowerShell\n")
+                append("- Do NOT use heredocs (`<<'EOF'`) — not supported in PowerShell\n")
+                append("- Do NOT use `/dev/null` — use `NUL` or `Out-Null`\n")
+                append("- Do NOT pass complex Python one-liners via `python -c \"...\"` — ")
+                append("PowerShell mangles quotes. Write a .py file and run it instead.\n")
+                append("- Use `where` not `which` to locate binaries\n")
+                append("- Paths use backslashes: `dir\\file.py` not `dir/file.py`\n")
+                append("PREFERRED PATTERN: Write scripts to files, then execute them.")
+            }
             isMac -> "macOS — BSD userland (not GNU). Some flags differ from Linux (e.g. `sed -i ''`, `find` predicates). `xargs -r` is unavailable."
             else -> "Linux — GNU userland. Standard POSIX + GNU extensions available."
         }
@@ -59,14 +70,19 @@ class SystemEnvironmentPromptProvider(
             append("user_home: $home\n")
             append("path_separator: \"$pathSep\"\n")
             append("file_separator: \"$fileSep\"\n")
-            append("platform_notes: $platformHint\n")
             append("available_tools:\n")
             for ((tool, available) in toolStatus) {
                 append("  - $tool: ${if (available) "yes" else "no"}\n")
             }
+
             append("IMPORTANT: Pick shell commands and flags that match the OS above. ")
             append("Do NOT assume a tool exists unless it is listed as `yes` in available_tools. ")
             append("When uncertain, prefer cross-platform alternatives or use Refio tools instead of raw shell.\n")
+
+            append("\n\n<platform_rules>\n")
+            append(platformHint)
+            append("\n</platform_rules>\n")
+
             append("</system_environment>")
         }
     }

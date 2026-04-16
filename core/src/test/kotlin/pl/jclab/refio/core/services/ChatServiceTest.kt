@@ -84,7 +84,6 @@ class ChatServiceTest {
             toolDescriptionBuilder = toolDescriptionBuilder,
             contextService = null,
             projectRoot = null,
-            ideProject = null  // CLI mode — no IntelliJ dependency
         )
     }
 
@@ -208,8 +207,8 @@ class ChatServiceTest {
     inner class StandaloneCompatibilityTests {
 
         @Test
-        fun `should work with ideProject null`() = runTest {
-            // ChatService constructed with ideProject = null (standalone mode)
+        fun `should work in standalone CLI mode`() = runTest {
+            // ChatService constructed without IntelliJ Project (standalone CLI mode)
             val service = ChatService(
                 taskRepository = taskRepository,
                 chatMessageRepository = chatMessageRepository,
@@ -219,7 +218,6 @@ class ChatServiceTest {
                 toolDescriptionBuilder = toolDescriptionBuilder,
                 contextService = null,
                 projectRoot = null,
-                ideProject = null
             )
 
             val request = ChatRequest(

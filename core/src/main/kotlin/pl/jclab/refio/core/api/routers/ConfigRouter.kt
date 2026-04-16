@@ -76,13 +76,16 @@ class ConfigRouter(
      * @param provider Optional provider filter (ollama, openai, anthropic)
      * @return List of ModelInfo with visibility settings
      */
-    suspend fun getModelsWithVisibility(provider: String? = null): List<ModelInfo> {
-        logger.info { "[ConfigRouter] Getting models with visibility: provider=${provider ?: "all"}" }
+    suspend fun getModelsWithVisibility(
+        provider: String? = null,
+        fetchIfMissing: Boolean = true
+    ): List<ModelInfo> {
+        logger.info { "[ConfigRouter] Getting models with visibility: provider=${provider ?: "all"}, fetchIfMissing=$fetchIfMissing" }
 
         val models = if (provider != null) {
             getModelsByProvider(provider, configService)
         } else {
-            getAllModels(configService)
+            getAllModels(configService, fetchIfMissing = fetchIfMissing)
         }
 
         // Get visibility settings
@@ -241,11 +244,11 @@ class ConfigRouter(
                 if (provider.equals("lmstudio", ignoreCase = true) && resolvedBaseUrl.isNullOrEmpty()) {
                     resolvedBaseUrl = "http://localhost:1234/v1"
                 }
-                if (provider.equals("custom_openai", ignoreCase = true) && resolvedBaseUrl.isNullOrEmpty()) {
+                if (provider.equals("generic_openai", ignoreCase = true) && resolvedBaseUrl.isNullOrEmpty()) {
                     resolvedBaseUrl = configService.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_BASE_URL)
                 }
                 if (provider.equals("zai", ignoreCase = true)) {
-                    resolvedBaseUrl = configService.normalizeZAIBaseUrl(resolvedBaseUrl)
+                    resolvedBaseUrl = pl.jclab.refio.core.llm.adapters.ZAIUrls.normalize(resolvedBaseUrl)
                 }
 
                 when (provider.lowercase()) {
@@ -272,7 +275,7 @@ class ConfigRouter(
                     "lmstudio" -> {
                         resolvedBaseUrl = resolvedBaseUrl ?: "http://localhost:1234/v1"
                     }
-                    "custom_openai" -> {
+                    "generic_openai" -> {
                         if (resolvedBaseUrl.isNullOrEmpty()) {
                             return@withTimeout TestConnectionResult(
                                 success = false,
@@ -285,26 +288,26 @@ class ConfigRouter(
                 }
 
                 val tempConfigKey = when (provider.lowercase()) {
-                    "ollama" -> ConfigService.KEY_PROVIDER_OLLAMA_ENDPOINT to (baseUrl ?: "")
-                    "anthropic" -> ConfigService.KEY_PROVIDER_ANTHROPIC_API_KEY to (apiKey ?: "")
-                    "openai" -> ConfigService.KEY_PROVIDER_OPENAI_API_KEY to (apiKey ?: "")
-                    "openrouter" -> ConfigService.KEY_PROVIDER_OPENROUTER_API_KEY to (apiKey ?: "")
-                    "gemini" -> ConfigService.KEY_PROVIDER_GEMINI_API_KEY to (apiKey ?: "")
-                    "lmstudio" -> ConfigService.KEY_PROVIDER_LM_STUDIO_API_KEY to (apiKey ?: "")
-                    "custom_openai" -> ConfigService.KEY_PROVIDER_CUSTOM_OPENAI_API_KEY to (apiKey ?: "")
-                    "zai" -> ConfigService.KEY_PROVIDER_ZAI_API_KEY to (apiKey ?: "")
+                    "ollama" -> ConfigKeys.PROVIDER_OLLAMA_ENDPOINT.key to (baseUrl ?: "")
+                    "anthropic" -> ConfigKeys.PROVIDER_ANTHROPIC_API_KEY.key to (apiKey ?: "")
+                    "openai" -> ConfigKeys.PROVIDER_OPENAI_API_KEY.key to (apiKey ?: "")
+                    "openrouter" -> ConfigKeys.PROVIDER_OPENROUTER_API_KEY.key to (apiKey ?: "")
+                    "gemini" -> ConfigKeys.PROVIDER_GEMINI_API_KEY.key to (apiKey ?: "")
+                    "lmstudio" -> ConfigKeys.PROVIDER_LM_STUDIO_API_KEY.key to (apiKey ?: "")
+                    "generic_openai" -> ConfigKeys.PROVIDER_CUSTOM_OPENAI_API_KEY.key to (apiKey ?: "")
+                    "zai" -> ConfigKeys.PROVIDER_ZAI_API_KEY.key to (apiKey ?: "")
                     else -> null
                 }
 
                 when (provider.lowercase()) {
-                    "custom_openai" -> {
-                        resolvedBaseUrl?.let { configService.set(ConfigService.KEY_PROVIDER_CUSTOM_OPENAI_BASE_URL, it, ConfigScope.APP) }
+                    "generic_openai" -> {
+                        resolvedBaseUrl?.let { configService.set(ConfigKeys.PROVIDER_CUSTOM_OPENAI_BASE_URL.key, it, ConfigScope.APP) }
                         config["model"]?.takeIf { it.isNotBlank() }?.let {
-                            configService.set(ConfigService.KEY_PROVIDER_CUSTOM_OPENAI_MODEL, it, ConfigScope.APP)
+                            configService.set(ConfigKeys.PROVIDER_CUSTOM_OPENAI_MODEL.key, it, ConfigScope.APP)
                         }
                     }
                     "zai" -> {
-                        resolvedBaseUrl?.let { configService.set(ConfigService.KEY_PROVIDER_ZAI_BASE_URL, it, ConfigScope.APP) }
+                        resolvedBaseUrl?.let { configService.set(ConfigKeys.PROVIDER_ZAI_BASE_URL.key, it, ConfigScope.APP) }
                     }
                 }
 
@@ -323,7 +326,7 @@ class ConfigRouter(
                         "openai" -> System.setProperty("OPENAI_API_KEY", apiKey)
                         "openrouter" -> System.setProperty("OPENROUTER_API_KEY", apiKey)
                         "lmstudio" -> System.setProperty("LM_STUDIO_API_KEY", apiKey)
-                        "custom_openai" -> System.setProperty("CUSTOM_OPENAI_API_KEY", apiKey)
+                        "generic_openai" -> System.setProperty("CUSTOM_OPENAI_API_KEY", apiKey)
                         "zai" -> System.setProperty("ZAI_API_KEY", apiKey)
                     }
                 }
@@ -331,8 +334,8 @@ class ConfigRouter(
                 when (provider.lowercase()) {
                     "ollama" -> resolvedBaseUrl?.let { System.setProperty("OLLAMA_BASE_URL", it) }
                     "lmstudio" -> resolvedBaseUrl?.let { System.setProperty("LM_STUDIO_BASE_URL", it) }
-                    "custom_openai" -> resolvedBaseUrl?.let { System.setProperty("CUSTOM_OPENAI_BASE_URL", it) }
-                    "zai" -> resolvedBaseUrl?.let { System.setProperty("ZAI_BASE_URL", configService.normalizeZAIBaseUrl(it)) }
+                    "generic_openai" -> resolvedBaseUrl?.let { System.setProperty("CUSTOM_OPENAI_BASE_URL", it) }
+                    "zai" -> resolvedBaseUrl?.let { System.setProperty("ZAI_BASE_URL", pl.jclab.refio.core.llm.adapters.ZAIUrls.normalize(it)) }
                 }
 
                 try {
@@ -464,6 +467,10 @@ class ConfigRouter(
         logger.info { "[ConfigRouter] Refreshing models for provider: $provider" }
 
         try {
+            // Force fresh fetch: model metadata (e.g. Ollama maxContext) depends on
+            // current provider config and would otherwise be served from stale cache.
+            clearModelsCache()
+
             logger.info { "Fetching models dynamically for $provider" }
             val models = getModelsByProvider(provider, configService)
 
@@ -503,7 +510,7 @@ class ConfigRouter(
     suspend fun refreshAllModels(): List<ModelInfo> {
         logger.info { "[ConfigRouter] Refreshing models for all providers" }
 
-        val allProviders = listOf("ollama", "anthropic", "openai", "openrouter", "gemini", "lmstudio", "custom_openai", "zai")
+        val allProviders = listOf("ollama", "anthropic", "openai", "openrouter", "gemini", "lmstudio", "generic_openai", "zai")
         val allModels = mutableListOf<ModelInfo>()
 
         for (provider in allProviders) {
@@ -564,6 +571,7 @@ class ConfigRouter(
     fun initializeProviderKeys() {
         logger.info { "[ConfigRouter] Initializing provider keys on startup" }
         syncProviderKeysToSystemProperties()
+        clearModelsCache()
     }
 
     /**
@@ -607,6 +615,11 @@ class ConfigRouter(
                 taskId = if (configScope == ConfigScope.TASK) taskId else null,
                 description = "Setting for $section"
             )
+
+            // Invalidate ConfigResolver cache — writing via configRepository bypasses it,
+            // which would otherwise keep serving the stale value (e.g. Ollama context size
+            // staying 32768 after the user bumped it to 65536).
+            configService.invalidateConfigCache(fullKey)
 
             logger.info { "Config updated: $fullKey = $value" }
         }
@@ -784,12 +797,12 @@ class ConfigRouter(
                         logger.debug { "Set LM_STUDIO_BASE_URL from database" }
                     }
 
-                    providerName == "custom_openai" && settingType == "custom_openai_api_key" -> {
+                    providerName == "generic_openai" && settingType == "generic_openai_api_key" -> {
                         System.setProperty("CUSTOM_OPENAI_API_KEY", config.value)
                         logger.debug { "Set CUSTOM_OPENAI_API_KEY from database" }
                     }
 
-                    providerName == "custom_openai" && settingType == "custom_openai_base_url" -> {
+                    providerName == "generic_openai" && settingType == "generic_openai_base_url" -> {
                         System.setProperty("CUSTOM_OPENAI_BASE_URL", config.value)
                         logger.debug { "Set CUSTOM_OPENAI_BASE_URL from database" }
                     }
@@ -800,7 +813,7 @@ class ConfigRouter(
                     }
 
                     providerName == "zai" && settingType == "zai_base_url" -> {
-                        System.setProperty("ZAI_BASE_URL", configService.normalizeZAIBaseUrl(config.value))
+                        System.setProperty("ZAI_BASE_URL", pl.jclab.refio.core.llm.adapters.ZAIUrls.normalize(config.value))
                         logger.debug { "Set ZAI_BASE_URL from database" }
                     }
 

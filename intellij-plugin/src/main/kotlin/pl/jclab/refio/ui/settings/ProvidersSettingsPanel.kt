@@ -9,9 +9,9 @@ import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import pl.jclab.refio.ui.theme.LCATheme
-import pl.jclab.refio.api.CoreApiClient
+import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,7 +37,7 @@ import javax.swing.event.DocumentListener
  */
 class ProvidersSettingsPanel(
     private val onSettingChanged: (section: String, key: String, value: Any) -> Unit,
-    private val coreApiClient: CoreApiClient?
+    private val coreApiClient: CoreApiRouter?
 ) : JBPanel<ProvidersSettingsPanel>(BorderLayout()), Disposable {
 
     private val logger = dualLogger("ProvidersSettingsPanel")
@@ -47,6 +47,12 @@ class ProvidersSettingsPanel(
     private val providerStates = mutableMapOf<String, ProviderCardState>()
     private var saveJobs = mutableMapOf<String, Job>()
     private val saveDebounceMs = 500L
+
+    // Set to true while programmatically populating fields from backend, so the
+    // DocumentListener doesn't misinterpret loaded values as user edits and trigger
+    // autosave + cache invalidation + Ollama model re-fetch on every panel open.
+    @Volatile
+    private var isLoadingFromBackend = false
 
     // Callback for model list refresh
     private var onModelsRefreshed: ((provider: String, models: List<pl.jclab.refio.core.api.ModelInfo>) -> Unit)? =
@@ -225,11 +231,11 @@ class ProvidersSettingsPanel(
 
         providersPanel.add(
             createProviderCard(
-                providerName = "custom_openai",
+                providerName = "generic_openai",
                 fields = listOf(
-                    ProviderField("API Key", FieldType.PASSWORD, "custom_openai_api_key"),
-                    ProviderField("Base URL", FieldType.TEXT, "custom_openai_base_url"),
-                    ProviderField("Model", FieldType.TEXT, "custom_openai_model")
+                    ProviderField("API Key", FieldType.PASSWORD, "generic_openai_api_key"),
+                    ProviderField("Base URL", FieldType.TEXT, "generic_openai_base_url"),
+                    ProviderField("Model", FieldType.TEXT, "generic_openai_model")
                 ),
                 initialStatus = ProviderStatus.NEEDS_CONFIG,
                 description = "OpenAI-compatible provider with custom base URL and optional default model."
@@ -379,6 +385,9 @@ class ProvidersSettingsPanel(
      * Handle field value change with debounce
      */
     private fun onFieldChanged(providerName: String, fieldKey: String, value: String) {
+        if (isLoadingFromBackend) {
+            return
+        }
         // Use lowercase provider name for config keys to match ConfigService expectations
         val jobKey = "${toProviderKey(providerName)}.$fieldKey"
         saveJobs[jobKey]?.cancel()
@@ -388,9 +397,29 @@ class ProvidersSettingsPanel(
 
             logger.debug { "Auto-saving: $jobKey = [REDACTED]" }
 
-            // Save to database
-            ApplicationManager.getApplication().invokeLater {
-                onSettingChanged("providers", jobKey, value)
+            val contextSizeChanged =
+                (providerName.equals("Ollama", ignoreCase = true) && fieldKey == "ollama_context_size") ||
+                    (providerName.equals("LMStudio", ignoreCase = true) && fieldKey == "lmstudio_context_size")
+
+            if (contextSizeChanged) {
+                // Persist synchronously here so the subsequent refresh reads the new value.
+                // Going through SettingsView.onSettingChanged adds another debounce, and
+                // the model refresh would race ahead of the save.
+                try {
+                    coreApiClient?.configRouter?.updateConfig(
+                        section = "providers",
+                        scope = "app",
+                        taskId = null,
+                        settings = mapOf(jobKey to value)
+                    )
+                } catch (e: Exception) {
+                    logger.error(e) { "Failed to save $jobKey before model refresh" }
+                }
+            } else {
+                // Save to database via the standard debounced path
+                ApplicationManager.getApplication().invokeLater {
+                    onSettingChanged("providers", jobKey, value)
+                }
             }
 
             // Re-sync API keys to System.properties (ensures keys work without restart)
@@ -447,7 +476,7 @@ class ProvidersSettingsPanel(
                 val config = buildProviderConfig(providerName, state.fields)
 
                 // Call backend API
-                val result = coreApiClient?.testProviderConnection(
+                val result = coreApiClient?.configRouter?.testProviderConnection(
                     provider = toProviderKey(providerName),
                     config = config
                 ) ?: throw Exception("CoreApiClient not available")
@@ -545,10 +574,10 @@ class ProvidersSettingsPanel(
                 "context_size" to getFieldValue(fields["lmstudio_context_size"]).ifEmpty { DEFAULT_CONTEXT_SIZE.toString() }
             )
 
-            "custom_openai" -> mapOf(
-                "api_key" to getFieldValue(fields["custom_openai_api_key"]),
-                "base_url" to getFieldValue(fields["custom_openai_base_url"]),
-                "model" to getFieldValue(fields["custom_openai_model"])
+            "generic_openai" -> mapOf(
+                "api_key" to getFieldValue(fields["generic_openai_api_key"]),
+                "base_url" to getFieldValue(fields["generic_openai_base_url"]),
+                "model" to getFieldValue(fields["generic_openai_model"])
             )
 
             "zai" -> mapOf(
@@ -611,7 +640,7 @@ class ProvidersSettingsPanel(
             try {
                 logger.info { "Refreshing models list for $providerName" }
 
-                val models = coreApiClient?.refreshProviderModels(
+                val models = coreApiClient?.configRouter?.refreshProviderModels(
                     provider = toProviderKey(providerName)
                 ) ?: emptyList()
 
@@ -658,7 +687,7 @@ class ProvidersSettingsPanel(
             try {
                 logger.info { "Loading providers configuration" }
 
-                val config = coreApiClient.getConfig(section = "providers", scope = "app")
+                val config = coreApiClient.configRouter.getConfig(section = "providers", scope = "app")
 
                 ApplicationManager.getApplication().invokeLater {
                     applyProvidersConfig(config.settings)
@@ -675,32 +704,37 @@ class ProvidersSettingsPanel(
     private fun applyProvidersConfig(settings: Map<String, Any>) {
         logger.info { "Applying providers config: ${settings.keys}" }
 
-        providerStates.forEach { (providerName, state) ->
-            state.fields.forEach { (fieldKey, textField) ->
-                // Use lowercase provider name to match saved keys
-                val configKey = "${toProviderKey(providerName)}.$fieldKey"
-                val value = settings[configKey] as? String
+        isLoadingFromBackend = true
+        try {
+            providerStates.forEach { (providerName, state) ->
+                state.fields.forEach { (fieldKey, textField) ->
+                    // Use lowercase provider name to match saved keys
+                    val configKey = "${toProviderKey(providerName)}.$fieldKey"
+                    val value = settings[configKey] as? String
 
-                logger.debug { "Looking for key: $configKey, found: ${value != null}" }
+                    logger.debug { "Looking for key: $configKey, found: ${value != null}" }
 
-                val effectiveValue = if (configKey == "zai.zai_base_url") {
-                    when (value?.trimEnd('/')) {
-                        "https://api.z.ai/v1" -> "https://api.z.ai/api/coding/paas/v4"
-                        "https://api.z.ai/api/paas/v4" -> "https://api.z.ai/api/coding/paas/v4"
-                        else -> value
+                    val effectiveValue = if (configKey == "zai.zai_base_url") {
+                        when (value?.trimEnd('/')) {
+                            "https://api.z.ai/v1" -> "https://api.z.ai/api/coding/paas/v4"
+                            "https://api.z.ai/api/paas/v4" -> "https://api.z.ai/api/coding/paas/v4"
+                            else -> value
+                        }
+                    } else {
+                        value
                     }
-                } else {
-                    value
-                }
 
-                if (effectiveValue != null && effectiveValue.isNotEmpty()) {
-                    logger.info { "Setting $configKey to [REDACTED] (length=${effectiveValue.length})" }
-                    setFieldValue(textField, effectiveValue)
-                    updateProviderStatus(providerName, ProviderStatus.CONFIGURED)
-                } else {
-                    logger.debug { "No value for $configKey" }
+                    if (effectiveValue != null && effectiveValue.isNotEmpty()) {
+                        logger.info { "Setting $configKey to [REDACTED] (length=${effectiveValue.length})" }
+                        setFieldValue(textField, effectiveValue)
+                        updateProviderStatus(providerName, ProviderStatus.CONFIGURED)
+                    } else {
+                        logger.debug { "No value for $configKey" }
+                    }
                 }
             }
+        } finally {
+            isLoadingFromBackend = false
         }
     }
 
@@ -713,7 +747,7 @@ class ProvidersSettingsPanel(
             "Gemini" -> "gemini"
             "LMStudio" -> "lmstudio"
             "ZAI" -> "zai"
-            "custom_openai" -> "custom_openai"
+            "generic_openai" -> "generic_openai"
             else -> providerName.lowercase()
         }
     }
@@ -728,12 +762,17 @@ class ProvidersSettingsPanel(
     fun reload() {
         logger.info { "Reloading providers configuration" }
 
-        // Clear all fields
-        providerStates.forEach { (providerName, state) ->
-            state.fields.values.forEach { field ->
-                setFieldValue(field, "")
+        isLoadingFromBackend = true
+        try {
+            // Clear all fields
+            providerStates.forEach { (providerName, state) ->
+                state.fields.values.forEach { field ->
+                    setFieldValue(field, "")
+                }
+                updateProviderStatus(providerName, ProviderStatus.NEEDS_CONFIG)
             }
-            updateProviderStatus(providerName, ProviderStatus.NEEDS_CONFIG)
+        } finally {
+            isLoadingFromBackend = false
         }
 
         // Reload from backend

@@ -6,7 +6,7 @@ import pl.jclab.refio.core.db.ToolCallData
  * Listener for turn events (tool execution, streaming, etc.).
  * Extracted from AgentTurnLoop to avoid circular dependencies.
  */
-interface TurnEventListener {
+interface TurnEventListener : TurnCompletionListener {
     fun onTurnStarted(
         taskId: String,
         mode: pl.jclab.refio.core.db.TaskMode,
@@ -24,12 +24,4 @@ interface TurnEventListener {
     fun onStreamChunk(taskId: String, delta: String, accumulated: String) {}
 
     fun onToolBatchCompleted(taskId: String, summary: ToolBatchSummary.BatchSummary) {}
-
-    fun onTurnCompleted(
-        taskId: String,
-        result: pl.jclab.refio.core.services.TurnResult,
-        runId: String,
-        parentRunId: String?,
-        depth: Int
-    ) {}
 }

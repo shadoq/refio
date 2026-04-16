@@ -34,7 +34,7 @@ enum class PromptType {
 
     // ========== User-Defined Content ==========
     RULE,                   // User-defined rule (appended to system prompts)
-    SLASH_COMMAND           // User-defined slash command (triggered by /command)
+    SLASH_PROMPT            // User-defined slash prompt template (triggered by /name)
     ;
 
     companion object {
@@ -58,12 +58,12 @@ enum class PromptType {
 
     fun isSystemPrompt(): Boolean = SYSTEM_PROMPT_TYPES.contains(this)
 
-    fun isSlashCommand(): Boolean = this == SLASH_COMMAND
+    fun isSlashPrompt(): Boolean = this == SLASH_PROMPT
 }
 
 /**
  * Prompts table definition using Exposed ORM DSL
- * Stores system prompts, rules, and slash commands
+ * Stores system prompts, rules, and slash prompts
  */
 object PromptsTable : Table("prompts") {
     val id = varchar("id", 36).clientDefault { UUID.randomUUID().toString() }

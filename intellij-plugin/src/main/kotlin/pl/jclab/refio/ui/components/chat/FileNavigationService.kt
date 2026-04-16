@@ -12,14 +12,14 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
-import com.intellij.openapi.vfs.VirtualFileManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import pl.jclab.refio.api.models.ContextReference
 import pl.jclab.refio.api.models.ContextType
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.services.project.SafeVfsAccess
 import java.nio.file.Files
 import java.nio.file.Paths
 
@@ -130,7 +130,7 @@ internal class FileNavigationService(
                         }
 
                         logger.info { "[DIFF] Attempting to load VirtualFile from: $fullPath" }
-                        val vFile = VirtualFileManager.getInstance().findFileByNioPath(fullPath) ?: run {
+                        val vFile = SafeVfsAccess.refreshAndFindFile(project, fullPath, logger) ?: run {
                             logger.error { "[DIFF] VirtualFileManager could not find file: $fullPath" }
                             showNotification("Error", "Could not load file: ${changes.filePath}", NotificationType.ERROR)
                             return@invokeLater
@@ -215,7 +215,7 @@ internal class FileNavigationService(
         return try {
             logger.info { "[SNAPSHOT] Loading snapshot content for: snapshotId=$snapshotId, filePath=$filePath" }
             val router = coreManager.getApiRouter()
-            val content = router.getSnapshotFileContent(snapshotId, filePath)
+            val content = router.snapshotRouter.getSnapshotFileContent(snapshotId, filePath)
             if (content != null) {
                 logger.info { "[SNAPSHOT] Loaded successfully: ${content.length} chars" }
             } else {

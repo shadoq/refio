@@ -2,7 +2,7 @@ package pl.jclab.refio.services.session
 
 import com.intellij.openapi.project.Project
 import pl.jclab.refio.core.api.UIAdapter
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.notification.NotificationService
 import java.util.concurrent.CompletableFuture
 

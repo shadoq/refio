@@ -1,0 +1,109 @@
+package pl.jclab.refio.core.session
+
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import pl.jclab.refio.api.models.Message
+import pl.jclab.refio.api.models.ToolCallDisplayInfo
+import pl.jclab.refio.api.models.ToolCallResult
+import pl.jclab.refio.api.models.ToolCallStatus
+import pl.jclab.refio.api.models.ToolDisplayType
+import pl.jclab.refio.core.db.ToolCallData
+
+/**
+ * [AbstractToolCallLifecycleListener] implementation backed by [SessionStateManager].
+ *
+ * Used by [CoreSessionService] (and any other caller that renders tool-call
+ * progress through the canonical [Message] stream) to create / update / finalize
+ * temporary assistant messages per tool invocation.
+ */
+class CoreMessageToolCallListener(
+    scope: CoroutineScope,
+    private val stateManager: SessionStateManager,
+    private val onReloadSubtasks: suspend () -> Unit,
+    private val resolveToolDisplayType: (String) -> ToolDisplayType,
+    private val parseToolParameters: (String) -> Map<String, String>,
+) : AbstractToolCallLifecycleListener(scope) {
+
+    private val scopeRef = scope
+
+    override fun onCreateTempMessage(taskId: String, toolCall: ToolCallData): String {
+        val tempId = "temp-${toolCall.id}"
+        val toolInfo = ToolCallDisplayInfo(
+            toolName = toolCall.name,
+            toolCallId = toolCall.id,
+            displayType = resolveToolDisplayType(toolCall.name),
+            parameters = parseToolParameters(toolCall.arguments),
+            status = ToolCallStatus.EXECUTING,
+        )
+        val tempMessage = Message(
+            id = tempId,
+            taskId = taskId,
+            role = "assistant",
+            content = "",
+            toolCallInfo = toolInfo,
+            createdAt = System.currentTimeMillis(),
+        )
+        scopeRef.launch { stateManager.appendMessage(tempMessage) }
+        return tempId
+    }
+
+    override fun onUpdateTempMessage(
+        messageId: String,
+        toolCallId: String,
+        delta: String,
+        accumulated: String,
+    ) {
+        scopeRef.launch {
+            stateManager.updateMessages { messages ->
+                messages.map { msg ->
+                    if (msg.id == messageId) {
+                        msg.copy(
+                            content = accumulated,
+                            isStreaming = true,
+                            isToolStreaming = true,
+                            lastChunkAt = System.currentTimeMillis(),
+                        )
+                    } else msg
+                }
+            }
+        }
+    }
+
+    override fun onFinalizeTempMessage(
+        messageId: String,
+        toolCall: ToolCallData,
+        result: String,
+        success: Boolean,
+    ) {
+        val resultSummary = if (result.isNotBlank()) {
+            val trimmed = result.trim()
+            if (trimmed.length <= 120) trimmed else "${trimmed.take(120)}..."
+        } else null
+
+        scopeRef.launch {
+            stateManager.updateMessages { messages ->
+                messages.map { msg ->
+                    if (msg.id == messageId) {
+                        val updatedToolInfo = msg.toolCallInfo?.copy(
+                            status = if (success) ToolCallStatus.COMPLETED else ToolCallStatus.FAILED,
+                            result = if (resultSummary != null) ToolCallResult(
+                                success = success,
+                                summary = resultSummary,
+                            ) else null,
+                        )
+                        msg.copy(
+                            toolCallInfo = updatedToolInfo,
+                            isStreaming = false,
+                            isToolStreaming = false,
+                            lastChunkAt = System.currentTimeMillis(),
+                        )
+                    } else msg
+                }
+            }
+        }
+    }
+
+    override suspend fun onAfterToolLifecycleEvent(taskId: String) {
+        onReloadSubtasks()
+    }
+}

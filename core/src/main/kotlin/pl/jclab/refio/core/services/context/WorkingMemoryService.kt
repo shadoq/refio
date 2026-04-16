@@ -1,6 +1,6 @@
 package pl.jclab.refio.core.services.context
 
-import pl.jclab.refio.core.services.ConfigService
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.analysis.CodeElements
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
@@ -24,7 +24,7 @@ data class WorkingMemoryEntry(
 )
 
 class WorkingMemoryService(
-    private val maxEntriesPerTask: Int = ConfigService.DEFAULT_WORKING_MEMORY_MAX_FACTS
+    private val maxEntriesPerTask: Int = ConfigKeys.WORKING_MEMORY_MAX_FACTS.default
 ) {
     private val entriesByTask = ConcurrentHashMap<String, ConcurrentHashMap<String, WorkingMemoryEntry>>()
     private val entriesBySession = ConcurrentHashMap<String, ConcurrentHashMap<String, WorkingMemoryEntry>>()

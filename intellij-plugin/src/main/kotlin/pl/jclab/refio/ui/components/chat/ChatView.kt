@@ -10,7 +10,7 @@ import pl.jclab.refio.api.models.Message
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 import pl.jclab.refio.services.execution.StepExecutionService
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.ui.components.chat.bubble.AssistantBubbleRenderer
 import pl.jclab.refio.ui.components.chat.bubble.BaseBubbleRenderer

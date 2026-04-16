@@ -5,7 +5,7 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.wm.ToolWindowManager
 import pl.jclab.refio.api.models.CodeSnippet
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.ui.components.chat.PromptInputPanel
 import pl.jclab.refio.ui.toolwindow.RefioMainPanel
 import java.awt.Container

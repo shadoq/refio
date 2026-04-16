@@ -126,71 +126,92 @@ class AgentExecutionPanel : JPanel(BorderLayout()), Disposable {
     }
 
     private fun handleEvent(event: AgentEvent) {
+        // StreamChunk events fire per-token — they belong to the per-agent chat bubble pipeline
+        // (consumed in CoreSessionService), not to the Trace / Timeline diagnostic views which
+        // would otherwise be flooded with hundreds of empty rows per second.
+        if (event is AgentEvent.StreamChunk) return
+
         // Always feed the trace panel — it knows which events to render
         tracePanel.handleEvent(event)
         // Timeline shows everything
         timelinePanel.addEvent(event)
 
         SwingUtilities.invokeLater {
-            // Auto-register a graph node for any new sourceAgentId so single-agent
-            // sessions also get a visible node (not just multi-agent runs).
-            if (!agentNames.containsKey(event.sourceAgentId)) {
-                val name = when (event) {
-                    is AgentEvent.AgentStarted -> event.agentName
-                    else -> "Session ${event.sourceAgentId.take(8)}"
-                }
-                val eventDepth = when (event) {
-                    is AgentEvent.TurnStarted -> event.depth
-                    is AgentEvent.LLMCallCompleted -> event.depth
-                    is AgentEvent.ToolCalled -> event.depth
-                    else -> 0
-                }
-                agentNames[event.sourceAgentId] = name
-                graphPanel.addOrUpdateAgent(
-                    agentId = event.sourceAgentId,
-                    name = name,
-                    depth = eventDepth,
-                    status = AgentNodeStatus.RUNNING
-                )
-            }
+            // Subagent invocations share the parent's sourceAgentId but spawn their own
+            // runId per TurnStarted. Key graph nodes on runId for depth > 0 so each
+            // subagent run shows up as its own indented node; keep sourceAgentId for
+            // top-level sessions since runId may be absent on pure AgentStarted events.
+            val depth = graphDepthOf(event)
+            val nodeId = graphNodeIdOf(event, depth)
+            ensureNode(nodeId, event, depth)
 
             when (event) {
                 is AgentEvent.AgentStarted -> {
-                    agentNames[event.sourceAgentId] = event.agentName
-                    graphPanel.addOrUpdateAgent(
-                        agentId = event.sourceAgentId,
-                        name = event.agentName,
-                        depth = 0,
-                        status = AgentNodeStatus.RUNNING
-                    )
+                    agentNames[nodeId] = event.agentName
+                    graphPanel.addOrUpdateAgent(nodeId, event.agentName, depth, AgentNodeStatus.RUNNING)
+                }
+                is AgentEvent.TurnStarted -> {
+                    graphPanel.bumpIterations(nodeId, event.iteration)
+                }
+                is AgentEvent.TurnEnded -> {
+                    graphPanel.addDuration(nodeId, event.durationMs)
+                }
+                is AgentEvent.LLMCallCompleted -> {
+                    graphPanel.addTokens(nodeId, (event.tokensIn + event.tokensOut).toLong())
                 }
                 is AgentEvent.AgentCompleted -> {
-                    val name = agentNames[event.sourceAgentId] ?: event.sourceAgentId.take(8)
-                    graphPanel.addOrUpdateAgent(
-                        agentId = event.sourceAgentId,
-                        name = name,
-                        depth = 0,
-                        status = AgentNodeStatus.COMPLETED
-                    )
+                    val name = agentNames[nodeId] ?: nodeId.take(8)
+                    graphPanel.addOrUpdateAgent(nodeId, name, depth, AgentNodeStatus.COMPLETED)
+                    // AgentCompleted carries authoritative totals for the root session —
+                    // override accumulated values so final metrics match the completion event.
                     graphPanel.updateMetrics(
-                        agentId = event.sourceAgentId,
-                        iterations = 0,
+                        agentId = nodeId,
+                        iterations = graphPanel.iterationsOf(nodeId),
                         tokens = event.tokensUsed,
                         durationMs = event.durationMs
                     )
                 }
                 is AgentEvent.AgentFailed -> {
-                    val name = agentNames[event.sourceAgentId] ?: event.sourceAgentId.take(8)
-                    graphPanel.addOrUpdateAgent(
-                        agentId = event.sourceAgentId,
-                        name = name,
-                        depth = 0,
-                        status = AgentNodeStatus.FAILED
-                    )
+                    val name = agentNames[nodeId] ?: nodeId.take(8)
+                    graphPanel.addOrUpdateAgent(nodeId, name, depth, AgentNodeStatus.FAILED)
                 }
                 else -> {}
             }
         }
+    }
+
+    private fun graphDepthOf(event: AgentEvent): Int = when (event) {
+        is AgentEvent.TurnStarted -> event.depth
+        is AgentEvent.TurnEnded -> event.depth
+        is AgentEvent.LLMCallCompleted -> event.depth
+        is AgentEvent.ToolCalled -> event.depth
+        is AgentEvent.StreamAborted -> event.depth
+        else -> 0
+    }
+
+    private fun graphRunIdOf(event: AgentEvent): String? = when (event) {
+        is AgentEvent.TurnStarted -> event.runId
+        is AgentEvent.TurnEnded -> event.runId
+        is AgentEvent.LLMCallCompleted -> event.runId
+        is AgentEvent.ToolCalled -> event.runId
+        is AgentEvent.StreamAborted -> event.runId
+        else -> null
+    }
+
+    private fun graphNodeIdOf(event: AgentEvent, depth: Int): String {
+        val runId = graphRunIdOf(event)
+        return if (depth > 0 && runId != null) runId else event.sourceAgentId
+    }
+
+    private fun ensureNode(nodeId: String, event: AgentEvent, depth: Int) {
+        if (agentNames.containsKey(nodeId)) return
+        val name = when {
+            event is AgentEvent.AgentStarted -> event.agentName
+            depth > 0 -> "Subagent ${nodeId.take(8)}"
+            else -> "Session ${nodeId.take(8)}"
+        }
+        agentNames[nodeId] = name
+        graphPanel.addOrUpdateAgent(nodeId, name, depth, AgentNodeStatus.RUNNING)
     }
 
     fun toText(): String = buildString {

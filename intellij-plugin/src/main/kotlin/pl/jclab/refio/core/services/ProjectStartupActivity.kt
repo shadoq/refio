@@ -49,8 +49,7 @@ class ProjectStartupActivity : ProjectActivity {
 
                 // 1. Analyze project structure (will be cached for 10 minutes)
                 logger.info { "Analyzing project structure in background..." }
-                val analyzerService = projectRouter.getProjectAnalyzerService()
-                val analysis = analyzerService?.analyzeProject(
+                val analysis = projectRouter.projectAnalyzer?.analyzeProject(
                     projectRoot = projectRoot,
                     includeContent = false // Don't include full file content for startup analysis
                 )

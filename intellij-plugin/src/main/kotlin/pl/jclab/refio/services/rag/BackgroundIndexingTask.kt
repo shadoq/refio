@@ -5,7 +5,7 @@ import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import pl.jclab.refio.services.core.CoreConnectionManager
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.notification.NotificationService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -37,6 +37,10 @@ class BackgroundIndexingTask(
         indicator.text2 = ""
         indicator.fraction = 0.0
 
+        // runBlocking is intentional: Task.Backgroundable.run() is synchronous in the IntelliJ 241+ API
+        // we target; ProgressManager blocks the caller on this method until it returns. Cancellation is
+        // propagated through job?.cancel() in onCancel() and through indicator.isCanceled checks inside
+        // the coroutine body.
         runBlocking {
             job = launch(Dispatchers.IO) {
                 runIndexingStage(router, indicator)

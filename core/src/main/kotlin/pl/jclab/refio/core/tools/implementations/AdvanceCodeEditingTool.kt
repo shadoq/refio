@@ -12,13 +12,11 @@ import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.db.repositories.TaskRepository
 import pl.jclab.refio.core.tools.DiffUtils
-import pl.jclab.refio.core.tools.FileLockManager
 import pl.jclab.refio.core.tools.PathSandbox
-import pl.jclab.refio.core.tools.base.Tool
+import pl.jclab.refio.core.tools.base.FileTool
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
-import pl.jclab.refio.core.tools.normalizePath
 import pl.jclab.refio.core.tools.security.FileLimits
 import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Files
@@ -51,39 +49,32 @@ private val logger = dualLogger("AdvanceCodeEditingTool")
  * Based on: docs/0017-advance-code.md (ADR 0017)
  */
 class AdvanceCodeEditingTool(
-    private val sandbox: PathSandbox,
+    sandbox: PathSandbox,
     private val limits: FileLimits,
     private val llmClient: LLMClient,
     private val configService: ConfigService,
     private val promptsService: PromptsService,
     private val taskRepository: TaskRepository
-) : Tool {
+) : FileTool(sandbox) {
 
     override val name = "advance_code_editing"
     override val description =
-        "LLM-assisted FULL FILE regeneration. EXPENSIVE (~\$0.06) — regenerates the entire file from scratch every call. " +
-        "DO NOT use this for small fixes (1–3 line changes, fixing a single function, renaming, adding a missing branch). " +
-        "Full regeneration frequently introduces NEW bugs in untouched code regions: the LLM rewrites the whole file " +
-        "from a description, drops invariants, changes function signatures inconsistently, and silently breaks call sites. " +
-        "Reserve this tool for: (a) creating brand new code files from scratch, " +
-        "(b) rewrites that would touch >50% of the file, " +
-        "(c) cases where surgical find/replace is impractical because the file is structurally broken. " +
-        "FOR EVERYTHING ELSE use code_editing (FREE, exact find/replace) for known strings, " +
-        "or multi_line_editor (CHEAP ~\$0.02) for 2–10 targeted semantic edits. " +
-        "Calling advance_code_editing twice in a row on the same file is almost always wrong — if the previous " +
-        "regeneration produced a bug, fix THAT bug surgically with code_editing instead of regenerating again."
+        "LLM-assisted FULL FILE generation/regeneration. " +
+        "PREFERRED for: (a) creating new files >50 lines from scratch (HTML pages, classes, scripts), " +
+        "(b) rewrites covering >50% of an existing file, (c) structurally broken files. " +
+        "Generates content via a dedicated LLM call so the agent's own response stays small — " +
+        "avoid stuffing large `content` payloads into `create_new_file`, which inflates the agent " +
+        "response and risks streaming timeouts. " +
+        "For small targeted edits prefer code_editing or multi_line_editor."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_PRODUCING
+    override val selectionHint =
+        "Full-file generation or >50% rewrites (new HTML/classes/scripts, structurally broken files). " +
+        "LLM generates the content so your agent response stays small — use instead of create_new_file for large files."
 
     override fun validateParams(params: Map<String, Any>) {
-        // Validate path
-        if (params["path"] == null || (params["path"] as? String).isNullOrBlank()) {
-            throw IllegalArgumentException("Parameter 'path' is required and cannot be empty")
-        }
-
-        // Check mode: either edit_description OR (old_string + new_string)
+        validatePathParam(params)
         val editDescription = params["edit_description"] as? String
-
         if (editDescription.isNullOrBlank()) {
             throw IllegalArgumentException("Either 'edit_description' must be provided")
         }
@@ -194,17 +185,14 @@ class AdvanceCodeEditingTool(
         conversationContext: String? = null
     ): ToolResult {
         // 1. Read file or prepare for creation
-        val normalizedPathStr = normalizePath(pathStr)
-        val path = sandbox.resolve(normalizedPathStr)
+        val path = resolveSandboxPath(pathStr)
         val fileExists = path.exists()
 
         if (limits.shouldExcludeFile(path.fileName.toString())) {
             return ToolResult.error("File extension not allowed: ${path.fileName}")
         }
 
-        return FileLockManager.withFileLock(path.toAbsolutePath().toString()) {
-            // Re-validate path inside lock to close TOCTOU window
-            sandbox.revalidateBeforeIO(path)
+        return withLockedFile(path) {
 
             val originalContent: String
             val fileSize: Long
@@ -226,13 +214,13 @@ class AdvanceCodeEditingTool(
             } else {
                 // File exists - will edit it
                 if (!path.isRegularFile()) {
-                    return@withFileLock ToolResult.error("Not a regular file: $pathStr")
+                    return@withLockedFile ToolResult.error("Not a regular file: $pathStr")
                 }
 
                 // Check file size
                 fileSize = path.fileSize()
                 if (fileSize > limits.maxFileSize) {
-                    return@withFileLock ToolResult.error(
+                    return@withLockedFile ToolResult.error(
                         "File too large for LLM-assisted editing: $fileSize bytes (max ${limits.maxFileSize} bytes). " +
                                 "Use simple search-replace mode or split into smaller edits."
                     )
@@ -313,7 +301,7 @@ class AdvanceCodeEditingTool(
                 )
             } catch (e: Exception) {
                 logger.error(e) { "LLM request failed" }
-                return@withFileLock ToolResult.error("LLM request failed: ${e.message}. Try again or use simple search-replace mode.")
+                return@withLockedFile ToolResult.error("LLM request failed: ${e.message}. Try again or use simple search-replace mode.")
             }
 
             val responseContent = response.content
@@ -335,7 +323,7 @@ class AdvanceCodeEditingTool(
 
             // 5. Extract code from response
             val newContent = extractCodeBlock(responseContent, language)
-                ?: return@withFileLock ToolResult.error(
+                ?: return@withLockedFile ToolResult.error(
                     "LLM did not return valid code block. Try rephrasing the edit description or use simple search-replace mode."
                 )
 

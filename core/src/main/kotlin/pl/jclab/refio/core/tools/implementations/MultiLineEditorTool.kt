@@ -15,9 +15,8 @@ import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
 import pl.jclab.refio.core.tools.DiffUtils
-import pl.jclab.refio.core.tools.FileLockManager
 import pl.jclab.refio.core.tools.PathSandbox
-import pl.jclab.refio.core.tools.base.Tool
+import pl.jclab.refio.core.tools.base.FileTool
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
@@ -59,29 +58,26 @@ private val logger = dualLogger("MultiLineEditorTool")
  * Based on: docs/0041-multi-coding.md (RFC 0041)
  */
 class MultiLineEditorTool(
-    private val sandbox: PathSandbox,
+    sandbox: PathSandbox,
     private val limits: FileLimits,
     private val llmClient: LLMClient,
     private val configService: ConfigService,
     private val promptsService: PromptsService,
     private val taskRepository: TaskRepository
-) : Tool {
+) : FileTool(sandbox) {
 
     override val name = "multi_line_editor"
     override val description =
         "LLM-assisted targeted edits in an existing file (2-10 locations). CHEAP (~\$0.02)."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_MODIFYING
+    override val selectionHint =
+        "Semantic/intent-based edits in an existing file (2-10 locations) where exact strings are hard to match."
 
     private val gson = Gson()
 
     override fun validateParams(params: Map<String, Any>) {
-        // Validate path
-        if (params["path"] == null || (params["path"] as? String).isNullOrBlank()) {
-            throw IllegalArgumentException("Parameter 'path' is required and cannot be empty")
-        }
-
-        // Validate edit_description
+        validatePathParam(params)
         val editDescription = params["edit_description"] as? String
         if (editDescription.isNullOrBlank()) {
             throw IllegalArgumentException("Parameter 'edit_description' is required and cannot be empty")
@@ -167,7 +163,7 @@ class MultiLineEditorTool(
         conversationContext: String? = null
     ): ToolResult {
         // 1. Read file and validate
-        val path = sandbox.resolve(pathStr)
+        val path = resolveSandboxPath(pathStr)
 
         if (!path.exists()) {
             return ToolResult.error("File not found: $pathStr. Use advance_code_editing to create new files.")
@@ -186,9 +182,7 @@ class MultiLineEditorTool(
             )
         }
 
-        return FileLockManager.withFileLock(path.toAbsolutePath().toString()) {
-            // Re-validate path inside lock to close TOCTOU window
-            sandbox.revalidateBeforeIO(path)
+        return withLockedFile(path) {
 
             // Read content
             val originalContent = Files.readString(path)
@@ -272,7 +266,7 @@ class MultiLineEditorTool(
                 )
             } catch (e: Exception) {
                 logger.error(e) { "LLM request failed" }
-                return@withFileLock ToolResult.error("LLM request failed: ${e.message}. Try rephrasing the edit description.")
+                return@withLockedFile ToolResult.error("LLM request failed: ${e.message}. Try rephrasing the edit description.")
             }
 
             val responseContent = response.content
@@ -300,7 +294,7 @@ class MultiLineEditorTool(
                     "Failed to parse LLM response as JSON: ${e.message}. " +
                         "Response preview: ${responseContent.take(200)}"
                 }
-                return@withFileLock ToolResult.error(
+                return@withLockedFile ToolResult.error(
                     "Failed to parse LLM response. Response was: ${responseContent.take(200)}... " +
                     "Try rephrasing the edit description or use advance_code_editing."
                 )
@@ -308,7 +302,7 @@ class MultiLineEditorTool(
 
             if (edits.isEmpty()) {
                 logger.warn { "LLM returned no edits for description: $editDescription" }
-                return@withFileLock ToolResult.error(
+                return@withLockedFile ToolResult.error(
                     "LLM did not identify any changes to make. Try being more specific in the edit description."
                 )
             }
@@ -318,7 +312,7 @@ class MultiLineEditorTool(
             // 7. Validate edits
             val validationError = validateEdits(edits, lines.size)
             if (validationError != null) {
-                return@withFileLock ToolResult.error(validationError)
+                return@withLockedFile ToolResult.error(validationError)
             }
 
             // 8. Apply edits (from end to start to preserve line numbers)

@@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
 import mu.KotlinLogging
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.api.ModelOperation
+import pl.jclab.refio.core.api.SubtaskResponse
 import pl.jclab.refio.core.api.TurnRequest
 import pl.jclab.refio.core.api.UpdateSubtaskRequest
 import pl.jclab.refio.core.api.UpdateTaskRequest
@@ -32,22 +33,19 @@ class TuiSessionViewModel(
     internal val mode: MutableStateFlow<String>,
     internal val model: MutableStateFlow<String?>,
     internal val projectPath: Path,
-    internal val projectId: String
+    internal val projectId: String,
+    internal val stateManager: pl.jclab.refio.core.session.SessionStateManager
 ) {
     // --- StateFlows owned by this sub-VM ---
 
-    /** Exposed as internal for coordinator wiring (workflowListener, clearSteps callback). */
-    internal val _stepsInternal = MutableStateFlow<List<TuiStep>>(emptyList())
-    val steps: StateFlow<List<TuiStep>> = _stepsInternal.asStateFlow()
+    /** Subtasks sourced from core [pl.jclab.refio.core.session.SessionStateManager]. */
+    val subtasks: StateFlow<List<SubtaskResponse>> = stateManager.subtasks
 
-    private val _subtasks = MutableStateFlow<List<TuiSubtask>>(emptyList())
-    val subtasks: StateFlow<List<TuiSubtask>> = _subtasks.asStateFlow()
+    private val _activePlan = MutableStateFlow<List<SubtaskResponse>?>(null)
+    val activePlan: StateFlow<List<SubtaskResponse>?> = _activePlan.asStateFlow()
 
-    private val _activePlan = MutableStateFlow<TuiPlan?>(null)
-    val activePlan: StateFlow<TuiPlan?> = _activePlan.asStateFlow()
-
-    private val _isPaused = MutableStateFlow(false)
-    val isPaused: StateFlow<Boolean> = _isPaused.asStateFlow()
+    /** Paused flag sourced from core [pl.jclab.refio.core.session.SessionStateManager]. */
+    val isPaused: StateFlow<Boolean> = stateManager.isPaused
 
     private val _pendingPlanApproval = MutableStateFlow<TuiPlanApproval?>(null)
     val pendingPlanApproval: StateFlow<TuiPlanApproval?> = _pendingPlanApproval.asStateFlow()
@@ -61,8 +59,8 @@ class TuiSessionViewModel(
     internal val _executionMode = MutableStateFlow("AUTO")
     val executionMode: StateFlow<String> = _executionMode.asStateFlow()
 
-    private val _sessions = MutableStateFlow<List<TuiSessionEntry>>(emptyList())
-    val sessions: StateFlow<List<TuiSessionEntry>> = _sessions.asStateFlow()
+    private val _sessions = MutableStateFlow<List<pl.jclab.refio.core.api.TaskResponse>>(emptyList())
+    val sessions: StateFlow<List<pl.jclab.refio.core.api.TaskResponse>> = _sessions.asStateFlow()
 
     private val _selectedHistoryIndex = MutableStateFlow(0)
     val selectedHistoryIndex: StateFlow<Int> = _selectedHistoryIndex.asStateFlow()
@@ -85,11 +83,9 @@ class TuiSessionViewModel(
     private val _totalTokens = MutableStateFlow(0L)
     val totalTokens: StateFlow<Long> = _totalTokens.asStateFlow()
 
-    private val _thinkingEnabled = MutableStateFlow(false)
-    val thinkingEnabled: StateFlow<Boolean> = _thinkingEnabled.asStateFlow()
-
-    private val _noEgressEnabled = MutableStateFlow(false)
-    val noEgressEnabled: StateFlow<Boolean> = _noEgressEnabled.asStateFlow()
+    /** Thinking/no-egress flags sourced from core [pl.jclab.refio.core.session.SessionStateManager]. */
+    val thinkingEnabled: StateFlow<Boolean> = stateManager.thinkingEnabled
+    val noEgressEnabled: StateFlow<Boolean> = stateManager.noEgressEnabled
 
     // --- Callbacks to parent TuiViewModel ---
 
@@ -142,11 +138,11 @@ class TuiSessionViewModel(
     var resolveContextWindow: (String?) -> Unit = {}
 
     fun setNoEgressEnabled(enabled: Boolean) {
-        _noEgressEnabled.value = enabled
+        stateManager.setNoEgressEnabled(enabled)
     }
 
     fun setThinkingEnabled(enabled: Boolean) {
-        _thinkingEnabled.value = enabled
+        stateManager.setThinkingEnabled(enabled)
     }
 
     // =============================================
@@ -157,21 +153,8 @@ class TuiSessionViewModel(
         val r = getRouter() ?: return
         scope.launch(Dispatchers.IO) {
             try {
-                val tasks = r.taskRouter.listTasks().tasks
-                _sessions.value = tasks.map { task ->
-                    TuiSessionEntry(
-                        id = task.id,
-                        name = task.name,
-                        mode = task.mode,
-                        status = task.status,
-                        tokensIn = task.tokensIn,
-                        tokensOut = task.tokensOut,
-                        costUsd = task.costUsd,
-                        createdAt = task.createdAt,
-                        updatedAt = task.updatedAt,
-                        pinned = task.pinned
-                    )
-                }.sortedByDescending { it.updatedAt }
+                _sessions.value = r.taskRouter.listTasks().tasks
+                    .sortedByDescending { it.updatedAt }
             } catch (e: Exception) {
                 logger.warn(e) { "Failed to load sessions" }
             }
@@ -234,7 +217,7 @@ class TuiSessionViewModel(
         _selectedHistoryIndex.value = 0
     }
 
-    private fun filteredSessions(): List<TuiSessionEntry> {
+    private fun filteredSessions(): List<pl.jclab.refio.core.api.TaskResponse> {
         val filter = _historyFilter.value
         return if (filter == "*") _sessions.value
         else _sessions.value.filter { it.mode == filter }
@@ -247,7 +230,7 @@ class TuiSessionViewModel(
         setTaskId(newId)
         clearMessages()
         clearSteps()
-        _subtasks.value = emptyList()
+        stateManager.setSubtasks(emptyList())
         _activePlan.value = null
         _pendingPlanApproval.value = null
         clearContextSections()
@@ -301,29 +284,29 @@ class TuiSessionViewModel(
         _executionStatus.value = status
     }
 
-    fun setSubtasks(subtasks: List<TuiSubtask>) {
-        _subtasks.value = subtasks
+    fun setSubtasks(subtasks: List<SubtaskResponse>) {
+        stateManager.setSubtasks(subtasks)
     }
 
     fun updateSubtaskStatus(subtaskId: String, status: String, error: String? = null) {
-        _subtasks.update { list ->
-            list.map {
-                if (it.id == subtaskId) it.copy(status = status, error = error) else it
+        stateManager.setSubtasks(
+            stateManager.getSubtasks().map {
+                if (it.id == subtaskId) it.copy(status = status, errorMessage = error) else it
             }
-        }
+        )
     }
 
-    fun setPendingPlanApproval(plan: TuiPlan) {
+    fun setPendingPlanApproval(taskId: String, steps: List<SubtaskResponse>) {
         _pendingPlanApproval.value = TuiPlanApproval(
-            taskId = plan.taskId,
-            plan = plan
+            taskId = taskId,
+            steps = steps,
         )
     }
 
     fun approvePlan() {
         val approval = _pendingPlanApproval.value ?: return
-        _activePlan.value = approval.plan
-        _subtasks.value = approval.plan.steps
+        _activePlan.value = approval.steps
+        stateManager.setSubtasks(approval.steps)
         _pendingPlanApproval.value = null
     }
 
@@ -336,93 +319,52 @@ class TuiSessionViewModel(
     // Subtask operations
     // =============================================
 
-    fun approveSubtask(subtaskId: String) {
+    private fun updateSubtaskApproval(subtaskId: String, status: ApprovalStatus) {
         scope.launch {
             val r = getRouter() ?: return@launch
             val tid = getTaskId() ?: return@launch
-            try {
-                r.subtaskRouter.updateSubtask(tid, subtaskId, UpdateSubtaskRequest(approvalStatus = ApprovalStatus.APPROVED))
-                loadSubtasksFromDb(r, tid)
-            } catch (e: Exception) {
-                logger.warn(e) { "Failed to approve subtask: $subtaskId" }
-                updateSubtaskStatus(subtaskId, "APPROVED") // fallback to local
-            }
+            r.subtaskRouter.updateSubtask(tid, subtaskId, UpdateSubtaskRequest(approvalStatus = status))
+            loadSubtasksFromDb(r, tid)
         }
     }
 
-    fun skipSubtask(subtaskId: String) {
-        scope.launch {
-            val r = getRouter() ?: return@launch
-            val tid = getTaskId() ?: return@launch
-            try {
-                r.subtaskRouter.updateSubtask(tid, subtaskId, UpdateSubtaskRequest(approvalStatus = ApprovalStatus.SKIPPED))
-                loadSubtasksFromDb(r, tid)
-            } catch (e: Exception) {
-                logger.warn(e) { "Failed to skip subtask: $subtaskId" }
-                updateSubtaskStatus(subtaskId, "SKIPPED") // fallback to local
-            }
-        }
-    }
+    fun approveSubtask(subtaskId: String) = updateSubtaskApproval(subtaskId, ApprovalStatus.APPROVED)
+
+    fun skipSubtask(subtaskId: String) = updateSubtaskApproval(subtaskId, ApprovalStatus.SKIPPED)
 
     fun deleteSubtask(subtaskId: String) {
         scope.launch {
             val r = getRouter() ?: return@launch
             val tid = getTaskId() ?: return@launch
-            try {
-                r.subtaskRouter.deleteSubtask(tid, subtaskId)
-                loadSubtasksFromDb(r, tid)
-            } catch (e: Exception) {
-                logger.warn(e) { "Failed to delete subtask: $subtaskId" }
-                _subtasks.update { it.filter { s -> s.id != subtaskId } } // fallback
-            }
+            r.subtaskRouter.deleteSubtask(tid, subtaskId)
+            loadSubtasksFromDb(r, tid)
         }
     }
 
     fun moveStepUp(index: Int) {
         if (index <= 0) return
-        val list = _subtasks.value
+        val list = stateManager.getSubtasks()
         val current = list.getOrNull(index) ?: return
         val above = list.getOrNull(index - 1) ?: return
         scope.launch {
             val r = getRouter() ?: return@launch
             val tid = getTaskId() ?: return@launch
-            try {
-                r.subtaskRouter.swapSubtaskOrder(tid, current.id, above.id)
-                loadSubtasksFromDb(r, tid)
-            } catch (e: Exception) {
-                logger.warn(e) { "Failed to swap subtask order" }
-                // Fallback to local swap
-                _subtasks.update { l ->
-                    l.toMutableList().apply {
-                        val item = removeAt(index)
-                        add(index - 1, item)
-                    }
-                }
-            }
+            r.subtaskRouter.swapSubtaskOrder(tid, current.id, above.id)
+            loadSubtasksFromDb(r, tid)
         }
         _selectedStepIndex.update { (it - 1).coerceAtLeast(0) }
     }
 
     fun moveStepDown(index: Int) {
-        val list = _subtasks.value
+        val list = stateManager.getSubtasks()
         if (index >= list.size - 1) return
         val current = list.getOrNull(index) ?: return
         val below = list.getOrNull(index + 1) ?: return
         scope.launch {
             val r = getRouter() ?: return@launch
             val tid = getTaskId() ?: return@launch
-            try {
-                r.subtaskRouter.swapSubtaskOrder(tid, current.id, below.id)
-                loadSubtasksFromDb(r, tid)
-            } catch (e: Exception) {
-                logger.warn(e) { "Failed to swap subtask order" }
-                _subtasks.update { l ->
-                    l.toMutableList().apply {
-                        val item = removeAt(index)
-                        add(index + 1, item)
-                    }
-                }
-            }
+            r.subtaskRouter.swapSubtaskOrder(tid, current.id, below.id)
+            loadSubtasksFromDb(r, tid)
         }
         _selectedStepIndex.update { (it + 1).coerceAtMost(list.size - 1) }
     }
@@ -431,34 +373,27 @@ class TuiSessionViewModel(
         scope.launch {
             val r = getRouter() ?: return@launch
             val tid = getTaskId() ?: return@launch
-            try {
-                r.subtaskRouter.deletePendingSubtasks(tid)
-                loadSubtasksFromDb(r, tid)
-            } catch (e: Exception) {
-                logger.warn(e) { "Failed to cancel all pending" }
-                _subtasks.update { list ->
-                    list.map {
-                        if (it.status in listOf("NEW", "PENDING", "APPROVED")) it.copy(status = "SKIPPED") else it
-                    }
-                }
-            }
+            r.subtaskRouter.deletePendingSubtasks(tid)
+            loadSubtasksFromDb(r, tid)
         }
     }
 
     fun executeStep(index: Int) {
-        val subtask = _subtasks.value.getOrNull(index) ?: return
+        val subtask = stateManager.getSubtasks().getOrNull(index) ?: return
         if (subtask.status !in listOf("NEW", "PENDING", "APPROVED")) {
-            addSystemMessage("Step '${subtask.name}' is ${subtask.status}, cannot execute")
+            addSystemMessage("Step '${subtask.description}' is ${subtask.status}, cannot execute")
             return
         }
         scope.launch {
             val r = getRouter() ?: return@launch
             val tid = getTaskId() ?: return@launch
             try {
-                _executionStatus.value = "Executing: ${subtask.name}"
-                _subtasks.update { list ->
-                    list.map { if (it.id == subtask.id) it.copy(status = "RUNNING") else it }
-                }
+                _executionStatus.value = "Executing: ${subtask.description}"
+                stateManager.setSubtasks(
+                    stateManager.getSubtasks().map {
+                        if (it.id == subtask.id) it.copy(status = "RUNNING") else it
+                    }
+                )
                 val result = r.agentRouter.executeSubtaskStep(tid, subtask.id)
                 loadSubtasksFromDb(r, tid)
                 loadMessagesFromDb(r, tid)
@@ -466,9 +401,11 @@ class TuiSessionViewModel(
                 _executionStatus.value = "Idle"
             } catch (e: Exception) {
                 logger.error(e) { "Failed to execute step: ${subtask.id}" }
-                _subtasks.update { list ->
-                    list.map { if (it.id == subtask.id) it.copy(status = "FAILED", error = e.message) else it }
-                }
+                stateManager.setSubtasks(
+                    stateManager.getSubtasks().map {
+                        if (it.id == subtask.id) it.copy(status = "FAILED", errorMessage = e.message) else it
+                    }
+                )
                 _executionStatus.value = "Error"
                 addSystemMessage("Step execution failed: ${e.message}")
             }
@@ -546,16 +483,16 @@ class TuiSessionViewModel(
     }
 
     fun togglePause() {
-        val wasPaused = _isPaused.value
-        _isPaused.update { !it }
+        val wasPaused = stateManager.getIsPaused()
+        stateManager.setPaused(!wasPaused)
         // On resume, check for pending subtasks needing approval
         if (wasPaused) {
-            val subtasks = _subtasks.value
+            val subtasks = stateManager.getSubtasks()
             val nextPending = subtasks.indexOfFirst { it.status in listOf("NEW", "PENDING") }
             if (nextPending >= 0) {
                 setActiveTab(TuiTab.STEPS)
                 selectStep(nextPending)
-                addSystemMessage("Resumed. Next step awaiting approval: ${subtasks[nextPending].name}")
+                addSystemMessage("Resumed. Next step awaiting approval: ${subtasks[nextPending].description}")
             } else {
                 addSystemMessage("Resumed. No pending steps.")
             }
@@ -563,7 +500,7 @@ class TuiSessionViewModel(
     }
 
     fun selectStep(index: Int) {
-        _selectedStepIndex.value = index.coerceIn(0, (_subtasks.value.size - 1).coerceAtLeast(0))
+        _selectedStepIndex.value = index.coerceIn(0, (stateManager.getSubtasks().size - 1).coerceAtLeast(0))
     }
 
     fun selectStepUp() {
@@ -571,7 +508,7 @@ class TuiSessionViewModel(
     }
 
     fun selectStepDown() {
-        _selectedStepIndex.update { (it + 1).coerceAtMost((_subtasks.value.size - 1).coerceAtLeast(0)) }
+        _selectedStepIndex.update { (it + 1).coerceAtMost((stateManager.getSubtasks().size - 1).coerceAtLeast(0)) }
     }
 
     // =============================================
@@ -647,7 +584,7 @@ class TuiSessionViewModel(
      * (e.g. no providers configured, endpoints unreachable).
      */
     private fun getStaticModelList(): List<String> {
-        val providers = listOf("openai", "anthropic", "openrouter", "gemini", "ollama", "lmstudio", "custom_openai", "zai")
+        val providers = listOf("openai", "anthropic", "openrouter", "gemini", "ollama", "lmstudio", "generic_openai", "zai")
         val result = mutableListOf<String>()
         for (provider in providers) {
             val definitions = pl.jclab.refio.core.llm.ModelDefinitions.getProviderDefinitions(provider)
@@ -680,9 +617,7 @@ class TuiSessionViewModel(
             val newId = createNewTaskInDb(r)
             setTaskId(newId)
             mode.value = newMode
-            try {
-                r.configRouter.updateConfig("ui", "app", null, mapOf("selected_mode" to newMode))
-            } catch (_: Exception) {}
+            persistUiSetting("selected_mode", newMode)
             updateDebugInfo(newId, newMode)
             addSystemMessage("Mode switched to $newMode (new session)")
             return
@@ -698,7 +633,7 @@ class TuiSessionViewModel(
             val newId = createNewTaskInDb(r)
             setTaskId(newId)
             clearMessages()
-            _subtasks.value = emptyList()
+            stateManager.setSubtasks(emptyList())
             clearSteps()
             _activePlan.value = null
             _pendingPlanApproval.value = null
@@ -706,17 +641,11 @@ class TuiSessionViewModel(
         }
 
         mode.value = newMode
-
-        // Persist to config (same key as IntelliJ: ui.selected_mode)
-        try {
-            getRouter()?.configRouter?.updateConfig("ui", "app", null, mapOf("selected_mode" to newMode))
-        } catch (e: Exception) {
-            logger.debug(e) { "Failed to persist selected mode" }
-        }
+        persistUiSetting("selected_mode", newMode)
 
         // Clear plan/step state when switching to CHAT (no tools in chat mode)
         if (newMode == "CHAT") {
-            _subtasks.value = emptyList()
+            stateManager.setSubtasks(emptyList())
             _activePlan.value = null
             _pendingPlanApproval.value = null
         }
@@ -725,34 +654,25 @@ class TuiSessionViewModel(
         addSystemMessage("Mode switched to $newMode")
     }
 
+    private fun persistUiSetting(key: String, value: String) {
+        getRouter()?.configRouter?.updateConfig("ui", "app", null, mapOf(key to value))
+    }
+
     fun toggleThinking() {
-        _thinkingEnabled.update { !it }
-        // Persist to config
-        try {
-            getRouter()?.configRouter?.updateConfig("ui", "app", null, mapOf("thinking_enabled" to _thinkingEnabled.value.toString()))
-        } catch (e: Exception) {
-            logger.debug(e) { "Failed to persist thinking state" }
-        }
+        val next = !stateManager.thinkingEnabled.value
+        stateManager.setThinkingEnabled(next)
+        persistUiSetting("thinking_enabled", next.toString())
     }
 
     fun toggleNoEgress() {
-        _noEgressEnabled.update { !it }
-        // Persist to config
-        try {
-            getRouter()?.configRouter?.updateConfig("ui", "app", null, mapOf("no_egress_enabled" to _noEgressEnabled.value.toString()))
-        } catch (e: Exception) {
-            logger.debug(e) { "Failed to persist no-egress state" }
-        }
+        val next = !stateManager.noEgressEnabled.value
+        stateManager.setNoEgressEnabled(next)
+        persistUiSetting("no_egress_enabled", next.toString())
     }
 
     fun toggleExecutionMode() {
         _executionMode.update { if (it == "AUTO") "INTERACTIVE" else "AUTO" }
-        // Persist to config (same key as IntelliJ: ui.execution_mode)
-        try {
-            getRouter()?.configRouter?.updateConfig("ui", "app", null, mapOf("execution_mode" to _executionMode.value))
-        } catch (e: Exception) {
-            logger.debug(e) { "Failed to persist execution mode" }
-        }
+        persistUiSetting("execution_mode", _executionMode.value)
     }
 
     // =============================================

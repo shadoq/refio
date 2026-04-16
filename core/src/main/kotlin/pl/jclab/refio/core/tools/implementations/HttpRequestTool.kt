@@ -78,9 +78,11 @@ class HttpRequestTool(
 ) : Tool {
 
     override val name = "http_request"
-    override val description = "Make HTTP requests (GET/POST/PUT/DELETE). Stateless: no cookie jar — for session auth read Set-Cookie from the response and resend it via headers={\"Cookie\":\"...\"} on the next call. The 'body' parameter accepts either a JSON string OR a raw object/array — objects are auto-serialized to JSON. Use save_to_file for large responses."
+    override val description = "Make HTTP requests (GET/POST/PUT/DELETE). Stateless — no cookie jar. " +
+        "Body accepts JSON string or raw object (auto-serialized). Use save_to_file for large responses."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.DATA_PRODUCING
+    override val selectionHint = "HTTP requests (GET/POST/PUT/DELETE). Use save_to_file for large responses."
 
     override fun validateParams(params: Map<String, Any>) {
         val url = params["url"] as? String
@@ -107,21 +109,23 @@ class HttpRequestTool(
             val bodyFile = params["body_file"] as? String
             val body = if (bodyFile != null) null else coerceBody(params["body"])
             val rawContentType = params["content_type"] as? String
-            // Validate and fallback to default if content_type is invalid
-            val contentType = run {
-                if (rawContentType == null) return@run "application/json"
+            // No fallback: invalid content_type is a caller bug, not something to paper over.
+            val contentType = if (rawContentType == null) {
+                "application/json"
+            } else {
                 val parts = rawContentType.split("/", limit = 2)
                 if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) {
-                    logger.warn { "Invalid content_type '$rawContentType', falling back to application/json" }
-                    return@run "application/json"
+                    return@withContext ToolResult.error(
+                        "Invalid content_type '$rawContentType' (expected 'type/subtype')"
+                    )
                 }
-                // Final check: try parsing to catch any edge cases
                 try {
                     ContentType.parse(rawContentType)
                     rawContentType
                 } catch (e: Exception) {
-                    logger.warn { "Unparseable content_type '$rawContentType', falling back to application/json" }
-                    "application/json"
+                    return@withContext ToolResult.error(
+                        "Unparseable content_type '$rawContentType': ${e.message}"
+                    )
                 }
             }
             val saveToFile = params["save_to_file"] as? String

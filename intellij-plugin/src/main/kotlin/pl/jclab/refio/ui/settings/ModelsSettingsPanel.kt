@@ -8,11 +8,11 @@ import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
 import pl.jclab.refio.ui.theme.LCATheme
-import pl.jclab.refio.api.CoreApiClient
+import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.config.ModelPresetConfig
 import pl.jclab.refio.core.utils.GsonInstance.gson
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.notification.NotificationService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -160,7 +160,7 @@ private fun ModelPresetConfig.toModelPreset(): ModelPreset = ModelPreset(
  */
 class ModelsSettingsPanel(
     private val onSettingChanged: (section: String, key: String, value: Any) -> Unit,
-    private val coreApiClient: CoreApiClient?
+    private val coreApiClient: CoreApiRouter?
 ) : JBPanel<ModelsSettingsPanel>(BorderLayout()) {
 
     companion object {
@@ -188,6 +188,12 @@ class ModelsSettingsPanel(
 
     // Flag to prevent saving when dropdowns are updated programmatically
     private var isUpdatingDropdowns = false
+
+    // Last models shown in the table — used by Show All / Hide All to update
+    // visibility in place instead of refetching from the backend (the model-registry
+    // cache may have been invalidated by a concurrent provider settings save, which
+    // would make fetchIfMissing=false return an empty list).
+    private var currentModels: List<pl.jclab.refio.core.api.ModelInfo> = emptyList()
 
     init {
         border = LCATheme.paddedBorder(LCATheme.margin)
@@ -245,7 +251,7 @@ class ModelsSettingsPanel(
         modelsTable = JBTable(object : DefaultTableModel(columnNames, 0) {
             override fun getColumnClass(columnIndex: Int): Class<*> {
                 return when (columnIndex) {
-                    6 -> java.lang.Boolean::class.java  // Show in Dropdown
+                    6 -> Boolean::class.javaObjectType  // Show in Dropdown
                     else -> String::class.java
                 }
             }
@@ -356,7 +362,7 @@ class ModelsSettingsPanel(
                 addAll(ModelPreset.PRESETS)
                 coreApiClient?.let { client ->
                     try {
-                        val yamlPresets = client.getYamlModelPresets().map { it.toModelPreset() }
+                        val yamlPresets = (client.configService.getYamlConfig().models?.presets ?: emptyList()).map { it.toModelPreset() }
                         addAll(yamlPresets)
                     } catch (e: Exception) {
                         logger.warn(e) { "Failed to load YAML model presets" }
@@ -424,7 +430,7 @@ class ModelsSettingsPanel(
         coroutineScope.launch {
             try {
                 // Step 1: Get all models
-                val allModels = coreApiClient?.getModelsWithVisibility() ?: emptyList()
+                val allModels = coreApiClient?.configRouter?.getModelsWithVisibility(fetchIfMissing = false) ?: emptyList()
                 logger.info { "Applying preset against ${allModels.size} available models" }
 
                 fun findMatchingModel(modelFullId: String): pl.jclab.refio.core.api.ModelInfo? {
@@ -459,7 +465,7 @@ class ModelsSettingsPanel(
 
                     val visibilityMap = buildVisibilityMap(allModels, visibleModelIds)
                     markModelVisibilityInitialized()
-                    coreApiClient?.updateModelsVisibility(visibilityMap)
+                    coreApiClient?.configRouter?.updateModelsVisibility(visibilityMap)
                 } else {
                     logger.info { "Preset has empty visibleModels; keeping current model visibility unchanged" }
                 }
@@ -467,7 +473,7 @@ class ModelsSettingsPanel(
                 // Step 3: Set default models for each operation
                 val defaultMatch = findMatchingModel(preset.defaultModel)
                 if (defaultMatch != null) {
-                    coreApiClient?.setDefaultModel(
+                    coreApiClient?.configRouter?.setDefaultModel(
                         request = pl.jclab.refio.core.api.SetDefaultModelRequest(
                             operation = ModelOperation.DEFAULT,
                             modelId = defaultMatch.id,
@@ -482,7 +488,7 @@ class ModelsSettingsPanel(
                 suspend fun applySpecializedModel(operation: ModelOperation, modelFullId: String) {
                     val match = findMatchingModel(modelFullId)
                     if (match != null) {
-                        coreApiClient?.setDefaultModel(
+                        coreApiClient?.configRouter?.setDefaultModel(
                             request = pl.jclab.refio.core.api.SetDefaultModelRequest(
                                 operation = operation,
                                 modelId = match.id,
@@ -492,7 +498,7 @@ class ModelsSettingsPanel(
                         )
                     } else {
                         logger.warn { "Preset model not available for $operation; falling back to inherit: $modelFullId" }
-                        coreApiClient?.setDefaultModel(
+                        coreApiClient?.configRouter?.setDefaultModel(
                             request = pl.jclab.refio.core.api.SetDefaultModelRequest(
                                 operation = operation,
                                 modelId = pl.jclab.refio.core.services.ConfigService.INHERIT_MODEL_VALUE,
@@ -511,7 +517,7 @@ class ModelsSettingsPanel(
                 logger.info { "Preset '${preset.name}' applied successfully" }
 
                 // Step 4: Reload UI to reflect changes
-                val updatedModels = coreApiClient?.getModelsWithVisibility() ?: emptyList()
+                val updatedModels = coreApiClient?.configRouter?.getModelsWithVisibility(fetchIfMissing = false) ?: emptyList()
                 val visibleCount = updatedModels.count { it.showInDropdown }
 
                 ApplicationManager.getApplication().invokeLater {
@@ -678,7 +684,7 @@ class ModelsSettingsPanel(
 
                 logger.info { "Refreshing models from all providers" }
 
-                val models = coreApiClient?.refreshAllModels()
+                val models = coreApiClient?.configRouter?.refreshAllModels()
                     ?: throw Exception("CoreApiClient not available")
 
                 // Apply smart defaults for new models (preserves existing settings)
@@ -714,72 +720,36 @@ class ModelsSettingsPanel(
         }
     }
 
-    private fun onShowAllModels() {
-        val tableModel = modelsTable.model as DefaultTableModel
-        val rowCount = tableModel.rowCount
+    private fun onShowAllModels() = setAllModelsVisibility(showInDropdown = true)
 
-        if (rowCount == 0) {
-            logger.warn { "No models to show" }
+    private fun onHideAllModels() = setAllModelsVisibility(showInDropdown = false)
+
+    private fun setAllModelsVisibility(showInDropdown: Boolean) {
+        val snapshot = currentModels
+        if (snapshot.isEmpty()) {
+            logger.warn { if (showInDropdown) "No models to show" else "No models to hide" }
             return
         }
 
-        logger.info { "Showing all $rowCount models" }
+        logger.info { "${if (showInDropdown) "Showing" else "Hiding"} all ${snapshot.size} models" }
 
         coroutineScope.launch {
             try {
-                val visibilityMap = buildVisibilityMapFromTable(showInDropdown = true)
+                val visibilityMap = snapshot.associate { it.id to showInDropdown }
                 markModelVisibilityInitialized()
-                coreApiClient?.updateModelsVisibility(visibilityMap)
+                coreApiClient?.configRouter?.updateModelsVisibility(visibilityMap)
 
-                // Reload models from database and update UI
-                val models = coreApiClient?.getModelsWithVisibility() ?: emptyList()
+                val updatedModels = snapshot.map { it.copy(showInDropdown = showInDropdown) }
                 ApplicationManager.getApplication().invokeLater {
-                    populateModelsTable(models)
-                    logger.info { "All models shown successfully" }
+                    populateModelsTable(updatedModels)
+                    logger.info { "All models ${if (showInDropdown) "shown" else "hidden"} successfully" }
                 }
             } catch (e: Exception) {
-                logger.error(e) { "Failed to show all models" }
+                logger.error(e) { "Failed to update visibility for all models" }
                 ApplicationManager.getApplication().invokeLater {
                     JOptionPane.showMessageDialog(
                         this@ModelsSettingsPanel,
-                        "Failed to show all models:\n${e.message}",
-                        "Error",
-                        JOptionPane.ERROR_MESSAGE
-                    )
-                }
-            }
-        }
-    }
-
-    private fun onHideAllModels() {
-        val tableModel = modelsTable.model as DefaultTableModel
-        val rowCount = tableModel.rowCount
-
-        if (rowCount == 0) {
-            logger.warn { "No models to hide" }
-            return
-        }
-
-        logger.info { "Hiding all $rowCount models" }
-
-        coroutineScope.launch {
-            try {
-                val visibilityMap = buildVisibilityMapFromTable(showInDropdown = false)
-                markModelVisibilityInitialized()
-                coreApiClient?.updateModelsVisibility(visibilityMap)
-
-                // Reload models from database and update UI
-                val models = coreApiClient?.getModelsWithVisibility() ?: emptyList()
-                ApplicationManager.getApplication().invokeLater {
-                    populateModelsTable(models)
-                    logger.info { "All models hidden successfully" }
-                }
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to hide all models" }
-                ApplicationManager.getApplication().invokeLater {
-                    JOptionPane.showMessageDialog(
-                        this@ModelsSettingsPanel,
-                        "Failed to hide all models:\n${e.message}",
+                        "Failed to update models visibility:\n${e.message}",
                         "Error",
                         JOptionPane.ERROR_MESSAGE
                     )
@@ -797,9 +767,11 @@ class ModelsSettingsPanel(
 
         coroutineScope.launch {
             try {
-                logger.info { "Loading models from backend" }
+                logger.info { "Loading models from cache (no remote fetch)" }
 
-                val models = coreApiClient.getModelsWithVisibility()
+                // Cache-only: never trigger remote provider fetches when opening the panel.
+                // User must press the Refresh button to pull fresh model lists.
+                val models = coreApiClient.configRouter.getModelsWithVisibility(fetchIfMissing = false)
 
                 // Apply smart defaults if this is the first time (no visibility settings yet)
                 val modelsWithDefaults = applySmartDefaults(models)
@@ -831,7 +803,7 @@ class ModelsSettingsPanel(
         }
 
         val visibilityInitialized =
-            coreApiClient.getConfigValue("ui", MODEL_VISIBILITY_INITIALIZED_KEY)?.toBooleanStrictOrNull() == true
+            coreApiClient.configService.get("ui.$MODEL_VISIBILITY_INITIALIZED_KEY", pl.jclab.refio.core.db.ConfigScope.APP, null)?.toBooleanStrictOrNull() == true
         val hasAnyVisibleModels = models.any { it.showInDropdown }
 
         // Older installs may not have the flag set yet. If at least one model is already visible,
@@ -857,7 +829,7 @@ class ModelsSettingsPanel(
             if (model.showInDropdown != defaultVisibility) {
                 // Update DB with smart default
                 try {
-                    coreApiClient?.updateModelVisibility(model.id, defaultVisibility)
+                    coreApiClient.configRouter.updateModelVisibility(model.id, defaultVisibility)
                     model.copy(showInDropdown = defaultVisibility)
                 } catch (e: Exception) {
                     logger.error(e) { "Failed to set default visibility for ${model.id}" }
@@ -875,7 +847,7 @@ class ModelsSettingsPanel(
 
     private fun markModelVisibilityInitialized() {
         try {
-            coreApiClient?.setConfigValue("ui", MODEL_VISIBILITY_INITIALIZED_KEY, "true")
+            coreApiClient?.configService?.set("ui.$MODEL_VISIBILITY_INITIALIZED_KEY", "true", pl.jclab.refio.core.db.ConfigScope.APP, null)
         } catch (e: Exception) {
             logger.warn(e) { "Failed to mark model visibility initialization" }
         }
@@ -934,6 +906,8 @@ class ModelsSettingsPanel(
     }
 
     private fun populateModelsTable(models: List<pl.jclab.refio.core.api.ModelInfo>) {
+        currentModels = models
+
         val tableModel = modelsTable.model as DefaultTableModel
         tableModel.rowCount = 0  // Clear table
 
@@ -971,12 +945,12 @@ class ModelsSettingsPanel(
         coroutineScope.launch {
             try {
                 // Load saved models for each mode
-                val chatModel = coreApiClient?.getDefaultModel(ModelOperation.DEFAULT)
-                val planModel = coreApiClient?.getDefaultModel(ModelOperation.PLAN)
-                val agentModel = coreApiClient?.getDefaultModel(ModelOperation.CODING)
-                val weakModel = coreApiClient?.getDefaultModel(ModelOperation.WEAK)
-                val embeddingModel = coreApiClient?.getDefaultModel(ModelOperation.EMBEDDING)
-                val defaultModelSettings = coreApiClient?.getConfig("default_model", "app")?.settings ?: emptyMap()
+                val chatModel = coreApiClient?.configRouter?.getDefaultModel(ModelOperation.DEFAULT)
+                val planModel = coreApiClient?.configRouter?.getDefaultModel(ModelOperation.PLAN)
+                val agentModel = coreApiClient?.configRouter?.getDefaultModel(ModelOperation.CODING)
+                val weakModel = coreApiClient?.configRouter?.getDefaultModel(ModelOperation.WEAK)
+                val embeddingModel = coreApiClient?.configRouter?.getDefaultModel(ModelOperation.EMBEDDING)
+                val defaultModelSettings = coreApiClient?.configRouter?.getConfig("default_model", "app")?.settings ?: emptyMap()
 
                 ApplicationManager.getApplication().invokeLater {
                     // Set flag to prevent saving during programmatic update
@@ -1091,7 +1065,7 @@ class ModelsSettingsPanel(
         coroutineScope.launch {
             try {
                 markModelVisibilityInitialized()
-                coreApiClient?.updateModelVisibility(
+                coreApiClient?.configRouter?.updateModelVisibility(
                     modelId = modelId,
                     showInDropdown = showInDropdown
                 )
@@ -1099,7 +1073,7 @@ class ModelsSettingsPanel(
                 logger.info { "Model visibility saved: $modelId -> $showInDropdown" }
 
                 // Refresh dropdowns with updated visibility
-                val models = coreApiClient?.getModelsWithVisibility() ?: emptyList()
+                val models = coreApiClient?.configRouter?.getModelsWithVisibility(fetchIfMissing = false) ?: emptyList()
                 ApplicationManager.getApplication().invokeLater {
                     updateModelDropdowns(models)
                 }
@@ -1163,7 +1137,7 @@ class ModelsSettingsPanel(
                 }
 
                 if (modelId == INHERIT_LABEL) {
-                    coreApiClient?.setDefaultModel(
+                    coreApiClient?.configRouter?.setDefaultModel(
                         request = pl.jclab.refio.core.api.SetDefaultModelRequest(
                             operation = operation,
                             modelId = pl.jclab.refio.core.services.ConfigService.INHERIT_MODEL_VALUE,
@@ -1176,7 +1150,7 @@ class ModelsSettingsPanel(
                 }
 
                 // Save using proper API
-                coreApiClient?.setDefaultModel(
+                coreApiClient?.configRouter?.setDefaultModel(
                     request = pl.jclab.refio.core.api.SetDefaultModelRequest(
                         operation = operation,
                         modelId = model,
@@ -1256,19 +1230,6 @@ class ModelsSettingsPanel(
         }
     }
 
-    private fun buildVisibilityMapFromTable(showInDropdown: Boolean): Map<String, Boolean> {
-        val tableModel = modelsTable.model as DefaultTableModel
-        val rowCount = tableModel.rowCount
-        val visibilityMap = HashMap<String, Boolean>(rowCount)
-
-        for (row in 0 until rowCount) {
-            val modelId = tableModel.getValueAt(row, 7) as String
-            visibilityMap[modelId] = showInDropdown
-        }
-
-        return visibilityMap
-    }
-
     private fun buildVisibilityMap(
         allModels: List<pl.jclab.refio.core.api.ModelInfo>,
         modelIdsToShow: Set<String>
@@ -1319,8 +1280,9 @@ class ModelsSettingsPanel(
 
         coroutineScope.launch {
             try {
-                // Just reload all models with visibility settings
-                val allModels = coreApiClient?.getModelsWithVisibility() ?: emptyList()
+                // ProvidersSettingsPanel already fetched the affected provider; reuse the cache here
+                // instead of triggering another full remote refresh.
+                val allModels = coreApiClient?.configRouter?.getModelsWithVisibility(fetchIfMissing = false) ?: emptyList()
 
                 ApplicationManager.getApplication().invokeLater {
                     populateModelsTable(allModels)

@@ -7,9 +7,9 @@ import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.UIUtil
 import pl.jclab.refio.ui.theme.LCATheme
-import pl.jclab.refio.api.models.SubtaskDto
+import pl.jclab.refio.core.api.SubtaskResponse
 import pl.jclab.refio.services.execution.StepExecutionService
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.ui.components.common.PromptDialog
 import kotlinx.coroutines.*
@@ -22,6 +22,8 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import javax.swing.*
+import javax.swing.event.AncestorEvent
+import javax.swing.event.AncestorListener
 import javax.swing.filechooser.FileNameExtensionFilter
 
 /**
@@ -111,6 +113,43 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
                 }
             }
         }
+
+        // Auto-refresh subtasks when the panel becomes visible in the hierarchy — tab switches
+        // in the Agents/RAG/Debug/Logs/API tab-pane don't re-run init(), so without this the
+        // StateFlow shows whatever was last cached from a prior session tick.
+        addAncestorListener(object : AncestorListener {
+            override fun ancestorAdded(event: AncestorEvent?) {
+                if (sessionManager.activeSession.value == null) return
+                cs.launch {
+                    try {
+                        sessionManager.refreshSubtasks()
+                    } catch (e: Exception) {
+                        logger.error(e) { "Auto-refresh on panel show failed" }
+                    }
+                }
+            }
+            override fun ancestorRemoved(event: AncestorEvent?) {}
+            override fun ancestorMoved(event: AncestorEvent?) {}
+        })
+
+        // Auto-refresh on step state changes. AgentEventBus.ToolCalled fires when a tool
+        // finishes (subtask PENDING → SUCCESS/FAILED) and TurnEnded covers the case where a
+        // whole turn batch just completed. Pulling the fresh list into the StateFlow keeps the
+        // view updated without waiting for the user to click ⟳ Refresh.
+        cs.launch {
+            sessionManager.apiRouter.agentEventBus.events.collect { event ->
+                val triggersRefresh = event is pl.jclab.refio.core.agents.events.AgentEvent.ToolCalled ||
+                    event is pl.jclab.refio.core.agents.events.AgentEvent.TurnEnded
+                if (!triggersRefresh) return@collect
+                val activeSessionId = sessionManager.activeSession.value?.id ?: return@collect
+                if (event.sessionId != activeSessionId) return@collect
+                try {
+                    sessionManager.refreshSubtasks()
+                } catch (e: Exception) {
+                    logger.debug { "Auto-refresh on tool event failed: ${e.message}" }
+                }
+            }
+        }
     }
 
     private fun showEmptyState() {
@@ -120,7 +159,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
         stepsPanel.repaint()
     }
 
-    private fun updateSteps(subtasks: List<SubtaskDto>) {
+    private fun updateSteps(subtasks: List<SubtaskResponse>) {
         logger.debug { "updateSteps called with ${subtasks.size} subtasks" }
 
         SwingUtilities.invokeLater {
@@ -158,7 +197,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
         }
     }
 
-    private fun createStepItem(subtask: SubtaskDto, stepNumber: Int): JPanel {
+    private fun createStepItem(subtask: SubtaskResponse, stepNumber: Int): JPanel {
         return JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             background = getBackgroundColorForStatus(subtask.status)
@@ -186,7 +225,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
     }
 
 
-    private fun createCompactStepHeader(subtask: SubtaskDto, stepNumber: Int): JPanel {
+    private fun createCompactStepHeader(subtask: SubtaskResponse, stepNumber: Int): JPanel {
         return JPanel(BorderLayout(8, 0)).apply {
             isOpaque = false
             border = LCATheme.paddedBorder(6, 8)
@@ -238,7 +277,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
      * Create compact action buttons for header (icons only)
      */
     @Suppress("UNUSED_PARAMETER")
-    private fun createCompactActions(subtask: SubtaskDto, _stepNumber: Int): JPanel {
+    private fun createCompactActions(subtask: SubtaskResponse, _stepNumber: Int): JPanel {
 
         val panel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0))
 
@@ -294,7 +333,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
     /**
      * Create action buttons for a step
      */
-    private fun createStepActions(subtask: SubtaskDto, stepNumber: Int): JPanel {
+    private fun createStepActions(subtask: SubtaskResponse, stepNumber: Int): JPanel {
         return JPanel(FlowLayout(FlowLayout.CENTER, 2, 0)).apply {
             isOpaque = false
 
@@ -414,7 +453,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
     }
 
 
-    private fun createToolsSection(subtask: SubtaskDto): JPanel? {
+    private fun createToolsSection(subtask: SubtaskResponse): JPanel? {
         val tools = parseToolsFromSubtask(subtask) ?: return null
 
         return JPanel().apply {
@@ -461,7 +500,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
         }
     }
 
-    private fun createMetricsSection(subtask: SubtaskDto): JPanel? {
+    private fun createMetricsSection(subtask: SubtaskResponse): JPanel? {
         // Calculate execution time from timestamps
         val startedAtMs = subtask.startedAt
         val finishedAtMs = subtask.completedAt ?: subtask.finishedAt
@@ -526,7 +565,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
     }
 
     @Suppress("UNCHECKED_CAST")
-    private fun parseToolsFromSubtask(subtask: SubtaskDto): List<ToolInfo>? {
+    private fun parseToolsFromSubtask(subtask: SubtaskResponse): List<ToolInfo>? {
         try {
             // Try step_plan_json first (from prepare endpoint)
             subtask.stepPlanJson?.let { json ->
@@ -603,7 +642,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
         }
     }
 
-    private fun installHeaderClickHandler(component: JComponent, subtask: SubtaskDto, stepNumber: Int) {
+    private fun installHeaderClickHandler(component: JComponent, subtask: SubtaskResponse, stepNumber: Int) {
         component.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 if (e.clickCount == 1 && SwingUtilities.isLeftMouseButton(e)) {
@@ -613,11 +652,11 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
         })
     }
 
-    private fun showStepDetailsDialog(subtask: SubtaskDto, stepNumber: Int) {
+    private fun showStepDetailsDialog(subtask: SubtaskResponse, stepNumber: Int) {
         StepDetailsDialog(project, subtask, stepNumber, this::buildStepDetailsText).show()
     }
 
-    private fun buildStepDetailsText(subtask: SubtaskDto, stepNumber: Int): String {
+    private fun buildStepDetailsText(subtask: SubtaskResponse, stepNumber: Int): String {
         val completedAt = subtask.completedAt ?: subtask.finishedAt
         return buildString {
             appendLine("Step $stepNumber")
@@ -817,9 +856,9 @@ data class ToolInfo(
 
 private class StepDetailsDialog(
     project: Project,
-    private val subtask: SubtaskDto,
+    private val subtask: SubtaskResponse,
     private val stepNumber: Int,
-    private val detailsProvider: (SubtaskDto, Int) -> String
+    private val detailsProvider: (SubtaskResponse, Int) -> String
 ) : DialogWrapper(project, true) {
 
     private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault())

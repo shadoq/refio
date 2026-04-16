@@ -153,7 +153,13 @@ sealed interface AgentEvent {
         override val correlationId: String,
         val delta: String,
         val accumulated: String,
-        val isComplete: Boolean
+        val isComplete: Boolean,
+        // Per-turn identity for routing to a per-agent streaming bubble. runId is unique per
+        // subagent invocation (even when sourceAgentId is shared with the parent), depth lets
+        // the renderer indent, and agentName populates ChatMessage.agentName on persistence.
+        val runId: String? = null,
+        val depth: Int = 0,
+        val agentName: String? = null,
     ) : AgentEvent
 
     // ── TURN LIFECYCLE — per-iteration events for Session Trace panel ──

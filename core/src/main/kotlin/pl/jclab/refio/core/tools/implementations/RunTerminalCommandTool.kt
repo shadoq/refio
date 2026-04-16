@@ -7,7 +7,6 @@ import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
 import pl.jclab.refio.core.tools.security.CommandLimits
 import pl.jclab.refio.core.tools.security.CommandRuleMatcher
-import pl.jclab.refio.core.tools.security.CommandWhitelist
 import pl.jclab.refio.core.tools.security.RuleAction
 import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
@@ -25,22 +24,24 @@ private val logger = dualLogger("RunTerminalCommandTool")
  * - command: Shell command to execute
  *
  * Security:
- * - Command whitelist validates allowed programs/arguments
+ * - Command rule matcher (regex-based ALLOW/BLOCK/ASK) validates commands
  * - Execution timeout enforced
  * - Output size limits
  * - Runs in project root directory
  */
 class RunTerminalCommandTool(
     private val sandbox: PathSandbox,
-    private val whitelist: CommandWhitelist,
     private val limits: CommandLimits,
-    private val commandRuleMatcher: CommandRuleMatcher? = null
+    private val commandRuleMatcher: CommandRuleMatcher
 ) : Tool {
 
     override val name = "run_terminal_command"
     override val description = "Execute a shell command in the project directory."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.EXECUTION
+    override val selectionHint =
+        "OS-level commands: git, gradle, npm, docker, build/test runners. " +
+        "Avoid inline `python -c \"...\"` on Windows — prefer run_code when available."
 
     override fun validateParams(params: Map<String, Any>) {
         if (params["command"] == null || (params["command"] as? String).isNullOrBlank()) {
@@ -61,40 +62,21 @@ class RunTerminalCommandTool(
                 ?.coerceIn(MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS)
                 ?: limits.timeoutSeconds
 
-            // Check command rules (new regex-based system)
-            if (commandRuleMatcher != null) {
-                val ruleResult = commandRuleMatcher.match(command)
-                when (ruleResult.action) {
-                    RuleAction.BLOCK -> {
-                        val desc = ruleResult.matchedRule?.description ?: "blocked by security policy"
-                        logger.warn { "Blocked command by rule: reason='$desc', command='$command'" }
-                        return@withContext ToolResult.error("Command blocked: $desc")
-                    }
-                    RuleAction.ALLOW -> {
-                        logger.debug { "Command allowed by rule: ${ruleResult.matchedRule?.description}, command='$command'" }
-                        // Continue to execution
-                    }
-                    RuleAction.ASK -> {
-                        // ASK is handled at TurnToolExecutor level (PermissionLevel.ASK).
-                        // At tool level, we allow execution — the approval already happened.
-                        logger.debug { "Command ASK rule (pre-approved): ${ruleResult.matchedRule?.description}, command='$command'" }
-                    }
+            // Check command rules (regex-based ALLOW/BLOCK/ASK)
+            val ruleResult = commandRuleMatcher.match(command)
+            when (ruleResult.action) {
+                RuleAction.BLOCK -> {
+                    val desc = ruleResult.matchedRule?.description ?: "blocked by security policy"
+                    logger.warn { "Blocked command by rule: reason='$desc', command='$command'" }
+                    return@withContext ToolResult.error("Command blocked: $desc")
                 }
-            } else {
-                // Fallback: legacy whitelist
-                val validation = whitelist.validate(command)
-                if (!validation.allowed) {
-                    logger.warn { "Blocked command by whitelist: reason='${validation.reason}', command='$command'" }
-                    return@withContext ToolResult.error(
-                        "Command not allowed: ${validation.reason ?: "blocked"}"
-                    )
+                RuleAction.ALLOW -> {
+                    logger.debug { "Command allowed by rule: ${ruleResult.matchedRule?.description}, command='$command'" }
                 }
-
-                if (validation.requiresConfirmation) {
-                    logger.warn { "Command requires user confirmation: $command" }
-                    return@withContext ToolResult.error(
-                        "Command requires user confirmation: $command"
-                    )
+                RuleAction.ASK -> {
+                    // ASK is handled at TurnToolExecutor level (PermissionLevel.ASK).
+                    // At tool level, we allow execution — the approval already happened.
+                    logger.debug { "Command ASK rule (pre-approved): ${ruleResult.matchedRule?.description}, command='$command'" }
                 }
             }
 

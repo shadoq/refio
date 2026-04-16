@@ -39,6 +39,16 @@ interface Tool {
         get() = ToolOrigin.BUILTIN
 
     /**
+     * One-line hint used to build the dynamic tool-selection matrix in system prompts.
+     * Acts as a "row" in the When-to-use-what table: a short phrase describing when to
+     * pick this tool over alternatives. Null means the tool is omitted from the matrix.
+     *
+     * Keep it under ~140 chars. Example: "Small new files (configs, stubs). For >50 lines prefer advance_code_editing."
+     */
+    val selectionHint: String?
+        get() = null
+
+    /**
      * Execute the tool with given parameters.
      *
      * @param params Tool-specific parameters as key-value map

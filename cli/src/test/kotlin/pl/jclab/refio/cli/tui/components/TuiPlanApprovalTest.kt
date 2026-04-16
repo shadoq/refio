@@ -17,21 +17,16 @@ class TuiPlanApprovalTest {
     private val handler = TuiInputHandler(terminal)
     private val viewModel = mockk<TuiViewModel>(relaxed = true)
 
-    private val plan = TuiPlan(
-        taskId = "task1",
-        steps = listOf(
-            TuiSubtask(id = "s1", name = "Read project", status = "NEW", toolName = "read_file"),
-            TuiSubtask(id = "s2", name = "Edit code", status = "NEW", toolName = "code_editing")
-        ),
-        totalReadSteps = 1,
-        totalWriteSteps = 1
+    private val planSteps = listOf(
+        subtaskFixture(id = "s1", description = "Read project", status = "NEW", kind = "read_file"),
+        subtaskFixture(id = "s2", description = "Edit code", status = "NEW", kind = "code_editing"),
     )
 
     @BeforeEach
     fun setup() {
         every { viewModel.stateFlow } returns mockk {
             every { value } returns TuiState(
-                pendingPlanApproval = TuiPlanApproval(taskId = "task1", plan = plan)
+                pendingPlanApproval = TuiPlanApproval(taskId = "task1", steps = planSteps)
             )
         }
     }
@@ -70,7 +65,7 @@ class TuiPlanApprovalTest {
     @Test
     fun `renderToBuffer should show plan approval overlay`() {
         val state = TuiState(
-            pendingPlanApproval = TuiPlanApproval(taskId = "task1", plan = plan)
+            pendingPlanApproval = TuiPlanApproval(taskId = "task1", steps = planSteps)
         )
         val buf = TuiStepsView.renderToBuffer(state, 80, 20)
         val lines = buf.getLines().joinToString("\n")

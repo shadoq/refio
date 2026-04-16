@@ -10,8 +10,8 @@ import org.junit.jupiter.api.Assertions.*
 class TuiViewModelSessionTest {
 
     @Test
-    fun `TuiSessionEntry should have default pinned false`() {
-        val session = TuiSessionEntry(
+    fun `TaskResponse fixture should have default pinned false`() {
+        val session = taskResponseFixture(
             id = "s1", name = "Test", mode = "CHAT", status = "SUCCESS",
             tokensIn = 100, tokensOut = 50, costUsd = 0.01,
             createdAt = 1000L, updatedAt = 2000L
@@ -40,10 +40,10 @@ class TuiViewModelSessionTest {
     @Test
     fun `session filtering by mode should work`() {
         val sessions = listOf(
-            TuiSessionEntry("id1", "S1", "CHAT", "SUCCESS", 0, 0, 0.0, 0, 0),
-            TuiSessionEntry("id2", "S2", "AGENT", "SUCCESS", 0, 0, 0.0, 0, 0),
-            TuiSessionEntry("id3", "S3", "CHAT", "SUCCESS", 0, 0, 0.0, 0, 0),
-            TuiSessionEntry("id4", "S4", "PLAN", "SUCCESS", 0, 0, 0.0, 0, 0)
+            taskResponseFixture(id = "id1", name = "S1", mode = "CHAT"),
+            taskResponseFixture(id = "id2", name = "S2", mode = "AGENT"),
+            taskResponseFixture(id = "id3", name = "S3", mode = "CHAT"),
+            taskResponseFixture(id = "id4", name = "S4", mode = "PLAN"),
         )
         val chatOnly = sessions.filter { it.mode == "CHAT" }
         assertEquals(2, chatOnly.size)
@@ -55,9 +55,9 @@ class TuiViewModelSessionTest {
     @Test
     fun `session sorting by updatedAt should work`() {
         val sessions = listOf(
-            TuiSessionEntry("id1", "Old", "CHAT", "SUCCESS", 0, 0, 0.0, 0, 1000L),
-            TuiSessionEntry("id2", "New", "CHAT", "SUCCESS", 0, 0, 0.0, 0, 3000L),
-            TuiSessionEntry("id3", "Mid", "CHAT", "SUCCESS", 0, 0, 0.0, 0, 2000L)
+            taskResponseFixture(id = "id1", name = "Old", updatedAt = 1000L),
+            taskResponseFixture(id = "id2", name = "New", updatedAt = 3000L),
+            taskResponseFixture(id = "id3", name = "Mid", updatedAt = 2000L),
         )
         val sorted = sessions.sortedByDescending { it.updatedAt }
         assertEquals("New", sorted[0].name)

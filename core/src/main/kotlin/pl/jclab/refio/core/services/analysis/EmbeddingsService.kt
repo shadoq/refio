@@ -1,5 +1,7 @@
 package pl.jclab.refio.core.services.analysis
 
+import pl.jclab.refio.core.config.ConfigKeys
+
 import com.github.benmanes.caffeine.cache.Cache
 import com.github.benmanes.caffeine.cache.Caffeine
 import pl.jclab.refio.core.services.ConfigService
@@ -18,7 +20,7 @@ class EmbeddingsService(
 ) {
 
     companion object {
-        private const val DEFAULT_CACHE_SIZE = ConfigService.DEFAULT_RAG_EMBEDDING_CACHE_SIZE
+        private val DEFAULT_CACHE_SIZE = ConfigKeys.RAG_EMBEDDING_CACHE_SIZE.default
     }
 
     private val logger = dualLogger("EmbeddingsService")

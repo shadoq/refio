@@ -17,9 +17,9 @@ class TuiStepsViewInteractiveTest {
     private val viewModel = mockk<TuiViewModel>(relaxed = true)
 
     private val sampleSubtasks = listOf(
-        TuiSubtask(id = "s1", name = "Read files", status = "COMPLETED", tokensIn = 100, tokensOut = 50, costUsd = 0.001),
-        TuiSubtask(id = "s2", name = "Edit code", status = "PENDING"),
-        TuiSubtask(id = "s3", name = "Verify", status = "NEW")
+        subtaskFixture(id = "s1", description = "Read files", status = "COMPLETED", tokensIn = 100, tokensOut = 50, costUsd = 0.001),
+        subtaskFixture(id = "s2", description = "Edit code", status = "PENDING"),
+        subtaskFixture(id = "s3", description = "Verify", status = "NEW"),
     )
 
     @BeforeEach

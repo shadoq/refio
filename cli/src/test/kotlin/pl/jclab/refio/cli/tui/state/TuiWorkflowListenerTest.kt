@@ -13,7 +13,6 @@ class TuiWorkflowListenerTest {
 
     private val messagesState = MutableStateFlow<List<TuiChatMessage>>(emptyList())
     private val streamingState = MutableStateFlow(false)
-    private val stepsState = MutableStateFlow<List<TuiStep>>(emptyList())
     private val scope = CoroutineScope(Dispatchers.Unconfined)
 
     private val listener = TuiWorkflowListener(
@@ -22,7 +21,6 @@ class TuiWorkflowListenerTest {
         agentColorIndex = 0,
         messagesState = messagesState,
         streamingState = streamingState,
-        stepsState = stepsState,
         scope = scope
     )
 

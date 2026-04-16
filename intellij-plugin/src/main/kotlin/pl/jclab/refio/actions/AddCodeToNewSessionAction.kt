@@ -10,7 +10,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import pl.jclab.refio.api.models.CodeSnippet
 import pl.jclab.refio.api.models.TaskMode
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.ui.components.chat.PromptInputPanel
 import pl.jclab.refio.ui.toolwindow.RefioMainPanel

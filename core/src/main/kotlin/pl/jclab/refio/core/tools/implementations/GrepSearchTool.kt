@@ -40,6 +40,9 @@ class GrepSearchTool(
     override val description = "Search file contents by regex pattern."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
+    override val selectionHint =
+        "Search file contents by exact string or regex. Use for identifiers and known literals; " +
+        "prefer rag_search for conceptual queries without good keywords."
 
     override fun validateParams(params: Map<String, Any>) {
         val pattern = params["pattern"] as? String

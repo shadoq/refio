@@ -51,7 +51,6 @@ class ChatService(
     private val toolDescriptionBuilder: ToolDescriptionBuilder,
     private val contextService: ContextService? = null,
     private val projectRoot: java.nio.file.Path? = null,
-    private val ideProject: Any? = null
 ) {
     private val fallbackProjectId: String =
         projectRoot?.let { ProjectIdGenerator.generate(it) } ?: LEGACY_PROJECT_ID
@@ -171,7 +170,6 @@ class ChatService(
                 val projectContext = contextService.buildProjectContext(
                     projectRoot = projectRoot,
                     taskId = task.id,
-                    project = ideProject,
                     query = request.input,
                     userContextRefs = allContextRefs  // Use combined refs (history + current request)
                 )
@@ -225,8 +223,8 @@ class ChatService(
 
         // Read UI state from config table (single source of truth)
         // UI state is global plugin state, not task-specific (saved by SessionManager)
-        val thinkingEnabled = configService.get(ConfigService.KEY_UI_THINKING_ENABLED)?.toBoolean() ?: false
-        val noEgressEnabled = configService.get(ConfigService.KEY_UI_NO_EGRESS_ENABLED)?.toBoolean() ?: false
+        val thinkingEnabled = configService.get(ConfigKeys.UI_THINKING_ENABLED.key)?.toBoolean() ?: false
+        val noEgressEnabled = configService.get(ConfigKeys.UI_NO_EGRESS_ENABLED.key)?.toBoolean() ?: false
 
         // Call LLM
         // Context is passed separately via contextContent parameter to ensure proper message order:

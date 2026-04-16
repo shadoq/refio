@@ -1,6 +1,6 @@
 package pl.jclab.refio.services.session
 
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.ui.components.toolbar.StatusBar
 
 class StatusBarIntegration {

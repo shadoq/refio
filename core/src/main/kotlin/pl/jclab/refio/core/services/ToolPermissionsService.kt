@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.services
 
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.db.repositories.ConfigRepository
@@ -59,7 +60,7 @@ class ToolPermissionsService(
 ) {
 
     companion object {
-        const val CONFIG_KEY = ConfigService.KEY_TOOLS_PERMISSIONS
+        val CONFIG_KEY = ConfigKeys.TOOLS_PERMISSIONS.key
 
         /**
          * Override'y dla narzędzi, których defaulty odbiegają od reguły

@@ -173,13 +173,16 @@ class OpenAIAdapter(
                     true -> "medium"
                 }
                 is String -> {
-                    // Validate string value
                     when (thinking.lowercase()) {
                         "low", "medium", "high" -> thinking.lowercase()
-                        else -> "medium" // default to medium for invalid values
+                        else -> throw IllegalArgumentException(
+                            "OpenAI reasoning effort must be one of [low, medium, high], got: '$thinking'"
+                        )
                     }
                 }
-                else -> "medium" // default fallback
+                else -> throw IllegalArgumentException(
+                    "OpenAI reasoning 'thinking' must be Boolean or String, got: ${thinking.javaClass.simpleName}"
+                )
             }
 
             transformed["reasoning"] = mapOf("effort" to effort)
@@ -264,30 +267,20 @@ class OpenAIAdapter(
         }
 
         if (content.isBlank()) {
-            // FALLBACK: If no output text found, check top-level "text" field
-            logger.warn { "[OPENAI] No content in output, checking top-level 'text' field" }
-
-            val topLevelText = response["text"]
-            logger.info { "[OPENAI] Top-level text field type: ${topLevelText?.javaClass?.simpleName}" }
-
-            content = when (topLevelText) {
-                is String -> {
-                    logger.info { "[OPENAI] Using top-level text string, length: ${topLevelText.length}" }
-                    topLevelText
-                }
-
-                is Map<*, *> -> {
-                    val textMap = topLevelText
-                    val textContent = textMap["content"]?.toString() ?: textMap["text"]?.toString() ?: ""
-                    logger.info { "[OPENAI] Using text from map, length: ${textContent.length}" }
-                    textContent
-                }
-
-                else -> {
-                    logger.error { "[OPENAI] Cannot extract content - no output text and no text field" }
-                    ""
-                }
+            // No silent fallback — let caller see the malformed structure. (Previously
+            // probed top-level "text" field; that path hid bugs in Responses API
+            // integration. See REFACTOR.md §1.)
+            val preview = try {
+                gson.toJson(response).take(500)
+            } catch (_: Exception) {
+                response.keys.joinToString(prefix = "[keys: ", postfix = "]")
             }
+            throw RefioError.MalformedResponse(
+                provider = provider,
+                model = model,
+                reason = "Responses API returned no content in 'output[*]' and no readable message item",
+                bodyPreview = preview
+            )
         }
 
         val role = messageItem?.get("role") as? String ?: "assistant"
@@ -345,33 +338,10 @@ class OpenAIAdapter(
 
     private val ownsHttpClient = httpClientOverride == null
 
-    private val client = httpClientOverride ?: HttpClient(CIO) {
-        install(ContentNegotiation) {
-            gson {
-                setPrettyPrinting()
-                serializeNulls()
-            }
-        }
-        install(Logging) {
-            level = LogLevel.INFO
-            logger = object : KtorLogger {
-                override fun log(message: String) {
-                    this@OpenAIAdapter.logger.debug { message }
-                }
-            }
-            sanitizeHeader { header ->
-                header.equals(HttpHeaders.Authorization, ignoreCase = true) ||
-                    header.equals("x-api-key", ignoreCase = true) ||
-                    header.equals("x-goog-api-key", ignoreCase = true)
-            }
-        }
-        install(HttpTimeout) {
-            val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
-                ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
-            requestTimeoutMillis = timeoutMs
-            connectTimeoutMillis = 30000
-            socketTimeoutMillis = timeoutMs
-        }
+    private val client = httpClientOverride ?: run {
+        val socketTimeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+            ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
+        LLMKtorClientFactory.create(socketTimeoutMs, logger)
     }
 
     override suspend fun chat(
@@ -437,7 +407,7 @@ class OpenAIAdapter(
         try {
             // Get API key from ConfigService (single source of truth)
             val apiKeyToUse = configService?.get(
-                key = pl.jclab.refio.core.services.ConfigService.KEY_PROVIDER_OPENAI_API_KEY,
+                key = ConfigKeys.PROVIDER_OPENAI_API_KEY.key,
                 scope = pl.jclab.refio.core.db.ConfigScope.APP
             )
                 ?: System.getProperty("OPENAI_API_KEY")
@@ -480,25 +450,19 @@ class OpenAIAdapter(
             baseParams["stream"] = true
         }
 
-        // Use min of provided maxTokens and configured limit
         val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)
             ?: ConfigKeys.MAX_OUTPUT_SIZE.default
-        val requestedMax = when {
-            maxTokens != null && maxTokens > 0 -> minOf(maxTokens, maxOutputLimit)
-            else -> maxOutputLimit
-        }
-        val modelLimit = definition?.maxOutputTokens
-        val effectiveMaxTokens = if (modelLimit != null && modelLimit > 0 && requestedMax > modelLimit) {
-            logger.warn {
-                "[OPENAI] Requested max_tokens=$requestedMax exceeds model limit ($modelLimit) for $model - clamping to safe value"
-            }
-            modelLimit
-        } else {
-            requestedMax
-        }
+        val effectiveMaxTokens = OpenAICompatibleHelpers.resolveEffectiveMaxTokens(
+            requested = maxTokens,
+            configLimit = maxOutputLimit,
+            modelLimit = definition?.maxOutputTokens,
+            providerTag = "OPENAI",
+            model = model,
+            log = { logger.warn(it) }
+        )
         baseParams["max_tokens"] = effectiveMaxTokens
         logger.debug {
-            "[OPENAI] Using maxTokens=$effectiveMaxTokens (requested=$maxTokens, configLimit=$maxOutputLimit, modelLimit=${modelLimit ?: "n/a"})"
+            "[OPENAI] Using maxTokens=$effectiveMaxTokens (requested=$maxTokens, configLimit=$maxOutputLimit, modelLimit=${definition?.maxOutputTokens ?: "n/a"})"
         }
 
         // Handle response_format for JSON mode
@@ -531,11 +495,7 @@ class OpenAIAdapter(
             }
         }
 
-        // Additional parameters from kwargs
-        (kwargs["top_p"] as? Number)?.let { baseParams["top_p"] = it }
-        (kwargs["frequency_penalty"] as? Number)?.let { baseParams["frequency_penalty"] = it }
-        (kwargs["presence_penalty"] as? Number)?.let { baseParams["presence_penalty"] = it }
-        kwargs["stop"]?.let { baseParams["stop"] = it }
+        with(OpenAICompatibleHelpers) { baseParams.addCommonKwargs(kwargs) }
 
         // Apply format transformation if needed
         val transformedParams = if (definition?.apiFormat == pl.jclab.refio.core.llm.ApiFormat.RESPONSES) {
@@ -1362,7 +1322,7 @@ class OpenAIAdapter(
         try {
             // Get API key from ConfigService (single source of truth)
             val apiKeyToUse = configService?.get(
-                key = pl.jclab.refio.core.services.ConfigService.KEY_PROVIDER_OPENAI_API_KEY,
+                key = ConfigKeys.PROVIDER_OPENAI_API_KEY.key,
                 scope = pl.jclab.refio.core.db.ConfigScope.APP
             )
                 ?: System.getProperty("OPENAI_API_KEY")
@@ -1397,16 +1357,17 @@ class OpenAIAdapter(
                     return@mapNotNull null
                 }
 
-                // Get static definition from ModelDefinitions or create fallback
+                // Get static definition from ModelDefinitions or synthesize for unknown models.
                 val definition = pl.jclab.refio.core.llm.ModelDefinitions.getDefinition("openai", modelId)
                     ?: run {
-                        // Extract context length from API response if available
                         @Suppress("UNCHECKED_CAST")
                         val contextLength = (modelData["context_length"] as? Number)?.toInt() ?: DEFAULT_CONTEXT_SIZE
 
-                        logger.debug { "[OPENAI] Model $modelId not in registry, using fallback (context=$contextLength)" }
+                        logger.warn {
+                            "[OPENAI] Model $modelId not in registry — using synthetic definition (context=$contextLength)"
+                        }
 
-                        pl.jclab.refio.core.llm.ModelDefinitions.createFallback(
+                        pl.jclab.refio.core.llm.ModelDefinitions.syntheticDefinitionFor(
                             provider = "openai",
                             modelId = modelId,
                             maxContext = contextLength

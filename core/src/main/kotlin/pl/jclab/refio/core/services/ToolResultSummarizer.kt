@@ -127,6 +127,24 @@ class ToolResultSummarizer(
             )
         }
 
+        // Skip eager summarization for read_file outputs under 512KB.
+        // These are deferred to RECENT_WORK budget-driven compression which
+        // can make better decisions about how much to keep based on available
+        // context window. See design spec: 2026-04-12-agent-execution-reliability.
+        if (toolName == "read_file" && rawOutput.length < 524_288) {
+            logger.info {
+                "[SUMMARIZER_SKIP] read_file output (${rawOutput.length} chars) below " +
+                    "lazy-compression threshold (512KB), deferring to RECENT_WORK budget."
+            }
+            return ToolResultSummary(
+                summary = rawOutput,
+                wasSummarized = false,
+                tokensIn = 0,
+                tokensOut = 0,
+                cost = 0.0
+            )
+        }
+
         // Higher skip threshold for RAW_OUTPUT (run_code, run_terminal_command, http_request).
         // These tool outputs typically contain literal data the model needs to read
         // verbatim (IDs, counts, error bodies, HTTP status codes, response JSON). Below
@@ -205,11 +223,11 @@ class ToolResultSummarizer(
         // Higher limits reduce finishReason=length failures with weaker/larger models
         // that tend to be verbose (e.g. qwen3.5, glm-5).
         val maxTokens = when (contextType) {
-            SummaryContextType.CODE_ANALYSIS -> 4096   // Keep more details for code
-            SummaryContextType.DATA_FILE -> 3072       // Preserve structure + samples
-            SummaryContextType.RAW_OUTPUT -> 4096      // Preserve numbers/IDs/errors verbatim
-            SummaryContextType.SEARCH_RESULT -> 2048   // Medium for search
-            SummaryContextType.GENERAL -> 1536         // Standard for others
+            SummaryContextType.CODE_ANALYSIS -> 8192   // Keep more details for code
+            SummaryContextType.DATA_FILE -> 4096       // Preserve structure + samples
+            SummaryContextType.RAW_OUTPUT -> 8192      // Preserve numbers/IDs/errors verbatim
+            SummaryContextType.SEARCH_RESULT -> 4096   // Medium for search
+            SummaryContextType.GENERAL -> 4096         // Standard for others
         }
 
         // Explicitly pass thinking=false to ensure all output goes to content.
@@ -554,7 +572,7 @@ Guidelines:
          * it could possibly save. Acts as a lower bound on TOOL_SUMMARY_MIN_LENGTH —
          * raising the config above this is fine, lowering it below has no effect.
          */
-        const val GLOBAL_MIN_SKIP_THRESHOLD = 1_024
+        const val GLOBAL_MIN_SKIP_THRESHOLD = 2048
 
         /**
          * Below this size, RAW_OUTPUT (run_code / run_terminal_command / http_request)
@@ -564,7 +582,7 @@ Guidelines:
          * HTTP status codes, error payloads) have the same characteristics and are
          * routed through the same path. Not configurable on purpose.
          */
-        const val RAW_OUTPUT_SKIP_THRESHOLD = 4_096
+        const val RAW_OUTPUT_SKIP_THRESHOLD = 8192
 
         /**
          * Below this size, DATA_FILE (read_file on .md/.json/.csv etc.) is NEVER
@@ -572,13 +590,13 @@ Guidelines:
          * data files — it paraphrases numbers, drops samples, and wastes 20-35s per
          * call on local models. Matches RAW_OUTPUT_SKIP_THRESHOLD.
          */
-        const val DATA_FILE_SKIP_THRESHOLD = 4_096
+        const val DATA_FILE_SKIP_THRESHOLD = 8192
 
         /** Trailing bytes of stdout copied verbatim into the head of a deterministic RAW_OUTPUT summary. */
-        const val RAW_OUTPUT_TAIL_BYTES = 1_500
+        const val RAW_OUTPUT_TAIL_BYTES = 4096
 
         /** Leading bytes of stdout copied verbatim after the tail block in a deterministic RAW_OUTPUT summary. */
-        const val RAW_OUTPUT_HEAD_BYTES = 600
+        const val RAW_OUTPUT_HEAD_BYTES = 4096
 
         /**
          * Total characters of raw output sent to the summarizer LLM. When the output
@@ -587,7 +605,7 @@ Guidelines:
          * — exit codes, API response bodies, stack traces — always survives the
          * compression step regardless of what the WEAK summarizer model decides.
          */
-        const val SUMMARIZER_INPUT_BUDGET = 16_394
+        const val SUMMARIZER_INPUT_BUDGET = 16394
 
         /**
          * File extensions treated as DATA_FILE rather than CODE_ANALYSIS.

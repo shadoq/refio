@@ -1,7 +1,6 @@
 package pl.jclab.refio.core.services.context
 
 import pl.jclab.refio.core.config.ConfigKeys
-import pl.jclab.refio.core.models.context.CodeFragmentDTO
 import pl.jclab.refio.core.models.context.ExecutedStepDTO
 import pl.jclab.refio.core.models.context.ProjectContextDTO
 import pl.jclab.refio.core.services.ConfigService
@@ -10,7 +9,6 @@ import java.nio.file.Path
 
 private val logger = dualLogger("ContextFormatter")
 
-private const val MAX_RAG_FRAGMENTS = 15
 private const val CONVERSATION_SUMMARY_METADATA_TYPE = ConversationContextBuilder.CONVERSATION_SUMMARY_METADATA_TYPE
 
 // RECENT_WORK limits
@@ -203,64 +201,6 @@ class ContextFormatter(
         }
 
         parts.add("</USER_REQUIREMENTS>")
-        return parts.joinToString("\n")
-    }
-
-    /**
-     * Build RAG fragments section with metadata.
-     */
-    fun buildRagFragmentsSection(context: ProjectContextDTO): String {
-        val parts = mutableListOf<String>()
-        parts.add("<RAG_FRAGMENTS>")
-
-        context.ragFragments.take(MAX_RAG_FRAGMENTS).forEach { fragment ->
-            // Enrich fragment with metadata
-            val metadata = enrichFragmentWithMetadata(fragment)
-
-            parts.add("")
-
-            // Build fragment header with metadata
-            val attrs = buildList {
-                add("file=\"${fragment.filePath}\"")
-
-                if (fragment.startLine != null && fragment.endLine != null) {
-                    add("lines=\"${fragment.startLine}-${fragment.endLine}\"")
-                }
-
-                metadata["language"]?.let { add("lang=\"$it\"") }
-                metadata["fileSize"]?.let { add("size=\"$it\"") }
-                add("similarity=\"${String.format("%.2f", fragment.similarity)}\"")
-                metadata["complexity"]?.let { add("complexity=\"$it\"") }
-            }.joinToString(" ")
-
-            parts.add("<fragment $attrs>")
-
-            // Content with language hint
-            val lang = metadata["language"] as? String ?: ""
-            val langHint = when (lang.lowercase()) {
-                "kotlin" -> "kotlin"
-                "java" -> "java"
-                "python" -> "python"
-                "javascript", "typescript" -> "javascript"
-                "html" -> "html"
-                "css" -> "css"
-                "json" -> "json"
-                "yaml" -> "yaml"
-                else -> ""
-            }
-
-            if (langHint.isNotEmpty()) {
-                parts.add("```$langHint")
-            } else {
-                parts.add("```")
-            }
-
-            parts.add(fragment.content.trim())
-            parts.add("```")
-            parts.add("</fragment>")
-        }
-
-        parts.add("</RAG_FRAGMENTS>")
         return parts.joinToString("\n")
     }
 
@@ -872,42 +812,6 @@ class ContextFormatter(
 
         parts.add("</CSS_ANALYSIS>")
         return parts.joinToString("\n")
-    }
-
-    /**
-     * Enrich code fragment with metadata (language, file size, complexity).
-     */
-    fun enrichFragmentWithMetadata(fragment: CodeFragmentDTO): Map<String, Any> {
-        val metadata = mutableMapOf<String, Any>()
-
-        // File size and line count
-        try {
-            val path = Path.of(fragment.filePath)
-            if (java.nio.file.Files.exists(path)) {
-                val size = java.nio.file.Files.size(path)
-                metadata["fileSize"] = when {
-                    size < 1024 -> "${size}B"
-                    size < 1024 * 1024 -> "${size / 1024}KB"
-                    else -> "${size / (1024 * 1024)}MB"
-                }
-
-                val lines = java.nio.file.Files.readAllLines(path).size
-                metadata["lineCount"] = lines
-
-                val modified = java.nio.file.Files.getLastModifiedTime(path).toInstant()
-                metadata["lastModified"] = modified.toString().take(10)
-            }
-        } catch (e: Exception) {
-            // Ignore file metadata errors
-        }
-
-        // Language detection
-        metadata["language"] = detectLanguage(fragment.filePath)
-
-        // Complexity estimation
-        metadata["complexity"] = estimateComplexity(fragment.content)
-
-        return metadata
     }
 
     // ===========================

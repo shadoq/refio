@@ -157,7 +157,6 @@ $stickyRequirements
                 val turnResult = contextService.buildAgentTurnMessages(
                     taskId = taskId,
                     projectRoot = projectRoot,
-                    project = null,
                     userContextRefs = allContextRefs,
                     query = lastUserMessage
                 )
@@ -385,9 +384,14 @@ $filteredContextPrompt
             logger.error { "[PLAN_PROMPT] Tool descriptions are EMPTY! This will cause LLM to return error." }
         }
 
+        val toolSelectionMatrix = toolDescriptionBuilder.getToolSelectionMatrix(mode, taskId)
+
         return promptsService.getSystemPrompt(
             type = PromptType.SYSTEM_PLAN,
-            variables = mapOf("tool_descriptions" to toolDescriptions)
+            variables = mapOf(
+                "tool_descriptions" to toolDescriptions,
+                "tool_selection_matrix" to toolSelectionMatrix
+            )
         )
     }
 
@@ -421,9 +425,14 @@ $filteredContextPrompt
 
         val iterationInfo = buildIterationInfo(currentIteration, maxIterations, writeToolsExecutedInTurn)
 
+        val toolSelectionMatrix = toolDescriptionBuilder.getToolSelectionMatrix(mode, taskId)
+
         val basePrompt = promptsService.getSystemPrompt(
             type = PromptType.SYSTEM_AGENT,
-            variables = mapOf("tool_descriptions" to toolDescriptions)
+            variables = mapOf(
+                "tool_descriptions" to toolDescriptions,
+                "tool_selection_matrix" to toolSelectionMatrix
+            )
         )
 
         return if (iterationInfo.isNotEmpty()) {
@@ -615,12 +624,6 @@ ${warning}
             // Remove file tree sections
             result = result.replace(Regex("<file_tree>.*?</file_tree>", RegexOption.DOT_MATCHES_ALL), "")
             result = result.replace(Regex("<project_structure>.*?</project_structure>", RegexOption.DOT_MATCHES_ALL), "")
-        }
-
-        if (!profile.includeRag) {
-            // Remove RAG fragment sections
-            result = result.replace(Regex("<rag_fragments>.*?</rag_fragments>", RegexOption.DOT_MATCHES_ALL), "")
-            result = result.replace(Regex("<rag_context>.*?</rag_context>", RegexOption.DOT_MATCHES_ALL), "")
         }
 
         if (!profile.includeDependencies) {

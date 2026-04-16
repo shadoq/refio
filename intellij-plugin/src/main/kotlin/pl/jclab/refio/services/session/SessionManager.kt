@@ -2,31 +2,28 @@ package pl.jclab.refio.services.session
 
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
-import io.ktor.util.reflect.*
+import pl.jclab.refio.core.session.SessionStateManager
+import pl.jclab.refio.core.session.MessageDispatcher
+import pl.jclab.refio.core.session.SubtaskTracker
+import pl.jclab.refio.core.session.SessionLifecycleService
+import pl.jclab.refio.core.session.ExecutionMonitor
+import pl.jclab.refio.core.session.PromptStateTracker
 import pl.jclab.refio.api.models.*
+import pl.jclab.refio.core.api.SubtaskResponse
 import pl.jclab.refio.core.api.UIAdapter
 import pl.jclab.refio.core.utils.ProjectIdGenerator
 import pl.jclab.refio.services.core.CoreConnectionManager
 import pl.jclab.refio.services.execution.StepExecutionService
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 import pl.jclab.refio.ui.components.toolbar.StatusBar
-import pl.jclab.refio.core.workflow.models.IntentResult
-import pl.jclab.refio.core.workflow.models.UIState
-import pl.jclab.refio.core.workflow.models.WorkflowRequest
-import pl.jclab.refio.ui.listeners.SwingWorkflowListener
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import pl.jclab.refio.core.db.MessageRole
-import pl.jclab.refio.core.db.repositories.ChatMessageRepository
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicReference
 import java.util.UUID
-import kotlin.reflect.typeOf
 
 @Service(Service.Level.PROJECT)
 class SessionManager(private val project: Project) {
@@ -67,15 +64,10 @@ class SessionManager(private val project: Project) {
     private val cs = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
 
     private val stateManager = SessionStateManager()
-    private val chatMessageRepository = ChatMessageRepository()
-
-    // PHASE 2 FIX: Track tool call message IDs for real-time streaming updates
-    // Maps toolCallId -> temporary message ID in stateManager
-    private val toolCallMessageIds = ConcurrentHashMap<String, String>()
     val activeSession: StateFlow<Session?> = stateManager.activeSession
     val sessions: StateFlow<List<Session>> = stateManager.sessions
     val messages: StateFlow<List<Message>> = stateManager.messages
-    val subtasks: StateFlow<List<SubtaskDto>> = stateManager.subtasks
+    val subtasks: StateFlow<List<SubtaskResponse>> = stateManager.subtasks
     val activePlan: StateFlow<pl.jclab.refio.core.api.PlanResponse?> = stateManager.activePlan
     val planSteps: StateFlow<List<pl.jclab.refio.core.api.PlanSpecStepResponse>> = stateManager.planSteps
     val selectedModel: StateFlow<String> = stateManager.selectedModel
@@ -142,6 +134,7 @@ class SessionManager(private val project: Project) {
     private lateinit var subtaskTracker: SubtaskTracker
     private lateinit var executionMonitor: ExecutionMonitor
     private lateinit var promptStateTracker: PromptStateTracker
+    private lateinit var coreSessionService: pl.jclab.refio.core.session.CoreSessionService
 
     // Selected mode (persisted in config, used for creating default session)
     private val modeSwitchMutex = Mutex()
@@ -174,10 +167,6 @@ class SessionManager(private val project: Project) {
         val projectRoot = java.nio.file.Paths.get(projectBasePath)
         logger.info { "SessionManager: Initializing project-specific router with projectRoot=$projectRoot (absolute=${projectRoot.toAbsolutePath()})" }
         coreManager.getOrCreateProjectRouter(projectRoot, project)
-    }
-
-    private val coreApiClient: pl.jclab.refio.api.CoreApiClient by lazy {
-        pl.jclab.refio.api.CoreApiClient(projectRouter)
     }
 
     private val configService: pl.jclab.refio.core.services.ConfigService
@@ -240,7 +229,6 @@ class SessionManager(private val project: Project) {
 
     private fun initializeServices() {
         executionMonitor = ExecutionMonitor(
-            project = project,
             projectRouter = projectRouter,
             stateManager = stateManager,
             stepExecutionService = stepExecutionService,
@@ -251,10 +239,9 @@ class SessionManager(private val project: Project) {
         )
 
         subtaskTracker = SubtaskTracker(
-            project = project,
             projectRouter = projectRouter,
-            coreApiClient = coreApiClient,
             stateManager = stateManager,
+            vfsRefresher = pl.jclab.refio.services.project.IntelliJVfsRefresher(project),
             loadMessages = { messageDispatcher.loadMessages() },
             executeCurrentStep = { subtaskId -> executionMonitor.executeCurrentStep(subtaskId) },
             showApprovalMessageForNextSubtask = { executionMonitor.showApprovalMessageForNextSubtask() }
@@ -268,9 +255,7 @@ class SessionManager(private val project: Project) {
         promptStateTracker = PromptStateTracker(stateManager)
 
         lifecycleService = SessionLifecycleService(
-            project = project,
             projectRouter = projectRouter,
-            coreApiClient = coreApiClient,
             configService = configService,
             stateManager = stateManager,
             modeSwitchMutex = modeSwitchMutex,
@@ -281,6 +266,16 @@ class SessionManager(private val project: Project) {
 
         lifecycleService.initialize(messageDispatcher, subtaskTracker, executionMonitor)
 
+        coreSessionService = pl.jclab.refio.core.session.CoreSessionService(
+            projectRouter = projectRouter,
+            stateManager = stateManager,
+            subtaskTracker = subtaskTracker,
+            messageDispatcher = messageDispatcher,
+            lifecycleService = lifecycleService,
+            uiAdapter = uiAdapter,
+            scope = cs,
+            modeSwitchMutex = modeSwitchMutex,
+        )
     }
 
     // ========================================================================
@@ -348,20 +343,7 @@ class SessionManager(private val project: Project) {
         contextRefs: List<ContextReference> = emptyList(),
         model: String? = null,
         provider: String? = null
-    ): Message {
-        GlobalMetrics.resetCancellation()
-
-        val currentSession = modeSwitchMutex.withLock {
-            lifecycleService.ensureActiveSessionExists()
-        }
-
-        logger.info {
-            "[SESSION] sendMessage: taskId=${currentSession.id}, mode=${currentSession.mode}, " +
-                    "executionMode=${currentSession.executionMode}, inputChars=${input.length}, " +
-                    "contextRefs=${contextRefs.size}, model=${model ?: "auto"}, provider=${provider ?: "auto"}"
-        }
-        return sendMessageUsingWorkflow(currentSession, input, contextRefs, model, provider)
-    }
+    ): Message = coreSessionService.sendMessage(input, contextRefs, model, provider)
 
     /**
      * Rewind conversation to the given message (inclusive), delete all related execution/planning data,
@@ -392,7 +374,7 @@ class SessionManager(private val project: Project) {
         // 2) Clear related execution data (subtasks/logs/snapshots)
         projectRouter.subtaskRouter.deleteAllSubtasks(session.id)
         projectRouter.apiLogsRouter.deleteApiLogsByTaskId(session.id)
-        projectRouter.deleteSnapshotsByTaskId(session.id)
+        projectRouter.snapshotRouter.deleteSnapshotsByTaskId(session.id)
 
         // 3) Clear planning state if in PLAN mode (plans are tied to session)
         if (session.mode == TaskMode.PLAN) {
@@ -704,847 +686,6 @@ class SessionManager(private val project: Project) {
         subtaskTracker.executeSubtaskById(subtaskId)
     }
 
-    private suspend fun sendMessageUsingWorkflow(
-        session: Session,
-        input: String,
-        contextRefs: List<ContextReference>,
-        model: String?,
-        provider: String?
-    ): Message {
-        stateManager.setIsGenerating(true)
-        return try {
-            val stream = isStreamingEnabled()
-            val executionMode = session.executionMode
-            logger.info {
-                "[SESSION] Workflow start: taskId=${session.id}, mode=${session.mode}, " +
-                        "executionMode=$executionMode, stream=$stream"
-            }
-
-            val userMessage = Message(
-                id = UUID.randomUUID().toString(),
-                taskId = session.id,
-                role = "user",
-                content = input,
-                createdAt = System.currentTimeMillis()
-            )
-            stateManager.appendMessage(userMessage)
-
-            // Use AgentTurnLoop for PLAN/AGENT modes instead of WorkflowOrchestrator
-            when (session.mode) {
-                TaskMode.CHAT -> {
-                    sendMessageUsingChatWorkflow(session, input, contextRefs, model, provider, stream, executionMode)
-                }
-
-                TaskMode.PLAN,
-                TaskMode.AGENT -> {
-                    sendMessageUsingTurnLoop(session, input, contextRefs, model, provider, stream, executionMode)
-                }
-            }
-        } catch (e: Exception) {
-            logger.error(e) { "[SESSION] Workflow failed: taskId=${session.id}, error=${e.message}" }
-            uiAdapter.showError("Workflow failed: ${e.message}")
-            val errorMessage = Message(
-                id = UUID.randomUUID().toString(),
-                taskId = session.id,
-                role = "system",
-                content = "Error: ${e.message}",
-                createdAt = System.currentTimeMillis()
-            )
-            stateManager.appendMessage(errorMessage)
-            throw e
-        } finally {
-            stateManager.setIsGenerating(false)
-        }
-    }
-
-    /**
-     * Send message using new AgentTurnLoop for PLAN/AGENT modes.
-     * Implements Codex CLI-style turn loop where model self-directs tool usage.
-     */
-    private suspend fun sendMessageUsingTurnLoop(
-        session: Session,
-        input: String,
-        contextRefs: List<ContextReference>,
-        model: String?,
-        provider: String?,
-        stream: Boolean,
-        executionMode: pl.jclab.refio.api.models.ExecutionMode
-    ): Message {
-        logger.info {
-            "[TURN_LOOP] Starting turn: taskId=${session.id}, mode=${session.mode}, " +
-                    "inputChars=${input.length}, contextRefs=${contextRefs.size}"
-        }
-
-        GlobalMetrics.setCurrentOperation(
-            OperationInfo.ChatRequest(model ?: "auto")
-        )
-
-        try {
-            // Create streaming message for UI updates
-            var streamingMessageId: String? = null
-            val streamingClosed = AtomicBoolean(false)
-            val pendingStreamContent = AtomicReference<String?>(null)
-            val streamStateMutex = Mutex()
-            var streamUiFlushJob: Job? = null
-            val streamFilter = IncrementalToolCallStreamFilter()
-
-            // Create stream callback for UI updates
-            // Filter TOOL_CALL blocks from streaming content for cleaner display
-            val streamCallback: pl.jclab.refio.core.api.StreamCallback? = if (stream) { chunk ->
-                cs.launch {
-                    if (streamingClosed.get()) return@launch
-
-                    streamStateMutex.withLock {
-                        val now = System.currentTimeMillis()
-                        val filteredContent = streamFilter.filter(
-                            delta = chunk.delta,
-                            accumulated = chunk.accumulated,
-                            isComplete = chunk.isComplete
-                        )
-
-                        if (filteredContent.isNotBlank()) {
-                            if (streamingMessageId == null) {
-                                streamingMessageId = UUID.randomUUID().toString()
-                                stateManager.appendMessage(
-                                    Message(
-                                        id = streamingMessageId!!,
-                                        taskId = session.id,
-                                        role = "assistant",
-                                        content = "",
-                                        isStreaming = true,
-                                        streamStartedAt = now,
-                                        createdAt = now
-                                    )
-                                )
-                            }
-                            pendingStreamContent.set(filteredContent)
-                        }
-
-                        if (chunk.isComplete) {
-                            val completedId = streamingMessageId
-                            val finalContent = pendingStreamContent.getAndSet(null)
-                            if (completedId != null) {
-                                stateManager.updateMessages { messages ->
-                                    messages.map { msg ->
-                                        if (msg.id == completedId) {
-                                            msg.copy(
-                                                content = finalContent ?: msg.content,
-                                                lastChunkAt = now,
-                                                isStreaming = false
-                                            )
-                                        } else msg
-                                    }
-                                }
-                            }
-                            streamingMessageId = null
-                            streamUiFlushJob?.cancel()
-                            streamUiFlushJob = null
-                            return@withLock
-                        }
-
-                        if (streamUiFlushJob?.isActive != true) {
-                            streamUiFlushJob = cs.launch {
-                                while (!streamingClosed.get()) {
-                                    val contentToFlush = streamStateMutex.withLock {
-                                        pendingStreamContent.getAndSet(null)
-                                    }
-
-                                    if (!contentToFlush.isNullOrBlank()) {
-                                        val activeMessageId = streamingMessageId
-                                        if (activeMessageId != null) {
-                                            stateManager.updateMessages { messages ->
-                                                messages.map { msg ->
-                                                    if (msg.id == activeMessageId) {
-                                                        msg.copy(
-                                                            content = contentToFlush,
-                                                            lastChunkAt = System.currentTimeMillis(),
-                                                            isStreaming = true
-                                                        )
-                                                    } else msg
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    delay(500)
-                                }
-                            }
-                        }
-                    }
-                }
-            } else null
-
-            // Create turn event listener for UI updates
-            val turnListener = object : pl.jclab.refio.core.services.AgentTurnLoop.TurnEventListener {
-                override fun onTurnStarted(
-                    taskId: String,
-                    mode: pl.jclab.refio.core.db.TaskMode,
-                    runId: String,
-                    parentRunId: String?,
-                    depth: Int
-                ) {
-                    logger.info {
-                        "[TURN_LOOP] Turn started: taskId=$taskId, mode=$mode, runId=$runId, " +
-                            "parentRunId=${parentRunId ?: "-"}, depth=$depth"
-                    }
-                }
-
-                override fun onToolExecutionStarted(taskId: String, toolCall: pl.jclab.refio.core.db.ToolCallData) {
-                    logger.info { "[TURN_LOOP] Tool started: ${toolCall.name}" }
-                    cs.launch {
-                        subtaskTracker.loadSubtasks()
-
-                        // PHASE 2 FIX: Create temporary message for real-time UI updates
-                        // This message will be replaced by loadMessages() at turn end with the DB version
-                        val toolInfo = ToolCallDisplayInfo(
-                            toolName = toolCall.name,
-                            toolCallId = toolCall.id,
-                            displayType = resolveToolDisplayType(toolCall.name),
-                            parameters = parseToolParameters(toolCall.arguments),
-                            status = ToolCallStatus.EXECUTING
-                        )
-
-                        val tempMessage = Message(
-                            id = "temp-${toolCall.id}", // Temporary ID - will be replaced by DB version
-                            taskId = taskId,
-                            role = "assistant",
-                            content = "",
-                            toolCallInfo = toolInfo,
-                            createdAt = System.currentTimeMillis()
-                        )
-
-                        stateManager.appendMessage(tempMessage)
-                        toolCallMessageIds[toolCall.id] = tempMessage.id
-                        logger.debug { "[TURN_LOOP] Created temp message for tool ${toolCall.name}: tempId=${tempMessage.id}" }
-                    }
-                }
-
-                override fun onToolStreamChunk(
-                    taskId: String,
-                    toolCallId: String,
-                    delta: String,
-                    accumulated: String
-                ) {
-                    // PHASE 2 FIX: Update temporary message with streaming content
-                    val messageId = toolCallMessageIds[toolCallId]
-                    if (messageId == null) {
-                        logger.warn { "[TURN_LOOP] Tool stream chunk for unknown tool call: $toolCallId" }
-                        return
-                    }
-
-                    cs.launch {
-                        stateManager.updateMessages { messages ->
-                            messages.map { msg ->
-                                if (msg.id == messageId) {
-                                    msg.copy(
-                                        content = accumulated,
-                                        isStreaming = true,
-                                        isToolStreaming = true,
-                                        lastChunkAt = System.currentTimeMillis()
-                                    )
-                                } else msg
-                            }
-                        }
-                    }
-                }
-
-                override fun onToolExecutionCompleted(
-                    taskId: String,
-                    toolCall: pl.jclab.refio.core.db.ToolCallData,
-                    result: String,
-                    success: Boolean
-                ) {
-                    logger.info { "[TURN_LOOP] Tool completed: ${toolCall.name}, success=$success" }
-                    cs.launch {
-                        subtaskTracker.loadSubtasks()
-
-                        // PHASE 2 FIX: Update temporary message status and result
-                        val messageId = toolCallMessageIds[toolCall.id]
-                        if (messageId != null) {
-                            val resultSummary = if (result.isNotBlank()) {
-                                val trimmed = result.trim()
-                                if (trimmed.length <= 120) trimmed
-                                else "${trimmed.take(120)}..."
-                            } else null
-                            stateManager.updateMessages { messages ->
-                                messages.map { msg ->
-                                    if (msg.id == messageId) {
-                                        val updatedToolInfo = msg.toolCallInfo?.copy(
-                                            status = if (success) ToolCallStatus.COMPLETED else ToolCallStatus.FAILED,
-                                            result = if (resultSummary != null) ToolCallResult(
-                                                success = success,
-                                                summary = resultSummary
-                                            ) else null
-                                        )
-                                        msg.copy(
-                                            toolCallInfo = updatedToolInfo,
-                                            isStreaming = false,
-                                            isToolStreaming = false,
-                                            lastChunkAt = System.currentTimeMillis()
-                                        )
-                                    } else msg
-                                }
-                            }
-                            // Remove from tracking map
-                            toolCallMessageIds.remove(toolCall.id)
-                            logger.debug { "[TURN_LOOP] Finalized temp message for tool ${toolCall.name}: tempId=$messageId" }
-                        }
-
-                        // NOTE: AgentTurnLoop creates TOOL message with result in DB
-                        // MessageDispatcher.loadMessages() at turn end will replace temp messages with DB versions
-                    }
-                }
-
-                override fun onStreamChunk(taskId: String, delta: String, accumulated: String) {
-                    // Handled by streamCallback
-                }
-
-                override fun onTurnCompleted(
-                    taskId: String,
-                    result: pl.jclab.refio.core.services.TurnResult,
-                    runId: String,
-                    parentRunId: String?,
-                    depth: Int
-                ) {
-                    logger.info {
-                        "[TURN_LOOP] Turn completed: taskId=$taskId, success=${result.success}, " +
-                                "iterations=${result.iterations}, runId=$runId, " +
-                                "parentRunId=${parentRunId ?: "-"}, depth=$depth"
-                    }
-                }
-            }
-
-            val modeDb = pl.jclab.refio.core.db.TaskMode.valueOf(session.mode.name)
-            val executionModeDb = pl.jclab.refio.core.db.ExecutionMode.valueOf(executionMode.name)
-            val defaultTurnRequest = pl.jclab.refio.core.api.TurnRequest(
-                taskId = session.id,
-                userInput = input,
-                mode = modeDb,
-                executionMode = executionModeDb,
-                model = model,
-                provider = provider,
-                userContextRefs = contextRefs
-            )
-
-            val subagentRouter = projectRouter.subagentRouter
-            val subagentCommand = subagentRouter?.parseSubagentCommand(input)
-            val subagentInvocation = subagentRouter?.parseSubagentInvocation(input)
-
-            if (subagentCommand != null && subagentInvocation == null) {
-                val (requestedName, _) = subagentCommand
-                val allSubagents = subagentRouter.listSubagents(includeDisabled = true)
-                val matched = allSubagents.firstOrNull { it.name.equals(requestedName, ignoreCase = true) }
-                val enabledSubagentNames = allSubagents
-                    .filter { it.enabled }
-                    .map { it.name }
-                    .sorted()
-
-                val errorContent = when {
-                    matched == null -> buildString {
-                        append("Subagent '")
-                        append(requestedName)
-                        append("' not found.")
-                        if (enabledSubagentNames.isNotEmpty()) {
-                            append(" Available subagents: ")
-                            append(enabledSubagentNames.joinToString(", "))
-                            append(".")
-                        }
-                    }
-                    !matched.enabled -> "Subagent '${matched.name}' is disabled. Enable it in Settings > Subagents."
-                    else -> "Subagent '$requestedName' is not available."
-                }
-
-                logger.warn {
-                    "[TURN_LOOP] Invalid subagent invocation: name=$requestedName, reason='${errorContent.replace('\n', ' ')}'"
-                }
-
-                val assistantMessage = Message(
-                    id = UUID.randomUUID().toString(),
-                    taskId = session.id,
-                    role = "assistant",
-                    content = errorContent,
-                    createdAt = System.currentTimeMillis()
-                )
-                stateManager.appendMessage(assistantMessage)
-                return assistantMessage
-            }
-
-            val turnRequest = if (subagentInvocation != null) {
-                val (subagentName, subagentPrompt) = subagentInvocation
-                val definition = subagentRouter.getSubagent(subagentName)
-
-                if (definition != null) {
-                    val parentModel = if (model != null && provider != null) "$provider/$model" else model
-                    val (resolvedModel, resolvedProvider) = definition.resolveModel(configService, parentModel)
-
-                    logger.info {
-                        "[TURN_LOOP] subagentDetected=true, subagentName=$subagentName, " +
-                            "runProfile=SUBAGENT, model=$resolvedModel, provider=$resolvedProvider"
-                    }
-
-                    pl.jclab.refio.core.api.TurnRequest(
-                        taskId = session.id,
-                        userInput = subagentPrompt,
-                        mode = modeDb,
-                        executionMode = executionModeDb,
-                        model = resolvedModel,
-                        provider = resolvedProvider,
-                        userContextRefs = contextRefs,
-                        runProfile = pl.jclab.refio.core.api.TurnRunProfile.SUBAGENT,
-                        profileOverrides = pl.jclab.refio.core.api.TurnProfileOverrides(
-                            subagentName = subagentName,
-                            systemPromptOverride = definition.systemPrompt,
-                            allowedTools = definition.allowedTools,
-                            disallowedTools = definition.disallowedTools,
-                            modelOverride = resolvedModel,
-                            providerOverride = resolvedProvider,
-                            maxIterationsOverride = definition.maxSteps,
-                            depth = 0,
-                            subagentChain = emptyList(),
-                            contextProfile = definition.contextProfile,
-                            reasoningEffort = definition.reasoningEffort
-                        )
-                    )
-                } else {
-                    logger.warn {
-                        "[TURN_LOOP] subagentDetected=true but definition not found: name=$subagentName, falling back"
-                    }
-                    defaultTurnRequest
-                }
-            } else {
-                defaultTurnRequest
-            }
-
-            // Execute turn using AgentTurnLoop
-            val result = projectRouter.agentRouter.runTurn(
-                request = turnRequest,
-                streamCallback = streamCallback,
-                listener = turnListener
-            )
-
-            logger.info {
-                "[TURN_LOOP] Turn complete: taskId=${session.id}, success=${result.success}, " +
-                        "iterations=${result.iterations}, responseChars=${result.response.length}"
-            }
-
-            streamingClosed.set(true)
-            streamUiFlushJob?.cancel()
-            val completedStreamingMessageId = streamingMessageId
-            streamingMessageId = null
-            if (completedStreamingMessageId != null) {
-                stateManager.updateMessages { messages ->
-                    messages.filterNot { it.id == completedStreamingMessageId }
-                }
-            }
-
-            // Reload messages from database (includes all tool calls and results)
-            messageDispatcher.loadMessages()
-
-            // PHASE 2 FIX: Clear temporary message IDs after DB reload
-            toolCallMessageIds.clear()
-            logger.debug { "[TURN_LOOP] Cleared tool call message tracking map after DB reload" }
-
-            // Update session costs
-            val freshTask = pl.jclab.refio.core.db.repositories.TaskRepository().findById(session.id)
-            if (freshTask != null) {
-                val updatedSession = session.copy(
-                    tokensIn = freshTask.tokensIn,
-                    tokensOut = freshTask.tokensOut,
-                    costUsd = freshTask.costUsd
-                )
-                updateSession(updatedSession)
-            }
-
-            // Auto-name session if needed
-            if (isDefaultSessionName(session.name) && stateManager.messages.value.size >= 2) {
-                scheduleAutoNameSession(session, input)
-            }
-
-        return stateManager.messages.value.last()
-        } finally {
-            GlobalMetrics.setCurrentOperation(OperationInfo.Idle)
-            logger.info { "[TURN_LOOP] Operation state reset to Idle" }
-        }
-    }
-
-    /**
-     * Send message using existing WorkflowOrchestrator for CHAT mode.
-     * CHAT mode has no tools - direct LLM conversation.
-     */
-    private suspend fun sendMessageUsingChatWorkflow(
-        session: Session,
-        input: String,
-        contextRefs: List<ContextReference>,
-        model: String?,
-        provider: String?,
-        stream: Boolean,
-        executionMode: pl.jclab.refio.api.models.ExecutionMode
-    ): Message {
-        logger.info {
-            "[CHAT_WORKFLOW] Starting chat: taskId=${session.id}, inputChars=${input.length}"
-        }
-
-        val uiState = UIState(
-            taskId = session.id,
-            mode = session.mode,
-            executionMode = executionMode,
-            input = input,
-            contextRefs = contextRefs,
-            model = model,
-            provider = provider,
-            streamingEnabled = stream,
-            thinkingEnabled = stateManager.getThinkingEnabled(),
-            noEgressEnabled = stateManager.getNoEgressEnabled()
-        )
-
-        val listener = SwingWorkflowListener(
-            taskId = session.id,
-            stateManager = stateManager,
-            scope = cs,
-            streamingEnabled = stream
-        )
-
-        // Generate project analysis summary for intent classification (if enabled)
-        val projectAnalysis = try {
-            projectRouter.projectContextRouter.getProjectAnalysisSummary()
-        } catch (e: Exception) {
-            logger.warn(e) { "[SESSION] Failed to generate project analysis, using null" }
-            null
-        }
-
-        val result = projectRouter.workflowOrchestrator.execute(
-            request = WorkflowRequest(
-                uiState = uiState,
-                projectAnalysis = projectAnalysis
-            ),
-            listener = listener
-        )
-
-        logger.info { "[CHAT_WORKFLOW] Workflow result: taskId=${session.id}, type=${result::class.simpleName}" }
-
-        when (result) {
-            is IntentResult.ChatResult -> {
-                val response = result.response
-                logger.info {
-                    "[CHAT_WORKFLOW] Chat response: taskId=${response.taskId}, outputChars=${response.output.length}"
-                }
-                if (response.taskId != session.id) {
-                    logger.info { "[CHAT] Task ID changed: ${session.id} -> ${response.taskId}, syncing session" }
-                    uiAdapter.log("INFO", "Session ID changed: ${session.id} -> ${response.taskId}")
-                    val newSession = session.copy(id = response.taskId)
-                    stateManager.setActiveSession(newSession)
-                }
-                updateSessionCosts(stateManager.getActiveSession() ?: session)
-                autoNameSessionIfNeeded(stateManager.getActiveSession() ?: session, input)
-                messageDispatcher.loadMessages()
-            }
-
-            is IntentResult.SubagentResult -> {
-                logger.info { "[CHAT_WORKFLOW] Subagent response: taskId=${session.id}" }
-                messageDispatcher.loadMessages()
-            }
-
-            else -> {
-                logger.warn { "[CHAT_WORKFLOW] Unexpected result type in CHAT mode: ${result::class.simpleName}" }
-            }
-        }
-
-        return stateManager.messages.value.last()
-    }
-
-    private fun isStreamingEnabled(): Boolean {
-        return try {
-            val streamingConfig = projectRouter.configService.get(
-                key = pl.jclab.refio.core.services.ConfigService.KEY_STREAMING_ENABLED,
-                scope = pl.jclab.refio.core.db.ConfigScope.APP
-            )
-            streamingConfig?.toBoolean() ?: true
-        } catch (e: Exception) {
-            logger.warn(e) { "Failed to read streaming config, defaulting to true" }
-            true
-        }
-    }
-
-    private suspend fun updateSessionCosts(session: Session) {
-        val freshTask = pl.jclab.refio.core.db.repositories.TaskRepository().findById(session.id)
-
-        if (freshTask != null) {
-            updateSession(
-                session.copy(
-                    tokensIn = freshTask.tokensIn,
-                    tokensOut = freshTask.tokensOut,
-                    costUsd = freshTask.costUsd
-                )
-            )
-        }
-    }
-
-    private fun isDefaultSessionName(name: String): Boolean {
-        return name == "New Session" || name.matches(Regex("^Session \\(.+\\)$"))
-    }
-
-    private suspend fun autoNameSessionIfNeeded(session: Session, input: String) {
-        if (isDefaultSessionName(session.name) && stateManager.messages.value.size == 2) {
-            scheduleAutoNameSession(session, input)
-        }
-    }
-
-    private fun scheduleAutoNameSession(session: Session, input: String) {
-        if (!isDefaultSessionName(session.name)) return
-
-        cs.launch {
-            try {
-                val rawTitle = projectRouter.chatRouter.generateSessionTitle(session.id, input)
-                val generatedName = sanitizeSessionTitle(rawTitle)
-                    .ifBlank { generateSessionNameFallback(input) }
-
-                projectRouter.taskRouter.updateTask(session.id, pl.jclab.refio.core.api.UpdateTaskRequest(name = generatedName))
-                updateSession(
-                    stateManager.getActiveSession()?.copy(name = generatedName)
-                        ?: return@launch
-                )
-                logger.info { "Auto-named: '$generatedName'" }
-            } catch (e: Exception) {
-                val fallback = generateSessionNameFallback(input)
-                try {
-                    projectRouter.taskRouter.updateTask(session.id, pl.jclab.refio.core.api.UpdateTaskRequest(name = fallback))
-                    updateSession(
-                        stateManager.getActiveSession()?.copy(name = fallback)
-                            ?: return@launch
-                    )
-                    logger.info { "Auto-named with fallback: '$fallback'" }
-                } catch (inner: Exception) {
-                    logger.warn(inner) { "Auto-name failed" }
-                }
-            }
-        }
-    }
-
-    private fun sanitizeSessionTitle(raw: String): String {
-        return raw
-            .trim()
-            .trim('"', '\'', '“', '”')
-            .replace(Regex("[\\r\\n]+"), " ")
-            .replace(Regex("\\s+"), " ")
-            .replace(Regex("[.!?:;]+$"), "")
-            .take(60)
-    }
-
-    private fun generateSessionNameFallback(input: String): String {
-        val cleaned = input
-            .trim()
-            .replace(Regex("\\s+"), " ")
-            .replace(Regex("[\\r\\n]+"), " ")
-
-        val firstSentence = cleaned.split(Regex("[.!?]\\s+")).firstOrNull() ?: cleaned
-        val truncated = if (firstSentence.length > 50) {
-            firstSentence.substring(0, 47) + "..."
-        } else {
-            firstSentence
-        }
-
-        return truncated.ifBlank { "Chat" }
-    }
-    private fun resolveToolDisplayType(toolName: String): ToolDisplayType {
-        return when (toolName) {
-            "advance_code_editing", "multi_line_editor" -> ToolDisplayType.LLM_EDIT
-            "code_editing", "create_new_file", "multi_edit" -> ToolDisplayType.CODE_EDIT
-            "run_terminal_command" -> ToolDisplayType.TERMINAL
-            else -> ToolDisplayType.SIMPLE
-        }
-    }
-
-    private fun parseToolParameters(argumentsJson: String): Map<String, String> {
-        return try {
-            val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-            val args = json.parseToJsonElement(argumentsJson)
-            val argsObj = args as? kotlinx.serialization.json.JsonObject ?: return emptyMap()
-
-            argsObj.entries.associate { (key, value) ->
-                key to when (value) {
-                    is kotlinx.serialization.json.JsonPrimitive -> value.content
-                    else -> value.toString()
-                }
-            }
-        } catch (e: Exception) {
-            logger.warn(e) { "Failed to parse tool arguments" }
-            emptyMap()
-        }
-    }
-
-
-    /**
-     * Build display text for tool call bubble (assistant role).
-     * Shows what tool is being called with key parameters.
-     */
-    private fun buildToolCallDisplay(toolName: String, argumentsJson: String): String {
-        return try {
-            val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-            val args = json.parseToJsonElement(argumentsJson)
-            val argsObj = args as? kotlinx.serialization.json.JsonObject ?: return "📤 **$toolName**"
-
-            when (toolName) {
-                "advance_code_editing", "multi_line_editor" -> {
-                    val path = argsObj["path"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    } ?: "unknown"
-                    val description = argsObj["edit_description"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    }
-                    val shortDesc = description?.take(80)?.let { if (description.length > 80) "$it..." else it }
-                    buildString {
-                        append("📤 **$toolName**\n")
-                        append("```\npath: $path")
-                        if (shortDesc != null) {
-                            append("\nedit_description: $shortDesc")
-                        }
-                        append("\n```")
-                    }
-                }
-
-                "code_editing" -> {
-                    val path = argsObj["path"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    } ?: "unknown"
-                    val oldString = argsObj["old_string"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    }?.take(50)?.let { if (it.length >= 50) "$it..." else it }
-                    buildString {
-                        append("📤 **$toolName**\n")
-                        append("```\npath: $path")
-                        if (oldString != null) {
-                            append("\nold_string: $oldString")
-                        }
-                        append("\n```")
-                    }
-                }
-
-                "create_new_file" -> {
-                    val path = argsObj["path"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    } ?: "unknown"
-                    "📤 **$toolName**\n```\npath: $path\n```"
-                }
-
-                "read_file" -> {
-                    val path = argsObj["path"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    } ?: "unknown"
-                    "📤 **$toolName**\n```\npath: $path\n```"
-                }
-
-                "read_directory" -> {
-                    val path = argsObj["path"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    } ?: "."
-                    "📤 **$toolName**\n```\npath: $path\n```"
-                }
-
-                "file_search" -> {
-                    val pattern = argsObj["pattern"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    } ?: "*"
-                    "📤 **$toolName**\n```\npattern: $pattern\n```"
-                }
-
-                "grep_search" -> {
-                    val pattern = argsObj["pattern"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    } ?: ""
-                    val shortPattern = pattern.take(60).let { if (pattern.length > 60) "$it..." else it }
-                    "📤 **$toolName**\n```\npattern: $shortPattern\n```"
-                }
-
-                else -> "📤 **$toolName**"
-            }
-        } catch (e: Exception) {
-            logger.warn(e) { "[TURN_LOOP] Failed to parse tool arguments for display" }
-            "📤 **$toolName**"
-        }
-    }
-
-    /**
-     * Build a user-friendly summary for tool execution display.
-     * Parses tool arguments to extract meaningful info (path, description, etc.)
-     */
-    private fun buildToolExecutionSummary(toolName: String, argumentsJson: String): String {
-        return try {
-            val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-            val args = json.parseToJsonElement(argumentsJson)
-            val argsObj = args as? kotlinx.serialization.json.JsonObject ?: return "🔧 Executing: $toolName"
-
-            when (toolName) {
-                "advance_code_editing", "multi_line_editor" -> {
-                    val path = argsObj["path"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    } ?: "unknown"
-                    val description = argsObj["edit_description"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    }
-                    val shortPath = path.substringAfterLast("/").substringAfterLast("\\")
-                    val shortDesc = description?.take(100)?.let { if (description.length > 100) "$it..." else it }
-                    buildString {
-                        append("🔧 Executing: **$toolName**\n")
-                        append("📄 File: `$shortPath`\n")
-                        if (shortDesc != null) {
-                            append("📝 $shortDesc")
-                        }
-                    }
-                }
-
-                "code_editing" -> {
-                    val path = argsObj["path"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    } ?: "unknown"
-                    val shortPath = path.substringAfterLast("/").substringAfterLast("\\")
-                    "🔧 Executing: **$toolName**\n📄 File: `$shortPath`"
-                }
-
-                "create_new_file" -> {
-                    val path = argsObj["path"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    } ?: "unknown"
-                    val shortPath = path.substringAfterLast("/").substringAfterLast("\\")
-                    "🔧 Executing: **$toolName**\n📄 Creating: `$shortPath`"
-                }
-
-                "read_file" -> {
-                    val path = argsObj["path"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    } ?: "unknown"
-                    val shortPath = path.substringAfterLast("/").substringAfterLast("\\")
-                    "🔧 Executing: **$toolName**\n📄 Reading: `$shortPath`"
-                }
-
-                "read_directory" -> {
-                    val path = argsObj["path"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    } ?: "."
-                    "🔧 Executing: **$toolName**\n📁 Directory: `$path`"
-                }
-
-                "file_search" -> {
-                    val pattern = argsObj["pattern"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    } ?: "*"
-                    "🔧 Executing: **$toolName**\n🔍 Pattern: `$pattern`"
-                }
-
-                "grep_search" -> {
-                    val pattern = argsObj["pattern"]?.let {
-                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    } ?: ""
-                    val shortPattern = pattern.take(50).let { if (pattern.length > 50) "$it..." else it }
-                    "🔧 Executing: **$toolName**\n🔍 Pattern: `$shortPattern`"
-                }
-
-                else -> "🔧 Executing: **$toolName**"
-            }
-        } catch (e: Exception) {
-            logger.warn(e) { "[TURN_LOOP] Failed to parse tool arguments for summary" }
-            "🔧 Executing: $toolName"
-        }
-    }
 
     suspend fun cancelAllPendingSteps() {
         subtaskTracker.cancelAllPendingSteps()

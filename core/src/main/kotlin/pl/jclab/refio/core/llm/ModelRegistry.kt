@@ -7,7 +7,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import pl.jclab.refio.core.llm.adapters.AnthropicAdapter
-import pl.jclab.refio.core.llm.adapters.CustomOpenAIAdapter
+import pl.jclab.refio.core.llm.adapters.GenericOpenAIAdapter
 import pl.jclab.refio.core.llm.adapters.GeminiAdapter
 import pl.jclab.refio.core.llm.adapters.LMStudioAdapter
 import pl.jclab.refio.core.llm.adapters.OllamaAdapter
@@ -129,8 +129,14 @@ fun ModelDefinition.toModelConfig(): ModelConfig {
 private var modelsCache: Map<String, List<ModelConfig>>? = null
 private var cacheTimestamp: Long = 0L
 private const val CACHE_TTL_MS = 300_000L // 5 minutes
-private const val LIST_MODELS_TIMEOUT_MS = 15_000L // 15s per-provider timeout for listing models
+private const val LIST_MODELS_TIMEOUT_MS = 15_000L // 15s per-provider timeout for cloud providers
+private const val LIST_MODELS_TIMEOUT_LOCAL_MS = 3_000L // 3s for local providers (ollama, lmstudio)
 private val modelsCacheMutex = Mutex()
+
+private fun listModelsTimeoutFor(provider: String): Long = when (provider) {
+    "ollama", "lmstudio" -> LIST_MODELS_TIMEOUT_LOCAL_MS
+    else -> LIST_MODELS_TIMEOUT_MS
+}
 
 private fun getCachedModelsIfFresh(now: Long = System.currentTimeMillis()): List<ModelConfig>? {
     val cached = modelsCache ?: return null
@@ -180,18 +186,36 @@ fun inferProvider(model: String, default: String = "ollama"): String {
 }
 
 /**
+ * Returns the last cached model snapshot regardless of TTL freshness, or empty if
+ * nothing has ever been fetched. Never triggers remote calls. Use this for read-only
+ * UI listings that should not block on slow providers.
+ */
+fun getCachedModelsSnapshot(): List<ModelConfig> {
+    return modelsCache?.values?.flatten() ?: emptyList()
+}
+
+/**
  * Gets all models from all providers dynamically.
  * Results are cached for 5 minutes to avoid excessive API calls.
  *
  * @param configService Optional ConfigService for API keys (uses env vars as fallback)
+ * @param fetchIfMissing When false, returns the current cache (even if stale or empty)
+ *                      without performing any remote calls. UI screens that just want
+ *                      to display the last known state should pass false.
  * @return List of all available models from all providers
  */
 suspend fun getAllModels(
-    configService: pl.jclab.refio.core.services.ConfigService? = null
+    configService: pl.jclab.refio.core.services.ConfigService? = null,
+    fetchIfMissing: Boolean = true
 ): List<ModelConfig> {
     getCachedModelsIfFresh()?.let {
         GlobalMetrics.recordCacheAccess("model_registry", hit = true)
         return it
+    }
+
+    if (!fetchIfMissing) {
+        GlobalMetrics.recordCacheAccess("model_registry", hit = false)
+        return getCachedModelsSnapshot()
     }
 
     return modelsCacheMutex.withLock {
@@ -206,13 +230,13 @@ suspend fun getAllModels(
 
         data class ProviderFetch(val name: String, val models: List<ModelConfig>)
 
-        val providerNames = listOf("ollama", "openai", "anthropic", "openrouter", "gemini", "lmstudio", "custom_openai", "zai")
+        val providerNames = listOf("ollama", "openai", "anthropic", "openrouter", "gemini", "lmstudio", "generic_openai", "zai")
 
         val results = coroutineScope {
             providerNames.map { name ->
                 async {
                     try {
-                        val models = withTimeoutOrNull(LIST_MODELS_TIMEOUT_MS) {
+                        val models = withTimeoutOrNull(listModelsTimeoutFor(name)) {
                             when (name) {
                                 "ollama" -> OllamaAdapter(configService = configService).listModels()
                                 "openai" -> OpenAIAdapter(configService = configService).listModels()
@@ -220,9 +244,9 @@ suspend fun getAllModels(
                                 "openrouter" -> OpenRouterAdapter(configService = configService).listModels()
                                 "gemini" -> GeminiAdapter(configService = configService).listModels()
                                 "lmstudio" -> LMStudioAdapter(configService = configService).listModels()
-                                "custom_openai" -> CustomOpenAIAdapter(
+                                "generic_openai" -> GenericOpenAIAdapter(
                                     model = configService?.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_MODEL) ?: "custom-openai",
-                                    providerName = "custom_openai",
+                                    providerName = "generic_openai",
                                     configService = configService
                                 ).listModels()
                                 "zai" -> ZAIAdapter(
@@ -233,7 +257,7 @@ suspend fun getAllModels(
                             }
                         }
                         if (models == null) {
-                            logger.warn { "[ModelRegistry] Timeout fetching $name models (${LIST_MODELS_TIMEOUT_MS}ms)" }
+                            logger.warn { "[ModelRegistry] Timeout fetching $name models (${listModelsTimeoutFor(name)}ms)" }
                             ProviderFetch(name, emptyList())
                         } else {
                             logger.info { "[ModelRegistry] Fetched ${models.size} models from $name" }
@@ -271,13 +295,14 @@ suspend fun getModelsByProvider(
     // Check cache first
     val now = System.currentTimeMillis()
     if (modelsCache != null && (now - cacheTimestamp) < CACHE_TTL_MS) {
-        return modelsCache!![provider] ?: emptyList()
+        val cached = modelsCache!![provider]
+        if (cached != null) return cached
     }
 
     logger.info { "[ModelRegistry] Fetching models from provider: $provider" }
 
     return try {
-        val models = withTimeoutOrNull(LIST_MODELS_TIMEOUT_MS) {
+        val models = withTimeoutOrNull(listModelsTimeoutFor(provider.lowercase())) {
             when (provider.lowercase()) {
                 "ollama" -> {
                     val adapter = OllamaAdapter(
@@ -305,10 +330,10 @@ suspend fun getModelsByProvider(
                     val adapter = LMStudioAdapter(configService = configService)
                     adapter.listModels()
                 }
-                "custom_openai" -> {
-                    val adapter = CustomOpenAIAdapter(
+                "generic_openai" -> {
+                    val adapter = GenericOpenAIAdapter(
                         model = configService?.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_MODEL) ?: "custom-openai",
-                        providerName = "custom_openai",
+                        providerName = "generic_openai",
                         configService = configService
                     )
                     adapter.listModels()
@@ -326,12 +351,22 @@ suspend fun getModelsByProvider(
                 }
             }
         }
-        if (models == null) {
-            logger.warn { "[ModelRegistry] Timeout fetching $provider models (${LIST_MODELS_TIMEOUT_MS}ms)" }
+        val fetched = if (models == null) {
+            logger.warn { "[ModelRegistry] Timeout fetching $provider models (${listModelsTimeoutFor(provider.lowercase())}ms)" }
             emptyList()
         } else {
             models
         }
+
+        // Merge result into shared cache so subsequent cache-only reads
+        // (e.g. StatusBar via getModelConfigFromCache) see fresh data.
+        val existing = modelsCache ?: emptyMap()
+        modelsCache = existing + (provider to fetched)
+        if (cacheTimestamp == 0L) {
+            cacheTimestamp = System.currentTimeMillis()
+        }
+
+        fetched
     } catch (e: Exception) {
         logger.error(e) { "[ModelRegistry] Failed to fetch models from $provider: ${e.message}" }
         emptyList()

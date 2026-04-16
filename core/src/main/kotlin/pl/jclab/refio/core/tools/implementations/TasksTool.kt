@@ -27,6 +27,7 @@ Use plan BEFORE starting complex work to organize approach.
 The plan is visible to the orchestrating agent."""
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.SYSTEM
+    override val selectionHint = "Plan/update/list execution steps for the current task (4+ step work)."
 
     override fun getParameterSchema(): Map<String, Any> = mapOf(
         "type" to "object",

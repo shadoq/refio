@@ -41,7 +41,7 @@ class RagEmbeddingService(
     private val configService: ConfigService? = null
 ) {
     companion object {
-        private const val BATCH_SIZE = ConfigService.DEFAULT_RAG_EMBEDDING_BATCH_SIZE
+        private val BATCH_SIZE = ConfigKeys.RAG_EMBEDDINGS_BATCH_SIZE.default
         private const val PER_CHUNK_THROTTLE_MS = 200L
         private const val MIN_COOLDOWN_DELAY_MS = 1_000L
     }

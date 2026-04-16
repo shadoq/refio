@@ -9,7 +9,7 @@ private val logger = dualLogger("PromptsRouter")
 
 /**
  * Router for prompts management operations.
- * Handles system prompts, rules, and slash commands.
+ * Handles system prompts, rules, and slash prompts.
  *
  * @property promptsService Prompts management service
  */
@@ -118,48 +118,48 @@ class PromptsRouter(
         return PromptResponse(prompt = rule.toDto())
     }
 
-    // ===== Commands =====
+    // ===== Slash Prompts =====
 
     /**
-     * Get all enabled slash commands.
+     * Get all enabled slash prompts.
      */
-    fun getEnabledCommands(): PromptsListResponse {
-        logger.info { "[PromptsRouter] Getting enabled commands" }
-        val commands = promptsService.getEnabledCommands()
+    fun getEnabledSlashPrompts(): PromptsListResponse {
+        logger.info { "[PromptsRouter] Getting enabled slash prompts" }
+        val slashPrompts = promptsService.getEnabledSlashPrompts()
         return PromptsListResponse(
-            prompts = commands.map { it.toDto() },
-            count = commands.size
+            prompts = slashPrompts.map { it.toDto() },
+            count = slashPrompts.size
         )
     }
 
     /**
-     * Find slash command by name.
+     * Find slash prompt by name.
      */
-    fun findCommand(commandName: String): PromptResponse? {
-        logger.info { "[PromptsRouter] Finding command: $commandName" }
-        val command = promptsService.findCommand(commandName)
-        return command?.let { PromptResponse(prompt = it.toDto()) }
+    fun findSlashPrompt(name: String): PromptResponse? {
+        logger.info { "[PromptsRouter] Finding slash prompt: $name" }
+        val slashPrompt = promptsService.findSlashPrompt(name)
+        return slashPrompt?.let { PromptResponse(prompt = it.toDto()) }
     }
 
     /**
-     * Save (create or update) a slash command.
+     * Save (create or update) a slash prompt.
      */
-    fun saveCommand(request: SaveCommandRequest): PromptResponse {
-        logger.info { "[PromptsRouter] Saving command: id=${request.id}, name=${request.name}" }
-        val command = promptsService.saveCommand(
+    fun saveSlashPrompt(request: SaveSlashPromptRequest): PromptResponse {
+        logger.info { "[PromptsRouter] Saving slash prompt: id=${request.id}, name=${request.name}" }
+        val slashPrompt = promptsService.saveSlashPrompt(
             id = request.id,
             name = request.name,
             content = request.content,
             description = request.description,
             isEnabled = request.isEnabled
         )
-        return PromptResponse(prompt = command.toDto())
+        return PromptResponse(prompt = slashPrompt.toDto())
     }
 
     // ===== General Operations =====
 
     /**
-     * Delete rule or command by ID.
+     * Delete rule or slash prompt by ID.
      */
     fun deletePrompt(id: String): DeletePromptResponse {
         logger.info { "[PromptsRouter] Deleting prompt: id=$id" }

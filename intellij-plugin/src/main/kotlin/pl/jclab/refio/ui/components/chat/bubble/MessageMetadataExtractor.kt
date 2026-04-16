@@ -5,7 +5,7 @@ import pl.jclab.refio.api.models.ToolCallDisplayInfo
 import pl.jclab.refio.api.models.ToolCallStatus
 import pl.jclab.refio.api.models.ToolDisplayType
 import pl.jclab.refio.api.models.UserContextMetadata
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.ui.components.chat.CodeChangesData
 import pl.jclab.refio.ui.components.chat.ConversationSummaryMetadata
 import pl.jclab.refio.ui.components.chat.ExecutionSummaryFile

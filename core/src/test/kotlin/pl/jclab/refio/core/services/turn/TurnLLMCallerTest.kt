@@ -77,7 +77,7 @@ class TurnLLMCallerTest {
             caller.callLLM(
                 taskId = "task-1",
                 mode = TaskMode.AGENT,
-                prompt = LLMCallPrompt(
+                prompt = TurnPrompt(
                     systemPrompt = "system",
                     messages = listOf(LLMMessage(role = "user", content = "hello"))
                 )

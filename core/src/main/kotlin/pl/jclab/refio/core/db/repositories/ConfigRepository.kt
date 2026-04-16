@@ -9,10 +9,12 @@ import org.jetbrains.exposed.exceptions.ExposedSQLException
 import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
+import org.jetbrains.exposed.sql.transactions.TransactionManager
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
 import org.jetbrains.exposed.sql.and
 import pl.jclab.refio.core.db.Config
+import pl.jclab.refio.core.db.DatabaseFactory
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.db.ConfigTable
 import pl.jclab.refio.core.logging.dualLogger
@@ -60,6 +62,10 @@ class ConfigRepository {
     }
 
     fun get(key: String, scope: ConfigScope, projectId: String? = null, taskId: String? = null): Config? {
+        if (!canAccessConfigTable()) {
+            logger.debug { "Skipping config lookup before database init: key=$key, scope=$scope" }
+            return null
+        }
         return try {
             transaction {
                 validateScope(scope, projectId, taskId)
@@ -80,6 +86,10 @@ class ConfigRepository {
     }
 
     fun getWithPrecedence(key: String, taskId: String? = null, projectId: String? = null): Config? {
+        if (!canAccessConfigTable()) {
+            logger.debug { "Skipping precedence config lookup before database init: key=$key" }
+            return null
+        }
         return try {
             transaction {
                 logger.debug { "[ORCHESTRATION-DEBUG] getWithPrecedence: key=$key, taskId=$taskId, projectId=$projectId" }
@@ -115,6 +125,10 @@ class ConfigRepository {
     }
 
     fun findByScope(scope: ConfigScope, projectId: String? = null, taskId: String? = null): List<Config> {
+        if (!canAccessConfigTable()) {
+            logger.debug { "Skipping config scope lookup before database init: scope=$scope" }
+            return emptyList()
+        }
         return try {
             transaction {
                 validateScope(scope, projectId, taskId)
@@ -143,6 +157,10 @@ class ConfigRepository {
         projectId: String? = null,
         taskId: String? = null
     ): List<Config> {
+        if (!canAccessConfigTable()) {
+            logger.debug { "Skipping config search before database init: pattern=$keyPattern" }
+            return emptyList()
+        }
         return try {
             transaction {
                 val conditions = mutableListOf<Op<Boolean>>(ConfigTable.key like keyPattern)
@@ -197,6 +215,10 @@ class ConfigRepository {
     }
 
     fun count(scope: ConfigScope? = null, projectId: String? = null, taskId: String? = null): Long {
+        if (!canAccessConfigTable()) {
+            logger.debug { "Skipping config count before database init" }
+            return 0L
+        }
         return try {
             transaction {
                 val conditions = mutableListOf<Op<Boolean>>()
@@ -283,6 +305,21 @@ class ConfigRepository {
                 require(taskId == null) { "PROJECT scope cannot reference taskId" }
             }
             ConfigScope.TASK -> require(!taskId.isNullOrBlank()) { "TASK scope requires taskId" }
+        }
+    }
+
+    private fun canAccessConfigTable(): Boolean {
+        if (DatabaseFactory.isInitialized()) return true
+        if (TransactionManager.defaultDatabase == null) return false
+
+        return try {
+            transaction {
+                exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'config' LIMIT 1") { rs ->
+                    rs.next()
+                } ?: false
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 

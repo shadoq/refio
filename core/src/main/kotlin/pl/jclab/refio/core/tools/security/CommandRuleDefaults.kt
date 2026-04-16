@@ -1,8 +1,7 @@
 package pl.jclab.refio.core.tools.security
 
 /**
- * Default command rules converted from AllowedCommand model.
- * Uses regex-based matching instead of the complex 8-field AllowedCommand.
+ * Default command rules. Regex-based ALLOW/BLOCK/ASK matcher for terminal commands.
  */
 object CommandRuleDefaults {
 
@@ -44,40 +43,98 @@ object CommandRuleDefaults {
     )
 
     /**
-     * Build tools, package managers, and development utilities — always allowed.
+     * Build tools, package managers, VCS, and common dev utilities — always allowed.
+     *
+     * Format: list of (program name, description). Aliases handled as separate entries.
+     * Network/privilege-sensitive tools (docker, kubectl, ssh, scp, rsync, wget, sudo, su,
+     * systemctl, service) are intentionally absent here — they're covered by ASK_RULES.
      */
-    /** Programs managed by explicit ASK rules — exclude from auto-generated ALLOW rules */
-    private val ASK_MANAGED_PROGRAMS = setOf(
-        "docker", "kubectl", "ssh", "scp", "rsync", "wget", "sudo", "su",
-        "systemctl", "service"
+    private val ALLOW_PROGRAMS: List<Pair<String, String>> = listOf(
+        // Version control
+        "git" to "Git version control",
+        // Build tools — Gradle / Maven / Make
+        "gradle" to "Gradle build tool",
+        "gradlew" to "Gradle wrapper",
+        "gradlew.bat" to "Gradle wrapper (Windows)",
+        "./gradlew" to "Gradle wrapper (relative)",
+        "mvn" to "Maven build tool",
+        "mvnw" to "Maven wrapper",
+        "make" to "Make build tool",
+        "cmake" to "CMake build tool",
+        "ninja" to "Ninja build tool",
+        // Node / JS ecosystem
+        "node" to "Node.js runtime",
+        "npm" to "npm package manager",
+        "npx" to "npm package runner",
+        "yarn" to "Yarn package manager",
+        "pnpm" to "pnpm package manager",
+        "tsc" to "TypeScript compiler",
+        "deno" to "Deno runtime",
+        "bun" to "Bun runtime",
+        // Python
+        "python" to "Python interpreter",
+        "python3" to "Python 3 interpreter",
+        "pip" to "Python package manager",
+        "pip3" to "Python 3 package manager",
+        "pytest" to "Python test runner",
+        "poetry" to "Python dependency manager",
+        "uv" to "Python installer/resolver",
+        // JVM / Kotlin
+        "java" to "Java runtime",
+        "javac" to "Java compiler",
+        "kotlin" to "Kotlin runtime",
+        "kotlinc" to "Kotlin compiler",
+        // Other languages
+        "go" to "Go toolchain",
+        "cargo" to "Rust package manager",
+        "rustc" to "Rust compiler",
+        "ruby" to "Ruby interpreter",
+        "bundle" to "Ruby bundler",
+        "php" to "PHP interpreter",
+        "composer" to "PHP dependency manager",
+        "dotnet" to ".NET CLI",
+        // Read-only filesystem inspection
+        "ls" to "List directory",
+        "dir" to "List directory (Windows)",
+        "cat" to "Print file contents",
+        "type" to "Print file contents (Windows)",
+        "head" to "Print file head",
+        "tail" to "Print file tail",
+        "wc" to "Word count",
+        "find" to "Find files",
+        "grep" to "Text search",
+        "rg" to "Ripgrep search",
+        "fd" to "fd-find",
+        "pwd" to "Print working directory",
+        "cd" to "Change directory",
+        "tree" to "Print directory tree",
+        "stat" to "File metadata",
+        "file" to "File type detection",
+        // Read-only git helpers often typed explicitly
+        "gh" to "GitHub CLI (non-destructive ops via ASK for delete)",
+        "hg" to "Mercurial",
+        // Environment
+        "env" to "Print environment",
+        "which" to "Locate executable",
+        "where" to "Locate executable (Windows)"
     )
 
     val ALLOW_RULES: List<CommandRule> by lazy {
-        val rules = mutableListOf<CommandRule>()
+        val rules = ALLOW_PROGRAMS.map { (prog, desc) ->
+            CommandRule(
+                pattern = "^${Regex.escape(prog)}(\\s+.*)?$",
+                action = RuleAction.ALLOW,
+                description = desc
+            )
+        }.toMutableList()
 
-        // Convert all AllowedCommand entries (that don't require confirmation
-        // and aren't managed by explicit ASK rules) into ALLOW rules
-        for (cmd in CommandWhitelistDefaults.DEFAULT_COMMANDS) {
-            if (cmd.requireConfirmation) continue
-            if (cmd.program in ASK_MANAGED_PROGRAMS) continue
-
-            val programs = listOf(cmd.program) + cmd.aliases
-            for (prog in programs) {
-                val escapedProg = Regex.escape(prog)
-                rules.add(CommandRule(
-                    pattern = "^$escapedProg(\\s+.*)?$",
-                    action = RuleAction.ALLOW,
-                    description = cmd.description
-                ))
-            }
-        }
-
-        // Common utilities not in AllowedCommand but safe
+        // Primitive utilities
         rules.addAll(listOf(
             CommandRule("^echo(\\s+.*)?$", RuleAction.ALLOW, "Echo text"),
             CommandRule("^printf(\\s+.*)?$", RuleAction.ALLOW, "Print formatted"),
             CommandRule("^true$", RuleAction.ALLOW, "Always succeed"),
             CommandRule("^false$", RuleAction.ALLOW, "Always fail"),
+            CommandRule("^exit(\\s+\\d+)?$", RuleAction.ALLOW, "Exit with code")
         ))
 
         rules

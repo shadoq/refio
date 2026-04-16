@@ -30,7 +30,9 @@ class TurnFinalizer(
         parentRunId: String?,
         depth: Int,
         persistAssistantMessage: Boolean,
-        metadata: String? = null
+        metadata: String? = null,
+        agentName: String? = null,
+        agentDepth: Int? = null,
     ): TurnResult {
         if (persistAssistantMessage) {
             val content = result.response.ifBlank {
@@ -40,7 +42,9 @@ class TurnFinalizer(
                 taskId = taskId,
                 role = MessageRole.ASSISTANT,
                 content = content,
-                metadata = metadata
+                metadata = metadata,
+                agentName = agentName,
+                agentDepth = agentDepth,
             )
         }
 

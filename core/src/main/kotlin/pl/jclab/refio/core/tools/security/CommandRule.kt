@@ -1,11 +1,12 @@
 package pl.jclab.refio.core.tools.security
 
-import pl.jclab.refio.core.logging.dualLogger
-
-private val logger = dualLogger("CommandRuleMatcher")
-
 /**
- * Simple regex-based command rule. Replaces the complex AllowedCommand model.
+ * Simple regex-based command rule.
+ *
+ * Regex is compiled eagerly in the init block — an invalid pattern fails **at
+ * construction time**, not silently during matching. Callers loading rules from
+ * config must be prepared to catch [IllegalArgumentException] and refuse startup
+ * with a clear message (see `ConfigService`/`ToolPermissionsService`).
  *
  * @param pattern Regex matching the full command string
  * @param action What to do when command matches
@@ -15,7 +16,16 @@ data class CommandRule(
     val pattern: String,
     val action: RuleAction,
     val description: String = ""
-)
+) {
+    val compiledRegex: Regex = try {
+        Regex(pattern, RegexOption.IGNORE_CASE)
+    } catch (e: Exception) {
+        throw IllegalArgumentException(
+            "Invalid command rule regex '$pattern' (action=$action, description='$description'): ${e.message}",
+            e
+        )
+    }
+}
 
 enum class RuleAction {
     ALLOW,  // Auto-execute without asking
@@ -42,13 +52,8 @@ class CommandRuleMatcher(private val rules: List<CommandRule>) {
     )
 
     private val compiled: Map<RuleAction, List<CompiledRule>> by lazy {
-        rules.mapNotNull { rule ->
-            try {
-                CompiledRule(rule, Regex(rule.pattern, RegexOption.IGNORE_CASE))
-            } catch (e: Exception) {
-                logger.warn { "Invalid command rule regex: '${rule.pattern}' — ${e.message}" }
-                null
-            }
+        rules.map { rule ->
+            CompiledRule(rule, rule.compiledRegex)
         }.groupBy { it.rule.action }
     }
 

@@ -138,13 +138,13 @@ class LLMAdaptersTest {
     }
 
     @Nested
-    inner class CustomOpenAIAdapterTests {
+    inner class GenericOpenAIAdapterTests {
 
-        private lateinit var adapter: CustomOpenAIAdapter
+        private lateinit var adapter: GenericOpenAIAdapter
 
         @BeforeEach
         fun setup() {
-            adapter = CustomOpenAIAdapter(
+            adapter = GenericOpenAIAdapter(
                 model = "custom-model",
                 baseUrlOverride = "http://localhost:8080/v1"
             )
@@ -152,7 +152,7 @@ class LLMAdaptersTest {
 
         @Test
         fun `should have correct provider name`() {
-            assertEquals("custom_openai", adapter.provider)
+            assertEquals("generic_openai", adapter.provider)
         }
 
         @Test
@@ -165,7 +165,7 @@ class LLMAdaptersTest {
 
         @Test
         fun `should build detailed zai rate limit message`() {
-            val zaiAdapter = CustomOpenAIAdapter(
+            val zaiAdapter = GenericOpenAIAdapter(
                 model = "glm-4.5",
                 providerName = "zai",
                 baseUrlOverride = "https://api.z.ai/api/paas/v4"
@@ -227,7 +227,7 @@ class LLMAdaptersTest {
     fun `llm client should expose custom providers`() {
         val providers = LLMClient().getSupportedProviders()
 
-        kotlin.test.assertTrue("custom_openai" in providers)
+        kotlin.test.assertTrue("generic_openai" in providers)
         kotlin.test.assertTrue("zai" in providers)
     }
 

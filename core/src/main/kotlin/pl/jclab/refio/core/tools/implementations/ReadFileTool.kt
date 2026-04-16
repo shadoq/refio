@@ -42,15 +42,14 @@ class ReadFileTool(
 ) : Tool {
 
     override val name = "read_file"
-    override val description = "Read a text, image, or PDF file. " +
-        "DEFAULT BEHAVIOUR: reads the WHOLE file in one call (up to the 2 MB sandbox limit). " +
-        "DO NOT pass offset/limit for normal source files — you will fragment your view of the code " +
-        "and waste turns paginating. Only use offset/limit when: " +
-        "(a) the file is very large (thousands of lines, e.g. logs, generated code, big datasets), or " +
-        "(b) you genuinely need a single slice and reading the rest would be wasteful. " +
-        "For typical Kotlin/Java/TS/Python source files: call read_file with just `path` and read it all."
+    override val description = "Read a text, image, or PDF file. Reads the WHOLE file by default (2 MB limit). " +
+        "Use offset/limit only for very large files (logs, generated code). " +
+        "For normal source files: just pass `path`."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
+    override val selectionHint =
+        "Read a file. Whole-file by default; use offset/limit only for huge files (logs, generated code). " +
+        "Do NOT re-read a file you just wrote — the write tool result already contains the diff."
 
     override fun validateParams(params: Map<String, Any>) {
         if (params["path"] == null || (params["path"] as? String).isNullOrBlank()) {
@@ -210,6 +209,33 @@ class ReadFileTool(
                 }
             }
 
+            // Binary file detection — must come after image/PDF checks
+            if (isBinaryFile(path, mediaType)) {
+                val duration = (System.currentTimeMillis() - startTime).toInt()
+                val mimeDesc = mediaType ?: "unknown"
+                val output = buildString {
+                    append("Binary file: $pathStr\n")
+                    append("  Type: $mimeDesc\n")
+                    append("  Size: $fileSize bytes (${fileSize / 1024} KB)\n")
+                    append("  Extension: .$fileExtension\n\n")
+                    append("This file contains binary data and cannot be read as text.\n")
+                    append("To process it, use run_code (Python) to decode/analyze it programmatically.")
+                }
+                return ToolResult(
+                    success = true,
+                    output = output,
+                    bytesRead = 0,
+                    durationMs = duration,
+                    metadata = mapOf(
+                        "type" to "binary",
+                        "path" to pathStr,
+                        "media_type" to mimeDesc,
+                        "file_size" to fileSize,
+                        "extension" to fileExtension
+                    )
+                )
+            }
+
             // Read file contents
             val allLines = Files.readAllLines(path)
             val totalLineCount = allLines.size
@@ -346,15 +372,11 @@ class ReadFileTool(
                 ),
                 "offset" to mapOf(
                     "type" to "integer",
-                    "description" to "Start line (1-based). OPTIONAL — omit to read from line 1. " +
-                        "Only set this when you genuinely need a slice of a large file."
+                    "description" to "Start line (1-based). Omit to read from line 1."
                 ),
                 "limit" to mapOf(
                     "type" to "integer",
-                    "description" to "Max lines to read from offset. OPTIONAL — omit to read the WHOLE file. " +
-                        "Default behaviour reads everything (up to the 2 MB sandbox limit). " +
-                        "Only set this for very large files (thousands of lines) where you need a slice. " +
-                        "DO NOT pass small values like 50/100 on normal source files — read the whole file in one call instead."
+                    "description" to "Max lines to read. Omit to read entire file. Only for very large files."
                 ),
                 "page_start" to mapOf(
                     "type" to "integer",
@@ -381,5 +403,43 @@ class ReadFileTool(
 
     private fun isPdf(path: java.nio.file.Path, mediaType: String?): Boolean {
         return path.fileName.toString().endsWith(".pdf", ignoreCase = true) || mediaType == "application/pdf"
+    }
+
+    private val BINARY_MIME_PREFIXES = listOf(
+        "audio/", "video/", "application/octet-stream",
+        "application/zip", "application/gzip", "application/x-tar",
+        "application/x-7z", "application/x-rar",
+        "application/vnd.", "application/x-executable",
+        "model/", "font/"
+    )
+
+    private val BINARY_EXTENSIONS = setOf(
+        "exe", "dll", "so", "dylib", "o", "obj", "bin",
+        "zip", "tar", "gz", "bz2", "7z", "rar", "xz",
+        "mp3", "mp4", "avi", "mov", "wav", "flac", "ogg", "webm",
+        "woff", "woff2", "ttf", "eot",
+        "db", "sqlite", "sqlite3",
+        "class", "jar", "war", "ear",
+        "pyc", "pyo", "pyd",
+        "iso", "img", "dmg"
+    )
+
+    private fun isBinaryFile(path: java.nio.file.Path, mediaType: String?): Boolean {
+        // Layer 1: MIME type
+        if (mediaType != null && BINARY_MIME_PREFIXES.any { mediaType.startsWith(it) }) return true
+
+        // Layer 2: Extension
+        val ext = path.fileName.toString().substringAfterLast('.', "").lowercase()
+        if (ext in BINARY_EXTENSIONS) return true
+
+        // Layer 3: Null-byte heuristic (first 8KB)
+        return try {
+            Files.newInputStream(path).use { stream ->
+                val buf = ByteArray(8192)
+                val read = stream.read(buf)
+                if (read <= 0) return false
+                buf.copyOf(read).any { it == 0.toByte() }
+            }
+        } catch (_: Exception) { false }
     }
 }

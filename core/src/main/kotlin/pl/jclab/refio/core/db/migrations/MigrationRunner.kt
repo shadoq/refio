@@ -17,6 +17,7 @@ object MigrationRunner {
         // SeedTestDataMigration removed from production runtime (Phase 7 refactor).
         // Seed data was for UI development only. Existing databases retain v1 data.
         V2DropAgentEventsSessionFk(),
+        V3RenameSlashCommandToSlashPrompt(),
     )
 
     fun run(database: Database) {

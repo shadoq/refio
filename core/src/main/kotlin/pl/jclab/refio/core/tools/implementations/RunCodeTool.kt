@@ -43,6 +43,9 @@ class RunCodeTool(
     override val description = "Execute Python, JavaScript, or Kotlin script inline."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.DATA_PRODUCING
+    override val selectionHint =
+        "Sandboxed data processing/calculations/API calls (Python/JS/Kotlin). " +
+        "Prefer over run_terminal_command for cross-platform logic — no shell quoting issues."
 
     override fun validateParams(params: Map<String, Any>) {
         val language = params["language"] as? String

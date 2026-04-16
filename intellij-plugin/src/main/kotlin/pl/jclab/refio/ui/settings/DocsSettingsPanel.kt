@@ -12,7 +12,7 @@ import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.core.db.DocIndexingStatus
 import pl.jclab.refio.core.db.DocumentationSource
 import pl.jclab.refio.services.core.CoreConnectionManager
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.*
 import java.awt.*
 import java.time.Instant

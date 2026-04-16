@@ -23,6 +23,7 @@ import io.ktor.http.*
 import io.ktor.serialization.gson.*
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.errors.LLMErrorMapper
+import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.core.logging.dualLogger
 import java.util.UUID
@@ -62,33 +63,10 @@ class AnthropicAdapter(
     private val baseUrl: String
         get() = baseUrlOverride ?: DEFAULT_BASE_URL
 
-    private val client = httpClientOverride ?: HttpClient(CIO) {
-        install(ContentNegotiation) {
-            gson {
-                setPrettyPrinting()
-                serializeNulls()
-            }
-        }
-        install(Logging) {
-            level = LogLevel.INFO
-            logger = object : KtorLogger {
-                override fun log(message: String) {
-                    this@AnthropicAdapter.logger.debug { message }
-                }
-            }
-            sanitizeHeader { header ->
-                header.equals(HttpHeaders.Authorization, ignoreCase = true) ||
-                    header.equals("x-api-key", ignoreCase = true) ||
-                    header.equals("x-goog-api-key", ignoreCase = true)
-            }
-        }
-        install(HttpTimeout) {
-            val timeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
-                ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
-            requestTimeoutMillis = timeoutMs
-            connectTimeoutMillis = 30000
-            socketTimeoutMillis = timeoutMs
-        }
+    private val client = httpClientOverride ?: run {
+        val socketTimeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+            ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
+        LLMKtorClientFactory.create(socketTimeoutMs, logger)
     }
 
     override suspend fun chat(
@@ -124,7 +102,7 @@ class AnthropicAdapter(
     ): LLMResponse {
         // Get API key from ConfigService (single source of truth)
         val apiKeyToUse = configService?.get(
-            key = pl.jclab.refio.core.services.ConfigService.KEY_PROVIDER_ANTHROPIC_API_KEY,
+            key = ConfigKeys.PROVIDER_ANTHROPIC_API_KEY.key,
             scope = pl.jclab.refio.core.db.ConfigScope.APP
         )
             ?: System.getProperty("ANTHROPIC_API_KEY")
@@ -343,6 +321,14 @@ class AnthropicAdapter(
             )
 
             // Parse response (handle content blocks including thinking)
+            if (response["content"] !is List<*>) {
+                throw RefioError.MalformedResponse(
+                    provider = provider,
+                    model = model,
+                    reason = "Missing or non-list 'content' in Anthropic response",
+                    bodyPreview = gson.toJson(response)
+                )
+            }
             @Suppress("UNCHECKED_CAST")
             val contentBlocks = response["content"] as? List<Map<String, Any?>> ?: emptyList()
 
@@ -743,7 +729,7 @@ class AnthropicAdapter(
         try {
             // Get API key from ConfigService (single source of truth)
             val apiKeyToUse = configService?.get(
-                key = pl.jclab.refio.core.services.ConfigService.KEY_PROVIDER_ANTHROPIC_API_KEY,
+                key = ConfigKeys.PROVIDER_ANTHROPIC_API_KEY.key,
                 scope = pl.jclab.refio.core.db.ConfigScope.APP
             )
                 ?: System.getProperty("ANTHROPIC_API_KEY")
@@ -779,12 +765,14 @@ class AnthropicAdapter(
                     return@mapNotNull null
                 }
 
-                // Get static definition from ModelDefinitions or create fallback
+                // Get static definition from ModelDefinitions or synthesize for unknown models.
                 val definition = pl.jclab.refio.core.llm.ModelDefinitions.getDefinition("anthropic", modelId)
                     ?: run {
-                        logger.debug { "[ANTHROPIC] Model $modelId not in registry, using fallback" }
+                        logger.warn {
+                            "[ANTHROPIC] Model $modelId not in registry — using synthetic definition (context=200000)"
+                        }
 
-                        pl.jclab.refio.core.llm.ModelDefinitions.createFallback(
+                        pl.jclab.refio.core.llm.ModelDefinitions.syntheticDefinitionFor(
                             provider = "anthropic",
                             modelId = modelId,
                             maxContext = 200_000  // Claude models typically have 200K context

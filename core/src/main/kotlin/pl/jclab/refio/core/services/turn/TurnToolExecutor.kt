@@ -69,6 +69,9 @@ class TurnToolExecutor(
         /** Max raw output size (chars) to preserve in-context for DATA_PRODUCING tools */
         const val DATA_PRODUCING_RAW_OUTPUT_BUFFER = 16_000
 
+        /** Max raw output size (chars) for read_file — lazy compression deferred to RECENT_WORK */
+        const val READ_FILE_RAW_OUTPUT_BUFFER = 524_288
+
         /** Max tokens of enriched context to inject into coding tools */
         const val CODING_TOOL_CONTEXT_TOKENS = 8_000
 
@@ -80,11 +83,17 @@ class TurnToolExecutor(
             rawOutput: String,
             summaryText: String,
             wasSummarized: Boolean,
-            isDataProducing: Boolean
+            isDataProducing: Boolean,
+            toolName: String = ""
         ): Pair<String, Boolean> {
             val rawLen = rawOutput.length
             return when {
                 rawLen <= 500 -> rawOutput to false
+
+                // read_file: keep raw up to 512KB, let RECENT_WORK compress lazily
+                toolName == "read_file" && rawLen <= READ_FILE_RAW_OUTPUT_BUFFER ->
+                    rawOutput to false
+
                 isDataProducing && rawLen <= DATA_PRODUCING_RAW_OUTPUT_BUFFER && wasSummarized ->
                     rawOutput to true
                 isDataProducing && wasSummarized ->
@@ -148,7 +157,7 @@ class TurnToolExecutor(
 
         val blockedResults = blockedIndexed.map { (index, toolCall) ->
             val subtaskId = subtaskIds[toolCall.id]!!
-            val errorText = "Error: Tool '${toolCall.name}' is not allowed for current run profile"
+            val errorText = buildProfileBlockedError(toolCall.name, profileOverrides)
             subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
             subtaskRepository.updateResult(subtaskId, result = null, errorMessage = errorText)
             listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
@@ -180,19 +189,15 @@ class TurnToolExecutor(
                 .map { it.second }
         }
 
-        val containsInvokeSubagent = allowedIndexed.any { (_, toolCall) ->
-            isDelegationTool(toolCall.name)
-        }
         // If any tool requires ASK approval, run sequentially to avoid multiple simultaneous dialogs
         val containsAskTool = permissionsService != null && approvalService != null &&
             allowedIndexed.any { (_, toolCall) ->
                 permissionsService.getPermission(toolCall.name, mode) == PermissionLevel.ASK
             }
-        // Allow READ_ONLY parallel execution during subagent runs — only block parallel
-        // for invoke_subagent (recursion risk) and ASK tools (concurrent approval dialogs).
-        // Previously isSubagentRun blanket-disabled all parallelism, causing 5 sequential
-        // read_file calls to take 270s instead of ~70s in a documentation-engineer session.
-        val shouldDisableParallel = containsInvokeSubagent || containsAskTool
+        // Recursion protection for delegation tools lives in InvokeSubagentTool.execute()
+        // (subagentChain check), so running multiple invoke_subagent in parallel is safe.
+        // LLM-level concurrency is bounded per-endpoint by OllamaRequestGate.
+        val shouldDisableParallel = containsAskTool
 
         // Parallel execution for READ_ONLY tools
         if (config.parallelReadTools && allowedIndexed.size > 1 && !shouldDisableParallel) {
@@ -270,10 +275,7 @@ class TurnToolExecutor(
         }
 
         if (config.parallelReadTools && shouldDisableParallel) {
-            logger.info {
-                "[PARALLEL] Disabled for this batch: invoke_subagent=$containsInvokeSubagent, " +
-                    "containsAskTool=$containsAskTool"
-            }
+            logger.info { "[PARALLEL] Disabled for this batch: containsAskTool=$containsAskTool" }
         }
 
         // Sequential execution
@@ -594,7 +596,8 @@ class TurnToolExecutor(
                     rawOutput = outputWithWarnings,
                     summaryText = summaryResult.summary,
                     wasSummarized = summaryResult.wasSummarized,
-                    isDataProducing = isDataProducing
+                    isDataProducing = isDataProducing,
+                    toolName = toolCall.name
                 )
                 if (isDataProducing && outputWithWarnings.length <= DATA_PRODUCING_RAW_OUTPUT_BUFFER && summaryResult.wasSummarized) {
                     logger.info {
@@ -741,6 +744,26 @@ class TurnToolExecutor(
             return normalizedName !in disallowed
         }
         return true
+    }
+
+    /**
+     * Build a self-correcting error that tells the LLM which tools it actually has. Weak models
+     * hallucinate tool names from conversation history — listing the real whitelist lets them
+     * recover on the next iteration instead of repeating the same blocked call.
+     */
+    private fun buildProfileBlockedError(
+        toolName: String,
+        profileOverrides: TurnProfileOverrides?,
+    ): String {
+        val allowed = profileOverrides?.allowedTools?.takeIf { it.isNotEmpty() }
+        val disallowed = profileOverrides?.disallowedTools?.takeIf { it.isNotEmpty() }
+        val scope = profileOverrides?.subagentName?.let { "subagent '$it'" } ?: "current run profile"
+        val details = when {
+            allowed != null -> "Your available tools are: ${allowed.joinToString(", ")}. Pick one of these or produce a final response."
+            disallowed != null -> "This tool is on the blocklist for this profile (${disallowed.joinToString(", ")}). Use a different approach."
+            else -> "Check the <available_tools> section and use only tools listed there."
+        }
+        return "Error: Tool '$toolName' is not available to the $scope. $details"
     }
 
     /**

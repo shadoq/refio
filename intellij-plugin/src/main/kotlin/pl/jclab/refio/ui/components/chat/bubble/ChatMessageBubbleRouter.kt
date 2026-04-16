@@ -25,13 +25,14 @@ internal class ChatMessageBubbleRouter(
             else -> otherBubbleRenderer.render(message)
         }
 
-        // Wrap with agent header if message comes from a subagent
+        // Wrap with agent header if message comes from a subagent. Applies to every role so
+        // tool calls, user injections (subagent prompts), and assistant replies all end up under
+        // the same visible group for the agent that produced them.
         val agentName = message.agentName
-        if (agentName != null && message.role == "assistant") {
+        if (agentName != null) {
             val wrapper = JPanel(BorderLayout())
             wrapper.isOpaque = false
 
-            // Add agent header if this is a new agent group
             if (agentName != lastAgentName) {
                 val header = createAgentHeader(agentName, message.agentDepth ?: 0)
                 wrapper.add(header, BorderLayout.NORTH)
@@ -42,9 +43,8 @@ internal class ChatMessageBubbleRouter(
             return wrapper
         }
 
-        if (agentName == null && message.role == "assistant") {
-            lastAgentName = null
-        }
+        // Message outside any subagent group — reset so the next subagent message re-emits the header.
+        lastAgentName = null
 
         return bubble
     }

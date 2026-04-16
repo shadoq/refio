@@ -9,7 +9,7 @@ class ZAIAdapter(
     taskId: String? = null,
     subtaskId: String? = null,
     source: String? = null
-) : CustomOpenAIAdapter(
+) : GenericOpenAIAdapter(
     model = model,
     providerName = "zai",
     configService = configService,
@@ -17,7 +17,7 @@ class ZAIAdapter(
     subtaskId = subtaskId,
     source = source,
     requireApiKey = true,
-    defaultBaseUrl = configService?.getTyped(ConfigKeys.PROVIDER_ZAI_BASE_URL) ?: ConfigService.DEFAULT_ZAI_BASE_URL
+    defaultBaseUrl = configService?.getTyped(ConfigKeys.PROVIDER_ZAI_BASE_URL) ?: ZAIUrls.DEFAULT
 ) {
     override suspend fun listModels() = super.listModels()
 }

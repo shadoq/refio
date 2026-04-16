@@ -76,7 +76,9 @@ class ChatMessageRepository {
         result: String,
         isSummarized: Boolean = false,
         rawOutput: String? = null,
-        metadata: String? = null
+        metadata: String? = null,
+        agentName: String? = null,
+        agentDepth: Int? = null,
     ): ChatMessage {
         return create(
             taskId = taskId,
@@ -86,7 +88,9 @@ class ChatMessageRepository {
             toolCallId = toolCallId,
             subtaskId = subtaskId,
             isSummarized = isSummarized,
-            rawOutput = rawOutput
+            rawOutput = rawOutput,
+            agentName = agentName,
+            agentDepth = agentDepth,
         )
     }
 

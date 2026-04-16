@@ -101,7 +101,7 @@ class StandaloneCoreBootstrap(
         val projectRouter = appRouter.createProjectRouter(
             projectRoot = absolutePath,
             projectHandle = projectHandle,
-            ideProject = null
+            platformProject = null
         )
         projectRouter.initialize(dbPath)
         this.projectRouter = projectRouter

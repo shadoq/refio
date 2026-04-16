@@ -1,10 +1,9 @@
 package pl.jclab.refio.core.tools.implementations
 
 import pl.jclab.refio.core.tools.DiffUtils
-import pl.jclab.refio.core.tools.FileLockManager
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.ChangeSummary
-import pl.jclab.refio.core.tools.base.Tool
+import pl.jclab.refio.core.tools.base.FileTool
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
@@ -33,14 +32,15 @@ private val logger = dualLogger("MultiEditTool")
  * - File size limits enforced
  */
 class MultiEditTool(
-    private val sandbox: PathSandbox,
+    sandbox: PathSandbox,
     private val limits: FileLimits
-) : Tool {
+) : FileTool(sandbox) {
 
     override val name = "multi_edit"
     override val description = "Atomic search-and-replace across multiple files. FREE."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_MODIFYING
+    override val selectionHint = "Atomic search/replace across multiple files or multiple sites in one file."
 
     override fun validateParams(params: Map<String, Any>) {
         @Suppress("UNCHECKED_CAST")
@@ -70,13 +70,10 @@ class MultiEditTool(
                 parseEdit(edit, index)
             }
 
-            // Prepare and apply each edit under a per-file lock
+            // Prepare and apply each edit under a per-file lock (revalidated inside lock).
             val results = parsedEdits.map { edit ->
-                val resolvedPath = sandbox.resolve(edit.path)
-                FileLockManager.withFileLock(resolvedPath.toAbsolutePath().toString()) {
-                    // Re-validate path inside lock to close TOCTOU window
-                    sandbox.revalidateBeforeIO(resolvedPath)
-
+                val resolvedPath = resolveSandboxPath(edit.path)
+                withLockedFile(resolvedPath) {
                     val prep = prepareEdit(edit)
                     applyEdit(prep)
                 }

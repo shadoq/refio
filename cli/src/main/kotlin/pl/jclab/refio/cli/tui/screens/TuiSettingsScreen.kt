@@ -173,9 +173,9 @@ object TuiSettingsScreen {
                 "lmstudio.lmstudio_context_size" to "Context size"
             ),
             "Custom OpenAI" to listOf(
-                "custom_openai.custom_openai_base_url" to "Base URL",
-                "custom_openai.custom_openai_api_key" to "API Key",
-                "custom_openai.custom_openai_model" to "Model"
+                "generic_openai.generic_openai_base_url" to "Base URL",
+                "generic_openai.generic_openai_api_key" to "API Key",
+                "generic_openai.generic_openai_model" to "Model"
             ),
             "Z.AI" to listOf(
                 "zai.zai_base_url" to "Base URL",

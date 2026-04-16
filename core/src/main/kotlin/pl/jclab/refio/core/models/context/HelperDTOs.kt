@@ -45,18 +45,6 @@ data class ConversationMessageDTO(
 )
 
 /**
- * Code fragment DTO - relevant code/documentation fragment from RAG search
- */
-data class CodeFragmentDTO(
-    val filePath: String,
-    val content: String,
-    val startLine: Int?,
-    val endLine: Int?,
-    val similarity: Float,
-    val contentType: String  // PROJECT_CODE or DOCUMENTATION
-)
-
-/**
  * Resolved context reference DTO - user-provided context from @ mentions
  * Contains resolved content ready for LLM consumption
  */

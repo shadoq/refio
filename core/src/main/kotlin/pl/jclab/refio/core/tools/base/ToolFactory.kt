@@ -2,13 +2,13 @@ package pl.jclab.refio.core.tools.base
 
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.services.ConfigService
+import pl.jclab.refio.core.services.ProcessManager
 import pl.jclab.refio.core.services.PromptsService
+import pl.jclab.refio.core.services.turn.UserQuestionService
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.implementations.*
-import pl.jclab.refio.core.tools.security.CommandDenylist
 import pl.jclab.refio.core.tools.security.CommandLimits
 import pl.jclab.refio.core.tools.security.CommandRuleDefaults
-import pl.jclab.refio.core.tools.security.CommandWhitelist
 import pl.jclab.refio.core.tools.security.FileLimits
 import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Path
@@ -30,9 +30,9 @@ class ToolFactory(
     private val configService: ConfigService,
     private val promptsService: PromptsService,
     private val taskRepository: pl.jclab.refio.core.db.repositories.TaskRepository,
+    private val userQuestionService: UserQuestionService = UserQuestionService(),
     private val fileLimits: FileLimits = FileLimits.DEFAULT,
-    private val commandLimits: CommandLimits = CommandLimits.DEFAULT,
-    private val commandDenylist: CommandDenylist = CommandDenylist.DEFAULT
+    private val commandLimits: CommandLimits = CommandLimits.DEFAULT
 ) {
     init {
         logger.info { "ToolFactory initializing with projectRoot=$projectRoot (absolute=${projectRoot.toAbsolutePath()})" }
@@ -40,6 +40,7 @@ class ToolFactory(
 
     private val sandbox = PathSandbox.withConfig(projectRoot, configService)
     private val registry = toolRegistry
+    private val processManager = ProcessManager()
 
     /**
      * Create and register all available tools
@@ -90,7 +91,23 @@ class ToolFactory(
 
             // Reasoning slot (no-op, gives the model an explicit place to think
             // between tool calls — used as a loop-breaker and pre-action checkpoint)
-            ThinkTool()
+            ThinkTool(),
+
+            // Web tools
+            WebSearchTool(configService),
+            FetchWebpageTool(llmClient, configService),
+
+            // Code intelligence
+            CodeIntelligenceTool(sandbox),
+
+            // Process monitoring (read-only — only reads output)
+            MonitorProcessTool(processManager),
+
+            // User interaction
+            AskUserTool(userQuestionService),
+
+            // Utilities
+            SleepTool()
         )
     }
 
@@ -100,9 +117,6 @@ class ToolFactory(
      * @return List of write tool instances
      */
     fun createWriteTools(): List<Tool> {
-        val whitelistConfig = configService.getTerminalWhitelistConfig()
-        val whitelist = CommandWhitelist(whitelistConfig, commandDenylist)
-
         return listOf(
             // File operations (write)
             CreateNewFileTool(sandbox, fileLimits),
@@ -114,7 +128,7 @@ class ToolFactory(
             MultiEditTool(sandbox, fileLimits),
 
             // Terminal operations
-            RunTerminalCommandTool(sandbox, whitelist, commandLimits, CommandRuleDefaults.createDefaultMatcher()),
+            RunTerminalCommandTool(sandbox, commandLimits, CommandRuleDefaults.createDefaultMatcher()),
 
             // Network operations
             HttpRequestTool(sandbox),
@@ -123,7 +137,10 @@ class ToolFactory(
             RunCodeTool(sandbox),
 
             // LLM call (raw single-turn call, no agent loop)
-            LlmCallTool(llmClient, configService, sandbox, fileLimits)
+            LlmCallTool(llmClient, configService, sandbox, fileLimits),
+
+            // Background process execution
+            RunProcessBackgroundTool(sandbox, processManager, CommandRuleDefaults.createDefaultMatcher())
         )
     }
 }

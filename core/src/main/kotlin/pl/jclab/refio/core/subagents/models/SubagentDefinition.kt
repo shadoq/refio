@@ -21,7 +21,6 @@ data class SubagentContextProfile(
     val includeFileTree: Boolean = true,
     val includeConversation: Boolean = true,
     val includeWorkingMemory: Boolean = true,
-    val includeRag: Boolean = true,
     val includeDependencies: Boolean = true,
     val maxContextTokens: Int? = null,
     val includeParentSummary: Boolean = false

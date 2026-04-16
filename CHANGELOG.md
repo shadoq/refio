@@ -9,6 +9,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`sleep` tool** — Pause agent execution for up to 30 seconds; useful for rate limiting or waiting on external processes.
+- **`ask_user` tool** — Agent can ask the user a question mid-execution and wait for a response; supports free-text and predefined options. Backed by `UserQuestionService` with CompletableDeferred pattern (same as ToolApprovalService).
+- **`web_search` tool** — Search the web via Brave Search, SerpAPI, or DuckDuckGo Instant Answers; configurable provider and API key in `config.yaml`.
+- **`fetch_webpage` tool** — Fetch a URL, convert HTML to Markdown (via Jsoup), then process with the weak LLM model using a custom prompt; for extracting specific information from web pages.
+- **`run_process_background` tool** — Start a shell command in the background and return immediately with a `process_id`; for long-running builds or dev servers.
+- **`monitor_process` tool** — Read stdout from a background process started with `run_process_background`; call repeatedly to stream output.
+- **`code_intelligence` tool** — Analyze code structure without IDE: find symbol usages (grep), find definitions (ctags/grep), list symbols (ctags), run compiler diagnostics; works in CLI and plugin.
+- `ProcessManager` service for managing long-running background processes with start/stop/monitor lifecycle.
+- `UserQuestionService` for suspending the agent loop while waiting for user answers.
+- `CommandLimits` helper for centralized terminal command output/size limits.
+- DB migration `V3RenameSlashCommandToSlashPrompt` that remaps existing `prompts.type='SLASH_COMMAND'` rows to `SLASH_PROMPT` in-place; preserves user-defined and built-in entries.
+- **Multi-agent orchestration pipeline** — dedicated `core/agents/orchestration/` package with `OrchestrationDispatcher`, `TaskDecomposer`, and `ResultMerger`. Supports three strategies: `ORCHESTRATOR` (single turn with `multi-agent-coordinator` subagent dynamically spawning via `invoke_subagent`), `PARALLEL` (independent specs executed concurrently via `MultiAgentRunner`), and `PIPELINE` (linear chain using `{{prev.output}}` placeholder between stages).
+- **`CoreSessionService` in `:core`** — session lifecycle, state, and dispatch moved out of the IntelliJ plugin. Backed by `CoreSessionServiceFactory` and `DefaultWorkflowStreamingListener`. The IntelliJ `SessionManager` is now a thin adapter (886 → 704 LOC).
+- **Reusable tool-call listeners** — `AbstractToolCallLifecycleListener` base plus `CoreMessageToolCallListener` (core persistence) and `TuiToolCallListener` (TUI rendering); eliminates duplicated tool-call plumbing between plugin and CLI.
+- `BuiltinSubagentOverrides` — user-level override mechanism for built-in subagent definitions without forking the Markdown source.
+- `example-config.yaml` shipped under `core/src/main/resources/config/` as a reference for the new typed YAML schema.
+- `OpenAICompatibleAdapter` base class consolidating shared `/v1/chat/completions` protocol, SSE streaming, and per-provider quirks for all OpenAI-compatible backends.
+- Test fixtures `SubtaskResponseFixtures` and `TaskResponseFixtures` plus new adapter characterization tests (`OpenAICompatibleBaseTest`, `GenericOpenAIAdapterMalformedTest`).
+
+### Changed
+
+- **Renamed feature "Slash Commands" → "Prompts"** across code and UI. The `/name` invocation syntax is unchanged; these are prompt templates (not plugin/CLI commands), so everything now reflects that:
+  - API model `SlashCommand` → `SlashPrompt` (`core/src/main/kotlin/pl/jclab/refio/api/models/SlashPrompt.kt`)
+  - DB enum `PromptType.SLASH_COMMAND` → `SLASH_PROMPT` (migrated automatically via V3)
+  - Router API: `getEnabledCommands`/`findCommand`/`saveCommand` → `getEnabledSlashPrompts`/`findSlashPrompt`/`saveSlashPrompt`; request model `SaveCommandRequest` → `SaveSlashPromptRequest`
+  - IntelliJ dialog `CommandEditDialog` → `PromptEditDialog`; intention action `RefioSlashCommandIntentionAction` → `RefioSlashPromptIntentionAction`
+  - Settings UI: tab label `Commands` → `Prompts`, column `Command` → `Prompt`
+  - Chat input placeholder now reads `(@context, /prompt, !subagent)`
+  - CLI/TUI methods `getSlashCommands`/`processSlashCommands` → `getSlashPrompts`/`processSlashPrompts`
+- **CommandWhitelist system replaced by unified `CommandRule`** (regex-based `ALLOW` / `BLOCK` / `ASK`). The legacy `CommandWhitelist`, `CommandWhitelistConfig`, `CommandWhitelistDefaults`, and `CommandDenylist` classes were removed; default ruleset is expanded in `CommandRuleDefaults`. Terminal command decisions are now a single-pass regex evaluation with a catch-all `ASK` rule.
+- **Models settings tab no longer auto-refreshes from providers on open.** The panel now reads from the in-memory model cache (or DB visibility settings) and never blocks the UI on slow/unreachable providers. Remote model discovery is triggered only by the **Refresh** button. New `fetchIfMissing: Boolean` parameter was added to `ModelRegistry.getAllModels` / `ConfigRouter.getModelsWithVisibility` / `CoreApiClient.getModelsWithVisibility` (defaults preserve previous behavior for other callers). `ModelRegistry.getCachedModelsSnapshot()` exposes the cache without triggering fetches.
+- **Shorter `listModels` timeout for local providers.** Ollama and LM Studio now use a 3-second per-provider timeout when listing models (down from 15s) since they are localhost services and 15s just extended UI freezes when the daemon wasn't running. Cloud providers keep 15s.
+- **Tools settings tab layout is now responsive.** Fixed column widths (180/320/90/90) were replaced with flexible bounds: `Plan Mode` and `Agent Mode` columns are clamped to 80–110 px, while Tool Name and Description stretch with the panel. The Terminal Command Rules table uses the same flexible layout. Removes the forced 700 px horizontal overflow that cropped column headers on narrow sidebars.
+- Built-in system-agent prompt (`system-agent.md`) refreshed.
+- `ToolDescriptionBuilder` adjusted for the new tool set and prompt-template renames.
+- **`CoreApiRouter` modularized from ~987 → ~300 LOC.** Composition-root concerns split into dedicated modules under `core/api/modules/`: `CoreApiRouterBootstrap` (system tool registration, Ollama concurrency, core init), `DomainRouters` (12 domain router wiring), `AgentExecutionModule`, `ChatPlanningModule`, `PersistenceModule`, `ProjectRouterFactory`, `SupportServicesModule`, `EmbeddingProviderFactory`, `AnalysisStack`, and `AgentTurnLoopFactory`. `CoreApiRouter` is now a readable composition root with no business logic.
+- **`ConfigService` split (2175 → 290 LOC, –87%).** Responsibilities extracted to focused services: `ModelSelectionService` (logical-slot resolution, model visibility), `ConfigResolver` (precedence-aware reads), `ConfigValidator`, `ConfigDefaultsInitializer`, `ConfigYamlApplier` (DB ← YAML application), and `ContextBudgetResolver`. Public API remains stable via `ConfigService` delegation.
+- **`ConfigYaml` redesigned around a typed schema.** The 1300+ LOC monolithic loader/emitter replaced by `ConfigYamlModel` (`kotlinx.serialization` data classes with typed sections), `ConfigYamlEmitter`, `ConfigYamlIO`, `ConfigYamlMerger`, and `YamlSanitizer`. `ConfigYaml.kt` shrank to 76 LOC. Unknown keys now fail loud (aligned with the no-fallbacks policy).
+- **OpenAI-compatible adapter consolidation.** Per-provider classes now extend the new `OpenAICompatibleAdapter` base:
+  - `GenericOpenAIAdapter` 547 → 189 LOC
+  - `LMStudioAdapter` 461 → 108 LOC
+  - `OpenRouterAdapter` 869 → 180 LOC (keeps its `data:`-prefix/mid-stream-error quirks)
+  - `ZAIAdapter` reduced to 23 LOC with endpoint resolution delegated to the new `ZAIUrls` helper
+  - `OpenAICompatibleHelpers` gained `consumeChatCompletionsSSE`, `buildMessages`, `addCommonKwargs`, and `resolveEffectiveMaxTokens` used across the family.
+- **Coverage gate moved to `:core`.** `:core:jacocoTestCoverageVerification` enforces a 35% instructions minimum and is wired into `:core:check`. `:intellij-plugin:jacocoTestReport` still produces HTML/XML but no longer enforces a threshold (tests live in `:core`).
+- **Session layer migrated from `:intellij-plugin` to `:core`.** `SessionStateManager`, `SessionLifecycleService`, `MessageDispatcher`, `SubtaskTracker`, `PromptStateTracker`, and `ExecutionMonitor` live in `core/session/` and are reused by both the IntelliJ plugin and the TUI.
+- **TUI state layer simplified.** `TuiViewModel`, `TuiSessionViewModel`, `TuiChatViewModel`, `TuiState`, `TuiStepsView`, and `TuiWorkflowListener` aligned with the new core session service; silent subtask-operation fallbacks removed; shared factory companions (`TuiSessionEntry.fromTaskResponse`, `TuiSubtask.fromSubtaskResponse`) eliminate inline DTO mapping.
+- Settings panels (`AdvancedSettingsPanel`, `ContextSettingsPanel`, `GeneralSettingsPanel`, `ModelsSettingsPanel`, `ProvidersSettingsPanel`, `SettingsView`) rewritten against the typed config model.
+- `AgentTurnLoop` + `TurnLLMCaller`/`TurnToolExecutor`/`TurnFinalizer`/`TurnEventListener`/`TurnPromptBuilder`/`TurnPrompt` updated for listener-based tool-call lifecycle, cleaner prompt assembly, and richer event propagation.
+
+### Removed
+
+- `core/src/main/kotlin/pl/jclab/refio/api/models/TaskPlanModels.kt` — superseded by the subtask pipeline.
+- `TurnLoopConfigAliases.kt` and `TurnPromptAliases.kt` backcompat shims (replaced by a single `TurnPrompt.kt`).
+- Legacy `CoreApiClient` passthroughs and `DualLogger` backcompat shim under `services/logging/` (call sites migrated to domain routers / `core.logging.dualLogger`).
+
+### Fixed
+
+- Four EDT-blocking `runBlocking` calls in `SessionLifecycleService` converted to `withContext`, eliminating UI-thread stalls during session persistence.
+- Silent fallbacks removed from OpenAI response parsing, `CommandRule` regex compilation, and `HttpRequestTool` content-type detection — errors now surface instead of masking bad input.
+- Duplicate `runTurnCallback` wiring in `CoreApiRouter` (InvokeSubagent + DelegateToStrong) consolidated into a single source of truth for agent turn dispatch.
+
 ## [0.0.1.6] - 2025-04-12
 
 ### Added

@@ -2,6 +2,11 @@
 
 > For contributors and advanced users. See [README.md](../README.md) for product overview.
 
+> **Recent notable changes** (see [CHANGELOG.md](../CHANGELOG.md) `[Unreleased]`):
+> - "Slash commands" were renamed to "Prompts" (code: `SlashCommand` → `SlashPrompt`, DB enum `SLASH_COMMAND` → `SLASH_PROMPT` with V3 migration). The `/name` invocation syntax is unchanged; UI tab is now **Settings → Prompts**.
+> - Terminal command security uses a single `CommandRule` regex engine (`ALLOW` / `BLOCK` / `ASK`); the legacy `CommandWhitelist` / `CommandDenylist` classes have been removed.
+> - Models settings tab no longer triggers remote provider fetches on open — only the **Refresh** button does. Local providers (Ollama, LM Studio) use a 3 s `listModels` timeout.
+
 ---
 
 ## Project Overview
@@ -276,7 +281,7 @@ RagSearchResult[]
 
 ## Tools
 
-### READ_ONLY Tools (7)
+### READ_ONLY Tools (14)
 
 | Tool | Parameters | Description |
 |------|------------|-------------|
@@ -287,8 +292,15 @@ RagSearchResult[]
 | `view_diff` | file1, file2 OR content2 | Line-by-line comparison |
 | `invoke_subagent` | subagent_name, goal, context_refs? | Run nested child loop via subagent profile |
 | `delegate_to_strong_model` | task, context?, allow_tools?, response_format? | Delegate complex task to a stronger model (single-shot or tool-enabled sub-agent). Only registered when `models.defaults.strong` is configured. |
+| `web_search` | query, max_results? | Search the web (Brave/SerpAPI/DuckDuckGo) |
+| `fetch_webpage` | url, prompt, max_content_chars? | Fetch URL, convert to Markdown, process with LLM |
+| `code_intelligence` | action, symbol?, path?, language? | Find usages/definitions, list symbols, get diagnostics |
+| `monitor_process` | process_id, max_lines? | Read output from background process |
+| `ask_user` | question, options? | Ask the user a question and wait for response |
+| `sleep` | duration_ms | Pause execution (max 30s) |
+| `think` | thought | Explicit reasoning slot |
 
-### WRITE Tools (8)
+### WRITE Tools (10)
 
 | Tool | Parameters | Description | Cost |
 |------|------------|-------------|------|
@@ -300,6 +312,8 @@ RagSearchResult[]
 | `run_terminal_command` | command | Shell execution (ASK in AGENT, CommandRule-protected) | Free |
 | `http_request` | url, method, headers, body, save_to_file | HTTP requests (GET/POST/PUT/DELETE), 5 MB limit, 60s timeout | Free |
 | `run_code` | language, code | Execute Python/JavaScript/Kotlin Script, 120s timeout | Free |
+| `run_process_background` | command | Start command in background, return process_id | Free |
+| `llm_call` | prompt, data?, file_path?, model? | Raw single-turn LLM call | ~$0.01 |
 
 ### Tool Availability by Mode
 
@@ -541,7 +555,7 @@ See [`docs/config.md`](config.md) for full configuration reference.
 |-------|------------|
 | **PathSandbox** | All file ops restricted to project root |
 | **FileLimits** | Size limits (2MB), excluded directories (24), extensions (34) |
-| **CommandRule System** | Regex-based rules with ALLOW/BLOCK/ASK levels replacing legacy whitelist |
+| **CommandRule System** | Regex-based rules with `ALLOW` / `BLOCK` / `ASK` actions; unified replacement for the removed `CommandWhitelist` / `CommandDenylist`. Defaults in `CommandRuleDefaults`, limits in `CommandLimits`. |
 | **ToolPermissions** | 3-level access control: ON/ASK/OFF per mode (PLAN=read-only, AGENT=read-write) |
 | **No-Egress Mode** | Blocks cloud providers, allows only Ollama/LM Studio |
 | **Secret Redaction** | API keys masked in all logs |
@@ -551,7 +565,7 @@ See [`docs/config.md`](config.md) for full configuration reference.
 | Issue | Description | Mitigation |
 |-------|-------------|------------|
 | Symlink Escape | PathSandbox can be bypassed via symlinks | Detection + logging in place |
-| Whitelist Coverage | Some workflows may require adding project-specific safe commands | Configure in Tools Settings (Terminal Whitelist) |
+| Command Rule Coverage | Some workflows may require adding project-specific safe commands | Configure in Tools Settings → Terminal Command Rules (regex-based `ALLOW` / `BLOCK` / `ASK`) |
 
 ---
 

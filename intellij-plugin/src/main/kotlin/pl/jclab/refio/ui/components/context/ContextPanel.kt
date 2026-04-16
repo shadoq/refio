@@ -14,7 +14,7 @@ import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.services.turn.PromptSnapshot
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.services.core.CoreConnectionManager
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.notification.NotificationService
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
@@ -143,7 +143,6 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private val mcpResourcesSection = createSection("MCP Resources", "mcp_resources")
     private val userRequirementsSection = createSection("User Requirements", "user_requirements")
     private val projectInstructionsSection = createSection("Project Instructions", "project_instructions")
-    private val ragFragmentsSection = createSection("RAG Fragments", "rag_fragments")
     private val subtasksSection = createSection("Subtasks", "subtasks")
     private val conversationSection = createSection("Conversation History", "conversation")
     private val recentWorkSection = createSection("Recent Work", "recent_work")
@@ -245,9 +244,6 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         SectionEntry("mcp_resources", 11, mcpResourcesSection) { context, _ ->
             updateMcpResourcesSection(context)
         },
-        SectionEntry("rag_fragments", 12, ragFragmentsSection) { context, _ ->
-            updateRagFragmentsSection(context)
-        },
         SectionEntry("conversation", 13, conversationSection) { context, _ ->
             updateConversationSection(context)
         },
@@ -335,7 +331,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
 
         // Assemble sections in contentPanel
         // Order matches ADR 0040 - Phase 2: Project context first, then task, then history
-        // Priority: Project Meta → Task → User Context → RAG → Conversation → Work History
+        // Priority: Project Meta → Task → User Context → Conversation → Work History
         applySectionOrder(sectionEntries.sortedBy { it.order })
 
         // Debounced refresh listener - collects all events and triggers refresh only once per time window
@@ -571,12 +567,6 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                 }
             } catch (e: Exception) {
                 logger.error(e) { "Failed to refresh context" }
-
-                // Show notification for RAG unavailability (only on first failure)
-                if (e.message?.contains("Ollama service") == true &&
-                    e.message?.contains("unavailable") == true) {
-                    NotificationService.showRagUnavailable(project, "ollama", "http://localhost:11434")
-                }
 
                 SwingUtilities.invokeLater {
                     showError("Failed to load context: ${e.message}")
@@ -1162,71 +1152,6 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         projectInstructionsSection.setContent(instructions, html)
     }
 
-    private fun updateRagFragmentsSection(context: pl.jclab.refio.core.api.ProjectContextResponse) {
-        if (context.ragFragments.isEmpty()) {
-            val html = """
-                <html><body style='padding: 5px; word-wrap: break-word;'>
-                No RAG fragments found. Run project indexing and embeddings to enable contextual search.
-                </body></html>
-            """.trimIndent()
-            ragFragmentsSection.setContent(
-                "No RAG fragments found. Run project indexing and embeddings to enable contextual search.",
-                html
-            )
-            return
-        }
-
-        val htmlParts = mutableListOf<String>()
-        val rawParts = mutableListOf<String>()
-        context.ragFragments.take(8).forEach { fragment ->
-            val sourceName = fragment.filePath.substringAfterLast("/").substringAfterLast("\\").take(60)
-            val lines = if (fragment.startLine != null && fragment.endLine != null) {
-                " (lines ${fragment.startLine}-${fragment.endLine})"
-            } else ""
-            val similarity = String.format("%.0f", fragment.similarity * 100)
-            val type = fragment.contentType.lowercase().replaceFirstChar { it.uppercase() }
-
-            htmlParts.add("<b>$sourceName$lines</b> <font color='#808080'>[$type | ${similarity}% match]</font>")
-
-            val escapedContent = fragment.content
-                .replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\n", "<br>")
-            val preview = if (fragment.content.length > 300) {
-                "${escapedContent.take(300)}..."
-            } else {
-                escapedContent
-            }
-
-            htmlParts.add("<pre style='padding: 5px; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;'>$preview</pre>")
-            htmlParts.add("<br>")
-        }
-
-        if (context.ragFragments.size > 8) {
-            htmlParts.add("<font color='#808080'>... and ${context.ragFragments.size - 8} more fragments</font>")
-        }
-
-        context.ragFragments.forEach { fragment ->
-            val lines = if (fragment.startLine != null && fragment.endLine != null) {
-                " (lines ${fragment.startLine}-${fragment.endLine})"
-            } else ""
-            val similarity = String.format("%.0f", fragment.similarity * 100)
-            val type = fragment.contentType.lowercase().replaceFirstChar { it.uppercase() }
-            rawParts.add("${fragment.filePath}$lines [$type | ${similarity}% match]")
-            rawParts.add(fragment.content)
-            rawParts.add("")
-        }
-
-        val html = """
-            <html><body style='padding: 5px; word-wrap: break-word;'>
-            ${htmlParts.joinToString("")}
-            </body></html>
-        """.trimIndent()
-        val raw = rawParts.joinToString("\n").trim()
-        ragFragmentsSection.setContent(raw, html)
-    }
-
     private fun updateSubtasksSection(context: pl.jclab.refio.core.api.ProjectContextResponse) {
         if (context.subtasks.isEmpty()) {
             val html = """
@@ -1493,7 +1418,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
             """.trimIndent()
             return
         }
-        val promptText = prompt ?: return
+        val promptText = prompt
 
         val structureHtml = buildContextStructureOverview(context)
         val escaped = promptText
@@ -1675,7 +1600,6 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
             "working_memory" -> ContextSection.WORKING_MEMORY
             "recent_work" -> ContextSection.RECENT_WORK
             "user_context", "mcp_resources" -> ContextSection.USER_CONTEXT
-            "rag_fragments" -> ContextSection.RAG_FRAGMENTS
             "conversation", "messages_user", "messages_assistant", "messages_system", "messages_other" -> ContextSection.CONVERSATION
             "key_components",
             "dependencies",
@@ -1880,11 +1804,12 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         val html = """
             <html><body style='padding: 5px; word-wrap: break-word;'>
             <b>Context Stability:</b> ~${stabilityPercent}% unchanged from previous turn<br>
-            <div style='background: #E0E0E0; width: 200px; height: 12px; border-radius: 6px; margin-top: 4px;'>
-                <div style='background: $barColor; width: ${stabilityPercent * 2}px; height: 12px; border-radius: 6px;'></div>
-            </div>
+            <table cellpadding='0' cellspacing='0' style='margin-top: 4px;'><tr>
+                <td style='background: $barColor; width: ${stabilityPercent * 2}px; height: 12px;'></td>
+                <td style='background: #E0E0E0; width: ${(100 - stabilityPercent) * 2}px; height: 12px;'></td>
+            </tr></table>
             <br>
-            <span style='font-size: 0.9em; color: #888;'>
+            <span style='color: #888;'>
             Stable context (project info, conventions) is cached and reused across turns.
             </span>
             </body></html>

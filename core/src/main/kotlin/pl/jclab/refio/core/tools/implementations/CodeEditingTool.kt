@@ -1,13 +1,11 @@
 package pl.jclab.refio.core.tools.implementations
 
 import pl.jclab.refio.core.tools.DiffUtils
-import pl.jclab.refio.core.tools.FileLockManager
 import pl.jclab.refio.core.tools.PathSandbox
-import pl.jclab.refio.core.tools.base.Tool
+import pl.jclab.refio.core.tools.base.FileTool
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
-import pl.jclab.refio.core.tools.normalizePath
 import pl.jclab.refio.core.tools.security.FileLimits
 import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Files
@@ -33,19 +31,18 @@ private val logger = dualLogger("CodeEditingTool")
  * - old_string must be unique (unless replace_all=true)
  */
 class CodeEditingTool(
-    private val sandbox: PathSandbox,
+    sandbox: PathSandbox,
     private val limits: FileLimits
-) : Tool {
+) : FileTool(sandbox) {
 
     override val name = "code_editing"
     override val description = "Search-and-replace edit in an existing file. FREE."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_MODIFYING
+    override val selectionHint = "Small targeted edit in an existing file via exact string match (search/replace)."
 
     override fun validateParams(params: Map<String, Any>) {
-        if (params["path"] == null || (params["path"] as? String).isNullOrBlank()) {
-            throw IllegalArgumentException("Parameter 'path' is required and cannot be empty")
-        }
+        validatePathParam(params)
         if (params["old_string"] == null) {
             throw IllegalArgumentException("Parameter 'old_string' is required")
         }
@@ -58,26 +55,18 @@ class CodeEditingTool(
         val startTime = System.currentTimeMillis()
 
         try {
-            // Extract parameters with safe casting
-            val pathStr = params["path"] as? String
-                ?: return ToolResult.error("Missing required parameter: 'path'")
+            val pathStr = validatePathParam(params)
             val oldString = params["old_string"] as? String
                 ?: return ToolResult.error("Missing required parameter: 'old_string'")
             val newString = params["new_string"] as? String
                 ?: return ToolResult.error("Missing required parameter: 'new_string'")
             val replaceAll = (params["replace_all"] as? Boolean) ?: false
 
-            // Normalize path for security (bare filenames → "./file.txt", backslash → forward slash)
-            val normalizedPathStr = normalizePath(pathStr)
-
-            // Resolve and validate path
-            val path = sandbox.resolve(normalizedPathStr)
+            val path = resolveSandboxPath(pathStr)
 
             logger.info { "Editing file: relative='$pathStr', absolute='${path.toAbsolutePath()}', sandbox_root='${getSandboxRoot()}', oldString=${oldString.length} chars, newString=${newString.length} chars, replaceAll=$replaceAll" }
 
-            return FileLockManager.withFileLock(path.toAbsolutePath().toString()) {
-                // Re-validate path inside lock to close TOCTOU window (symlink swap between validate and I/O)
-                sandbox.revalidateBeforeIO(path)
+            return withLockedFile(path) {
 
                 // Check if file exists
                 val fileExists = path.exists()
@@ -112,7 +101,7 @@ class CodeEditingTool(
                         )
                         val diff = changeSummary.unifiedDiff ?: ""
 
-                        return@withFileLock ToolResult(
+                        return@withLockedFile ToolResult(
                             success = true,
                             output = buildString {
                                 appendLine("File created successfully: $pathStr ($newFileSize bytes)")
@@ -137,7 +126,7 @@ class CodeEditingTool(
                         )
                     } else {
                         logger.warn { "File not found: $pathStr (resolved to ${path.toAbsolutePath()})" }
-                        return@withFileLock ToolResult.error(
+                        return@withLockedFile ToolResult.error(
                             message = "File not found: $pathStr",
                             recovery = "To create a new file pass old_string=\"\" with the full new content, or use advance_code_editing with edit_description.",
                             nextActionHints = listOf(
@@ -152,14 +141,14 @@ class CodeEditingTool(
                 // Check if it's a regular file
                 if (!path.isRegularFile()) {
                     logger.warn { "Not a regular file: $pathStr (is directory: ${path.isDirectory()})" }
-                    return@withFileLock ToolResult.error("Not a regular file: $pathStr")
+                    return@withLockedFile ToolResult.error("Not a regular file: $pathStr")
                 }
 
                 // Check file size
                 val fileSize = path.fileSize()
                 logger.info { "File size before edit: $fileSize bytes, absolute='${path.toAbsolutePath()}'" }
                 if (fileSize > limits.maxFileSize) {
-                    return@withFileLock ToolResult.error(
+                    return@withLockedFile ToolResult.error(
                         message = "File too large: $fileSize bytes (max ${limits.maxFileSize} bytes)",
                         recovery = "Use multi_line_editor for targeted edits, or split the change into smaller hunks."
                     )
@@ -170,7 +159,7 @@ class CodeEditingTool(
 
                 // Check if old_string exists
                 if (!content.contains(oldString)) {
-                    return@withFileLock ToolResult.error(
+                    return@withLockedFile ToolResult.error(
                         message = "String not found in file: '${oldString.take(80)}${if (oldString.length > 80) "…" else ""}' (${oldString.length} chars).",
                         recovery = "Read the file first to see the actual content, then retry with the exact substring (including whitespace).",
                         nextActionHints = listOf(
@@ -185,7 +174,7 @@ class CodeEditingTool(
                 if (!replaceAll) {
                     val occurrences = countOccurrences(content, oldString)
                     if (occurrences > 1) {
-                        return@withFileLock ToolResult.error(
+                        return@withLockedFile ToolResult.error(
                             message = "String appears $occurrences times in file.",
                             recovery = "Either pass replace_all=true to apply to every occurrence, or extend old_string with surrounding context to make it unique.",
                             nextActionHints = listOf(

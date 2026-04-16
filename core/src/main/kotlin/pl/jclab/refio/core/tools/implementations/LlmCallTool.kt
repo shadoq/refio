@@ -52,12 +52,12 @@ class LlmCallTool(
 ) : Tool {
 
     override val name = "llm_call"
-    override val description = "Send a prompt to an LLM and get the text response. " +
-        "Use 'prompt' for instructions/role, 'data' for inline text, 'file_path' for large content (keeps it out of agent context). " +
-        "Supports vision: use 'image_path' or 'image_base64' with a vision-capable model (e.g. openai/gpt-5.4-mini). " +
-        "No tools, no history, no project context — a raw single-turn LLM call. CHEAPER than invoke_subagent."
+    override val description = "Raw single-turn LLM call — no tools, no history, no project context. " +
+        "Supports vision via image_path/image_base64. CHEAPER than invoke_subagent."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_PRODUCING
+    override val selectionHint =
+        "Single-turn LLM call for analysis/transform/vision. Cheaper than invoke_subagent when no tools needed."
 
     override suspend fun execute(params: Map<String, Any>): ToolResult {
         val userPrompt = params["data"]?.toString()?.trim() ?: ""

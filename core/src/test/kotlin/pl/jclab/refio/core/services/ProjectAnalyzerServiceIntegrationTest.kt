@@ -1,5 +1,7 @@
 package pl.jclab.refio.core.services
 
+import pl.jclab.refio.core.config.ConfigKeys
+
 import io.mockk.*
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.BeforeEach
@@ -28,7 +30,7 @@ class ProjectAnalyzerServiceIntegrationTest {
         richAnalysisEngine = mockk()
         configService = mockk()
         every { configService.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
-        every { configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.RAG_IGNORED_DIRECTORIES) } returns ConfigService.DEFAULT_RAG_IGNORED_DIRECTORIES
+        every { configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.RAG_IGNORED_DIRECTORIES) } returns ConfigKeys.RAG_IGNORED_DIRECTORIES.default
 
         // Prepare test project structure
         testProjectRoot = tempDir.resolve("test-project")

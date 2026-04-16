@@ -82,7 +82,7 @@ class TuiRendererTest {
             messages = listOf(
                 TuiChatMessage("1", System.currentTimeMillis(), "user", "Hello")
             ),
-            steps = listOf(TuiStep("s1", "Analyze code", "RUNNING"))
+            subtasks = listOf(pl.jclab.refio.cli.tui.state.subtaskFixture(id = "s1", description = "Analyze code", status = "RUNNING"))
         )
         renderer.render(state)
     }

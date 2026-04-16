@@ -96,8 +96,8 @@ class PlanningServiceTest {
         }
         every { configService.getModel(any(), any()) } returns Pair("test-model", "test")
         every { configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, any<String>()) } returns 4096
-        every { configService.get(ConfigService.KEY_UI_THINKING_ENABLED) } returns "false"
-        every { configService.get(ConfigService.KEY_UI_NO_EGRESS_ENABLED) } returns "false"
+        every { configService.get(ConfigKeys.UI_THINKING_ENABLED.key) } returns "false"
+        every { configService.get(ConfigKeys.UI_NO_EGRESS_ENABLED.key) } returns "false"
         every { promptsService.getSystemPrompt(any(), any()) } returns "You are a planning assistant."
 
         every { toolDescriptionBuilder.getToolDescriptions(any(), any()) } returns "read_file, file_search, grep_search"
@@ -154,7 +154,6 @@ class PlanningServiceTest {
             toolPermissionsService = null,
             contextService = null,
             projectRoot = null,
-            ideProject = null
         )
     }
 

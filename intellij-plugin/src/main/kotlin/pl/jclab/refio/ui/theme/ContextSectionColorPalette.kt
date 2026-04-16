@@ -18,7 +18,6 @@ object ContextSectionColorPalette {
         "current_task" to Color(0xDA70D6),
         "subtasks" to Color(0xFF69B4),
         "conversation" to Color(0xF08080),
-        "rag_fragments" to Color(0xFFB347),
         "user_context" to Color(0x98FB98),
         "tool_outputs" to Color(0x87CEEB),
         "recent_work" to Color(0xDDA0DD),

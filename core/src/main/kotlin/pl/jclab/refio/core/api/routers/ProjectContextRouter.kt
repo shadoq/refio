@@ -25,7 +25,6 @@ private val logger = dualLogger("ProjectContextRouter")
 class ProjectContextRouter(
     private val contextService: ContextService?,
     private val projectRoot: Path?,
-    private val ideProject: Any?,
     private val taskRepository: TaskRepository,
     private val chatMessageRepository: ChatMessageRepository,
     private val promptsService: PromptsService,
@@ -76,7 +75,6 @@ class ProjectContextRouter(
             val context = contextService.buildProjectContext(
                 projectRoot = projectRoot,
                 taskId = taskId,
-                project = ideProject,
                 query = effectiveQuery,
                 userContextRefs = userContextRefs
             )
@@ -305,9 +303,13 @@ class ProjectContextRouter(
         contextSectionTokens: Map<String, ContextSectionTokenInfo>
     ): RuntimePromptPreview {
         val toolDescriptions = toolDescriptionBuilder.getToolDescriptions(TaskMode.AGENT, task.id)
+        val toolSelectionMatrix = toolDescriptionBuilder.getToolSelectionMatrix(TaskMode.AGENT, task.id)
         val baseSystemPromptRaw = promptsService.getSystemPrompt(
             type = PromptType.SYSTEM_AGENT,
-            variables = mapOf("tool_descriptions" to toolDescriptions)
+            variables = mapOf(
+                "tool_descriptions" to toolDescriptions,
+                "tool_selection_matrix" to toolSelectionMatrix
+            )
         )
         // Apply the same section providers used by TurnPromptBuilder in runtime
         // so the preview reflects the real prompt (including <system_environment>).
@@ -358,7 +360,7 @@ class ProjectContextRouter(
         if (contextService != null && projectRoot != null) {
             return try {
                 val turnMessages = contextService.buildAgentTurnMessages(
-                    taskId = taskId, projectRoot = projectRoot, project = null,
+                    taskId = taskId, projectRoot = projectRoot,
                     userContextRefs = userContextRefs, query = query
                 ).messages.toMutableList()
                 appendPendingUserMessage(turnMessages, pendingUserInput)
@@ -613,13 +615,11 @@ class ProjectContextRouter(
             analyzedAt = context.contextGeneratedAt.toEpochMilli(),
             contextBuiltAt = context.contextGeneratedAt.toEpochMilli(),
             userRequirements = context.userRequirements,
-            ragFragments = context.ragFragments,
             mcpResources = context.mcpResources.map {
                 MCPResourceResponse(serverId = it.serverId, uri = it.uri, name = it.name, description = it.description, mimeType = it.mimeType)
             },
             userContextRefs = userContextRefDTOs,
             conversationHistory = conversationDTOs,
-            previousSubtasks = context.executedSteps.map { it.displayContent },
             domainAnalysis = context.domainAnalysis,
             directoryCount = context.structure.directoryCount,
             maxDepth = context.structure.maxDepth,
@@ -659,7 +659,7 @@ class ProjectContextRouter(
     private fun findNextKnownSectionStart(prompt: String, fromIndex: Int): Int? {
         val knownSectionTags = listOf(
             "PROJECT_CONTEXT", "CURRENT_TASK", "USER_REQUIREMENTS", "USER_PROVIDED_CONTEXT",
-            "WORKING_MEMORY", "MCP_RESOURCES", "RAG_FRAGMENTS", "CONVERSATION_HISTORY",
+            "WORKING_MEMORY", "MCP_RESOURCES", "CONVERSATION_HISTORY",
             "RECENT_WORK", "SUBTASKS_STATUS", "KEY_COMPONENTS", "PROJECT_DEPENDENCIES", "CODE_ANALYSIS"
         )
         var nextIndex: Int? = null

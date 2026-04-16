@@ -95,7 +95,7 @@ data class ContextBudget(
         // truncate when space is tight. Giving them slack from under-used stable
         // sections (PROJECT_CONTEXT, REFERENCE) means a multi-turn agent session
         // gets to carry more of its own history forward. CONVERSATION comes next
-        // (user-facing chat), then USER_CONTEXT and RAG_FRAGMENTS as supplementary.
+        // (user-facing chat), then USER_CONTEXT as supplementary.
         //
         // Bug 2C fix: previously CONVERSATION was first and RECENT_WORK wasn't on
         // the list at all, so agent work history never benefited from budget slack.
@@ -104,7 +104,6 @@ data class ContextBudget(
             ContextSection.WORKING_MEMORY,
             ContextSection.CONVERSATION,
             ContextSection.USER_CONTEXT,
-            ContextSection.RAG_FRAGMENTS
         )
 
         val redistributed = sectionBudgets.toMutableMap()
@@ -129,7 +128,6 @@ data class ContextBudget(
             ContextSection.PROJECT_CONTEXT to 1500,
             ContextSection.RECENT_WORK to 8000,
             ContextSection.USER_CONTEXT to 5000,
-            ContextSection.RAG_FRAGMENTS to 1000,
             ContextSection.CONVERSATION to 14000,
             ContextSection.REFERENCE to 2500
         )

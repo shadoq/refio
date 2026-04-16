@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.tools.base.ToolFactory
@@ -88,8 +88,7 @@ class CoreConnectionManager {
             ContextProviderRegistry.providerFactory = { isIdeEnvironment ->
                 val terminalAvailable = try {
                     val pluginId = com.intellij.openapi.extensions.PluginId.getId("com.intellij.terminal")
-                    val plugin = com.intellij.ide.plugins.PluginManagerCore.getPlugin(pluginId)
-                    plugin?.isEnabled == true
+                    com.intellij.ide.plugins.PluginManagerCore.isPluginInstalled(pluginId)
                 } catch (_: Exception) { false }
 
                 buildList {

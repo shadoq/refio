@@ -50,13 +50,13 @@ class ThinkTool : Tool {
 
     override val name: String = "think"
     override val description: String =
-        "Record a short reasoning step (plan, hypothesis, gap analysis) without performing any action. " +
-            "Use BEFORE acting when: you are about to repeat a tool, just hit an error, are about to write/edit, " +
-            "or the request is ambiguous and you need to enumerate what you don't yet know. " +
-            "This tool has no side effects — it only forces a structured think before the next action. " +
-            "The same thought cannot be recorded twice in a row — repeats are rejected."
+        "Record a reasoning step (plan, hypothesis, gap analysis) without performing any action. " +
+            "Use BEFORE acting when: about to repeat a tool, hit an error, about to write/edit, or request is ambiguous. " +
+            "No side effects. Duplicate thoughts are rejected."
     override val mode: ToolMode = ToolMode.READ_ONLY
     override val category: ToolCategory = ToolCategory.SYSTEM
+    override val selectionHint: String =
+        "Record a reasoning step before retrying a failed call or at a decision point. No side effects."
 
     override fun validateParams(params: Map<String, Any>) {
         val thought = params["thought"] as? String

@@ -82,6 +82,8 @@ object SupportedModels {
      */
     private val ANTHROPIC_SUPPORTED = setOf<String>(
         // Opus models
+        "claude-opus-4-7",
+        "anthropic.claude-opus-4-7",
         "claude-opus-4-6",
         "anthropic.claude-opus-4-6-v1",
         "claude-opus-4-5",
@@ -100,6 +102,8 @@ object SupportedModels {
         // Haiku models
         "claude-haiku-4-5-20251001",
         "claude-haiku-4-5",
+        "claude-haiku-4-5@20251001",
+        "anthropic.claude-haiku-4-5-20251001-v1:0",
         "claude-3-5-haiku-20241022",
         "claude-3-5-haiku-latest",
         "claude-3-haiku-20240307",
@@ -141,6 +145,8 @@ object SupportedModels {
      */
     private val GEMINI_SUPPORTED = setOf(
         "gemini-3-pro-preview",
+        "gemini-3-flash",
+        "gemini-3-flash-lite",
         "gemini-2.5-pro",
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
@@ -232,7 +238,7 @@ object SupportedModels {
                 supported
             }
 
-            "custom_openai" -> {
+            "generic_openai" -> {
                 val supported = CUSTOM_OPENAI_SUPPORTED.any { it.matches(modelId) }
                 if (!supported) {
                     logger.debug { "[WHITELIST] Custom OpenAI model not supported: $modelId" }

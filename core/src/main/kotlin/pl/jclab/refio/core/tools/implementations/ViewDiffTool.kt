@@ -33,6 +33,7 @@ class ViewDiffTool(
     override val description = "Compare two files or a file against provided content."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
+    override val selectionHint = "Compare two files or a file against provided content."
 
     override fun validateParams(params: Map<String, Any>) {
         if (params["file1"] == null || (params["file1"] as? String).isNullOrBlank()) {

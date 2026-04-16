@@ -4,7 +4,7 @@ import pl.jclab.refio.core.api.StreamCallback
 import pl.jclab.refio.core.api.StreamChunk
 import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.llm.adapters.AnthropicAdapter
-import pl.jclab.refio.core.llm.adapters.CustomOpenAIAdapter
+import pl.jclab.refio.core.llm.adapters.GenericOpenAIAdapter
 import pl.jclab.refio.core.llm.adapters.GeminiAdapter
 import pl.jclab.refio.core.llm.adapters.LMStudioAdapter
 import pl.jclab.refio.core.llm.adapters.OllamaAdapter
@@ -194,7 +194,7 @@ class LLMClient(
             // Even for local providers, verify the endpoint is actually localhost
             val endpoint = when (providerLower) {
                 "ollama" -> configService?.getTyped(pl.jclab.refio.core.config.ConfigKeys.PROVIDER_OLLAMA_ENDPOINT) ?: "http://localhost:11434"
-                "lmstudio" -> configService?.get(pl.jclab.refio.core.services.ConfigService.KEY_PROVIDER_LM_STUDIO_BASE_URL) ?: "http://localhost:1234"
+                "lmstudio" -> configService?.get(pl.jclab.refio.core.config.ConfigKeys.PROVIDER_LM_STUDIO_BASE_URL.key) ?: "http://localhost:1234"
                 else -> ""
             }
             if (endpoint.isNotBlank() && !isLocalEndpoint(endpoint)) {
@@ -293,7 +293,14 @@ class LLMClient(
             // Provider-agnostic guardrails — detect repetition loops, runaway output
             // size, and wall-clock deadlines. Instantiated per-request (stateful).
             // See core/llm/streaming/StreamGuardrails.kt for details.
-            val guardrails = if (stream) StreamGuardrails.defaults() else null
+            val guardrails = if (stream) {
+                val streamingTimeoutSec = configService?.getTyped(
+                    pl.jclab.refio.core.config.ConfigKeys.STREAMING_REQUEST_TIMEOUT
+                ) ?: pl.jclab.refio.core.config.ConfigKeys.STREAMING_REQUEST_TIMEOUT.default
+                // Wall clock = 90% of streaming timeout (10% buffer for cleanup/logging)
+                val wallClockMs = (streamingTimeoutSec * 900L).coerceIn(60_000, 1_800_000)
+                StreamGuardrails.defaults(wallClockMs)
+            } else null
 
             val streamCallback: ((pl.jclab.refio.core.llm.StreamChunk) -> Unit)? = if (stream) { llmChunk ->
                 contentBuilder.append(llmChunk.delta)
@@ -444,7 +451,7 @@ class LLMClient(
                 "anthropic" -> AnthropicAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
                 "gemini" -> GeminiAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
                 "lmstudio" -> LMStudioAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
-                "custom_openai" -> CustomOpenAIAdapter(model = model, providerName = "custom_openai", configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
+                "generic_openai" -> GenericOpenAIAdapter(model = model, providerName = "generic_openai", configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
                 "zai" -> ZAIAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
                 "openrouter" -> OpenRouterAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
                 else -> {
@@ -483,7 +490,7 @@ class LLMClient(
      * Get list of supported providers.
      */
     fun getSupportedProviders(): List<String> {
-        return listOf("ollama", "openai", "anthropic", "gemini", "openrouter", "lmstudio", "custom_openai", "zai")
+        return listOf("ollama", "openai", "anthropic", "gemini", "openrouter", "lmstudio", "generic_openai", "zai")
     }
 
     /**

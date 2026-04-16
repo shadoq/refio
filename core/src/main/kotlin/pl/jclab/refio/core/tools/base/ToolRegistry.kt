@@ -21,23 +21,43 @@ class ToolRegistry {
     private val tools = ConcurrentHashMap<String, Tool>()
 
     /**
-     * Canonical tool ordering: READ → WRITE (cheapest first) → EXECUTE → DELEGATE.
+     * Named tool group for prompt section headers.
+     */
+    data class ToolGroup(val name: String, val tools: List<String>)
+
+    /**
+     * Logical tool groups for LLM prompt rendering.
+     * Each group gets a section header so the LLM sees related tools together.
+     * Tools not in any group appear at the end under "Other".
+     */
+    val toolGroups = listOf(
+        ToolGroup("Reading & Search", listOf(
+            "read_file", "read_directory", "file_search", "grep_search", "view_diff",
+            "code_intelligence", "rag_search"
+        )),
+        ToolGroup("Web & HTTP", listOf(
+            "web_search", "fetch_webpage", "http_request"
+        )),
+        ToolGroup("System", listOf(
+            "think", "tasks", "memory", "manage_subagent", "ask_user", "sleep"
+        )),
+        ToolGroup("Editing", listOf(
+            "code_editing", "multi_edit", "create_new_file", "multi_line_editor", "advance_code_editing"
+        )),
+        ToolGroup("Execution", listOf(
+            "run_terminal_command", "run_code",
+            "run_process_background", "monitor_process"
+        )),
+        ToolGroup("Delegation", listOf(
+            "send_message", "delegate_to_strong_model", "invoke_subagent", "llm_call"
+        ))
+    )
+
+    /**
+     * Canonical tool ordering derived from toolGroups.
      * Tools not listed here appear at the end (e.g. MCP tools).
      */
-    private val toolOrder = listOf(
-        // READ — orientation & analysis
-        "read_file", "read_directory", "file_search", "grep_search", "view_diff",
-        // SYSTEM — planning, memory, reasoning & agent management
-        "think", "tasks", "memory", "manage_subagent",
-        // WRITE — cheapest first
-        "code_editing", "multi_edit", "create_new_file", "multi_line_editor", "advance_code_editing",
-        // EXECUTE — verification & data
-        "run_terminal_command", "run_code", "http_request",
-        // COMMUNICATE
-        "send_message",
-        // DELEGATE — only when the agent cannot handle the task itself
-        "delegate_to_strong_model", "invoke_subagent"
-    )
+    private val toolOrder = toolGroups.flatMap { it.tools }
 
     /**
      * Register a tool
@@ -72,6 +92,31 @@ class ToolRegistry {
      */
     fun getAllTools(): List<Tool> {
         return sortByCanonicalOrder(tools.values)
+    }
+
+    /**
+     * Get tools organized by groups, filtering to only include registered & available tools.
+     * Returns pairs of (groupName, toolsInGroup). Ungrouped tools go into "Other".
+     */
+    fun getToolsByGroups(toolList: List<Tool>): List<Pair<String, List<Tool>>> {
+        val byName = toolList.associateBy { it.name }
+        val result = mutableListOf<Pair<String, List<Tool>>>()
+        val grouped = mutableSetOf<String>()
+
+        for (group in toolGroups) {
+            val groupTools = group.tools.mapNotNull { byName[it] }
+            if (groupTools.isNotEmpty()) {
+                result.add(group.name to groupTools)
+                grouped.addAll(groupTools.map { it.name })
+            }
+        }
+
+        val ungrouped = toolList.filter { it.name !in grouped }
+        if (ungrouped.isNotEmpty()) {
+            result.add("Other" to ungrouped)
+        }
+
+        return result
     }
 
     private fun sortByCanonicalOrder(values: Collection<Tool>): List<Tool> {

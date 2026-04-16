@@ -20,7 +20,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import pl.jclab.refio.api.models.ContextReference
-import pl.jclab.refio.api.models.SlashCommand
+import pl.jclab.refio.api.models.SlashPrompt
 import pl.jclab.refio.core.db.PromptType
 import pl.jclab.refio.core.context.ContextProviderRegistry
 import pl.jclab.refio.core.context.LoadSubmenuItemsArgs
@@ -39,12 +39,12 @@ class RefioCompletionContributor : CompletionContributor() {
         val REPLACE_CONTEXT_PREFIX_KEY: Key<(String) -> Unit> =
             Key.create("refio.promptEditor.replaceContextPrefix")
 
-        private val slashCommandsCacheLock = Any()
+        private val slashPromptsCacheLock = Any()
         @Volatile
-        private var cachedSlashCommands: List<SlashCommand> = SlashCommand.BUILTINS
+        private var cachedSlashPrompts: List<SlashPrompt> = SlashPrompt.BUILTINS
         @Volatile
-        private var lastSlashCommandsLoadAt: Long = 0
-        private const val SLASH_COMMANDS_CACHE_MS = 5_000L
+        private var lastSlashPromptsLoadAt: Long = 0
+        private const val SLASH_PROMPTS_CACHE_MS = 5_000L
 
         private val subagentsCacheLock = Any()
         @Volatile
@@ -62,24 +62,24 @@ class RefioCompletionContributor : CompletionContributor() {
         }
 
         @Suppress("UNUSED_PARAMETER")
-        private fun loadSlashCommands(_project: Project): List<SlashCommand> {
+        private fun loadSlashPrompts(_project: Project): List<SlashPrompt> {
             val now = System.currentTimeMillis()
-            synchronized(slashCommandsCacheLock) {
-                if (now - lastSlashCommandsLoadAt < SLASH_COMMANDS_CACHE_MS && cachedSlashCommands.isNotEmpty()) {
-                    return cachedSlashCommands
+            synchronized(slashPromptsCacheLock) {
+                if (now - lastSlashPromptsLoadAt < SLASH_PROMPTS_CACHE_MS && cachedSlashPrompts.isNotEmpty()) {
+                    return cachedSlashPrompts
                 }
 
                 return try {
                     val router = CoreConnectionManager.getInstance().getApiRouter()
-                    val response = router.promptsRouter.getPromptsByType(PromptType.SLASH_COMMAND)
+                    val response = router.promptsRouter.getPromptsByType(PromptType.SLASH_PROMPT)
 
-                    val commands = response.prompts
+                    val slashPrompts = response.prompts
                         .filter { it.isEnabled }
                         .map { prompt ->
-                            SlashCommand(
+                            SlashPrompt(
                                 id = prompt.id,
                                 name = prompt.name.removePrefix("/"),
-                                description = prompt.description ?: "Custom command",
+                                description = prompt.description ?: "Custom prompt",
                                 template = prompt.content,
                                 variables = extractVariablesFromTemplate(prompt.content),
                                 category = "custom",
@@ -87,15 +87,15 @@ class RefioCompletionContributor : CompletionContributor() {
                             )
                         }
 
-                    val resolved = if (commands.isEmpty()) SlashCommand.BUILTINS else commands
-                    cachedSlashCommands = resolved
-                    lastSlashCommandsLoadAt = now
+                    val resolved = if (slashPrompts.isEmpty()) SlashPrompt.BUILTINS else slashPrompts
+                    cachedSlashPrompts = resolved
+                    lastSlashPromptsLoadAt = now
                     resolved
                 } catch (e: Exception) {
-                    log.warn("Failed to load slash commands for completion, using built-ins", e)
-                    cachedSlashCommands = SlashCommand.BUILTINS
-                    lastSlashCommandsLoadAt = now
-                    cachedSlashCommands
+                    log.warn("Failed to load slash prompts for completion, using built-ins", e)
+                    cachedSlashPrompts = SlashPrompt.BUILTINS
+                    lastSlashPromptsLoadAt = now
+                    cachedSlashPrompts
                 }
             }
         }
@@ -204,19 +204,19 @@ class RefioCompletionContributor : CompletionContributor() {
                             }
                         }
 
-                        // Slash commands: /explain, /fix, etc.
+                        // Slash prompts: /explain, /fix, etc.
                         token.startsWith("/") -> {
                             val cleanPrefix = token.removePrefix("/").lowercase()
                             val prefixMatcher = result.withPrefixMatcher(token)
-                            loadSlashCommands(project)
+                            loadSlashPrompts(project)
                                 .sortedBy { it.name.lowercase() }
-                                .forEach { cmd ->
-                                    if (cleanPrefix.isEmpty() || cmd.name.lowercase().startsWith(cleanPrefix)) {
+                                .forEach { sp ->
+                                    if (cleanPrefix.isEmpty() || sp.name.lowercase().startsWith(cleanPrefix)) {
                                         prefixMatcher.addElement(
-                                            LookupElementBuilder.create("/${cmd.name} ")
-                                                .withPresentableText("/${cmd.name}")
-                                                .withTypeText("Command", true)
-                                                .withTailText(" ${cmd.description}", true),
+                                            LookupElementBuilder.create("/${sp.name} ")
+                                                .withPresentableText("/${sp.name}")
+                                                .withTypeText("Prompt", true)
+                                                .withTailText(" ${sp.description}", true),
                                         )
                                     }
                                 }

@@ -2,6 +2,7 @@ package pl.jclab.refio.core.tools.security
 
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import kotlin.test.assertEquals
 
 class CommandRuleMatcherTest {
@@ -146,15 +147,13 @@ class CommandRuleMatcherTest {
         }
 
         @Test
-        fun `should handle invalid regex gracefully`() {
-            val matcher = CommandRuleMatcher(listOf(
-                CommandRule("[invalid", RuleAction.BLOCK, "Bad regex"),
-                CommandRule("^ls(\\s+.*)?$", RuleAction.ALLOW, "List files")
-            ))
-
-            // Invalid regex should be skipped, valid one should work
-            val result = matcher.match("ls -la")
-            assertEquals(RuleAction.ALLOW, result.action)
+        fun `invalid regex fails at CommandRule construction not at match time`() {
+            // Post Sprint 1: invalid regex is detected eagerly. Config loader must refuse
+            // startup when this throws, instead of silently dropping the rule.
+            val err = assertThrows<IllegalArgumentException> {
+                CommandRule("[invalid", RuleAction.BLOCK, "Bad regex")
+            }
+            assert(err.message!!.contains("Invalid command rule regex")) { "unexpected: ${err.message}" }
         }
     }
 }

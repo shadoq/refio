@@ -643,7 +643,7 @@ interface Tool {
 }
 ```
 
-### READ_ONLY Tools (7)
+### READ_ONLY Tools (14)
 
 | Tool | Parameters | Description | Limits |
 |------|------------|-------------|--------|
@@ -652,10 +652,17 @@ interface Tool {
 | `file_search` | pattern, path, offset, limit | Glob pattern search | 100 results |
 | `grep_search` | pattern, path, case_sensitive | Regex content search | 500 results |
 | `view_diff` | file1, file2/content2 | Line-by-line diff | - |
-| `invoke_subagent` | subagent_name, goal, context_refs? | Run nested child loop with a specialized subagent (dynamic description: active subagents + allowed tools/inherit) | Depth <= 3 |
-| `delegate_to_strong_model` | task, context?, allow_tools?, response_format? | Delegate complex task to a stronger model (single-shot or tool-enabled sub-agent). Only registered when `models.defaults.strong` is configured. | - |
+| `invoke_subagent` | subagent_name, goal, context_refs? | Run nested child loop with a specialized subagent | Depth <= 3 |
+| `delegate_to_strong_model` | task, context?, allow_tools?, response_format? | Delegate complex task to a stronger model | - |
+| `web_search` | query, max_results? | Search the web (Brave/SerpAPI/DuckDuckGo) | 20 results max |
+| `fetch_webpage` | url, prompt, max_content_chars? | Fetch URL → Markdown → LLM processing | 50K chars max |
+| `code_intelligence` | action, symbol?, path?, language? | Find usages, definitions, list symbols, compiler diagnostics | ctags optional |
+| `monitor_process` | process_id, max_lines? | Read output from background process | 1000 lines max |
+| `ask_user` | question, options? | Ask user a question and wait for response | 10 min timeout |
+| `sleep` | duration_ms | Pause execution | 30s max |
+| `think` | thought | Explicit reasoning slot | - |
 
-### WRITE Tools (8)
+### WRITE Tools (10)
 
 | Tool | Parameters | Description | Cost |
 |------|------------|-------------|------|
@@ -667,6 +674,8 @@ interface Tool {
 | `run_terminal_command` | command | Shell execution (whitelist-protected) | **AGENT: ON (default)** |
 | `http_request` | url, method, headers, body, save_to_file | HTTP requests (GET/POST/PUT/DELETE), 5 MB limit, 60s timeout | Free |
 | `run_code` | language, code | Execute Python/JavaScript/Kotlin Script snippets, 120s timeout | **OFF by default** |
+| `run_process_background` | command | Start command in background, return process_id | Free |
+| `llm_call` | prompt, data?, file_path?, model? | Raw single-turn LLM call | ~$0.01 |
 
 ### Security Layers
 
@@ -1100,7 +1109,7 @@ Layer 7: Secret Redaction
 | Issue | Location | Impact | Status |
 |-------|----------|--------|--------|
 | Symlink Escape | PathSandbox.kt | Can escape project root | Detection in place |
-| Whitelist Coverage | CommandWhitelistDefaults.kt | Missing command entries can block harmless commands | Add via config/UI whitelist |
+| Command Rule Coverage | `CommandRuleDefaults.kt` | Missing rules may require confirmation (`ASK`) for otherwise harmless commands | Add project-specific rules via Tools Settings → Terminal Command Rules |
 
 ---
 
@@ -1218,7 +1227,7 @@ TuiApp (entry point — launchTuiApp())
 │
 ├── Detects interactive mode: System.console() != null
 │   ├── Interactive: alternate screen buffer, raw JLine3 input, F-key navigation
-│   └── Non-interactive: inline rendering, line-based input (/commands, :shortcuts)
+│   └── Non-interactive: inline rendering, line-based input (`/prompt`, `:shortcuts`)
 │
 ├── Three concurrent coroutines:
 │   ├── Render loop — stateFlow.collect { renderer.render(state) }
@@ -1255,7 +1264,7 @@ TuiApp (entry point — launchTuiApp())
 │
 ├── TuiInputHandler (dual-mode input)
 │   ├── Raw mode (real TTY): JLine3 reader, single-char dispatch, escape sequence parsing
-│   ├── Line mode (IDE/pipe): BufferedReader from System.in, /commands, :tab shortcuts
+│   ├── Line mode (IDE/pipe): BufferedReader from System.in, `/prompt`, `:tab` shortcuts
 │   ├── dispatchAction() handles: tab switching, typing, backspace, send, autocomplete
 │   └── Slash commands: /quit, /clear, /help, /mode, /history, /settings, /set section.key value
 │
@@ -1296,7 +1305,7 @@ The Settings screen provides full configuration access via `ConfigRouter`, match
 | General | `general` | Markdown rendering, streaming, advanced view toggles |
 | Providers | `providers` | 8 providers (Ollama, Anthropic, OpenAI, OpenRouter, Gemini, LM Studio, Custom OpenAI, Z.AI) with masked API keys and status indicators |
 | Models | `models` | Model assignments: default, planning, coding, auxiliary, embeddings |
-| Prompts | `prompts` | Custom system prompts and slash commands |
+| Prompts | `prompts` | Custom system prompts and slash prompts (reusable `/name` prompt templates) |
 | Context | `index` | RAG search tuning (similarity threshold, top-k, hybrid search) and indexing settings |
 | MCP | `mcp` | MCP server list with enable/disable and type |
 | Docs | `docs` | Documentation sources for @docs context provider |
@@ -1334,7 +1343,7 @@ The Settings screen provides full configuration access via `ConfigRouter`, match
 | Ctrl+L | **Continue** | Resume current conversation after interruption (e.g. if agent stopped mid-task). |
 | Ctrl+D | **Summarize** | Compact long conversation history to save context window space. Uses LLM to generate a summary of older messages. |
 
-You can also use slash commands for session management:
+You can also use system commands (note: these are TUI session commands, distinct from user-defined slash prompts managed in Settings → Prompts):
 - `/history` — Open session history
 - `/export <path>` — Export conversation to Markdown file
 - `/resend` — Resend last user message
@@ -1381,7 +1390,7 @@ You can also use slash commands for session management:
 |---------|--------|------------|
 | `@` | Context autocomplete | @file, @folder, @codebase, @grep, @diff, @url, @docs, @clipboard, etc. |
 | `!` | Subagent autocomplete | !review, !security, !architect, !docs, and custom subagents |
-| `/` | Slash command autocomplete | /explain, /refactor, /test, /fix, /implement, /optimize, /security-review, etc. |
+| `/` | Slash prompt autocomplete | /explain, /refactor, /test, /fix, /implement, /optimize, /security-review, etc. |
 
 When the autocomplete popup is visible:
 - **Arrow Down / Tab** — Next candidate
@@ -1390,9 +1399,9 @@ When the autocomplete popup is visible:
 - **Escape** — Dismiss
 - **Keep typing** — Filters candidates in real-time
 
-#### Slash Commands Reference
+#### Slash Prompts Reference
 
-**Prompt templates** (sent to LLM with your input as context):
+**Prompt templates** (sent to LLM with your input as context). The feature was previously called "Slash Commands"; the `/name` syntax is unchanged, only the UI/code label changed to reflect that these are prompts, not plugin/CLI commands.
 
 | Command | Description |
 |---------|-------------|

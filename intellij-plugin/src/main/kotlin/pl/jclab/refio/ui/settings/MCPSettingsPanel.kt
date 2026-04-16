@@ -28,7 +28,7 @@ import pl.jclab.refio.core.context.mcp.MCPToolWorkflowConfig
 import pl.jclab.refio.core.context.mcp.MCPToolWorkflowStep
 import pl.jclab.refio.core.context.mcp.MCPToolsExposureMode
 import pl.jclab.refio.core.utils.ProjectIdGenerator
-import pl.jclab.refio.services.logging.dualLogger
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.ui.theme.LCATheme
 import java.awt.BorderLayout
 import java.awt.Component
