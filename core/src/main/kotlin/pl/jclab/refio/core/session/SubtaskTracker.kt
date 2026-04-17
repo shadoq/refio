@@ -1,5 +1,11 @@
 package pl.jclab.refio.core.session
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.launch
 import pl.jclab.refio.core.session.SessionStateManager
 import pl.jclab.refio.core.session.VfsRefresher
 import pl.jclab.refio.api.models.Message
@@ -16,10 +22,33 @@ class SubtaskTracker(
     private val vfsRefresher: VfsRefresher,
     private val loadMessages: suspend () -> Unit,
     private val executeCurrentStep: suspend (String) -> ExecuteStepResponse?,
-    private val showApprovalMessageForNextSubtask: suspend () -> Unit
+    private val showApprovalMessageForNextSubtask: suspend () -> Unit,
+    scope: CoroutineScope,
 ) {
 
     private val logger = dualLogger("SubtaskTracker")
+
+    // Tool lifecycle events fire loadSubtasks on every start/complete — up to dozens/sec
+    // during parallel tool execution. scheduleReload() coalesces these bursts into a single
+    // DB read after 300ms of quiet.
+    private val reloadTrigger = MutableSharedFlow<Unit>(
+        replay = 0,
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    init {
+        @OptIn(FlowPreview::class)
+        scope.launch {
+            reloadTrigger
+                .debounce(RELOAD_DEBOUNCE_MS)
+                .collect { loadSubtasks() }
+        }
+    }
+
+    fun scheduleReload() {
+        reloadTrigger.tryEmit(Unit)
+    }
 
     fun updateSubtasks(subtasks: List<SubtaskResponse>) {
         stateManager.setSubtasks(subtasks)
@@ -320,6 +349,10 @@ class SubtaskTracker(
 
         loadSubtasks()
         return prepareResponse
+    }
+
+    companion object {
+        private const val RELOAD_DEBOUNCE_MS = 300L
     }
 
     private fun areSubtasksEqual(current: List<SubtaskResponse>, new: List<SubtaskResponse>): Boolean {

@@ -116,7 +116,7 @@ data class SubagentDefinition(
      * Reasoning effort override for reasoning-capable models (OpenAI o1/o3/gpt-5,
      * Anthropic thinking, etc.). Allowed values: "low", "medium", "high".
      *
-     * - null = inherit global config (UI_THINKING_ENABLED → low/medium)
+     * - null = inherit global config (GENERAL_THINKING_ENABLED → low/medium)
      * - explicit value = override per-subagent (e.g. architectural reviewers benefit
      *   from "high" while quick documentation tasks should stay on "low")
      *

@@ -264,15 +264,16 @@ class LLMClient(
         try {
             logger.info { "[LLM_CLIENT] Calling $provider adapter for model $model (stream=$stream)" }
 
-            val adapterKwargs = buildMap {
+            val adapterKwargs: Map<String, Any> = buildMap<String, Any> {
                 putAll(kwargs)
-                responseFormat?.let { put("response_format", it) }
+                if (responseFormat != null) put("response_format", responseFormat)
                 // reasoningEffort takes precedence over the boolean `thinking` flag.
                 // OpenAI adapter accepts either a Boolean or a String ("low"/"medium"/"high")
                 // and maps it to the Responses API `reasoning.effort` field.
-                when {
-                    reasoningEffort != null -> put("thinking", reasoningEffort)
-                    thinking -> put("thinking", true)
+                if (reasoningEffort != null) {
+                    put("thinking", reasoningEffort)
+                } else if (thinking) {
+                    put("thinking", true)
                 }
             }
 

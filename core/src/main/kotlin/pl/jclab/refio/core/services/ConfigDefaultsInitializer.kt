@@ -73,12 +73,10 @@ internal class ConfigDefaultsInitializer(
          * UI toggles first, then models, then feature flags, then RAG/context/agent knobs.
          */
         private val BUILTIN_DEFAULTS: List<Triple<String, String, String>> = listOf(
-            Triple(ConfigKeys.UI_THINKING_ENABLED.key, "false", "Show LLM thinking process in UI"),
-            Triple(ConfigKeys.UI_NO_EGRESS_ENABLED.key, "false", "Block external network calls"),
-            Triple(ConfigKeys.UI_ORCHESTRATION_ENABLED.key, "true", "Enable orchestration UI toggle"),
-            Triple(ConfigKeys.UI_MULTI_AGENT_STRATEGY.key, "SINGLE", "Multi-agent orchestration strategy: SINGLE, PARALLEL, PIPELINE, ORCHESTRATOR"),
+            Triple(ConfigKeys.GENERAL_THINKING_ENABLED.key, "false", "Show LLM thinking process in UI"),
+            Triple(ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key, "false", "Block external network calls"),
             Triple(ConfigKeys.UI_INTENT_CLASSIFICATION_ENABLED.key, "false", "Enable LLM intent classification"),
-            Triple(ConfigKeys.UI_EXECUTION_MODE.key, "AUTO", "Execution mode (AUTO/INTERACTIVE)"),
+            Triple(ConfigKeys.GENERAL_EXECUTION_MODE.key, "AUTO", "Execution mode (AUTO/INTERACTIVE)"),
             Triple(ConfigKeys.UI_SELECTED_MODE.key, "CHAT", "Selected task mode (CHAT/PLAN/AGENT)"),
             Triple(ConfigKeys.EMBEDDING_MODEL.key, "ollama/nomic-embed-text", "Model for embeddings"),
             Triple(ConfigKeys.FORMAT_MARKDOWN.key, "true", "Format responses as markdown"),

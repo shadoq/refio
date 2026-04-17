@@ -364,7 +364,7 @@ class SubagentSettingsPanel(
                     if (!isBuiltin && dialog.isOk) {
                         coroutineScope.launch {
                             try {
-                                coreApiClient.subagentRouter?.updateSubagent(
+                                coreApiClient?.subagentRouter?.updateSubagent(
                                     name = name,
                                     description = dialog.descriptionField.text,
                                     systemPrompt = dialog.systemPromptArea.text,

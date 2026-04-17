@@ -263,7 +263,7 @@ class CoreSessionService(
             val turnListener = CoreMessageToolCallListener(
                 scope = scope,
                 stateManager = stateManager,
-                onReloadSubtasks = { subtaskTracker.loadSubtasks() },
+                onReloadSubtasks = { subtaskTracker.scheduleReload() },
                 resolveToolDisplayType = ::resolveToolDisplayType,
                 parseToolParameters = ::parseToolParameters,
             )
@@ -369,28 +369,6 @@ class CoreSessionService(
                 defaultTurnRequest
             }
 
-            // Read multi-agent settings from config (not StateManager) so a toggle in
-            // General Settings takes effect on the very next message. StateManager is loaded
-            // once per session in SessionLifecycleService and only PromptInputPanel's in-chat
-            // toggle keeps it in sync — the Settings panel writes to config only.
-            val strategy = configService.get(
-                ConfigKeys.UI_MULTI_AGENT_STRATEGY.key,
-                ConfigScope.APP,
-                taskId = session.id,
-            )?.let { pl.jclab.refio.api.models.MultiAgentStrategy.fromString(it) }
-                ?: stateManager.getMultiAgentStrategy()
-            val multiAgentEnabled = configService.get(
-                ConfigKeys.UI_ORCHESTRATION_ENABLED.key,
-                ConfigScope.APP,
-                taskId = session.id,
-            )?.toBooleanStrictOrNull()
-                ?: stateManager.getMultiAgentEnabled()
-            val orchestrator = projectRouter.orchestrationDispatcher
-            val useOrchestration = multiAgentEnabled &&
-                strategy != pl.jclab.refio.api.models.MultiAgentStrategy.SINGLE &&
-                subagentInvocation == null &&
-                orchestrator != null
-
             // Live-refresh the UI when the turn spawns subagent or tool activity. Without this,
             // messages persisted mid-turn by AgentTurnLoop (tool calls, sub-LLM responses) stay
             // invisible until the outer runTurn completes and the final loadMessages() flush runs.
@@ -465,33 +443,11 @@ class CoreSessionService(
                     }
             }
 
-            val result = if (useOrchestration) {
-                logger.info { "[TURN_LOOP] Orchestration dispatch: strategy=$strategy, taskId=${session.id}" }
-                val outcome = orchestrator.dispatch(
-                    parentTaskId = session.id,
-                    input = input,
-                    contextRefs = contextRefs,
-                    parentModel = model,
-                    parentProvider = provider,
-                    stream = stream,
-                    streamCallback = streamCallback,
-                    strategy = strategy,
-                )
-                TurnResult(
-                    success = true,
-                    response = outcome.response,
-                    iterations = 1,
-                    tokensIn = outcome.totalTokensIn,
-                    tokensOut = outcome.totalTokensOut,
-                    cost = outcome.totalCost,
-                )
-            } else {
-                projectRouter.agentRouter.runTurn(
-                    request = turnRequest,
-                    streamCallback = streamCallback,
-                    listener = turnListener,
-                )
-            }
+            val result = projectRouter.agentRouter.runTurn(
+                request = turnRequest,
+                streamCallback = streamCallback,
+                listener = turnListener,
+            )
 
             logger.info {
                 "[TURN_LOOP] Turn complete: taskId=${session.id}, success=${result.success}, " +

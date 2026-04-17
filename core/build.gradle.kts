@@ -98,6 +98,11 @@ tasks {
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_17)
+            // Pin to Kotlin bundled with oldest supported IntelliJ (2025.1 → Kotlin 2.1).
+            // Prevents emitting references to stdlib APIs (e.g. SpillingKt from Kotlin 2.2)
+            // missing in older IDE builds.
+            apiVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_1_9)
+            languageVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_1_9)
         }
     }
 

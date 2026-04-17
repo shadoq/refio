@@ -1,7 +1,7 @@
 # Onboarding: Refio
 
 > **Last Updated:** 2026-04-03
-> **Version:** 0.0.1.5
+> **Version:** 0.0.1.7
 > **Status:** Active Development
 
 ---

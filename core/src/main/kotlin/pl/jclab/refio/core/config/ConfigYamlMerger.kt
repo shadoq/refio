@@ -37,6 +37,9 @@ internal object ConfigYamlMerger {
             formatMarkdown = override.formatMarkdown ?: base.formatMarkdown,
             streamingEnabled = override.streamingEnabled ?: base.streamingEnabled,
             advancedView = override.advancedView ?: base.advancedView,
+            thinkingEnabled = override.thinkingEnabled ?: base.thinkingEnabled,
+            noEgressEnabled = override.noEgressEnabled ?: base.noEgressEnabled,
+            executionMode = override.executionMode ?: base.executionMode,
         )
     }
 
@@ -90,10 +93,8 @@ internal object ConfigYamlMerger {
         if (base == null) return override
         if (override == null) return base
         return AdvancedConfig(
-            noEgressDefault = override.noEgressDefault ?: base.noEgressDefault,
             readOnlyMode = override.readOnlyMode ?: base.readOnlyMode,
             autoOptimizePercentage = override.autoOptimizePercentage ?: base.autoOptimizePercentage,
-            orchestrationEnabled = override.orchestrationEnabled ?: base.orchestrationEnabled,
         )
     }
 
@@ -123,9 +124,6 @@ internal object ConfigYamlMerger {
         if (base == null) return override
         if (override == null) return base
         return UiConfig(
-            thinkingEnabled = override.thinkingEnabled ?: base.thinkingEnabled,
-            noEgressEnabled = override.noEgressEnabled ?: base.noEgressEnabled,
-            executionMode = override.executionMode ?: base.executionMode,
             selectedMode = override.selectedMode ?: base.selectedMode,
             selectedModel = override.selectedModel ?: base.selectedModel,
         )

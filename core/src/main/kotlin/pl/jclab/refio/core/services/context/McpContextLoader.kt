@@ -71,7 +71,10 @@ class McpContextLoader {
             val serverConfig = config
             val toolsExposure = serverConfig?.toolsExposureMode ?: MCPToolsExposureMode.TOOLS
             val shouldUseTools = serverConfig?.toolsEnabled == true && toolsExposure == MCPToolsExposureMode.CONTEXT
-            if (shouldUseTools && serverConfig != null && connection.supportsTools()) {
+            val hasWorkflow = (serverConfig?.toolWorkflow?.steps?.isNotEmpty()) == true
+            // Skip ad-hoc tool invocations when there is nothing to ask for and no workflow is configured.
+            // Calling e.g. context7's resolve-library-id with empty query just yields validation errors.
+            if (shouldUseTools && serverConfig != null && connection.supportsTools() && (hasWorkflow || toolQuery.isNotBlank())) {
                 val tools = runCatching {
                     val cached = connection.getCachedTools()
                     if (cached.isNotEmpty()) cached else connection.refreshTools()

@@ -182,8 +182,8 @@ class StepPlanner(
             logger.info { "[PLANNER] Using model=$model, provider=$provider" }
 
             // 6. Read UI state
-            val thinkingEnabled = configService.get(ConfigKeys.UI_THINKING_ENABLED.key)?.toBoolean() ?: false
-            val noEgressEnabled = configService.get(ConfigKeys.UI_NO_EGRESS_ENABLED.key)?.toBoolean() ?: false
+            val thinkingEnabled = configService.get(ConfigKeys.GENERAL_THINKING_ENABLED.key)?.toBoolean() ?: false
+            val noEgressEnabled = configService.get(ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key)?.toBoolean() ?: false
 
             // 7. RFC 0032: Use unified complete() with stream flag
             val startTime = System.currentTimeMillis()

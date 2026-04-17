@@ -28,7 +28,6 @@ class AdvancedSettingsPanel(
     private val logger = dualLogger("AdvancedSettingsPanel")
 
     // Security
-    private lateinit var noEgressDefaultCheckbox: JBCheckBox
     private lateinit var readOnlyModeCheckbox: JBCheckBox
 
     // Limits - Timeouts
@@ -84,18 +83,6 @@ class AdvancedSettingsPanel(
     // ==================== SECURITY ====================
 
     private fun createSecurityPanel(): JPanel {
-        noEgressDefaultCheckbox = JBCheckBox("Enable No-Egress mode by default", false).apply {
-            addItemListener {
-                if (isUpdatingProgrammatically) {
-                    return@addItemListener
-                }
-                val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                    pl.jclab.refio.core.config.ConfigKeys.NO_EGRESS_DEFAULT.key
-                )
-                onSettingChanged(section, key, isSelected)
-            }
-        }
-
         readOnlyModeCheckbox = JBCheckBox("Read-only mode", false).apply {
             addItemListener {
                 if (isUpdatingProgrammatically) {
@@ -111,12 +98,6 @@ class AdvancedSettingsPanel(
         return JBPanel<JBPanel<*>>().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             border = LCATheme.paddedBorder(LCATheme.padding)
-
-            add(noEgressDefaultCheckbox)
-            add(JBLabel("Block all external network calls by default").apply {
-                foreground = LCATheme.descriptionForeground
-                border = LCATheme.paddedBorder(0, 24, 8, 0)
-            })
 
             add(readOnlyModeCheckbox)
             add(JBLabel("Prevent all file write operations").apply {
@@ -309,11 +290,6 @@ class AdvancedSettingsPanel(
 
     // ==================== PUBLIC API ====================
 
-    fun isNoEgressDefaultEnabled(): Boolean = noEgressDefaultCheckbox.isSelected
-    fun setNoEgressDefault(enabled: Boolean) {
-        noEgressDefaultCheckbox.isSelected = enabled
-    }
-
     fun isReadOnlyModeEnabled(): Boolean = readOnlyModeCheckbox.isSelected
     fun setReadOnlyMode(enabled: Boolean) {
         readOnlyModeCheckbox.isSelected = enabled
@@ -355,7 +331,6 @@ class AdvancedSettingsPanel(
 
         isUpdatingProgrammatically = true
         try {
-            noEgressDefaultCheckbox.isSelected = false
             readOnlyModeCheckbox.isSelected = false
             toolExecutionSlider.value = 120
             apiCallSlider.value = 240
@@ -406,12 +381,10 @@ class AdvancedSettingsPanel(
     private fun applyAdvancedConfig(settings: Map<String, Any>) {
         isUpdatingProgrammatically = true
         try {
-            val noEgressDefault = parseBoolean(settings["no_egress_default"], false)
             val readOnlyMode = parseBoolean(settings["read_only_mode"], false)
             val autoOptimize = parseInt(settings["auto_optimize_percentage"], 85)
                 .coerceIn(autoOptimizeSlider.minimum, autoOptimizeSlider.maximum)
 
-            noEgressDefaultCheckbox.isSelected = noEgressDefault
             readOnlyModeCheckbox.isSelected = readOnlyMode
             autoOptimizeSlider.value = autoOptimize
         } finally {

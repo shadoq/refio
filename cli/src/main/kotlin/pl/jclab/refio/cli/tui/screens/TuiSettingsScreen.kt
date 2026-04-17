@@ -150,6 +150,11 @@ object TuiSettingsScreen {
         renderBool(buf, "format_markdown", "Markdown rendering", config)
         renderBool(buf, "streaming_enabled", "Stream responses", config)
         renderBool(buf, "advanced_view", "Advanced view (show all tabs)", config)
+        buf.addLine()
+        buf.addLine("  ${TuiColors.highlight("Execution")}")
+        renderBool(buf, "thinking_enabled", "Thinking mode", config)
+        renderBool(buf, "no_egress_enabled", "No-egress (block network)", config)
+        renderValue(buf, "execution_mode", "Execution mode (AUTO/INTERACTIVE)", config, "AUTO")
     }
 
     // ── Providers ────────────────────────────────────────────────────────
@@ -504,7 +509,6 @@ object TuiSettingsScreen {
         val limitsConfig = viewModel?.getConfigSection("limits") ?: emptyMap()
 
         buf.addLine("  ${TuiColors.highlight("Security")}")
-        renderBool(buf, "no_egress_default", "No-egress mode (block external calls)", config)
         renderBool(buf, "read_only_mode", "Read-only mode (no file writes)", config)
         buf.addLine()
         buf.addLine("  ${TuiColors.highlight("Timeouts")}")

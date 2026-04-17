@@ -67,7 +67,7 @@ data class TurnProfileOverrides(
     val contextProfile: pl.jclab.refio.core.subagents.models.SubagentContextProfile? = null,
     /**
      * Reasoning effort override for reasoning-capable models. Values: "low" | "medium" | "high".
-     * Sourced from SubagentDefinition.reasoningEffort. Null = use global UI_THINKING_ENABLED config.
+     * Sourced from SubagentDefinition.reasoningEffort. Null = use global GENERAL_THINKING_ENABLED config.
      */
     val reasoningEffort: String? = null
 )

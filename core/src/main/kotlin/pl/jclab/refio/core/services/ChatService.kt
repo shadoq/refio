@@ -223,8 +223,8 @@ class ChatService(
 
         // Read UI state from config table (single source of truth)
         // UI state is global plugin state, not task-specific (saved by SessionManager)
-        val thinkingEnabled = configService.get(ConfigKeys.UI_THINKING_ENABLED.key)?.toBoolean() ?: false
-        val noEgressEnabled = configService.get(ConfigKeys.UI_NO_EGRESS_ENABLED.key)?.toBoolean() ?: false
+        val thinkingEnabled = configService.get(ConfigKeys.GENERAL_THINKING_ENABLED.key)?.toBoolean() ?: false
+        val noEgressEnabled = configService.get(ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key)?.toBoolean() ?: false
 
         // Call LLM
         // Context is passed separately via contextContent parameter to ensure proper message order:

@@ -307,9 +307,8 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     @Volatile
     private var lastReceivedMessages = emptyList<Message>()
     private val messageUpdateFlow = MutableSharedFlow<List<Message>>(extraBufferCapacity = 1)
-    private val immediateMessageUpdateFlow = MutableSharedFlow<List<Message>>(extraBufferCapacity = 1)
     @Suppress("MagicNumber")
-    private val uiUpdateDebounceMs = 200L
+    private val uiUpdateDebounceMs = 300L
 
     private fun resolveAvailableWidth(): Int {
         val viewportWidth = (SwingUtilities.getAncestorOfClass(JViewport::class.java, this) as? JViewport)?.width ?: 0
@@ -419,17 +418,10 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
             messageUpdateFlow
                 .debounce(uiUpdateDebounceMs)
                 .collect { _ ->
-                    // Use latest received messages instead of stale debounced value.
-                    // An immediate flush (e.g. from loadMessages) may have already
-                    // rendered newer data; updateMessages' hash check makes this a no-op
-                    // when nothing changed.
+                    // Always use latest received snapshot — rapid bursts get coalesced.
+                    // updateMessages' hash check makes this a no-op when nothing changed.
                     updateMessages(lastReceivedMessages)
                 }
-        }
-
-        cs.launch {
-            immediateMessageUpdateFlow
-                .collect { messages -> updateMessages(messages) }
         }
 
         // Observe tool approval requests
@@ -669,31 +661,8 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     }
 
     private fun scheduleMessagesUpdate(messages: List<Message>) {
-        val previous = lastReceivedMessages
         lastReceivedMessages = messages
-
-        val flushNow = shouldFlushImmediately(previous, messages)
-        if (flushNow) {
-            immediateMessageUpdateFlow.tryEmit(messages)
-        } else {
-            messageUpdateFlow.tryEmit(messages)
-        }
-    }
-
-    private fun shouldFlushImmediately(previous: List<Message>, current: List<Message>): Boolean {
-        if (previous.isEmpty()) return true
-
-        // Structural change (messages added or removed) — show immediately
-        if (current.size != previous.size ||
-            current.map { it.id } != previous.map { it.id }
-        ) return true
-
-        // Streaming → finished transition — show final state immediately
-        val prevById = previous.associateBy { it.id }
-        return current.any { msg ->
-            val prev = prevById[msg.id] ?: return@any false
-            prev.isStreaming && !msg.isStreaming
-        }
+        messageUpdateFlow.tryEmit(messages)
     }
 
     private fun showNotification(

@@ -1,6 +1,6 @@
-# Refio Quickstart Guide
+# RefIo Quickstart Guide
 
-**Refio** is a local-first AI coding assistant for IntelliJ IDEA that minimizes LLM context through intelligent RAG and code analysis. Get up and running in minutes!
+**RefIo** is a local-first AI coding assistant for IntelliJ IDEA that minimizes LLM context through intelligent RAG and code analysis. Get up and running in minutes!
 
 ## 🚀 Quick Installation
 
@@ -35,7 +35,7 @@
 
 ## 🎯 First Steps
 
-1. **Open Refio**: Go to `View > Tool Windows > Refio` in the launched IDE
+1. **Open RefIo**: Go to `View > Tool Windows > RefIo` in the launched IDE
 2. **Simple Interface**: You'll see a clean chat window by default
 3. **Advanced View**: Enable in `Settings → General` to see Context Preview, RAG Components, Logs, and Debug Panel
 
@@ -67,7 +67,7 @@ Refactor this class to use dependency injection: @file
 
 ## 🎮 Fun Test Prompts
 
-Try creating games to test Refio's capabilities:
+Try creating games to test RefIo's capabilities:
 
 **Snake Game:**
 ```
@@ -99,6 +99,6 @@ Write a snake game in javascript, css, html in one file. Build a classic Snake g
 
 ---
 
-**Note**: Refio is experimental software created as a proof-of-concept that coding agents can build other coding agents. Expect some rough edges and report issues on GitHub!
+**Note**: RefIo is experimental software created as a proof-of-concept that coding agents can build other coding agents. Expect some rough edges and report issues on GitHub!
 
 Happy coding with your AI assistant! 🤖✨

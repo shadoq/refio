@@ -31,6 +31,7 @@ object CoreSessionServiceFactory {
         val messageDispatcher = MessageDispatcher(
             projectRouter = projectRouter,
             stateManager = stateManager,
+            scope = scope,
         )
 
         lateinit var subtaskTrackerRef: SubtaskTracker
@@ -54,6 +55,7 @@ object CoreSessionServiceFactory {
             loadMessages = { messageDispatcher.loadMessages() },
             executeCurrentStep = { subtaskId -> executionMonitorRef.executeCurrentStep(subtaskId) },
             showApprovalMessageForNextSubtask = { executionMonitorRef.showApprovalMessageForNextSubtask() },
+            scope = scope,
         )
         subtaskTrackerRef = subtaskTracker
 

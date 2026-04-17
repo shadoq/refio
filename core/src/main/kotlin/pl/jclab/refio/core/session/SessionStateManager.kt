@@ -54,12 +54,6 @@ class SessionStateManager {
     private val _noEgressEnabled = MutableStateFlow(false)
     val noEgressEnabled: StateFlow<Boolean> = _noEgressEnabled.asStateFlow()
 
-    private val _multiAgentEnabled = MutableStateFlow(false)
-    val multiAgentEnabled: StateFlow<Boolean> = _multiAgentEnabled.asStateFlow()
-
-    private val _multiAgentStrategy = MutableStateFlow(pl.jclab.refio.api.models.MultiAgentStrategy.SINGLE)
-    val multiAgentStrategy: StateFlow<pl.jclab.refio.api.models.MultiAgentStrategy> = _multiAgentStrategy.asStateFlow()
-
     private val _isPaused = MutableStateFlow(false)
     val isPaused: StateFlow<Boolean> = _isPaused.asStateFlow()
 
@@ -120,14 +114,6 @@ class SessionStateManager {
         _noEgressEnabled.value = enabled
     }
 
-    fun setMultiAgentEnabled(enabled: Boolean) {
-        _multiAgentEnabled.value = enabled
-    }
-
-    fun setMultiAgentStrategy(strategy: pl.jclab.refio.api.models.MultiAgentStrategy) {
-        _multiAgentStrategy.value = strategy
-    }
-
     fun setPaused(paused: Boolean) {
         _isPaused.value = paused
     }
@@ -183,10 +169,6 @@ class SessionStateManager {
     fun getThinkingEnabled(): Boolean = _thinkingEnabled.value
 
     fun getNoEgressEnabled(): Boolean = _noEgressEnabled.value
-
-    fun getMultiAgentEnabled(): Boolean = _multiAgentEnabled.value
-
-    fun getMultiAgentStrategy(): pl.jclab.refio.api.models.MultiAgentStrategy = _multiAgentStrategy.value
 
     fun debugStateSnapshot() {
         logger.debug {

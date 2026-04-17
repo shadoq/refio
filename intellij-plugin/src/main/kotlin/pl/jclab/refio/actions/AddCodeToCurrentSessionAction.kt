@@ -8,6 +8,7 @@ import pl.jclab.refio.api.models.CodeSnippet
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.ui.components.chat.PromptInputPanel
 import pl.jclab.refio.ui.toolwindow.RefioMainPanel
+import pl.jclab.refio.ui.toolwindow.RefioToolWindowFactory
 import java.awt.Container
 
 /**
@@ -52,9 +53,9 @@ class AddCodeToCurrentSessionAction : AnAction(
         logger.info { "Adding code snippet: ${snippet.displayName}" }
 
         // Open tool window and add snippet
-        val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("Refio")
+        val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(RefioToolWindowFactory.TOOL_WINDOW_ID)
         if (toolWindow == null) {
-            logger.error { "Refio tool window not found!" }
+            logger.error { "${RefioToolWindowFactory.TOOL_WINDOW_ID} tool window not found!" }
             return
         }
 

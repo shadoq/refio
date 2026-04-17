@@ -406,3 +406,15 @@ fun clearModelsCache() {
     cacheTimestamp = 0L
     logger.info { "[ModelRegistry] Cache cleared" }
 }
+
+/**
+ * Clears the cache entry for a single provider, leaving other providers' entries intact.
+ * Used when a single provider's config changes (e.g. Ollama context size) so we don't
+ * evict fresh data for unrelated providers.
+ */
+fun clearModelsCacheForProvider(provider: String) {
+    val existing = modelsCache ?: return
+    val key = existing.keys.firstOrNull { it.equals(provider, ignoreCase = true) } ?: return
+    modelsCache = existing - key
+    logger.info { "[ModelRegistry] Cache cleared for provider: $key" }
+}

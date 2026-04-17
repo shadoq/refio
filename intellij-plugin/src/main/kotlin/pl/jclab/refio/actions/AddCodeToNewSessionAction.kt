@@ -14,6 +14,7 @@ import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.ui.components.chat.PromptInputPanel
 import pl.jclab.refio.ui.toolwindow.RefioMainPanel
+import pl.jclab.refio.ui.toolwindow.RefioToolWindowFactory
 import java.awt.Container
 import javax.swing.SwingUtilities
 
@@ -67,7 +68,7 @@ class AddCodeToNewSessionAction : AnAction(
 
                 // Open tool window and add snippet on EDT
                 SwingUtilities.invokeLater {
-                    val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("Refio")
+                    val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(RefioToolWindowFactory.TOOL_WINDOW_ID)
                     toolWindow?.show {
                         findPromptInputPanel(toolWindow.component)?.addCodeSnippet(snippet)
                     }

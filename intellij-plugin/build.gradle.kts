@@ -101,8 +101,8 @@ intellijPlatform {
 
     pluginConfiguration {
         ideaVersion {
-            sinceBuild = "261"
-            untilBuild = provider { null }
+            sinceBuild.set("241")
+            untilBuild.set("261.*")
         }
     }
 }
@@ -115,6 +115,11 @@ tasks {
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_21)
+            // Pin to Kotlin bundled with oldest supported IDE (2025.1 → Kotlin 2.1).
+            // Prevents emitting references to stdlib APIs (e.g. SpillingKt from Kotlin 2.2)
+            // that don't exist in the Kotlin runtime shipped by older IntelliJ builds.
+            apiVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_1_9)
+            languageVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_1_9)
         }
     }
 

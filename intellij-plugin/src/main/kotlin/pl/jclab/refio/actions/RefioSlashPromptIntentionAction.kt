@@ -16,6 +16,7 @@ import pl.jclab.refio.api.models.TaskMode
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.ui.components.chat.PromptInputPanel
+import pl.jclab.refio.ui.toolwindow.RefioToolWindowFactory
 import java.awt.Container
 import javax.swing.SwingUtilities
 
@@ -64,7 +65,7 @@ class RefioSlashPromptIntentionAction(
                 sessionManager.createSession("/${selected.name}", targetMode)
 
                 SwingUtilities.invokeLater {
-                    val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("Refio")
+                    val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(RefioToolWindowFactory.TOOL_WINDOW_ID)
                     toolWindow?.show {
                         val panel = findPromptInputPanel(toolWindow.component)
                         if (panel != null) {

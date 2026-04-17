@@ -40,7 +40,9 @@ data class ConfigYaml(
     val ui: UiConfig? = null,
     val prompts: PromptsConfig? = null,
     val mcp: McpConfig? = null,
-    val hooks: HooksConfig? = null
+    val hooks: HooksConfig? = null,
+    val context: ContextConfig? = null,
+    val docs: DocsConfig? = null
 ) {
     companion object {
         fun getUserConfigPath(): File {

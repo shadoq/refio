@@ -74,8 +74,8 @@ object LLMMessageMapper {
             parts = listOf(
                 LLMContentPart.Text(textContent),
                 LLMContentPart.Image(
-                    mediaType = mediaType,
-                    base64Data = base64Data,
+                    mediaType = mediaType!!,
+                    base64Data = base64Data!!,
                     detail = "auto"
                 )
             )

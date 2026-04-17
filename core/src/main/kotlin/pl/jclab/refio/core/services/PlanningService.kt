@@ -151,8 +151,8 @@ class PlanningService(
         val userPrompt = buildUserPrompt(sanitizedInput)
 
         // Read UI state from config table (single source of truth)
-        val thinkingEnabled = configService.get(ConfigKeys.UI_THINKING_ENABLED.key)?.toBoolean() ?: false
-        val noEgressEnabled = configService.get(ConfigKeys.UI_NO_EGRESS_ENABLED.key)?.toBoolean() ?: false
+        val thinkingEnabled = configService.get(ConfigKeys.GENERAL_THINKING_ENABLED.key)?.toBoolean() ?: false
+        val noEgressEnabled = configService.get(ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key)?.toBoolean() ?: false
 
         // Build messages - context is passed separately via contextContent parameter
         // This ensures proper order: [system] System, [user] Context, [user] User prompt

@@ -50,7 +50,7 @@ class SessionLifecycleService(
 
                     val executionModeStr = withContext(Dispatchers.IO) {
                         transaction {
-                            configService.get(ConfigKeys.UI_EXECUTION_MODE.key)
+                            configService.get(ConfigKeys.GENERAL_EXECUTION_MODE.key)
                         }
                     }
                     val executionMode = try {
@@ -438,7 +438,7 @@ class SessionLifecycleService(
         if (activeSession != null) {
             stateManager.setActiveSession(activeSession.copy(thinkingEnabled = enabled))
         } else {
-            setUiSettingDefaults(ConfigKeys.UI_THINKING_ENABLED.key, enabled.toString())
+            setUiSettingDefaults(ConfigKeys.GENERAL_THINKING_ENABLED.key, enabled.toString())
         }
         saveCurrentSessionState()
     }
@@ -450,21 +450,9 @@ class SessionLifecycleService(
         if (activeSession != null) {
             stateManager.setActiveSession(activeSession.copy(noEgressEnabled = enabled))
         } else {
-            setUiSettingDefaults(ConfigKeys.UI_NO_EGRESS_ENABLED.key, enabled.toString())
+            setUiSettingDefaults(ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key, enabled.toString())
         }
         saveCurrentSessionState()
-    }
-
-    fun setMultiAgentEnabled(enabled: Boolean) {
-        stateManager.setMultiAgentEnabled(enabled)
-        logger.info { "Multi-agent mode set to: $enabled" }
-        setUiSettingDefaults(ConfigKeys.UI_ORCHESTRATION_ENABLED.key, enabled.toString())
-    }
-
-    fun setMultiAgentStrategy(strategy: pl.jclab.refio.api.models.MultiAgentStrategy) {
-        stateManager.setMultiAgentStrategy(strategy)
-        logger.info { "Multi-agent strategy set to: $strategy" }
-        setUiSettingDefaults(ConfigKeys.UI_MULTI_AGENT_STRATEGY.key, strategy.name)
     }
 
     suspend fun getAvailableModels(): List<String> {
@@ -564,9 +552,9 @@ class SessionLifecycleService(
             logger.debug { "Persisting session settings: taskId=$taskId" }
             // Caller already dispatches on Dispatchers.IO via scope.launch.
             setUiSettingDefaults(ConfigKeys.UI_SELECTED_MODEL.key, settings.selectedModel ?: "auto")
-            setUiSettingDefaults(ConfigKeys.UI_THINKING_ENABLED.key, settings.thinkingEnabled.toString())
-            setUiSettingDefaults(ConfigKeys.UI_NO_EGRESS_ENABLED.key, settings.noEgressEnabled.toString())
-            setUiSettingDefaults(ConfigKeys.UI_EXECUTION_MODE.key, settings.executionMode.name)
+            setUiSettingDefaults(ConfigKeys.GENERAL_THINKING_ENABLED.key, settings.thinkingEnabled.toString())
+            setUiSettingDefaults(ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key, settings.noEgressEnabled.toString())
+            setUiSettingDefaults(ConfigKeys.GENERAL_EXECUTION_MODE.key, settings.executionMode.name)
             configService.set(ConfigKeys.UI_SELECTED_MODE.key, selectedMode.name, ConfigScope.APP)
 
             projectRouter.taskRouter.updateTask(
@@ -597,7 +585,7 @@ class SessionLifecycleService(
         logger.info {
             "Loaded UI state from config: model=${stateManager.getSelectedModel()}, " +
                 "thinking=${stateManager.getThinkingEnabled()}, noEgress=${stateManager.getNoEgressEnabled()}, " +
-                "multiAgent=${stateManager.getMultiAgentEnabled()}, mode=$selectedMode"
+                "mode=$selectedMode"
         }
     }
 
@@ -641,38 +629,25 @@ class SessionLifecycleService(
         )?.also { hasAny = true }
 
         val thinkingEnabled = configService.get(
-            ConfigKeys.UI_THINKING_ENABLED.key,
+            ConfigKeys.GENERAL_THINKING_ENABLED.key,
             scope,
             taskId = taskId,
             projectId = projectId
         )?.also { hasAny = true }?.toBoolean()
 
         val noEgressEnabled = configService.get(
-            ConfigKeys.UI_NO_EGRESS_ENABLED.key,
+            ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key,
             scope,
             taskId = taskId,
             projectId = projectId
         )?.also { hasAny = true }?.toBoolean()
-            ?: if (scope == ConfigScope.APP && configService.getTyped(ConfigKeys.NO_EGRESS_DEFAULT)) {
-                hasAny = true
-                true
-            } else {
-                null
-            }
 
         val executionModeValue = configService.get(
-            ConfigKeys.UI_EXECUTION_MODE.key,
+            ConfigKeys.GENERAL_EXECUTION_MODE.key,
             scope,
             taskId = taskId,
             projectId = projectId
         )?.also { hasAny = true }
-
-        val multiAgentEnabled = configService.get(
-            ConfigKeys.UI_ORCHESTRATION_ENABLED.key,
-            scope,
-            taskId = taskId,
-            projectId = projectId
-        )?.also { hasAny = true }?.toBoolean()
 
         @Suppress("UNUSED_VARIABLE") val _intentClassificationEnabled = configService.get(
             ConfigKeys.UI_INTENT_CLASSIFICATION_ENABLED.key,
@@ -685,21 +660,10 @@ class SessionLifecycleService(
             return null
         }
 
-        val multiAgentStrategyValue = configService.get(
-            ConfigKeys.UI_MULTI_AGENT_STRATEGY.key,
-            scope,
-            taskId = taskId,
-            projectId = projectId
-        )?.also { hasAny = true }
-
         return SessionSettings(
             selectedModel = selectedModel,
             thinkingEnabled = thinkingEnabled ?: false,
             noEgressEnabled = noEgressEnabled ?: false,
-            multiAgentEnabled = multiAgentEnabled ?: false,
-            multiAgentStrategy = multiAgentStrategyValue?.let {
-                pl.jclab.refio.api.models.MultiAgentStrategy.fromString(it)
-            } ?: pl.jclab.refio.api.models.MultiAgentStrategy.SINGLE,
             executionMode = parseExecutionMode(executionModeValue)
         )
     }
@@ -711,8 +675,6 @@ class SessionLifecycleService(
         settings.selectedModel?.let { stateManager.setSelectedModel(it) }
         stateManager.setThinkingEnabled(settings.thinkingEnabled)
         stateManager.setNoEgressEnabled(settings.noEgressEnabled)
-        stateManager.setMultiAgentEnabled(settings.multiAgentEnabled)
-        stateManager.setMultiAgentStrategy(settings.multiAgentStrategy)
     }
 
     private fun captureCurrentSettings(currentExecutionMode: ExecutionMode): SessionSettings =
@@ -720,8 +682,6 @@ class SessionLifecycleService(
             selectedModel = stateManager.getSelectedModel(),
             thinkingEnabled = stateManager.getThinkingEnabled(),
             noEgressEnabled = stateManager.getNoEgressEnabled(),
-            multiAgentEnabled = stateManager.getMultiAgentEnabled(),
-            multiAgentStrategy = stateManager.getMultiAgentStrategy(),
             executionMode = currentExecutionMode
         )
 
@@ -736,15 +696,15 @@ class SessionLifecycleService(
                     settings.selectedModel ?: "auto",
                 )
                 setUiSettingDefaults(
-                    ConfigKeys.UI_THINKING_ENABLED.key,
+                    ConfigKeys.GENERAL_THINKING_ENABLED.key,
                     settings.thinkingEnabled.toString(),
                 )
                 setUiSettingDefaults(
-                    ConfigKeys.UI_NO_EGRESS_ENABLED.key,
+                    ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key,
                     settings.noEgressEnabled.toString(),
                 )
                 setUiSettingDefaults(
-                    ConfigKeys.UI_EXECUTION_MODE.key,
+                    ConfigKeys.GENERAL_EXECUTION_MODE.key,
                     settings.executionMode.name,
                 )
 
@@ -835,8 +795,6 @@ class SessionLifecycleService(
             selectedModel = selectedModel,
             thinkingEnabled = thinkingEnabled,
             noEgressEnabled = noEgressEnabled,
-            multiAgentEnabled = multiAgentEnabled,
-            multiAgentStrategy = multiAgentStrategy.name,
             executionMode = executionMode.name
         )
         return pl.jclab.refio.core.utils.GsonInstance.gson.toJson(payload)
@@ -845,7 +803,7 @@ class SessionLifecycleService(
     private suspend fun loadExecutionModePreference(): ExecutionMode {
         val executionModeStr = withContext(Dispatchers.IO) {
             transaction {
-                configService.get(ConfigKeys.UI_EXECUTION_MODE.key)
+                configService.get(ConfigKeys.GENERAL_EXECUTION_MODE.key)
             }
         }
         return parseExecutionMode(executionModeStr)
@@ -855,8 +813,6 @@ class SessionLifecycleService(
         val selectedModel: String?,
         val thinkingEnabled: Boolean,
         val noEgressEnabled: Boolean,
-        val multiAgentEnabled: Boolean,
-        val multiAgentStrategy: pl.jclab.refio.api.models.MultiAgentStrategy,
         val executionMode: ExecutionMode
     ) {
         companion object {
@@ -864,8 +820,6 @@ class SessionLifecycleService(
                 selectedModel = null,
                 thinkingEnabled = false,
                 noEgressEnabled = false,
-                multiAgentEnabled = false,
-                multiAgentStrategy = pl.jclab.refio.api.models.MultiAgentStrategy.SINGLE,
                 executionMode = ExecutionMode.INTERACTIVE
             )
         }
@@ -875,16 +829,12 @@ class SessionLifecycleService(
         val selectedModel: String? = null,
         val thinkingEnabled: Boolean = false,
         val noEgressEnabled: Boolean = false,
-        val multiAgentEnabled: Boolean = false,
-        val multiAgentStrategy: String = pl.jclab.refio.api.models.MultiAgentStrategy.SINGLE.name,
         val executionMode: String = ExecutionMode.INTERACTIVE.name
     ) {
         fun toSettings(): SessionSettings = SessionSettings(
             selectedModel = selectedModel,
             thinkingEnabled = thinkingEnabled,
             noEgressEnabled = noEgressEnabled,
-            multiAgentEnabled = multiAgentEnabled,
-            multiAgentStrategy = pl.jclab.refio.api.models.MultiAgentStrategy.fromString(multiAgentStrategy),
             executionMode = parseExecutionModeValue(executionMode)
         )
     }

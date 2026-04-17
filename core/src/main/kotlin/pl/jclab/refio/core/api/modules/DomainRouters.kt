@@ -2,9 +2,6 @@ package pl.jclab.refio.core.api.modules
 
 import pl.jclab.refio.core.agents.MultiAgentRunner
 import pl.jclab.refio.core.agents.events.AgentEventBus
-import pl.jclab.refio.core.agents.orchestration.OrchestrationDispatcher
-import pl.jclab.refio.core.agents.orchestration.ResultMerger
-import pl.jclab.refio.core.agents.orchestration.TaskDecomposer
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.api.StreamCallback
 import pl.jclab.refio.core.api.TurnRequest
@@ -226,19 +223,4 @@ internal class DomainRouters(
         )
     }
 
-    val orchestrationDispatcher: OrchestrationDispatcher? by lazy {
-        val router = subagentRouter ?: return@lazy null
-        OrchestrationDispatcher(
-            configService = configService,
-            subagentRouter = router,
-            multiAgentRunner = multiAgentRunner,
-            chatMessageRepository = persistence.chatMessageRepository,
-            taskDecomposer = TaskDecomposer(llmClient, configService, router),
-            resultMerger = ResultMerger(llmClient, configService),
-            createTaskFn = { request -> taskRouter.createTask(request) },
-            runTurnFn = { request, callback -> agentRouter.runTurn(request, callback) },
-            projectId = routerProjectId,
-            projectPath = routerProjectPath,
-        )
-    }
 }

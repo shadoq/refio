@@ -10,6 +10,7 @@ import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.llm.clearModelsCache
+import pl.jclab.refio.core.llm.clearModelsCacheForProvider
 import pl.jclab.refio.core.llm.getAllModels
 import pl.jclab.refio.core.llm.getModelsByProvider
 import pl.jclab.refio.core.api.ModelOperation
@@ -467,9 +468,10 @@ class ConfigRouter(
         logger.info { "[ConfigRouter] Refreshing models for provider: $provider" }
 
         try {
-            // Force fresh fetch: model metadata (e.g. Ollama maxContext) depends on
-            // current provider config and would otherwise be served from stale cache.
-            clearModelsCache()
+            // Force fresh fetch for this provider only: its metadata (e.g. Ollama
+            // maxContext) depends on current provider config. Do not evict other
+            // providers — the UI reads them via cache-only afterwards.
+            clearModelsCacheForProvider(provider)
 
             logger.info { "Fetching models dynamically for $provider" }
             val models = getModelsByProvider(provider, configService)

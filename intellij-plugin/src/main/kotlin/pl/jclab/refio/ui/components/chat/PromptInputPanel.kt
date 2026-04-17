@@ -63,7 +63,6 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.*
-import javax.swing.BoxLayout as SwingBoxLayout
 
 /**
  * Prompt input panel - separate component for user input
@@ -96,10 +95,6 @@ class PromptInputPanel(
     private val modeSelector: JComboBox<String>
     private val modelSelector: JComboBox<ModelItem>
 
-    private val executionModeToggle: JToggleButton
-    private val thinkingToggle: JToggleButton
-    private val noEgressToggle: JToggleButton
-    private val multiAgentToggle: JToggleButton
 
     private val inputContainer: InputPanelContainer
     private val promptEditor: EditorTextField
@@ -149,7 +144,6 @@ class PromptInputPanel(
 
     // Flag to prevent triggering API calls during initialization
     private var isInitializing = true
-    private var isUpdatingToggleProgrammatically = false
     private var isUpdatingModeSelectorProgrammatically = false
     private var isUpdatingModelSelectorProgrammatically = false
 
@@ -335,130 +329,11 @@ class PromptInputPanel(
         gbc.gridx = 2
         add(modelSelector, gbc)
 
-        // Initialize toggle buttons (not added to panel directly, but used in popup menu)
-        executionModeToggle = JToggleButton("🤚").apply {
-            toolTipText = "Interactive mode (🤚) / Auto mode (⚡)"
-            preferredSize = Dimension(200, 28)
-            minimumSize = Dimension(200, 28)
-            maximumSize = Dimension(200, 28)
-
-            addActionListener {
-                if (isUpdatingToggleProgrammatically) {
-                    return@addActionListener
-                }
-
-                val newMode = if (isSelected) {
-                    toolTipText = "Interactive mode"
-                    text = "🤚 Interactive mode"
-                    ExecutionMode.INTERACTIVE
-                } else {
-                    toolTipText = "Auto mode"
-                    text = "⚡ Auto mode"
-                    ExecutionMode.AUTO
-                }
-
-                onExecutionModeChanged(newMode)
-                updateBadge()
-            }
-        }
-
-        thinkingToggle = JToggleButton("💭").apply {
-            toolTipText = "Thinking mode disabled"
-            preferredSize = Dimension(200, 28)
-            minimumSize = Dimension(200, 28)
-            maximumSize = Dimension(200, 28)
-
-            addActionListener {
-                if (!isUpdatingToggleProgrammatically) {
-                    // Update UI immediately
-                    if (isSelected) {
-                        text = "🧠 Thinking mode enabled"
-                        toolTipText = "Thinking mode enabled"
-                    } else {
-                        text = "💭 Thinking mode disabled"
-                        toolTipText = "Thinking mode disabled"
-                    }
-
-                    // Save thinking state to database
-                    sessionManager.setThinkingEnabled(isSelected)
-                    logger.info { "Thinking mode toggled: ${isSelected}" }
-                }
-                updateBadge()
-            }
-        }
-
-        noEgressToggle = JToggleButton("🌐").apply {
-            toolTipText = "No-egress mode disabled (network enabled)"
-            preferredSize = Dimension(200, 28)
-            minimumSize = Dimension(200, 28)
-            maximumSize = Dimension(200, 28)
-
-            addActionListener {
-                if (!isUpdatingToggleProgrammatically) {
-                    // Update UI immediately
-                    if (isSelected) {
-                        text = "🔒 No-egress enabled"
-                        toolTipText = "No-egress mode enabled (local only)"
-                    } else {
-                        text = "🌐 No-egress disabled"
-                        toolTipText = "No-egress mode disabled (network enabled)"
-                    }
-
-                    // Save no-egress state to database
-                    sessionManager.setNoEgressEnabled(isSelected)
-                    logger.info { "No-egress mode toggled: ${isSelected}" }
-                }
-                updateBadge()
-            }
-        }
-
-        multiAgentToggle = JToggleButton("👤").apply {
-            toolTipText = "Multi-agent mode disabled"
-            preferredSize = Dimension(200, 28)
-            minimumSize = Dimension(200, 28)
-            maximumSize = Dimension(200, 28)
-
-            addActionListener {
-                if (!isUpdatingToggleProgrammatically) {
-                    if (isSelected) {
-                        text = "👥 Multi-agent enabled"
-                        toolTipText = "Multi-agent mode enabled"
-                    } else {
-                        text = "👤 Multi-agent disabled"
-                        toolTipText = "Multi-agent mode disabled"
-                    }
-
-                    sessionManager.setMultiAgentEnabled(isSelected)
-                    logger.info { "Multi-agent mode toggled: ${isSelected}" }
-                }
-                updateBadge()
-            }
-        }
-
-        // More options button (...) - shows popup with toggle buttons
-        val moreOptionsButton = JButton("...").apply {
-            toolTipText = "More options"
-            preferredSize = Dimension(32, 28)
-            minimumSize = Dimension(32, 28)
-            maximumSize = Dimension(32, 28)
-
-            addActionListener {
-                showMoreOptionsMenu()
-            }
-        }
-
-        // Invisible glue component to push button right
+        // Invisible glue component to push send/stop buttons right
         gbc.gridx = 3
         gbc.weightx = 1.0
         gbc.fill = GridBagConstraints.HORIZONTAL
         add(Box.createHorizontalGlue(), gbc)
-
-        // More options button
-        gbc.gridx = 4
-        gbc.weightx = 0.0
-        gbc.fill = GridBagConstraints.NONE
-        gbc.anchor = GridBagConstraints.EAST
-        add(moreOptionsButton, gbc)
 
         // Send/Stop button (right side of row 1)
         // Transforms: Send → Stop during operation, Stop → Send when idle
@@ -490,15 +365,12 @@ class PromptInputPanel(
         // Load models from backend
         loadAvailableModels()
 
-        loadNoEgressDefault()
-        loadExecutionModeDefault()
-
         // Listen to session changes
         cs.launch {
             var lastSessionId: String? = sessionManager.activeSession.value?.id
             sessionManager.activeSession.collect { session ->
                 val newSessionId = session?.id
-                val didSessionChange = newSessionId != null && newSessionId != lastSessionId
+                val didSessionChange = lastSessionId != null && newSessionId != null && newSessionId != lastSessionId
                 if (didSessionChange) {
                     SwingUtilities.invokeLater {
                         clearPrompt()
@@ -513,77 +385,6 @@ class PromptInputPanel(
                 if (session != null) {
                     logger.info { "Session changed: mode=${session.mode}, executionMode=${session.executionMode}" }
                     updateSession(session)
-                }
-            }
-        }
-
-        // Listen to thinking toggle state changes
-        cs.launch {
-            sessionManager.thinkingEnabled.collect { enabled ->
-                if (thinkingToggle.isSelected != enabled) {
-                    isUpdatingToggleProgrammatically = true
-                    thinkingToggle.isSelected = enabled
-
-                    // Update icon and tooltip based on state
-                    SwingUtilities.invokeLater {
-                        if (enabled) {
-                            thinkingToggle.text = "🧠 Thinking mode enabled"
-                            thinkingToggle.toolTipText = "Thinking mode enabled"
-                        } else {
-                            thinkingToggle.text = "💭 Thinking mode disabled"
-                            thinkingToggle.toolTipText = "Thinking mode disabled"
-                        }
-                    }
-
-                    isUpdatingToggleProgrammatically = false
-                    updateBadge()
-                }
-            }
-        }
-
-        // Listen to no-egress toggle state changes
-        cs.launch {
-            sessionManager.noEgressEnabled.collect { enabled ->
-                if (noEgressToggle.isSelected != enabled) {
-                    isUpdatingToggleProgrammatically = true
-                    noEgressToggle.isSelected = enabled
-
-                    // Update icon and tooltip based on state
-                    SwingUtilities.invokeLater {
-                        if (enabled) {
-                            noEgressToggle.text = "🔒 No-egress enabled"
-                            noEgressToggle.toolTipText = "No-egress mode enabled (local only)"
-                        } else {
-                            noEgressToggle.text = "🌐 No-egress disabled"
-                            noEgressToggle.toolTipText = "No-egress mode disabled (network enabled)"
-                        }
-                    }
-
-                    isUpdatingToggleProgrammatically = false
-                    updateBadge()
-                }
-            }
-        }
-
-        // Listen to multi-agent toggle state changes
-        cs.launch {
-            sessionManager.multiAgentEnabled.collect { enabled ->
-                if (multiAgentToggle.isSelected != enabled) {
-                    isUpdatingToggleProgrammatically = true
-                    multiAgentToggle.isSelected = enabled
-
-                    SwingUtilities.invokeLater {
-                        if (enabled) {
-                            multiAgentToggle.text = "👥 Multi-agent enabled"
-                            multiAgentToggle.toolTipText = "Multi-agent mode enabled"
-                        } else {
-                            multiAgentToggle.text = "👤 Multi-agent disabled"
-                            multiAgentToggle.toolTipText = "Multi-agent mode disabled"
-                        }
-                    }
-
-                    isUpdatingToggleProgrammatically = false
-                    updateBadge()
                 }
             }
         }
@@ -726,31 +527,6 @@ class PromptInputPanel(
                 logger.error(e) { "Failed to send message or answer question" }
                 // Don't clear context on error - user might want to retry with same context
                 // Error handled by SessionManager
-            }
-        }
-    }
-
-    private fun loadNoEgressDefault() {
-        val client = coreApiClient ?: sessionManager.apiRouter
-        cs.launch {
-            try {
-                val config = client.configRouter.getConfig(section = "advanced", scope = "app")
-                val noEgressDefault = (config.settings["no_egress_default"] as? String).toBoolean()
-
-                if (noEgressDefault) {
-                    withContext(Dispatchers.IO) {
-                        sessionManager.setNoEgressEnabled(true)
-                    }
-                }
-
-                SwingUtilities.invokeLater {
-                    noEgressToggle.isEnabled = !noEgressDefault
-                    if (noEgressDefault) {
-                        noEgressToggle.toolTipText = "No-egress is locked by default (disable in Advanced Settings)"
-                    }
-                }
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to load no-egress default setting" }
             }
         }
     }
@@ -1019,37 +795,11 @@ class PromptInputPanel(
     }
 
     /**
-     * Handle execution mode change
-     */
-    private fun onExecutionModeChanged(mode: ExecutionMode) {
-        logger.info { "Execution mode changed to: $mode" }
-
-        cs.launch(Dispatchers.IO) {
-            val currentSession = sessionManager.activeSession.value
-            if (currentSession != null) {
-                try {
-                    // Update session and persist to config
-                    sessionManager.setExecutionMode(mode)
-
-                    StepExecutionService.getInstance(project)
-                        .switchExecutionMode(currentSession.id, mode)
-
-                } catch (e: Exception) {
-                    logger.error(e) { "Failed to set execution mode" }
-                }
-            }
-        }
-
-        firePropertyChange("executionMode", null, mode)
-    }
-
-    /**
      * Update UI with session data
      */
     private fun updateSession(session: pl.jclab.refio.api.models.Session) {
         logger.info { "updateSession called: mode=${session.mode}, executionMode=${session.executionMode}" }
 
-        // Synchronize mode selector with session state
         val expectedModeIndex = when (session.mode) {
             TaskMode.CHAT -> 0
             TaskMode.PLAN -> 1
@@ -1057,59 +807,18 @@ class PromptInputPanel(
         }
 
         if (modeSelector.selectedIndex != expectedModeIndex) {
-            // Set flag to prevent action listener from triggering mode switch
             isUpdatingModeSelectorProgrammatically = true
-
             modeSelector.selectedIndex = expectedModeIndex
-            logger.info { "Synchronized mode selector to: ${session.mode}" }
-
             isUpdatingModeSelectorProgrammatically = false
         }
-
-        // Synchronize execution mode toggle with session state
-        val isInteractiveMode = session.executionMode == ExecutionMode.INTERACTIVE
-        logger.info { "Synchronizing execution mode: session=${session.executionMode}, toggle.isSelected=${executionModeToggle.isSelected}, isInteractiveMode=$isInteractiveMode" }
-
-        if (executionModeToggle.isSelected != isInteractiveMode) {
-            logger.info { "Updating execution mode toggle: $isInteractiveMode" }
-            isUpdatingToggleProgrammatically = true
-
-            executionModeToggle.isSelected = isInteractiveMode
-
-            if (isInteractiveMode) {
-                executionModeToggle.text = "🤚 Interactive mode"
-                executionModeToggle.toolTipText = "Interactive mode"
-            } else {
-                executionModeToggle.text = "⚡ Auto mode"
-                executionModeToggle.toolTipText = "Auto mode"
-            }
-
-            isUpdatingToggleProgrammatically = false
-            logger.info { "Execution mode toggle updated: text=${executionModeToggle.text}, isSelected=${executionModeToggle.isSelected}" }
-        } else {
-            logger.info { "Execution mode toggle already correct, skipping update" }
-        }
-
-        updateBadge()
     }
 
     /**
-     * Get current execution mode from toggle button state
+     * Get current execution mode from active session (falls back to AUTO).
+     * Managed via General Settings, not inline toggle.
      */
     fun getCurrentExecutionMode(): ExecutionMode {
-        return if (executionModeToggle.isSelected) {
-            ExecutionMode.INTERACTIVE
-        } else {
-            ExecutionMode.AUTO
-        }
-    }
-
-    /**
-     * Update badge with current session and toggle states
-     * NOTE: Mode badge removed - this method no longer does anything
-     */
-    private fun updateBadge() {
-        // Mode badge functionality removed
+        return sessionManager.activeSession.value?.executionMode ?: ExecutionMode.AUTO
     }
 
     /**
@@ -2079,9 +1788,6 @@ class PromptInputPanel(
             addContextButton.isEnabled = false
             modeSelector.isEnabled = false
             modelSelector.isEnabled = false
-            executionModeToggle.isEnabled = false
-            thinkingToggle.isEnabled = false
-            noEgressToggle.isEnabled = false
 
             logger.info { "Operation started - prompt stays active for mid-execution input" }
         } else {
@@ -2098,9 +1804,6 @@ class PromptInputPanel(
             addContextButton.isEnabled = true
             modeSelector.isEnabled = true
             modelSelector.isEnabled = true
-            executionModeToggle.isEnabled = true
-            thinkingToggle.isEnabled = true
-            noEgressToggle.isEnabled = true
 
             logger.info { "Operation finished - all controls enabled" }
         }
@@ -2362,93 +2065,6 @@ class PromptInputPanel(
     /**
      * Show more options menu with toggle buttons
      */
-    private fun showMoreOptionsMenu() {
-        val popup = JPopupMenu()
-
-        // Create a panel to hold the toggle buttons in a vertical layout
-        val buttonPanel = JBPanel<JBPanel<*>>().apply {
-            layout = SwingBoxLayout(this, SwingBoxLayout.Y_AXIS)
-            border = LCATheme.paddedBorder(5)
-            alignmentX = Component.LEFT_ALIGNMENT
-        }
-
-        // Update toggle button text to show current state and add to panel
-        executionModeToggle.text = if (executionModeToggle.isSelected) "🤚 Interactive mode" else "⚡ Auto mode"
-        thinkingToggle.text = if (thinkingToggle.isSelected) "🧠 Thinking mode enabled" else "💭 Thinking mode disabled"
-        noEgressToggle.text = if (noEgressToggle.isSelected) "🔒 No-egress enabled" else "🌐 No-egress disabled"
-        multiAgentToggle.text = if (multiAgentToggle.isSelected) "👥 Multi-agent enabled" else "👤 Multi-agent disabled"
-
-        buttonPanel.add(executionModeToggle)
-        buttonPanel.add(Box.createVerticalStrut(3))
-        buttonPanel.add(Box.createVerticalStrut(3))
-        buttonPanel.add(thinkingToggle)
-        buttonPanel.add(Box.createVerticalStrut(3))
-        buttonPanel.add(noEgressToggle)
-        buttonPanel.add(Box.createVerticalStrut(3))
-        buttonPanel.add(multiAgentToggle)
-
-        // Add the panel to the popup
-        popup.add(buttonPanel)
-
-        // Show popup menu
-        val moreOptionsButton = this.components.find { it is JButton && (it).text == "..." } as? JButton
-        moreOptionsButton?.let { button ->
-            // Calculate popup preferred size
-            val popupSize = popup.preferredSize
-
-            // Get button location on screen
-            val buttonLocation = button.locationOnScreen
-            val screenSize = Toolkit.getDefaultToolkit().screenSize
-
-            // Calculate available space below and above the button
-            val spaceBelow = screenSize.height - buttonLocation.y - button.height
-            val spaceAbove = buttonLocation.y
-
-            // Show popup above if there's not enough space below
-            val yOffset = if (spaceBelow < popupSize.height && spaceAbove > popupSize.height) {
-                -popupSize.height
-            } else {
-                button.height
-            }
-
-            popup.show(button, 0, yOffset)
-        }
-    }
-
-    private fun loadExecutionModeDefault() {
-        cs.launch {
-            try {
-                val client = coreApiClient ?: sessionManager.apiRouter
-                val executionModeStr = client.configService.get("ui.execution_mode", pl.jclab.refio.core.db.ConfigScope.APP, null)
-
-                // Default to INTERACTIVE if not specified in config
-                val isInteractive = if (executionModeStr != null) {
-                    ExecutionMode.valueOf(executionModeStr.uppercase()) == ExecutionMode.INTERACTIVE
-                } else {
-                    true
-                }
-
-                SwingUtilities.invokeLater {
-                    if (executionModeToggle.isSelected != isInteractive) {
-                        isUpdatingToggleProgrammatically = true
-                        executionModeToggle.isSelected = isInteractive
-                        if (isInteractive) {
-                            executionModeToggle.text = "🤚 Interactive mode"
-                            executionModeToggle.toolTipText = "Interactive mode"
-                        } else {
-                            executionModeToggle.text = "⚡ Auto mode"
-                            executionModeToggle.toolTipText = "Auto mode"
-                        }
-                        isUpdatingToggleProgrammatically = false
-                        updateBadge()
-                    }
-                }
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to load executionMode default setting" }
-            }
-        }
-    }
-
     fun dispose() {
         // Timer is lazy-initialized, so we can safely stop it (it will be created if not already)
         autocompleteTimer.stop()

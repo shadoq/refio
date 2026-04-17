@@ -43,8 +43,8 @@ class TurnLLMCallerTest {
     fun `should pass thinking and no-egress flags to llm client`() {
         every { configService.getModel(any(), any(), any()) } returns ("model-a" to "anthropic")
         every { configService.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
-        every { configService.getTyped(ConfigKeys.UI_THINKING_ENABLED, "task-1") } returns true
-        every { configService.getTyped(ConfigKeys.UI_NO_EGRESS_ENABLED, "task-1") } returns true
+        every { configService.getTyped(ConfigKeys.GENERAL_THINKING_ENABLED, "task-1") } returns true
+        every { configService.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, "task-1") } returns true
         coEvery {
             llmClient.complete(
                 provider = any(),

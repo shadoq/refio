@@ -147,15 +147,15 @@ class ConfigService(
     // ==================== UI CONFIGURATION ====================
 
     fun setThinkingEnabled(enabled: Boolean, taskId: String? = null) {
-        setTyped(ConfigKeys.UI_THINKING_ENABLED, enabled, taskScope(taskId), taskId)
+        setTyped(ConfigKeys.GENERAL_THINKING_ENABLED, enabled, taskScope(taskId), taskId)
     }
 
     fun setNoEgressEnabled(enabled: Boolean, taskId: String? = null) {
-        setTyped(ConfigKeys.UI_NO_EGRESS_ENABLED, enabled, taskScope(taskId), taskId)
+        setTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, enabled, taskScope(taskId), taskId)
     }
 
     fun setExecutionMode(mode: String, taskId: String? = null) {
-        setTyped(ConfigKeys.UI_EXECUTION_MODE, mode, taskScope(taskId), taskId)
+        setTyped(ConfigKeys.GENERAL_EXECUTION_MODE, mode, taskScope(taskId), taskId)
     }
 
     fun setSelectedModel(model: String, taskId: String? = null) {
@@ -180,8 +180,14 @@ class ConfigService(
      * @param file Target file to write
      * @param includeApiKeys If true, includes API keys (masked for security)
      */
-    fun exportToYaml(file: java.io.File, includeApiKeys: Boolean = false) {
-        val config = ConfigYamlBuilder(this, configRepository).build(includeApiKeys)
+    fun exportToYaml(
+        file: java.io.File,
+        includeApiKeys: Boolean = false,
+        projectId: String? = null,
+        toolPermissionsService: ToolPermissionsService? = null
+    ) {
+        val config = ConfigYamlBuilder(this, configRepository, toolPermissionsService, projectRoot)
+            .build(includeApiKeys, projectId)
         ConfigYaml.saveToFile(config, file, withComments = true)
         logger.info { "Exported configuration to: ${file.absolutePath}" }
     }

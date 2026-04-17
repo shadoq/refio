@@ -243,7 +243,6 @@ class CoreApiRouter(
     val projectContextRouter get() = domainRouters.projectContextRouter
     val workflowOrchestrator get() = domainRouters.workflowOrchestrator
     val multiAgentRouter get() = domainRouters.multiAgentRouter
-    val orchestrationDispatcher get() = domainRouters.orchestrationDispatcher
 
     // Internal accessors for modules in `api.modules` package
     internal val toolRegistryOrNull: ToolRegistry? get() = toolRegistry

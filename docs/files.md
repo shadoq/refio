@@ -420,7 +420,7 @@
 
 ### Chat Components (`ui/components/chat/`)
 - **ChatView.kt** — Main chat view: scrollable message list with `GridBagLayout` for vertical stacking (weightx=1.0, gridwidth=REMAINDER); `CachedMessagePanel` caches rendered bubbles; Flow-based state management.
-- **PromptInputPanel.kt** — Input panel with `GridBagLayout`: row 0 for input container (snippets + context + editor), row 1 for controls (mode/model/context buttons). `GradientBorderPanel` wrapper with custom gradient rendering.
+- **PromptInputPanel.kt** — Input panel with `GridBagLayout`: row 0 for input container (snippets + context + editor), row 1 for controls (mode/model/context buttons + send/stop). Execution mode, thinking, and no-egress toggles are *not* here — they live in **Settings → General**. `GradientBorderPanel` wrapper with custom gradient rendering.
 - **CodeBlockPanel.kt** — Code display with `BorderLayout`: header (NORTH) with `FlowLayout` for filename+buttons, `JBScrollPane` (CENTER), footer (SOUTH) for expand/collapse; dynamic height via `updatePanelSize()`.
 - **EditableUserBubble.kt** — Read/edit mode toggle with `BorderLayout`; edit mode replaces content via `removeAll()` + `add()` + `revalidate()/repaint()`.
 - **MetricsView.kt** — Token/cost/failed step chips with `GridBagLayout`.
@@ -482,8 +482,8 @@ The bubble system uses a multi-layout composition pattern. **This is historicall
 
 ### Settings Panels
 - **SettingsView.kt** — Main settings panel coordinating all tabs.
-- **GeneralSettingsPanel.kt** — General preferences.
-- **AdvancedSettingsPanel.kt** — Advanced config options.
+- **GeneralSettingsPanel.kt** — General preferences: format markdown, streaming, advanced view, thinking mode, no-egress, execution mode (AUTO/INTERACTIVE). All six write to `general.*` config keys.
+- **AdvancedSettingsPanel.kt** — Advanced config options: read-only mode, timeouts, size limits, auto-optimize threshold. (No-egress toggle moved to General.)
 - **ModelsSettingsPanel.kt** — Model selection/config.
 - **ProvidersSettingsPanel.kt** — LLM provider config and API keys.
 - **ContextSettingsPanel.kt** — Context building and RAG config.

@@ -157,22 +157,6 @@ class ConfigServiceTest {
     inner class BooleanConfigTests {
 
         @Test
-        fun `ORCHESTRATION_ENABLED should return true by default`() {
-            every { configRepository.getWithPrecedence(any(), any(), any()) } returns null
-            val result: Boolean = configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.ORCHESTRATION_ENABLED)
-            assertTrue(result)
-        }
-
-        @Test
-        fun `ORCHESTRATION_ENABLED should return false when explicitly disabled`() {
-            every {
-                configRepository.getWithPrecedence(ConfigKeys.ORCHESTRATION_ENABLED.key, any(), any())
-            } returns createConfig(ConfigKeys.ORCHESTRATION_ENABLED.key, "false")
-            val result: Boolean = configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.ORCHESTRATION_ENABLED)
-            assertEquals(false, result)
-        }
-
-        @Test
         fun `TASK_VERIFICATION_ENABLED should return false by default`() {
             every { configRepository.getWithPrecedence(any(), any(), any()) } returns null
             val result: Boolean = configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.TASK_VERIFICATION_ENABLED)

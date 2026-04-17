@@ -372,16 +372,9 @@ class TuiViewModel(
                     session.setThinkingEnabled(it)
                 }
 
-                // No-egress enabled (with NO_EGRESS_DEFAULT fallback, same as IntelliJ)
-                val noEgressFromDb = settings["no_egress_enabled"]?.toString()?.toBooleanStrictOrNull()
-                if (noEgressFromDb != null) {
-                    session.setNoEgressEnabled(noEgressFromDb)
-                } else {
-                    // Check advanced.no_egress_default (same fallback as IntelliJ)
-                    val noEgressDefault = r.configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.NO_EGRESS_DEFAULT)
-                    if (noEgressDefault) {
-                        session.setNoEgressEnabled(true)
-                    }
+                // No-egress enabled
+                settings["no_egress_enabled"]?.toString()?.toBooleanStrictOrNull()?.let {
+                    session.setNoEgressEnabled(it)
                 }
 
                 // Execution mode

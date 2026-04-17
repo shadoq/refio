@@ -126,15 +126,10 @@ class ReadDirectoryTool(
 
     private fun listSingleLevel(path: java.nio.file.Path): List<FileEntry> {
         return Files.list(path).use { stream ->
-            stream.map { file ->
-                FileEntry(
-                    name = file.name,
-                    relativePath = sandbox.resolve(".").relativize(file).toString(),
-                    isDirectory = file.isDirectory(),
-                    size = if (file.isRegularFile()) file.fileSize() else 0L,
-                    lastModified = file.getLastModifiedTime().toMillis()
-                )
-            }.toList()
+            stream.map { file -> toEntrySafe(file, path) }
+                .filter { it != null }
+                .map { it!! }
+                .toList()
         }
     }
 
@@ -145,21 +140,32 @@ class ReadDirectoryTool(
             stream.forEach { file ->
                 // Skip the root directory itself
                 if (file != path) {
-                    entries.add(
-                        FileEntry(
-                            name = file.name,
-                            relativePath = sandbox.resolve(".").relativize(file).toString(),
-                            isDirectory = file.isDirectory(),
-                            size = if (file.isRegularFile()) file.fileSize() else 0L,
-                            lastModified = file.getLastModifiedTime().toMillis(),
-                            depth = path.relativize(file).nameCount
-                        )
-                    )
+                    toEntrySafe(file, path)?.let { entries.add(it) }
                 }
             }
         }
 
         return entries.sortedWith(compareBy({ it.depth }, { it.relativePath }))
+    }
+
+    // Builds FileEntry, skipping entries that raise filesystem errors (e.g. Windows reserved
+    // device names like `nul` surface inside directory streams and blow up on attribute reads).
+    private fun toEntrySafe(file: java.nio.file.Path, root: java.nio.file.Path): FileEntry? {
+        return try {
+            val isDir = file.isDirectory()
+            val isRegular = file.isRegularFile()
+            FileEntry(
+                name = file.name,
+                relativePath = sandbox.resolve(".").relativize(file).toString(),
+                isDirectory = isDir,
+                size = if (isRegular) file.fileSize() else 0L,
+                lastModified = file.getLastModifiedTime().toMillis(),
+                depth = if (file == root) 0 else root.relativize(file).nameCount
+            )
+        } catch (e: Exception) {
+            logger.warn { "Skipping unreadable entry: $file (${e.javaClass.simpleName}: ${e.message})" }
+            null
+        }
     }
 
     private fun formatFileList(files: List<FileEntry>): String {

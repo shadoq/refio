@@ -1418,7 +1418,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
             """.trimIndent()
             return
         }
-        val promptText = prompt
+        val promptText = prompt!!
 
         val structureHtml = buildContextStructureOverview(context)
         val escaped = promptText

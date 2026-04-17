@@ -13,6 +13,11 @@ import com.intellij.openapi.wm.ToolWindowFactory
  */
 class RefioToolWindowFactory : ToolWindowFactory, DumbAware {
 
+    companion object {
+        // Must match the id attribute in plugin.xml <toolWindow id="..."/>.
+        const val TOOL_WINDOW_ID = "RefIo"
+    }
+
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         val contentManager = toolWindow.contentManager
         val mainPanel = RefioMainPanel(project)

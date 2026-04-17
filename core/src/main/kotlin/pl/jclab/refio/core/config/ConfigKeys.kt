@@ -141,34 +141,20 @@ object ConfigKeys {
         default = 1000L
     )
 
-    // ==================== ORCHESTRATION ====================
-
-    val ORCHESTRATION_ENABLED = ConfigKey(
-        key = "orchestration.enabled",
-        parser = String::toBooleanStrictOrNull,
-        default = true
-    )
-
     // ==================== UI ====================
 
-    val UI_THINKING_ENABLED = ConfigKey(
-        key = "ui.thinking_enabled",
+    val GENERAL_THINKING_ENABLED = ConfigKey(
+        key = "general.thinking_enabled",
         parser = String::toBooleanStrictOrNull,
         default = false,
-        yamlAccessor = { it.getUiThinkingEnabled() }
+        yamlAccessor = { it.getGeneralThinkingEnabled() }
     )
 
-    val UI_NO_EGRESS_ENABLED = ConfigKey(
-        key = "ui.no_egress_enabled",
+    val GENERAL_NO_EGRESS_ENABLED = ConfigKey(
+        key = "general.no_egress_enabled",
         parser = String::toBooleanStrictOrNull,
         default = false,
-        yamlAccessor = { it.getUiNoEgressEnabled() }
-    )
-
-    val UI_ORCHESTRATION_ENABLED = ConfigKey(
-        key = "ui.orchestration_enabled",
-        parser = String::toBooleanStrictOrNull,
-        default = true
+        yamlAccessor = { it.getGeneralNoEgressEnabled() }
     )
 
     val UI_INTENT_CLASSIFICATION_ENABLED = ConfigKey(
@@ -177,17 +163,11 @@ object ConfigKeys {
         default = false
     )
 
-    val UI_MULTI_AGENT_STRATEGY = ConfigKey(
-        key = "ui.multi_agent_strategy",
-        parser = { it.trim().uppercase().takeIf { s -> s.isNotBlank() } },
-        default = "SINGLE"
-    )
-
-    val UI_EXECUTION_MODE = ConfigKey(
-        key = "ui.execution_mode",
+    val GENERAL_EXECUTION_MODE = ConfigKey(
+        key = "general.execution_mode",
         parser = { it.trim().uppercase().takeIf { s -> s.isNotBlank() } },
         default = "AUTO",
-        yamlAccessor = { it.getUiExecutionMode()?.trim()?.uppercase() }
+        yamlAccessor = { it.getGeneralExecutionMode()?.trim()?.uppercase() }
     )
 
     val UI_SELECTED_MODE = ConfigKey(
@@ -425,13 +405,6 @@ object ConfigKeys {
         parser = String::toIntOrNull,
         default = 85,
         yamlAccessor = { it.getAutoOptimizePercentage() }
-    )
-
-    val NO_EGRESS_DEFAULT = ConfigKey(
-        key = "advanced.no_egress_default",
-        parser = String::toBooleanStrictOrNull,
-        default = false,
-        yamlAccessor = { it.getNoEgressDefault() }
     )
 
     val READ_ONLY_MODE = ConfigKey(
@@ -704,15 +677,12 @@ object ConfigKeys {
             MAX_RETRIES,
             RATE_LIMIT_RPM,
             RETRY_DELAY_MS,
-            // Orchestration
-            ORCHESTRATION_ENABLED,
+            // General (thinking/no-egress/execution mode moved from ui section)
+            GENERAL_THINKING_ENABLED,
+            GENERAL_NO_EGRESS_ENABLED,
+            GENERAL_EXECUTION_MODE,
             // UI
-            UI_THINKING_ENABLED,
-            UI_NO_EGRESS_ENABLED,
-            UI_ORCHESTRATION_ENABLED,
             UI_INTENT_CLASSIFICATION_ENABLED,
-            UI_MULTI_AGENT_STRATEGY,
-            UI_EXECUTION_MODE,
             UI_SELECTED_MODE,
             UI_SELECTED_MODEL,
             // Models
@@ -748,7 +718,6 @@ object ConfigKeys {
             PROJECT_ANALYSIS_CACHE_TTL_MS,
             // Advanced
             AUTO_OPTIMIZE_PERCENTAGE,
-            NO_EGRESS_DEFAULT,
             READ_ONLY_MODE,
             // Tools
             TOOLS_PERMISSIONS,

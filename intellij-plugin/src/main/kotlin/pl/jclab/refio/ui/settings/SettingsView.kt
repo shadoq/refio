@@ -250,7 +250,18 @@ class SettingsView(
                 val configService = coreApiClient?.configService
                     ?: throw IllegalStateException("ConfigService not available")
 
-                configService.exportToYaml(configPath, includeApiKeys)
+                // Include MCP servers from the current project in user export too — they are stored per-project
+                // in DB but user config.yaml is the natural home for personal MCP setup.
+                val projectPath = project.basePath
+                val projectId = projectPath?.let {
+                    pl.jclab.refio.core.utils.ProjectIdGenerator.generate(java.nio.file.Paths.get(it))
+                }
+                configService.exportToYaml(
+                    configPath,
+                    includeApiKeys,
+                    projectId = projectId,
+                    toolPermissionsService = coreApiClient.toolPermissionsService
+                )
 
                 ApplicationManager.getApplication().invokeLater {
                     NotificationService.showInfo(
@@ -308,7 +319,15 @@ class SettingsView(
                     ?: throw IllegalStateException("ConfigService not available")
 
                 // Export without API keys for project config
-                configService.exportToYaml(configPath, includeApiKeys = false)
+                val projectId = pl.jclab.refio.core.utils.ProjectIdGenerator.generate(
+                    java.nio.file.Paths.get(projectPath)
+                )
+                configService.exportToYaml(
+                    configPath,
+                    includeApiKeys = false,
+                    projectId = projectId,
+                    toolPermissionsService = coreApiClient.toolPermissionsService
+                )
 
                 ApplicationManager.getApplication().invokeLater {
                     NotificationService.showInfo(

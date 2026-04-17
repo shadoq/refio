@@ -7,7 +7,10 @@ import kotlinx.serialization.Serializable
 data class GeneralConfig(
     val formatMarkdown: Boolean? = null,
     val streamingEnabled: Boolean? = null,
-    val advancedView: Boolean? = null
+    val advancedView: Boolean? = null,
+    val thinkingEnabled: Boolean? = null,
+    val noEgressEnabled: Boolean? = null,
+    val executionMode: String? = null
 )
 
 @Serializable
@@ -105,10 +108,8 @@ data class LimitsConfig(
 
 @Serializable
 data class AdvancedConfig(
-    val noEgressDefault: Boolean? = null,
     val readOnlyMode: Boolean? = null,
-    val autoOptimizePercentage: Int? = null,
-    val orchestrationEnabled: Boolean? = null
+    val autoOptimizePercentage: Int? = null
 )
 
 @Serializable
@@ -141,9 +142,6 @@ data class RagConfig(
 
 @Serializable
 data class UiConfig(
-    val thinkingEnabled: Boolean? = null,
-    val noEgressEnabled: Boolean? = null,
-    val executionMode: String? = null,
     val selectedMode: String? = null,
     val selectedModel: String? = null
 )
@@ -190,7 +188,22 @@ data class McpServerConfig(
     val env: List<McpEnvConfig>? = null,
     val httpHeaders: List<McpHeaderConfig>? = null,
     val timeout: Int? = null,
-    val retryAttempts: Int? = null
+    val retryAttempts: Int? = null,
+    val auth: McpAuthYamlConfig? = null,
+    val serverInstructions: String? = null,
+    val resourcesEnabled: Boolean? = null,
+    val toolsEnabled: Boolean? = null,
+    val promptsEnabled: Boolean? = null,
+    val toolsExposureMode: String? = null,
+    val contextToolName: String? = null,
+    val contextToolQueryParam: String? = null,
+    val toolParamMapping: Map<String, String>? = null
+)
+
+@Serializable
+data class McpAuthYamlConfig(
+    val type: String,
+    val apiKey: String? = null
 )
 
 @Serializable
@@ -205,6 +218,33 @@ data class McpHeaderConfig(
     val name: String,
     val value: String,
     val isSecret: Boolean = false
+)
+
+@Serializable
+data class ContextConfig(
+    val recentWorkFullDataLimit: Int? = null,
+    val recentWorkSummaryMaxLength: Int? = null,
+    val budgetTotalTokens: Int? = null,
+    val budgetInputRatio: Double? = null,
+    val workingMemoryMaxFacts: Int? = null,
+    val budgetSections: Map<String, Int>? = null
+)
+
+@Serializable
+data class DocsConfig(val sources: List<DocsSourceConfig>? = null)
+
+@Serializable
+data class DocsSourceConfig(
+    val url: String,
+    val sourceType: String = "URL",
+    val filePath: String? = null,
+    val title: String? = null,
+    val description: String? = null,
+    val crawlDepth: Int? = null,
+    val status: String? = null,
+    val pagesIndexed: Int? = null,
+    val totalPages: Int? = null,
+    val lastIndexed: Long? = null
 )
 
 @Serializable

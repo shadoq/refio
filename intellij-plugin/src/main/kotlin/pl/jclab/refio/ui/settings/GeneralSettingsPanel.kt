@@ -1,22 +1,16 @@
 package pl.jclab.refio.ui.settings
 
-import pl.jclab.refio.core.config.ConfigKeys
-
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBPanel
-import pl.jclab.refio.api.models.MultiAgentStrategy
 import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.*
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
-import java.awt.Dimension
 import java.awt.event.ItemEvent
 import javax.swing.JComboBox
 import javax.swing.JLabel
-import javax.swing.JSeparator
 
 /**
  * General Settings Panel
@@ -33,8 +27,9 @@ class GeneralSettingsPanel(
     private val formatMarkdownCheckbox: JBCheckBox
     private val streamingEnabledCheckbox: JBCheckBox
     private val advancedViewCheckbox: JBCheckBox
-    private val multiAgentEnabledCheckbox: JBCheckBox
-    private val multiAgentStrategyCombo: JComboBox<MultiAgentStrategy>
+    private val thinkingEnabledCheckbox: JBCheckBox
+    private val noEgressEnabledCheckbox: JBCheckBox
+    private val executionModeCombo: JComboBox<String>
 
     // Flag to prevent triggering onSettingChanged during programmatic updates
     private var isUpdatingProgrammatically = false
@@ -122,85 +117,69 @@ class GeneralSettingsPanel(
             gbc
         )
 
-        // --- Multi-Agent section ---
+        // Thinking mode
         gbc.gridy++
         gbc.insets = LCATheme.insetsGridBagLarge
-        add(JSeparator(), gbc)
-
-        gbc.gridy++
-        add(JLabel("Multi-Agent").apply {
-            font = font.deriveFont(14f).deriveFont(java.awt.Font.BOLD)
-        }, gbc)
-
-        // Multi-agent enabled checkbox
-        gbc.gridy++
-        multiAgentEnabledCheckbox = JBCheckBox("Enable multi-agent orchestration", false).apply {
+        thinkingEnabledCheckbox = JBCheckBox("Thinking mode", false).apply {
             addItemListener { event ->
                 if (!isUpdatingProgrammatically) {
                     val isSelected = event.stateChange == ItemEvent.SELECTED
                     val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.config.ConfigKeys.UI_ORCHESTRATION_ENABLED.key
+                        pl.jclab.refio.core.config.ConfigKeys.GENERAL_THINKING_ENABLED.key
                     )
                     onSettingChanged(section, key, isSelected)
-                    multiAgentStrategyCombo.isEnabled = isSelected
                 }
             }
         }
-        add(multiAgentEnabledCheckbox, gbc)
+        add(thinkingEnabledCheckbox, gbc)
 
         gbc.gridy++
         gbc.insets = LCATheme.insetsDetailsIndented
-        add(
-            JLabel("<html><font color='gray'>Allow the agent to spawn and coordinate multiple subagents</font></html>"),
-            gbc
-        )
+        add(JLabel("<html><font color='gray'>Enable extended reasoning/thinking for models that support it</font></html>"), gbc)
 
-        // Multi-agent strategy selector
+        // No-egress mode
         gbc.gridy++
         gbc.insets = LCATheme.insetsGridBagLarge
-        add(JLabel("Orchestration strategy:"), gbc)
-
-        gbc.gridy++
-        gbc.insets = LCATheme.insetsDetailsIndented
-        multiAgentStrategyCombo = JComboBox(MultiAgentStrategy.entries.toTypedArray()).apply {
-            preferredSize = Dimension(250, 28)
-            maximumSize = Dimension(250, 28)
-            isEnabled = false
-            toolTipText = "How multiple agents are coordinated"
-
-            renderer = object : javax.swing.DefaultListCellRenderer() {
-                override fun getListCellRendererComponent(
-                    list: javax.swing.JList<*>?, value: Any?, index: Int,
-                    isSelected: Boolean, cellHasFocus: Boolean
-                ): java.awt.Component {
-                    super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
-                    text = (value as? MultiAgentStrategy)?.displayName ?: value.toString()
-                    return this
-                }
-            }
-
-            addActionListener {
+        noEgressEnabledCheckbox = JBCheckBox("No-egress mode (block network)", false).apply {
+            addItemListener { event ->
                 if (!isUpdatingProgrammatically) {
-                    val strategy = selectedItem as? MultiAgentStrategy ?: return@addActionListener
+                    val isSelected = event.stateChange == ItemEvent.SELECTED
                     val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        ConfigKeys.UI_MULTI_AGENT_STRATEGY.key
+                        pl.jclab.refio.core.config.ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key
                     )
-                    onSettingChanged(section, key, strategy.name)
+                    onSettingChanged(section, key, isSelected)
                 }
             }
         }
-        add(multiAgentStrategyCombo, gbc)
+        add(noEgressEnabledCheckbox, gbc)
 
         gbc.gridy++
-        add(
-            JLabel("<html><font color='gray'>" +
-                "Single agent — one agent, subagent calls on demand<br>" +
-                "Parallel — multiple agents run concurrently<br>" +
-                "Pipeline — sequential chain (A → B → C)<br>" +
-                "Orchestrator (LLM) — LLM decides dynamically" +
-                "</font></html>"),
-            gbc
-        )
+        gbc.insets = LCATheme.insetsDetailsIndented
+        add(JLabel("<html><font color='gray'>Restrict tools to local-only operations (no outbound network)</font></html>"), gbc)
+
+        // Execution mode
+        gbc.gridy++
+        gbc.insets = LCATheme.insetsGridBagLarge
+        executionModeCombo = JComboBox(arrayOf("AUTO", "INTERACTIVE")).apply {
+            addActionListener {
+                if (!isUpdatingProgrammatically) {
+                    val value = selectedItem as? String ?: return@addActionListener
+                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
+                        pl.jclab.refio.core.config.ConfigKeys.GENERAL_EXECUTION_MODE.key
+                    )
+                    onSettingChanged(section, key, value)
+                }
+            }
+        }
+        val execPanel = JBPanel<JBPanel<*>>(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0)).apply {
+            add(JLabel("Execution mode: "))
+            add(executionModeCombo)
+        }
+        add(execPanel, gbc)
+
+        gbc.gridy++
+        gbc.insets = LCATheme.insetsDetailsIndented
+        add(JLabel("<html><font color='gray'>AUTO executes steps automatically; INTERACTIVE waits for confirmation</font></html>"), gbc)
 
         // Filler to push content to top
         gbc.gridy++
@@ -267,9 +246,6 @@ class GeneralSettingsPanel(
 
             val config = coreApiClient.configRouter.getConfig(section = "general", scope = "app")
             applyGeneralConfig(config.settings)
-
-            val uiConfig = coreApiClient.configRouter.getConfig(section = "ui", scope = "app")
-            applyUiConfig(uiConfig.settings)
         } catch (e: Exception) {
             logger.error(e) { "Failed to load general config" }
         }
@@ -283,38 +259,14 @@ class GeneralSettingsPanel(
 
         isUpdatingProgrammatically = true
         try {
-            // Apply format_markdown setting
-            val formatMarkdown = (settings["format_markdown"] as? String).toBoolean()
-            logger.info { "Setting format_markdown = $formatMarkdown" }
-            formatMarkdownCheckbox.isSelected = formatMarkdown
+            formatMarkdownCheckbox.isSelected = (settings["format_markdown"] as? String).toBoolean()
+            streamingEnabledCheckbox.isSelected = (settings["streaming_enabled"] as? String).toBoolean()
+            advancedViewCheckbox.isSelected = (settings["advanced_view"] as? String).toBoolean()
+            thinkingEnabledCheckbox.isSelected = (settings["thinking_enabled"] as? String).toBoolean()
+            noEgressEnabledCheckbox.isSelected = (settings["no_egress_enabled"] as? String).toBoolean()
 
-            // Apply streaming_enabled setting
-            val streamingEnabled = (settings["streaming_enabled"] as? String).toBoolean()
-            logger.info { "Setting streaming_enabled = $streamingEnabled" }
-            streamingEnabledCheckbox.isSelected = streamingEnabled
-
-            // Apply advanced_view setting
-            val advancedView = (settings["advanced_view"] as? String).toBoolean()
-            logger.info { "Setting advanced_view = $advancedView" }
-            advancedViewCheckbox.isSelected = advancedView
-        } finally {
-            isUpdatingProgrammatically = false
-        }
-    }
-
-    private fun applyUiConfig(settings: Map<String, Any>) {
-        isUpdatingProgrammatically = true
-        try {
-            val orchestrationEnabled = (settings["orchestration_enabled"] as? String).toBoolean()
-            multiAgentEnabledCheckbox.isSelected = orchestrationEnabled
-            multiAgentStrategyCombo.isEnabled = orchestrationEnabled
-
-            val strategyStr = settings["multi_agent_strategy"] as? String
-            if (strategyStr != null) {
-                multiAgentStrategyCombo.selectedItem = MultiAgentStrategy.fromString(strategyStr)
-            }
-
-            logger.info { "Multi-agent config: enabled=$orchestrationEnabled, strategy=$strategyStr" }
+            val executionMode = (settings["execution_mode"] as? String)?.trim()?.uppercase()
+            executionModeCombo.selectedItem = if (executionMode == "INTERACTIVE") "INTERACTIVE" else "AUTO"
         } finally {
             isUpdatingProgrammatically = false
         }
@@ -331,9 +283,9 @@ class GeneralSettingsPanel(
         formatMarkdownCheckbox.isSelected = true
         streamingEnabledCheckbox.isSelected = true
         advancedViewCheckbox.isSelected = false
-        multiAgentEnabledCheckbox.isSelected = false
-        multiAgentStrategyCombo.selectedItem = MultiAgentStrategy.SINGLE
-        multiAgentStrategyCombo.isEnabled = false
+        thinkingEnabledCheckbox.isSelected = false
+        noEgressEnabledCheckbox.isSelected = false
+        executionModeCombo.selectedItem = "AUTO"
         isUpdatingProgrammatically = false
 
         // Reload from backend

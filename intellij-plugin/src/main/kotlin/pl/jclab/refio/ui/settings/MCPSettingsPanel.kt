@@ -168,48 +168,62 @@ class MCPSettingsPanel(private val project: Project) : JBPanel<MCPSettingsPanel>
     }
 
     private fun createServerCard(config: MCPServerConfig): JPanel {
-        val panel = JBPanel<JBPanel<*>>()
-        panel.layout = BoxLayout(panel, BoxLayout.Y_AXIS)
+        val panel = JBPanel<JBPanel<*>>(BorderLayout())
         panel.border = BorderFactory.createCompoundBorder(
-            LCATheme.paddedBorder(4),
-            BorderFactory.createLineBorder(LCATheme.borderColor, 1, true)
+            BorderFactory.createLineBorder(LCATheme.borderColor, 1, true),
+            LCATheme.paddedBorder(10, 12, 10, 12)
         )
+        panel.alignmentX = Component.LEFT_ALIGNMENT
 
-        // Info section
-        val infoPanel = JBPanel<JBPanel<*>>()
-        infoPanel.layout = BoxLayout(infoPanel, BoxLayout.Y_AXIS)
-        infoPanel.border = LCATheme.paddedBorder(4)
-        infoPanel.alignmentX = Component.LEFT_ALIGNMENT
-
-        // Status badge
+        // Header row: title + status badge
         val status = MCPManager.getServerStatus(projectId, config.id)
-        val statusText = when (status) {
-            pl.jclab.refio.core.context.mcp.MCPServerStatus.CONNECTED -> "<font color='#4CAF50'>● CONNECTED</font>"
-            pl.jclab.refio.core.context.mcp.MCPServerStatus.CONNECTING -> "<font color='#FF9800'>● CONNECTING</font>"
-            pl.jclab.refio.core.context.mcp.MCPServerStatus.DISCONNECTED -> "<font color='#9E9E9E'>● DISCONNECTED</font>"
-            pl.jclab.refio.core.context.mcp.MCPServerStatus.ERROR -> "<font color='#F44336'>● ERROR</font>"
-            pl.jclab.refio.core.context.mcp.MCPServerStatus.DISABLED -> "<font color='#757575'>● DISABLED</font>"
-            pl.jclab.refio.core.context.mcp.MCPServerStatus.NEEDS_AUTH -> "<font color='#FF5722'>● NEEDS AUTH</font>"
-            pl.jclab.refio.core.context.mcp.MCPServerStatus.STALE -> "<font color='#FFC107'>● STALE</font>"
+        val (statusLabel, statusColor) = when (status) {
+            pl.jclab.refio.core.context.mcp.MCPServerStatus.CONNECTED -> "CONNECTED" to "#4CAF50"
+            pl.jclab.refio.core.context.mcp.MCPServerStatus.CONNECTING -> "CONNECTING" to "#FF9800"
+            pl.jclab.refio.core.context.mcp.MCPServerStatus.DISCONNECTED -> "DISCONNECTED" to "#9E9E9E"
+            pl.jclab.refio.core.context.mcp.MCPServerStatus.ERROR -> "ERROR" to "#F44336"
+            pl.jclab.refio.core.context.mcp.MCPServerStatus.DISABLED -> "DISABLED" to "#757575"
+            pl.jclab.refio.core.context.mcp.MCPServerStatus.NEEDS_AUTH -> "NEEDS AUTH" to "#FF5722"
+            pl.jclab.refio.core.context.mcp.MCPServerStatus.STALE -> "STALE" to "#FFC107"
         }
 
-        infoPanel.add(JBLabel("<html><b>@${config.id}</b> (${config.displayName ?: "Unnamed"}) $statusText</html>"))
-        infoPanel.add(Box.createVerticalStrut(2))
-        infoPanel.add(JBLabel("Type: ${config.type} | Mode: ${config.accessMode}").apply {
-            foreground = LCATheme.descriptionForeground
-        })
-        infoPanel.add(Box.createVerticalStrut(2))
-        infoPanel.add(JBLabel("Command/URL: ${config.command ?: config.url ?: "-"}").apply {
-            foreground = LCATheme.descriptionForeground
-        })
+        val header = JBPanel<JBPanel<*>>(BorderLayout())
+        header.isOpaque = false
+        val titleText = buildString {
+            append("<html><b>@${config.id}</b>")
+            if (!config.displayName.isNullOrBlank() && config.displayName != config.id) {
+                append(" <span style='color:#888'>— ${config.displayName}</span>")
+            }
+            append("</html>")
+        }
+        header.add(JBLabel(titleText), BorderLayout.WEST)
+        header.add(
+            JBLabel("<html><font color='$statusColor'>●</font> <b>$statusLabel</b></html>"),
+            BorderLayout.EAST
+        )
 
-        panel.add(infoPanel)
-        panel.add(Box.createVerticalStrut(4))
+        // Details (type / mode / url)
+        val details = JBPanel<JBPanel<*>>()
+        details.layout = BoxLayout(details, BoxLayout.Y_AXIS)
+        details.isOpaque = false
+        details.border = LCATheme.paddedBorder(6, 0, 6, 0)
 
-        // Buttons section - all in one row
-        val buttonsPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 4)).apply {
-            border = LCATheme.paddedBorder(0, 4, 4, 4)
+        val target = config.url ?: config.command ?: "-"
+        details.add(
+            JBLabel("<html><font color='#888'>${config.type} · ${config.accessMode}</font></html>").apply {
+                foreground = LCATheme.descriptionForeground
+            }
+        )
+        details.add(Box.createVerticalStrut(2))
+        details.add(
+            JBLabel("<html><code>$target</code></html>").apply {
+                foreground = LCATheme.descriptionForeground
+            }
+        )
 
+        // Buttons row
+        val buttonsPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+            isOpaque = false
             add(JButton("Edit").apply {
                 toolTipText = "Edit server configuration"
                 addActionListener { openConfigDialog(config) }
@@ -229,12 +243,12 @@ class MCPSettingsPanel(private val project: Project) : JBPanel<MCPSettingsPanel>
                     }
                 }
             })
-            val testButton = JButton("Test Connection").apply {
+            add(JButton("Test Connection").apply {
                 toolTipText = "Test MCP server connection and view request/response"
                 addActionListener { testConnection(config, this) }
-            }
-            add(testButton)
+            })
             add(JCheckBox("Enabled", config.enabled).apply {
+                isOpaque = false
                 toolTipText = "Enable/disable auto-connect"
                 addActionListener {
                     val updated = config.copy(enabled = isSelected)
@@ -244,7 +258,15 @@ class MCPSettingsPanel(private val project: Project) : JBPanel<MCPSettingsPanel>
             })
         }
 
-        panel.add(buttonsPanel)
+        val body = JBPanel<JBPanel<*>>()
+        body.layout = BoxLayout(body, BoxLayout.Y_AXIS)
+        body.isOpaque = false
+        body.add(header)
+        body.add(details)
+        body.add(buttonsPanel)
+
+        panel.add(body, BorderLayout.CENTER)
+        panel.maximumSize = java.awt.Dimension(Int.MAX_VALUE, panel.preferredSize.height)
         return panel
     }
 

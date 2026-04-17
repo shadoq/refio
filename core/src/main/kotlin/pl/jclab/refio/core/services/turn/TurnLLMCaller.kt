@@ -60,8 +60,8 @@ class TurnLLMCaller(
         logger.info { "[CALL_LLM] Final model selection: $providerName/$modelId" }
 
         val responseFormat = resolveResponseFormat(mode, providerName)
-        val thinkingEnabled = configService.getTyped(ConfigKeys.UI_THINKING_ENABLED, taskId)
-        val noEgressEnabled = configService.getTyped(ConfigKeys.UI_NO_EGRESS_ENABLED, taskId)
+        val thinkingEnabled = configService.getTyped(ConfigKeys.GENERAL_THINKING_ENABLED, taskId)
+        val noEgressEnabled = configService.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, taskId)
         val reasoningEffortOverride = profileOverrides?.reasoningEffort
         if (reasoningEffortOverride != null) {
             logger.info {

@@ -93,6 +93,9 @@ class HierarchicalConfigLoader private constructor(
     fun getFormatMarkdown(): Boolean? = getConfig().general?.formatMarkdown
     fun getStreamingEnabled(): Boolean? = getConfig().general?.streamingEnabled
     fun getAdvancedView(): Boolean? = getConfig().general?.advancedView
+    fun getGeneralThinkingEnabled(): Boolean? = getConfig().general?.thinkingEnabled
+    fun getGeneralNoEgressEnabled(): Boolean? = getConfig().general?.noEgressEnabled
+    fun getGeneralExecutionMode(): String? = getConfig().general?.executionMode
 
     // ═══════════════════════════════════════════════════════════════════════════════
     // Provider Settings
@@ -150,10 +153,8 @@ class HierarchicalConfigLoader private constructor(
     // Advanced Settings
     // ═══════════════════════════════════════════════════════════════════════════════
 
-    fun getNoEgressDefault(): Boolean? = getConfig().advanced?.noEgressDefault
     fun getReadOnlyMode(): Boolean? = getConfig().advanced?.readOnlyMode
     fun getAutoOptimizePercentage(): Int? = getConfig().advanced?.autoOptimizePercentage
-    fun getOrchestrationEnabled(): Boolean? = getConfig().advanced?.orchestrationEnabled
 
     // ═══════════════════════════════════════════════════════════════════════════════
     // Tools Settings
@@ -191,9 +192,6 @@ class HierarchicalConfigLoader private constructor(
     // UI Settings
     // ═══════════════════════════════════════════════════════════════════════════════
 
-    fun getUiThinkingEnabled(): Boolean? = getConfig().ui?.thinkingEnabled
-    fun getUiNoEgressEnabled(): Boolean? = getConfig().ui?.noEgressEnabled
-    fun getUiExecutionMode(): String? = getConfig().ui?.executionMode
     fun getUiSelectedMode(): String? = getConfig().ui?.selectedMode
     fun getUiSelectedModel(): String? = getConfig().ui?.selectedModel
 

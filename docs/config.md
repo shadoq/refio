@@ -103,10 +103,15 @@ Controls basic UI behavior.
 
 ```yaml
 general:
-  formatMarkdown: true      # Format LLM responses as markdown
-  streamingEnabled: true    # Stream responses in real-time
-  advancedView: false       # Show advanced UI tabs (Steps, Context, RAG, Debug)
+  formatMarkdown: true        # Format LLM responses as markdown
+  streamingEnabled: true      # Stream responses in real-time
+  advancedView: false         # Show advanced UI tabs (Steps, Context, RAG, Debug)
+  thinkingEnabled: false      # Extended reasoning/thinking for models that support it
+  noEgressEnabled: false      # Block outbound network calls (local-only mode)
+  executionMode: "AUTO"       # AUTO (runs steps automatically) or INTERACTIVE (waits for confirmation)
 ```
+
+All six fields are edited from the **General** tab in Settings (plugin and TUI). `thinkingEnabled`, `noEgressEnabled`, and `executionMode` used to live under `ui:` — they moved to `general:` so the storage layout mirrors the UI tab 1:1.
 
 ### Provider Configuration
 
@@ -201,13 +206,14 @@ Security and optimization settings.
 
 ```yaml
 advanced:
-  noEgressDefault: false         # Block external network calls by default
   readOnlyMode: false            # Prevent all file write operations
   autoOptimizePercentage: 85     # Auto-optimize context at this % of limit
 
 security:
   allowSymlinks: false           # Unsafe opt-in: allow symbolic links in PathSandbox
 ```
+
+> **Note:** `noEgressDefault` was removed. Use `general.noEgressEnabled` instead — it is now the single source of truth for blocking outbound network calls (edited from the **General** tab / same key in YAML).
 
 ### Tool Permissions
 
@@ -276,14 +282,11 @@ Persisted UI preferences.
 
 ```yaml
 ui:
-  thinkingEnabled: false        # Show LLM thinking process
-  noEgressEnabled: false        # Block external network calls
-  orchestrationEnabled: true    # Enable orchestration toggle
-  intentClassificationEnabled: false # Enable LLM intent classification
-  executionMode: "AUTO"         # AUTO or INTERACTIVE
   selectedMode: "CHAT"          # CHAT, PLAN, or AGENT
   selectedModel: ""             # Currently selected model (empty = auto)
 ```
+
+The `ui:` section only holds transient session state (what the user last picked in the sidebar). User-facing preferences — `thinkingEnabled`, `noEgressEnabled`, `executionMode` — now live under `general:` (see *General Settings* above).
 
 ### Custom Prompts (Project-Specific)
 
@@ -387,6 +390,9 @@ mcp:
 | `general.formatMarkdown` | `general.format_markdown` | `true` |
 | `general.streamingEnabled` | `general.streaming_enabled` | `true` |
 | `general.advancedView` | `general.advanced_view` | `false` |
+| `general.thinkingEnabled` | `general.thinking_enabled` | `false` |
+| `general.noEgressEnabled` | `general.no_egress_enabled` | `false` |
+| `general.executionMode` | `general.execution_mode` | `AUTO` |
 | `providers.ollama.endpoint` | `ollama_endpoint` | `http://localhost:11434` |
 | `providers.ollama.contextSize` | `providers.ollama.ollama_context_size` | `32768` |
 | `providers.anthropic.apiKey` | `anthropic_api_key` | - |
@@ -405,7 +411,6 @@ mcp:
 | `limits.maxContextSize` | `limits.max_context_size` | `128000` |
 | `limits.maxOutputSize` | `limits.max_output_size` | `16384` |
 | `limits.maxFileSize` | `limits.max_file_size` | `10` |
-| `advanced.noEgressDefault` | `advanced.no_egress_default` | `false` |
 | `advanced.readOnlyMode` | `advanced.read_only_mode` | `false` |
 | `security.allowSymlinks` | `security.allow_symlinks` | `false` |
 | `rag.enabled` | `rag.enabled` | `true` |
@@ -415,8 +420,6 @@ mcp:
 | `rag.searchHybridEnabled` | `rag.search_hybrid_enabled` | `false` |
 | `rag.searchSemanticWeight` | `rag.search_semantic_weight` | `0.7` |
 | `rag.searchIncludeContextChunks` | `rag.search_include_context_chunks` | `false` |
-| `ui.thinkingEnabled` | `ui.thinking_enabled` | `false` |
-| `ui.noEgressEnabled` | `ui.no_egress_enabled` | `false` |
 | `ui.intentClassificationEnabled` | `ui.intent_classification_enabled` | `false` |
 | `ui.selectedMode` | `ui.selected_mode` | `CHAT` |
 | `ui.selectedModel` | `ui.selected_model` | - |

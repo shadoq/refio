@@ -86,9 +86,27 @@ class CoreConnectionManager {
             // Initialize Context Provider Registry with IntelliJ-specific providers
             logger.info { "Initializing Context Provider Registry" }
             ContextProviderRegistry.providerFactory = { isIdeEnvironment ->
+                // Reflection instead of direct calls: in IntelliJ 261 PluginId is a Kotlin
+                // class with a Companion object, so `PluginId.getId(x)` compiles to
+                // `PluginId.Companion.getId(x)`. In IntelliJ 241 PluginId is still a Java
+                // class with a static `getId`, and has no Companion field — the direct
+                // call throws NoSuchFieldError: Companion at load time. Reflection tries
+                // the static first, then falls back to the companion accessor.
                 val terminalAvailable = try {
-                    val pluginId = com.intellij.openapi.extensions.PluginId.getId("com.intellij.terminal")
-                    com.intellij.ide.plugins.PluginManagerCore.isPluginInstalled(pluginId)
+                    val pluginIdClass = Class.forName("com.intellij.openapi.extensions.PluginId")
+                    val pluginId = try {
+                        pluginIdClass.getMethod("getId", String::class.java).invoke(null, "com.intellij.terminal")
+                    } catch (_: NoSuchMethodException) {
+                        val companion = pluginIdClass.getField("Companion").get(null)
+                        companion.javaClass.getMethod("getId", String::class.java).invoke(companion, "com.intellij.terminal")
+                    }
+                    val pmcClass = Class.forName("com.intellij.ide.plugins.PluginManagerCore")
+                    try {
+                        pmcClass.getMethod("isPluginInstalled", pluginIdClass).invoke(null, pluginId) as Boolean
+                    } catch (_: NoSuchMethodException) {
+                        val companion = pmcClass.getField("Companion").get(null)
+                        companion.javaClass.getMethod("isPluginInstalled", pluginIdClass).invoke(companion, pluginId) as Boolean
+                    }
                 } catch (_: Exception) { false }
 
                 buildList {

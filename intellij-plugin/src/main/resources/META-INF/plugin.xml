@@ -5,7 +5,7 @@
 
   <!-- Public plugin name should be written in Title Case.
        Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-name -->
-  <name>Refio</name>
+  <name>RefIo</name>
 
   <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
   <vendor email="shad@shad.net.pl" url="https://github.com/shadoq/refio">Jarek Cz</vendor>
@@ -14,87 +14,95 @@
        Simple HTML elements (text formatting, paragraphs, and lists) can be added inside of <![CDATA[ ]]> tag.
        Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
   <description><![CDATA[
-    <h2>Refio — Deterministic AI Agent for IntelliJ IDEA</h2>
+    <h2>RefIo — Local-First AI Coding Plugin for IntelliJ</h2>
 
-    <p><b>Built for developers who want control — not black-box automation.</b></p>
+    <p>An open-source AI coding plugin for IntelliJ IDEA, built in Kotlin. Native
+    JetBrains UI, no WebView, no cloud account required. Works with local models
+    (Ollama, LM Studio) or cloud LLMs.</p>
 
-    <p>Most AI coding tools send your code to opaque cloud prompts, make unpredictable
-    changes, and give you no insight into what's happening. Refio is different:
-    every prompt is inspectable, every tool call is explicit, every file change is
-    snapshotted and reversible. You choose the level of autonomy — the agent never
-    acts beyond what you allow.</p>
+    <p><b>Early-stage, actively developed.</b> The foundation is in place — modular
+    architecture, three execution modes, visible tool calls, file snapshots before
+    writes. The depth is still growing. See the
+    <a href="https://github.com/shadoq/refio/blob/main/docs/ROADMAP.md">Roadmap</a>
+    for where the project is heading.</p>
 
-    <h3>Why developers choose Refio</h3>
+    <h3>What it does today</h3>
     <ul>
-      <li><b>Deterministic execution</b> — know exactly what's sent to the model.
-          Transparent context, explicit tool calls, no hidden injections.</li>
-      <li><b>Three execution modes</b> — Chat (think), Plan (inspect), Agent (execute).
-          You pick the level of autonomy. Plan mode is read-only by design.</li>
-      <li><b>Safe by default</b> — Agent mode creates file snapshots before every edit.
-          One click to roll back any change.</li>
-      <li><b>Local-first</b> — run 100% offline with Ollama. Free. Your code never
-          leaves your machine. No telemetry, no tracking.</li>
-      <li><b>Works with ANY model</b> — universal tool-calling protocol works even with
-          local models that don't support native function calling.</li>
-      <li><b>50-70% lower API costs</b> — semantic RAG sends only relevant code fragments,
-          not the whole codebase.</li>
-      <li><b>Native IntelliJ UI</b> — pure Swing, no WebView lag. Feels like a
-          first-party JetBrains tool.</li>
-      <li><b>Open source</b> — MIT licensed. Inspect, fork, extend freely.</li>
+      <li><b>Three execution modes</b> — Chat (conversation, no tools), Plan
+          (read-only analysis, code-enforced), Agent (file edits with snapshots
+          before every write).</li>
+      <li><b>Local or cloud LLMs</b> — Ollama, LM Studio, OpenAI, Anthropic, Gemini,
+          OpenRouter, Custom OpenAI, Z.AI. Universal tool-calling protocol works with
+          models that lack native function calling.</li>
+      <li><b>Tool system</b> — per-mode permissions (<code>ON</code> / <code>ASK</code> /
+          <code>OFF</code>), <code>PathSandbox</code> with symlink resolution,
+          <code>CommandRule</code> (regex allow/block/ask policies), snapshot + rollback.</li>
+      <li><b>Context control</b> — @mentions for directing context
+          (<code>@file</code>, <code>@codebase</code>, <code>@diff</code>,
+          <code>@problems</code>, <code>@terminal</code>, and more), RAG with semantic
+          chunking, token budgeting that scales to the model's context window.</li>
+      <li><b>Extensibility</b> — subagents as Markdown + YAML (Claude Code compatible
+          format), MCP protocol support (STDIO + HTTP/SSE) with built-in presets,
+          project instructions via <code>AGENTS.md</code> and
+          <code>.refio/rules/*.md</code> with glob-based activation.</li>
+      <li><b>Two interfaces, one core</b> — native IntelliJ plugin + full terminal
+          TUI share the same engine.</li>
+      <li><b>No-egress mode</b> — blocks all cloud LLM calls at the client layer for
+          strict offline work.</li>
     </ul>
 
-    <h3>Three Modes — You Choose the Control Level</h3>
+    <h3>What it is, and what it isn't</h3>
+
+    <p><b>It is:</b> an early-stage open-source plugin with a clear direction — a
+    native JetBrains tool for developers working in Kotlin, Java and JVM ecosystems,
+    or anyone who wants their AI coding agent to run offline and be auditable.</p>
+
+    <p><b>It isn't:</b> a drop-in replacement for inline completion (different
+    category). A polished enterprise-grade product (not yet). Something you install
+    and forget — changes happen fast at v0.0.1.x.</p>
+
+    <h3>Known limitations (honest)</h3>
     <ul>
-      <li><b>Chat — Think</b>: Ask questions, get explanations, explore code.
-          No file changes, no tools.</li>
-      <li><b>Plan — Inspect</b>: Model reads your codebase and builds a step-by-step
-          action plan. Guaranteed read-only. You approve before anything executes.</li>
-      <li><b>Agent — Execute</b>: Autonomous editing across files. 12 tools, automatic
-          snapshots, subtask tracking, and turn-based execution. Always reversible.</li>
+      <li>Orchestration is a light router + executors, not a deep agent engine.</li>
+      <li>No multi-agent runtime yet (Planner / Executor / Reviewer roles — roadmap).</li>
+      <li>No git worktree isolation per task — agents edit directly with snapshot rollback.</li>
+      <li>Planning loop is basic — no plan-refinement iteration yet.</li>
+      <li>Security layers are pragmatic v1, not hardened defense-in-depth.</li>
+      <li>Small commit history, fast changes, breaking changes possible pre-1.0.</li>
     </ul>
 
-    <h3>21 Built-in Specialized Subagents</h3>
-    <ul>
-      <li><code>!code-reviewer</code> — thorough code review with actionable suggestions</li>
-      <li><code>!security-reviewer</code> — OWASP audit: injection, auth, data exposure</li>
-      <li><code>!refactor</code>, <code>!test-writer</code>, <code>!documenter</code> — and 16 more</li>
-      <li>Define your own in Markdown + YAML frontmatter</li>
-    </ul>
+    <h3>Quick start — local models</h3>
+<pre>
+ollama pull nomic-embed-text        # required for RAG
+ollama pull qwen3.5:9b              # small and fast
+# or for bigger hardware:
+ollama pull qwen3.5:35b
+ollama pull qwen3.5:122b
+</pre>
 
-    <h3>Transparent Context — 14 @Mention Providers</h3>
-    <p>You control exactly what the model sees:</p>
-    <ul>
-      <li><code>@codebase</code> — semantic RAG search across your project (not the whole repo)</li>
-      <li><code>@diff</code> — uncommitted git changes only</li>
-      <li><code>@problems</code> — live IDE compilation errors</li>
-      <li><code>@terminal</code> — recent terminal output</li>
-      <li><code>@file</code>, <code>@folder</code>, <code>@url</code>, <code>@commit</code>,
-          <code>@docs</code>, <code>@clipboard</code>, <code>@grep</code> — and more</li>
-    </ul>
-
-    <h3>All Major LLM Providers</h3>
-    <ul>
-      <li><b>Local (Free):</b> Ollama, LM Studio — offline, private, $0</li>
-      <li><b>Cloud:</b> OpenAI (GPT-4o, o3), Anthropic (Claude 3.7, Opus 4),
-          Google Gemini (2.5 Flash/Pro), OpenRouter (100+ models)</li>
-    </ul>
-
-    <h3>18 MCP Integrations — Ready Out of the Box</h3>
-    <p>GitHub, GitLab, PostgreSQL, SQLite, Brave Search, Google Drive, AWS, Slack, and more.</p>
-
-    <h3>Get Started in 3 Steps</h3>
     <ol>
-      <li>Install from JetBrains Marketplace</li>
-      <li>Open the Refio panel (right sidebar) and go to <b>Refio → Settings</b></li>
-      <li>Pick your LLM provider — or run locally:
-          <code>ollama pull nomic-embed-text &amp;&amp; ollama pull qwen2.5-coder:7b</code></li>
+      <li>Install the plugin from JetBrains Marketplace</li>
+      <li>Open the RefIo tool window (right sidebar)</li>
+      <li>Go to <b>RefIo → Settings</b>, pick your model</li>
+      <li>Start with <code>@codebase your question here</code></li>
     </ol>
 
-    <p><a href="https://github.com/shadoq/refio">GitHub (MIT)</a> |
-       <a href="https://github.com/shadoq/refio/blob/main/PRIVACY.md">Privacy</a> |
-       <a href="https://github.com/shadoq/refio/issues">Report Issues</a></p>
+    <h3>Requirements</h3>
+    <ul>
+      <li>IntelliJ IDEA 2024.1 or newer (Community or Ultimate)</li>
+      <li>JDK 17+</li>
+      <li>Ollama or LM Studio (optional, for local models)</li>
+    </ul>
 
-    <p><i>Built with Kotlin. Made for developers who want to understand what their AI is doing.</i></p>
+    <p>
+      <a href="https://github.com/shadoq/refio">GitHub (MIT)</a> |
+      <a href="https://github.com/shadoq/refio/blob/main/docs/ROADMAP.md">Roadmap</a> |
+      <a href="https://github.com/shadoq/refio/blob/main/PRIVACY.md">Privacy</a> |
+      <a href="https://github.com/shadoq/refio/issues">Issues &amp; Discussions</a>
+    </p>
+
+    <p><i>Built in Kotlin. Early-stage. Honest about what's done and what's next.
+    Contributions welcome.</i></p>
   ]]></description>
 
   <!-- Product and plugin compatibility requirements.
@@ -106,7 +114,7 @@
   <extensions defaultExtensionNs="com.intellij">
     <!-- Tool Window -->
     <toolWindow
-        id="Refio"
+        id="RefIo"
         anchor="right"
         factoryClass="pl.jclab.refio.ui.toolwindow.RefioToolWindowFactory"
         icon="/icons/pluginIcon.svg"/>
@@ -150,51 +158,51 @@
       <add-to-group group-id="ToolsMenu" anchor="last"/>
     </action>
 
-    <!-- Add code to current Refio session (Ctrl+Shift+J / Cmd+Shift+J) -->
+    <!-- Add code to current RefIo session (Ctrl+Shift+J / Cmd+Shift+J) -->
     <action id="refio.AddCodeToCurrentSession"
             class="pl.jclab.refio.actions.AddCodeToCurrentSessionAction"
-            text="Add to Refio"
-            description="Add selected code to current Refio session">
+            text="Add to RefIo"
+            description="Add selected code to current RefIo session">
       <keyboard-shortcut first-keystroke="control I" keymap="$default"/>
       <keyboard-shortcut first-keystroke="meta I" keymap="Mac OS X"/>
       <keyboard-shortcut first-keystroke="meta I" keymap="Mac OS X 10.5+"/>
       <add-to-group group-id="EditorPopupMenu" anchor="last"/>
     </action>
 
-    <!-- Add code to new Refio session (Ctrl+J / Cmd+J) -->
+    <!-- Add code to new RefIo session (Ctrl+J / Cmd+J) -->
     <action id="refio.AddCodeToNewSession"
             class="pl.jclab.refio.actions.AddCodeToNewSessionAction"
-            text="Add to Refio (New Session)"
-            description="Add selected code to a new Refio session">
+            text="Add to RefIo (New Session)"
+            description="Add selected code to a new RefIo session">
       <keyboard-shortcut first-keystroke="control shift I" keymap="$default"/>
       <keyboard-shortcut first-keystroke="meta shift I" keymap="Mac OS X"/>
       <keyboard-shortcut first-keystroke="meta shift I" keymap="Mac OS X 10.5+"/>
       <add-to-group group-id="EditorPopupMenu" anchor="last"/>
     </action>
 
-    <!-- Refio Tool Window Actions - These appear in the tool window title bar -->
+    <!-- RefIo Tool Window Actions - These appear in the tool window title bar -->
     <action id="refio.ToolWindow.NewSession"
             class="pl.jclab.refio.actions.NewSessionToolWindowAction"
             text="New Session"
-            description="Create a new Refio session"
+            description="Create a new RefIo session"
             icon="AllIcons.General.Add"/>
 
     <action id="refio.ToolWindow.ShowHistory"
             class="pl.jclab.refio.actions.ShowHistoryToolWindowAction"
             text="History"
-            description="Show Refio session history"
+            description="Show RefIo session history"
             icon="AllIcons.Vcs.History"/>
 
     <action id="refio.ToolWindow.ShowSettings"
             class="pl.jclab.refio.actions.ShowSettingsToolWindowAction"
             text="Settings"
-            description="Show Refio settings"
+            description="Show RefIo settings"
             icon="AllIcons.General.Settings"/>
 
     <action id="refio.ToolWindow.ShowHelp"
             class="pl.jclab.refio.actions.ShowHelpToolWindowAction"
             text="Help"
-            description="Show Refio help"
+            description="Show RefIo help"
             icon="AllIcons.Actions.Help"/>
   </actions>
 </idea-plugin>

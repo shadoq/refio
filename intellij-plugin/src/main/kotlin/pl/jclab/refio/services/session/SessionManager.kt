@@ -73,8 +73,6 @@ class SessionManager(private val project: Project) {
     val selectedModel: StateFlow<String> = stateManager.selectedModel
     val thinkingEnabled: StateFlow<Boolean> = stateManager.thinkingEnabled
     val noEgressEnabled: StateFlow<Boolean> = stateManager.noEgressEnabled
-    val multiAgentEnabled: StateFlow<Boolean> = stateManager.multiAgentEnabled
-    val multiAgentStrategy: StateFlow<pl.jclab.refio.api.models.MultiAgentStrategy> = stateManager.multiAgentStrategy
 
     val isPaused: StateFlow<Boolean> = stateManager.isPaused
     val isGenerating: StateFlow<Boolean> = stateManager.isGenerating
@@ -244,12 +242,14 @@ class SessionManager(private val project: Project) {
             vfsRefresher = pl.jclab.refio.services.project.IntelliJVfsRefresher(project),
             loadMessages = { messageDispatcher.loadMessages() },
             executeCurrentStep = { subtaskId -> executionMonitor.executeCurrentStep(subtaskId) },
-            showApprovalMessageForNextSubtask = { executionMonitor.showApprovalMessageForNextSubtask() }
+            showApprovalMessageForNextSubtask = { executionMonitor.showApprovalMessageForNextSubtask() },
+            scope = cs,
         )
 
         messageDispatcher = MessageDispatcher(
             projectRouter = projectRouter,
-            stateManager = stateManager
+            stateManager = stateManager,
+            scope = cs,
         )
 
         promptStateTracker = PromptStateTracker(stateManager)
@@ -474,18 +474,6 @@ class SessionManager(private val project: Project) {
      */
     fun setNoEgressEnabled(enabled: Boolean) {
         lifecycleService.setNoEgressEnabled(enabled)
-    }
-
-    /**
-     * Set multi-agent mode enabled/disabled.
-     * Auto-saves UI state to database.
-     */
-    fun setMultiAgentEnabled(enabled: Boolean) {
-        lifecycleService.setMultiAgentEnabled(enabled)
-    }
-
-    fun setMultiAgentStrategy(strategy: pl.jclab.refio.api.models.MultiAgentStrategy) {
-        lifecycleService.setMultiAgentStrategy(strategy)
     }
 
     suspend fun getAvailableModels(): List<String> {

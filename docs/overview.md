@@ -1,7 +1,7 @@
 # Refio - Technical Architecture Overview
 
 > **Last Updated:** 2026-03-29
-> **Version:** 0.0.1.5
+> **Version:** 0.0.1.7
 > **Status:** Active Development
 
 This document provides a comprehensive technical overview of Refio - a local-first AI coding assistant for IntelliJ IDEA and the terminal.

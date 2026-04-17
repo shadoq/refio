@@ -6,6 +6,7 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.wm.ToolWindowManager
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.ui.toolwindow.RefioMainPanel
+import pl.jclab.refio.ui.toolwindow.RefioToolWindowFactory
 import java.awt.Container
 
 /**
@@ -28,9 +29,9 @@ class NewSessionAction : AnAction(
 
         logger.info { "New Session action triggered" }
 
-        val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("Refio")
+        val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(RefioToolWindowFactory.TOOL_WINDOW_ID)
         if (toolWindow == null) {
-            logger.warn { "Refio tool window not found" }
+            logger.warn { "${RefioToolWindowFactory.TOOL_WINDOW_ID} tool window not found" }
             return
         }
     }
