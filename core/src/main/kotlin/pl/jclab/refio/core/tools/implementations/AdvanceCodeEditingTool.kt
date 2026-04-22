@@ -382,22 +382,32 @@ class AdvanceCodeEditingTool(
             ToolResult(
                 success = true,
                 output = buildString {
-                    if (fileExists) {
-                        appendLine("File edited successfully: $pathStr")
+                    if (changeSummary.noop) {
+                        // LLM returned content identical to the existing file — no change applied.
+                        // Surface this explicitly so the agent notices (instead of seeing a bland
+                        // "File edited successfully" with an empty diff and concluding all is fine).
+                        appendLine("⚠ No changes applied: generated content is identical to the existing file ($pathStr).")
+                        appendLine("Likely causes: the edit_description was too vague for the model to act on, the change is already present, or the model refused and returned the file unchanged.")
+                        appendLine("Next step: refine edit_description with concrete before/after snippets, or switch to code_editing / multi_line_editor with an exact string to match. Do NOT retry advance_code_editing with the same description.")
+                        appendLine("Model: $model, Tokens: ${usage.inputTokens}/${usage.outputTokens}, Cost: $${"%.4f".format(cost)}")
                     } else {
-                        appendLine("File created successfully: $pathStr")
+                        if (fileExists) {
+                            appendLine("File edited successfully: $pathStr")
+                        } else {
+                            appendLine("File created successfully: $pathStr")
+                        }
+                        if (fileExists) {
+                            appendLine("Size: $fileSize bytes → $newFileSize bytes")
+                        } else {
+                            appendLine("Size: $newFileSize bytes")
+                        }
+                        appendLine("Model: $model, Tokens: ${usage.inputTokens}/${usage.outputTokens}, Cost: $${"%.4f".format(cost)}")
+                        // Wrap diff in markdown code block for proper UI rendering
+                        appendLine("Diff:")
+                        appendLine("```diff")
+                        diff.lines().forEach { line -> appendLine(line) }
+                        append("```")
                     }
-                    if (fileExists) {
-                        appendLine("Size: $fileSize bytes → $newFileSize bytes")
-                    } else {
-                        appendLine("Size: $newFileSize bytes")
-                    }
-                    appendLine("Model: $model, Tokens: ${usage.inputTokens}/${usage.outputTokens}, Cost: $${"%.4f".format(cost)}")
-                    // Wrap diff in markdown code block for proper UI rendering
-                    appendLine("Diff:")
-                    appendLine("```diff")
-                    diff.lines().forEach { line -> appendLine(line) }
-                    append("```")
                 },
                 bytesRead = originalContent.toByteArray().size,
                 bytesWritten = newContent.toByteArray().size,
@@ -410,6 +420,7 @@ class AdvanceCodeEditingTool(
                     "diff_lines" to diff.lines().size,
                     "added_lines" to addedLines,
                     "removed_lines" to removedLines,
+                    "noop" to changeSummary.noop,
                     "edit_description" to editDescription,
                     "model" to model,
                     "provider" to provider,

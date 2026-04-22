@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.llm.adapters
 
+import pl.jclab.refio.core.llm.NativeToolCall
 import pl.jclab.refio.core.utils.GsonInstance.gson
 
 internal object ToolCallContentNormalizer {
@@ -10,6 +11,7 @@ internal object ToolCallContentNormalizer {
 
     internal class OpenAiStreamingToolCallAccumulator {
         private data class CallBuffer(
+            var id: String? = null,
             var name: String? = null,
             val argumentsBuilder: StringBuilder = StringBuilder()
         )
@@ -29,6 +31,9 @@ internal object ToolCallContentNormalizer {
                 val index = (toolCall["index"] as? Number)?.toInt() ?: fallbackIndex
                 val buffer = callsByIndex.getOrPut(index) { CallBuffer() }
 
+                val id = toolCall["id"] as? String
+                if (!id.isNullOrBlank()) buffer.id = id
+
                 @Suppress("UNCHECKED_CAST")
                 val function = toolCall["function"] as? Map<String, Any?> ?: continue
                 val name = function["name"] as? String
@@ -46,6 +51,21 @@ internal object ToolCallContentNormalizer {
                     }
                 }
             }
+        }
+
+        fun toNativeToolCalls(toolsWereRequested: Boolean): List<NativeToolCall>? {
+            if (!toolsWereRequested) return null
+            return callsByIndex
+                .toSortedMap()
+                .values
+                .mapNotNull { buffer ->
+                    val name = buffer.name ?: return@mapNotNull null
+                    NativeToolCall(
+                        id = buffer.id ?: java.util.UUID.randomUUID().toString(),
+                        name = name,
+                        argumentsJson = buffer.argumentsBuilder.toString().ifEmpty { "{}" }
+                    )
+                }
         }
 
         fun toCanonicalJson(): String? {

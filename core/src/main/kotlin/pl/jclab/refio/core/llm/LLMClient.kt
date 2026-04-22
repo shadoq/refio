@@ -364,11 +364,14 @@ class LLMClient(
                 kwargs = adapterKwargs
             )
 
-            // For streaming mode, build response from accumulated data
+            // For streaming mode, build response from accumulated data while preserving
+            // adapter-supplied fields (nativeToolCalls, thinking, rawResponse). Dropping
+            // nativeToolCalls here would force AgentTurnLoop back into JSON-in-text parsing
+            // even when the adapter successfully parsed the native tool_calls stream.
             val finalResponse = if (stream && contentBuilder.isNotEmpty()) {
                 val usage = finalUsage ?: response.usage
                 val cost = estimateCost(usage, provider, model)
-                LLMResponse(
+                response.copy(
                     content = contentBuilder.toString(),
                     usage = usage,
                     model = model,

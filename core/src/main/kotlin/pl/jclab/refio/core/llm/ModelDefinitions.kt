@@ -2879,6 +2879,259 @@ object ModelDefinitions {
             active = true
         ),
 
+        "qwen3.6:35b" to ModelDefinition(
+            id = "qwen3.6:35b",
+            name = "Qwen 3.6 35B",
+            provider = "ollama",
+            description = "Qwen 3.6 35B multimodal model with 256K context and native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "qwen3-next:80b" to ModelDefinition(
+            id = "qwen3-next:80b",
+            name = "Qwen 3 Next 80B",
+            provider = "ollama",
+            description = "Qwen 3 Next 80B with native tool use and long context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "gpt-oss-safeguard:20b" to ModelDefinition(
+            id = "gpt-oss-safeguard:20b",
+            name = "GPT-OSS Safeguard 20B",
+            provider = "ollama",
+            description = "OpenAI gpt-oss-safeguard 20B with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "gpt-oss-safeguard:120b" to ModelDefinition(
+            id = "gpt-oss-safeguard:120b",
+            name = "GPT-OSS Safeguard 120B",
+            provider = "ollama",
+            description = "OpenAI gpt-oss-safeguard 120B with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "deepseek-v3.2:latest" to ModelDefinition(
+            id = "deepseek-v3.2:latest",
+            name = "DeepSeek V3.2",
+            provider = "ollama",
+            description = "DeepSeek V3.2 with native tool use and reasoning",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "kimi-k2-thinking:latest" to ModelDefinition(
+            id = "kimi-k2-thinking:latest",
+            name = "Kimi K2 Thinking",
+            provider = "ollama",
+            description = "Moonshot Kimi K2 Thinking with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 200_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "minimax-m2:latest" to ModelDefinition(
+            id = "minimax-m2:latest",
+            name = "MiniMax M2",
+            provider = "ollama",
+            description = "MiniMax M2 with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "nemotron-3-super:120b" to ModelDefinition(
+            id = "nemotron-3-super:120b",
+            name = "Nemotron 3 Super 120B",
+            provider = "ollama",
+            description = "NVIDIA Nemotron 3 Super 120B with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "nemotron-3-nano:4b" to ModelDefinition(
+            id = "nemotron-3-nano:4b",
+            name = "Nemotron 3 Nano 4B",
+            provider = "ollama",
+            description = "NVIDIA Nemotron 3 Nano 4B with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "nemotron-3-nano:30b" to ModelDefinition(
+            id = "nemotron-3-nano:30b",
+            name = "Nemotron 3 Nano 30B",
+            provider = "ollama",
+            description = "NVIDIA Nemotron 3 Nano 30B with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "nemotron-cascade-2:30b" to ModelDefinition(
+            id = "nemotron-cascade-2:30b",
+            name = "Nemotron Cascade 2 30B",
+            provider = "ollama",
+            description = "NVIDIA Nemotron Cascade 2 30B with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
         "qwen3-coder:30b" to ModelDefinition(
             id = "qwen3-coder:30b",
             name = "Qwen 3 Coder 30B",

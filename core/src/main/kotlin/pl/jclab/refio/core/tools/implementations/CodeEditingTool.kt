@@ -214,14 +214,22 @@ class CodeEditingTool(
                 ToolResult(
                     success = true,
                     output = buildString {
-                        appendLine("File edited successfully: $pathStr ($replacements replacements made)")
-                        if (replaceAll && replacements > 1) {
-                            appendLine("Preview shows one replacement pattern applied across all matches.")
+                        if (changeSummary.noop) {
+                            // Replacement applied but before/after content is identical — usually means
+                            // `old_string` == `new_string`. Flag explicitly so the agent doesn't assume
+                            // progress was made.
+                            appendLine("⚠ No changes applied: $replacements replacement(s) matched but old_string and new_string produce identical content ($pathStr).")
+                            appendLine("Next step: verify that new_string actually differs from old_string, or re-read the file to confirm whether the desired state is already present.")
+                        } else {
+                            appendLine("File edited successfully: $pathStr ($replacements replacements made)")
+                            if (replaceAll && replacements > 1) {
+                                appendLine("Preview shows one replacement pattern applied across all matches.")
+                            }
+                            appendLine("Diff:")
+                            appendLine("```diff")
+                            diff.lines().forEach { line -> appendLine(line) }
+                            append("```")
                         }
-                        appendLine("Diff:")
-                        appendLine("```diff")
-                        diff.lines().forEach { line -> appendLine(line) }
-                        append("```")
                     },
                     bytesRead = content.toByteArray().size,
                     bytesWritten = newContent.toByteArray().size,
@@ -235,6 +243,7 @@ class CodeEditingTool(
                         "new_length" to newContent.length,
                         "added_lines" to changeSummary.addedLines,
                         "removed_lines" to changeSummary.removedLines,
+                        "noop" to changeSummary.noop,
                         "diff" to diff
                     )
                 )

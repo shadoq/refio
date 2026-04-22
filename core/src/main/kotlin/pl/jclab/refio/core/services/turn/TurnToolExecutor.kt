@@ -65,6 +65,62 @@ class TurnToolExecutor(
         name.equals("invoke_subagent", ignoreCase = true) ||
         name.equals("delegate_to_strong_model", ignoreCase = true)
 
+    /**
+     * Detect whether the current tool call repeats a recent one with identical
+     * arguments. Emits an in-band nudge that ships WITH the tool result so the
+     * agent sees the warning on the next turn without a separate system message.
+     *
+     * Strategy: compare against the previous 3 SUCCESS subtasks of the same task.
+     * We use exact string equality on `paramsJson`, which is safe because both
+     * the current call and the stored subtask serialise arguments through the
+     * same Gson instance — so identical args produce identical JSON.
+     *
+     * Returns null when no repeat is detected; the caller drops the nudge from
+     * `outputWithWarnings` in that case.
+     */
+    private fun buildRepeatedCallNudge(
+        taskId: String,
+        currentSubtaskId: String,
+        toolName: String,
+        argumentsJson: String
+    ): String? {
+        // `think`, `memory` and similar reflective tools are expected to be called
+        // repeatedly with similar args. Nudging on those would be noise.
+        val noisyTools = setOf("think", "memory", "tasks")
+        if (toolName in noisyTools) return null
+        if (argumentsJson.isBlank()) return null
+
+        val recent = try {
+            transaction { subtaskRepository.findByTaskId(taskId) }
+                .asReversed()
+                .asSequence()
+                .filter { it.id != currentSubtaskId }
+                .filter { it.status == TaskStatus.SUCCESS }
+                .take(3)
+                .toList()
+        } catch (e: Exception) {
+            logger.debug { "[REPEATED_CALL_NUDGE] query failed, skipping: ${e.message}" }
+            return null
+        }
+
+        val match = recent.firstOrNull {
+            it.kind.name.equals(toolName, ignoreCase = true) &&
+                it.paramsJson == argumentsJson
+        } ?: return null
+
+        logger.info {
+            "[REPEATED_CALL] tool=$toolName taskId=$taskId currentSubtask=$currentSubtaskId " +
+                "matchesPriorSubtask=${match.id} orderIndex=${match.orderIndex}"
+        }
+
+        return buildString {
+            appendLine("[⚠ progressive hint — possible loop]")
+            appendLine("You just ran `$toolName` with arguments identical to a prior successful call in this task (subtask ${match.id}).")
+            appendLine("If the previous result did not advance the task, repeating it will not help either.")
+            appendLine("Options: (1) change the arguments materially, (2) try a different tool — see <tool_selection> for alternatives, (3) if stuck on the same problem for 3+ attempts, call `delegate_to_strong_model` with a concrete summary of what failed, or (4) ask the user with `ask_user` when the goal itself is ambiguous.")
+        }.trim()
+    }
+
     companion object {
         /** Max raw output size (chars) to preserve in-context for DATA_PRODUCING tools */
         const val DATA_PRODUCING_RAW_OUTPUT_BUFFER = 16_000
@@ -492,7 +548,22 @@ class TurnToolExecutor(
                     ?.takeIf { it.isNotEmpty() }
                     ?.joinToString(prefix = "[next-step hints]\n- ", separator = "\n- ")
 
-                val outputWithWarnings = listOfNotNull(rawOutput, hintsBlock).joinToString("\n\n")
+                // Progressive nudge: if the agent just ran an identical tool call (same
+                // name + arguments) that also succeeded, it's burning turns on a loop —
+                // common failure mode for small local models (qwen/gemma) which keep
+                // retrying `advance_code_editing` with the same description hoping for
+                // different output. Detect by comparing against the previous subtask's
+                // paramsJson; nudge the agent toward a different approach in-band so it
+                // arrives with the tool result rather than via a round-trip.
+                val repeatedCallNudge = buildRepeatedCallNudge(
+                    taskId = taskId,
+                    currentSubtaskId = subtaskId,
+                    toolName = toolCall.name,
+                    argumentsJson = toolCall.arguments
+                )
+
+                val outputWithWarnings = listOfNotNull(rawOutput, hintsBlock, repeatedCallNudge)
+                    .joinToString("\n\n")
                 val isInvokeSubagent = toolCall.name.equals("invoke_subagent", ignoreCase = true)
                 val isDelegateStrong = toolCall.name.equals("delegate_to_strong_model", ignoreCase = true)
                 val isMemoryGetSubtaskOutput = toolCall.name.equals("memory", ignoreCase = true)

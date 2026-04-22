@@ -353,15 +353,22 @@ class MultiLineEditorTool(
             ToolResult(
                 success = true,
                 output = buildString {
-                    appendLine("File edited successfully: $pathStr")
-                    appendLine("Applied ${edits.size} edits to file")
-                    appendLine("Size: $fileSize bytes → $newFileSize bytes")
-                    appendLine("Model: $model, Tokens: ${usage.inputTokens}/${usage.outputTokens}, Cost: $${"%.4f".format(cost)}")
-                    // Wrap diff in markdown code block for proper UI rendering
-                    appendLine("Diff:")
-                    appendLine("```diff")
-                    diff.lines().forEach { line -> appendLine(line) }
-                    append("```")
+                    if (changeSummary.noop) {
+                        appendLine("⚠ No changes applied: regenerated content is identical to the existing file ($pathStr).")
+                        appendLine("Likely causes: the edit_description was too vague for the model to locate the region to change, the change is already present, or the model returned the file unchanged.")
+                        appendLine("Next step: refine edit_description with concrete snippets (before/after text, line numbers, function names), or use code_editing for a targeted search/replace. Do NOT retry multi_line_editor with the same description.")
+                        appendLine("Model: $model, Tokens: ${usage.inputTokens}/${usage.outputTokens}, Cost: $${"%.4f".format(cost)}")
+                    } else {
+                        appendLine("File edited successfully: $pathStr")
+                        appendLine("Applied ${edits.size} edits to file")
+                        appendLine("Size: $fileSize bytes → $newFileSize bytes")
+                        appendLine("Model: $model, Tokens: ${usage.inputTokens}/${usage.outputTokens}, Cost: $${"%.4f".format(cost)}")
+                        // Wrap diff in markdown code block for proper UI rendering
+                        appendLine("Diff:")
+                        appendLine("```diff")
+                        diff.lines().forEach { line -> appendLine(line) }
+                        append("```")
+                    }
                 },
                 bytesRead = originalContent.toByteArray().size,
                 bytesWritten = newContent.toByteArray().size,
@@ -374,6 +381,7 @@ class MultiLineEditorTool(
                     "edits_count" to edits.size,
                     "added_lines" to addedLines,
                     "removed_lines" to removedLines,
+                    "noop" to changeSummary.noop,
                     "edit_description" to editDescription,
                     "model" to model,
                     "provider" to provider,

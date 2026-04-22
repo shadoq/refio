@@ -57,13 +57,41 @@ data class LLMUsage(
 )
 
 /**
+ * Single tool invocation emitted by the LLM via native function-calling API.
+ *
+ * Unified across providers: OpenAI tool_calls[], Anthropic content[].tool_use,
+ * Ollama message.tool_calls[]. Each adapter maps its provider-specific shape to this
+ * type before returning from chat().
+ *
+ * @property id Stable call identifier. Ollama omits it so adapters generate UUID.
+ * @property name Tool name as registered in ToolRegistry.
+ * @property argumentsJson Raw JSON string of arguments. AgentTurnLoop parses this.
+ */
+data class NativeToolCall(
+    val id: String,
+    val name: String,
+    val argumentsJson: String,
+)
+
+/**
+ * Incremental tool-call delta for streaming.
+ */
+data class NativeToolCallDelta(
+    val index: Int,
+    val idDelta: String? = null,
+    val nameDelta: String? = null,
+    val argumentsDelta: String? = null,
+)
+
+/**
  * Single chunk from streaming LLM response (US-027)
  */
 data class StreamChunk(
     val delta: String,                    // Incremental content
     val thinking: String? = null,         // Incremental thinking content (reasoning models)
     val finishReason: String? = null,     // "stop", "length", "cancelled", etc.
-    val usage: LLMUsage? = null           // Present only on final chunk
+    val usage: LLMUsage? = null,          // Present only on final chunk
+    val toolCallDelta: NativeToolCallDelta? = null  // Present only on native-tools streaming path
 )
 
 /**
@@ -77,8 +105,27 @@ data class LLMResponse(
     val cost: Double,  // Estimated cost in USD
     val finishReason: String? = null,
     val rawResponse: Map<String, Any?>? = null,  // Allow nullable values in response map
-    val thinking: String? = null           // Complete thinking process (reasoning models)
+    val thinking: String? = null,          // Complete thinking process (reasoning models)
+    /**
+     * Tool calls emitted via native function-calling API.
+     *
+     * - null  = adapter did NOT use native tools path (fall back to JSON-in-text parsing)
+     * - emptyList() = native tools path was used, but model chose not to call any tool
+     * - non-empty   = AgentTurnLoop should use these directly, skipping ToolCallParser
+     *
+     * Adapters MUST leave this null when `tools` was not passed in the request.
+     */
+    val nativeToolCalls: List<NativeToolCall>? = null,
 )
+
+/**
+ * Thrown by adapters when a provider rejects a request because native tool calling is
+ * not supported (e.g. HTTP 400 with "tool_choice"/"tools" in the error message).
+ *
+ * Caught by AgentTurnLoop to mark the model in [NativeToolsFallbackTracker] and retry
+ * without tools on the JSON-in-text path.
+ */
+class ToolsNotSupportedException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 /**
  * Abstract base class for LLM adapters.

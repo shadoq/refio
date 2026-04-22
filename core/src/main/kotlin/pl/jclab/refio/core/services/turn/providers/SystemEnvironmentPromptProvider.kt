@@ -40,48 +40,36 @@ class SystemEnvironmentPromptProvider(
         val isWindows = osName.lowercase(Locale.ROOT).contains("windows")
         val isMac = osName.lowercase(Locale.ROOT).contains("mac")
         val shell = detectShell(isWindows)
-        val pathSep = File.pathSeparator
-        val fileSep = File.separator
         val cwd = projectRoot?.toAbsolutePath()?.toString() ?: System.getProperty("user.dir")
-        val home = System.getProperty("user.home")
-        val platformHint = when {
-            isWindows -> buildString {
-                append("**CRITICAL: This is a Windows PowerShell environment.**\n")
-                append("SHELL SYNTAX RULES (violations will cause command failures):\n")
-                append("- Do NOT use `&&` to chain commands — use `;` in PowerShell\n")
-                append("- Do NOT use heredocs (`<<'EOF'`) — not supported in PowerShell\n")
-                append("- Do NOT use `/dev/null` — use `NUL` or `Out-Null`\n")
-                append("- Do NOT pass complex Python one-liners via `python -c \"...\"` — ")
-                append("PowerShell mangles quotes. Write a .py file and run it instead.\n")
-                append("- Use `where` not `which` to locate binaries\n")
-                append("- Paths use backslashes: `dir\\file.py` not `dir/file.py`\n")
-                append("PREFERRED PATTERN: Write scripts to files, then execute them.")
-            }
-            isMac -> "macOS — BSD userland (not GNU). Some flags differ from Linux (e.g. `sed -i ''`, `find` predicates). `xargs -r` is unavailable."
-            else -> "Linux — GNU userland. Standard POSIX + GNU extensions available."
-        }
+
+        // Split probed tools into have/lack lists. A single "have: a,b,c" line is ~4×
+        // cheaper in tokens than a per-tool "a: yes\nb: no\n..." table that previously
+        // cost ~600 tokens by itself — and a flat list is what the model actually needs
+        // (it wants to know what it can invoke, not each tool's boolean individually).
         val toolStatus = probeTools(isWindows)
+        val have = toolStatus.filter { it.second }.map { it.first }
+        val lack = toolStatus.filter { !it.second }.map { it.first }
 
         return buildString {
             append("<system_environment>\n")
-            append("os: $osName $osVersion ($osArch)\n")
-            append("shell: $shell\n")
-            append("working_directory: $cwd\n")
-            append("user_home: $home\n")
-            append("path_separator: \"$pathSep\"\n")
-            append("file_separator: \"$fileSep\"\n")
-            append("available_tools:\n")
-            for ((tool, available) in toolStatus) {
-                append("  - $tool: ${if (available) "yes" else "no"}\n")
+            append("os: $osName $osVersion ($osArch); shell: $shell; cwd: $cwd\n")
+            if (have.isNotEmpty()) append("have: ${have.joinToString(",")}\n")
+            if (lack.isNotEmpty()) append("lack: ${lack.joinToString(",")}\n")
+            append("Prefer Refio tools over raw shell; if a command is not in `have`, do not assume it is installed.\n")
+
+            // Platform-specific rules: only emit when non-trivial. Linux/GNU defaults
+            // don't need a block — most shell idioms work out of the box. Mac BSD and
+            // Windows PowerShell have real divergences that burn the agent if omitted,
+            // so those sections stay.
+            when {
+                isWindows -> {
+                    append("<platform_rules>PowerShell: use `;` not `&&` to chain; no heredocs; `NUL` not `/dev/null`; `where` not `which`; backslash paths. For non-trivial Python, write a .py file rather than `python -c \"...\"` (quote mangling).</platform_rules>\n")
+                }
+                isMac -> {
+                    append("<platform_rules>macOS BSD userland: `sed -i ''` (not `-i`), `xargs -r` unavailable, `find` predicate set differs from GNU.</platform_rules>\n")
+                }
+                // Linux/other: omit — POSIX + GNU defaults are the model's baseline.
             }
-
-            append("IMPORTANT: Pick shell commands and flags that match the OS above. ")
-            append("Do NOT assume a tool exists unless it is listed as `yes` in available_tools. ")
-            append("When uncertain, prefer cross-platform alternatives or use Refio tools instead of raw shell.\n")
-
-            append("\n\n<platform_rules>\n")
-            append(platformHint)
-            append("\n</platform_rules>\n")
 
             append("</system_environment>")
         }

@@ -12,6 +12,7 @@ import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.TurnLoopConfig
+import pl.jclab.refio.core.tools.base.ToolSchema
 import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("TurnLLMCaller")
@@ -47,7 +48,8 @@ class TurnLLMCaller(
         streamCallback: StreamCallback? = null,
         model: String? = null,
         provider: String? = null,
-        profileOverrides: TurnProfileOverrides? = null
+        profileOverrides: TurnProfileOverrides? = null,
+        nativeToolSchemas: List<ToolSchema>? = null
     ): LLMResponse {
         val (modelId, providerName) = resolveModelSelection(
             mode = mode,
@@ -70,6 +72,13 @@ class TurnLLMCaller(
             }
         }
 
+        val extraKwargs: Map<String, Any> = if (!nativeToolSchemas.isNullOrEmpty()) {
+            logger.info { "[NATIVE_TOOLS] Requesting: model=$modelId, tools=${nativeToolSchemas.size}, mode=$mode" }
+            mapOf("native_tools" to nativeToolSchemas)
+        } else {
+            emptyMap()
+        }
+
         return withContext(Dispatchers.IO) {
             llmClient.complete(
                 provider = providerName,
@@ -83,7 +92,8 @@ class TurnLLMCaller(
                 reasoningEffort = reasoningEffortOverride,
                 noEgressEnabled = noEgressEnabled,
                 stream = streamCallback != null,
-                onChunk = streamCallback
+                onChunk = streamCallback,
+                kwargs = extraKwargs
             )
         }
     }

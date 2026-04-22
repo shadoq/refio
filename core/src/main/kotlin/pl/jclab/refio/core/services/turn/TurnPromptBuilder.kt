@@ -88,7 +88,8 @@ class TurnPromptBuilder(
         userContextRefs: List<ContextReference>,
         runProfile: TurnRunProfile,
         profileOverrides: TurnProfileOverrides?,
-        writeToolsExecutedInTurn: Int = 0
+        writeToolsExecutedInTurn: Int = 0,
+        nativeToolsActive: Boolean = false
     ): TurnPrompt {
         // Build system prompt based on mode/profile
         val baseSystemPrompt = resolveSystemPrompt(
@@ -98,7 +99,8 @@ class TurnPromptBuilder(
             maxIterations = maxIterations,
             runProfile = runProfile,
             profileOverrides = profileOverrides,
-            writeToolsExecutedInTurn = writeToolsExecutedInTurn
+            writeToolsExecutedInTurn = writeToolsExecutedInTurn,
+            nativeToolsActive = nativeToolsActive
         )
 
         // Resolve context profile for subagents
@@ -352,15 +354,24 @@ $filteredContextPrompt
     fun buildPlanSystemPrompt(
         mode: TaskMode,
         taskId: String,
-        toolDescriptionsOverride: String? = null
+        toolDescriptionsOverride: String? = null,
+        nativeToolsActive: Boolean = false,
+        profileOverrides: TurnProfileOverrides? = null
     ): String {
         // Auto-detect compact mode based on model context size
         syncCompactMode(mode, taskId)
 
+        val responseContract = resolveResponseContract(nativeToolsActive)
+        val multiAgentSection = resolveMultiAgentSection(mode, taskId, profileOverrides)
+
         if (toolDescriptionsOverride != null) {
             return promptsService.getSystemPrompt(
                 type = PromptType.SYSTEM_PLAN,
-                variables = mapOf("tool_descriptions" to toolDescriptionsOverride)
+                variables = mapOf(
+                    "tool_descriptions" to toolDescriptionsOverride,
+                    "response_contract" to responseContract,
+                    "multi_agent_section" to multiAgentSection
+                )
             )
         }
 
@@ -371,7 +382,11 @@ $filteredContextPrompt
                 logger.info { "[PLAN_PROMPT] Using ${if (cached.fromCache) "CACHED" else "NEW"} prompt (~${cached.tokenEstimate} tokens)" }
                 return promptsService.getSystemPrompt(
                     type = PromptType.SYSTEM_PLAN,
-                    variables = mapOf("tool_descriptions" to cached.toolDescriptions)
+                    variables = mapOf(
+                        "tool_descriptions" to cached.toolDescriptions,
+                        "response_contract" to responseContract,
+                        "multi_agent_section" to multiAgentSection
+                    )
                 )
             }
         }
@@ -390,9 +405,62 @@ $filteredContextPrompt
             type = PromptType.SYSTEM_PLAN,
             variables = mapOf(
                 "tool_descriptions" to toolDescriptions,
-                "tool_selection_matrix" to toolSelectionMatrix
+                "tool_selection_matrix" to toolSelectionMatrix,
+                "response_contract" to responseContract,
+                "multi_agent_section" to multiAgentSection
             )
         )
+    }
+
+    /**
+     * Resolve which response-contract fragment to inject based on active tool-calling mode.
+     * Native path gets a terse "use native tool_calls, reply in prose" contract;
+     * JSON-in-text path gets the full envelope + examples.
+     */
+    private fun resolveResponseContract(nativeToolsActive: Boolean): String {
+        val name = if (nativeToolsActive) "response-contract-native" else "response-contract-json"
+        return promptsService.getFragment(name)
+    }
+
+    /**
+     * Resolve the <multi_agent> section. Returns the full delegation-guidance block when the
+     * caller can actually invoke subagents — empty string otherwise.
+     *
+     * Rationale: subagents (and profiles without `invoke_subagent`) don't need ~2500 tokens of
+     * "when to delegate" rules — they can't delegate in the first place. Same for subagents
+     * at depth>=1 where deeper delegation is discouraged.
+     *
+     * @param mode TaskMode (PLAN vs AGENT — different fragment files with slightly different tone)
+     * @param taskId task id for mode-level tool resolution
+     * @param profileOverrides subagent profile overrides (null for main run)
+     */
+    fun resolveMultiAgentSection(
+        mode: TaskMode,
+        taskId: String,
+        profileOverrides: TurnProfileOverrides?
+    ): String {
+        if (!hasInvokeSubagentAvailable(mode, taskId, profileOverrides)) {
+            return ""
+        }
+        val fragmentName = when (mode) {
+            TaskMode.PLAN -> "multi-agent-plan"
+            TaskMode.AGENT -> "multi-agent-agent"
+            TaskMode.CHAT -> return ""
+        }
+        return promptsService.getFragment(fragmentName)
+    }
+
+    private fun hasInvokeSubagentAvailable(
+        mode: TaskMode,
+        taskId: String,
+        profileOverrides: TurnProfileOverrides?
+    ): Boolean {
+        val tools = if (profileOverrides != null) {
+            resolveToolsForProfile(mode, taskId, profileOverrides)
+        } else {
+            toolDescriptionBuilder.getToolsForMode(mode, taskId)
+        }
+        return tools.any { it.name.equals("invoke_subagent", ignoreCase = true) }
     }
 
     /**
@@ -404,7 +472,9 @@ $filteredContextPrompt
         currentIteration: Int = 0,
         maxIterations: Int,
         toolDescriptionsOverride: String? = null,
-        writeToolsExecutedInTurn: Int = 0
+        writeToolsExecutedInTurn: Int = 0,
+        nativeToolsActive: Boolean = false,
+        profileOverrides: TurnProfileOverrides? = null
     ): String {
         // Auto-detect compact mode based on model context size
         syncCompactMode(mode, taskId)
@@ -431,7 +501,9 @@ $filteredContextPrompt
             type = PromptType.SYSTEM_AGENT,
             variables = mapOf(
                 "tool_descriptions" to toolDescriptions,
-                "tool_selection_matrix" to toolSelectionMatrix
+                "tool_selection_matrix" to toolSelectionMatrix,
+                "response_contract" to resolveResponseContract(nativeToolsActive),
+                "multi_agent_section" to resolveMultiAgentSection(mode, taskId, profileOverrides)
             )
         )
 
@@ -456,10 +528,20 @@ $iterationInfo
         currentIteration: Int,
         maxIterations: Int,
         toolDescriptions: String,
-        writeToolsExecutedInTurn: Int = 0
+        writeToolsExecutedInTurn: Int = 0,
+        nativeToolsActive: Boolean = false
     ): String {
         val basePrompt = overrides.systemPromptOverride
-            ?: buildAgentSystemPrompt(mode, taskId, currentIteration, maxIterations, toolDescriptions, writeToolsExecutedInTurn)
+            ?: buildAgentSystemPrompt(
+                mode = mode,
+                taskId = taskId,
+                currentIteration = currentIteration,
+                maxIterations = maxIterations,
+                toolDescriptionsOverride = toolDescriptions,
+                writeToolsExecutedInTurn = writeToolsExecutedInTurn,
+                nativeToolsActive = nativeToolsActive,
+                profileOverrides = overrides
+            )
         val iterationInfo = buildIterationInfo(currentIteration, maxIterations, writeToolsExecutedInTurn)
 
         return buildString {
@@ -472,13 +554,21 @@ $iterationInfo
             }
             appendLine()
             appendLine("<tool_call_contract>")
-            appendLine("When using tools, respond ONLY with JSON object:")
-            appendLine("""{"actions":[{"tool":"exact_tool_name","arguments":{"param":"value"}}],"response":"","intent":"implementation|analysis|response"}""")
-            appendLine("Use only tool names from <available_tools> and exact parameter names from schemas.")
-            appendLine("""Optional field: "thinking":"short reasoning" when it adds value.""")
-            appendLine("""Never wrap calls in helper tools like {"tool":"run", ...}.""")
-            appendLine("""Never nest tool payloads like {"tool":"some_tool","arguments":{"tool":"other","arguments":{...}}}.""")
-            appendLine("""If no tools are needed, respond with {"actions":[],"response":"your answer","intent":"response"}.""")
+            if (nativeToolsActive) {
+                appendLine("Native function-calling is active for this subagent.")
+                appendLine("Invoke tools through the provider's native tool_call / tool_use channel.")
+                appendLine("Do not emit a JSON envelope in text content.")
+                appendLine("Use only tool names from <available_tools> and exact parameter names from attached schemas.")
+                appendLine("When finished, respond with plain text only.")
+            } else {
+                appendLine("When using tools, respond ONLY with JSON object:")
+                appendLine("""{"actions":[{"tool":"exact_tool_name","arguments":{"param":"value"}}],"response":"","intent":"implementation|analysis|response"}""")
+                appendLine("Use only tool names from <available_tools> and exact parameter names from schemas.")
+                appendLine("""Optional field: "thinking":"short reasoning" when it adds value.""")
+                appendLine("""Never wrap calls in helper tools like {"tool":"run", ...}.""")
+                appendLine("""Never nest tool payloads like {"tool":"some_tool","arguments":{"tool":"other","arguments":{...}}}.""")
+                appendLine("""If no tools are needed, respond with {"actions":[],"response":"your answer","intent":"response"}.""")
+            }
             appendLine("</tool_call_contract>")
             if (iterationInfo.isNotBlank()) {
                 appendLine()
@@ -497,14 +587,50 @@ $iterationInfo
         maxIterations: Int,
         runProfile: TurnRunProfile,
         profileOverrides: TurnProfileOverrides?,
-        writeToolsExecutedInTurn: Int = 0
+        writeToolsExecutedInTurn: Int = 0,
+        nativeToolsActive: Boolean = false
     ): String {
         // Sync compact mode early — before resolving tool descriptions for any profile.
         // Without this, subagent tool descriptions are built with compactMode=false
         // even on small-context models (e.g. Ollama 32k), wasting ~1.5k tokens.
         syncCompactMode(mode, taskId)
 
-        val toolDescriptionsOverride = resolveToolDescriptionsForProfile(mode, taskId, profileOverrides)
+        // Native function-calling: reuse the .md templates but substitute {{tool_descriptions}}
+        // with a short note (schemas are attached via the API `tools` parameter) and select the
+        // native response-contract fragment. All other guidance stays intact.
+        if (nativeToolsActive && runProfile != TurnRunProfile.SUBAGENT) {
+            val nativeNote = nativeToolsDescriptionOverride()
+            return when (mode) {
+                TaskMode.PLAN -> buildPlanSystemPrompt(
+                    mode = mode,
+                    taskId = taskId,
+                    toolDescriptionsOverride = nativeNote,
+                    nativeToolsActive = true,
+                    profileOverrides = profileOverrides
+                )
+                TaskMode.AGENT -> buildAgentSystemPrompt(
+                    mode = mode,
+                    taskId = taskId,
+                    currentIteration = currentIteration,
+                    maxIterations = maxIterations,
+                    toolDescriptionsOverride = nativeNote,
+                    writeToolsExecutedInTurn = writeToolsExecutedInTurn,
+                    nativeToolsActive = true,
+                    profileOverrides = profileOverrides
+                )
+                TaskMode.CHAT -> buildChatSystemPrompt()
+            }
+        }
+
+        val toolDescriptionsOverride = if (nativeToolsActive) {
+            // Subagent path with native tools: still goes through buildSubagentSystemPrompt, which
+            // produces a <tool_call_contract> block — replace the tool list with a short note.
+            "Tools are available via the native function-calling API. " +
+                "Call tools using the standard tool_use mechanism. " +
+                "When you have completed the task, respond with plain text — no JSON envelope."
+        } else {
+            resolveToolDescriptionsForProfile(mode, taskId, profileOverrides)
+        }
 
         if (runProfile == TurnRunProfile.SUBAGENT && profileOverrides?.systemPromptOverride != null) {
             return buildSubagentSystemPrompt(
@@ -514,20 +640,29 @@ $iterationInfo
                 currentIteration = currentIteration,
                 maxIterations = maxIterations,
                 toolDescriptions = toolDescriptionsOverride.orEmpty(),
-                writeToolsExecutedInTurn = writeToolsExecutedInTurn
+                writeToolsExecutedInTurn = writeToolsExecutedInTurn,
+                nativeToolsActive = nativeToolsActive
             )
         }
 
         return when (mode) {
             TaskMode.CHAT -> buildChatSystemPrompt()
-            TaskMode.PLAN -> buildPlanSystemPrompt(mode, taskId, toolDescriptionsOverride)
+            TaskMode.PLAN -> buildPlanSystemPrompt(
+                mode = mode,
+                taskId = taskId,
+                toolDescriptionsOverride = toolDescriptionsOverride,
+                nativeToolsActive = false,
+                profileOverrides = profileOverrides
+            )
             TaskMode.AGENT -> buildAgentSystemPrompt(
                 mode = mode,
                 taskId = taskId,
                 currentIteration = currentIteration,
                 maxIterations = maxIterations,
                 toolDescriptionsOverride = toolDescriptionsOverride,
-                writeToolsExecutedInTurn = writeToolsExecutedInTurn
+                writeToolsExecutedInTurn = writeToolsExecutedInTurn,
+                nativeToolsActive = false,
+                profileOverrides = profileOverrides
             )
         }
     }
@@ -594,6 +729,25 @@ ${warning}
     ): List<pl.jclab.refio.core.tools.base.Tool> {
         val baseTools = toolDescriptionBuilder.getToolsForMode(mode, taskId)
         return baseTools.filter { isToolAllowedByProfile(it.name, profileOverrides) }
+    }
+
+    /**
+     * Filter native tool schemas by subagent profile (allowedTools / disallowedTools).
+     *
+     * Without this, the model receives all mode-permitted schemas via the native
+     * function-calling API and will happily emit tool_calls the harness then rejects
+     * (e.g. api-documenter calling `think` when the definition lists only file ops).
+     * The filtered list must match what the subagent's system prompt says is available.
+     */
+    fun filterNativeToolSchemasByProfile(
+        schemas: List<pl.jclab.refio.core.tools.base.ToolSchema>,
+        profileOverrides: TurnProfileOverrides?
+    ): List<pl.jclab.refio.core.tools.base.ToolSchema> {
+        if (profileOverrides == null) return schemas
+        if (profileOverrides.allowedTools.isNullOrEmpty() && profileOverrides.disallowedTools.isNullOrEmpty()) {
+            return schemas
+        }
+        return schemas.filter { isToolAllowedByProfile(it.name, profileOverrides) }
     }
 
     private fun isToolAllowedByProfile(toolName: String, profileOverrides: TurnProfileOverrides): Boolean {

@@ -46,12 +46,21 @@ class ToolCallParser(
 
     /**
      * Main entry point - parses LLM content into ToolCallData list.
+     *
+     * No cheap pre-guard here: some models (e.g. glm-4.7-flash) emit a prose preamble
+     * BEFORE the JSON envelope. A `startsWith("{")` check would incorrectly bail out
+     * and force the loop into plain-text finalization while `extractJsonWithStrategies`
+     * (Strategy 2 brace-matching) would have found the envelope just fine. The prior
+     * WARN noise this guard was meant to silence has already been downgraded to DEBUG
+     * at the end of `extractJsonWithStrategies`.
      */
     fun extractToolCalls(
         content: String,
         mode: TaskMode,
         profileOverrides: TurnProfileOverrides? = null
     ): List<ToolCallData> {
+        if (content.isBlank()) return emptyList()
+
         // Try JSON format first (preferred)
         val jsonToolCalls = extractToolCallsFromJson(content, mode)
         if (jsonToolCalls.isNotEmpty()) {
@@ -559,7 +568,10 @@ class ToolCallParser(
             logger.debug { "[EXTRACT_JSON] Strategy 5 (repair) failed: ${e.message}" }
         }
 
-        logger.warn { "[EXTRACT_JSON] All strategies failed, content preview: ${trimmed.take(200)}..." }
+        // Downgraded from WARN to DEBUG: the pre-guard in extractToolCalls() already filters
+        // obvious prose, so reaching this point means the content *looked* JSON-ish but
+        // couldn't be parsed by any of the 5 strategies. That's noise, not an operator alert.
+        logger.debug { "[EXTRACT_JSON] All strategies failed, content preview: ${trimmed.take(200)}..." }
         return null
     }
 

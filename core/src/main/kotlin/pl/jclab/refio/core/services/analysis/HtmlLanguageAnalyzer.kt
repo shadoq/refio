@@ -48,7 +48,14 @@ class HtmlLanguageAnalyzer : ExtensionLanguageAnalyzer(
 
         scriptSources
             .mapNotNull { it.takeIf { src -> !src.startsWith("http", ignoreCase = true) && !src.startsWith("//") } }
-            .mapNotNull { src -> filePath.parent?.resolve(src)?.normalize() }
+            .mapNotNull { src ->
+                // Strip query string (?v=10) and fragment (#anchor), reject scheme-qualified
+                // URLs (javascript:, data:). Wrap in runCatching because Windows rejects
+                // additional chars (* < > | ") that can appear in generated src attributes.
+                val clean = src.substringBefore('?').substringBefore('#').trim()
+                if (clean.isBlank() || clean.contains(':')) return@mapNotNull null
+                runCatching { filePath.parent?.resolve(clean)?.normalize() }.getOrNull()
+            }
             .filter { Files.exists(it) && Files.isRegularFile(it) }
             .forEach { resolved ->
                 runCatching {

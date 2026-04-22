@@ -193,6 +193,7 @@ internal class DomainRouters(
             projectAnalyzer = projectAnalyzer,
             richProjectAnalysisEngine = richProjectAnalysisEngine,
             promptSectionProviders = promptSectionProviders,
+            configService = configService,
         )
     }
 

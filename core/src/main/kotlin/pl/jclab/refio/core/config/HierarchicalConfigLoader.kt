@@ -96,6 +96,7 @@ class HierarchicalConfigLoader private constructor(
     fun getGeneralThinkingEnabled(): Boolean? = getConfig().general?.thinkingEnabled
     fun getGeneralNoEgressEnabled(): Boolean? = getConfig().general?.noEgressEnabled
     fun getGeneralExecutionMode(): String? = getConfig().general?.executionMode
+    fun getNativeToolsMode(): String? = getConfig().general?.nativeToolsMode
 
     // ═══════════════════════════════════════════════════════════════════════════════
     // Provider Settings

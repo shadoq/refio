@@ -61,8 +61,12 @@ class LLMRetryHandler(
         maxRetries: Int = 3,
         baseDelayMs: Long = 1000,
         responseFormat: Map<String, Any>? = null,
+        thinking: Boolean = false,
+        reasoningEffort: String? = null,
+        noEgressEnabled: Boolean = false,
         stream: Boolean = false,
-        onChunk: StreamCallback? = null
+        onChunk: StreamCallback? = null,
+        kwargs: Map<String, Any> = emptyMap()
     ): LLMResponse {
         var lastException: Exception? = null
 
@@ -76,8 +80,12 @@ class LLMRetryHandler(
                     taskId = taskId,
                     source = source,
                     responseFormat = responseFormat,
+                    thinking = thinking,
+                    reasoningEffort = reasoningEffort,
+                    noEgressEnabled = noEgressEnabled,
                     stream = stream,
-                    onChunk = onChunk
+                    onChunk = onChunk,
+                    kwargs = kwargs
                 )
             } catch (e: Exception) {
                 lastException = e

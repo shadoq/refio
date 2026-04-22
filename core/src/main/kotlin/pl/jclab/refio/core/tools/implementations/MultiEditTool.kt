@@ -96,9 +96,18 @@ class MultiEditTool(
 
             logger.info { "Successfully applied ${edits.size} edits to ${filesChanged.size} files, ${duration}ms (+$totalAdded/-$totalRemoved)" }
 
+            val allNoop = results.isNotEmpty() && results.all { it.changeSummary.noop }
             return ToolResult(
                 success = true,
-                output = formatResults(results),
+                output = if (allNoop) {
+                    buildString {
+                        appendLine("⚠ No changes applied: all ${results.size} edit(s) matched but produced identical content.")
+                        appendLine("Per-file: ${results.joinToString(", ") { "${it.path} (${it.replacements} match)" }}")
+                        appendLine("Next step: verify new_string differs from old_string, or re-read the files to confirm whether the desired state is already present.")
+                    }
+                } else {
+                    formatResults(results)
+                },
                 durationMs = duration,
                 filesChanged = filesChanged,
                 changeSummary = aggregatedSummary,
@@ -108,6 +117,7 @@ class MultiEditTool(
                     "total_replacements" to totalReplacements,
                     "added_lines" to totalAdded,
                     "removed_lines" to totalRemoved,
+                    "noop" to allNoop,
                     "diffs" to results.associate { it.path to (it.changeSummary.unifiedDiff ?: "") }
                 )
             )

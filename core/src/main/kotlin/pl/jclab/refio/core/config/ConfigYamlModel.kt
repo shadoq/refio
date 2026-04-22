@@ -10,7 +10,8 @@ data class GeneralConfig(
     val advancedView: Boolean? = null,
     val thinkingEnabled: Boolean? = null,
     val noEgressEnabled: Boolean? = null,
-    val executionMode: String? = null
+    val executionMode: String? = null,
+    val nativeToolsMode: String? = null
 )
 
 @Serializable

@@ -86,6 +86,16 @@ class ConfigYamlApplier(
             }
         }
 
+        yamlConfig.general?.let { g ->
+            applyKey(ConfigKeys.FORMAT_MARKDOWN.key, g.formatMarkdown?.toString(), "format markdown")
+            applyKey(ConfigKeys.STREAMING_ENABLED.key, g.streamingEnabled?.toString(), "streaming enabled")
+            applyKey(ConfigKeys.ADVANCED_VIEW.key, g.advancedView?.toString(), "advanced view")
+            applyKey(ConfigKeys.GENERAL_THINKING_ENABLED.key, g.thinkingEnabled?.toString(), "thinking enabled")
+            applyKey(ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key, g.noEgressEnabled?.toString(), "no egress enabled")
+            applyKey(ConfigKeys.GENERAL_EXECUTION_MODE.key, g.executionMode, "execution mode")
+            applyKey(ConfigKeys.NATIVE_TOOLS_MODE.key, g.nativeToolsMode, "native tools mode")
+        }
+
         yamlConfig.providers?.let { p ->
             applyKey(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT.key, p.ollama?.endpoint, "Ollama endpoint")
             applyKey(ConfigKeys.PROVIDER_ANTHROPIC_API_KEY.key, p.anthropic?.apiKey, "Anthropic API key")
