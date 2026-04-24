@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import pl.jclab.refio.core.db.Snapshot
+import pl.jclab.refio.core.db.SnapshotGroup
+import pl.jclab.refio.core.db.repositories.SnapshotGroupRepository
 import pl.jclab.refio.core.db.repositories.SnapshotRepository
 import java.nio.file.Path
 import kotlin.io.path.createDirectories
@@ -18,12 +20,22 @@ class SnapshotServiceTest {
     lateinit var tempDir: Path
 
     private lateinit var snapshotRepository: SnapshotRepository
+    private lateinit var snapshotGroupRepository: SnapshotGroupRepository
     private lateinit var service: SnapshotService
 
     @BeforeEach
     fun setup() {
         snapshotRepository = mockk(relaxed = true)
-        service = SnapshotService(snapshotRepository, tempDir)
+        snapshotGroupRepository = mockk(relaxed = true)
+        every { snapshotGroupRepository.create(any(), any()) } answers {
+            SnapshotGroup(
+                id = "group-generated",
+                taskId = firstArg(),
+                subtaskId = secondArg(),
+                createdAt = 0L
+            )
+        }
+        service = SnapshotService(snapshotRepository, snapshotGroupRepository, tempDir)
     }
 
     @Nested
@@ -35,12 +47,14 @@ class SnapshotServiceTest {
             file.parent.createDirectories()
             file.writeText("fun main() {}")
 
-            service.createSnapshot("task-1", "subtask-1", listOf("src/main.kt"))
+            val groupId = service.createSnapshot("task-1", "subtask-1", listOf("src/main.kt"))
 
+            assertEquals("group-generated", groupId)
             verify {
+                snapshotGroupRepository.create(taskId = "task-1", subtaskId = "subtask-1")
                 snapshotRepository.create(
                     taskId = "task-1",
-                    subtaskId = "subtask-1",
+                    groupId = "group-generated",
                     filePath = "src/main.kt",
                     content = "fun main() {}",
                     contentHash = any()
@@ -49,30 +63,32 @@ class SnapshotServiceTest {
         }
 
         @Test
-        fun `should skip nonexistent files`() {
-            service.createSnapshot("task-1", "subtask-1", listOf("nonexistent.kt"))
+        fun `should return null when no existing files`() {
+            val result = service.createSnapshot("task-1", "subtask-1", listOf("nonexistent.kt"))
 
+            assertNull(result)
             verify(exactly = 0) {
+                snapshotGroupRepository.create(any(), any())
                 snapshotRepository.create(any(), any(), any(), any(), any())
             }
         }
 
         @Test
-        fun `should return subtaskId as snapshot id`() {
+        fun `should return null for empty path list`() {
             val result = service.createSnapshot("task-1", "snap-42", emptyList())
-            assertEquals("snap-42", result)
+            assertNull(result)
         }
 
         @Test
-        fun `should snapshot multiple files`() {
+        fun `should snapshot multiple files under one group`() {
             tempDir.resolve("a.kt").writeText("A")
             tempDir.resolve("b.kt").writeText("B")
 
-            service.createSnapshot("task-1", "sub-1", listOf("a.kt", "b.kt"))
+            val groupId = service.createSnapshot("task-1", "sub-1", listOf("a.kt", "b.kt"))
 
-            verify(exactly = 2) {
-                snapshotRepository.create(any(), any(), any(), any(), any())
-            }
+            assertEquals("group-generated", groupId)
+            verify(exactly = 1) { snapshotGroupRepository.create(any(), any()) }
+            verify(exactly = 2) { snapshotRepository.create(any(), any(), any(), any(), any()) }
         }
 
         @Test
@@ -86,7 +102,6 @@ class SnapshotServiceTest {
 
             service.createSnapshot("task-1", "sub-1", listOf("test.txt"))
 
-            // SHA-256 of "hello" is well-known
             assertEquals(
                 "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
                 hashSlot.captured
@@ -99,18 +114,14 @@ class SnapshotServiceTest {
 
         @Test
         fun `should return file contents map`() {
-            val snapshot1 = mockk<Snapshot> {
-                every { filePath } returns "a.kt"
-            }
-            val snapshot2 = mockk<Snapshot> {
-                every { filePath } returns "b.kt"
-            }
+            val snapshot1 = mockk<Snapshot> { every { filePath } returns "a.kt" }
+            val snapshot2 = mockk<Snapshot> { every { filePath } returns "b.kt" }
 
-            every { snapshotRepository.findBySubtaskId("snap-1") } returns listOf(snapshot1, snapshot2)
+            every { snapshotRepository.findByGroupId("grp-1") } returns listOf(snapshot1, snapshot2)
             every { snapshotRepository.decompressContent(snapshot1) } returns "content-A"
             every { snapshotRepository.decompressContent(snapshot2) } returns "content-B"
 
-            val result = service.getSnapshot("snap-1")
+            val result = service.getSnapshot("grp-1")
 
             assertEquals(2, result.size)
             assertEquals("content-A", result["a.kt"])
@@ -119,7 +130,7 @@ class SnapshotServiceTest {
 
         @Test
         fun `should return empty map for unknown snapshot`() {
-            every { snapshotRepository.findBySubtaskId("unknown") } returns emptyList()
+            every { snapshotRepository.findByGroupId("unknown") } returns emptyList()
 
             val result = service.getSnapshot("unknown")
             assertTrue(result.isEmpty())
@@ -131,24 +142,20 @@ class SnapshotServiceTest {
 
         @Test
         fun `should return content for existing file`() {
-            val snapshot = mockk<Snapshot> {
-                every { filePath } returns "target.kt"
-            }
-            every { snapshotRepository.findBySubtaskId("snap-1") } returns listOf(snapshot)
+            val snapshot = mockk<Snapshot> { every { filePath } returns "target.kt" }
+            every { snapshotRepository.findByGroupId("grp-1") } returns listOf(snapshot)
             every { snapshotRepository.decompressContent(snapshot) } returns "file content"
 
-            val result = service.getFileContent("snap-1", "target.kt")
+            val result = service.getFileContent("grp-1", "target.kt")
             assertEquals("file content", result)
         }
 
         @Test
         fun `should return null for missing file`() {
-            val snapshot = mockk<Snapshot> {
-                every { filePath } returns "other.kt"
-            }
-            every { snapshotRepository.findBySubtaskId("snap-1") } returns listOf(snapshot)
+            val snapshot = mockk<Snapshot> { every { filePath } returns "other.kt" }
+            every { snapshotRepository.findByGroupId("grp-1") } returns listOf(snapshot)
 
-            val result = service.getFileContent("snap-1", "target.kt")
+            val result = service.getFileContent("grp-1", "target.kt")
             assertNull(result)
         }
     }
@@ -158,13 +165,11 @@ class SnapshotServiceTest {
 
         @Test
         fun `should restore files to project root`() {
-            val snapshot = mockk<Snapshot> {
-                every { filePath } returns "restored.kt"
-            }
-            every { snapshotRepository.findBySubtaskId("snap-1") } returns listOf(snapshot)
+            val snapshot = mockk<Snapshot> { every { filePath } returns "restored.kt" }
+            every { snapshotRepository.findByGroupId("grp-1") } returns listOf(snapshot)
             every { snapshotRepository.decompressContent(snapshot) } returns "restored content"
 
-            val result = service.restoreSnapshot("snap-1")
+            val result = service.restoreSnapshot("grp-1")
 
             assertTrue(result.success)
             assertEquals(listOf("restored.kt"), result.restoredFiles)
@@ -176,11 +181,11 @@ class SnapshotServiceTest {
             val snap1 = mockk<Snapshot> { every { filePath } returns "a.kt" }
             val snap2 = mockk<Snapshot> { every { filePath } returns "b.kt" }
 
-            every { snapshotRepository.findBySubtaskId("snap-1") } returns listOf(snap1, snap2)
+            every { snapshotRepository.findByGroupId("grp-1") } returns listOf(snap1, snap2)
             every { snapshotRepository.decompressContent(snap1) } returns "A"
             every { snapshotRepository.decompressContent(snap2) } returns "B"
 
-            val result = service.restoreSnapshot("snap-1", filePaths = listOf("a.kt"))
+            val result = service.restoreSnapshot("grp-1", filePaths = listOf("a.kt"))
 
             assertTrue(result.success)
             assertEquals(listOf("a.kt"), result.restoredFiles)
@@ -189,13 +194,11 @@ class SnapshotServiceTest {
 
         @Test
         fun `should create parent directories`() {
-            val snapshot = mockk<Snapshot> {
-                every { filePath } returns "deep/nested/dir/file.kt"
-            }
-            every { snapshotRepository.findBySubtaskId("snap-1") } returns listOf(snapshot)
+            val snapshot = mockk<Snapshot> { every { filePath } returns "deep/nested/dir/file.kt" }
+            every { snapshotRepository.findByGroupId("grp-1") } returns listOf(snapshot)
             every { snapshotRepository.decompressContent(snapshot) } returns "deep content"
 
-            val result = service.restoreSnapshot("snap-1")
+            val result = service.restoreSnapshot("grp-1")
 
             assertTrue(result.success)
             assertTrue(tempDir.resolve("deep/nested/dir/file.kt").toFile().exists())

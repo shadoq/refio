@@ -50,10 +50,10 @@ class MCPSettingsPanel(private val project: Project) : JBPanel<MCPSettingsPanel>
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     init {
-        border = LCATheme.paddedBorder(LCATheme.margin)
+        border = LCATheme.emptyBorder()
         // MCPManager is already initialized by CoreConnectionManager.createProjectRouter()
         // with the correct ToolRegistry. Do NOT re-initialize here without ToolRegistry!
-        add(createSectionPanel("MCP Servers", createServersSection()), BorderLayout.CENTER)
+        add(createServersSection(), BorderLayout.CENTER)
         refreshServers()
     }
 
@@ -303,19 +303,6 @@ class MCPSettingsPanel(private val project: Project) : JBPanel<MCPSettingsPanel>
             val config = dialog.getConfig()
             MCPManager.addOrUpdateServer(projectId, config)
             refreshServers()
-        }
-    }
-
-    private fun createSectionPanel(title: String, content: JPanel): JPanel {
-        return JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder(
-                    LCATheme.customLineBorder(LCATheme.borderColor, 1),
-                    title
-                ),
-                LCATheme.paddedBorder(LCATheme.padding)
-            )
-            add(content, BorderLayout.CENTER)
         }
     }
 }

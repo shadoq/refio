@@ -189,6 +189,29 @@ class ModelsSettingsPanel(
     // Flag to prevent saving when dropdowns are updated programmatically
     private var isUpdatingDropdowns = false
 
+    // Mapping "provider/id" -> human-readable display text ("provider - name").
+    // Populated from the visible models in updateModelDropdowns; used by the shared
+    // combo renderer so selectors show friendly names while the underlying item
+    // value stays as "provider/id" (required for persistence).
+    private var modelDisplayNames: Map<String, String> = emptyMap()
+
+    private val modelComboRenderer = object : DefaultListCellRenderer() {
+        override fun getListCellRendererComponent(
+            list: JList<*>?,
+            value: Any?,
+            index: Int,
+            isSelected: Boolean,
+            cellHasFocus: Boolean
+        ): Component {
+            val label = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus) as JLabel
+            val raw = value as? String
+            if (raw != null) {
+                label.text = modelDisplayNames[raw] ?: raw
+            }
+            return label
+        }
+    }
+
     // Last models shown in the table — used by Show All / Hide All to update
     // visibility in place instead of refetching from the backend (the model-registry
     // cache may have been invalidated by a concurrent provider settings save, which
@@ -196,7 +219,7 @@ class ModelsSettingsPanel(
     private var currentModels: List<pl.jclab.refio.core.api.ModelInfo> = emptyList()
 
     init {
-        border = LCATheme.paddedBorder(LCATheme.margin)
+        border = LCATheme.emptyBorder()
 
         // Main content
         val contentPanel = JBPanel<JBPanel<*>>(GridBagLayout()).apply {
@@ -572,6 +595,12 @@ class ModelsSettingsPanel(
                 fill = GridBagConstraints.HORIZONTAL
                 insets = LCATheme.insetsFormField
             }
+
+            // Apply friendly-name renderer to every combo up-front.
+            listOf(
+                defaultModelCombo, planModelCombo, codingModelCombo,
+                weakModelCombo, embeddingModelCombo, strongModelCombo
+            ).forEach { it.renderer = modelComboRenderer }
 
             // Default model
             add(JLabel("Default Model:"), gbc)
@@ -1187,6 +1216,11 @@ class ModelsSettingsPanel(
                 compareBy<pl.jclab.refio.core.api.ModelInfo> { it.provider.lowercase() }
                     .thenBy { it.id.lowercase() }
             )
+
+            // Rebuild display-name map for the combo renderer.
+            modelDisplayNames = sortedVisibleModels.associate { model ->
+                "${model.provider}/${model.id}" to "${model.provider} - ${model.name}"
+            }
 
             val currentDefault = defaultModelCombo.selectedItem as? String
             val currentPlan = planModelCombo.selectedItem as? String

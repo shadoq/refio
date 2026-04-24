@@ -298,7 +298,10 @@ class TurnToolExecutor(
                             val params = TurnJsonUtils.parseJsonToMap(toolCall.arguments)
                             val path = params["path"]?.toString()
                             if (path != null) {
-                                snapshotService.createSnapshot(taskId, subtaskId, listOf(path))
+                                val snapshotId = snapshotService.createSnapshot(taskId, subtaskId, listOf(path))
+                                if (snapshotId != null) {
+                                    subtaskRepository.linkSnapshot(subtaskId, snapshotId)
+                                }
                             }
                         } catch (e: Exception) {
                             logger.warn(e) { "[SNAPSHOT] Failed to create snapshot for ${toolCall.name}" }

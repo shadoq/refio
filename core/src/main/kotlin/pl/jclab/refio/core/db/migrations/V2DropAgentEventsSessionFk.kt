@@ -27,6 +27,10 @@ class V2DropAgentEventsSessionFk : Migration {
     override fun migrate(database: Database) {
         transaction(database) {
             val jdbc = (connection.connection as java.sql.Connection)
+            if (!tableExists(jdbc, "agent_events")) {
+                logger.info { "agent_events table does not exist (fresh DB); skipping V2 rebuild" }
+                return@transaction
+            }
             jdbc.createStatement().use { st ->
                 st.execute("PRAGMA foreign_keys = OFF")
                 try {

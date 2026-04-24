@@ -77,7 +77,7 @@ class ContextSettingsPanel(
     private val searchSettingsSaveDebounceMs = 300L
 
     init {
-        border = LCATheme.paddedBorder(LCATheme.margin)
+        border = LCATheme.emptyBorder()
 
         val contentPanel = JBPanel<JBPanel<*>>().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
@@ -753,13 +753,7 @@ class ContextSettingsPanel(
 
     private fun createSectionPanel(title: String, content: JPanel): JPanel {
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder(
-                    LCATheme.customLineBorder(LCATheme.borderColor, 1),
-                    title
-                ),
-                LCATheme.paddedBorder(LCATheme.spacingLg)
-            )
+            border = LCATheme.createSettingsBorder(title)
             add(content, BorderLayout.CENTER)
         }
     }

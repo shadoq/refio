@@ -148,7 +148,7 @@ class OpenRouterAdapter(
 
             ModelConfig(
                 id = modelId,
-                name = "$modelName (via OpenRouter)",
+                name = modelName,
                 provider = "openrouter",
                 capabilities = capabilities,
                 maxContext = contextLength,

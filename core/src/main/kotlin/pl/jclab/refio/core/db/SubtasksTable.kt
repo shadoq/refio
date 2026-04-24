@@ -38,8 +38,8 @@ object SubtasksTable : Table("subtasks") {
     val costUsd = double("cost_usd").default(0.0)
     val latencyMs = integer("latency_ms").default(0)
 
-    // Snapshots for rollback
-    val snapshotIdBeforeWrite = varchar("snapshot_id_before_write", 36).references(SnapshotsTable.id, onDelete = ReferenceOption.SET_NULL).nullable()
+    // Snapshots for rollback — references a snapshot group (set of files captured before one tool execution)
+    val snapshotIdBeforeWrite = varchar("snapshot_id_before_write", 36).references(SnapshotGroupsTable.id, onDelete = ReferenceOption.SET_NULL).nullable()
 
     // Timestamps
     val createdAt = long("created_at").clientDefault { System.currentTimeMillis() }

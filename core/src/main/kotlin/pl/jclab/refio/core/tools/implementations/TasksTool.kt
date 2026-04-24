@@ -39,14 +39,20 @@ The plan is visible to the orchestrating agent."""
             ),
             "steps" to mapOf(
                 "type" to "array",
-                "description" to "List of plan steps in execution order. Required for plan action.",
+                "description" to "List of plan steps in execution order. Required for plan action. " +
+                    "Each step may be either a plain string (used as the step title) or an object with 'title' and optional 'description'.",
                 "items" to mapOf(
-                    "type" to "object",
-                    "properties" to mapOf(
-                        "title" to mapOf("type" to "string", "description" to "Short step title"),
-                        "description" to mapOf("type" to "string", "description" to "What this step involves")
-                    ),
-                    "required" to listOf("title")
+                    "anyOf" to listOf(
+                        mapOf("type" to "string"),
+                        mapOf(
+                            "type" to "object",
+                            "properties" to mapOf(
+                                "title" to mapOf("type" to "string", "description" to "Short step title"),
+                                "description" to mapOf("type" to "string", "description" to "What this step involves")
+                            ),
+                            "required" to listOf("title")
+                        )
+                    )
                 )
             ),
             "step_index" to mapOf(
@@ -87,13 +93,19 @@ The plan is visible to the orchestrating agent."""
             ?: return ToolResult.error("steps required for plan action")
 
         val planSteps = steps.mapIndexed { index, step ->
-            val map = step as? Map<*, *>
-                ?: return ToolResult.error("Invalid step at index $index")
+            val (title, description) = when (step) {
+                is String -> step to null
+                is Map<*, *> -> {
+                    val t = step["title"] as? String
+                        ?: return ToolResult.error("Step $index missing title")
+                    t to (step["description"] as? String)
+                }
+                else -> return ToolResult.error("Invalid step at index $index: expected string or object with 'title'")
+            }
             AgentPlanStep(
                 index = index,
-                title = map["title"] as? String
-                    ?: return ToolResult.error("Step $index missing title"),
-                description = map["description"] as? String,
+                title = title,
+                description = description,
                 status = PlanStepStatus.PENDING
             )
         }

@@ -57,6 +57,7 @@ class CoreConnectionManager {
 
     // Cache for project-specific routers (one per project)
     private val projectRouters = mutableMapOf<String, CoreApiRouter>()
+    private val projectRoutersLock = Any()
 
     init {
         logger.info { "Initializing embedded Kotlin core" }
@@ -196,29 +197,31 @@ class CoreConnectionManager {
     ): CoreApiRouter {
         val absolutePath = projectRoot.toAbsolutePath().toString()
 
-        // Return cached router if exists
-        projectRouters[absolutePath]?.let { cachedRouter ->
-            logger.debug { "Using cached router for project: $absolutePath" }
-            if (ideProject != null && !cachedRouter.hasIdeProject()) {
-                logger.info { "Recreating cached router with IDE project for: $absolutePath" }
-                val refreshedRouter = createProjectRouterInternal(projectRoot, ideProject)
-                projectRouters[absolutePath] = refreshedRouter
+        // Serialize so concurrent startup callers (RefioMainPanel, ProjectStartupActivity,
+        // RagIndexingStartup) don't each build a full router in parallel — that caused
+        // three simultaneous PromptsService.initializeDefaults() runs contending on
+        // SQLite locks and the UI hanging on "Initializing Refio…".
+        synchronized(projectRoutersLock) {
+            projectRouters[absolutePath]?.let { cachedRouter ->
+                logger.debug { "Using cached router for project: $absolutePath" }
+                if (ideProject != null && !cachedRouter.hasIdeProject()) {
+                    logger.info { "Recreating cached router with IDE project for: $absolutePath" }
+                    val refreshedRouter = createProjectRouterInternal(projectRoot, ideProject)
+                    projectRouters[absolutePath] = refreshedRouter
+                    val projectId = ProjectIdGenerator.generate(projectRoot)
+                    MCPManager.setToolRegistry(projectId, refreshedRouter.getToolRegistry())
+                    return refreshedRouter
+                }
                 val projectId = ProjectIdGenerator.generate(projectRoot)
-                MCPManager.setToolRegistry(projectId, refreshedRouter.getToolRegistry())
-                return refreshedRouter
+                MCPManager.setToolRegistry(projectId, cachedRouter.getToolRegistry())
+                return cachedRouter
             }
-            // Ensure MCPManager has ToolRegistry even for cached router
-            // (in case it was initialized without ToolRegistry from UI)
-            val projectId = ProjectIdGenerator.generate(projectRoot)
-            MCPManager.setToolRegistry(projectId, cachedRouter.getToolRegistry())
-            return cachedRouter
-        }
 
-        // Create new router and cache it
-        logger.info { "Creating new router for project: $absolutePath" }
-        val projectRouter = createProjectRouterInternal(projectRoot, ideProject)
-        projectRouters[absolutePath] = projectRouter
-        return projectRouter
+            logger.info { "Creating new router for project: $absolutePath" }
+            val projectRouter = createProjectRouterInternal(projectRoot, ideProject)
+            projectRouters[absolutePath] = projectRouter
+            return projectRouter
+        }
     }
 
     /**

@@ -498,6 +498,12 @@ class OllamaAdapter(
                         source = source
                     )
 
+                    if (requestBody.containsKey("tools") &&
+                        httpStatus == 400 &&
+                        errorBody.contains("does not support tools", ignoreCase = true)
+                    ) {
+                        throw pl.jclab.refio.core.llm.ToolsNotSupportedException(errorMessage)
+                    }
                     throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus ?: 500, errorMessage)
                 }
 

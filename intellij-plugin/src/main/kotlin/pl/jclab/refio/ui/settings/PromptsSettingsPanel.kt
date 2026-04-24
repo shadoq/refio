@@ -35,16 +35,7 @@ class PromptsSettingsPanel(
     private val slashPromptsCache = mutableListOf<PromptDto>()
 
     init {
-        border = LCATheme.paddedBorder(16)
-
-        // Header
-        val headerPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
-            add(JLabel("Prompts").apply {
-                font = font.deriveFont(14f).deriveFont(Font.BOLD)
-            })
-            isEnabled = false
-        }
-        add(headerPanel, BorderLayout.NORTH)
+        border = LCATheme.emptyBorder()
 
         // Tabbed pane for system prompts + slash prompts
         val tabbedPane = JBTabbedPane().apply {

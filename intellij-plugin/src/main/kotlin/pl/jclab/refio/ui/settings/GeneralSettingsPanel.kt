@@ -36,7 +36,7 @@ class GeneralSettingsPanel(
     private var isUpdatingProgrammatically = false
 
     init {
-        border = LCATheme.paddedBorder(LCATheme.margin)
+        border = LCATheme.emptyBorder()
 
         val gbc = GridBagConstraints().apply {
             gridx = 0
@@ -47,13 +47,7 @@ class GeneralSettingsPanel(
             insets = LCATheme.insetsMedium
         }
 
-        // Section title
-        add(JLabel("General Settings").apply {
-            font = font.deriveFont(14f).deriveFont(java.awt.Font.BOLD)
-        }, gbc)
-
         // Format Markdown option
-        gbc.gridy++
         gbc.insets = LCATheme.insetsGridBagLarge
         formatMarkdownCheckbox = JBCheckBox("Format Markdown in responses", true).apply {
             addItemListener { event ->

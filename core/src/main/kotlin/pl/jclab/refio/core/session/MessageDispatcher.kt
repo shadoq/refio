@@ -158,10 +158,11 @@ class MessageDispatcher(
                         )
                     }
 
-                    // Completely empty - filter out
-                    if (coreMsg.metadata.isNullOrBlank()) {
-                        return@flatMap emptyList()
-                    }
+                    // Empty assistant with no usable tool-call info — drop it.
+                    // Native tool-call envelopes (content="", toolCallsJson populated) are
+                    // handled above; anything falling through here would render as an empty
+                    // "Assistant" bubble next to the real tool bubble.
+                    return@flatMap emptyList()
                 }
 
                 val toolDisplay = ToolMessageDisplayResolver.resolve(

@@ -1,34 +1,31 @@
 package pl.jclab.refio.core.llm.adapters
 
+import io.ktor.client.*
+import io.ktor.client.call.*
+import io.ktor.client.request.*
+import io.ktor.http.*
+import io.ktor.utils.io.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import pl.jclab.refio.core.config.ConfigKeys
+import pl.jclab.refio.core.errors.LLMErrorMapper
+import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.llm.BaseLLMAdapter
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.ModelConfig
+import pl.jclab.refio.core.llm.NativeToolCall
 import pl.jclab.refio.core.llm.StreamChunk
+import pl.jclab.refio.core.llm.ToolSchemaSanitizer
+import pl.jclab.refio.core.llm.ToolsNotSupportedException
 import pl.jclab.refio.core.llm.toModelConfig
-import pl.jclab.refio.core.utils.GsonInstance.gson
-import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.plugins.logging.*
-import io.ktor.client.plugins.logging.Logger as KtorLogger
-import io.ktor.client.request.*
-import io.ktor.http.*
-import io.ktor.serialization.gson.gson
-import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.security.SecureLogger
-import io.ktor.client.request.get
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.Dispatchers
-import io.ktor.utils.io.ByteReadChannel
-import pl.jclab.refio.core.errors.LLMErrorMapper
-import pl.jclab.refio.core.errors.RefioError
-import java.util.UUID
+import pl.jclab.refio.core.tools.base.ToolSchema
+import pl.jclab.refio.core.utils.GsonInstance.gson
+import java.util.*
 
 /**
  * Adapter for Google Gemini models (generateContent API).
@@ -102,6 +99,8 @@ class GeminiAdapter(
         } catch (e: CancellationException) {
             // Stream aborted by a guardrail (see core/llm/streaming/) — must propagate
             // so the caller can see StreamAbortedException instead of RefioError.LLMError.
+            throw e
+        } catch (e: ToolsNotSupportedException) {
             throw e
         } catch (e: Exception) {
             throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
@@ -192,7 +191,63 @@ class GeminiAdapter(
             body["generationConfig"] = generationConfig
         }
 
+        @Suppress("UNCHECKED_CAST")
+        val nativeTools = kwargs["native_tools"] as? List<ToolSchema>
+        if (!nativeTools.isNullOrEmpty()) {
+            body["tools"] = listOf(
+                mapOf(
+                    "functionDeclarations" to nativeTools.map { rawTool ->
+                        val tool = ToolSchemaSanitizer.forGemini(rawTool)
+                        mapOf(
+                            "name" to tool.name,
+                            "description" to tool.description,
+                            "parameters" to tool.parametersJsonSchema,
+                        )
+                    }
+                )
+            )
+            logger.info { "[GEMINI][NATIVE_TOOLS] Sending ${nativeTools.size} tool schemas" }
+        }
+
         return body
+    }
+
+    /**
+     * Gemini rejects top-level `oneOf/allOf/anyOf` and JSON-Schema meta keys like `$schema`
+     * on function parameter schemas. Strip them conservatively and log a warning so the
+     * authors can encode constraints in field descriptions.
+     */
+    private fun sanitizeSchemaForGemini(toolName: String, schema: Map<String, Any>): Map<String, Any> {
+        @Suppress("UNCHECKED_CAST")
+        return sanitizeGeminiNode(schema, toolName) as Map<String, Any>
+    }
+
+    private fun sanitizeGeminiNode(node: Any?, toolName: String): Any? {
+        val forbidden = setOf("oneOf", "allOf", "anyOf", "\$schema", "additionalProperties", "default")
+        return when (node) {
+            is Map<*, *> -> {
+                val result = LinkedHashMap<String, Any?>()
+                for ((k, v) in node) {
+                    val key = k as? String ?: continue
+                    if (key in forbidden) continue
+                    val sanitizedValue = if (key == "type" && v is List<*>) {
+                        val firstString = v.firstOrNull { it is String && it != "null" } as? String
+                            ?: (v.firstOrNull { it is String } as? String)
+                            ?: "string"
+                        logger.warn {
+                            "[GEMINI][NATIVE_TOOLS] Tool '$toolName' has type=$v (array) — coercing to '$firstString'. Gemini accepts only single types."
+                        }
+                        firstString
+                    } else {
+                        sanitizeGeminiNode(v, toolName)
+                    }
+                    result[key] = sanitizedValue
+                }
+                result
+            }
+            is List<*> -> node.map { sanitizeGeminiNode(it, toolName) }
+            else -> node
+        }
     }
 
     private suspend fun executeStandard(
@@ -235,7 +290,13 @@ class GeminiAdapter(
                     subtaskId = subtaskId,
                     source = source
                 )
-                throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, "Gemini API error (HTTP $httpStatus)")
+                val errorMessage = "Gemini API error (HTTP $httpStatus): ${gson.toJson(rawResponse)}"
+                if ((requestBody["tools"] as? List<*>)?.isNotEmpty() == true &&
+                    isToolsNotSupportedError(httpStatus, errorMessage)
+                ) {
+                    throw ToolsNotSupportedException(errorMessage)
+                }
+                throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, errorMessage)
             }
 
             if (rawResponse["candidates"] !is List<*>) {
@@ -249,8 +310,15 @@ class GeminiAdapter(
             val usage = extractUsage(rawResponse)
             val cost = estimateCost(usage)
             val content = extractContent(rawResponse)
-            val normalizedToolCallsJson = if (content.isBlank()) {
-                ToolCallContentNormalizer.fromGeminiParts(extractParts(rawResponse))
+            val toolsWereRequested = (requestBody["tools"] as? List<*>)?.isNotEmpty() == true
+            val parts = extractParts(rawResponse)
+            val nativeToolCalls: List<NativeToolCall>? = if (toolsWereRequested) {
+                parseNativeGeminiToolCalls(parts).also { calls ->
+                    logger.info { "$logPrefix [NATIVE_TOOLS_RESPONSE] calls=${calls.size}" }
+                }
+            } else null
+            val normalizedToolCallsJson = if (nativeToolCalls == null && content.isBlank()) {
+                ToolCallContentNormalizer.fromGeminiParts(parts)
             } else {
                 null
             }
@@ -284,8 +352,13 @@ class GeminiAdapter(
                 provider = provider,
                 cost = cost,
                 finishReason = finishReason,
-                rawResponse = rawResponse
+                rawResponse = rawResponse,
+                nativeToolCalls = nativeToolCalls
             )
+        } catch (e: ToolsNotSupportedException) {
+            throw e
+        } catch (e: ToolsNotSupportedException) {
+            throw e
         } catch (e: Exception) {
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
             logger.apiError(
@@ -301,6 +374,26 @@ class GeminiAdapter(
                 source = source
             )
             throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
+        }
+    }
+
+    private fun parseNativeGeminiToolCalls(parts: List<Map<String, Any?>>): List<NativeToolCall> {
+        return parts.mapNotNull { part ->
+            @Suppress("UNCHECKED_CAST")
+            val functionCall = part["functionCall"] as? Map<String, Any?> ?: return@mapNotNull null
+            val name = functionCall["name"] as? String ?: return@mapNotNull null
+            val args = functionCall["args"]
+            val argumentsJson = when (args) {
+                null -> "{}"
+                is Map<*, *> -> gson.toJson(args)
+                is String -> args.ifBlank { "{}" }
+                else -> gson.toJson(args)
+            }
+            NativeToolCall(
+                id = java.util.UUID.randomUUID().toString(),
+                name = ToolCallContentNormalizer.normalizeToolName(name),
+                argumentsJson = argumentsJson
+            )
         }
     }
 
@@ -343,11 +436,17 @@ class GeminiAdapter(
                         subtaskId = subtaskId,
                         source = source
                     )
+                    val errorMessage = "Gemini streaming error (HTTP $httpStatus): $errorBody"
+                    if ((requestBody["tools"] as? List<*>)?.isNotEmpty() == true &&
+                        isToolsNotSupportedError(httpStatus ?: 500, errorMessage)
+                    ) {
+                        throw ToolsNotSupportedException(errorMessage)
+                    }
                     throw LLMErrorMapper.fromHttpStatus(
                         provider,
                         model,
                         httpStatus ?: 500,
-                        "Gemini streaming error (HTTP $httpStatus)"
+                        errorMessage
                     )
                 }
 
@@ -433,7 +532,14 @@ class GeminiAdapter(
                 source = source
             )
 
-            if (contentBuilder.isEmpty()) {
+            val toolsWereRequested = (requestBody["tools"] as? List<*>)?.isNotEmpty() == true
+            val streamNativeToolCalls: List<NativeToolCall>? = if (toolsWereRequested) {
+                parseNativeGeminiToolCalls(functionCallParts).also { calls ->
+                    logger.info { "$logPrefix [NATIVE_TOOLS_RESPONSE] (stream) calls=${calls.size}" }
+                }
+            } else null
+
+            if (streamNativeToolCalls == null && contentBuilder.isEmpty()) {
                 val normalizedToolCallsJson = ToolCallContentNormalizer.fromGeminiParts(functionCallParts)
                 if (normalizedToolCallsJson != null) {
                     contentBuilder.append(normalizedToolCallsJson)
@@ -447,7 +553,8 @@ class GeminiAdapter(
                 model = model,
                 provider = provider,
                 cost = cost,
-                finishReason = finalFinishReason
+                finishReason = finalFinishReason,
+                nativeToolCalls = streamNativeToolCalls
             )
         } catch (e: CancellationException) {
             // Guardrail-triggered abort — log and rethrow as-is, do NOT wrap.
@@ -573,6 +680,28 @@ class GeminiAdapter(
             inputTokens = usage.inputTokens,
             outputTokens = usage.outputTokens
         )
+    }
+
+    private fun isToolsNotSupportedError(httpStatus: Int, errorMessage: String): Boolean {
+        if (httpStatus != 400 && httpStatus != 422) return false
+        val lower = errorMessage.lowercase()
+        val mentionsTooling =
+            lower.contains("tools") ||
+                lower.contains("functiondeclarations") ||
+                lower.contains("function declarations") ||
+                lower.contains("function calling") ||
+                lower.contains("parameters") ||
+                lower.contains("schema")
+        val unsupportedShape =
+            lower.contains("not supported") ||
+                lower.contains("unsupported") ||
+                lower.contains("unknown field") ||
+                lower.contains("unknown name") ||
+                lower.contains("unexpected") ||
+                lower.contains("invalid argument") ||
+                lower.contains("invalid value") ||
+                lower.contains("invalid schema")
+        return mentionsTooling && unsupportedShape
     }
 
     override suspend fun close() {

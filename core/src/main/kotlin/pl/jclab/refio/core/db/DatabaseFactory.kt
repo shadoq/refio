@@ -66,15 +66,21 @@ object DatabaseFactory {
             org.jetbrains.exposed.sql.transactions.TransactionManager.manager.defaultMinRepetitionDelay = 100
             org.jetbrains.exposed.sql.transactions.TransactionManager.manager.defaultMaxRepetitionDelay = 1000
 
-            // Create tables
-            transaction(database) {
+            // Migrations run BEFORE createMissingTablesAndColumns so they can rebuild
+            // tables whose schema drifted from the current Exposed definitions
+            // (e.g. V4 rewires snapshots/subtasks to use snapshot_groups).
+            // Each migration is idempotent and guards against missing tables for fresh DBs.
+            MigrationRunner.run(database)
 
-                // Create tables in dependency order
-                // Note: Subtasks <-> Snapshots have circular reference (both nullable)
+            transaction(database) {
+                // Create tables in dependency order.
+                // Snapshot groups have no FK back to subtasks (subtaskId is a plain column),
+                // so there's no cycle: Tasks -> SnapshotGroups -> Subtasks -> Snapshots.
                 SchemaUtils.createMissingTablesAndColumns(
                     TasksTable,
-                    SnapshotsTable,      // Created before Subtasks (circular ref handled via nullable FKs)
+                    SnapshotGroupsTable,
                     SubtasksTable,
+                    SnapshotsTable,
                     ChatMessagesTable,
                     ApiLogsTable,
                     MCPServersTable,
@@ -94,8 +100,6 @@ object DatabaseFactory {
 
                 logger.info { "All tables created successfully" }
             }
-
-            MigrationRunner.run(database)
 
             // Set initialized AFTER everything is complete (tables + migrations)
             initialized = true

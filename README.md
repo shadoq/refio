@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![IntelliJ](https://img.shields.io/badge/IntelliJ-2024.1+-orange.svg)](https://www.jetbrains.com/idea/)
-[![Version](https://img.shields.io/badge/version-0.0.1.5-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.0.1.8-green.svg)](CHANGELOG.md)
 [![Stage](https://img.shields.io/badge/stage-early--active-yellow.svg)](docs/ROADMAP.md)
 
 **Open-source AI coding plugin for IntelliJ IDEA, built in Kotlin.**
@@ -216,12 +216,12 @@ See [docs/config.md](docs/config.md) for full configuration reference.
 
 ## Project status
 
-| | |
-|---|---|
-| **Version** | 0.0.1.5 |
-| **Stage** | Early-stage — active development |
-| **License** | MIT |
-| **Community** | Small, growing — PRs and issues welcome |
+| |                                          |
+|---|------------------------------------------|
+| **Version** | 0.0.1.8                                  |
+| **Stage** | Early-stage — active development         |
+| **License** | MIT                                      |
+| **Community** | Small, growing — PRs and issues welcome  |
 | **Change cadence** | Fast. Breaking changes possible pre-1.0. |
 
 ---

@@ -574,8 +574,8 @@ class HttpRequestTool(
                     "enum" to ALLOWED_METHODS
                 ),
                 "body" to mapOf(
-                    "type" to listOf("string", "object", "array"),
-                    "description" to "Request body for POST/PUT. May be a JSON string OR a raw object/array — objects/arrays are auto-serialized to JSON via Gson. Mutually exclusive with body_file."
+                    "type" to "string",
+                    "description" to "Request body for POST/PUT as a string. For JSON payloads, pass a JSON-serialized string (e.g. \"{\\\"key\\\":\\\"value\\\"}\"). Mutually exclusive with body_file."
                 ),
                 "body_file" to mapOf(
                     "type" to "string",

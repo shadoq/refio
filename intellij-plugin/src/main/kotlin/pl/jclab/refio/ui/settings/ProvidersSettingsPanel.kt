@@ -59,13 +59,7 @@ class ProvidersSettingsPanel(
         null
 
     init {
-        border = BorderFactory.createCompoundBorder(
-            BorderFactory.createTitledBorder(
-                LCATheme.customLineBorder(LCATheme.borderColor, 1),
-                "Providers"
-            ),
-            LCATheme.paddedBorder(LCATheme.margin)
-        )
+        border = LCATheme.createSettingsBorder("Providers")
 
         // Providers cards
         providersPanel = JPanel().apply {

@@ -61,7 +61,8 @@ class TurnLLMCaller(
 
         logger.info { "[CALL_LLM] Final model selection: $providerName/$modelId" }
 
-        val responseFormat = resolveResponseFormat(mode, providerName)
+        val nativeToolsActive = !nativeToolSchemas.isNullOrEmpty()
+        val responseFormat = if (nativeToolsActive) null else resolveResponseFormat(mode, providerName)
         val thinkingEnabled = configService.getTyped(ConfigKeys.GENERAL_THINKING_ENABLED, taskId)
         val noEgressEnabled = configService.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, taskId)
         val reasoningEffortOverride = profileOverrides?.reasoningEffort
@@ -72,9 +73,9 @@ class TurnLLMCaller(
             }
         }
 
-        val extraKwargs: Map<String, Any> = if (!nativeToolSchemas.isNullOrEmpty()) {
-            logger.info { "[NATIVE_TOOLS] Requesting: model=$modelId, tools=${nativeToolSchemas.size}, mode=$mode" }
-            mapOf("native_tools" to nativeToolSchemas)
+        val extraKwargs: Map<String, Any> = if (nativeToolsActive) {
+            logger.info { "[NATIVE_TOOLS] Requesting: model=$modelId, tools=${nativeToolSchemas!!.size}, mode=$mode (response_format suppressed)" }
+            mapOf("native_tools" to nativeToolSchemas!!)
         } else {
             emptyMap()
         }

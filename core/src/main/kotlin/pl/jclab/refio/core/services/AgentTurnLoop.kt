@@ -1261,6 +1261,39 @@ class AgentTurnLoop(
                         // contradict the intentional simplification in TurnGuardrails.
                         val hasIncompleteJsonEnvelope =
                             jsonEnvelopeInspection.hasJsonEnvelope && !jsonEnvelopeInspection.isComplete
+                        // Detect "effectively empty" JSON envelope: model returned a complete object
+                        // like `{}` or `{"response":""}` with no actions/subtasks and no prose.
+                        // Seen with MiniMax under native-tools + response_format=json_object conflict
+                        // (fixed separately in TurnLLMCaller). Without this guard the turn exits as
+                        // success=true with 0 actions and the user sees nothing happen.
+                        val isEffectivelyEmptyEnvelope =
+                            jsonEnvelopeInspection.hasJsonEnvelope &&
+                                jsonEnvelopeInspection.isComplete &&
+                                toolCalls.isEmpty() &&
+                                nativeCalls == null &&
+                                isEmptyJsonEnvelope(contentForExtraction)
+                        // Native-tools mode: model emitted a tool call in text instead of via the
+                        // native tool_calls channel. Two observed patterns:
+                        //   - pseudo-XML: <tool_call>...</tool_call>, <function_call>...
+                        //   - inline JSON: {"name":"foo","arguments":{...}} or {"tool_calls":[...]}
+                        // Parser extracts nothing from these (shape isn't {actions:[...]}), so
+                        // without this guard the turn exits as success=true with 0 actions.
+                        // Observed with glm-5, glm-5.1, glm-4.7 on Z.AI.
+                        val nativeTextEmbeddedToolCall =
+                            activeNativeToolSchemas != null &&
+                                nativeCalls == null &&
+                                toolCalls.isEmpty() &&
+                                looksLikeTextEmbeddedToolCall(contentForExtraction)
+                        // Native-tools mode: model emitted a short intent announcement ("Let me
+                        // first check...", "I'll create the game...") without any tool call, on
+                        // iteration 1. User asked for work to be done, model is stalling. Nudge
+                        // once before accepting prose as a terminal answer.
+                        val nativeIntentAnnouncement =
+                            activeNativeToolSchemas != null &&
+                                nativeCalls == null &&
+                                toolCalls.isEmpty() &&
+                                iteration == 1 &&
+                                looksLikeIntentAnnouncement(contentForExtraction)
                         // In the JSON-envelope path, AGENT mode never uses plain text as a
                         // terminal signal — completion is `{"actions": []}`. So ANY blank/prose
                         // reply (no envelope) is a format lapse, regardless of whether the model
@@ -1273,6 +1306,14 @@ class AgentTurnLoop(
                             !looksLikeJsonResponse &&
                                 contentForExtraction.isNotBlank() &&
                                 lastPlainTextContent?.trim() == contentForExtraction.trim()
+                        // When native function-calling is active and the model returned prose
+                        // without any tool_calls, that is a legitimate final answer — not a
+                        // format lapse. The JSON-envelope contract only applies to the legacy
+                        // JSON-in-text path. Skipping the guard here lets informational answers
+                        // ("Co to za projekt?") terminate cleanly in AGENT mode instead of being
+                        // nudged into a JSON envelope the model was never asked to emit.
+                        val nativeToolsActive = activeNativeToolSchemas != null
+
                         val requiresFormatRetry =
                             nativeCalls == null &&
                                 mode == TaskMode.AGENT &&
@@ -1280,14 +1321,20 @@ class AgentTurnLoop(
                                 plainTextNudgeCount < 2 &&
                                 iteration < maxIterations &&
                                 !isRepeatedPlainText &&
-                                (hasIncompleteJsonEnvelope || !looksLikeJsonResponse)
+                                (
+                                    isEffectivelyEmptyEnvelope ||
+                                        nativeTextEmbeddedToolCall ||
+                                        nativeIntentAnnouncement ||
+                                        (!nativeToolsActive && (hasIncompleteJsonEnvelope || !looksLikeJsonResponse))
+                                )
 
                         // Hard-fail when nudges are exhausted (or model is repeating itself).
                         // Returning prose as `success=true` would let the UI claim the task is
                         // done while the model has neither executed a tool this turn nor emitted
-                        // a proper terminal envelope.
+                        // a proper terminal envelope. Does not apply in native tool-calling mode.
                         val shouldHardFailFormat =
-                            nativeCalls == null &&
+                            !nativeToolsActive &&
+                                nativeCalls == null &&
                                 mode == TaskMode.AGENT &&
                                 contentForExtraction.isNotBlank() &&
                                 !looksLikeJsonResponse &&
@@ -1330,10 +1377,12 @@ class AgentTurnLoop(
                         if (requiresFormatRetry) {
                             lastPlainTextContent = contentForExtraction
                             plainTextNudgeCount++
-                            val retryReason = if (hasIncompleteJsonEnvelope) {
-                                "LLM returned incomplete JSON envelope"
-                            } else {
-                                "LLM returned plain text without JSON structure"
+                            val retryReason = when {
+                                isEffectivelyEmptyEnvelope -> "LLM returned empty JSON envelope (no actions, no response)"
+                                nativeTextEmbeddedToolCall -> "LLM emitted tool call in text content instead of native tool_calls channel"
+                                nativeIntentAnnouncement -> "LLM announced intent in prose without emitting a native tool call"
+                                hasIncompleteJsonEnvelope -> "LLM returned incomplete JSON envelope"
+                                else -> "LLM returned plain text without JSON structure"
                             }
                             logger.warn {
                                 "[FORMAT_RETRY_NUDGE] taskId=$taskId, iteration=$iteration: " +
@@ -1358,17 +1407,29 @@ class AgentTurnLoop(
                             chatMessageRepository.create(
                                 taskId = taskId,
                                 role = MessageRole.SYSTEM,
-                                content = if (hasIncompleteJsonEnvelope) {
-                                    "Your previous reply contained incomplete JSON. Generate the full JSON envelope again from scratch. " +
-                                        "Do not continue or patch the previous output. Reply with JSON only: " +
-                                        "{\"actions\":[{\"tool\":\"NAME\",\"args\":{...}}]," +
-                                        "\"response\":\"...\",\"intent\":\"implementation\"}. " +
-                                        "No prose, no markdown fences."
-                                } else {
-                                    "Reply with JSON only: " +
-                                        "{\"actions\":[{\"tool\":\"NAME\",\"args\":{...}}]," +
-                                        "\"response\":\"...\",\"intent\":\"implementation\"}. " +
-                                        "No prose, no markdown fences."
+                                content = when {
+                                    nativeTextEmbeddedToolCall ->
+                                        "Your previous reply embedded a tool call inside the text content " +
+                                            "(e.g. <tool_call>...</tool_call> or JSON in prose). Those are " +
+                                            "ignored. Tools must be invoked through the native tool_calls / " +
+                                            "tool_use channel of this API — emit them as structured tool_calls, " +
+                                            "not as text. Retry now using the native channel."
+                                    nativeIntentAnnouncement ->
+                                        "You announced an intent (\"let me check\", \"I'll create...\") but did " +
+                                            "not invoke any tool. Do not narrate — call the tool directly via " +
+                                            "the native tool_calls channel. If the task is already complete, " +
+                                            "reply with the final answer instead of an intent announcement."
+                                    hasIncompleteJsonEnvelope ->
+                                        "Your previous reply contained incomplete JSON. Generate the full JSON envelope again from scratch. " +
+                                            "Do not continue or patch the previous output. Reply with JSON only: " +
+                                            "{\"actions\":[{\"tool\":\"NAME\",\"args\":{...}}]," +
+                                            "\"response\":\"...\",\"intent\":\"implementation\"}. " +
+                                            "No prose, no markdown fences."
+                                    else ->
+                                        "Reply with JSON only: " +
+                                            "{\"actions\":[{\"tool\":\"NAME\",\"args\":{...}}]," +
+                                            "\"response\":\"...\",\"intent\":\"implementation\"}. " +
+                                            "No prose, no markdown fences."
                                 },
                                 toolCalls = null,
                                 agentName = persistAgentName,
@@ -1815,12 +1876,80 @@ class AgentTurnLoop(
      * emitted in text instead of using native tool_calls? Used to trigger the native→JSON
      * fallback path without waiting for a provider-level [ToolsNotSupportedException].
      */
+    /**
+     * Returns true when `content` parses as a JSON object with no usable payload:
+     * no `actions`/`tool_calls`/`subtasks`/`steps` array, and no non-blank `response`/`content` text.
+     * Such responses are a silent no-op — we nudge the model to emit a real envelope.
+     */
+    private fun isEmptyJsonEnvelope(content: String): Boolean {
+        val trimmed = content.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        if (!trimmed.startsWith("{")) return false
+        return try {
+            val element = kotlinx.serialization.json.Json.parseToJsonElement(trimmed)
+            val obj = element as? kotlinx.serialization.json.JsonObject ?: return false
+            val hasActions = listOf("actions", "tool_calls", "subtasks", "steps").any { key ->
+                (obj[key] as? kotlinx.serialization.json.JsonArray)?.isNotEmpty() == true
+            }
+            if (hasActions) return false
+            val hasText = listOf("response", "content", "answer", "text").any { key ->
+                val v = obj[key] as? kotlinx.serialization.json.JsonPrimitive
+                v != null && v.isString && v.content.isNotBlank()
+            }
+            !hasText
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun isJsonEnvelopeFallback(content: String): Boolean {
         val trimmed = content.trim()
         if (!trimmed.startsWith("{") && !trimmed.startsWith("```")) return false
         // Fast path: presence of the distinctive keys. Avoids parsing JSON on every turn.
         val body = if (trimmed.startsWith("```")) trimmed.removePrefix("```").removePrefix("json").trim() else trimmed
         return body.contains("\"actions\"") && (body.contains("\"tool\"") || body.contains("\"response\""))
+    }
+
+    /**
+     * Detect tool calls embedded in text content (not via native tool_calls channel).
+     * Matches two observed patterns from weak models under native-tools mode:
+     *   - pseudo-XML: <tool_call>...</tool_call>, <function_call>..., <tool_call'>
+     *   - inline JSON tool shape: {"name":"foo","arguments":{...}} or {"tool_calls":[...]}
+     * Parser can't dispatch these (shape isn't {actions:[...]}) so we must nudge.
+     */
+    private fun looksLikeTextEmbeddedToolCall(content: String): Boolean {
+        val trimmed = content.trim()
+        if (trimmed.isBlank()) return false
+        // Pseudo-XML tags (tolerant of trailing punctuation like `<tool_call'>` from glm-5)
+        if (trimmed.contains("<tool_call", ignoreCase = true) ||
+            trimmed.contains("<function_call", ignoreCase = true) ||
+            trimmed.contains("</tool_call", ignoreCase = true) ||
+            trimmed.contains("</function_call", ignoreCase = true)
+        ) {
+            return true
+        }
+        // Inline JSON tool-call shape without the {actions:[...]} envelope
+        val hasToolCallsKey = trimmed.contains("\"tool_calls\"")
+        val hasNameAndArgs = trimmed.contains("\"name\"") &&
+            (trimmed.contains("\"arguments\"") || trimmed.contains("\"parameters\""))
+        return hasToolCallsKey || hasNameAndArgs
+    }
+
+    /**
+     * Detect short intent-announcement prose from models that "thought out loud"
+     * instead of calling a tool. Matches leading phrases like "Let me...", "I'll...",
+     * "First, I'll..." with short total length (real informational answers are longer).
+     * Heuristic only — used once on iteration 1 in native-tools mode to nudge the model
+     * back onto the tool_calls channel.
+     */
+    private fun looksLikeIntentAnnouncement(content: String): Boolean {
+        val trimmed = content.trim()
+        if (trimmed.isBlank() || trimmed.length > 300) return false
+        val lower = trimmed.lowercase()
+        val openers = listOf(
+            "let me ", "let's ", "i'll ", "i will ", "i am going to ", "i'm going to ",
+            "first, i", "first i", "checking ", "i need to ", "i should ", "i'll first"
+        )
+        return openers.any { lower.startsWith(it) }
     }
 
     /**

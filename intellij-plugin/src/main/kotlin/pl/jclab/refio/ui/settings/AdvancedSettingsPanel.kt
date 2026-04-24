@@ -49,13 +49,7 @@ class AdvancedSettingsPanel(
     private var isUpdatingProgrammatically = false
 
     init {
-        border = BorderFactory.createCompoundBorder(
-            BorderFactory.createTitledBorder(
-                LCATheme.customLineBorder(LCATheme.borderColor, 1),
-                "Advanced Settings"
-            ),
-            LCATheme.paddedBorder(LCATheme.margin)
-        )
+        border = LCATheme.createSettingsBorder("Advanced Settings")
 
         // Main content with visual sections
         val contentPanel = JBPanel<JBPanel<*>>().apply {
@@ -349,13 +343,7 @@ class AdvancedSettingsPanel(
 
     private fun createSectionPanel(title: String, content: JPanel): JPanel {
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder(
-                    LCATheme.customLineBorder(LCATheme.borderColor, 1),
-                    title
-                ),
-                LCATheme.paddedBorder(LCATheme.padding)
-            )
+            border = LCATheme.createSettingsBorder(title)
             add(content, BorderLayout.CENTER)
         }
     }

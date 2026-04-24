@@ -635,6 +635,19 @@ class PromptInputPanel(
                 // Get models from SessionManager (uses embedded core, in-process)
                 val modelStrings = sessionManager.getAvailableModels()
 
+                // Build "provider/id" -> backend-provided display name map so dynamic
+                // providers (OpenRouter, LM Studio) show friendly names like
+                // "Google: Gemini 2.5 Flash (via OpenRouter)" instead of raw ids.
+                val backendNames: Map<String, String> = try {
+                    coreApiClient?.configRouter
+                        ?.getModelsWithVisibility(fetchIfMissing = false)
+                        ?.associate { "${it.provider.lowercase()}/${it.id}" to it.name }
+                        ?: emptyMap()
+                } catch (e: Exception) {
+                    logger.warn(e) { "Failed to fetch ModelInfo names; falling back to ids" }
+                    emptyMap()
+                }
+
                 SwingUtilities.invokeLater {
                     isUpdatingModelSelectorProgrammatically = true
                     try {
@@ -657,7 +670,12 @@ class PromptInputPanel(
                                     val provider = parts[0].lowercase()
                                     val modelId = parts[1]
                                     val displayName = modelString.replace("/", " / ")
-                                    val fullDisplayName = getModelDisplayName(modelId, provider)
+                                    val backendName = backendNames["$provider/$modelId"]
+                                    val fullDisplayName = if (backendName != null) {
+                                        "${provider.replaceFirstChar { it.uppercase() }} - $backendName"
+                                    } else {
+                                        getModelDisplayName(modelId, provider)
+                                    }
                                     ModelItem(modelId, displayName, fullDisplayName, provider)
                                 } else null
                             }.sortedWith(compareBy<ModelItem> { it.provider }.thenBy { it.modelId })

@@ -5,6 +5,7 @@ import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.db.repositories.ProjectAnalysisReportRepository
 import pl.jclab.refio.core.db.repositories.RagRepository
+import pl.jclab.refio.core.db.repositories.SnapshotGroupRepository
 import pl.jclab.refio.core.db.repositories.SnapshotRepository
 import pl.jclab.refio.core.db.repositories.SubtaskRepository
 import pl.jclab.refio.core.db.repositories.TaskRepository
@@ -26,6 +27,7 @@ internal class AnalysisStack(
     private val configService: ConfigService,
     private val ragRepository: RagRepository,
     snapshotRepository: SnapshotRepository,
+    snapshotGroupRepository: SnapshotGroupRepository,
     analysisReportRepository: ProjectAnalysisReportRepository,
     taskRepository: TaskRepository,
     chatMessageRepository: ChatMessageRepository,
@@ -104,7 +106,7 @@ internal class AnalysisStack(
     } else null
 
     val snapshotService: SnapshotService? = if (projectRoot != null) {
-        SnapshotService(snapshotRepository, projectRoot)
+        SnapshotService(snapshotRepository, snapshotGroupRepository, projectRoot)
     } else null
 
     /**

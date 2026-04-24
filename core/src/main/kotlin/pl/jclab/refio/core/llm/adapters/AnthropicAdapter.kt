@@ -10,6 +10,8 @@ import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.llm.NativeToolCall
 import pl.jclab.refio.core.llm.StreamChunk
+import pl.jclab.refio.core.llm.ToolSchemaSanitizer
+import pl.jclab.refio.core.llm.ToolsNotSupportedException
 import pl.jclab.refio.core.llm.toModelConfig
 import pl.jclab.refio.core.tools.base.ToolSchema
 import pl.jclab.refio.core.utils.GsonInstance.gson
@@ -88,6 +90,8 @@ class AnthropicAdapter(
             // Stream aborted by a guardrail (see core/llm/streaming/) — must propagate
             // so the caller can see StreamAbortedException instead of RefioError.LLMError.
             throw e
+        } catch (e: ToolsNotSupportedException) {
+            throw e
         } catch (e: Exception) {
             throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
         }
@@ -125,11 +129,12 @@ class AnthropicAdapter(
         // "user"/"assistant" in the messages array — remap "tool" (used by
         // LLMMessageMapper for tool results) to "assistant" so the request
         // body stays valid.
+        // Tool results must be on the "user" role for Anthropic — mapping them to
+        // "assistant" makes the conversation end with an assistant message, which Anthropic
+        // interprets as a prefill (and some models like opus-4-6 reject prefill entirely).
         val claudeMessages = nonSystemMessages.mapIndexed { index, msg ->
-            val mappedRole = if (msg.role == "tool") "assistant" else msg.role
+            val mappedRole = if (msg.role == "tool") "user" else msg.role
             val content = toAnthropicMessageContent(msg)
-            // Anthropic API rejects requests where assistant content ends with trailing whitespace.
-            // Trim trailing whitespace from the last assistant message to prevent HTTP 400.
             val sanitizedContent = if (index == nonSystemMessages.lastIndex && mappedRole == "assistant" && content is String) {
                 content.trimEnd()
             } else {
@@ -172,7 +177,14 @@ class AnthropicAdapter(
                 "[ANTHROPIC] Using maxTokens=$effectiveMaxTokens (requested=$maxTokens, configLimit=$maxOutputLimit, modelLimit=${modelLimit ?: "n/a"})"
             }
 
-            put("temperature", temperature)
+            // Respect model-level removeParams (e.g. claude-opus-4-7 deprecated `temperature`).
+            val removeParams = pl.jclab.refio.core.llm.ModelDefinitions
+                .getDefinition("anthropic", model)
+                ?.removeParams
+                ?: emptyList()
+            if ("temperature" !in removeParams) {
+                put("temperature", temperature)
+            }
 
             // Add system prompt as separate parameter (not a message)
             // Use combinedSystemPrompt which combines all system messages from systemMessages parameter
@@ -237,13 +249,25 @@ class AnthropicAdapter(
     }
 
     private fun buildAnthropicToolsArray(tools: List<ToolSchema>): List<Map<String, Any>> =
-        tools.map { tool ->
+        tools.map { rawTool ->
+            val tool = ToolSchemaSanitizer.forAnthropic(rawTool)
             mapOf(
                 "name" to tool.name,
                 "description" to tool.description,
                 "input_schema" to tool.parametersJsonSchema,
             )
         }
+
+    private fun sanitizeInputSchemaForAnthropic(toolName: String, schema: Map<String, Any>): Map<String, Any> {
+        val forbidden = listOf("oneOf", "allOf", "anyOf")
+        val stripped = forbidden.filter { schema.containsKey(it) }
+        if (stripped.isEmpty()) return schema
+        logger.warn {
+            "[ANTHROPIC][NATIVE_TOOLS] Tool '$toolName' schema has top-level ${stripped.joinToString()} " +
+                "which Anthropic rejects — stripping. Encode constraints in field descriptions instead."
+        }
+        return schema.filterKeys { it !in forbidden }
+    }
 
     private fun parseNativeAnthropicToolCalls(contentBlocks: List<Map<String, Any?>>): List<NativeToolCall> {
         return contentBlocks.mapNotNull { block ->
@@ -325,7 +349,7 @@ class AnthropicAdapter(
                 )
 
                 if (requestBody.containsKey("tools") && isToolsNotSupportedError(httpStatus, errorMessage)) {
-                    throw pl.jclab.refio.core.llm.ToolsNotSupportedException(fullErrorMessage)
+                    throw ToolsNotSupportedException(fullErrorMessage)
                 }
                 throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, fullErrorMessage)
             }
@@ -422,6 +446,8 @@ class AnthropicAdapter(
                 nativeToolCalls = nativeToolCalls
             )
 
+        } catch (e: ToolsNotSupportedException) {
+            throw e
         } catch (e: Exception) {
             // Error #15: Log error (console + database)
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
@@ -508,6 +534,9 @@ class AnthropicAdapter(
                         source = source
                     )
 
+                    if (requestBody.containsKey("tools") && isToolsNotSupportedError(httpStatus ?: 500, errorMessage)) {
+                        throw ToolsNotSupportedException(errorMessage)
+                    }
                     throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus ?: 500, errorMessage)
                 }
 
@@ -759,6 +788,8 @@ class AnthropicAdapter(
                 source = source
             )
             throw e
+        } catch (e: ToolsNotSupportedException) {
+            throw e
         } catch (e: Exception) {
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
             logger.apiError(
@@ -869,13 +900,17 @@ class AnthropicAdapter(
         val mentionsTooling =
             lower.contains("tools") ||
                 lower.contains("tool_use") ||
-                lower.contains("function calling")
+                lower.contains("function calling") ||
+                lower.contains("input_schema") ||
+                lower.contains("schema")
         val unsupportedShape =
             lower.contains("not supported") ||
                 lower.contains("unsupported") ||
                 lower.contains("unknown parameter") ||
                 lower.contains("unexpected parameter") ||
-                lower.contains("invalid parameter")
+                lower.contains("invalid parameter") ||
+                lower.contains("invalid schema") ||
+                lower.contains("invalid_request_error")
         return mentionsTooling && unsupportedShape
     }
 

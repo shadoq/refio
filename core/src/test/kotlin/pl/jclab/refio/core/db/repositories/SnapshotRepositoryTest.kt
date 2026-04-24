@@ -10,19 +10,18 @@ import pl.jclab.refio.testutil.TestDatabase
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
-/**
- * Testy dla SnapshotRepository.
- */
 class SnapshotRepositoryTest {
 
     private lateinit var db: TestDatabase.SharedInMemoryDb
     private lateinit var repository: SnapshotRepository
+    private lateinit var groupRepository: SnapshotGroupRepository
     private lateinit var taskRepository: TaskRepository
 
     @BeforeEach
     fun setup() {
         db = TestDatabase.createSharedInMemory()
         repository = SnapshotRepository()
+        groupRepository = SnapshotGroupRepository()
         taskRepository = TaskRepository()
     }
 
@@ -31,17 +30,18 @@ class SnapshotRepositoryTest {
         db.keepAlive.close()
     }
 
-    private fun createTestTask(id: String = "task-123"): Task {
-        return transaction {
-            taskRepository.create(
-                name = "Test Task",
-                mode = TaskMode.AGENT,
-                projectId = "project-123",
-                projectPath = "/test/project",
-                id = id
-            )
-        }
+    private fun createTestTask(id: String = "task-123"): Task = transaction {
+        taskRepository.create(
+            name = "Test Task",
+            mode = TaskMode.AGENT,
+            projectId = "project-123",
+            projectPath = "/test/project",
+            id = id
+        )
     }
+
+    private fun createGroup(taskId: String, subtaskId: String? = null): SnapshotGroup =
+        groupRepository.create(taskId = taskId, subtaskId = subtaskId)
 
     @Nested
     inner class CreateTests {
@@ -49,42 +49,41 @@ class SnapshotRepositoryTest {
         @Test
         fun `should create snapshot`() {
             transaction {
-                // Given
                 val task = createTestTask()
+                val group = createGroup(task.id)
 
-                // When
                 val snapshot = repository.create(
                     taskId = task.id,
+                    groupId = group.id,
                     filePath = "/path/to/file.txt",
                     content = "original content",
                     contentHash = "hash123"
                 )
 
-                // Then
                 assertNotNull(snapshot.id)
                 assertEquals(task.id, snapshot.taskId)
+                assertEquals(group.id, snapshot.groupId)
                 assertEquals("/path/to/file.txt", snapshot.filePath)
             }
         }
 
         @Test
-        fun `should create snapshot with subtask`() {
+        fun `should create snapshot with subtask-tagged group`() {
             transaction {
-                // Given
                 val task = createTestTask()
+                val group = createGroup(task.id, subtaskId = "subtask-123")
 
-                // When
                 val snapshot = repository.create(
                     taskId = task.id,
+                    groupId = group.id,
                     filePath = "/file.txt",
                     content = "content",
-                    contentHash = "hash456",
-                    subtaskId = "subtask-123"
+                    contentHash = "hash456"
                 )
 
-                // Then
                 assertNotNull(snapshot.id)
-                assertEquals("subtask-123", snapshot.subtaskId)
+                assertEquals(group.id, snapshot.groupId)
+                assertEquals("subtask-123", groupRepository.findById(group.id)?.subtaskId)
             }
         }
     }
@@ -95,19 +94,18 @@ class SnapshotRepositoryTest {
         @Test
         fun `should find snapshot by ID`() {
             transaction {
-                // Given
                 val task = createTestTask()
+                val group = createGroup(task.id)
                 val created = repository.create(
                     taskId = task.id,
+                    groupId = group.id,
                     filePath = "/file.txt",
                     content = "content",
                     contentHash = "hash"
                 )
 
-                // When
                 val found = repository.findById(created.id)
 
-                // Then
                 assertNotNull(found)
                 assertEquals("/file.txt", found.filePath)
             }
@@ -116,15 +114,13 @@ class SnapshotRepositoryTest {
         @Test
         fun `should find snapshots by task ID`() {
             transaction {
-                // Given
                 val task = createTestTask()
-                repository.create(taskId = task.id, filePath = "/file1.txt", content = "c1", contentHash = "h1")
-                repository.create(taskId = task.id, filePath = "/file2.txt", content = "c2", contentHash = "h2")
+                val group = createGroup(task.id)
+                repository.create(taskId = task.id, groupId = group.id, filePath = "/file1.txt", content = "c1", contentHash = "h1")
+                repository.create(taskId = task.id, groupId = group.id, filePath = "/file2.txt", content = "c2", contentHash = "h2")
 
-                // When
                 val snapshots = repository.findByTaskId(task.id)
 
-                // Then
                 assertEquals(2, snapshots.size)
             }
         }
@@ -132,15 +128,13 @@ class SnapshotRepositoryTest {
         @Test
         fun `should find snapshots by file path`() {
             transaction {
-                // Given
                 val task = createTestTask()
-                repository.create(taskId = task.id, filePath = "/file.txt", content = "v1", contentHash = "h1")
-                repository.create(taskId = task.id, filePath = "/file.txt", content = "v2", contentHash = "h2")
+                val group = createGroup(task.id)
+                repository.create(taskId = task.id, groupId = group.id, filePath = "/file.txt", content = "v1", contentHash = "h1")
+                repository.create(taskId = task.id, groupId = group.id, filePath = "/file.txt", content = "v2", contentHash = "h2")
 
-                // When
                 val snapshots = repository.findByFilePath(task.id, "/file.txt")
 
-                // Then
                 assertEquals(2, snapshots.size)
             }
         }
@@ -152,19 +146,18 @@ class SnapshotRepositoryTest {
         @Test
         fun `should delete snapshot`() {
             transaction {
-                // Given
                 val task = createTestTask()
+                val group = createGroup(task.id)
                 val snapshot = repository.create(
                     taskId = task.id,
+                    groupId = group.id,
                     filePath = "/file.txt",
                     content = "content",
                     contentHash = "hash"
                 )
 
-                // When
                 val deleted = repository.delete(snapshot.id)
 
-                // Then
                 assertEquals(true, deleted)
             }
         }

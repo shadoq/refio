@@ -113,6 +113,7 @@ class CoreApiRouter(
         configService = configService,
         ragRepository = persistence.ragRepository,
         snapshotRepository = persistence.snapshotRepository,
+        snapshotGroupRepository = persistence.snapshotGroupRepository,
         analysisReportRepository = persistence.projectAnalysisReportRepository,
         taskRepository = taskRepository,
         chatMessageRepository = persistence.chatMessageRepository,

@@ -48,13 +48,7 @@ class DocsSettingsPanel(
     private val embeddingProgress = mutableMapOf<Int, Int>()
 
     init {
-        border = BorderFactory.createCompoundBorder(
-            BorderFactory.createTitledBorder(
-                LCATheme.customLineBorder(LCATheme.borderColor, 1),
-                "Documentation"
-            ),
-            LCATheme.paddedBorder(16)
-        )
+        border = LCATheme.createSettingsBorder("Documentation")
 
         // Initialize buttons
         addButton = JButton("Add Documentation")

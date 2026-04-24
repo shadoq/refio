@@ -20,6 +20,10 @@ class V3RenameSlashCommandToSlashPrompt : Migration {
     override fun migrate(database: Database) {
         transaction(database) {
             val jdbc = (connection.connection as java.sql.Connection)
+            if (!tableExists(jdbc, "prompts")) {
+                logger.info { "prompts table does not exist (fresh DB); skipping V3 rename" }
+                return@transaction
+            }
             jdbc.createStatement().use { st ->
                 val updated = st.executeUpdate(
                     "UPDATE prompts SET type = 'SLASH_PROMPT' WHERE type = 'SLASH_COMMAND'"

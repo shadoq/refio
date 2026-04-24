@@ -367,8 +367,21 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
         add(southPanel, BorderLayout.SOUTH)
 
         cs.launch {
+            var previousTaskId: String? = null
             sessionManager.activeSession.collect { session ->
                 logger.info { "Received session update: mode=${session?.mode}" }
+                val newTaskId = session?.id
+                if (newTaskId != previousTaskId) {
+                    previousTaskId = newTaskId
+                    // Session switch: clear the current transcript immediately.
+                    // The messages StateFlow may still momentarily hold the previous
+                    // session's data, so rendering that snapshot here can leave the
+                    // old chat visible after "New Session" is clicked.
+                    lastReceivedMessages = emptyList()
+                    SwingUtilities.invokeLater {
+                        updateMessages(emptyList())
+                    }
+                }
             }
         }
 

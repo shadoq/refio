@@ -10,6 +10,8 @@ import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.llm.NativeToolCall
 import pl.jclab.refio.core.llm.StreamChunk
+import pl.jclab.refio.core.llm.ToolSchemaSanitizer
+import pl.jclab.refio.core.llm.ToolsNotSupportedException
 import pl.jclab.refio.core.llm.toModelConfig
 import pl.jclab.refio.core.tools.base.ToolSchema
 import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
@@ -577,13 +579,16 @@ class OpenAIAdapter(
             // Stream aborted by a guardrail (see core/llm/streaming/) — must propagate
             // so the caller can see StreamAbortedException instead of RefioError.LLMError.
             throw e
+        } catch (e: ToolsNotSupportedException) {
+            throw e
         } catch (e: Exception) {
             throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
         }
     }
 
     private fun buildOpenAIToolsArray(tools: List<ToolSchema>): List<Map<String, Any>> =
-        tools.map { tool ->
+        tools.map { rawTool ->
+            val tool = ToolSchemaSanitizer.forOpenAI(rawTool).tool
             mapOf(
                 "type" to "function",
                 "function" to mapOf(
@@ -595,13 +600,21 @@ class OpenAIAdapter(
         }
 
     private fun buildResponsesToolsArray(tools: List<ToolSchema>): List<Map<String, Any>> =
-        tools.map { tool ->
+        tools.map { rawTool ->
+            val sanitized = ToolSchemaSanitizer.forOpenAI(rawTool)
+            if (!sanitized.strict) {
+                logger.warn {
+                    "[OPENAI][NATIVE_TOOLS] Tool '${rawTool.name}' is not strict-compatible; " +
+                        "sending strict=false. Reasons: ${sanitized.strictIncompatibilities.joinToString("; ")}"
+                }
+            }
+            val tool = sanitized.tool
             mapOf(
                 "type" to "function",
                 "name" to tool.name,
                 "description" to tool.description,
                 "parameters" to tool.parametersJsonSchema,
-                "strict" to true
+                "strict" to sanitized.strict
             )
         }
 
@@ -696,7 +709,7 @@ class OpenAIAdapter(
                 )
 
                 if (requestBody.containsKey("tools") && isToolsNotSupportedError(httpStatus, errorMessage)) {
-                    throw pl.jclab.refio.core.llm.ToolsNotSupportedException(fullErrorMessage)
+                    throw ToolsNotSupportedException(fullErrorMessage)
                 }
                 throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, fullErrorMessage)
             }
@@ -1105,7 +1118,7 @@ class OpenAIAdapter(
                         source = source
                     )
                     if (requestBody.containsKey("tools") && isToolsNotSupportedError(httpStatus ?: 500, errorMessage)) {
-                        throw pl.jclab.refio.core.llm.ToolsNotSupportedException(errorMessage)
+                        throw ToolsNotSupportedException(errorMessage)
                     }
                     throw IllegalStateException(errorMessage)
                 }
@@ -1567,13 +1580,18 @@ class OpenAIAdapter(
             lower.contains("tools") ||
                 lower.contains("tool_choice") ||
                 lower.contains("tool calling") ||
-                lower.contains("function calling")
+                lower.contains("function calling") ||
+                lower.contains("function '") ||
+                lower.contains("schema for function")
         val unsupportedShape =
             lower.contains("not supported") ||
                 lower.contains("unsupported") ||
                 lower.contains("unknown parameter") ||
                 lower.contains("unexpected parameter") ||
-                lower.contains("invalid parameter")
+                lower.contains("invalid parameter") ||
+                lower.contains("invalid schema") ||
+                lower.contains("invalid_function_parameters") ||
+                lower.contains("additionalproperties")
         return mentionsTooling && unsupportedShape
     }
 

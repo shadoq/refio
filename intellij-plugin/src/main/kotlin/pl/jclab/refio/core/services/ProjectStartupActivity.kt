@@ -3,8 +3,8 @@ package pl.jclab.refio.core.services
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
 import pl.jclab.refio.core.logging.LogSinkRegistry
-import pl.jclab.refio.services.core.CoreConnectionManager
 import pl.jclab.refio.services.logging.PluginLoggerSink
+import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.*
 import java.nio.file.Paths
@@ -42,10 +42,11 @@ class ProjectStartupActivity : ProjectActivity {
             // Launch background analysis (don't block IDE startup)
             // Use IO dispatcher for file operations
             withContext(Dispatchers.IO) {
-                // Get or create cached project router
-                val coreManager = CoreConnectionManager.getInstance()
+                // Route through SessionManager so it is the single owner of router
+                // creation for the project; prevents concurrent router init races
+                // between startup activities and the tool-window panel.
                 val projectRoot = Paths.get(projectPath)
-                val projectRouter = coreManager.getOrCreateProjectRouter(projectRoot)
+                val projectRouter = SessionManager.getInstance(project).apiRouter
 
                 // 1. Analyze project structure (will be cached for 10 minutes)
                 logger.info { "Analyzing project structure in background..." }
