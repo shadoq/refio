@@ -2968,6 +2968,30 @@ object ModelDefinitions {
             active = true
         ),
 
+
+        "qwen3.6:27b" to ModelDefinition(
+            id = "qwen3.6:27b",
+            name = "Qwen 3.6 27B",
+            provider = "ollama",
+            description = "Qwen 3.6 27B multimodal model with 256K context and native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
         "qwen3-next:80b" to ModelDefinition(
             id = "qwen3-next:80b",
             name = "Qwen 3 Next 80B",

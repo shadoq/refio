@@ -740,7 +740,8 @@ class ProjectContextRouter(
             taskRequirementsPrompt = taskRequirementsPrompt,
             recentWorkPrompt = recentWorkPrompt,
             activeLlmRequestPrompt = activeLlmPreviewPrompt,
-            auxiliaryPromptsPreview = auxiliaryPreviewPrompt
+            auxiliaryPromptsPreview = auxiliaryPreviewPrompt,
+            rawContextPrompt = llmPrompt
         )
     }
 
