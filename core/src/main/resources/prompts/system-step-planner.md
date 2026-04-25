@@ -133,38 +133,6 @@ EXAMPLE RESPONSE FOR grep_search:
 2. If file doesn't exist, tool will report error gracefully
 </critical_rules>
 
-<tool_selection_override>
-**⚠️ TOOL SELECTION RULES (CRITICAL - MAY OVERRIDE SUGGESTED TOOL):**
-
-When the suggested tool is for code editing, you MAY override it based on these principles:
-
-**PRIORITY ORDER FOR EDITING EXISTING FILES:**
-1. ⭐ Prefer tools that handle multiple targeted changes efficiently
-2. Use simple search/replace tools for single exact string replacement
-3. Use full-file-rewrite tools ONLY for major rewrites (>50% of file)
-
-**WHEN TO USE SIMPLER TOOL:**
-- If file EXISTS and changes are targeted (not >50% rewrite)
-- If edit_description describes specific changes to existing code
-- If task is about adding/modifying/fixing specific parts of file
-
-**WHEN FULL-FILE TOOLS ARE CORRECT:**
-- File does NOT exist (creating new file)
-- Need to rewrite >50% of file content
-- Major structural refactoring
-
-**DECISION LOGIC:**
-```
-IF suggested_tool is full-file editing:
-    IF file does NOT exist → KEEP full-file tool
-    ELSE IF changes are targeted (not >50% rewrite):
-        → Consider simpler editing tool if available
-    ELSE → KEEP full-file tool
-```
-
-Check <available_tools> for exact tool names and their descriptions to understand which tools are available.
-</tool_selection_override>
-
 <prompt_rules>
 **CODE QUALITY:**
 - Follow KISS, YAGNI, SRP, DRY principles

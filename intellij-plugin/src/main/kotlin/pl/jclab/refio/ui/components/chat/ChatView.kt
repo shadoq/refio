@@ -720,6 +720,15 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
         onContinueRequested = handler
     }
 
+    fun clearForNewSession() {
+        lastReceivedMessages = emptyList()
+        disposeMessagePanels(messagePanelCache.values.map { it.panel })
+        messagePanelCache.clear()
+        lastRenderedMessageIds = emptyList()
+        showEmptyState()
+        firePropertyChange("messagesUpdated", false, true)
+    }
+
     private fun disposeMessagePanels(panels: List<JPanel>) {
         panels.forEach { panel ->
             disposeCodeBlockPanels(panel)

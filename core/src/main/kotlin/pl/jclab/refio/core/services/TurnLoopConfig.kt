@@ -16,6 +16,7 @@ import java.time.Duration
  * @property maxIterations Maximum number of loop iterations
  * @property warningThreshold When to show iteration warning
  * @property parallelReadTools Enable parallel execution for READ_ONLY tools
+ * @property maxParallelReadTools Cap on concurrent READ_ONLY tool execution within a single turn (chunks larger batches)
  * @property enableSnapshots Enable file snapshots before write operations
  * @property toolTimeout Timeout for single tool execution
  * @property enableAutoCompaction Enable automatic conversation compaction
@@ -45,6 +46,7 @@ data class TurnLoopConfig(
 
     // Tool execution
     val parallelReadTools: Boolean,
+    val maxParallelReadTools: Int,
     val enableSnapshots: Boolean,
     val toolTimeout: Duration,
 
@@ -91,6 +93,7 @@ data class TurnLoopConfig(
             maxIterations = 50,
             warningThreshold = 20,
             parallelReadTools = true,
+            maxParallelReadTools = 3,
             enableSnapshots = false,
             toolTimeout = Duration.ofSeconds(30),
             enableAutoCompaction = true,
@@ -123,6 +126,7 @@ data class TurnLoopConfig(
             maxIterations = 100,
             warningThreshold = 30,
             parallelReadTools = true,
+            maxParallelReadTools = 3,
             enableSnapshots = true,
             toolTimeout = Duration.ofMinutes(2),
             enableAutoCompaction = true,

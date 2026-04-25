@@ -44,8 +44,11 @@ class CreateNewFileTool(
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_MODIFYING
     override val selectionHint =
-        "Small new files (configs, stubs, short snippets) where you already have the full content. " +
-        "For >~50 lines, HTML/classes, or generated code, prefer advance_code_editing."
+        "ONLY for small new files (≤50 lines): configs, stubs, short snippets where you already have the exact final content. " +
+        "For HTML pages, full classes, scripts, games, or anything >50 lines: STOP — use `advance_code_editing` instead. " +
+        "Stuffing 200–900 lines into the `content` parameter blows your output-token budget (10K+ wasted tokens), " +
+        "risks streaming truncation, and bloats every subsequent turn's conversation history. " +
+        "`advance_code_editing` delegates generation to the editing model so your agent response stays small."
 
     override fun validateParams(params: Map<String, Any>) {
         validatePathParam(params)

@@ -874,12 +874,13 @@ class AgentTurnLoop(
                         // themselves are also stored structurally in `toolCalls` for execution and
                         // adapter mapping back to native tool_use on later turns.
                         //
-                        // Native path: drop the raw status blurb text (e.g. "[reading]", "Analyzing…")
-                        // that accompanied the native tool_calls — it's noise that models like qwen3.6
-                        // mimic as a final answer when it leaks into later conversation history.
+                        // Native path: preserve original LLM text for UI display (e.g. "I'll create
+                        // the file…"). Tool calls are stored structurally in toolCallsJson so the
+                        // LLM history is correctly reconstructed independently of the content field.
+                        // Fall back to a JSON envelope only when the model produced no text at all.
                         logger.info { "[TOOL_CALLS] taskId=$taskId, count=${toolCalls.size}" }
                         val assistantContent = if (nativeCalls != null) {
-                            buildActionsEnvelopeJson(toolCalls)
+                            llmResponse.content.takeIf { it.isNotBlank() } ?: buildActionsEnvelopeJson(toolCalls)
                         } else {
                             llmResponse.content
                         }

@@ -262,30 +262,44 @@ class TurnToolExecutor(
             }
 
             if (readOnlyIndexed.isNotEmpty() && writeIndexed.isEmpty()) {
-                logger.info {
-                    "[PARALLEL] Executing ${readOnlyIndexed.size} READ_ONLY in parallel (no WRITE tools in batch)"
+                // Cap concurrency: weak local models occasionally batch 7+ reads in one turn
+                // (gpt-5.4-mini in particular). Running them all in parallel doesn't help —
+                // the bottleneck is the next LLM call, not the reads. Chunk into windows of
+                // `maxParallelReadTools` so we keep parallelism gains without unbounded fan-out.
+                val cap = config.maxParallelReadTools.coerceAtLeast(1)
+                if (readOnlyIndexed.size > cap) {
+                    logger.warn {
+                        "[PARALLEL_CAPPED] ${readOnlyIndexed.size} READ_ONLY tools in batch — " +
+                            "capping concurrency at $cap (chunked execution)"
+                    }
+                } else {
+                    logger.info {
+                        "[PARALLEL] Executing ${readOnlyIndexed.size} READ_ONLY in parallel (no WRITE tools in batch)"
+                    }
                 }
 
-                val readOnlyResults = readOnlyIndexed.map { (originalIndex, toolCall) ->
-                    async {
-                        val subtaskId = subtaskIds[toolCall.id]!!
-                        val result = executeSingleTool(
-                            taskId = taskId,
-                            toolCall = toolCall,
-                            subtaskId = subtaskId,
-                            listener = listener,
-                            iteration = iteration,
-                            _config = config,
-                            mode = mode,
-                            executionMode = executionMode,
-                            runId = runId,
-                            depth = depth,
-                            profileOverrides = profileOverrides,
-                            _subtaskIds = subtaskIds
-                        )
-                        originalIndex to (toolCall to result)
-                    }
-                }.awaitAll()
+                val readOnlyResults = readOnlyIndexed.chunked(cap).flatMap { chunk ->
+                    chunk.map { (originalIndex, toolCall) ->
+                        async {
+                            val subtaskId = subtaskIds[toolCall.id]!!
+                            val result = executeSingleTool(
+                                taskId = taskId,
+                                toolCall = toolCall,
+                                subtaskId = subtaskId,
+                                listener = listener,
+                                iteration = iteration,
+                                _config = config,
+                                mode = mode,
+                                executionMode = executionMode,
+                                runId = runId,
+                                depth = depth,
+                                profileOverrides = profileOverrides,
+                                _subtaskIds = subtaskIds
+                            )
+                            originalIndex to (toolCall to result)
+                        }
+                    }.awaitAll()
+                }
 
                 val writeResults = writeIndexed.map { (originalIndex, toolCall) ->
                     if (GlobalMetrics.isCancelled()) {

@@ -246,6 +246,7 @@ class RefioContentPanel(
             sessionManager.createSession("Session (${currentMode.name})", currentMode, executionMode)
 
             SwingUtilities.invokeLater {
+                chatView.clearForNewSession()
                 showChatView()
             }
         }

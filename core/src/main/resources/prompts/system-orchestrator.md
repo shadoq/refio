@@ -134,97 +134,30 @@ ACTION TYPES:
 </guidelines>
 
 <examples>
-### Example 1: Add missing step
+### Example 1: Continue when step succeeds
 
-**Input:**
-- Step: "Create UserService class"
-- Result: ERROR - Import error: module 'bcrypt' not found
-
-**Output:**
-{
-  "decision": "MODIFY_PLAN",
-  "reasoning": "Need to install bcrypt dependency before service can work. This is a standard fix for missing dependencies.",
-  "analysis": "Service code is correct but missing runtime dependency. The import statement requires bcrypt package which isn't installed.",
-  "actions": [
-    {
-      "type": "add_step",
-      "after_step": 2,
-      "description": "Install bcrypt package",
-      "kind": "run_terminal_command",
-      "suggested_params": {"command": "npm install bcrypt"}
-    },
-    {
-      "type": "retry_step",
-      "step": 3,
-      "reason": "Will succeed after installing dependency"
-    }
-  ]
-}
-
-### Example 2: Skip unnecessary step
-
-**Input:**
-- Step: "Read config file"
-- Result: ERROR - File not found: config.yaml (fresh installation detected)
-
-**Output:**
-{
-  "decision": "MODIFY_PLAN",
-  "reasoning": "This is a fresh install with no existing config. Migration steps are not needed for fresh installations.",
-  "analysis": "Config file missing indicates clean installation state. Steps 3-4 are designed for migrating existing data, which doesn't apply here.",
-  "actions": [
-    {
-      "type": "add_step",
-      "after_step": 1,
-      "description": "Create default config file",
-      "kind": "create_new_file",
-      "suggested_params": {
-        "path": "config.yaml",
-        "content": "default configuration content"
-      }
-    },
-    {
-      "type": "skip_step",
-      "step": 3,
-      "reason": "No existing schema to migrate in fresh install"
-    },
-    {
-      "type": "skip_step",
-      "step": 4,
-      "reason": "No existing data to migrate in fresh install"
-    }
-  ]
-}
-
-### Example 3: Ask user for guidance
-
-**Input:**
-- Step: "Update authentication system"
-- Result: SUCCESS - Tests failing due to session timeout config change
-
-**Output:**
-{
-  "decision": "ASK_USER",
-  "reasoning": "Two valid approaches with different implications. User should decide based on their requirements.",
-  "analysis": "Session timeout is now configurable but tests use old hardcoded value. Both approaches are valid - updating tests maintains new flexibility, hardcoding preserves backwards compatibility.",
-  "question": "Tests are failing because session timeout is now configurable. How should I handle this?",
-  "question_options": [
-    "Update tests to use new config format",
-    "Keep timeout hardcoded for backwards compatibility"
-  ]
-}
-
-### Example 4: Continue with plan
-
-**Input:**
-- Step: "Create UserRepository class"
-- Result: SUCCESS - File created with 80 lines, all tests passing
+**Input:** Step "Create UserRepository class" → SUCCESS, file created, tests pass.
 
 **Output:**
 {
   "decision": "CONTINUE",
-  "reasoning": "Step completed successfully and plan is on track. Next step (Create SessionRepository) is ready to execute.",
-  "analysis": "Repository created successfully with proper structure. No issues detected. The plan is working as expected."
+  "reasoning": "Step completed successfully and plan is on track.",
+  "analysis": "Repository created with proper structure. No issues detected."
+}
+
+### Example 2: Modify plan to fix a missing dependency
+
+**Input:** Step "Create UserService" → ERROR: module 'bcrypt' not found.
+
+**Output:**
+{
+  "decision": "MODIFY_PLAN",
+  "reasoning": "Missing runtime dependency must be installed before service can run.",
+  "analysis": "Service code is correct; only the import target is unavailable.",
+  "actions": [
+    {"type": "add_step", "after_step": 2, "description": "Install bcrypt", "kind": "run_terminal_command", "suggested_params": {"command": "npm install bcrypt"}},
+    {"type": "retry_step", "step": 3, "reason": "Will succeed after install"}
+  ]
 }
 </examples>
 
