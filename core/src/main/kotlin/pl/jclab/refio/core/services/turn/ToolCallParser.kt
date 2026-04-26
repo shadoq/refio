@@ -68,19 +68,13 @@ class ToolCallParser(
             return filterToolCallsByProfile(jsonToolCalls, profileOverrides)
         }
 
-        // Fallback: weak local models (qwen3.5-122b, qwen3-coder-next, some gemma builds) emit
-        // tool calls as XML-style tags in text instead of going through the native tool_calls
-        // channel — e.g. `<create_new_file><path>foo.html</path><content>...</content></create_new_file>`.
-        // Without this fallback the loop sees content but no tool calls, ends with success=true,
-        // and the user gets nothing. Treat the tag as a tool name iff it matches a registered tool.
-        val xmlToolCalls = extractToolCallsFromXmlTags(content)
-        if (xmlToolCalls.isNotEmpty()) {
-            logger.warn {
-                "[EXTRACT_FALLBACK_XML] Recovered ${xmlToolCalls.size} tool calls from XML pseudo-tags. " +
-                    "Model is not using native tool_calls — consider switching to a stronger model."
-            }
-            return filterToolCallsByProfile(xmlToolCalls, profileOverrides)
-        }
+        // Models without native tool_calls support are routed to JSON-mode via the
+        // `response-contract-json` system prompt. We do NOT recover tool calls from
+        // XML pseudo-tags any more — that path encouraged garbage output formats and
+        // hid the real failure (a registry entry whose `supportsFunctionCalling` flag
+        // is wrong). If a model emits XML, fix the model definition to flip
+        // `supportsFunctionCalling = false`; the harness will then send it the JSON
+        // contract instead.
 
         // Fallback to legacy TOOL_CALL format
         val legacyToolCalls = extractToolCallsLegacy(content)
@@ -88,75 +82,6 @@ class ToolCallParser(
             logger.info { "[TOOL_CALLS] Extracted ${legacyToolCalls.size} tool calls from legacy format" }
         }
         return filterToolCallsByProfile(legacyToolCalls, profileOverrides)
-    }
-
-    /**
-     * Recovery path: extract tool calls from XML-style tags in plain text.
-     *
-     * Some weak/local models ignore the native tool_calls API and emit:
-     *   <create_new_file>
-     *     <path>foo.html</path>
-     *     <content>...</content>
-     *   </create_new_file>
-     *
-     * We detect a top-level tag whose name matches a registered tool, then parse
-     * inner `<key>value</key>` pairs as the args map. Multiple sibling top-level
-     * tool-name tags are all extracted (parallel reads in one turn).
-     *
-     * Constraints:
-     * - Only tags whose name is a registered tool count (prevents matching `<html>`, `<div>`, etc.).
-     * - Inner content of args is taken verbatim — preserves embedded HTML/code in `<content>`.
-     * - We DO NOT attempt nested struct extraction; for that the model should use native tools.
-     */
-    private fun extractToolCallsFromXmlTags(content: String): List<ToolCallData> {
-        // Quick reject: no '<' means definitely no XML tag form.
-        if ('<' !in content) return emptyList()
-
-        // Match `<name>...</name>` with reluctant body to handle multiple sibling calls.
-        // (?s) = DOTALL so . matches newlines (XML body usually spans lines).
-        val tagPattern = Regex("""(?s)<([a-z_][a-z0-9_]*)>(.*?)</\1>""", RegexOption.IGNORE_CASE)
-        val toolCalls = mutableListOf<ToolCallData>()
-
-        for (match in tagPattern.findAll(content)) {
-            val tagName = match.groupValues[1].lowercase()
-            if (!toolRegistry.hasTool(tagName)) continue
-
-            val body = match.groupValues[2]
-            val argsJson = parseInnerXmlAsArgs(body)
-
-            toolCalls.add(
-                ToolCallData(
-                    id = UUID.randomUUID().toString(),
-                    name = tagName,
-                    arguments = argsJson
-                )
-            )
-            logger.info { "[EXTRACT_FALLBACK_XML] Parsed tag <$tagName>, argsLength=${argsJson.length}" }
-        }
-
-        return toolCalls
-    }
-
-    /**
-     * Parse inner `<key>value</key>` pairs into a JSON object string.
-     * Values are taken verbatim and emitted as JSON strings (so embedded
-     * `<` and `\n` survive). Returns "{}" if no pairs are found.
-     */
-    private fun parseInnerXmlAsArgs(body: String): String {
-        val pairPattern = Regex("""(?s)<([a-z_][a-z0-9_]*)>(.*?)</\1>""", RegexOption.IGNORE_CASE)
-        val args = mutableMapOf<String, String>()
-
-        for (match in pairPattern.findAll(body)) {
-            val key = match.groupValues[1]
-            val value = match.groupValues[2].trim()
-            // First occurrence wins — guards against nested tags with the same name.
-            args.putIfAbsent(key, value)
-        }
-
-        if (args.isEmpty()) return "{}"
-
-        val obj = JsonObject(args.mapValues { (_, v) -> JsonPrimitive(v) })
-        return obj.toString()
     }
 
     /**
@@ -378,11 +303,32 @@ class ToolCallParser(
                 val stepsElement = jsonElement["steps"] as? JsonArray
                 val subtasksElement = jsonElement["subtasks"] as? JsonArray
 
+                // Some models without proper native tool_calls (GLM, MiniMax) emit a
+                // bare OpenAI-tool-call object inline in markdown:
+                //   {"name": "read_file", "arguments": {"path": "x"}}
+                // No envelope, no wrapper array. Treat that shape as a single-element
+                // actions array if `name` matches a registered tool.
+                val bareToolName = (jsonElement["name"] as? JsonPrimitive)?.content
+                val isBareToolCall = bareToolName != null
+                    && actionsElement == null
+                    && toolCallsElement == null
+                    && stepsElement == null
+                    && subtasksElement == null
+                    && toolRegistry.hasTool(bareToolName)
+
                 val toolCalls = when {
                     actionsElement != null -> extractToolCallsFromActionsArray(actionsElement)
                     toolCallsElement != null -> extractToolCallsFromActionsArray(toolCallsElement)
                     stepsElement != null -> extractToolCallsFromActionsArray(stepsElement)
                     subtasksElement != null -> extractToolCallsFromSubtasksArray(subtasksElement)
+                    isBareToolCall -> {
+                        logger.warn {
+                            "[TOOL_CALL_JSON] Recovering bare tool-call object (no envelope) for '$bareToolName' — " +
+                                "model is not following the JSON contract; consider flipping " +
+                                "supportsFunctionCalling=false in ModelDefinitions."
+                        }
+                        extractToolCallsFromActionsArray(JsonArray(listOf(jsonElement)))
+                    }
                     else -> emptyList()
                 }
 

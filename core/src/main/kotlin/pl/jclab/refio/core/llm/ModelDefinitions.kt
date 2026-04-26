@@ -4823,6 +4823,10 @@ object ModelDefinitions {
         // Qwen
         "qwen/qwen3.6" to openrouterDef("qwen/qwen3.6-*", maxContext = 1_000_000, vision = true),
         "qwen/qwen3.5" to openrouterDef("qwen/qwen3.5-*", maxContext = 262_144, vision = true),
+        // qwen3-coder-* variants emit XML pseudo-tags instead of native tool_calls
+        // (observed: `<create_new_file><path>...</path><content>...</content></create_new_file>`).
+        // Prefix entry must come before "qwen/qwen3" to win the prefix match.
+        "qwen/qwen3-coder" to openrouterDef("qwen/qwen3-coder-*", maxContext = 262_144, functionCalling = false),
         "qwen/qwen3" to openrouterDef("qwen/qwen3-*", maxContext = 262_144),
         "qwen/" to openrouterDef("qwen/*", maxContext = 128_000),
         // DeepSeek
@@ -4835,6 +4839,9 @@ object ModelDefinitions {
         "moonshotai/kimi" to openrouterDef("moonshotai/kimi-*", maxContext = 262_144, vision = true),
         "moonshotai/" to openrouterDef("moonshotai/*", maxContext = 128_000),
         // MiniMax
+        // minimax-m2.7 emits `<minimax:tool_call><invoke name="...">...</invoke></minimax:tool_call>`
+        // pseudo-XML instead of native tool_calls. Force JSON envelope mode.
+        "minimax/minimax-m2.7" to openrouterDef("minimax/minimax-m2.7*", maxContext = 196_608, functionCalling = false),
         "minimax/minimax-m2" to openrouterDef("minimax/minimax-m2*", maxContext = 196_608),
         "minimax/" to openrouterDef("minimax/*", maxContext = 128_000),
         // Z.AI
@@ -4882,12 +4889,24 @@ object ModelDefinitions {
         id: String,
         maxContext: Int,
         vision: Boolean = false,
-        reasoning: Boolean = false
+        reasoning: Boolean = false,
+        /**
+         * Whether the upstream model reliably emits native OpenAI-format
+         * `tool_calls`. When false, AgentTurnLoop falls back to the
+         * `response-contract-json` system prompt and parses JSON envelopes
+         * out of plain text — that is the right path for models which
+         * advertise function calling but actually emit pseudo-XML
+         * (e.g. `<minimax:tool_call>`, `<create_new_file>...</...>`).
+         */
+        functionCalling: Boolean = true
     ): ModelDefinition = ModelDefinition(
         id = id,
         name = id,
         provider = "openrouter",
-        description = "OpenRouter curated family with native function-calling",
+        description = if (functionCalling)
+            "OpenRouter curated family with native function-calling"
+        else
+            "OpenRouter family that does NOT emit native tool_calls — JSON envelope only",
         capabilities = buildList {
             add(ModelCapability.CHAT_COMPLETION)
             add(ModelCapability.TEXT_COMPLETION)
@@ -4901,7 +4920,7 @@ object ModelDefinitions {
         supportsVision = vision,
         supportsReasoning = reasoning,
         supportsStreaming = true,
-        supportsFunctionCalling = true,
+        supportsFunctionCalling = functionCalling,
         endpointType = ApiEndpointType.CHAT_COMPLETIONS,
         apiFormat = ApiFormat.CHAT_COMPLETIONS,
         active = true

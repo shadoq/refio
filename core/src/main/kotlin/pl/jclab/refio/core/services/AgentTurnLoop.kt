@@ -25,6 +25,7 @@ import pl.jclab.refio.core.services.AgentTurnLoop.UserMessageStrategy
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 import pl.jclab.refio.core.services.turn.ToolCallParser
+import pl.jclab.refio.core.services.turn.TrivialTaskDetector
 import pl.jclab.refio.core.services.turn.TurnEventListener
 import pl.jclab.refio.core.services.turn.TurnPrompt
 import pl.jclab.refio.core.services.turn.GuardianContext
@@ -547,7 +548,28 @@ class AgentTurnLoop(
                         OperationInfo.TurnBuildingPrompt(iteration, turnPromptBuilder.getHistorySize(taskId))
                     )
 
-                    val useNativeTools = activeNativeToolSchemas != null
+                    // Trivial-task harness guard: when the user prompt is "create file X with Y"
+                    // and we're on the very first iteration, narrow the tool schema to write tools
+                    // only. Stops weak models from burning 3+ turns on file_search / read_directory
+                    // pre-flight reads. Subagent profiles already had their tools filtered, so we
+                    // only narrow the top-level (DEFAULT profile) call.
+                    val schemasSnapshot = activeNativeToolSchemas
+                    val iterationNativeToolSchemas = if (
+                        iteration == 1
+                        && profileOverrides?.subagentName == null
+                        && schemasSnapshot != null
+                    ) {
+                        TrivialTaskDetector.maybeRestrictForIteration1(
+                            schemas = schemasSnapshot,
+                            userInput = userMessageStrategy.getUserMessage(taskId),
+                            iteration = iteration,
+                            modeName = mode.name
+                        )
+                    } else {
+                        schemasSnapshot
+                    }
+
+                    val useNativeTools = iterationNativeToolSchemas != null
 
                     // Auto-compact if context window is filling
                     if (config.enableAutoCompaction && conversationCompactor != null) {
@@ -586,6 +608,7 @@ class AgentTurnLoop(
                         currentPrompt: TurnPrompt,
                         nativeSchemas: List<ToolSchema>?
                     ) = if (config.maxRetries > 0 && llmRetryHandler != null) {
+                        val thinkingRequested = configService.getTyped<Boolean>(ConfigKeys.GENERAL_THINKING_ENABLED, taskId)
                         llmRetryHandler.callWithRetry(
                             provider = effectiveProvider,
                             model = effectiveModel,
@@ -596,7 +619,7 @@ class AgentTurnLoop(
                             maxRetries = config.maxRetries,
                             baseDelayMs = config.retryBackoffMs,
                             responseFormat = responseFormat,
-                            thinking = configService.getTyped(ConfigKeys.GENERAL_THINKING_ENABLED, taskId),
+                            thinking = turnLLMCaller.resolveThinkingEnabled(effectiveProvider, effectiveModel, thinkingRequested),
                             reasoningEffort = profileOverrides?.reasoningEffort,
                             noEgressEnabled = configService.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, taskId),
                             stream = effectiveStreamCallback != null,
@@ -619,7 +642,7 @@ class AgentTurnLoop(
                     var llmResponse: pl.jclab.refio.core.llm.LLMResponse
                     while (true) {
                         try {
-                            llmResponse = callModelWithPrompt(prompt, activeNativeToolSchemas)
+                            llmResponse = callModelWithPrompt(prompt, iterationNativeToolSchemas)
                             break
                         } catch (e: ToolsNotSupportedException) {
                             val modelKey = effectiveModel ?: "unknown"

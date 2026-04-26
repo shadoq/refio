@@ -1,6 +1,6 @@
 # Refio - Technical Architecture Overview
 
-> **Last Updated:** 2026-03-24
+> **Last Updated:** 2026-04-26
 > **Version:** 0.0.1.8
 > **Status:** Active Development
 
@@ -756,6 +756,38 @@ suspend fun LLMClient.complete(
 | Anthropic | SSE | `message_stop` event |
 | Ollama | NDJSON | `done: true` |
 | Gemini | SSE | Implicit end |
+
+### Native Function Calling
+
+From 0.0.1.8 Refio supports the providers' structured `tools` API as an alternative to
+the JSON-in-text envelope. Controlled by `tools.native_tools` in `config.yaml`:
+
+| Value | Behaviour |
+|-------|-----------|
+| `auto` *(default)* | Use native tools when `ModelDefinition.supportsFunctionCalling=true` |
+| `always` | Force native tools even for unlisted models |
+| `never` | Always fall back to JSON-in-text path |
+
+**Dispatch path:**
+
+```
+AgentTurnLoop
+  └─→ NativeToolsResolver (mode + ModelDefinition + fallback cache)
+        ├─→ NATIVE path  → adapter.chat(native_tools=[...])
+        │                   → LLMResponse.nativeToolCalls  (skips ToolCallParser)
+        │
+        └─→ JSON path    → ToolCallParser.extractToolCalls(content)
+                            ← existing behaviour unchanged
+```
+
+`ToolSchemaSanitizer` normalizes each tool's JSON Schema per provider before the request:
+- **OpenAI** — strips `$schema`/`default`; strict-mode compatibility check; Responses API uses flat `name/description/parameters/strict` shape.
+- **Anthropic** — strips composition keywords (`oneOf`, `allOf`, `anyOf`).
+- **Gemini** — strips `additionalProperties`; converts array `type` values to a single uppercase string; adds `nullable: true` for optional fields.
+
+`NativeToolsFallbackTracker` is a session-scoped in-memory set. If a provider returns
+HTTP 400 "tools not supported", the model is added and future turns silently use the
+JSON path without requiring a restart.
 
 ### No-Egress Mode
 
