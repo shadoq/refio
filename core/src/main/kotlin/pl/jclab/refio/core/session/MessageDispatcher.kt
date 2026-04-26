@@ -134,7 +134,12 @@ class MessageDispatcher(
                                     id = if (index == 0) coreMsg.id else "${coreMsg.id}:tc$index",
                                     taskId = coreMsg.taskId,
                                     createdAt = coreMsg.createdAt,
-                                    toolCallInfo = enriched
+                                    toolCallInfo = enriched,
+                                    // Attach token/cost metrics only to the first tool-call bubble
+                                    // so SessionStatsCalculator doesn't double-count.
+                                    tokensIn = if (index == 0) coreMsg.tokensIn else null,
+                                    tokensOut = if (index == 0) coreMsg.tokensOut else null,
+                                    cost = if (index == 0) coreMsg.cost else null
                                 )
                             }
                         }
@@ -153,7 +158,10 @@ class MessageDispatcher(
                                 taskId = coreMsg.taskId,
                                 createdAt = coreMsg.createdAt,
                                 toolCallInfo = toolCallInfo,
-                                metadata = coreMsg.metadata
+                                metadata = coreMsg.metadata,
+                                tokensIn = coreMsg.tokensIn,
+                                tokensOut = coreMsg.tokensOut,
+                                cost = coreMsg.cost
                             )
                         )
                     }
@@ -259,8 +267,45 @@ class MessageDispatcher(
             } else {
                 logger.debug { "[MESSAGES] Unchanged, skipping update (count=${allMessages.size})" }
             }
+
+            refreshActiveSessionMetrics(currentSession.id)
         } catch (e: Exception) {
             logger.error(e) { "Failed to load messages" }
+        }
+    }
+
+    /**
+     * Refresh tokens/cost/status on the active session from the DB so the
+     * Session Debug Report and any other consumer of `activeSession` reflect
+     * AgentTurnLoop's per-iteration `incrementMetrics` writes.
+     */
+    private fun refreshActiveSessionMetrics(sessionId: String) {
+        val current = stateManager.getActiveSession() ?: return
+        if (current.id != sessionId) return
+        try {
+            val task = projectRouter.taskRouter.getTask(sessionId) ?: return
+            val refreshedStatus = runCatching {
+                pl.jclab.refio.api.models.TaskStatus.valueOf(task.status)
+            }.getOrDefault(current.status)
+
+            if (current.tokensIn == task.tokensIn &&
+                current.tokensOut == task.tokensOut &&
+                current.costUsd == task.costUsd &&
+                current.status == refreshedStatus &&
+                current.updatedAt == task.updatedAt
+            ) return
+
+            stateManager.updateSession(
+                current.copy(
+                    tokensIn = task.tokensIn,
+                    tokensOut = task.tokensOut,
+                    costUsd = task.costUsd,
+                    status = refreshedStatus,
+                    updatedAt = task.updatedAt
+                )
+            )
+        } catch (e: Exception) {
+            logger.warn(e) { "Failed to refresh active session metrics for $sessionId" }
         }
     }
 
@@ -442,7 +487,10 @@ class MessageDispatcher(
         taskId: String,
         createdAt: Long,
         toolCallInfo: ToolCallDisplayInfo,
-        metadata: String? = ToolCallDisplayInfo.toMetadataJson(toolCallInfo)
+        metadata: String? = ToolCallDisplayInfo.toMetadataJson(toolCallInfo),
+        tokensIn: Int? = null,
+        tokensOut: Int? = null,
+        cost: Double? = null
     ): Message {
         return Message(
             id = id,
@@ -451,7 +499,10 @@ class MessageDispatcher(
             content = "",
             toolCallInfo = toolCallInfo,
             createdAt = createdAt,
-            metadata = metadata
+            metadata = metadata,
+            tokensIn = tokensIn,
+            tokensOut = tokensOut,
+            costUsd = cost
         )
     }
 

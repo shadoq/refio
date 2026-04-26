@@ -2,28 +2,37 @@ package pl.jclab.refio.services.session
 
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
-import pl.jclab.refio.core.session.SessionStateManager
-import pl.jclab.refio.core.session.MessageDispatcher
-import pl.jclab.refio.core.session.SubtaskTracker
-import pl.jclab.refio.core.session.SessionLifecycleService
-import pl.jclab.refio.core.session.ExecutionMonitor
-import pl.jclab.refio.core.session.PromptStateTracker
-import pl.jclab.refio.api.models.*
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import pl.jclab.refio.api.models.ContextReference
+import pl.jclab.refio.api.models.ExecutionMode
+import pl.jclab.refio.api.models.Message
+import pl.jclab.refio.api.models.Session
+import pl.jclab.refio.api.models.TaskMode
 import pl.jclab.refio.core.api.SubtaskResponse
 import pl.jclab.refio.core.api.UIAdapter
-import pl.jclab.refio.core.utils.ProjectIdGenerator
-import pl.jclab.refio.services.core.CoreConnectionManager
-import pl.jclab.refio.services.execution.StepExecutionService
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
+import pl.jclab.refio.core.session.ExecutionMonitor
+import pl.jclab.refio.core.session.MessageDispatcher
+import pl.jclab.refio.core.session.PromptStateTracker
+import pl.jclab.refio.core.session.SessionLifecycleService
+import pl.jclab.refio.core.session.SessionStateManager
+import pl.jclab.refio.core.session.SubtaskTracker
+import pl.jclab.refio.core.utils.ProjectIdGenerator
+import pl.jclab.refio.services.core.CoreConnectionManager
+import pl.jclab.refio.services.execution.StepExecutionService
 import pl.jclab.refio.ui.components.toolbar.StatusBar
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import pl.jclab.refio.core.db.MessageRole
-import java.util.UUID
+import java.util.*
 
 @Service(Service.Level.PROJECT)
 class SessionManager(private val project: Project) {

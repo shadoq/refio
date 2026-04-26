@@ -48,6 +48,7 @@ import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.geom.RoundRectangle2D
 import javax.swing.Box
+import javax.swing.BoxLayout
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JViewport
@@ -600,8 +601,14 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
         }
 
         val toolbarRow = messages.size
+        val toolbarWithStats = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            add(toolbarFactory.createConversationToolbar())
+            add(SessionStatsBar.create(messages))
+        }
         messagesPanel.add(
-            toolbarFactory.createConversationToolbar(),
+            toolbarWithStats,
             GridBagConstraints().apply {
                 gridx = 0
                 gridy = toolbarRow

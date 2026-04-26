@@ -671,6 +671,20 @@ class AgentTurnLoop(
                     totalTokensOut += llmResponse.usage.outputTokens
                     totalCost += llmResponse.cost
 
+                    // Persist per-iteration metrics on the task row so HistoryPanel
+                    // and live stats bar can show running totals without aggregating
+                    // from message metadata.
+                    try {
+                        taskRepository.incrementMetrics(
+                            id = taskId,
+                            tokensIn = llmResponse.usage.inputTokens,
+                            tokensOut = llmResponse.usage.outputTokens,
+                            costUsd = llmResponse.cost
+                        )
+                    } catch (e: Exception) {
+                        logger.warn(e) { "[AGENT_TURN_LOOP] Failed to increment task metrics for $taskId" }
+                    }
+
                     // Populate per-session metrics for Session Trace footer / cost analytics
                     GlobalMetrics.forAgent(taskId).recordTokens(
                         tokensIn = llmResponse.usage.inputTokens,
