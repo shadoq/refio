@@ -11,25 +11,6 @@ private val logger = dualLogger("ContextFormatter")
 
 private const val CONVERSATION_SUMMARY_METADATA_TYPE = ConversationContextBuilder.CONVERSATION_SUMMARY_METADATA_TYPE
 
-// RECENT_WORK limits
-private const val RECENT_WORK_BUDGET_TIER_1 = 12_000
-private const val RECENT_WORK_BUDGET_TIER_2 = 8_000
-private const val RECENT_WORK_BUDGET_TIER_3 = 5_000
-private const val RECENT_WORK_BUDGET_TIER_4 = 3_500
-private const val RECENT_WORK_BUDGET_TIER_5 = 3_000
-private const val RECENT_WORK_BUDGET_TIER_6 = 2_500
-private const val RECENT_WORK_FULL_LIMIT_TIER_1 = 10
-private const val RECENT_WORK_FULL_LIMIT_TIER_2 = 8
-private const val RECENT_WORK_FULL_LIMIT_TIER_3 = 6
-private const val RECENT_WORK_FULL_LIMIT_TIER_4 = 5
-private const val RECENT_WORK_FULL_LIMIT_DEFAULT = 4
-private const val RECENT_WORK_DETAILED_LIMIT_TIER_1 = 10
-private const val RECENT_WORK_DETAILED_LIMIT_TIER_2 = 8
-private const val RECENT_WORK_DETAILED_LIMIT_TIER_3 = 6
-private const val RECENT_WORK_DETAILED_LIMIT_TIER_4 = 5
-private const val RECENT_WORK_DETAILED_LIMIT_TIER_5 = 4
-private const val RECENT_WORK_DETAILED_LIMIT_DEFAULT = 3
-
 // CONVERSATION_HISTORY limits
 // We no longer hard-cap by message count (see buildCompressedConversationSection for
 // the rationale — Bug 2B). The per-message truncation budget is derived from a soft
@@ -40,6 +21,11 @@ private const val CONVERSATION_SOFT_MAX_MESSAGES_FOR_PER_MESSAGE_CAP = 60
 
 /**
  * Configuration for RECENT_WORK section generation.
+ *
+ * `fullDataLimit` is read from [ConfigKeys.RECENT_WORK_FULL_DATA_LIMIT] for backwards
+ * compatibility but no longer drives the FULL/DETAILED/SUMMARY tier split — the adaptive
+ * builder tries FULL for every step and only compresses older entries when the token
+ * budget runs out. The field stays so existing `config.yaml` files keep loading cleanly.
  */
 data class RecentWorkConfig(
     val fullDataLimit: Int = 2,
@@ -367,8 +353,6 @@ class ContextFormatter(
         val parts = mutableListOf<String>()
         parts.add("<RECENT_WORK>")
 
-        val fullDataLimit = calculateFullDataLimit(executedSteps.size, budgetTokens, config.fullDataLimit)
-        val detailedLimit = calculateDetailedLimit(budgetTokens)
         val compressionConfig = ToolResultCompressionConfig(
             detailedMaxChars = config.detailedMaxLength,
             summaryMaxChars = config.summaryMaxLength
@@ -376,8 +360,6 @@ class ContextFormatter(
 
         val entries = buildAdaptiveRecentWork(
             steps = executedSteps,
-            fullLimit = fullDataLimit,
-            detailedLimit = detailedLimit,
             budgetTokens = budgetTokens,
             config = config,
             compressionConfig = compressionConfig
@@ -818,37 +800,8 @@ class ContextFormatter(
     // Private helper methods
     // ===========================
 
-    private fun calculateFullDataLimit(stepsCount: Int, budgetTokens: Int, baseLimit: Int): Int {
-        if (stepsCount <= 0) return 0
-        val safeBase = baseLimit.coerceAtLeast(1)
-        val budgetLimit = when {
-            budgetTokens >= RECENT_WORK_BUDGET_TIER_1 -> RECENT_WORK_FULL_LIMIT_TIER_1
-            budgetTokens >= RECENT_WORK_BUDGET_TIER_2 -> RECENT_WORK_FULL_LIMIT_TIER_2
-            budgetTokens >= RECENT_WORK_BUDGET_TIER_3 -> RECENT_WORK_FULL_LIMIT_TIER_3
-            budgetTokens >= RECENT_WORK_BUDGET_TIER_4 -> RECENT_WORK_FULL_LIMIT_TIER_4
-            else -> RECENT_WORK_FULL_LIMIT_DEFAULT
-        }
-        // `baseLimit` (from config) acts as a floor: the user's minimum guaranteed
-        // number of FULL entries. Budget decides how high we go above it — with a
-        // 131k-token context window we want the larger tier-based value, not the
-        // 5-entry config default capping everything.
-        val effective = maxOf(safeBase, budgetLimit)
-        return minOf(stepsCount, effective)
-    }
-
-    private fun calculateDetailedLimit(budgetTokens: Int): Int = when {
-        budgetTokens >= RECENT_WORK_BUDGET_TIER_1 -> RECENT_WORK_DETAILED_LIMIT_TIER_1
-        budgetTokens >= RECENT_WORK_BUDGET_TIER_2 -> RECENT_WORK_DETAILED_LIMIT_TIER_2
-        budgetTokens >= RECENT_WORK_BUDGET_TIER_3 -> RECENT_WORK_DETAILED_LIMIT_TIER_3
-        budgetTokens >= RECENT_WORK_BUDGET_TIER_4 -> RECENT_WORK_DETAILED_LIMIT_TIER_4
-        budgetTokens >= RECENT_WORK_BUDGET_TIER_6 -> RECENT_WORK_DETAILED_LIMIT_TIER_5
-        else -> RECENT_WORK_DETAILED_LIMIT_DEFAULT
-    }
-
     private fun buildAdaptiveRecentWork(
         steps: List<ExecutedStepDTO>,
-        fullLimit: Int,
-        detailedLimit: Int,
         budgetTokens: Int,
         config: RecentWorkConfig,
         compressionConfig: ToolResultCompressionConfig
@@ -857,7 +810,6 @@ class ContextFormatter(
 
         val entries = mutableListOf<Pair<Int, String>>()  // (original index, entry)
         val reversedSteps = steps.asReversed()
-        val detailedStart = fullLimit + detailedLimit
 
         // Strict budget handling: most recent tools first, with graceful fallback.
         // Steps that don't fit at any compression level are dropped; a one-line
@@ -866,13 +818,14 @@ class ContextFormatter(
         // loop based on what actually ended up in `entries`.
         var tokensUsed = 0
 
+        // Budget-driven compression: try FULL for every step, let the fallback loop
+        // demote older entries to DETAILED/SUMMARY only when tokens run out. If the
+        // section budget has headroom, the agent sees complete tool output — which
+        // for write tools means the full diff, and for reads means the full file
+        // content. Preemptive tier-based compression (the prior behavior) wasted
+        // headroom on sessions with a handful of steps and plenty of budget.
         val candidates = reversedSteps.mapIndexed { index, step ->
-            val baseLevel = when {
-                index < fullLimit -> CompressionLevel.FULL
-                index < detailedStart -> CompressionLevel.DETAILED
-                else -> CompressionLevel.SUMMARY
-            }
-            Triple(index, step, baseLevel)
+            Triple(index, step, CompressionLevel.FULL)
         }
 
         // Always keep the latest executed step uncompressed (FULL) for maximum fidelity.

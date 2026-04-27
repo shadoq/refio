@@ -24,7 +24,7 @@ class SnapshotRepository {
      */
     fun create(
         taskId: String,
-        subtaskId: String? = null,
+        groupId: String,
         filePath: String,
         content: String,
         contentHash: String
@@ -36,7 +36,7 @@ class SnapshotRepository {
 
             val snapshotId = SnapshotsTable.insert {
                 it[SnapshotsTable.taskId] = taskId
-                it[SnapshotsTable.subtaskId] = subtaskId
+                it[SnapshotsTable.groupId] = groupId
                 it[SnapshotsTable.filePath] = filePath
                 it[SnapshotsTable.contentHash] = contentHash
                 it[contentCompressed] = ExposedBlob(compressed)
@@ -78,12 +78,12 @@ class SnapshotRepository {
     }
 
     /**
-     * Find snapshots for a specific subtask
+     * Find snapshots belonging to a snapshot group (one group per tool execution).
      */
-    fun findBySubtaskId(subtaskId: String): List<Snapshot> {
+    fun findByGroupId(groupId: String): List<Snapshot> {
         return transaction {
             SnapshotsTable.selectAll()
-                .where { SnapshotsTable.subtaskId eq subtaskId }
+                .where { SnapshotsTable.groupId eq groupId }
                 .orderBy(SnapshotsTable.createdAt to SortOrder.DESC)
                 .map { rowToSnapshot(it) }
         }
@@ -205,7 +205,7 @@ class SnapshotRepository {
         return Snapshot(
             id = row[SnapshotsTable.id],
             taskId = row[SnapshotsTable.taskId],
-            subtaskId = row[SnapshotsTable.subtaskId],
+            groupId = row[SnapshotsTable.groupId],
             filePath = row[SnapshotsTable.filePath],
             contentHash = row[SnapshotsTable.contentHash],
             contentCompressed = row[SnapshotsTable.contentCompressed].bytes,

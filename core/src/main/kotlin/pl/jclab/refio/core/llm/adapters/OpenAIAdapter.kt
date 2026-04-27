@@ -8,8 +8,12 @@ import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.ModelConfig
+import pl.jclab.refio.core.llm.NativeToolCall
 import pl.jclab.refio.core.llm.StreamChunk
+import pl.jclab.refio.core.llm.ToolSchemaSanitizer
+import pl.jclab.refio.core.llm.ToolsNotSupportedException
 import pl.jclab.refio.core.llm.toModelConfig
+import pl.jclab.refio.core.tools.base.ToolSchema
 import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import io.ktor.client.*
@@ -160,6 +164,25 @@ class OpenAIAdapter(
             )
         }
 
+        @Suppress("UNCHECKED_CAST")
+        val tools = transformed["tools"] as? List<Map<String, Any?>>
+        if (tools != null) {
+            transformed["tools"] = tools.map { tool ->
+                val function = tool["function"] as? Map<String, Any?>
+                if ((tool["type"] as? String) == "function" && function != null) {
+                    mapOf(
+                        "type" to "function",
+                        "name" to (function["name"] as? String ?: ""),
+                        "description" to (function["description"] as? String ?: ""),
+                        "parameters" to (function["parameters"] as? Map<*, *> ?: emptyMap<String, Any>()),
+                        "strict" to true
+                    )
+                } else {
+                    tool
+                }
+            }
+        }
+
         // Add reasoning parameter for reasoning models based on thinking flag
         // thinking: Boolean or String (low/medium/high)
         // - false (Boolean) → effort: "low"
@@ -266,7 +289,24 @@ class OpenAIAdapter(
             content = extractTextFromOutputItems(output)
         }
 
-        if (content.isBlank()) {
+        val toolCalls = output.mapNotNull { item ->
+            if (item["type"] != "function_call") return@mapNotNull null
+            val id = (item["call_id"] as? String)
+                ?: (item["id"] as? String)
+                ?: return@mapNotNull null
+            val name = item["name"] as? String ?: return@mapNotNull null
+            val arguments = item["arguments"] as? String ?: "{}"
+            mapOf(
+                "id" to id,
+                "type" to "function",
+                "function" to mapOf(
+                    "name" to name,
+                    "arguments" to arguments
+                )
+            )
+        }
+
+        if (content.isBlank() && toolCalls.isEmpty()) {
             // No silent fallback — let caller see the malformed structure. (Previously
             // probed top-level "text" field; that path hid bugs in Responses API
             // integration. See REFACTOR.md §1.)
@@ -292,9 +332,10 @@ class OpenAIAdapter(
             mapOf(
                 "message" to mapOf(
                     "role" to role,
-                    "content" to content
+                    "content" to content,
+                    "tool_calls" to toolCalls
                 ),
-                "finish_reason" to status
+                "finish_reason" to if (toolCalls.isNotEmpty()) "tool_calls" else status
             )
         )
 
@@ -495,6 +536,19 @@ class OpenAIAdapter(
             }
         }
 
+        // Add native tools if requested and model supports function calling
+        @Suppress("UNCHECKED_CAST")
+        val nativeTools = kwargs["native_tools"] as? List<ToolSchema>
+        if (!nativeTools.isNullOrEmpty()) {
+            baseParams["tools"] = if (definition?.apiFormat == pl.jclab.refio.core.llm.ApiFormat.RESPONSES) {
+                buildResponsesToolsArray(nativeTools)
+            } else {
+                buildOpenAIToolsArray(nativeTools)
+            }
+            baseParams["tool_choice"] = "auto"
+            logger.info { "[OPENAI][NATIVE_TOOLS] Sending ${nativeTools.size} tool schemas" }
+        }
+
         with(OpenAICompatibleHelpers) { baseParams.addCommonKwargs(kwargs) }
 
         // Apply format transformation if needed
@@ -525,8 +579,59 @@ class OpenAIAdapter(
             // Stream aborted by a guardrail (see core/llm/streaming/) — must propagate
             // so the caller can see StreamAbortedException instead of RefioError.LLMError.
             throw e
+        } catch (e: ToolsNotSupportedException) {
+            throw e
         } catch (e: Exception) {
             throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
+        }
+    }
+
+    private fun buildOpenAIToolsArray(tools: List<ToolSchema>): List<Map<String, Any>> =
+        tools.map { rawTool ->
+            val tool = ToolSchemaSanitizer.forOpenAI(rawTool).tool
+            mapOf(
+                "type" to "function",
+                "function" to mapOf(
+                    "name" to tool.name,
+                    "description" to tool.description,
+                    "parameters" to tool.parametersJsonSchema,
+                )
+            )
+        }
+
+    private fun buildResponsesToolsArray(tools: List<ToolSchema>): List<Map<String, Any>> =
+        tools.map { rawTool ->
+            val sanitized = ToolSchemaSanitizer.forOpenAI(rawTool)
+            if (!sanitized.strict) {
+                logger.warn {
+                    "[OPENAI][NATIVE_TOOLS] Tool '${rawTool.name}' is not strict-compatible; " +
+                        "sending strict=false. Reasons: ${sanitized.strictIncompatibilities.joinToString("; ")}"
+                }
+            }
+            val tool = sanitized.tool
+            mapOf(
+                "type" to "function",
+                "name" to tool.name,
+                "description" to tool.description,
+                "parameters" to tool.parametersJsonSchema,
+                "strict" to sanitized.strict
+            )
+        }
+
+    private fun parseNativeOpenAIToolCalls(rawToolCalls: Any?): List<NativeToolCall> {
+        @Suppress("UNCHECKED_CAST")
+        val toolCalls = rawToolCalls as? List<Map<String, Any?>> ?: return emptyList()
+        return toolCalls.mapNotNull { call ->
+            val id = call["id"] as? String ?: return@mapNotNull null
+            @Suppress("UNCHECKED_CAST")
+            val function = call["function"] as? Map<String, Any?> ?: return@mapNotNull null
+            val name = function["name"] as? String ?: return@mapNotNull null
+            val argsString = function["arguments"] as? String ?: "{}"
+            NativeToolCall(
+                id = id,
+                name = ToolCallContentNormalizer.normalizeToolName(name),
+                argumentsJson = argsString
+            )
         }
     }
 
@@ -603,6 +708,9 @@ class OpenAIAdapter(
                     source = source
                 )
 
+                if (requestBody.containsKey("tools") && isToolsNotSupportedError(httpStatus, errorMessage)) {
+                    throw ToolsNotSupportedException(fullErrorMessage)
+                }
                 throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, fullErrorMessage)
             }
 
@@ -652,16 +760,24 @@ class OpenAIAdapter(
             @Suppress("UNCHECKED_CAST")
             val message = choice["message"] as? Map<String, Any?> ?: emptyMap()
             val content = message["content"] as? String ?: ""
-            val normalizedToolCallsJson = if (content.isBlank()) {
-                ToolCallContentNormalizer.fromOpenAiToolCalls(message["tool_calls"])
-            } else {
-                null
-            }
-            val finalContent = normalizedToolCallsJson ?: content
-            if (normalizedToolCallsJson != null) {
-                logger.info { "$logPrefix [TOOL_CALLS_NORMALIZED] Converted OpenAI tool_calls to canonical JSON content" }
-            }
             val finishReason = choice["finish_reason"] as? String
+
+            val toolsWereRequested = requestBody.containsKey("tools")
+            val nativeToolCalls: List<NativeToolCall>? = if (toolsWereRequested) {
+                parseNativeOpenAIToolCalls(message["tool_calls"]).also { calls ->
+                    logger.info { "$logPrefix [NATIVE_TOOLS_RESPONSE] calls=${calls.size}" }
+                }
+            } else null
+
+            val finalContent = if (nativeToolCalls == null && content.isBlank()) {
+                val normalizedToolCallsJson = ToolCallContentNormalizer.fromOpenAiToolCalls(message["tool_calls"])
+                if (normalizedToolCallsJson != null) {
+                    logger.info { "$logPrefix [TOOL_CALLS_NORMALIZED] Converted OpenAI tool_calls to canonical JSON content" }
+                }
+                normalizedToolCallsJson ?: content
+            } else {
+                content
+            }
 
             logger.info {
                 "$logPrefix Response processed: model=$responseModel, " +
@@ -676,7 +792,8 @@ class OpenAIAdapter(
                 provider = provider,
                 cost = cost,
                 finishReason = finishReason,
-                rawResponse = response
+                rawResponse = response,
+                nativeToolCalls = nativeToolCalls
             )
 
         } catch (e: Exception) {
@@ -852,7 +969,12 @@ class OpenAIAdapter(
                 }
             }
 
-            if (contentBuilder.isEmpty()) {
+            val toolsWereRequested = requestBody.containsKey("tools")
+            val streamNativeToolCalls = toolCallAccumulator.toNativeToolCalls(toolsWereRequested)?.also { calls ->
+                logger.info { "$logPrefix [NATIVE_TOOLS_RESPONSE] (stream) calls=${calls.size}" }
+            }
+
+            if (streamNativeToolCalls == null && contentBuilder.isEmpty()) {
                 val normalizedToolCallsJson = toolCallAccumulator.toCanonicalJson()
                 if (normalizedToolCallsJson != null) {
                     contentBuilder.append(normalizedToolCallsJson)
@@ -929,7 +1051,8 @@ class OpenAIAdapter(
                 provider = provider,
                 cost = cost,
                 finishReason = finalFinishReason,
-                rawResponse = syntheticResponse
+                rawResponse = syntheticResponse,
+                nativeToolCalls = streamNativeToolCalls
             )
 
         } catch (e: Exception) {
@@ -965,6 +1088,7 @@ class OpenAIAdapter(
         var finalFinishReason: String? = null
         var finalUsage: LLMUsage? = null
         var finalRawResponse: Map<String, Any?>? = null
+        val responseOutputItems = linkedMapOf<Int, MutableMap<String, Any?>>()
         val endpoint = getEndpoint(definition)
 
         try {
@@ -993,6 +1117,9 @@ class OpenAIAdapter(
                         subtaskId = subtaskId,
                         source = source
                     )
+                    if (requestBody.containsKey("tools") && isToolsNotSupportedError(httpStatus ?: 500, errorMessage)) {
+                        throw ToolsNotSupportedException(errorMessage)
+                    }
                     throw IllegalStateException(errorMessage)
                 }
 
@@ -1037,6 +1164,38 @@ class OpenAIAdapter(
                                     contentBuilder.append(deltaText)
                                     totalTokensEstimate += countApproxTokens(deltaText)
                                     onStreamChunk(StreamChunk(delta = deltaText, finishReason = null))
+                                }
+                            }
+
+                            "response.output_item.added",
+                            "response.output_item.done" -> {
+                                @Suppress("UNCHECKED_CAST")
+                                val item = (eventData["item"] as? Map<String, Any?>)?.toMutableMap()
+                                val index = (eventData["output_index"] as? Number)?.toInt()
+                                if (item != null && index != null) {
+                                    responseOutputItems[index] = item
+                                }
+                            }
+
+                            "response.function_call_arguments.delta" -> {
+                                val index = (eventData["output_index"] as? Number)?.toInt()
+                                val delta = eventData["delta"] as? String
+                                if (index != null && delta != null) {
+                                    val item = responseOutputItems.getOrPut(index) {
+                                        mutableMapOf("type" to "function_call")
+                                    }
+                                    val existing = item["arguments"] as? String ?: ""
+                                    item["arguments"] = existing + delta
+                                    (eventData["item_id"] as? String)?.let { item["id"] = it }
+                                }
+                            }
+
+                            "response.function_call_arguments.done" -> {
+                                @Suppress("UNCHECKED_CAST")
+                                val item = (eventData["item"] as? Map<String, Any?>)?.toMutableMap()
+                                val index = (eventData["output_index"] as? Number)?.toInt()
+                                if (item != null && index != null) {
+                                    responseOutputItems[index] = item
                                 }
                             }
 
@@ -1085,12 +1244,15 @@ class OpenAIAdapter(
                 )
             }
 
+            val streamedOutputItems = responseOutputItems.toSortedMap().values.map { it.toMap() }
             val rawResponse = finalRawResponse ?: buildSyntheticResponsesPayload(
                 content = contentBuilder.toString(),
                 finishReason = finalFinishReason,
-                usage = usage
+                usage = usage,
+                outputItems = streamedOutputItems
             )
 
+            val transformedResponse = transformResponseFromResponses(rawResponse)
             val responseJson = gson.toJson(rawResponse)
             val cost = estimateCost(usage)
 
@@ -1132,7 +1294,14 @@ class OpenAIAdapter(
                 provider = provider,
                 cost = cost,
                 finishReason = finalFinishReason,
-                rawResponse = transformResponseFromResponses(rawResponse)
+                rawResponse = transformedResponse,
+                nativeToolCalls = run {
+                    @Suppress("UNCHECKED_CAST")
+                    val choices = transformedResponse["choices"] as? List<Map<String, Any?>> ?: emptyList()
+                    @Suppress("UNCHECKED_CAST")
+                    val message = choices.firstOrNull()?.get("message") as? Map<String, Any?> ?: emptyMap()
+                    if (requestBody.containsKey("tools")) parseNativeOpenAIToolCalls(message["tool_calls"]) else null
+                }
             )
         } catch (e: Exception) {
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
@@ -1276,15 +1445,14 @@ class OpenAIAdapter(
     private fun buildSyntheticResponsesPayload(
         content: String,
         finishReason: String?,
-        usage: LLMUsage
+        usage: LLMUsage,
+        outputItems: List<Map<String, Any?>> = emptyList()
     ): Map<String, Any?> {
         val status = finishReason ?: "completed"
-
-        return mapOf(
-            "id" to "synthetic_${UUID.randomUUID()}",
-            "model" to model,
-            "status" to status,
-            "output" to listOf(
+        val finalOutput = if (outputItems.isNotEmpty()) {
+            outputItems
+        } else {
+            listOf(
                 mapOf(
                     "type" to "message",
                     "role" to "assistant",
@@ -1296,7 +1464,14 @@ class OpenAIAdapter(
                         )
                     )
                 )
-            ),
+            )
+        }
+
+        return mapOf(
+            "id" to "synthetic_${UUID.randomUUID()}",
+            "model" to model,
+            "status" to status,
+            "output" to finalOutput,
             "usage" to mapOf(
                 "input_tokens" to usage.inputTokens,
                 "output_tokens" to usage.outputTokens,
@@ -1396,6 +1571,28 @@ class OpenAIAdapter(
             inputTokens = usage.inputTokens,
             outputTokens = usage.outputTokens
         )
+    }
+
+    private fun isToolsNotSupportedError(httpStatus: Int, errorMessage: String): Boolean {
+        if (httpStatus != 400 && httpStatus != 422) return false
+        val lower = errorMessage.lowercase()
+        val mentionsTooling =
+            lower.contains("tools") ||
+                lower.contains("tool_choice") ||
+                lower.contains("tool calling") ||
+                lower.contains("function calling") ||
+                lower.contains("function '") ||
+                lower.contains("schema for function")
+        val unsupportedShape =
+            lower.contains("not supported") ||
+                lower.contains("unsupported") ||
+                lower.contains("unknown parameter") ||
+                lower.contains("unexpected parameter") ||
+                lower.contains("invalid parameter") ||
+                lower.contains("invalid schema") ||
+                lower.contains("invalid_function_parameters") ||
+                lower.contains("additionalproperties")
+        return mentionsTooling && unsupportedShape
     }
 
     override suspend fun close() {

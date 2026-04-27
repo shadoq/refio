@@ -28,7 +28,14 @@ object SupportedModels {
      * - GPT-3.5 Turbo (cost-effective)
      * - O1 series (reasoning models)
      */
-    private val OPENAI_SUPPORTED = setOf<String>(
+    private val OPENAI_SUPPORTED = setOf(
+        // GPT-5.5
+        "gpt-5.5",
+        "gpt-5.5-mini",
+        "gpt-5.5-nano",
+        "gpt-5.5-codex-max",
+        "gpt-5.5-codex",
+        "gpt-5.5-codex-mini",
         // GPT-5.4
         "gpt-5.4",
         "gpt-5.4-mini",
@@ -80,7 +87,7 @@ object SupportedModels {
     /**
      * Anthropic supported models.
      */
-    private val ANTHROPIC_SUPPORTED = setOf<String>(
+    private val ANTHROPIC_SUPPORTED = setOf(
         // Opus models
         "claude-opus-4-7",
         "anthropic.claude-opus-4-7",
@@ -93,6 +100,7 @@ object SupportedModels {
         "claude-opus-4-0",
         "claude-opus-4-20250514",
         // Sonnet models
+        "claude-sonnet-4-6",
         "claude-sonnet-4-5-20250929",
         "claude-sonnet-4-5",
         "claude-sonnet-4-20250514",
@@ -117,7 +125,7 @@ object SupportedModels {
      *
      * Format: "provider/model" (e.g., "google/gemini-2.0-flash-exp")
      */
-    private val OPENROUTER_PATTERNS = setOf<Regex>(
+    private val OPENROUTER_PATTERNS = setOf(
         // Google Gemini models (1.x and 2.x series)
         Regex("^.*gpt-.*"),
         Regex("^.*amazon.*"),
@@ -177,7 +185,7 @@ object SupportedModels {
     /**
      * Ollama supported models.
      */
-    private val OLLAMA_SUPPORTED = setOf<Regex>(
+    private val OLLAMA_SUPPORTED = setOf(
         Regex("^.*"),
     )
 

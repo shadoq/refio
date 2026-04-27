@@ -163,6 +163,22 @@ object ConfigKeys {
         default = false
     )
 
+    // ==================== TOOLS ====================
+
+    /**
+     * Native function-calling mode.
+     * - "auto"  (default): use native tools iff ModelDefinition.supportsFunctionCalling=true
+     * - "always": force native tools even on unlisted models (debug / opt-in)
+     * - "never" : force JSON-in-text path (escape hatch)
+     */
+    val NATIVE_TOOLS_MODE = ConfigKey(
+        key = "tools.native_tools",
+        parser = { raw -> raw.trim().lowercase().takeIf { it in setOf("auto", "always", "never") } },
+        default = "auto",
+        validator = { it in setOf("auto", "always", "never") },
+        yamlAccessor = { it.getNativeToolsMode()?.trim()?.lowercase() }
+    )
+
     val GENERAL_EXECUTION_MODE = ConfigKey(
         key = "general.execution_mode",
         parser = { it.trim().uppercase().takeIf { s -> s.isNotBlank() } },
@@ -720,6 +736,7 @@ object ConfigKeys {
             AUTO_OPTIMIZE_PERCENTAGE,
             READ_ONLY_MODE,
             // Tools
+            NATIVE_TOOLS_MODE,
             TOOLS_PERMISSIONS,
             TOOL_PERMISSION_RUN_TERMINAL,
             // Tool summary

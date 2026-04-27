@@ -34,49 +34,7 @@ FORMAT (return ONLY this JSON, no explanations):
   ]
 }
 
-EXAMPLES:
-
-Example 1 - Add null check:
-File has:
-  10: function parseUser(data) {
-  11:   return JSON.parse(data)
-  12: }
-
-Edit: "Add null check for data parameter"
-
-Response:
-{
-  "changes": [
-    {
-      "line_start": 11,
-      "line_end": 11,
-      "new_content": "  if (!data) throw new Error('data is required')\n  return JSON.parse(data)",
-      "description": "Add null check before parsing"
-    }
-  ]
-}
-
-Example 2 - Delete unused import:
-File has:
-  1: import java.util.List
-  2: import java.util.Map
-  3: import java.util.Set
-
-Edit: "Remove unused Set import"
-
-Response:
-{
-  "changes": [
-    {
-      "line_start": 3,
-      "line_end": 3,
-      "new_content": "",
-      "description": "Remove unused Set import"
-    }
-  ]
-}
-
-Example 3 - Multiple changes:
+EXAMPLE — multiple changes in one file:
 File has:
   10: function calculate(a, b) {
   11:   return a + b

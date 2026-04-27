@@ -166,7 +166,18 @@ class PromptCache(
             TaskMode.AGENT -> PromptType.SYSTEM_AGENT
             else -> throw IllegalArgumentException("Invalid mode for cache: $mode")
         }
-        return promptsService.getSystemPrompt(type)
+        // Supply blank placeholders for all declared variables. The cached `systemPrompt`
+        // field is informational (metrics only); actual rendering happens in TurnPromptBuilder
+        // with the real response_contract / tool_descriptions resolved per-call.
+        return promptsService.getSystemPrompt(
+            type = type,
+            variables = mapOf(
+                "tool_descriptions" to "",
+                "tool_selection_matrix" to "",
+                "response_contract" to "",
+                "multi_agent_section" to ""
+            )
+        )
     }
 }
 

@@ -30,12 +30,13 @@ class GeneralSettingsPanel(
     private val thinkingEnabledCheckbox: JBCheckBox
     private val noEgressEnabledCheckbox: JBCheckBox
     private val executionModeCombo: JComboBox<String>
+    private val nativeToolsModeCombo: JComboBox<String>
 
     // Flag to prevent triggering onSettingChanged during programmatic updates
     private var isUpdatingProgrammatically = false
 
     init {
-        border = LCATheme.paddedBorder(LCATheme.margin)
+        border = LCATheme.emptyBorder()
 
         val gbc = GridBagConstraints().apply {
             gridx = 0
@@ -46,13 +47,7 @@ class GeneralSettingsPanel(
             insets = LCATheme.insetsMedium
         }
 
-        // Section title
-        add(JLabel("General Settings").apply {
-            font = font.deriveFont(14f).deriveFont(java.awt.Font.BOLD)
-        }, gbc)
-
         // Format Markdown option
-        gbc.gridy++
         gbc.insets = LCATheme.insetsGridBagLarge
         formatMarkdownCheckbox = JBCheckBox("Format Markdown in responses", true).apply {
             addItemListener { event ->
@@ -181,6 +176,30 @@ class GeneralSettingsPanel(
         gbc.insets = LCATheme.insetsDetailsIndented
         add(JLabel("<html><font color='gray'>AUTO executes steps automatically; INTERACTIVE waits for confirmation</font></html>"), gbc)
 
+        // Native tools mode
+        gbc.gridy++
+        gbc.insets = LCATheme.insetsGridBagLarge
+        nativeToolsModeCombo = JComboBox(arrayOf("auto", "always", "never")).apply {
+            addActionListener {
+                if (!isUpdatingProgrammatically) {
+                    val value = selectedItem as? String ?: return@addActionListener
+                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
+                        pl.jclab.refio.core.config.ConfigKeys.NATIVE_TOOLS_MODE.key
+                    )
+                    onSettingChanged(section, key, value)
+                }
+            }
+        }
+        val nativeToolsPanel = JBPanel<JBPanel<*>>(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0)).apply {
+            add(JLabel("Native tools mode: "))
+            add(nativeToolsModeCombo)
+        }
+        add(nativeToolsPanel, gbc)
+
+        gbc.gridy++
+        gbc.insets = LCATheme.insetsDetailsIndented
+        add(JLabel("<html><font color='gray'>auto: use native tools if model supports it; always: force native tools; never: use JSON fallback</font></html>"), gbc)
+
         // Filler to push content to top
         gbc.gridy++
         gbc.weighty = 1.0
@@ -244,17 +263,15 @@ class GeneralSettingsPanel(
         try {
             logger.info { "Loading general configuration" }
 
-            val config = coreApiClient.configRouter.getConfig(section = "general", scope = "app")
-            applyGeneralConfig(config.settings)
+            val generalSettings = coreApiClient.configRouter.getConfig(section = "general", scope = "app").settings
+            val toolsSettings = coreApiClient.configRouter.getConfig(section = "tools", scope = "app").settings
+            applyGeneralConfig(generalSettings, toolsSettings)
         } catch (e: Exception) {
             logger.error(e) { "Failed to load general config" }
         }
     }
 
-    /**
-     * Apply loaded configuration to UI
-     */
-    private fun applyGeneralConfig(settings: Map<String, Any>) {
+    private fun applyGeneralConfig(settings: Map<String, Any>, toolsSettings: Map<String, Any> = emptyMap()) {
         logger.info { "Applying general config: ${settings.keys}" }
 
         isUpdatingProgrammatically = true
@@ -267,6 +284,9 @@ class GeneralSettingsPanel(
 
             val executionMode = (settings["execution_mode"] as? String)?.trim()?.uppercase()
             executionModeCombo.selectedItem = if (executionMode == "INTERACTIVE") "INTERACTIVE" else "AUTO"
+
+            val nativeToolsMode = (toolsSettings["native_tools"] as? String)?.trim()?.lowercase()
+            nativeToolsModeCombo.selectedItem = if (nativeToolsMode in setOf("always", "never")) nativeToolsMode else "auto"
         } finally {
             isUpdatingProgrammatically = false
         }
@@ -286,6 +306,7 @@ class GeneralSettingsPanel(
         thinkingEnabledCheckbox.isSelected = false
         noEgressEnabledCheckbox.isSelected = false
         executionModeCombo.selectedItem = "AUTO"
+        nativeToolsModeCombo.selectedItem = "auto"
         isUpdatingProgrammatically = false
 
         // Reload from backend

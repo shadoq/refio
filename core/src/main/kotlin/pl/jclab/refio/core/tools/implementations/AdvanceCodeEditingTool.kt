@@ -64,7 +64,9 @@ class AdvanceCodeEditingTool(
         "(b) rewrites covering >50% of an existing file, (c) structurally broken files. " +
         "Generates content via a dedicated LLM call so the agent's own response stays small — " +
         "avoid stuffing large `content` payloads into `create_new_file`, which inflates the agent " +
-        "response and risks streaming timeouts. " +
+        "response and risks streaming timeouts. Returns a diff/change summary so you usually do not need " +
+        "to re-read the file immediately after writing; if the tool result gets summarized or truncated, " +
+        "recover the full raw output with memory(action=\"get_subtask_output\", subtask_id=...). " +
         "For small targeted edits prefer code_editing or multi_line_editor."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_PRODUCING
@@ -382,22 +384,33 @@ class AdvanceCodeEditingTool(
             ToolResult(
                 success = true,
                 output = buildString {
-                    if (fileExists) {
-                        appendLine("File edited successfully: $pathStr")
+                    if (changeSummary.noop) {
+                        // LLM returned content identical to the existing file — no change applied.
+                        // Surface this explicitly so the agent notices (instead of seeing a bland
+                        // "File edited successfully" with an empty diff and concluding all is fine).
+                        appendLine("⚠ No changes applied: generated content is identical to the existing file ($pathStr).")
+                        appendLine("Likely causes: the edit_description was too vague for the model to act on, the change is already present, or the model refused and returned the file unchanged.")
+                        appendLine("Next step: refine edit_description with concrete before/after snippets, or switch to code_editing / multi_line_editor with an exact string to match.")
+                        appendLine("If you need to inspect the current file state, use read_file(path=\"$pathStr\"). If this tool result was summarized, recover the full raw diff/output with memory(action=\"get_subtask_output\", subtask_id=\"<this tool result id>\"). Do NOT retry advance_code_editing with the same description.")
+                        appendLine("Model: $model, Tokens: ${usage.inputTokens}/${usage.outputTokens}, Cost: $${"%.4f".format(cost)}")
                     } else {
-                        appendLine("File created successfully: $pathStr")
+                        if (fileExists) {
+                            appendLine("File edited successfully: $pathStr")
+                        } else {
+                            appendLine("File created successfully: $pathStr")
+                        }
+                        if (fileExists) {
+                            appendLine("Size: $fileSize bytes → $newFileSize bytes")
+                        } else {
+                            appendLine("Size: $newFileSize bytes")
+                        }
+                        appendLine("Model: $model, Tokens: ${usage.inputTokens}/${usage.outputTokens}, Cost: $${"%.4f".format(cost)}")
+                        // Wrap diff in markdown code block for proper UI rendering
+                        appendLine("Diff:")
+                        appendLine("```diff")
+                        diff.lines().forEach { line -> appendLine(line) }
+                        append("```")
                     }
-                    if (fileExists) {
-                        appendLine("Size: $fileSize bytes → $newFileSize bytes")
-                    } else {
-                        appendLine("Size: $newFileSize bytes")
-                    }
-                    appendLine("Model: $model, Tokens: ${usage.inputTokens}/${usage.outputTokens}, Cost: $${"%.4f".format(cost)}")
-                    // Wrap diff in markdown code block for proper UI rendering
-                    appendLine("Diff:")
-                    appendLine("```diff")
-                    diff.lines().forEach { line -> appendLine(line) }
-                    append("```")
                 },
                 bytesRead = originalContent.toByteArray().size,
                 bytesWritten = newContent.toByteArray().size,
@@ -410,6 +423,7 @@ class AdvanceCodeEditingTool(
                     "diff_lines" to diff.lines().size,
                     "added_lines" to addedLines,
                     "removed_lines" to removedLines,
+                    "noop" to changeSummary.noop,
                     "edit_description" to editDescription,
                     "model" to model,
                     "provider" to provider,
@@ -517,14 +531,20 @@ class AdvanceCodeEditingTool(
                 ),
                 "edit_description" to mapOf(
                     "type" to "string",
-                    "description" to "What to edit or create, in natural language."
+                    "description" to "Natural-language description of the change. " +
+                        "Provide this OR the (old_string, new_string) pair — not both."
+                ),
+                "old_string" to mapOf(
+                    "type" to "string",
+                    "description" to "Exact substring to replace. Use together with new_string " +
+                        "as an alternative to edit_description."
+                ),
+                "new_string" to mapOf(
+                    "type" to "string",
+                    "description" to "Replacement text for old_string."
                 ),
             ),
-            "required" to listOf("path"),
-            "oneOf" to listOf(
-                mapOf("required" to listOf("edit_description")),
-                mapOf("required" to listOf("old_string", "new_string"))
-            )
+            "required" to listOf("path")
         )
     }
 

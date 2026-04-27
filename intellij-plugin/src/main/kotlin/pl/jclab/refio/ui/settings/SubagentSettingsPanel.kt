@@ -40,13 +40,7 @@ class SubagentSettingsPanel(
     private var isLoadingSubagents = false
 
     init {
-        border = BorderFactory.createCompoundBorder(
-            BorderFactory.createTitledBorder(
-                LCATheme.customLineBorder(LCATheme.borderColor, 1),
-                "Subagents"
-            ),
-            LCATheme.paddedBorder(16)
-        )
+        border = LCATheme.createSettingsBorder("Subagents")
 
         // Main content
         val contentPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {

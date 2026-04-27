@@ -10,10 +10,18 @@ import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMMessageMapper
 import pl.jclab.refio.core.llm.TokenEstimator
 import pl.jclab.refio.core.models.context.*
+import pl.jclab.refio.core.llm.ModelDefinitions
+import pl.jclab.refio.core.llm.NativeToolsFallbackTracker
+import pl.jclab.refio.core.llm.parseNativeToolsMode
+import pl.jclab.refio.core.llm.shouldUseNativeTools
+import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.ContextService
 import pl.jclab.refio.core.services.ProjectAnalyzerService
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.services.analysis.project.RichProjectAnalysisEngine
+import pl.jclab.refio.core.services.turn.nativeToolsDescriptionOverride
+import pl.jclab.refio.core.config.ConfigKeys
+import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Path
 
@@ -37,7 +45,8 @@ class ProjectContextRouter(
      * (e.g. <system_environment>, <agent_plans>) that the runtime prompt has.
      * Pass emptyList() to preserve the legacy stripped preview.
      */
-    private val promptSectionProviders: List<pl.jclab.refio.core.services.turn.PromptSectionProvider> = emptyList()
+    private val promptSectionProviders: List<pl.jclab.refio.core.services.turn.PromptSectionProvider> = emptyList(),
+    private val configService: ConfigService? = null,
 ) : Router {
 
     override suspend fun initialize() {
@@ -46,6 +55,42 @@ class ProjectContextRouter(
 
     override suspend fun shutdown() {
         logger.info { "[ProjectContextRouter] Shutting down" }
+    }
+
+    private fun resolveResponseContractFragment(nativeToolsActive: Boolean): String {
+        val name = if (nativeToolsActive) "response-contract-native" else "response-contract-json"
+        return promptsService.getFragment(name)
+    }
+
+    /**
+     * Mirror of [TurnPromptBuilder.resolveMultiAgentSection] for preview rendering. Returns the
+     * full delegation-guidance block when the caller can actually invoke subagents — empty
+     * string otherwise. ProjectContextRouter previews the "main" run (no profile overrides),
+     * so only the mode-level tool list is checked for `invoke_subagent`.
+     */
+    private fun resolveMultiAgentSectionFragment(mode: TaskMode, taskId: String): String {
+        val tools = toolDescriptionBuilder.getToolsForMode(mode, taskId)
+        val hasInvokeSubagent = tools.any { it.name.equals("invoke_subagent", ignoreCase = true) }
+        if (!hasInvokeSubagent) return ""
+        val fragmentName = when (mode) {
+            TaskMode.PLAN -> "multi-agent-plan"
+            TaskMode.AGENT -> "multi-agent-agent"
+            TaskMode.CHAT -> return ""
+        }
+        return promptsService.getFragment(fragmentName)
+    }
+
+    private fun isNativeToolsActiveForTask(mode: TaskMode, taskId: String): Boolean {
+        if (configService == null) return false
+        val operation = when (mode) {
+            TaskMode.PLAN -> ModelOperation.PLAN
+            TaskMode.AGENT -> ModelOperation.CODING
+            TaskMode.CHAT -> return false
+        }
+        val (modelId, providerName) = configService.getModel(operation, taskId)
+        val nativeToolsMode = parseNativeToolsMode(configService.getTyped(ConfigKeys.NATIVE_TOOLS_MODE, taskId))
+        val modelDef = ModelDefinitions.getDefinition(providerName, modelId)
+        return shouldUseNativeTools(nativeToolsMode, modelDef, modelId, NativeToolsFallbackTracker.getFallbackSet())
     }
 
     /**
@@ -199,7 +244,7 @@ class ProjectContextRouter(
     ): RuntimePromptPreview {
         return when (task.mode) {
             TaskMode.CHAT -> buildChatRuntimePromptPreview(chatHistory, pendingUserInput, contextPrompt, contextSectionTokens)
-            TaskMode.PLAN -> buildPlanRuntimePromptPreview(task, chatHistory, pendingUserInput, contextPrompt, contextSectionTokens)
+            TaskMode.PLAN -> buildPlanRuntimePromptPreview(task, chatHistory, pendingUserInput, contextPrompt, userContextRefs, contextSectionTokens)
             TaskMode.AGENT -> buildAgentRuntimePromptPreview(task, chatHistory, pendingUserInput, contextPrompt, userContextRefs, contextSectionTokens)
         }
     }
@@ -248,30 +293,63 @@ class ProjectContextRouter(
         chatHistory: List<ChatMessage>,
         pendingUserInput: String?,
         contextPrompt: String,
+        userContextRefs: List<ContextReference>,
         contextSectionTokens: Map<String, ContextSectionTokenInfo>
     ): RuntimePromptPreview {
-        val toolDescriptions = toolDescriptionBuilder.getToolDescriptions(TaskMode.PLAN, task.id)
-        val validToolNames = toolDescriptionBuilder.getValidToolNames(TaskMode.PLAN, task.id)
-        val basePrompt = promptsService.getSystemPrompt(
-            type = PromptType.SYSTEM_PLAN,
-            variables = mapOf("tool_descriptions" to toolDescriptions, "valid_tool_names" to validToolNames)
-        )
-        val systemPrompt = appendProviderSections(basePrompt, TaskMode.PLAN, task.id, iteration = 0)
+        val nativeTools = isNativeToolsActiveForTask(TaskMode.PLAN, task.id)
+        val responseContract = resolveResponseContractFragment(nativeTools)
+        val multiAgentSection = resolveMultiAgentSectionFragment(TaskMode.PLAN, task.id)
+        val systemPrompt = if (nativeTools) {
+            val basePrompt = promptsService.getSystemPrompt(
+                type = PromptType.SYSTEM_PLAN,
+                variables = mapOf(
+                    "tool_descriptions" to nativeToolsDescriptionOverride(),
+                    "response_contract" to responseContract,
+                    "multi_agent_section" to multiAgentSection
+                )
+            )
+            appendProviderSections(basePrompt, TaskMode.PLAN, task.id, iteration = 0)
+        } else {
+            val toolDescriptions = toolDescriptionBuilder.getToolDescriptions(TaskMode.PLAN, task.id)
+            val validToolNames = toolDescriptionBuilder.getValidToolNames(TaskMode.PLAN, task.id)
+            val basePrompt = promptsService.getSystemPrompt(
+                type = PromptType.SYSTEM_PLAN,
+                variables = mapOf(
+                    "tool_descriptions" to toolDescriptions,
+                    "valid_tool_names" to validToolNames,
+                    "response_contract" to responseContract,
+                    "multi_agent_section" to multiAgentSection
+                )
+            )
+            appendProviderSections(basePrompt, TaskMode.PLAN, task.id, iteration = 0)
+        }
 
-        val requestText = pendingUserInput
-            ?: chatHistory.lastOrNull { it.role == MessageRole.USER }?.content ?: ""
-        val userPrompt = buildString {
-            appendLine("User request:")
-            appendLine(requestText)
-            appendLine()
-            appendLine("Create a detailed execution plan as JSON.")
-        }.trim()
-        val messages = listOf(LLMMessage(role = "user", content = userPrompt))
+        // For native tools, show the same multi-message structure that AgentTurnLoop actually sends
+        // (ContextService builds stable context + working memory + conversation history).
+        // For the legacy JSON path, keep the old single-message "Create a detailed execution plan" format.
+        val messages: List<LLMMessage>
+        val effectiveContextPrompt: String
+        if (nativeTools) {
+            messages = buildAgentMessagesForPreview(task.id, chatHistory, pendingUserInput, userContextRefs,
+                pendingUserInput ?: chatHistory.lastOrNull { it.role == MessageRole.USER }?.content)
+            effectiveContextPrompt = ""
+        } else {
+            val requestText = pendingUserInput
+                ?: chatHistory.lastOrNull { it.role == MessageRole.USER }?.content ?: ""
+            val userPrompt = buildString {
+                appendLine("User request:")
+                appendLine(requestText)
+                appendLine()
+                appendLine("Create a detailed execution plan as JSON.")
+            }.trim()
+            messages = listOf(LLMMessage(role = "user", content = userPrompt))
+            effectiveContextPrompt = contextPrompt
+        }
 
         val preparedPayload = LLMClient.prepareRequestPayload(
             messages = messages,
             systemPrompt = systemPrompt,
-            contextContent = contextPrompt.takeIf { it.isNotBlank() },
+            contextContent = effectiveContextPrompt.takeIf { it.isNotBlank() },
             systemMessages = emptyList()
         )
         val activeTokens = preparedPayload.estimatedInputTokens
@@ -282,7 +360,7 @@ class ProjectContextRouter(
             systemPromptForBreakdown = systemPrompt,
             systemMessages = emptyList(),
             messages = messages,
-            hasInjectedContext = contextPrompt.isNotBlank()
+            hasInjectedContext = effectiveContextPrompt.isNotBlank()
         )
 
         val preview = renderActiveRequestPreview(
@@ -302,18 +380,37 @@ class ProjectContextRouter(
         userContextRefs: List<ContextReference>,
         contextSectionTokens: Map<String, ContextSectionTokenInfo>
     ): RuntimePromptPreview {
-        val toolDescriptions = toolDescriptionBuilder.getToolDescriptions(TaskMode.AGENT, task.id)
-        val toolSelectionMatrix = toolDescriptionBuilder.getToolSelectionMatrix(TaskMode.AGENT, task.id)
-        val baseSystemPromptRaw = promptsService.getSystemPrompt(
-            type = PromptType.SYSTEM_AGENT,
-            variables = mapOf(
-                "tool_descriptions" to toolDescriptions,
-                "tool_selection_matrix" to toolSelectionMatrix
+        val nativeToolsAgent = isNativeToolsActiveForTask(TaskMode.AGENT, task.id)
+        val responseContractAgent = resolveResponseContractFragment(nativeToolsAgent)
+        val multiAgentSectionAgent = resolveMultiAgentSectionFragment(TaskMode.AGENT, task.id)
+        val baseSystemPrompt = if (nativeToolsAgent) {
+            val toolSelectionMatrix = toolDescriptionBuilder.getToolSelectionMatrix(TaskMode.AGENT, task.id)
+            val baseRaw = promptsService.getSystemPrompt(
+                type = PromptType.SYSTEM_AGENT,
+                variables = mapOf(
+                    "tool_descriptions" to nativeToolsDescriptionOverride(),
+                    "tool_selection_matrix" to toolSelectionMatrix,
+                    "response_contract" to responseContractAgent,
+                    "multi_agent_section" to multiAgentSectionAgent
+                )
             )
-        )
-        // Apply the same section providers used by TurnPromptBuilder in runtime
-        // so the preview reflects the real prompt (including <system_environment>).
-        val baseSystemPrompt = appendProviderSections(baseSystemPromptRaw, TaskMode.AGENT, task.id, iteration = 0)
+            appendProviderSections(baseRaw, TaskMode.AGENT, task.id, iteration = 0)
+        } else {
+            val toolDescriptions = toolDescriptionBuilder.getToolDescriptions(TaskMode.AGENT, task.id)
+            val toolSelectionMatrix = toolDescriptionBuilder.getToolSelectionMatrix(TaskMode.AGENT, task.id)
+            val baseRaw = promptsService.getSystemPrompt(
+                type = PromptType.SYSTEM_AGENT,
+                variables = mapOf(
+                    "tool_descriptions" to toolDescriptions,
+                    "tool_selection_matrix" to toolSelectionMatrix,
+                    "response_contract" to responseContractAgent,
+                    "multi_agent_section" to multiAgentSectionAgent
+                )
+            )
+            // Apply the same section providers used by TurnPromptBuilder in runtime
+            // so the preview reflects the real prompt (including <system_environment>).
+            appendProviderSections(baseRaw, TaskMode.AGENT, task.id, iteration = 0)
+        }
 
         val runtimeSystemPrompt = if (contextPrompt.isNotBlank()) {
             "$baseSystemPrompt\n\n<context>\n$contextPrompt\n</context>"
@@ -530,7 +627,17 @@ class ProjectContextRouter(
             .filter { it != activeType }
             .sortedBy { it.name }
             .mapNotNull { type ->
-                val content = runCatching { promptsService.getSystemPrompt(type) }.getOrNull()?.takeIf { it.isNotBlank() }
+                // Auxiliary previews are non-active modes shown for reference. Supply blank
+                // placeholders for all declared variables so `PromptTemplate.render` doesn't
+                // throw — content quality doesn't matter here, we just need it to render.
+                val auxVariables = mapOf(
+                    "tool_descriptions" to "",
+                    "tool_selection_matrix" to "",
+                    "valid_tool_names" to "",
+                    "response_contract" to "",
+                    "multi_agent_section" to ""
+                )
+                val content = runCatching { promptsService.getSystemPrompt(type, auxVariables) }.getOrNull()?.takeIf { it.isNotBlank() }
                     ?: return@mapNotNull null
                 val role = if (type.name.endsWith("_USER")) "user_template" else "system"
                 PromptPreviewEntry(source = type.name, role = role, content = content, estimatedTokens = TokenEstimator.estimateTokens(content))
@@ -633,7 +740,8 @@ class ProjectContextRouter(
             taskRequirementsPrompt = taskRequirementsPrompt,
             recentWorkPrompt = recentWorkPrompt,
             activeLlmRequestPrompt = activeLlmPreviewPrompt,
-            auxiliaryPromptsPreview = auxiliaryPreviewPrompt
+            auxiliaryPromptsPreview = auxiliaryPreviewPrompt,
+            rawContextPrompt = llmPrompt
         )
     }
 

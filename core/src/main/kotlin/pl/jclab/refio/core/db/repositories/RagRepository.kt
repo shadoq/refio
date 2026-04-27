@@ -296,20 +296,27 @@ class RagRepository {
     // ========== Embeddings Operations ==========
 
     /**
-     * Create embedding
+     * Create embedding.
+     *
+     * Uses INSERT OR IGNORE: if the parent chunk has been concurrently deleted
+     * (FK violation) or the (chunkId, model) unique key already exists, the
+     * insert is silently skipped and `null` is returned. This avoids spamming
+     * the log with `SQLITE_CONSTRAINT_FOREIGNKEY` exceptions during concurrent
+     * RAG index refreshes (FileAnalyzerService re-indexes while another caller
+     * may have evicted the file row).
      */
     fun createEmbedding(
         chunkId: Int,
         model: String,
         vector: ByteArray,
         dimensions: Int
-    ): Int = transaction {
-        EmbeddingsTable.insertAndGetId {
+    ): Int? = transaction {
+        EmbeddingsTable.insertIgnoreAndGetId {
             it[EmbeddingsTable.chunkId] = chunkId
             it[EmbeddingsTable.model] = model
             it[EmbeddingsTable.vector] = ExposedBlob(vector)
             it[EmbeddingsTable.dimensions] = dimensions
-        }.value
+        }?.value
     }
 
     /**

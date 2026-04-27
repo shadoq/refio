@@ -31,9 +31,13 @@ private val logger = dualLogger("LlmCallTool")
  * Optionally reads a file and appends its contents to the prompt.
  * Optionally saves the LLM response to a file instead of returning it in context.
  *
+ * At least one of `data`, `file_path`, `image_path`/`image_base64`, or `save_to_file`
+ * must be set. With only `save_to_file`, the tool runs in pure generation mode — the
+ * model writes directly to disk from the prompt.
+ *
  * Parameters:
  * - prompt: System prompt — instructions, role, or task description
- * - data: Inline data or text to analyze (optional if file_path is provided)
+ * - data: Inline data or text to analyze (optional if file_path or save_to_file is provided)
  * - file_path: Optional file whose contents are used as data input
  * - image_path: Optional image file path to include in the prompt (requires vision-capable model)
  * - image_base64: Optional base64-encoded image data (requires vision-capable model, use with image_media_type)
@@ -73,8 +77,17 @@ class LlmCallTool(
 
         // Build final prompt: data + optional file contents
         val hasImage = !imagePath.isNullOrBlank() || !imageBase64.isNullOrBlank()
+        val hasSaveTarget = !saveToFile.isNullOrBlank()
         val finalPrompt = buildFinalPrompt(userPrompt, filePath)
-            ?: if (hasImage) "" else return ToolResult.error("Either 'data', 'file_path', or 'image_path'/'image_base64' is required")
+            ?: if (hasImage || hasSaveTarget) "" else return ToolResult.error(
+                "Need at least one of: 'data', 'file_path', 'image_path'/'image_base64', or 'save_to_file'. " +
+                    "For prompt-only generation that writes to disk, set 'save_to_file' and put instructions in 'prompt'."
+            )
+        if (finalPrompt.isBlank() && !hasImage && systemPrompt.isNullOrBlank()) {
+            return ToolResult.error(
+                "Empty request: need 'prompt' (with optional 'save_to_file'), 'data'/'file_path', or image input."
+            )
+        }
 
         // Resolve model
         val (model, provider) = resolveModel(params["model"]?.toString())
@@ -385,7 +398,8 @@ class LlmCallTool(
             "save_to_file" to mapOf(
                 "type" to "string",
                 "description" to "Save LLM response to this file path instead of returning full content. " +
-                    "Returns a summary with preview."
+                    "Returns a summary with preview. Sufficient on its own: when set, you can call the tool " +
+                    "with only 'prompt' + 'save_to_file' to generate new content (no 'data'/'file_path' needed)."
             )
         )
     )

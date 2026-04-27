@@ -26,10 +26,13 @@ import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.llm.LLMContentPart
 import pl.jclab.refio.core.llm.LLMMessage
+import pl.jclab.refio.core.tools.base.ToolSchema
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.testutil.TestDatabase
 import pl.jclab.refio.core.utils.GsonInstance.gson as appGson
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class LLMAdapterSmokeTest {
@@ -256,6 +259,214 @@ class LLMAdapterSmokeTest {
         assertEquals("Zm9v", inlineData["data"])
         assertEquals("Gemini ok", response.content)
         assertEquals(22, response.usage.totalTokens)
+    }
+
+    @Test
+    fun `openai responses tools should disable strict for non-strict-compatible schema`() = runTest {
+        val configService = mockProviderConfig(
+            key = ConfigKeys.PROVIDER_OPENAI_API_KEY.key,
+            apiKey = "test-openai-key"
+        )
+
+        var requestJson = ""
+        val adapter = OpenAIAdapter(
+            model = "gpt-5.1-codex",
+            configService = configService,
+            baseUrlOverride = "https://mock.openai.test/v1",
+            httpClientOverride = mockHttpClient { request ->
+                requestJson = request.bodyText()
+                respondJson(
+                    """
+                    {
+                      "id": "resp_test",
+                      "model": "gpt-5.1-codex",
+                      "output": [
+                        { "type": "message", "content": [ { "type": "output_text", "text": "ok" } ] }
+                      ],
+                      "usage": { "input_tokens": 5, "output_tokens": 2, "total_tokens": 7 }
+                    }
+                    """.trimIndent()
+                )
+            }
+        )
+
+        val dynamicSchema = ToolSchema(
+            name = "http_request_like",
+            description = "Dynamic map schema",
+            parametersJsonSchema = mapOf(
+                "type" to "object",
+                "properties" to mapOf(
+                    "headers" to mapOf(
+                        "type" to "object",
+                        "additionalProperties" to mapOf("type" to "string")
+                    )
+                ),
+                "required" to listOf<String>()
+            )
+        )
+
+        adapter.chat(
+            messages = listOf(LLMMessage(role = "user", content = "hi")),
+            systemMessages = emptyList(),
+            maxTokens = 128,
+            temperature = 0.2,
+            streaming = false,
+            onStreamChunk = null,
+            kwargs = mapOf("native_tools" to listOf(dynamicSchema))
+        )
+
+        val requestBody = parseJsonMap(requestJson)
+        @Suppress("UNCHECKED_CAST")
+        val tools = requestBody["tools"] as List<Map<String, Any?>>
+        val tool = tools.first()
+        assertEquals(false, tool["strict"])
+        @Suppress("UNCHECKED_CAST")
+        val parameters = tool["parameters"] as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val properties = parameters["properties"] as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val headers = properties["headers"] as Map<String, Any?>
+        assertNotNull(headers["additionalProperties"])
+    }
+
+    @Test
+    fun `openai responses tools should keep strict for strict-compatible schema`() = runTest {
+        val configService = mockProviderConfig(
+            key = ConfigKeys.PROVIDER_OPENAI_API_KEY.key,
+            apiKey = "test-openai-key"
+        )
+
+        var requestJson = ""
+        val adapter = OpenAIAdapter(
+            model = "gpt-5.1-codex",
+            configService = configService,
+            baseUrlOverride = "https://mock.openai.test/v1",
+            httpClientOverride = mockHttpClient { request ->
+                requestJson = request.bodyText()
+                respondJson(
+                    """
+                    {
+                      "id": "resp_test",
+                      "model": "gpt-5.1-codex",
+                      "output": [
+                        { "type": "message", "content": [ { "type": "output_text", "text": "ok" } ] }
+                      ],
+                      "usage": { "input_tokens": 5, "output_tokens": 2, "total_tokens": 7 }
+                    }
+                    """.trimIndent()
+                )
+            }
+        )
+
+        val strictSchema = ToolSchema(
+            name = "read_exact",
+            description = "Strict-compatible schema",
+            parametersJsonSchema = mapOf(
+                "type" to "object",
+                "properties" to mapOf(
+                    "path" to mapOf("type" to "string")
+                ),
+                "required" to listOf("path"),
+                "additionalProperties" to false
+            )
+        )
+
+        adapter.chat(
+            messages = listOf(LLMMessage(role = "user", content = "hi")),
+            systemMessages = emptyList(),
+            maxTokens = 128,
+            temperature = 0.2,
+            streaming = false,
+            onStreamChunk = null,
+            kwargs = mapOf("native_tools" to listOf(strictSchema))
+        )
+
+        val requestBody = parseJsonMap(requestJson)
+        @Suppress("UNCHECKED_CAST")
+        val tools = requestBody["tools"] as List<Map<String, Any?>>
+        val tool = tools.first()
+        assertEquals(true, tool["strict"])
+    }
+
+    @Test
+    fun `gemini tools should convert nullable json schema to openapi-like schema`() = runTest {
+        val configService = mockProviderConfig(
+            key = ConfigKeys.PROVIDER_GEMINI_API_KEY.key,
+            apiKey = "test-gemini-key"
+        )
+
+        var requestJson = ""
+        val adapter = GeminiAdapter(
+            model = "gemini-2.5-flash",
+            configService = configService,
+            baseUrlOverride = "https://mock.gemini.test/v1beta",
+            httpClientOverride = mockHttpClient { request ->
+                requestJson = request.bodyText()
+                respondJson(
+                    """
+                    {
+                      "candidates": [
+                        {
+                          "content": { "parts": [ { "text": "ok" } ] },
+                          "finishReason": "STOP"
+                        }
+                      ],
+                      "usageMetadata": {
+                        "promptTokenCount": 2,
+                        "candidatesTokenCount": 1,
+                        "totalTokenCount": 3
+                      }
+                    }
+                    """.trimIndent()
+                )
+            }
+        )
+
+        val nullableSchema = ToolSchema(
+            name = "read_file_like",
+            description = "Nullable params",
+            parametersJsonSchema = mapOf(
+                "type" to "object",
+                "properties" to mapOf(
+                    "path" to mapOf("type" to "string"),
+                    "detail" to mapOf(
+                        "type" to listOf("string", "null"),
+                        "enum" to listOf("summary", "full"),
+                        "default" to "summary"
+                    )
+                ),
+                "required" to listOf("path"),
+                "additionalProperties" to false
+            )
+        )
+
+        adapter.chat(
+            messages = listOf(LLMMessage(role = "user", content = "hi")),
+            systemMessages = emptyList(),
+            maxTokens = 128,
+            temperature = 0.2,
+            streaming = false,
+            onStreamChunk = null,
+            kwargs = mapOf("native_tools" to listOf(nullableSchema))
+        )
+
+        val requestBody = parseJsonMap(requestJson)
+        @Suppress("UNCHECKED_CAST")
+        val tools = requestBody["tools"] as List<Map<String, Any?>>
+        @Suppress("UNCHECKED_CAST")
+        val declarations = (tools.first()["functionDeclarations"] as List<Map<String, Any?>>)
+        @Suppress("UNCHECKED_CAST")
+        val parameters = declarations.first()["parameters"] as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val properties = parameters["properties"] as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val detail = properties["detail"] as Map<String, Any?>
+
+        assertEquals("OBJECT", parameters["type"])
+        assertEquals("STRING", detail["type"])
+        assertEquals(true, detail["nullable"])
+        assertFalse(detail.containsKey("default"))
+        assertFalse(parameters.containsKey("additionalProperties"))
     }
 
     private fun mockProviderConfig(key: String, apiKey: String): ConfigService {

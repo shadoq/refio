@@ -95,6 +95,23 @@ object JsonExtractor {
             return rawJson
         }
 
+        // Turn-loop envelope: {"response": "...", "actions": [{"tool": ..., "args": ...}]}
+        // Treat each action as a subtask so downstream plan-extraction code works uniformly.
+        // This is the canonical shape emitted by PLAN/AGENT modes on the JSON-in-text path
+        // and by the native-tools serializer.
+        if (rawJson.containsKey("actions") && rawJson["actions"] is List<*>) {
+            logger.info { "[JSON] Normalizing envelope: 'actions' array → 'subtasks'" }
+            val subtasks = normalizeStepsArray(rawJson["actions"])
+            val planDescription = rawJson["response"]?.toString()
+                ?: rawJson["plan"]?.toString()
+                ?: rawJson["summary"]?.toString()
+                ?: "Execution plan"
+            return mapOf(
+                "plan" to planDescription,
+                "subtasks" to subtasks
+            )
+        }
+
         // Helper function to find key case-insensitively
         fun findKey(vararg keys: String): Pair<String, Any?>? {
             for (key in keys) {

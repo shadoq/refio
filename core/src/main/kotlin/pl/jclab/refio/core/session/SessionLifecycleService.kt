@@ -3,6 +3,7 @@ package pl.jclab.refio.core.session
 import pl.jclab.refio.core.session.SessionStateManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -32,6 +33,17 @@ class SessionLifecycleService(
     private val logger = dualLogger("SessionLifecycleService")
     private var selectedMode: TaskMode = TaskMode.CHAT
 
+    // Tracks the initial last-session-restore coroutine so that user-driven
+    // lifecycle ops (createSession/switchSession/loadSession) can wait for it
+    // to finish before mutating session state. Without this, restore can race
+    // with a fast "New Session" click and overwrite the freshly-created session
+    // (visible right after plugin startup as the old chat reappearing).
+    private var initializeJob: Job? = null
+
+    private suspend fun awaitInitialization() {
+        initializeJob?.join()
+    }
+
     fun getSelectedMode(): TaskMode = selectedMode
 
     @Suppress("UNUSED_PARAMETER")
@@ -40,7 +52,7 @@ class SessionLifecycleService(
         subtaskTracker: SubtaskTracker,
         _executionMonitor: ExecutionMonitor
     ) {
-        scope.launchSafe {
+        initializeJob = scope.launchSafeJob {
             loadUIState()
 
             try {
@@ -97,6 +109,7 @@ class SessionLifecycleService(
         mode: TaskMode,
         executionMode: ExecutionMode? = null
     ): Session {
+        awaitInitialization()
         val totalTimeStart = System.currentTimeMillis()
         logger.info { "[PERF] createSession START: name='$name', mode=$mode" }
 
@@ -175,6 +188,7 @@ class SessionLifecycleService(
     }
 
     suspend fun switchSession(sessionId: String, messageDispatcher: MessageDispatcher, subtaskTracker: SubtaskTracker) {
+        awaitInitialization()
         try {
             saveCurrentSessionState()
 
@@ -229,6 +243,7 @@ class SessionLifecycleService(
         subtaskTracker: SubtaskTracker,
         _executionMonitor: ExecutionMonitor
     ) {
+        awaitInitialization()
         modeSwitchMutex.lock()
         try {
             logger.info { "Loading session: $sessionId" }
@@ -843,6 +858,9 @@ class SessionLifecycleService(
 private fun CoroutineScope.launchSafe(block: suspend () -> Unit) {
     this.launch(Dispatchers.IO) { block() }
 }
+
+private fun CoroutineScope.launchSafeJob(block: suspend () -> Unit): Job =
+    this.launch(Dispatchers.IO) { block() }
 
 private fun parseExecutionModeValue(value: String?): ExecutionMode {
     if (value.isNullOrBlank()) {

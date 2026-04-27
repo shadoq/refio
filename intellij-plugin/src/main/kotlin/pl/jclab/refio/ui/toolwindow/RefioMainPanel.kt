@@ -1,505 +1,135 @@
 package pl.jclab.refio.ui.toolwindow
 
 import com.intellij.openapi.Disposable
-import pl.jclab.refio.core.logging.dualLogger
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.project.Project
+import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
-import com.intellij.ui.components.JBScrollPane
-import pl.jclab.refio.ui.theme.LCATheme
-import pl.jclab.refio.api.models.TaskMode
-import pl.jclab.refio.services.session.SessionManager
-import pl.jclab.refio.services.execution.StepExecutionService
-import pl.jclab.refio.ui.components.chat.ChatView
-import pl.jclab.refio.ui.components.chat.PromptInputPanel
-import pl.jclab.refio.ui.components.toolbar.StatusBar
-import pl.jclab.refio.ui.components.steps.StepsQueueView
-import pl.jclab.refio.ui.components.logs.LogsPanel
-import pl.jclab.refio.ui.components.debug.DebugPanel
-import pl.jclab.refio.ui.components.context.ContextPanel
-import pl.jclab.refio.ui.components.history.HistoryPanel
-import pl.jclab.refio.ui.components.rag.RagViewPanel
-import pl.jclab.refio.ui.execution.TurnStateStatusBar
-import pl.jclab.refio.ui.settings.ApiLogsPanel
-import pl.jclab.refio.ui.settings.SettingsView
-import pl.jclab.refio.core.api.CoreApiRouter
-import com.intellij.openapi.actionSystem.ActionManager
-import com.intellij.openapi.actionSystem.DefaultActionGroup
-import com.intellij.openapi.actionSystem.Separator
-import com.intellij.ui.awt.RelativePoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.services.execution.StepExecutionService
+import pl.jclab.refio.services.session.SessionManager
+import pl.jclab.refio.ui.theme.LCATheme
 import java.awt.BorderLayout
-import java.awt.CardLayout
-import java.awt.Component
-import java.awt.Dimension
-import java.beans.PropertyChangeListener
-import javax.swing.JPanel
-import javax.swing.JTabbedPane
-import javax.swing.SwingUtilities
+import javax.swing.SwingConstants
 
 /**
- * Main panel for Refio tool window
- * Layout:
- * - Tabbed Pane (Chat, Steps, Debug panels)
- * - Prompt Input Panel (mode/model selectors, execution toggles, text area, send button)
- * - Status Bar (bottom)
+ * Thin wrapper around [RefioContentPanel] that keeps the EDT free while
+ * [SessionManager] initializes. The previous implementation constructed the
+ * full UI inline, which pulled in project-level service creation (DB init,
+ * prompt seeding, migrations) on the EDT and produced multi-second freezes.
  *
- * Title bar actions (+ New Session, History, Settings, Help) are added via setTitleActions() in RefioToolWindowFactory
+ * Flow:
+ *  1. On EDT: show a lightweight "Initializing..." placeholder.
+ *  2. Off EDT: create [SessionManager] and [StepExecutionService].
+ *  3. Back on EDT: swap placeholder for [RefioContentPanel].
+ *
+ * Public action methods queue their work: if the content panel isn't ready
+ * yet, the action is replayed once initialization completes.
  */
 class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(BorderLayout()), Disposable {
 
     private val logger = dualLogger("RefioMainPanel")
 
-    // Use EDT dispatcher for UI updates in IntelliJ
-    private val cs = CoroutineScope(SupervisorJob())
-    private val sessionManager = SessionManager.getInstance(project)
-    private val stepExecutionService = StepExecutionService.getInstance(project)
-    private val coreApiClient: pl.jclab.refio.core.api.CoreApiRouter = sessionManager.apiRouter
+    private val cs = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    private val chatView: ChatView
-    private val promptInputPanel: PromptInputPanel
-    private val chatScrollPane: JBScrollPane
-    private val statusBar: StatusBar
+    @Volatile
+    private var content: RefioContentPanel? = null
 
-    //    private val splitPane: JSplitPane
-    private val stepsQueueView: StepsQueueView
-    private val contextPanel: ContextPanel
-    private val logsPanel: LogsPanel
-    private val debugPanel: DebugPanel
-    private val apiLogsPanel: ApiLogsPanel
-    private val historyPanel: HistoryPanel
-    private val ragViewPanel: RagViewPanel
+    private val pendingActions = mutableListOf<(RefioContentPanel) -> Unit>()
 
-    private val turnStateStatusBar: TurnStateStatusBar
-
-    private val tabbedPane: JTabbedPane
-    private val middlePanel: JPanel
-    private val cardLayout: CardLayout
-    private val agentExecutionPanel: pl.jclab.refio.ui.components.agents.AgentExecutionPanel
-
-    // Cache SettingsView to avoid creating new instance each time
-    private var settingsView: SettingsView? = null
-    private val chatMessagesUpdatedListener = PropertyChangeListener {
-        scrollChatToBottom()
-    }
-    private val stopExecutionListener = PropertyChangeListener { evt ->
-        if (evt.newValue == true) {
-            stepExecutionService.stopExecution()
-        }
-    }
-    private val historySessionLoadedListener = PropertyChangeListener { evt ->
-        if (evt.newValue == true) {
-            showChatView()
-        }
-    }
-    private val historyBackToChatListener = PropertyChangeListener { evt ->
-        if (evt.newValue == true) {
-            showChatView()
-        }
-    }
-    private val advancedViewChangedListener = PropertyChangeListener { evt ->
-        if (evt.newValue is Boolean) {
-            setAdvancedViewEnabled(evt.newValue as Boolean)
-        }
+    private val loader = JBLabel("Initializing Refio…", SwingConstants.CENTER).apply {
+        background = LCATheme.backgroundColor
+        isOpaque = true
     }
 
     init {
+        background = LCATheme.backgroundColor
+        add(loader, BorderLayout.CENTER)
 
-        logger.info { "Initialize main plugin panel" }
-
-        // Create components - note: order matters for cross-references
-        chatView = ChatView(project)
-        promptInputPanel = PromptInputPanel(project, chatView, coreApiClient)
-        chatView.setContinuePromptHandler {
-            promptInputPanel.sendContinuePrompt()
-        }
-        statusBar = StatusBar(project)
-        stepsQueueView = StepsQueueView(project)
-        contextPanel = ContextPanel(project)
-        logsPanel = LogsPanel(project)
-        debugPanel = DebugPanel(project)
-        apiLogsPanel = ApiLogsPanel(coreApiClient, autoLoadOnInit = false)
-        historyPanel = HistoryPanel(project, autoLoadOnInit = false)
-        ragViewPanel = RagViewPanel(project)
-        turnStateStatusBar = TurnStateStatusBar()
-        agentExecutionPanel = pl.jclab.refio.ui.components.agents.AgentExecutionPanel()
-        debugPanel.agentTraceProvider = { agentExecutionPanel.toText() }
-
-        // Observe turn state for status bar.
-        // turnState may be null initially (AgentTurnLoop created lazily), so re-check on each session change.
-        cs.launch {
-            var turnStateJob: kotlinx.coroutines.Job? = null
-            sessionManager.activeSession.collect { _ ->
-                turnStateJob?.cancel()
-                val turnStateFlow = sessionManager.turnState
-                if (turnStateFlow != null) {
-                    turnStateJob = cs.launch {
-                        turnStateFlow.collect { snapshot ->
-                            SwingUtilities.invokeLater { turnStateStatusBar.update(snapshot) }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Scroll pane for chat messages only
-        chatScrollPane = JBScrollPane(chatView).apply {
-            border = null
-            verticalScrollBarPolicy = javax.swing.JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
-            horizontalScrollBarPolicy = javax.swing.JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
-            background = LCATheme.backgroundColor
-            viewport.background = LCATheme.backgroundColor
-        }
-
-        // Listen for messages update to scroll to bottom
-        chatView.addPropertyChangeListener("messagesUpdated", chatMessagesUpdatedListener)
-
-        // Chat panel: scroll(messages) + promptInput (sticky bottom)
-        val chatPanel = JPanel(BorderLayout()).apply {
-            background = LCATheme.backgroundColor
-            add(chatScrollPane, BorderLayout.CENTER)
-            add(promptInputPanel, BorderLayout.SOUTH)
-        }
-
-        // Steps panel: turn state status bar (IDLE/iteration) at top, steps view below (has its own internal scroll)
-        val stepsPanel = JPanel(BorderLayout()).apply {
-            add(turnStateStatusBar, BorderLayout.NORTH)
-            add(stepsQueueView, BorderLayout.CENTER)
-        }
-
-        // Create tabbed pane
-        tabbedPane = JTabbedPane().apply {
-            addTab("Chat", chatPanel)
-            addTab("Execution", stepsPanel)
-            addTab("Context", contextPanel)
-            addTab("Agents", agentExecutionPanel)
-            addTab("RAG", ragViewPanel)
-            addTab("Debug", debugPanel)
-            addTab("Logs", logsPanel)
-            addTab("API", apiLogsPanel)
-            addChangeListener {
-                if (selectedIndex >= 0 && getComponentAt(selectedIndex) === apiLogsPanel) {
-                    apiLogsPanel.ensureLoaded()
-                }
-            }
-        }
-
-        // Create normal content panel
-        val normalContentPanel = JPanel(BorderLayout()).apply {
-            add(tabbedPane, BorderLayout.CENTER)
-            border = LCATheme.paddedBorder(0, 0, 2, 0)
-        }
-
-        // Create middle panel with CardLayout for switching between views
-        cardLayout = CardLayout()
-        middlePanel = JPanel(cardLayout).apply {
-            add(normalContentPanel, "NORMAL")
-            add(historyPanel, "HISTORY")
-            // Settings will be added lazily when first opened
-        }
-
-        add(middlePanel, BorderLayout.CENTER)
-        add(statusBar, BorderLayout.SOUTH)
-
-        // Load advanced view setting from config on startup
         cs.launch {
             try {
-                val config = coreApiClient.configRouter.getConfig(section = "general", scope = "app")
-                val advancedView = (config.settings["advanced_view"] as? String).toBoolean()
-
-                // Apply setting on EDT
-                javax.swing.SwingUtilities.invokeLater {
-                    setAdvancedViewEnabled(advancedView)
+                val sessionManager = withContext(Dispatchers.IO) {
+                    SessionManager.getInstance(project)
                 }
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to load advanced view setting, using default: false" }
-                // Start in simple mode by default if loading fails
-                javax.swing.SwingUtilities.invokeLater {
-                    setAdvancedViewEnabled(false)
+                val stepExecutionService = withContext(Dispatchers.IO) {
+                    StepExecutionService.getInstance(project)
                 }
-            }
-        }
 
-        // Register statusBar with SessionManager for execution progress updates
-        sessionManager.setStatusBar(statusBar)
-
-        // Listen to status bar stop execution event
-        statusBar.addPropertyChangeListener("stopExecution", stopExecutionListener)
-
-//        // Listen to toolbar property changes for history toggle
-//        toolbar.addPropertyChangeListener("showHistory") { evt ->
-//            if (evt.newValue == true) {
-//                toggleHistoryPanel()
-//            }
-//        }
-//
-//        // Listen to toolbar property changes for new session creation
-//        toolbar.addPropertyChangeListener("newSessionCreated") { evt ->
-//            if (evt.newValue == true) {
-//                showChatView()
-//            }
-//        }
-
-        // Direct callback for reliable navigation back to chat
-        historyPanel.onNavigateToChat = { showChatView() }
-
-        // Listen to historyPanel session loaded event to return to Chat view (legacy fallback)
-        historyPanel.addPropertyChangeListener("sessionLoaded", historySessionLoadedListener)
-
-        // Listen to historyPanel back to chat event (legacy fallback)
-        historyPanel.addPropertyChangeListener("backToChat", historyBackToChatListener)
-
-        // Listen to mode changes to show/hide steps queue
-        cs.launch {
-            sessionManager.activeSession.collect { session ->
-                session?.let { updateStepsQueueVisibility(it.mode) }
-                // Wire AgentExecutionPanel to the active session so Trace/Timeline
-                // get populated for single-agent runs too (not only multi-agent).
-                session?.let {
-                    agentExecutionPanel.subscribeToSession(sessionManager.apiRouter.agentEventBus, it.id)
-                }
-            }
-        }
-
-        // Listen to subtasks changes to update steps queue visibility
-        cs.launch {
-            sessionManager.subtasks.collect {
-                sessionManager.activeSession.value?.let { session ->
-                    updateStepsQueueVisibility(session.mode)
-                }
-            }
-    }
-    }
-
-    /**
-     * Cycle to next mode (triggered by Alt+M action)
-     */
-    fun cycleMode() {
-        promptInputPanel.cycleMode()
-    }
-
-    /**
-     * Public method for toolbar action: Create new session
-     */
-    fun createNewSession() {
-        logger.info { "Creating new session" }
-
-        cs.launch {
-            // Cancel any running operations before creating new session
-            try {
-                sessionManager.cancelStreaming()
-                sessionManager.cancelExecution()
-                stepExecutionService.stopExecution()
-                logger.info { "Canceled running operations before creating new session" }
-            } catch (e: Exception) {
-                logger.warn(e) { "Failed to cancel operations (may not be running)" }
-            }
-
-            val currentMode = promptInputPanel.getSelectedMode()
-            val executionMode = promptInputPanel.getCurrentExecutionMode()
-            sessionManager.createSession("Session (${currentMode.name})", currentMode, executionMode)
-
-            // Switch to Chat view
-            SwingUtilities.invokeLater {
-                showChatView()
+                ApplicationManager.getApplication().invokeLater({
+                    installContent(sessionManager, stepExecutionService)
+                }, ModalityState.any())
+            } catch (e: Throwable) {
+                logger.error(e) { "Failed to initialize Refio tool window" }
+                ApplicationManager.getApplication().invokeLater({
+                    loader.text = "Failed to initialize Refio: ${e.message}"
+                }, ModalityState.any())
             }
         }
     }
 
-    /**
-     * Public method for toolbar action: Show history panel
-     */
-    fun showHistory() {
-        toggleHistoryPanel()
+    private fun installContent(
+        sessionManager: SessionManager,
+        stepExecutionService: StepExecutionService
+    ) {
+        logger.info { "Installing Refio content panel on EDT" }
+
+        val panel = RefioContentPanel(project, sessionManager, stepExecutionService)
+
+        remove(loader)
+        add(panel, BorderLayout.CENTER)
+        revalidate()
+        repaint()
+
+        val actionsToReplay: List<(RefioContentPanel) -> Unit>
+        synchronized(pendingActions) {
+            content = panel
+            actionsToReplay = pendingActions.toList()
+            pendingActions.clear()
+        }
+        actionsToReplay.forEach { it(panel) }
     }
 
-    /**
-     * Public method for toolbar action: Show settings view
-     */
-    fun showSettings() {
-        openSettings()
+    private fun run(action: (RefioContentPanel) -> Unit) {
+        val ready = content
+        if (ready != null) {
+            action(ready)
+            return
+        }
+        synchronized(pendingActions) {
+            val current = content
+            if (current != null) {
+                current.let(action)
+            } else {
+                pendingActions.add(action)
+            }
+        }
     }
 
-    /**
-     * Public method for toolbar action: Show help (opens GitHub docs)
-     */
+    fun cycleMode() = run { it.cycleMode() }
+
+    fun createNewSession() = run { it.createNewSession() }
+
+    fun showHistory() = run { it.showHistory() }
+
+    fun showSettings() = run { it.showSettings() }
+
     fun showHelp() {
+        // Help is independent of content initialization — open browser directly.
         logger.info { "Show help requested" }
         com.intellij.ide.BrowserUtil.browse("https://github.com/jclab-joseph/refio")
     }
 
-    /**
-     * Scroll chat to bottom (show latest messages).
-     * Forces synchronous layout via validate() before reading scroll sizes
-     * to prevent the visual "jump" caused by stale layout metrics.
-     */
-    private fun scrollChatToBottom() {
-        javax.swing.SwingUtilities.invokeLater {
-            chatScrollPane.validate()
-            val scrollBar = chatScrollPane.verticalScrollBar
-            scrollBar.value = scrollBar.maximum
-        }
-    }
+    fun setAdvancedViewEnabled(enabled: Boolean) = run { it.setAdvancedViewEnabled(enabled) }
 
-    /**
-     * Open Settings view (switches to SETTINGS card in CardLayout)
-     */
-    private fun openSettings() {
-        logger.info { "Opening settings view" }
-
-        // Create settings view only once (lazy initialization)
-        if (settingsView == null) {
-            settingsView = SettingsView(project, coreApiClient) {
-                closeSettings()
-            }
-
-            // Listen to advanced view changes
-            settingsView!!.addPropertyChangeListener("advancedViewChanged", advancedViewChangedListener)
-
-            // Add settings to CardLayout (only first time)
-            middlePanel.add(settingsView, "SETTINGS")
-        }
-
-        // Switch to settings card
-        cardLayout.show(middlePanel, "SETTINGS")
-
-        // Refresh UI
-        middlePanel.revalidate()
-        middlePanel.repaint()
-    }
-
-    /**
-     * Close Settings view and return to normal content (Chat view)
-     */
-    private fun closeSettings() {
-        logger.info { "Closing settings view" }
-
-        // Switch back to normal card (Chat view)
-        cardLayout.show(middlePanel, "NORMAL")
-
-        // Switch to Chat tab (index 0)
-        tabbedPane.selectedIndex = 0
-
-        // Refresh UI
-        middlePanel.revalidate()
-        middlePanel.repaint()
-
-        // Refresh model list in dropdown (visibility may have changed)
-        // Note: refreshModels() will preserve user's selected model, not override with default
-        promptInputPanel.refreshModels()
-    }
-
-    /**
-     * Toggle history panel visibility
-     * US-204: Show history panel instead of normal content (not as overlay)
-     */
-    private fun toggleHistoryPanel() {
-        logger.info { "Toggling history panel" }
-
-        // Switch to history card
-        cardLayout.show(middlePanel, "HISTORY")
-
-        // Load sessions when showing history
-        historyPanel.showHistory()
-
-        middlePanel.revalidate()
-        middlePanel.repaint()
-    }
-
-    /**
-     * Show normal content (hide history panel)
-     */
-    private fun showNormalContent() {
-        logger.info { "Showing normal content" }
-
-        // Switch to normal card
-        cardLayout.show(middlePanel, "NORMAL")
-
-        middlePanel.revalidate()
-        middlePanel.repaint()
-    }
-
-    /**
-     * Show Chat view (used when creating new session from History)
-     */
-    private fun showChatView() {
-        logger.info { "Showing Chat view after new session creation" }
-
-        // Switch to normal card (hide history)
-        cardLayout.show(middlePanel, "NORMAL")
-
-        // Switch to Chat tab (index 0)
-        tabbedPane.selectedIndex = 0
-
-        middlePanel.revalidate()
-        middlePanel.repaint()
-    }
-
-    private fun updateStepsQueueVisibility(@Suppress("UNUSED_PARAMETER") mode: TaskMode) {
-        // No-op: using tabbed pane layout — steps are always accessible via Steps tab.
-        // If split pane layout is re-enabled, add show/hide logic here based on mode.
-    }
-
-    /**
-     * Enable or disable advanced view
-     * - Simple mode: Show only Chat tab, hide tab bar
-     * - Advanced mode: Show all tabs with tab bar
-     */
-    fun setAdvancedViewEnabled(enabled: Boolean) {
-        logger.info { "Setting advanced view: $enabled" }
-
-        javax.swing.SwingUtilities.invokeLater {
-            if (enabled) {
-                // Advanced mode: Show all tabs
-                // Add tabs back if they were removed (check if tab count is only 1)
-                if (tabbedPane.tabCount == 1) {
-                    tabbedPane.addTab("Steps", stepsQueueView)
-                    tabbedPane.addTab("Context", contextPanel)
-                    tabbedPane.addTab("RAG", ragViewPanel)
-                    tabbedPane.addTab("Logs", logsPanel)
-                    tabbedPane.addTab("Debug", debugPanel)
-                    tabbedPane.addTab("API Logs", apiLogsPanel)
-                }
-                // Show tab bar by setting tab placement
-                tabbedPane.tabPlacement = JTabbedPane.TOP
-            } else {
-                // Simple mode: Remove all tabs except Chat (index 0)
-                while (tabbedPane.tabCount > 1) {
-                    tabbedPane.removeTabAt(1)
-                }
-                // Hide tab bar by setting tab placement to hidden (hack: set height to 0)
-                // Note: There's no direct way to hide tabs in Swing, so we remove them instead
-                tabbedPane.selectedIndex = 0
-            }
-
-            // Update status bar as well
-            statusBar.setAdvancedViewEnabled(enabled)
-
-            tabbedPane.revalidate()
-            tabbedPane.repaint()
-        }
-    }
-
-    /**
-     * Dispose resources when tool window is closed
-     */
     override fun dispose() {
         cs.cancel()
-        chatView.removePropertyChangeListener("messagesUpdated", chatMessagesUpdatedListener)
-        statusBar.removePropertyChangeListener("stopExecution", stopExecutionListener)
-        historyPanel.removePropertyChangeListener("sessionLoaded", historySessionLoadedListener)
-        historyPanel.removePropertyChangeListener("backToChat", historyBackToChatListener)
-        settingsView?.removePropertyChangeListener("advancedViewChanged", advancedViewChangedListener)
-        chatView.dispose()
-        stepsQueueView.dispose()
-        contextPanel.dispose()
-        promptInputPanel.dispose()
-        statusBar.dispose()
-        logsPanel.dispose()
-        debugPanel.dispose()
-        // historyPanel doesn't have dispose() yet - no resources to clean up
+        content?.dispose()
     }
 }

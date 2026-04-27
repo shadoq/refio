@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.services
 
+import pl.jclab.refio.core.db.repositories.SnapshotGroupRepository
 import pl.jclab.refio.core.db.repositories.SnapshotRepository
 import pl.jclab.refio.core.db.Snapshot
 import pl.jclab.refio.core.logging.dualLogger
@@ -17,63 +18,67 @@ import kotlin.io.path.*
  */
 class SnapshotService(
     private val snapshotRepository: SnapshotRepository,
+    private val snapshotGroupRepository: SnapshotGroupRepository,
     private val projectRoot: Path
 ) {
     private val logger = dualLogger("SnapshotService")
 
     /**
-     * Create snapshots for specified files.
+     * Create snapshots for specified files. Only files that exist on disk are
+     * captured — for create-file operations, nothing is snapshotted.
      *
-     * @param taskId Task ID
-     * @param subtaskId Subtask ID (used as snapshot identifier)
-     * @param filePaths List of relative file paths to snapshot
-     * @return Snapshot ID (same as subtask_id)
+     * @return group id of the created snapshot group, or null when no file was
+     *         actually snapshotted (no existing files among [filePaths]).
      */
     fun createSnapshot(
         taskId: String,
-        subtaskId: String,
+        subtaskId: String?,
         filePaths: List<String>
-    ): String {
-        for (relPath in filePaths) {
+    ): String? {
+        data class Captured(val relPath: String, val content: String, val hash: String)
+
+        val captured = filePaths.mapNotNull { relPath ->
             val fullPath = projectRoot.resolve(relPath).normalize()
+            if (!fullPath.exists()) return@mapNotNull null
 
-            // Skip if file doesn't exist (for create operations)
-            if (!fullPath.exists()) {
-                continue
-            }
-
-            // Read content
             val content = try {
                 fullPath.readText(StandardCharsets.UTF_8)
             } catch (e: Exception) {
-                // Binary file - read as bytes and decode as latin-1
                 String(fullPath.readBytes(), charset("ISO-8859-1"))
             }
+            Captured(relPath, content, sha256Hash(content))
+        }
 
-            // Calculate hash
-            val contentHash = sha256Hash(content)
+        if (captured.isEmpty()) {
+            logger.info {
+                "No files to snapshot (all paths missing): taskId=$taskId, subtaskId=$subtaskId, paths=$filePaths"
+            }
+            return null
+        }
 
-            // Create snapshot record (repository handles compression)
+        val group = snapshotGroupRepository.create(taskId = taskId, subtaskId = subtaskId)
+
+        for (file in captured) {
             snapshotRepository.create(
                 taskId = taskId,
-                subtaskId = subtaskId,
-                filePath = relPath,
-                content = content,
-                contentHash = contentHash
+                groupId = group.id,
+                filePath = file.relPath,
+                content = file.content,
+                contentHash = file.hash
             )
         }
 
-        return subtaskId
+        return group.id
     }
 
     /**
-     * Get all files in a snapshot.
+     * Get all files in a snapshot group.
      *
-     * @param snapshotId Snapshot ID (subtask_id)
+     * @param snapshotId Snapshot group id
      * @return Map of file_path to content
      */
     fun getSnapshot(snapshotId: String): Map<String, String> {
-        val snapshots = snapshotRepository.findBySubtaskId(snapshotId)
+        val snapshots = snapshotRepository.findByGroupId(snapshotId)
 
         return snapshots.associate { snapshot ->
             val content = snapshotRepository.decompressContent(snapshot)
@@ -82,14 +87,10 @@ class SnapshotService(
     }
 
     /**
-     * Get content of specific file from snapshot.
-     *
-     * @param snapshotId Snapshot ID
-     * @param filePath Relative file path
-     * @return File content or null if not found
+     * Get content of specific file from snapshot group.
      */
     fun getFileContent(snapshotId: String, filePath: String): String? {
-        val snapshots = snapshotRepository.findBySubtaskId(snapshotId)
+        val snapshots = snapshotRepository.findByGroupId(snapshotId)
         val snapshot = snapshots.find { it.filePath == filePath } ?: return null
 
         return snapshotRepository.decompressContent(snapshot)
@@ -165,20 +166,16 @@ class SnapshotService(
     }
 
     /**
-     * List all snapshots for a task, grouped by subtask_id.
-     *
-     * @param taskId Task ID
-     * @return List of snapshot info
+     * List all snapshots for a task, grouped by snapshot group id.
      */
     fun listSnapshotsForTask(taskId: String): List<SnapshotInfo> {
         val snapshots = snapshotRepository.findByTaskId(taskId)
 
-        // Group by subtask_id
-        val grouped = snapshots.groupBy { it.subtaskId }
+        val grouped = snapshots.groupBy { it.groupId }
 
-        return grouped.map { (subtaskId, snapshotList) ->
+        return grouped.map { (groupId, snapshotList) ->
             SnapshotInfo(
-                snapshotId = subtaskId ?: "unknown",
+                snapshotId = groupId,
                 createdAt = snapshotList.first().createdAt,
                 files = snapshotList.map { snapshot ->
                     FileInfo(
@@ -210,8 +207,7 @@ class SnapshotService(
         // Delete snapshots
         var deleted = 0
         for (snapshotId in toDelete) {
-            // Delete all snapshots with this subtask_id
-            val snapshots = snapshotRepository.findBySubtaskId(snapshotId)
+            val snapshots = snapshotRepository.findByGroupId(snapshotId)
             for (snapshot in snapshots) {
                 if (snapshotRepository.delete(snapshot.id)) {
                     deleted++

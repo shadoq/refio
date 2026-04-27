@@ -5,6 +5,7 @@ import pl.jclab.refio.core.config.ConfigKeys
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBPanel
+import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTabbedPane
 import pl.jclab.refio.services.notification.NotificationService
 import pl.jclab.refio.ui.theme.LCATheme
@@ -62,17 +63,17 @@ class SettingsView(
 
         // Tabbed pane for settings sections
         val tabbedPane = JBTabbedPane(SwingConstants.TOP).apply {
-            addTab("General", generalPanel)
+            addTab("General", createStyledTabPanel("General", generalPanel, scrollable = true))
             addTab("Providers", providersPanel)
-            addTab("Models", modelsPanel)
-            addTab("Prompts", promptsPanel)
-            addTab("Context", contextSettingsPanel)
-            addTab("MCP Servers", mcpPanel)
+            addTab("Models", createStyledTabPanel("Models", modelsPanel))
+            addTab("Prompts", createStyledTabPanel("Prompts", promptsPanel, scrollable = true))
+            addTab("Context", createStyledTabPanel("Context", contextSettingsPanel))
+            addTab("MCP Servers", createStyledTabPanel("MCP Servers", mcpPanel))
             addTab("Documentation", docsPanel)
             addTab("Tools", toolsPanel)
             addTab("Subagents", subagentPanel)  // AI subagents configuration
             addTab("Advanced", advancedPanel)  // Merged: Advanced + Limits
-            addTab("Theme", themePanel)  // LCATheme visual preview
+            addTab("Theme", createStyledTabPanel("Theme", themePanel))  // LCATheme visual preview
         }
         add(tabbedPane, BorderLayout.CENTER)
 
@@ -126,6 +127,23 @@ class SettingsView(
                 toolTipText = "Reset all settings to default values"
             }
             add(resetButton)
+        }
+    }
+
+    private fun createStyledTabPanel(title: String, content: JComponent, scrollable: Boolean = false): JComponent {
+        val wrappedContent: JComponent = if (scrollable) {
+            JBScrollPane(content).apply {
+                border = LCATheme.emptyBorder()
+                verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
+                horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
+            }
+        } else {
+            content
+        }
+
+        return JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            border = LCATheme.createSettingsBorder(title)
+            add(wrappedContent, BorderLayout.CENTER)
         }
     }
 

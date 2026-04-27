@@ -1,7 +1,11 @@
 package pl.jclab.refio.core.services.context
 
 import pl.jclab.refio.core.config.ConfigKeys
+import pl.jclab.refio.core.db.Subtask
+import pl.jclab.refio.core.db.SubtaskKind
+import pl.jclab.refio.core.db.TaskStatus
 import pl.jclab.refio.core.services.analysis.CodeElements
+import pl.jclab.refio.core.utils.GsonInstance
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 
@@ -28,6 +32,100 @@ class WorkingMemoryService(
 ) {
     private val entriesByTask = ConcurrentHashMap<String, ConcurrentHashMap<String, WorkingMemoryEntry>>()
     private val entriesBySession = ConcurrentHashMap<String, ConcurrentHashMap<String, WorkingMemoryEntry>>()
+
+    /**
+     * True when [taskId] already has in-memory entries — caller can skip a rebuild.
+     * See [rebuildFromSubtasks] for the rebuild entry point.
+     */
+    fun hasEntries(taskId: String): Boolean {
+        val entries = entriesByTask[taskId] ?: return false
+        return entries.isNotEmpty()
+    }
+
+    /**
+     * Reconstruct working memory for [taskId] from its persisted [subtasks] history.
+     *
+     * Working memory entries live in-memory only (see [entriesByTask]) and are lost
+     * across process restarts. But the underlying data — tool name, args, output —
+     * is already durable in the `subtasks` table. This method walks that history
+     * and re-runs [extractKnowledge] / [recordEntries] as if the tools had executed
+     * in this process, producing an equivalent section for prompt building.
+     *
+     * Idempotency: skips the rebuild when in-memory entries already exist for
+     * [taskId] so repeated turns don't pay the cost twice. Pass `force = true` to
+     * override (useful in tests or on cache invalidation).
+     *
+     * Fidelity notes:
+     *  - `metadata` from the original [ToolResult] is NOT persisted in subtasks, so
+     *    rebuilt entries use only `args` + `output` via the fallback paths in each
+     *    `buildXxxEntries` helper. Structurally the resulting entries match what
+     *    [recordEntries] produced live — just without the occasional metadata-derived
+     *    field (e.g. `status_code`, `added_lines`).
+     *  - `iteration` is taken from [Subtask.orderIndex]; the working memory's decay
+     *    math (see [effectiveImportance]) is monotonic in iteration so this is a
+     *    correct proxy even if it doesn't match the exact turn number.
+     *  - FAILED subtasks are skipped: their `result` typically holds an
+     *    "Error: ..." envelope that would produce misleading "api_failure" entries
+     *    unrelated to real API failures.
+     */
+    fun rebuildFromSubtasks(
+        taskId: String,
+        subtasks: List<Subtask>,
+        sessionId: String? = null,
+        force: Boolean = false
+    ) {
+        if (!force && hasEntries(taskId)) return
+        if (subtasks.isEmpty()) return
+
+        val gson = GsonInstance.gson
+        for (subtask in subtasks) {
+            if (subtask.status == TaskStatus.FAILED) continue
+            val toolName = subtaskKindToToolName(subtask.kind) ?: continue
+            val output = subtask.result ?: continue
+            if (output.isBlank()) continue
+
+            val args: Map<String, Any?> = parseParamsJson(subtask.paramsJson, gson)
+
+            val entries = extractKnowledge(
+                toolName = toolName,
+                args = args,
+                output = output,
+                iteration = subtask.orderIndex,
+                metadata = null,
+                codeElementsProvider = null,
+                originId = subtask.id
+            )
+            if (entries.isNotEmpty()) {
+                recordEntries(taskId, entries, sessionId)
+            }
+        }
+    }
+
+    private fun parseParamsJson(paramsJson: String?, gson: com.google.gson.Gson): Map<String, Any?> {
+        if (paramsJson.isNullOrBlank()) return emptyMap()
+        return try {
+            @Suppress("UNCHECKED_CAST")
+            gson.fromJson(paramsJson, Map::class.java) as? Map<String, Any?> ?: emptyMap()
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    /**
+     * Map a [SubtaskKind] back to the tool name accepted by [extractKnowledge].
+     *
+     * Most kinds are direct lowercase inversions of the enum name (READ_FILE →
+     * read_file) so they round-trip cleanly. The synthetic kinds PLAN_STEP,
+     * PROJECT_ANALYSIS and KNOWLEDGE_BASE don't correspond to tool-call executions
+     * and are intentionally excluded: they would land in the generic fallback and
+     * pollute working memory with empty "tool_activity" rows.
+     */
+    private fun subtaskKindToToolName(kind: SubtaskKind): String? = when (kind) {
+        SubtaskKind.PLAN_STEP,
+        SubtaskKind.PROJECT_ANALYSIS,
+        SubtaskKind.KNOWLEDGE_BASE -> null
+        else -> kind.name.lowercase()
+    }
 
     fun recordEntries(taskId: String, entries: List<WorkingMemoryEntry>, sessionId: String? = null) {
         if (entries.isEmpty()) return

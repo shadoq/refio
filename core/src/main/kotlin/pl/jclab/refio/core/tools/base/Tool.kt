@@ -79,6 +79,46 @@ interface Tool {
 }
 
 /**
+ * Provider-agnostic tool schema for native function-calling APIs.
+ *
+ * Each adapter converts this to its provider-specific format:
+ * - OpenAI/Ollama: {"type":"function","function":{"name":...,"description":...,"parameters":...}}
+ * - Anthropic:     {"name":...,"description":...,"input_schema":...}
+ *
+ * parametersJsonSchema must be a valid JSON Schema draft-7 subset accepted by all providers:
+ *   {"type":"object","properties":{...},"required":[...]}
+ */
+data class ToolSchema(
+    val name: String,
+    val description: String,
+    val parametersJsonSchema: Map<String, Any>,
+)
+
+/**
+ * Convert a Tool into a provider-agnostic schema using Tool.getParameterSchema().
+ *
+ * Wraps bare-properties maps in {"type":"object","properties":...} so all providers
+ * accept the result. Tools returning emptyMap() become a no-parameter schema.
+ */
+fun Tool.toToolSchema(): ToolSchema {
+    val schema = getParameterSchema()
+    val resolved: Map<String, Any> = when {
+        schema.isEmpty() -> mapOf("type" to "object", "properties" to emptyMap<String, Any>())
+        !schema.containsKey("type") -> mapOf(
+            "type" to "object",
+            "properties" to schema,
+            "required" to emptyList<String>()
+        )
+        else -> schema
+    }
+    return ToolSchema(
+        name = name,
+        description = description,
+        parametersJsonSchema = resolved,
+    )
+}
+
+/**
  * Origin of a tool — where it was registered from.
  */
 enum class ToolOrigin {
@@ -164,7 +204,17 @@ data class ChangeSummary(
     val replacements: Int? = null,
     /** Whether the file was newly created (vs. modified in place). */
     val created: Boolean = false
-)
+) {
+    /**
+     * True when an edit ran but produced no content change (identical before/after
+     * content on an existing file). The tool still reports success=true (no I/O error),
+     * but this flag lets callers and the agent distinguish a genuine edit from a
+     * silent no-op — typically the LLM editor returned unchanged content, a search
+     * pattern did not match, or the edit_description was too vague to apply.
+     */
+    val noop: Boolean
+        get() = !created && addedLines == 0 && removedLines == 0
+}
 
 /**
  * Result of tool execution

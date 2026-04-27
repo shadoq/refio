@@ -46,18 +46,35 @@ class ToolCallParser(
 
     /**
      * Main entry point - parses LLM content into ToolCallData list.
+     *
+     * No cheap pre-guard here: some models (e.g. glm-4.7-flash) emit a prose preamble
+     * BEFORE the JSON envelope. A `startsWith("{")` check would incorrectly bail out
+     * and force the loop into plain-text finalization while `extractJsonWithStrategies`
+     * (Strategy 2 brace-matching) would have found the envelope just fine. The prior
+     * WARN noise this guard was meant to silence has already been downgraded to DEBUG
+     * at the end of `extractJsonWithStrategies`.
      */
     fun extractToolCalls(
         content: String,
         mode: TaskMode,
         profileOverrides: TurnProfileOverrides? = null
     ): List<ToolCallData> {
+        if (content.isBlank()) return emptyList()
+
         // Try JSON format first (preferred)
         val jsonToolCalls = extractToolCallsFromJson(content, mode)
         if (jsonToolCalls.isNotEmpty()) {
             logger.info { "[TOOL_CALLS] Extracted ${jsonToolCalls.size} tool calls from JSON format" }
             return filterToolCallsByProfile(jsonToolCalls, profileOverrides)
         }
+
+        // Models without native tool_calls support are routed to JSON-mode via the
+        // `response-contract-json` system prompt. We do NOT recover tool calls from
+        // XML pseudo-tags any more — that path encouraged garbage output formats and
+        // hid the real failure (a registry entry whose `supportsFunctionCalling` flag
+        // is wrong). If a model emits XML, fix the model definition to flip
+        // `supportsFunctionCalling = false`; the harness will then send it the JSON
+        // contract instead.
 
         // Fallback to legacy TOOL_CALL format
         val legacyToolCalls = extractToolCallsLegacy(content)
@@ -286,11 +303,32 @@ class ToolCallParser(
                 val stepsElement = jsonElement["steps"] as? JsonArray
                 val subtasksElement = jsonElement["subtasks"] as? JsonArray
 
+                // Some models without proper native tool_calls (GLM, MiniMax) emit a
+                // bare OpenAI-tool-call object inline in markdown:
+                //   {"name": "read_file", "arguments": {"path": "x"}}
+                // No envelope, no wrapper array. Treat that shape as a single-element
+                // actions array if `name` matches a registered tool.
+                val bareToolName = (jsonElement["name"] as? JsonPrimitive)?.content
+                val isBareToolCall = bareToolName != null
+                    && actionsElement == null
+                    && toolCallsElement == null
+                    && stepsElement == null
+                    && subtasksElement == null
+                    && toolRegistry.hasTool(bareToolName)
+
                 val toolCalls = when {
                     actionsElement != null -> extractToolCallsFromActionsArray(actionsElement)
                     toolCallsElement != null -> extractToolCallsFromActionsArray(toolCallsElement)
                     stepsElement != null -> extractToolCallsFromActionsArray(stepsElement)
                     subtasksElement != null -> extractToolCallsFromSubtasksArray(subtasksElement)
+                    isBareToolCall -> {
+                        logger.warn {
+                            "[TOOL_CALL_JSON] Recovering bare tool-call object (no envelope) for '$bareToolName' — " +
+                                "model is not following the JSON contract; consider flipping " +
+                                "supportsFunctionCalling=false in ModelDefinitions."
+                        }
+                        extractToolCallsFromActionsArray(JsonArray(listOf(jsonElement)))
+                    }
                     else -> emptyList()
                 }
 
@@ -559,7 +597,10 @@ class ToolCallParser(
             logger.debug { "[EXTRACT_JSON] Strategy 5 (repair) failed: ${e.message}" }
         }
 
-        logger.warn { "[EXTRACT_JSON] All strategies failed, content preview: ${trimmed.take(200)}..." }
+        // Downgraded from WARN to DEBUG: the pre-guard in extractToolCalls() already filters
+        // obvious prose, so reaching this point means the content *looked* JSON-ish but
+        // couldn't be parsed by any of the 5 strategies. That's noise, not an operator alert.
+        logger.debug { "[EXTRACT_JSON] All strategies failed, content preview: ${trimmed.take(200)}..." }
         return null
     }
 

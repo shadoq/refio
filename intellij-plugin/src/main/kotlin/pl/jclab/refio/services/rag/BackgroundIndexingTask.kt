@@ -7,6 +7,7 @@ import com.intellij.openapi.project.Project
 import pl.jclab.refio.services.core.CoreConnectionManager
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.notification.NotificationService
+import pl.jclab.refio.services.session.SessionManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,7 +31,9 @@ class BackgroundIndexingTask(
             return
         }
 
-        val router = coreConnectionManager.getOrCreateProjectRouter(Paths.get(projectPath), project)
+        // Route through SessionManager so router creation serializes through a
+        // single owner per project (prevents concurrent startup router init races).
+        val router = SessionManager.getInstance(project!!).apiRouter
 
         indicator.isIndeterminate = false
         indicator.text = "Preparing RAG indexing..."

@@ -40,6 +40,7 @@ internal object ConfigYamlMerger {
             thinkingEnabled = override.thinkingEnabled ?: base.thinkingEnabled,
             noEgressEnabled = override.noEgressEnabled ?: base.noEgressEnabled,
             executionMode = override.executionMode ?: base.executionMode,
+            nativeToolsMode = override.nativeToolsMode ?: base.nativeToolsMode,
         )
     }
 

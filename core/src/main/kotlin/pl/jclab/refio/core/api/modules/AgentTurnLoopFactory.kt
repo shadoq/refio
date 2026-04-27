@@ -125,7 +125,8 @@ internal class AgentTurnLoopFactory(
             llmRetryHandler = null,
             workingMemoryIntegration = workingMemoryIntegration,
             agentEventBus = agentEventBus,
-            hookService = hookService
+            hookService = hookService,
+            toolPermissionsService = toolPermissionsService
         )
     }
 }

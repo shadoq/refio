@@ -444,7 +444,9 @@ data class ProjectContextResponse(
     // Active LLM request preview (exact runtime shape for next call)
     val activeLlmRequestPrompt: String? = null,
     // Auxiliary prompt preview (tool/system/user templates not in active request)
-    val auxiliaryPromptsPreview: String? = null
+    val auxiliaryPromptsPreview: String? = null,
+    // Raw context prompt as produced by ContextService.buildLLMContextPrompt (no system prompt, no messages)
+    val rawContextPrompt: String? = null
 )
 
 /**

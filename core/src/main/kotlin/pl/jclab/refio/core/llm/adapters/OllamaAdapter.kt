@@ -5,8 +5,10 @@ import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.ModelConfig
+import pl.jclab.refio.core.llm.NativeToolCall
 import pl.jclab.refio.core.llm.StreamChunk
 import pl.jclab.refio.core.llm.toModelConfig
+import pl.jclab.refio.core.tools.base.ToolSchema
 import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import io.ktor.client.*
@@ -120,6 +122,8 @@ class OllamaAdapter(
         val responseFormat = kwargs["response_format"] as? Map<*, *>
         val jsonMode = responseFormat?.get("type") == "json_object"
         val thinkingRequested = kwargs["thinking"] as? Boolean ?: false
+        @Suppress("UNCHECKED_CAST")
+        val nativeTools = kwargs["native_tools"] as? List<ToolSchema>
 
         val requestBody = buildOllamaRequestBody(
             ollamaMessages = ollamaMessages,
@@ -127,7 +131,8 @@ class OllamaAdapter(
             thinkingRequested = thinkingRequested,
             streaming = streaming,
             maxTokens = maxTokens,
-            temperature = temperature
+            temperature = temperature,
+            tools = nativeTools
         )
 
         val requestJson = gson.toJson(requestBody)
@@ -193,12 +198,18 @@ class OllamaAdapter(
         thinkingRequested: Boolean,
         streaming: Boolean,
         maxTokens: Int?,
-        temperature: Double
+        temperature: Double,
+        tools: List<ToolSchema>? = null
     ): Map<String, Any> {
         return buildMap {
             put("model", model)
             put("messages", ollamaMessages)
             put("stream", streaming)
+
+            if (!tools.isNullOrEmpty()) {
+                put("tools", buildOllamaToolsArray(tools))
+                logger.info { "[OLLAMA][NATIVE_TOOLS] Sending ${tools.size} tool schemas: ${tools.map { it.name }}" }
+            }
 
             // Keep model in GPU memory to avoid loading delays.
             val keepAlive = configService?.getTyped(ConfigKeys.PROVIDER_OLLAMA_KEEP_ALIVE)
@@ -307,6 +318,9 @@ class OllamaAdapter(
                     source = source
                 )
 
+                if (requestBody.containsKey("tools") && isToolsNotSupportedError(httpStatus, errorMessage)) {
+                    throw pl.jclab.refio.core.llm.ToolsNotSupportedException(fullErrorMessage)
+                }
                 throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, fullErrorMessage)
             }
 
@@ -353,7 +367,14 @@ class OllamaAdapter(
             val rawThinking = messageMap["thinking"] as? String  // Reasoning models (gpt-oss)
             val rawToolCalls = extractOllamaToolCalls(messageMap)
 
-            if (rawContent.isBlank() && rawToolCalls.isNotEmpty()) {
+            val toolsWereRequested = requestBody.containsKey("tools")
+            val nativeToolCalls = if (toolsWereRequested) {
+                parseNativeOllamaToolCalls(rawToolCalls).also { calls ->
+                    logger.info { "$logPrefix [NATIVE_TOOLS_RESPONSE] calls=${calls.size}" }
+                }
+            } else null
+
+            if (nativeToolCalls == null && rawContent.isBlank() && rawToolCalls.isNotEmpty()) {
                 rawContent = convertToolCallsToCanonicalJson(rawToolCalls)
                 logger.info {
                     "$logPrefix [TOOL_CALLS_NORMALIZED] Converted Ollama message.tool_calls to canonical JSON content " +
@@ -394,7 +415,8 @@ class OllamaAdapter(
                 cost = 0.0,  // Free local execution
                 finishReason = doneReason,
                 rawResponse = response,
-                thinking = finalThinking
+                thinking = finalThinking,
+                nativeToolCalls = nativeToolCalls
             )
 
         } catch (e: Exception) {
@@ -476,6 +498,12 @@ class OllamaAdapter(
                         source = source
                     )
 
+                    if (requestBody.containsKey("tools") &&
+                        httpStatus == 400 &&
+                        errorBody.contains("does not support tools", ignoreCase = true)
+                    ) {
+                        throw pl.jclab.refio.core.llm.ToolsNotSupportedException(errorMessage)
+                    }
                     throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus ?: 500, errorMessage)
                 }
 
@@ -647,7 +675,14 @@ class OllamaAdapter(
             var rawContent = rawContentBuilder.toString()
             val rawThinking = rawThinkingBuilder.takeIf { it.isNotEmpty() }?.toString()
 
-            if (rawContent.isBlank() && rawToolCalls.isNotEmpty()) {
+            val toolsWereRequestedStream = requestBody.containsKey("tools")
+            val streamNativeToolCalls = if (toolsWereRequestedStream) {
+                parseNativeOllamaToolCalls(rawToolCalls).also { calls ->
+                    logger.info { "$logPrefix [NATIVE_TOOLS_RESPONSE] (stream) calls=${calls.size}" }
+                }
+            } else null
+
+            if (streamNativeToolCalls == null && rawContent.isBlank() && rawToolCalls.isNotEmpty()) {
                 rawContent = convertToolCallsToCanonicalJson(rawToolCalls)
                 logger.info {
                     "$logPrefix [TOOL_CALLS_NORMALIZED] Converted Ollama streamed message.tool_calls to canonical JSON content " +
@@ -677,7 +712,8 @@ class OllamaAdapter(
                 cost = 0.0,  // Free local execution
                 finishReason = finalDoneReason,
                 rawResponse = syntheticResponse,
-                thinking = finalThinking
+                thinking = finalThinking,
+                nativeToolCalls = streamNativeToolCalls
             )
         } catch (e: CancellationException) {
             // Guardrail-triggered abort — log and rethrow as-is, do NOT wrap.
@@ -811,6 +847,39 @@ class OllamaAdapter(
         return Pair("", rawThinking)
     }
 
+    private fun buildOllamaToolsArray(tools: List<ToolSchema>): List<Map<String, Any>> {
+        return tools.map { tool ->
+            mapOf(
+                "type" to "function",
+                "function" to mapOf(
+                    "name" to tool.name,
+                    "description" to tool.description,
+                    "parameters" to tool.parametersJsonSchema,
+                )
+            )
+        }
+    }
+
+    private fun parseNativeOllamaToolCalls(rawCalls: List<Map<String, Any?>>): List<NativeToolCall> {
+        return rawCalls.mapNotNull { call ->
+            @Suppress("UNCHECKED_CAST")
+            val function = call["function"] as? Map<String, Any?> ?: return@mapNotNull null
+            val name = function["name"] as? String ?: return@mapNotNull null
+            val argsRaw = function["arguments"]
+            val argumentsJson = when (argsRaw) {
+                is String -> argsRaw
+                is Map<*, *> -> gson.toJson(argsRaw)
+                null -> "{}"
+                else -> gson.toJson(argsRaw)
+            }
+            NativeToolCall(
+                id = java.util.UUID.randomUUID().toString(),
+                name = normalizeToolName(name),
+                argumentsJson = argumentsJson,
+            )
+        }
+    }
+
     private fun extractOllamaToolCalls(messageMap: Map<String, Any?>): List<Map<String, Any?>> {
         @Suppress("UNCHECKED_CAST")
         val toolCalls = messageMap["tool_calls"] as? List<Map<String, Any?>> ?: return emptyList()
@@ -858,6 +927,22 @@ class OllamaAdapter(
             }
             else -> mapOf("value" to rawArguments.toString())
         }
+    }
+
+    private fun isToolsNotSupportedError(httpStatus: Int, errorMessage: String): Boolean {
+        if (httpStatus != 400 && httpStatus != 422) return false
+        val lower = errorMessage.lowercase()
+        val mentionsTooling =
+            lower.contains("\"tools\"") ||
+                lower.contains("tool calling") ||
+                lower.contains("function calling")
+        val unsupportedShape =
+            lower.contains("not supported") ||
+                lower.contains("unsupported") ||
+                lower.contains("unknown field") ||
+                lower.contains("unknown parameter") ||
+                lower.contains("unexpected")
+        return mentionsTooling && unsupportedShape
     }
 
     override suspend fun close() {

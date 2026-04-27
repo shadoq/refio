@@ -10,6 +10,7 @@ import pl.jclab.refio.core.db.repositories.DocumentationRepository
 import pl.jclab.refio.core.db.repositories.ProjectAnalysisReportRepository
 import pl.jclab.refio.core.db.repositories.PromptsRepository
 import pl.jclab.refio.core.db.repositories.RagRepository
+import pl.jclab.refio.core.db.repositories.SnapshotGroupRepository
 import pl.jclab.refio.core.db.repositories.SnapshotRepository
 import pl.jclab.refio.core.db.repositories.SubtaskRepository
 import pl.jclab.refio.core.db.repositories.TaskRepository
@@ -29,6 +30,7 @@ class PersistenceModule {
     val ragRepository = RagRepository()
     val documentationRepository = DocumentationRepository()
     val snapshotRepository = SnapshotRepository()
+    val snapshotGroupRepository = SnapshotGroupRepository()
     val projectAnalysisReportRepository = ProjectAnalysisReportRepository()
     val agentSessionRepository = AgentSessionRepository()
     val agentInstanceRepository = AgentInstanceRepository()

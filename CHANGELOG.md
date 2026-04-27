@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.0.1.8] - 2026-04-26
+
+### Added
+
+- **Native function calling** — agents can now use providers' structured `tools` API instead of the JSON-in-text envelope. Opt-in per model via `tools.native_tools: auto | always | never` in `config.yaml`; default is `auto` (enabled for models with `supportsFunctionCalling=true`).
+  - OpenAI (Chat Completions + Responses API) — strict-mode schema sanitization, `tool_choice: auto`.
+  - Anthropic — `tools` array + `content[].tool_use` response parsing; schema sanitized (composition keywords stripped).
+  - Gemini — `functionDeclarations` array + `functionCall` response parsing; Gemini-specific type normalization.
+- `ToolSchemaSanitizer` — provider-aware JSON Schema normalization (OpenAI strict compatibility check, Anthropic forbidden-keyword stripping, Gemini single-type coercion and nullable fields).
+- `NativeToolsFallbackTracker` — session-scoped in-memory registry; if a provider returns 400 "tools not supported", the model is marked and all subsequent requests in the same process skip native tools automatically.
+- `NativeToolsResolver` (`NativeToolsMode` enum: `AUTO / ALWAYS / NEVER`) — central decision logic with precedence: fallback cache → NEVER → ALWAYS → `ModelDefinition.supportsFunctionCalling`.
+- XML tag fallback in `ToolCallParser` — recovers tool calls from `<tool_name><arg>…</arg></tool_name>` pseudo-tags emitted by weak local models (qwen<70B, some Gemma builds) that bypass the native API entirely. Warns on use.
+- New models: **GPT-5.5**, **GPT-5.4 Nano**, **Qwen 3.6 35B/27B** (Ollama), **Qwen 3-next 80B**, **gpt-oss-safeguard 20B/120B**, OpenRouter `qwen/*` patterns.
+- `claude-sonnet-4-6` added to `SupportedModels`.
+- Per-iteration token and cost metrics persisted directly to the task row so the History panel and live stats bar show running totals without aggregating from message metadata.
+
+### Changed
+
+- `AgentTurnLoop` auto-falls back to the JSON-in-text path when a provider throws `ToolsNotSupportedException` — prompt is rebuilt without `<available_tools>` and the JSON envelope contract; no user action needed.
+- When native tools are active the `response_format` / `json_object` override is suppressed (incompatible with function-calling mode on most providers).
+- `TurnLLMCaller` accepts `nativeToolSchemas` and forwards them as `native_tools` in `kwargs`; retry handler also propagates `thinking`, `reasoningEffort`, and `noEgressEnabled`.
+- Subagent profiles filter the native `tools` array to match their `<available_tools>` list — prevents the model calling tools the harness would reject.
+- `ToolCallParser.extractToolCalls` pre-guard (`startsWith("{")`) removed — some models (e.g. glm-4.7-flash) emit prose before the JSON envelope, which the brace-matching strategy handles correctly. All-strategies-failed log downgraded from `WARN` to `DEBUG`.
+
+### Fixed
+
+- Anthropic tool results were mapped to `role: "assistant"` — now correctly mapped to `role: "user"`, fixing HTTP 400 rejections from claude-opus-4-6 and newer models that treat assistant-role tool results as prefill.
+- `temperature` parameter no longer sent to models that deprecated it (`claude-opus-4-7`, `claude-opus-4-6`, `gpt-5.5`, `gpt-5.4-nano`) — removes spurious provider warnings.
+- Anthropic streaming: `content_block_start` for `tool_use` blocks now captures the call `id` alongside the name.
+
+---
+
 ## [0.0.1.7] - 2025-04-17
 
 ### Added

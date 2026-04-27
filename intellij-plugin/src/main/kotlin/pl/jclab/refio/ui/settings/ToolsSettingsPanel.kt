@@ -38,13 +38,7 @@ class ToolsSettingsPanel(
     private var isLoadingPermissions = false
 
     init {
-        border = BorderFactory.createCompoundBorder(
-            BorderFactory.createTitledBorder(
-                LCATheme.customLineBorder(LCATheme.borderColor, 1),
-                "Tools"
-            ),
-            LCATheme.paddedBorder(16)
-        )
+        border = LCATheme.createSettingsBorder("Tools")
 
         val contentPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
@@ -156,13 +150,7 @@ class ToolsSettingsPanel(
 
     private fun createCommandRulesPanel(): JComponent {
         val panel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder(
-                    LCATheme.customLineBorder(LCATheme.borderColor, 1),
-                    "Terminal Command Rules"
-                ),
-                LCATheme.paddedBorder(8)
-            )
+            border = LCATheme.createSettingsBorder("Terminal Command Rules")
             preferredSize = Dimension(0, 310)
         }
 

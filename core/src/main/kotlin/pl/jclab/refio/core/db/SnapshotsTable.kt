@@ -5,27 +5,27 @@ import java.util.UUID
 
 /**
  * Snapshots table definition using Exposed ORM DSL
- * Stores file content snapshots for rollback capability
+ * Stores file content snapshots for rollback capability.
+ * Each snapshot belongs to a [SnapshotGroupsTable] (one group per tool execution).
  */
 object SnapshotsTable : Table("snapshots") {
     val id = varchar("id", 36).clientDefault { UUID.randomUUID().toString() }
     val taskId = varchar("task_id", 36).references(TasksTable.id, onDelete = ReferenceOption.CASCADE)
-    val subtaskId = varchar("subtask_id", 36).references(SubtasksTable.id, onDelete = ReferenceOption.CASCADE).nullable()
+    val groupId = varchar("group_id", 36).references(SnapshotGroupsTable.id, onDelete = ReferenceOption.CASCADE)
 
-    val filePath = text("file_path")  // Absolute or relative path within sandbox
-    val contentHash = varchar("content_hash", 64)  // SHA-256 hash
-    val contentCompressed = blob("content_compressed")  // zlib compressed content
-    val originalSize = long("original_size")  // Size in bytes before compression
-    val compressionRatio = double("compression_ratio").default(1.0)  // originalSize / compressedSize
+    val filePath = text("file_path")
+    val contentHash = varchar("content_hash", 64)
+    val contentCompressed = blob("content_compressed")
+    val originalSize = long("original_size")
+    val compressionRatio = double("compression_ratio").default(1.0)
 
     val createdAt = long("created_at").clientDefault { System.currentTimeMillis() }
 
     override val primaryKey = PrimaryKey(id)
 
     init {
-        // Index for efficient retrieval of snapshots by task
         index("idx_snapshots_task", false, taskId, createdAt)
-        // Index for finding snapshots by file path
+        index("idx_snapshots_group", false, groupId)
         index("idx_snapshots_file_hash", false, filePath, contentHash)
     }
 }
@@ -36,7 +36,7 @@ object SnapshotsTable : Table("snapshots") {
 data class Snapshot(
     val id: String,
     val taskId: String,
-    val subtaskId: String?,
+    val groupId: String,
     val filePath: String,
     val contentHash: String,
     val contentCompressed: ByteArray,

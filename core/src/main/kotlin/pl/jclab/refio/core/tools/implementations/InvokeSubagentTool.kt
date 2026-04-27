@@ -174,12 +174,73 @@ class InvokeSubagentTool(
         )
     }
 
+    /**
+     * Parse and normalize the `context_refs` parameter from an `invoke_subagent` call.
+     *
+     * Behavior:
+     *  - Drops blank / null entries.
+     *  - Normalizes leading `./` and collapses redundant `/` so equivalent paths
+     *    that vary only in surface form deduplicate cleanly.
+     *  - Deduplicates while preserving insertion order (first occurrence wins).
+     *  - Hard-caps at [MAX_CONTEXT_REFS]; remaining entries are dropped with a
+     *    single warning. Without this guard, parallel `invoke_subagent` calls
+     *    that all pass the project's full file list (observed: 21 paths × 3
+     *    parallel agents in session 11) duplicate the same string into every
+     *    subagent's prompt and inflate context cost linearly.
+     */
     private fun parseContextRefs(raw: Any?): List<ContextReference> {
         val refs = raw as? List<*> ?: return emptyList()
-        return refs.mapNotNull { value ->
-            val path = value?.toString()?.trim().orEmpty()
-            if (path.isBlank()) null else ContextReference.file(path)
+        if (refs.isEmpty()) return emptyList()
+
+        val seen = LinkedHashSet<String>(refs.size)
+        var blank = 0
+        var duplicate = 0
+        var capped = 0
+        for (value in refs) {
+            val asString = value?.toString()?.trim().orEmpty()
+            if (asString.isBlank()) {
+                blank++
+                continue
+            }
+            val normalized = normalizePath(asString)
+            if (!seen.add(normalized)) {
+                duplicate++
+                continue
+            }
+            if (seen.size >= MAX_CONTEXT_REFS) {
+                capped = refs.size - refs.indexOf(value) - 1
+                break
+            }
         }
+        if (duplicate > 0 || capped > 0 || blank > 0) {
+            logger.info {
+                "[INVOKE_SUBAGENT] context_refs sanitized: kept=${seen.size}, " +
+                    "duplicates=$duplicate, blank=$blank, dropped_over_cap=$capped, " +
+                    "cap=$MAX_CONTEXT_REFS"
+            }
+        }
+        return seen.map { ContextReference.file(it) }
+    }
+
+    private fun normalizePath(path: String): String {
+        var p = path
+        while (p.startsWith("./")) p = p.removePrefix("./")
+        // Collapse `//` runs but preserve a leading `//` (UNC paths) — though sandbox
+        // rejects absolute paths anyway, this is just defensive normalization.
+        val leading = if (p.startsWith("//")) "//" else ""
+        val body = p.removePrefix(leading).replace(Regex("/+"), "/")
+        return leading + body
+    }
+
+    private companion object {
+        /**
+         * Upper bound for context_refs per `invoke_subagent` call. Generous enough
+         * for real multi-file investigations (a code review across 30 modules) but
+         * stops a model from blindly forwarding the entire project listing. When
+         * exceeded the trailing entries are dropped — the model sees the first
+         * [MAX_CONTEXT_REFS] paths in declaration order.
+         */
+        const val MAX_CONTEXT_REFS = 32
     }
 
     private fun buildDynamicDescription(): String {

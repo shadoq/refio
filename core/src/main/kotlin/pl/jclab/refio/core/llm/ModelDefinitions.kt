@@ -72,6 +72,40 @@ object ModelDefinitions {
     val OPENAI_MODELS = mapOf(
 
         //
+        // GPT 5.5
+        //
+        "gpt-5.5" to ModelDefinition(
+            id = "gpt-5.5",
+            name = "GPT-5.5",
+            provider = "openai",
+            description = "Best intelligence at scale for agentic, coding, and professional workflows",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 2.50,
+            costPer1MOutput = 15.00,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            paramMappings = mapOf(
+                "max_tokens" to "max_completion_tokens"
+            ),
+            removeParams = listOf(
+                "temperature"
+            ),
+            active = true
+        ),
+        //
         // GPT 5.4
         //
         "gpt-5.4" to ModelDefinition(
@@ -120,6 +154,36 @@ object ModelDefinitions {
             maxOutputTokens = 32_768,
             costPer1MInput = 0.25,
             costPer1MOutput = 2.00,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            paramMappings = mapOf(
+                "max_tokens" to "max_completion_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+        "gpt-5.4-nano" to ModelDefinition(
+            id = "gpt-5.4-nano",
+            name = "GPT-5.4 Nano",
+            provider = "openai",
+            description = "Ultra cost-effective model for simple tasks",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = 32_768,
+            costPer1MInput = 0.05,
+            costPer1MOutput = 0.40,
             supportsVision = false,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -1225,6 +1289,7 @@ object ModelDefinitions {
             supportsStreaming = true,
             supportsFunctionCalling = true,
             supportsThinking = true,
+            removeParams = listOf("temperature"),
             active = true
         ),
 
@@ -1248,6 +1313,7 @@ object ModelDefinitions {
             supportsStreaming = true,
             supportsFunctionCalling = true,
             supportsThinking = true,
+            removeParams = listOf("temperature"),
             active = true
         ),
 
@@ -2879,6 +2945,283 @@ object ModelDefinitions {
             active = true
         ),
 
+        "qwen3.6:35b" to ModelDefinition(
+            id = "qwen3.6:35b",
+            name = "Qwen 3.6 35B",
+            provider = "ollama",
+            description = "Qwen 3.6 35B multimodal model with 256K context and native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+
+        "qwen3.6:27b" to ModelDefinition(
+            id = "qwen3.6:27b",
+            name = "Qwen 3.6 27B",
+            provider = "ollama",
+            description = "Qwen 3.6 27B multimodal model with 256K context and native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "qwen3-next:80b" to ModelDefinition(
+            id = "qwen3-next:80b",
+            name = "Qwen 3 Next 80B",
+            provider = "ollama",
+            description = "Qwen 3 Next 80B with native tool use and long context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "gpt-oss-safeguard:20b" to ModelDefinition(
+            id = "gpt-oss-safeguard:20b",
+            name = "GPT-OSS Safeguard 20B",
+            provider = "ollama",
+            description = "OpenAI gpt-oss-safeguard 20B with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "gpt-oss-safeguard:120b" to ModelDefinition(
+            id = "gpt-oss-safeguard:120b",
+            name = "GPT-OSS Safeguard 120B",
+            provider = "ollama",
+            description = "OpenAI gpt-oss-safeguard 120B with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "deepseek-v3.2:latest" to ModelDefinition(
+            id = "deepseek-v3.2:latest",
+            name = "DeepSeek V3.2",
+            provider = "ollama",
+            description = "DeepSeek V3.2 with native tool use and reasoning",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "kimi-k2-thinking:latest" to ModelDefinition(
+            id = "kimi-k2-thinking:latest",
+            name = "Kimi K2 Thinking",
+            provider = "ollama",
+            description = "Moonshot Kimi K2 Thinking with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 200_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "minimax-m2:latest" to ModelDefinition(
+            id = "minimax-m2:latest",
+            name = "MiniMax M2",
+            provider = "ollama",
+            description = "MiniMax M2 with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "nemotron-3-super:120b" to ModelDefinition(
+            id = "nemotron-3-super:120b",
+            name = "Nemotron 3 Super 120B",
+            provider = "ollama",
+            description = "NVIDIA Nemotron 3 Super 120B with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "nemotron-3-nano:4b" to ModelDefinition(
+            id = "nemotron-3-nano:4b",
+            name = "Nemotron 3 Nano 4B",
+            provider = "ollama",
+            description = "NVIDIA Nemotron 3 Nano 4B with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "nemotron-3-nano:30b" to ModelDefinition(
+            id = "nemotron-3-nano:30b",
+            name = "Nemotron 3 Nano 30B",
+            provider = "ollama",
+            description = "NVIDIA Nemotron 3 Nano 30B with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "nemotron-cascade-2:30b" to ModelDefinition(
+            id = "nemotron-cascade-2:30b",
+            name = "Nemotron Cascade 2 30B",
+            provider = "ollama",
+            description = "NVIDIA Nemotron Cascade 2 30B with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
         "qwen3-coder:30b" to ModelDefinition(
             id = "qwen3-coder:30b",
             name = "Qwen 3 Coder 30B",
@@ -3007,8 +3350,7 @@ object ModelDefinitions {
             description = "Compact reasoning model with excellent efficiency",
             capabilities = listOf(
                 ModelCapability.CHAT_COMPLETION,
-                ModelCapability.REASONING,
-                ModelCapability.TOOL_USE
+                ModelCapability.REASONING
             ),
             modelType = ModelType.TEXT,
             maxContext = 64_000,
@@ -3018,7 +3360,7 @@ object ModelDefinitions {
             supportsVision = false,
             supportsReasoning = true,
             supportsStreaming = true,
-            supportsFunctionCalling = true,
+            supportsFunctionCalling = false,
             defaultParams = mapOf("temperature" to 0.7),
             active = true
         ),
@@ -3030,8 +3372,7 @@ object ModelDefinitions {
             description = "Open reasoning model approaching O3/Gemini 2.5 Pro performance",
             capabilities = listOf(
                 ModelCapability.CHAT_COMPLETION,
-                ModelCapability.REASONING,
-                ModelCapability.TOOL_USE
+                ModelCapability.REASONING
             ),
             modelType = ModelType.TEXT,
             maxContext = 64_000,
@@ -3041,7 +3382,7 @@ object ModelDefinitions {
             supportsVision = false,
             supportsReasoning = true,
             supportsStreaming = true,
-            supportsFunctionCalling = true,
+            supportsFunctionCalling = false,
             defaultParams = mapOf("temperature" to 0.7),
             active = true
         ),
@@ -3053,8 +3394,7 @@ object ModelDefinitions {
             description = "High-performance reasoning model",
             capabilities = listOf(
                 ModelCapability.CHAT_COMPLETION,
-                ModelCapability.REASONING,
-                ModelCapability.TOOL_USE
+                ModelCapability.REASONING
             ),
             modelType = ModelType.TEXT,
             maxContext = 64_000,
@@ -3064,7 +3404,7 @@ object ModelDefinitions {
             supportsVision = false,
             supportsReasoning = true,
             supportsStreaming = true,
-            supportsFunctionCalling = true,
+            supportsFunctionCalling = false,
             defaultParams = mapOf("temperature" to 0.7),
             active = true
         ),
@@ -3076,8 +3416,7 @@ object ModelDefinitions {
             description = "Large reasoning model with superior capabilities",
             capabilities = listOf(
                 ModelCapability.CHAT_COMPLETION,
-                ModelCapability.REASONING,
-                ModelCapability.TOOL_USE
+                ModelCapability.REASONING
             ),
             modelType = ModelType.TEXT,
             maxContext = 64_000,
@@ -3087,7 +3426,7 @@ object ModelDefinitions {
             supportsVision = false,
             supportsReasoning = true,
             supportsStreaming = true,
-            supportsFunctionCalling = true,
+            supportsFunctionCalling = false,
             defaultParams = mapOf("temperature" to 0.7),
             active = true
         ),
@@ -3099,8 +3438,7 @@ object ModelDefinitions {
             description = "Very large reasoning model with excellent performance",
             capabilities = listOf(
                 ModelCapability.CHAT_COMPLETION,
-                ModelCapability.REASONING,
-                ModelCapability.TOOL_USE
+                ModelCapability.REASONING
             ),
             modelType = ModelType.TEXT,
             maxContext = 64_000,
@@ -3110,7 +3448,7 @@ object ModelDefinitions {
             supportsVision = false,
             supportsReasoning = true,
             supportsStreaming = true,
-            supportsFunctionCalling = true,
+            supportsFunctionCalling = false,
             defaultParams = mapOf("temperature" to 0.7),
             active = true
         ),
@@ -3122,8 +3460,7 @@ object ModelDefinitions {
             description = "Flagship reasoning model with state-of-the-art capabilities",
             capabilities = listOf(
                 ModelCapability.CHAT_COMPLETION,
-                ModelCapability.REASONING,
-                ModelCapability.TOOL_USE
+                ModelCapability.REASONING
             ),
             modelType = ModelType.TEXT,
             maxContext = 64_000,
@@ -3133,7 +3470,7 @@ object ModelDefinitions {
             supportsVision = false,
             supportsReasoning = true,
             supportsStreaming = true,
-            supportsFunctionCalling = true,
+            supportsFunctionCalling = false,
             defaultParams = mapOf("temperature" to 0.7),
             active = true
         ),
@@ -3145,8 +3482,7 @@ object ModelDefinitions {
             description = "Massive MoE reasoning model rivaling closed-source models",
             capabilities = listOf(
                 ModelCapability.CHAT_COMPLETION,
-                ModelCapability.REASONING,
-                ModelCapability.TOOL_USE
+                ModelCapability.REASONING
             ),
             modelType = ModelType.TEXT,
             maxContext = 64_000,
@@ -3156,7 +3492,7 @@ object ModelDefinitions {
             supportsVision = false,
             supportsReasoning = true,
             supportsStreaming = true,
-            supportsFunctionCalling = true,
+            supportsFunctionCalling = false,
             defaultParams = mapOf("temperature" to 0.7),
             active = true
         ),
@@ -4448,6 +4784,149 @@ object ModelDefinitions {
     )
 
     /**
+     * OpenRouter Models Registry (curated)
+     *
+     * OpenRouter exposes 200+ models via dynamic listing. This registry contains
+     * static definitions for the popular families where we know native
+     * function-calling is reliable — so AgentTurnLoop takes the native tool_calls
+     * path instead of the JSON-in-text envelope. Unknown OpenRouter model IDs
+     * still fall back to null (JSON envelope) — that preserves backwards
+     * compatibility for exotic community models.
+     *
+     * Matching is prefix-based in [getDefinition] (e.g. "amazon/nova-lite-v1"
+     * matches entry "amazon/nova-").
+     */
+    val OPENROUTER_MODELS = mapOf(
+        // Anthropic
+        "anthropic/claude-opus" to openrouterDef("anthropic/claude-opus-*", maxContext = 1_000_000, vision = true),
+        "anthropic/claude-sonnet" to openrouterDef("anthropic/claude-sonnet-*", maxContext = 1_000_000, vision = true),
+        "anthropic/claude-haiku" to openrouterDef("anthropic/claude-haiku-*", maxContext = 200_000, vision = true),
+        "anthropic/claude-" to openrouterDef("anthropic/claude-*", maxContext = 200_000, vision = true),
+        // OpenAI
+        "openai/gpt-5.4-pro" to openrouterDef("openai/gpt-5.4-pro", maxContext = 1_050_000, vision = true),
+        "openai/gpt-5.4" to openrouterDef("openai/gpt-5.4-*", maxContext = 400_000, vision = true),
+        "openai/gpt-5" to openrouterDef("openai/gpt-5-*", maxContext = 400_000, vision = true),
+        "openai/gpt-audio" to openrouterDef("openai/gpt-audio*", maxContext = 128_000),
+        "openai/gpt-" to openrouterDef("openai/gpt-*", maxContext = 128_000, vision = true),
+        "openai/o" to openrouterDef("openai/o*", maxContext = 200_000, reasoning = true),
+        // Google
+        "google/gemini-3" to openrouterDef("google/gemini-3*", maxContext = 1_048_576, vision = true),
+        "google/gemini-" to openrouterDef("google/gemini-*", maxContext = 1_000_000, vision = true),
+        "google/gemma-" to openrouterDef("google/gemma-*", maxContext = 262_144, vision = true),
+        // Amazon
+        "amazon/nova-" to openrouterDef("amazon/nova-*", maxContext = 300_000, vision = true),
+        // Meta
+        "meta-llama/llama-" to openrouterDef("meta-llama/llama-*", maxContext = 128_000),
+        "meta-llama/" to openrouterDef("meta-llama/*", maxContext = 128_000),
+        // Mistral
+        "mistralai/" to openrouterDef("mistralai/*", maxContext = 262_144),
+        // Qwen
+        "qwen/qwen3.6" to openrouterDef("qwen/qwen3.6-*", maxContext = 1_000_000, vision = true),
+        "qwen/qwen3.5" to openrouterDef("qwen/qwen3.5-*", maxContext = 262_144, vision = true),
+        // qwen3-coder-* variants emit XML pseudo-tags instead of native tool_calls
+        // (observed: `<create_new_file><path>...</path><content>...</content></create_new_file>`).
+        // Prefix entry must come before "qwen/qwen3" to win the prefix match.
+        "qwen/qwen3-coder" to openrouterDef("qwen/qwen3-coder-*", maxContext = 262_144, functionCalling = false),
+        "qwen/qwen3" to openrouterDef("qwen/qwen3-*", maxContext = 262_144),
+        "qwen/" to openrouterDef("qwen/*", maxContext = 128_000),
+        // DeepSeek
+        "deepseek/" to openrouterDef("deepseek/*", maxContext = 128_000),
+        // xAI
+        "x-ai/grok-" to openrouterDef("x-ai/grok-*", maxContext = 2_000_000, vision = true),
+        // Cohere
+        "cohere/command-" to openrouterDef("cohere/command-*", maxContext = 128_000),
+        // Moonshot
+        "moonshotai/kimi" to openrouterDef("moonshotai/kimi-*", maxContext = 262_144, vision = true),
+        "moonshotai/" to openrouterDef("moonshotai/*", maxContext = 128_000),
+        // MiniMax
+        // minimax-m2.7 emits `<minimax:tool_call><invoke name="...">...</invoke></minimax:tool_call>`
+        // pseudo-XML instead of native tool_calls. Force JSON envelope mode.
+        "minimax/minimax-m2.7" to openrouterDef("minimax/minimax-m2.7*", maxContext = 196_608, functionCalling = false),
+        "minimax/minimax-m2" to openrouterDef("minimax/minimax-m2*", maxContext = 196_608),
+        "minimax/" to openrouterDef("minimax/*", maxContext = 128_000),
+        // Z.AI
+        "z-ai/glm-5v" to openrouterDef("z-ai/glm-5v*", maxContext = 202_752, vision = true),
+        "z-ai/glm-" to openrouterDef("z-ai/glm-*", maxContext = 202_752),
+        "z-ai/" to openrouterDef("z-ai/*", maxContext = 128_000),
+        // ByteDance
+        "bytedance-seed/" to openrouterDef("bytedance-seed/*", maxContext = 262_144, vision = true),
+        // NVIDIA
+        "nvidia/nemotron" to openrouterDef("nvidia/nemotron-*", maxContext = 262_144),
+        "nvidia/" to openrouterDef("nvidia/*", maxContext = 128_000),
+        // InclusionAI (Ling family)
+        "inclusionai/" to openrouterDef("inclusionai/*", maxContext = 262_144),
+        // Arcee
+        "arcee-ai/" to openrouterDef("arcee-ai/*", maxContext = 262_144),
+        // Kwai
+        "kwaipilot/" to openrouterDef("kwaipilot/*", maxContext = 256_000),
+        // Reka
+        "rekaai/" to openrouterDef("rekaai/*", maxContext = 16_384, vision = true),
+        // Xiaomi
+        "xiaomi/mimo" to openrouterDef("xiaomi/mimo*", maxContext = 1_048_576, vision = true),
+        // Upstage
+        "upstage/solar" to openrouterDef("upstage/solar-*", maxContext = 128_000),
+        // Inception
+        "inception/mercury" to openrouterDef("inception/mercury*", maxContext = 128_000),
+        // Tencent
+        "tencent/" to openrouterDef("tencent/*", maxContext = 262_144),
+        // Writer
+        "writer/palmyra" to openrouterDef("writer/palmyra-*", maxContext = 1_040_000),
+        // Allen AI
+        "allenai/olmo" to openrouterDef("allenai/olmo-*", maxContext = 65_536),
+        // StepFun
+        "stepfun/step" to openrouterDef("stepfun/step-*", maxContext = 262_144),
+        // Liquid
+        "liquid/lfm" to openrouterDef("liquid/lfm-*", maxContext = 32_768),
+        // AION
+        "aion-labs/" to openrouterDef("aion-labs/*", maxContext = 131_072),
+        // Baidu
+        "baidu/" to openrouterDef("baidu/*", maxContext = 65_536, vision = true),
+        // OpenRouter meta-models
+        "openrouter/" to openrouterDef("openrouter/*", maxContext = 200_000, vision = true)
+    )
+
+    private fun openrouterDef(
+        id: String,
+        maxContext: Int,
+        vision: Boolean = false,
+        reasoning: Boolean = false,
+        /**
+         * Whether the upstream model reliably emits native OpenAI-format
+         * `tool_calls`. When false, AgentTurnLoop falls back to the
+         * `response-contract-json` system prompt and parses JSON envelopes
+         * out of plain text — that is the right path for models which
+         * advertise function calling but actually emit pseudo-XML
+         * (e.g. `<minimax:tool_call>`, `<create_new_file>...</...>`).
+         */
+        functionCalling: Boolean = true
+    ): ModelDefinition = ModelDefinition(
+        id = id,
+        name = id,
+        provider = "openrouter",
+        description = if (functionCalling)
+            "OpenRouter curated family with native function-calling"
+        else
+            "OpenRouter family that does NOT emit native tool_calls — JSON envelope only",
+        capabilities = buildList {
+            add(ModelCapability.CHAT_COMPLETION)
+            add(ModelCapability.TEXT_COMPLETION)
+            if (vision) add(ModelCapability.VISION)
+        },
+        modelType = ModelType.TEXT,
+        maxContext = maxContext,
+        maxOutputTokens = null,
+        costPer1MInput = 0.0,
+        costPer1MOutput = 0.0,
+        supportsVision = vision,
+        supportsReasoning = reasoning,
+        supportsStreaming = true,
+        supportsFunctionCalling = functionCalling,
+        endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+        apiFormat = ApiFormat.CHAT_COMPLETIONS,
+        active = true
+    )
+
+    /**
      * Get model definition by ID and provider.
      * Returns null if not found (use fallback).
      *
@@ -4463,7 +4942,10 @@ object ModelDefinitions {
             "gemini" -> GEMINI_MODELS[modelId]
             "lmstudio" -> LM_STUDIO_MODELS[modelId]
             "zai" -> ZAI_MODELS[modelId]
-            "openrouter" -> null  // OpenRouter uses dynamic models
+            "openrouter" -> OPENROUTER_MODELS.entries
+                .firstOrNull { (prefix, _) -> modelId.startsWith(prefix) }
+                ?.value
+                ?.copy(id = modelId, name = modelId)
             else -> null
         }
     }

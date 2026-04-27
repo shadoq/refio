@@ -179,6 +179,8 @@ class ParallelToolExecutor(
                 subtaskId = subtaskId,
                 filePaths = listOf(path)
             )
+            // Intentionally not linking to subtask here — parallel path is for READ_ONLY tools;
+            // writes go through ToolExecutor/TurnToolExecutor which do the link.
         } catch (e: Exception) {
             logger.warn(e) { "[SNAPSHOT] Failed to create snapshot for ${toolCall.name}" }
         }

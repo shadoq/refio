@@ -130,8 +130,9 @@ object TestDatabase {
     private fun createTables() {
         SchemaUtils.createMissingTablesAndColumns(
             TasksTable,
-            SnapshotsTable,
+            SnapshotGroupsTable,
             SubtasksTable,
+            SnapshotsTable,
             ChatMessagesTable,
             ApiLogsTable,
             MCPServersTable,
@@ -182,8 +183,9 @@ object TestDatabase {
             MCPServersTable.deleteAll()
             ApiLogsTable.deleteAll()
             ChatMessagesTable.deleteAll()
-            SubtasksTable.deleteAll()
             SnapshotsTable.deleteAll()
+            SubtasksTable.deleteAll()
+            SnapshotGroupsTable.deleteAll()
             TasksTable.deleteAll()
         }
     }

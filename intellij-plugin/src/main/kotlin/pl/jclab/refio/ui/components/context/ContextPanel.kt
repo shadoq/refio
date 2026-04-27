@@ -192,6 +192,15 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         }
     }
 
+    private val viewContextButton = JButton("View Context").apply {
+        toolTipText = "Show generated project context (ContextService output, without system prompt)"
+        isEnabled = false
+        margin = Insets(2, 6, 2, 6)
+        addActionListener {
+            openRawContextViewer()
+        }
+    }
+
     private val refreshButton = JButton("Refresh").apply {
         margin = Insets(2, 6, 2, 6)
         addActionListener {
@@ -201,6 +210,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
 
     private var isLoading = false
     private var currentLLMPrompt: String? = null
+    private var currentRawContext: String? = null
     private var lastStreamingActive = false
     private var streamingSuppressStartMs: Long? = null
     private var pendingAutoRefreshAfterStreaming = false
@@ -314,6 +324,8 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                 add(savePromptButton)
                 add(Box.createHorizontalStrut(6))
                 add(viewPromptButton)
+                add(Box.createHorizontalStrut(4))
+                add(viewContextButton)
                 add(Box.createHorizontalStrut(8))
                 add(refreshButton)
             }
@@ -1404,11 +1416,13 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private fun updateLLMPromptState(context: pl.jclab.refio.core.api.ProjectContextResponse) {
         val prompt = context.activeLlmRequestPrompt?.takeIf { it.isNotBlank() } ?: context.llmContextPrompt
         currentLLMPrompt = prompt
+        currentRawContext = context.rawContextPrompt?.takeIf { it.isNotBlank() }
 
         val enabled = !prompt.isNullOrBlank()
         copyPromptButton.isEnabled = enabled
         savePromptButton.isEnabled = enabled
         viewPromptButton.isEnabled = enabled
+        viewContextButton.isEnabled = !currentRawContext.isNullOrBlank()
 
         if (!enabled) {
             val html = """
@@ -1489,6 +1503,19 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         }
 
         LLMPromptViewerDialog(project, prompt).show()
+    }
+
+    private fun openRawContextViewer() {
+        val raw = currentRawContext
+        if (raw.isNullOrBlank()) {
+            Messages.showWarningDialog(
+                project,
+                "Project context is not available. Please refresh the context first.",
+                "View Context"
+            )
+            return
+        }
+        LLMPromptViewerDialog(project, raw, dialogTitle = "Project Context (LLM input)").show()
     }
 
     private fun updateSections(
@@ -1926,9 +1953,11 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
             val html = "<html><body style='padding: 5px;'>$message</body></html>"
             currentTaskSection.setContent(message, html)
             currentLLMPrompt = null
+            currentRawContext = null
             copyPromptButton.isEnabled = false
             savePromptButton.isEnabled = false
             viewPromptButton.isEnabled = false
+            viewContextButton.isEnabled = false
 
             // Clear other sections (order matches contentPanel order for clarity)
             sectionEntries

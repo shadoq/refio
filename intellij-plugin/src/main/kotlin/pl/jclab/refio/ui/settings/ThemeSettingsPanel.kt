@@ -44,7 +44,7 @@ class ThemeSettingsPanel : JBPanel<ThemeSettingsPanel>(BorderLayout()) {
     }
 
     init {
-        border = JBUI.Borders.empty(LCATheme.margin)
+        border = JBUI.Borders.empty()
 
         val mainPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)

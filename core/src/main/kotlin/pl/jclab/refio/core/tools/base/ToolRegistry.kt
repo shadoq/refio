@@ -162,6 +162,18 @@ class ToolRegistry {
     }
 
     /**
+     * Get tool schemas for native function-calling API.
+     * Returns the same set of tools that would appear in the system prompt for this mode.
+     */
+    fun getToolSchemas(
+        taskMode: TaskMode,
+        permissionsService: ToolPermissionsService,
+        taskId: String? = null
+    ): List<ToolSchema> {
+        return getAvailableTools(taskMode, permissionsService, taskId).map { it.toToolSchema() }
+    }
+
+    /**
      * Check if tool exists
      *
      * @param name Tool name

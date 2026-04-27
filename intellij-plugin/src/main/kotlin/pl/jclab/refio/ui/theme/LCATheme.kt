@@ -297,6 +297,9 @@ object LCATheme {
     /** Standard margin (16px scaled) */
     val margin: Int get() = spacingXl
 
+    /** Standard inner padding for settings panels and titled sections */
+    val settingsPanelPadding: Int get() = padding
+
     /** Standard gap between elements (4px scaled) */
     val gap: Int get() = spacingSm
 
@@ -366,6 +369,12 @@ object LCATheme {
     ).apply {
         titleColor = com.intellij.util.ui.UIUtil.getLabelForeground()
     }
+
+    /** Standard titled border used by settings panels */
+    fun createSettingsBorder(title: String, innerPadding: Int = settingsPanelPadding) = compoundBorder(
+        createTitledBorder(title),
+        paddedBorder(innerPadding)
+    )
 
     /** Standard section border (line + padding) */
     val sectionBorder get() = compoundBorder(

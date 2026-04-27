@@ -7,8 +7,10 @@ import pl.jclab.refio.core.db.repositories.PromptsRepository
 import pl.jclab.refio.core.prompts.PromptRegistry
 import pl.jclab.refio.core.prompts.PromptTemplate
 import pl.jclab.refio.core.logging.dualLogger
+import java.util.concurrent.atomic.AtomicBoolean
 
 private val logger = dualLogger("PromptsService")
+private val defaultsInitialized = AtomicBoolean(false)
 
 /**
  * Service for managing prompts with {{variable}} substitution.
@@ -65,12 +67,34 @@ class PromptsService(
      * System prompts are now loaded from MD files - no DB seeding needed.
      */
     fun initializeDefaults() {
+        // Guard against redundant seeding: each CoreApiRouter construction used
+        // to re-run this against the shared SQLite DB, which caused three
+        // concurrent writers at startup and deadlocks.
+        if (!defaultsInitialized.compareAndSet(false, true)) {
+            logger.debug { "Default prompts already initialized in this process; skipping" }
+            return
+        }
         logger.info { "Initializing default prompts" }
 
         initializeBuiltinSlashPrompts()
         cleanupNonCustomSystemPrompts()
 
         logger.info { "Default prompts initialized" }
+    }
+
+    /**
+     * Resolve a named prompt fragment (no DB layer, no [PromptType] mapping).
+     * Used for sub-fragments like `response-contract-json` / `response-contract-native`
+     * that are included into larger system prompts via `{{variable}}` substitution.
+     *
+     * Hierarchy: project file > user file > builtin. Returns empty string if not found.
+     */
+    fun getFragment(name: String): String {
+        promptRegistry.getProjectFile(name)?.let { return it.content }
+        promptRegistry.getUserFile(name)?.let { return it.content }
+        promptRegistry.getBuiltin(name)?.let { return it.content }
+        logger.warn { "Prompt fragment not found in any layer: $name" }
+        return ""
     }
 
     /**

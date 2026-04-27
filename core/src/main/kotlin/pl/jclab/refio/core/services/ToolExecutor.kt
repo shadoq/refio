@@ -511,14 +511,17 @@ class ToolExecutor(
 
             logger.info { "Creating snapshot before ${toolCall.name}: ${filePaths.size} file(s)" }
 
-            // Create snapshot (returns subtaskId as snapshotId)
             val snapshotId = snapshotService.createSnapshot(
                 taskId = subtask.taskId,
                 subtaskId = subtask.id,
                 filePaths = filePaths
             )
 
-            // Link snapshot to subtask
+            if (snapshotId == null) {
+                logger.info { "No existing files to snapshot for ${toolCall.name} (${filePaths.joinToString()}); skipping link" }
+                return
+            }
+
             subtaskRepository.linkSnapshot(subtask.id, snapshotId)
 
             logger.info { "Snapshot created and linked: $snapshotId for ${filePaths.joinToString()}" }

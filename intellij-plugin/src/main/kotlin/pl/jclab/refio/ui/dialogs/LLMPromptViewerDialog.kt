@@ -22,13 +22,14 @@ import javax.swing.filechooser.FileNameExtensionFilter
 
 class LLMPromptViewerDialog(
     private val project: Project,
-    private val prompt: String
+    private val prompt: String,
+    dialogTitle: String = "LLM Context Prompt"
 ) : DialogWrapper(project) {
 
     private var editor: EditorEx? = null
 
     init {
-        title = "LLM Context Prompt"
+        title = dialogTitle
         setResizable(true)
         init()
     }

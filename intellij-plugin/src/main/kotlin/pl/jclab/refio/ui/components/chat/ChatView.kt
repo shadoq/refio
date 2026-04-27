@@ -48,6 +48,7 @@ import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.geom.RoundRectangle2D
 import javax.swing.Box
+import javax.swing.BoxLayout
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JViewport
@@ -367,8 +368,21 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
         add(southPanel, BorderLayout.SOUTH)
 
         cs.launch {
+            var previousTaskId: String? = null
             sessionManager.activeSession.collect { session ->
                 logger.info { "Received session update: mode=${session?.mode}" }
+                val newTaskId = session?.id
+                if (newTaskId != previousTaskId) {
+                    previousTaskId = newTaskId
+                    // Session switch: clear the current transcript immediately.
+                    // The messages StateFlow may still momentarily hold the previous
+                    // session's data, so rendering that snapshot here can leave the
+                    // old chat visible after "New Session" is clicked.
+                    lastReceivedMessages = emptyList()
+                    SwingUtilities.invokeLater {
+                        updateMessages(emptyList())
+                    }
+                }
             }
         }
 
@@ -587,8 +601,14 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
         }
 
         val toolbarRow = messages.size
+        val toolbarWithStats = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            add(toolbarFactory.createConversationToolbar())
+            add(SessionStatsBar.create(messages))
+        }
         messagesPanel.add(
-            toolbarFactory.createConversationToolbar(),
+            toolbarWithStats,
             GridBagConstraints().apply {
                 gridx = 0
                 gridy = toolbarRow
@@ -705,6 +725,15 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
 
     fun setContinuePromptHandler(handler: () -> Unit) {
         onContinueRequested = handler
+    }
+
+    fun clearForNewSession() {
+        lastReceivedMessages = emptyList()
+        disposeMessagePanels(messagePanelCache.values.map { it.panel })
+        messagePanelCache.clear()
+        lastRenderedMessageIds = emptyList()
+        showEmptyState()
+        firePropertyChange("messagesUpdated", false, true)
     }
 
     private fun disposeMessagePanels(panels: List<JPanel>) {

@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.services.turn
 
 import kotlinx.serialization.json.Json
+import pl.jclab.refio.core.api.TurnRunProfile
 import pl.jclab.refio.core.db.ExecutionMode
 import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.db.TaskStatus
@@ -67,9 +68,28 @@ class TurnResponseProcessor(
         taskId: String,
         mode: TaskMode,
         executionMode: ExecutionMode,
-        llmResponse: LLMResponse
+        llmResponse: LLMResponse,
+        runProfile: TurnRunProfile = TurnRunProfile.DEFAULT
     ): Int {
         if (mode != TaskMode.PLAN) return 0
+        // Subagents must never leave orphan PLANNED subtasks. A subagent final turn
+        // that happens to emit a {response, actions} envelope as prose (qwen3.5 failure
+        // mode, sesja 2) would otherwise create a PLANNED subtask that never executes
+        // — the subagent loop already ended. Silently skip.
+        if (runProfile == TurnRunProfile.SUBAGENT) {
+            logger.debug { "[PLAN] Skipping PLANNED subtask creation for SUBAGENT run profile (no orphans)" }
+            return 0
+        }
+
+        // Quick guard: on the native function-calling path the final assistant turn is
+        // typically plain prose (markdown summary), not a JSON envelope. Running JsonExtractor
+        // on prose wastes cycles and (more annoyingly) logs ERROR-level "All extraction
+        // strategies failed" noise. Only attempt extraction when content visibly starts
+        // with `{` or a fenced block.
+        val trimmedContent = llmResponse.content.trim()
+        if (!trimmedContent.startsWith("{") && !trimmedContent.startsWith("```") && !trimmedContent.startsWith("[")) {
+            return 0
+        }
 
         val planData = try {
             JsonExtractor.extractAndParsePlanningResponse(llmResponse.content)

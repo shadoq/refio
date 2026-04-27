@@ -18,6 +18,7 @@ object MigrationRunner {
         // Seed data was for UI development only. Existing databases retain v1 data.
         V2DropAgentEventsSessionFk(),
         V3RenameSlashCommandToSlashPrompt(),
+        V4SnapshotGroups(),
     )
 
     fun run(database: Database) {

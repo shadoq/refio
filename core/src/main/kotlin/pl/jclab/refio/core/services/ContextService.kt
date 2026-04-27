@@ -180,6 +180,13 @@ class ContextService(
         // 4. Get subtasks
         val subtasks = transaction { subtaskRepository.findByTaskId(taskId) }
 
+        // 4a. Lazily rebuild WORKING_MEMORY from persisted subtasks. Working memory lives
+        // in-memory only, so after a plugin/app restart (or when the user reopens an old
+        // conversation) the in-memory map is empty even though the underlying data —
+        // subtask params + result — is still in the database. hasEntries() guards against
+        // re-running the extraction on every turn within a live session.
+        workingMemoryService?.rebuildFromSubtasks(taskId = taskId, subtasks = subtasks)
+
         // 4. Get conversation history (if requested)
         val rawConversationHistory = if (CONTEXT_INCLUDE_CONVERSATION_HISTORY) {
             val allMessages = transaction { chatMessageRepository.findByTaskId(taskId) }

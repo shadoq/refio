@@ -32,6 +32,7 @@ internal object ConfigYamlEmitter {
             general.thinkingEnabled?.let { sb.appendLine("  thinkingEnabled: $it") }
             general.noEgressEnabled?.let { sb.appendLine("  noEgressEnabled: $it") }
             general.executionMode?.let { sb.appendLine("  executionMode: \"$it\"") }
+            general.nativeToolsMode?.let { sb.appendLine("  nativeToolsMode: \"$it\"") }
             sb.appendLine()
         }
 

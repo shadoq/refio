@@ -46,11 +46,41 @@ class HistoryPanel(
 
     private val searchField: SearchTextField
     private val filterTabs: JTabbedPane
+    private val sortCombo: JComboBox<SortOrder>
+    private val statusCombo: JComboBox<StatusFilter>
+    private val groupPinnedCheckbox: JCheckBox
     private val sessionListPanel: JPanel
     private val sessionListScrollPane: JBScrollPane
 
+    enum class SortOrder(val label: String) {
+        UPDATED_DESC("Recently updated"),
+        CREATED_DESC("Recently created"),
+        CREATED_ASC("Oldest first"),
+        NAME_ASC("Name A→Z"),
+        NAME_DESC("Name Z→A"),
+        DURATION_DESC("Duration (longest)"),
+        GENERATION_DESC("Generation time (longest)"),
+        TOKENS_DESC("Tokens (most)"),
+        COST_DESC("Cost (highest)");
+
+        override fun toString() = label
+    }
+
+    enum class StatusFilter(val label: String, val status: TaskStatus?) {
+        ALL("All statuses", null),
+        SUCCESS("✓ Success", TaskStatus.SUCCESS),
+        FAILED("✗ Failed", TaskStatus.FAILED),
+        RUNNING("⟳ Running", TaskStatus.RUNNING),
+        CANCELED("⊘ Canceled", TaskStatus.CANCELED),
+        NEW("New", TaskStatus.NEW),
+        PENDING("Pending", TaskStatus.PENDING);
+
+        override fun toString() = label
+    }
+
     private var allSessions: List<Session> = emptyList()
     private var filteredSessions: List<Session> = emptyList()
+    private val generationMillisBySession: MutableMap<String, Long> = mutableMapOf()
     @Volatile
     private var isLoading = false
 
@@ -107,7 +137,7 @@ class HistoryPanel(
             add(searchField, BorderLayout.CENTER)
         }
 
-        // Filter tabs
+        // Filter tabs (mode)
         filterTabs = JTabbedPane().apply {
             addTab("All", JPanel())
             addTab("Chat", JPanel())
@@ -118,6 +148,32 @@ class HistoryPanel(
             addChangeListener {
                 applyFilters()
             }
+        }
+
+        // Sort + status filter row
+        sortCombo = JComboBox(SortOrder.values()).apply {
+            selectedItem = SortOrder.UPDATED_DESC
+            toolTipText = "Sort order"
+            addActionListener { applyFilters() }
+        }
+
+        statusCombo = JComboBox(StatusFilter.values()).apply {
+            selectedItem = StatusFilter.ALL
+            toolTipText = "Filter by status"
+            addActionListener { applyFilters() }
+        }
+
+        groupPinnedCheckbox = JCheckBox("Group pinned", true).apply {
+            toolTipText = "Show pinned sessions in a separate section at the top"
+            addActionListener { applyFilters() }
+        }
+
+        val filterRow = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
+            add(JBLabel("Sort:"))
+            add(sortCombo)
+            add(JBLabel("Status:"))
+            add(statusCombo)
+            add(groupPinnedCheckbox)
         }
 
         // Session list
@@ -137,11 +193,12 @@ class HistoryPanel(
             })
         }
 
-        // Top panel combining header and filter tabs
+        // Top panel combining header, filter tabs, and sort/status row
         val topPanel = JBPanel<JBPanel<*>>().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             add(headerPanel)
             add(filterTabs)
+            add(filterRow)
         }
 
         // Layout
@@ -183,8 +240,6 @@ class HistoryPanel(
                 val tasks = (currentProjectTasks + testDataTasks)
                     // Deduplicate by ID (in case same session exists in both)
                     .distinctBy { it.id }
-                    // Filter out empty sessions (no LLM calls made), keep pinned
-                    .filter { it.pinned || it.tokensIn > 0 || it.tokensOut > 0 }
 
                 logger.debug {
                     "Converting ${tasks.size} tasks to Session models (project=${currentProjectTasks.size}, testData=${testDataTasks.size})"
@@ -200,6 +255,7 @@ class HistoryPanel(
                         executionMode = ExecutionMode.valueOf(task.executionMode),
                         createdAt = task.createdAt,
                         updatedAt = task.updatedAt,
+                        model = extractModelFromUiState(task.uiState),
                         tokensIn = task.tokensIn,
                         tokensOut = task.tokensOut,
                         costUsd = task.costUsd,
@@ -209,6 +265,22 @@ class HistoryPanel(
                 }
 
                 logger.debug { "Loaded ${allSessions.size} sessions" }
+
+                // Compute generation time (LLM + tool execution) per session from message metadata.
+                generationMillisBySession.clear()
+                allSessions.forEach { session ->
+                    try {
+                        val messages = router.chatRouter.getMessages(session.id).messages
+                        var total = 0L
+                        messages.forEach { msg ->
+                            val m = pl.jclab.refio.core.db.MessageMetrics.fromJson(msg.metadata) ?: return@forEach
+                            total += m.latencyMs.toLong() + m.toolExecutionTimeMs.toLong()
+                        }
+                        if (total > 0) generationMillisBySession[session.id] = total
+                    } catch (e: Exception) {
+                        logger.warn(e) { "Failed to compute generation time for session ${session.id}" }
+                    }
+                }
 
                 // Update UI on EDT thread
                 SwingUtilities.invokeLater {
@@ -232,33 +304,52 @@ class HistoryPanel(
     private fun applyFilters() {
         val query = searchField.text.lowercase()
         val selectedTab = filterTabs.selectedIndex
+        val statusFilter = (statusCombo.selectedItem as? StatusFilter) ?: StatusFilter.ALL
+        val sortOrder = (sortCombo.selectedItem as? SortOrder) ?: SortOrder.UPDATED_DESC
+        val groupPinned = groupPinnedCheckbox.isSelected
+
+        val primary = sortComparator(sortOrder)
+        val comparator: Comparator<Session> = if (groupPinned) {
+            compareByDescending<Session> { it.pinned }.then(primary)
+        } else {
+            primary
+        }
 
         filteredSessions = allSessions
             .filter { session ->
-                // Filter by search query
                 val matchesQuery = query.isEmpty() ||
                     session.name.lowercase().contains(query) ||
                     session.id.lowercase().contains(query)
 
-                // Filter by mode tab
                 val matchesMode = when (selectedTab) {
-                    0 -> true // All
+                    0 -> true
                     1 -> session.mode == TaskMode.CHAT
                     2 -> session.mode == TaskMode.PLAN
                     3 -> session.mode == TaskMode.AGENT
                     else -> true
                 }
 
-                matchesQuery && matchesMode
-            }
-            .sortedWith(
-                compareByDescending<Session> { it.pinned }  // Pinned first
-                    .thenByDescending { it.updatedAt }      // Then by recency
-            )
+                val matchesStatus = statusFilter.status == null || session.status == statusFilter.status
 
-        logger.debug { "applyFilters: filteredSessions.size=${filteredSessions.size}" }
+                matchesQuery && matchesMode && matchesStatus
+            }
+            .sortedWith(comparator)
+
+        logger.debug { "applyFilters: filteredSessions.size=${filteredSessions.size}, sort=$sortOrder, status=$statusFilter" }
 
         refreshSessionList()
+    }
+
+    private fun sortComparator(order: SortOrder): Comparator<Session> = when (order) {
+        SortOrder.UPDATED_DESC -> compareByDescending<Session> { it.updatedAt }
+        SortOrder.CREATED_DESC -> compareByDescending<Session> { it.createdAt }
+        SortOrder.CREATED_ASC -> compareBy<Session> { it.createdAt }
+        SortOrder.NAME_ASC -> Comparator { a, b -> String.CASE_INSENSITIVE_ORDER.compare(a.name, b.name) }
+        SortOrder.NAME_DESC -> Comparator<Session> { a, b -> String.CASE_INSENSITIVE_ORDER.compare(a.name, b.name) }.reversed()
+        SortOrder.DURATION_DESC -> compareByDescending<Session> { (it.updatedAt - it.createdAt).coerceAtLeast(0L) }
+        SortOrder.GENERATION_DESC -> compareByDescending<Session> { generationMillisBySession[it.id] ?: 0L }
+        SortOrder.TOKENS_DESC -> compareByDescending<Session> { it.tokensIn + it.tokensOut }
+        SortOrder.COST_DESC -> compareByDescending<Session> { it.costUsd }
     }
 
     /**
@@ -276,11 +367,10 @@ class HistoryPanel(
                 border = BorderFactory.createEmptyBorder(20, 0, 0, 0)
             }
             sessionListPanel.add(emptyLabel)
-        } else {
-            // Group by pinned/recent
+        } else if (groupPinnedCheckbox.isSelected) {
+            // Group by pinned/recent, preserving chosen sort within each group
             val (pinned, recent) = filteredSessions.partition { it.pinned }
 
-            // Pinned section
             if (pinned.isNotEmpty()) {
                 sessionListPanel.add(JBLabel("📌 Pinned").apply {
                     font = font.deriveFont(java.awt.Font.BOLD, 12f)
@@ -293,7 +383,6 @@ class HistoryPanel(
                 }
             }
 
-            // Recent section
             if (recent.isNotEmpty()) {
                 sessionListPanel.add(JBLabel("🕒 Recent").apply {
                     font = font.deriveFont(java.awt.Font.BOLD, 12f)
@@ -304,6 +393,12 @@ class HistoryPanel(
                     sessionListPanel.add(createSessionCard(session))
                     sessionListPanel.add(Box.createVerticalStrut(8))
                 }
+            }
+        } else {
+            // Flat list using chosen sort order
+            filteredSessions.forEach { session ->
+                sessionListPanel.add(createSessionCard(session))
+                sessionListPanel.add(Box.createVerticalStrut(8))
             }
         }
 
@@ -338,6 +433,27 @@ class HistoryPanel(
                     foreground = LCATheme.grayColor
                     font = font.deriveFont(11f)
                 })
+
+                add(JBLabel("Duration: ${formatDuration(session.updatedAt - session.createdAt)}").apply {
+                    foreground = LCATheme.grayColor
+                    font = font.deriveFont(11f)
+                })
+
+                generationMillisBySession[session.id]?.let { genMs ->
+                    add(JBLabel("Generation: ${formatDuration(genMs)}").apply {
+                        foreground = LCATheme.grayColor
+                        font = font.deriveFont(11f)
+                        toolTipText = "Sum of LLM latency and tool execution time"
+                    })
+                }
+
+                session.model?.takeIf { it.isNotBlank() }?.let { modelName ->
+                    add(JBLabel("Model: $modelName").apply {
+                        foreground = LCATheme.grayColor
+                        font = font.deriveFont(11f)
+                        toolTipText = modelName
+                    })
+                }
 
                 if (session.tokensIn > 0 || session.tokensOut > 0) {
                     add(JBLabel("Tokens: ${session.tokensIn}↓ ${session.tokensOut}↑").apply {
@@ -443,6 +559,32 @@ class HistoryPanel(
         val date = java.util.Date(epochMs)
         val formatter = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm")
         return formatter.format(date)
+    }
+
+    private fun formatDuration(millis: Long): String {
+        if (millis <= 0) return "—"
+        val totalSeconds = millis / 1000
+        val hours = totalSeconds / 3600
+        val minutes = (totalSeconds % 3600) / 60
+        val seconds = totalSeconds % 60
+        return when {
+            hours > 0 -> "${hours}h ${minutes}m"
+            minutes > 0 -> "${minutes}m ${seconds}s"
+            else -> "${seconds}s"
+        }
+    }
+
+    private fun extractModelFromUiState(uiStateJson: String?): String? {
+        if (uiStateJson.isNullOrBlank()) return null
+        return try {
+            val map = com.google.gson.Gson().fromJson(
+                uiStateJson,
+                com.google.gson.reflect.TypeToken.get(Map::class.java).type
+            ) as? Map<*, *> ?: return null
+            (map["selectedModel"] as? String)?.takeIf { it.isNotBlank() }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun onLoadSession(session: Session) {

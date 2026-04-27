@@ -8,8 +8,12 @@ import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.ModelConfig
+import pl.jclab.refio.core.llm.NativeToolCall
 import pl.jclab.refio.core.llm.StreamChunk
+import pl.jclab.refio.core.llm.ToolSchemaSanitizer
+import pl.jclab.refio.core.llm.ToolsNotSupportedException
 import pl.jclab.refio.core.llm.toModelConfig
+import pl.jclab.refio.core.tools.base.ToolSchema
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -86,6 +90,8 @@ class AnthropicAdapter(
             // Stream aborted by a guardrail (see core/llm/streaming/) — must propagate
             // so the caller can see StreamAbortedException instead of RefioError.LLMError.
             throw e
+        } catch (e: ToolsNotSupportedException) {
+            throw e
         } catch (e: Exception) {
             throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
         }
@@ -123,11 +129,12 @@ class AnthropicAdapter(
         // "user"/"assistant" in the messages array — remap "tool" (used by
         // LLMMessageMapper for tool results) to "assistant" so the request
         // body stays valid.
+        // Tool results must be on the "user" role for Anthropic — mapping them to
+        // "assistant" makes the conversation end with an assistant message, which Anthropic
+        // interprets as a prefill (and some models like opus-4-6 reject prefill entirely).
         val claudeMessages = nonSystemMessages.mapIndexed { index, msg ->
-            val mappedRole = if (msg.role == "tool") "assistant" else msg.role
+            val mappedRole = if (msg.role == "tool") "user" else msg.role
             val content = toAnthropicMessageContent(msg)
-            // Anthropic API rejects requests where assistant content ends with trailing whitespace.
-            // Trim trailing whitespace from the last assistant message to prevent HTTP 400.
             val sanitizedContent = if (index == nonSystemMessages.lastIndex && mappedRole == "assistant" && content is String) {
                 content.trimEnd()
             } else {
@@ -170,7 +177,14 @@ class AnthropicAdapter(
                 "[ANTHROPIC] Using maxTokens=$effectiveMaxTokens (requested=$maxTokens, configLimit=$maxOutputLimit, modelLimit=${modelLimit ?: "n/a"})"
             }
 
-            put("temperature", temperature)
+            // Respect model-level removeParams (e.g. claude-opus-4-7 deprecated `temperature`).
+            val removeParams = pl.jclab.refio.core.llm.ModelDefinitions
+                .getDefinition("anthropic", model)
+                ?.removeParams
+                ?: emptyList()
+            if ("temperature" !in removeParams) {
+                put("temperature", temperature)
+            }
 
             // Add system prompt as separate parameter (not a message)
             // Use combinedSystemPrompt which combines all system messages from systemMessages parameter
@@ -208,6 +222,14 @@ class AnthropicAdapter(
             (kwargs["top_p"] as? Number)?.let { put("top_p", it) }
             (kwargs["top_k"] as? Number)?.let { put("top_k", it) }
             (kwargs["stop_sequences"] as? List<*>)?.let { put("stop_sequences", it) }
+
+            // Native function-calling tools
+            @Suppress("UNCHECKED_CAST")
+            val nativeTools = kwargs["native_tools"] as? List<ToolSchema>
+            if (!nativeTools.isNullOrEmpty()) {
+                put("tools", buildAnthropicToolsArray(nativeTools))
+                logger.info { "[ANTHROPIC][NATIVE_TOOLS] Sending ${nativeTools.size} tool schemas" }
+            }
         }
 
         val requestJson = gson.toJson(requestBody)
@@ -223,6 +245,46 @@ class AnthropicAdapter(
         } else {
             // Standard mode
             executeStandard(apiKeyToUse, requestBody, requestJson, startTime, logPrefix)
+        }
+    }
+
+    private fun buildAnthropicToolsArray(tools: List<ToolSchema>): List<Map<String, Any>> =
+        tools.map { rawTool ->
+            val tool = ToolSchemaSanitizer.forAnthropic(rawTool)
+            mapOf(
+                "name" to tool.name,
+                "description" to tool.description,
+                "input_schema" to tool.parametersJsonSchema,
+            )
+        }
+
+    private fun sanitizeInputSchemaForAnthropic(toolName: String, schema: Map<String, Any>): Map<String, Any> {
+        val forbidden = listOf("oneOf", "allOf", "anyOf")
+        val stripped = forbidden.filter { schema.containsKey(it) }
+        if (stripped.isEmpty()) return schema
+        logger.warn {
+            "[ANTHROPIC][NATIVE_TOOLS] Tool '$toolName' schema has top-level ${stripped.joinToString()} " +
+                "which Anthropic rejects — stripping. Encode constraints in field descriptions instead."
+        }
+        return schema.filterKeys { it !in forbidden }
+    }
+
+    private fun parseNativeAnthropicToolCalls(contentBlocks: List<Map<String, Any?>>): List<NativeToolCall> {
+        return contentBlocks.mapNotNull { block ->
+            if (block["type"] != "tool_use") return@mapNotNull null
+            val id = block["id"] as? String ?: return@mapNotNull null
+            val name = block["name"] as? String ?: return@mapNotNull null
+            val input = block["input"]
+            val argumentsJson = when (input) {
+                is Map<*, *> -> gson.toJson(input)
+                null -> "{}"
+                else -> gson.toJson(input)
+            }
+            NativeToolCall(
+                id = id,
+                name = ToolCallContentNormalizer.normalizeToolName(name),
+                argumentsJson = argumentsJson
+            )
         }
     }
 
@@ -286,6 +348,9 @@ class AnthropicAdapter(
                     source = source
                 )
 
+                if (requestBody.containsKey("tools") && isToolsNotSupportedError(httpStatus, errorMessage)) {
+                    throw ToolsNotSupportedException(fullErrorMessage)
+                }
                 throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, fullErrorMessage)
             }
 
@@ -338,14 +403,21 @@ class AnthropicAdapter(
                 when (block["type"]) {
                     "text" -> textContent += (block["text"] as? String ?: "")
                     "thinking" -> {
-                        // Collect thinking process for UI display
                         val thinking = block["thinking"] as? String ?: ""
                         thinkingContent += thinking
                         logger.debug { "[ANTHROPIC] Claude thinking: ${thinking.take(200)}..." }
                     }
                 }
             }
-            if (textContent.isBlank()) {
+
+            val toolsWereRequested = requestBody.containsKey("tools")
+            val nativeToolCalls: List<NativeToolCall>? = if (toolsWereRequested) {
+                parseNativeAnthropicToolCalls(contentBlocks).also { calls ->
+                    logger.info { "$logPrefix [NATIVE_TOOLS_RESPONSE] calls=${calls.size}" }
+                }
+            } else null
+
+            if (nativeToolCalls == null && textContent.isBlank()) {
                 val normalizedToolCallsJson = ToolCallContentNormalizer.fromAnthropicContentBlocks(contentBlocks)
                 if (normalizedToolCallsJson != null) {
                     textContent = normalizedToolCallsJson
@@ -370,9 +442,12 @@ class AnthropicAdapter(
                 cost = cost,
                 finishReason = stopReason,
                 rawResponse = response,
-                thinking = thinkingContent.takeIf { it.isNotEmpty() }  // Include thinking for UI
+                thinking = thinkingContent.takeIf { it.isNotEmpty() },
+                nativeToolCalls = nativeToolCalls
             )
 
+        } catch (e: ToolsNotSupportedException) {
+            throw e
         } catch (e: Exception) {
             // Error #15: Log error (console + database)
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
@@ -403,7 +478,8 @@ class AnthropicAdapter(
     ): LLMResponse {
         val contentBuilder = StringBuilder()
         val thinkingBuilder = StringBuilder()  // Collect thinking process
-        val activeToolUseByIndex = mutableMapOf<Int, Pair<String, StringBuilder>>()
+        // Triple: (id, name, argsBuilder)
+        val activeToolUseByIndex = mutableMapOf<Int, Triple<String?, String, StringBuilder>>()
         val completedToolUseBlocks = mutableListOf<Map<String, Any?>>()
         var inputTokens = 0
         var outputTokens = 0
@@ -458,6 +534,9 @@ class AnthropicAdapter(
                         source = source
                     )
 
+                    if (requestBody.containsKey("tools") && isToolsNotSupportedError(httpStatus ?: 500, errorMessage)) {
+                        throw ToolsNotSupportedException(errorMessage)
+                    }
                     throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus ?: 500, errorMessage)
                 }
 
@@ -505,13 +584,14 @@ class AnthropicAdapter(
                                         val contentBlock = chunk["content_block"] as? Map<String, Any?> ?: emptyMap()
                                         if (contentBlock["type"] == "tool_use") {
                                             val name = contentBlock["name"] as? String
+                                            val id = contentBlock["id"] as? String
                                             if (!name.isNullOrBlank()) {
                                                 val argsBuilder = StringBuilder()
                                                 val input = contentBlock["input"]
                                                 if (input is Map<*, *> && input.isNotEmpty()) {
                                                     argsBuilder.append(gson.toJson(input))
                                                 }
-                                                activeToolUseByIndex[index] = name to argsBuilder
+                                                activeToolUseByIndex[index] = Triple(id, name, argsBuilder)
                                             }
                                         }
                                     }
@@ -550,7 +630,7 @@ class AnthropicAdapter(
                                                 val index = (chunk["index"] as? Number)?.toInt() ?: -1
                                                 val partialJson = delta["partial_json"] as? String
                                                 if (!partialJson.isNullOrEmpty()) {
-                                                    activeToolUseByIndex[index]?.second?.append(partialJson)
+                                                    activeToolUseByIndex[index]?.third?.append(partialJson)
                                                 }
                                             }
                                         }
@@ -560,7 +640,7 @@ class AnthropicAdapter(
                                         val index = (chunk["index"] as? Number)?.toInt() ?: -1
                                         val active = activeToolUseByIndex.remove(index)
                                         if (active != null) {
-                                            val (name, argsBuilder) = active
+                                            val (toolId, name, argsBuilder) = active
                                             val argsRaw = argsBuilder.toString().trim()
                                             val input = if (argsRaw.isEmpty()) {
                                                 emptyMap<String, Any?>()
@@ -575,6 +655,7 @@ class AnthropicAdapter(
                                             completedToolUseBlocks.add(
                                                 mapOf(
                                                     "type" to "tool_use",
+                                                    "id" to (toolId ?: java.util.UUID.randomUUID().toString()),
                                                     "name" to name,
                                                     "input" to input
                                                 )
@@ -664,7 +745,14 @@ class AnthropicAdapter(
 
             logger.info { "$logPrefix Streaming completed in ${latencyMs}ms, tokens=$inputTokens/$outputTokens, logged to API logs" }
 
-            if (contentBuilder.isEmpty()) {
+            val toolsWereRequested = requestBody.containsKey("tools")
+            val streamNativeToolCalls: List<NativeToolCall>? = if (toolsWereRequested) {
+                parseNativeAnthropicToolCalls(completedToolUseBlocks).also { calls ->
+                    logger.info { "$logPrefix [NATIVE_TOOLS_RESPONSE] (stream) calls=${calls.size}" }
+                }
+            } else null
+
+            if (streamNativeToolCalls == null && contentBuilder.isEmpty()) {
                 val normalizedToolCallsJson = ToolCallContentNormalizer.fromAnthropicContentBlocks(completedToolUseBlocks)
                 if (normalizedToolCallsJson != null) {
                     contentBuilder.append(normalizedToolCallsJson)
@@ -680,7 +768,8 @@ class AnthropicAdapter(
                 cost = cost,
                 finishReason = finalStopReason,
                 rawResponse = syntheticResponse,
-                thinking = thinkingBuilder.takeIf { it.isNotEmpty() }?.toString()  // Include thinking for UI
+                thinking = thinkingBuilder.takeIf { it.isNotEmpty() }?.toString(),
+                nativeToolCalls = streamNativeToolCalls
             )
 
         } catch (e: CancellationException) {
@@ -698,6 +787,8 @@ class AnthropicAdapter(
                 subtaskId = subtaskId,
                 source = source
             )
+            throw e
+        } catch (e: ToolsNotSupportedException) {
             throw e
         } catch (e: Exception) {
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
@@ -801,6 +892,26 @@ class AnthropicAdapter(
             inputTokens = usage.inputTokens,
             outputTokens = usage.outputTokens
         )
+    }
+
+    private fun isToolsNotSupportedError(httpStatus: Int, errorMessage: String): Boolean {
+        if (httpStatus != 400 && httpStatus != 422) return false
+        val lower = errorMessage.lowercase()
+        val mentionsTooling =
+            lower.contains("tools") ||
+                lower.contains("tool_use") ||
+                lower.contains("function calling") ||
+                lower.contains("input_schema") ||
+                lower.contains("schema")
+        val unsupportedShape =
+            lower.contains("not supported") ||
+                lower.contains("unsupported") ||
+                lower.contains("unknown parameter") ||
+                lower.contains("unexpected parameter") ||
+                lower.contains("invalid parameter") ||
+                lower.contains("invalid schema") ||
+                lower.contains("invalid_request_error")
+        return mentionsTooling && unsupportedShape
     }
 
     override suspend fun close() {

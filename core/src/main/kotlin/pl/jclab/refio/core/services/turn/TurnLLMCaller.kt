@@ -9,9 +9,11 @@ import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
+import pl.jclab.refio.core.llm.ModelDefinitions
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.TurnLoopConfig
+import pl.jclab.refio.core.tools.base.ToolSchema
 import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("TurnLLMCaller")
@@ -47,7 +49,8 @@ class TurnLLMCaller(
         streamCallback: StreamCallback? = null,
         model: String? = null,
         provider: String? = null,
-        profileOverrides: TurnProfileOverrides? = null
+        profileOverrides: TurnProfileOverrides? = null,
+        nativeToolSchemas: List<ToolSchema>? = null
     ): LLMResponse {
         val (modelId, providerName) = resolveModelSelection(
             mode = mode,
@@ -59,8 +62,10 @@ class TurnLLMCaller(
 
         logger.info { "[CALL_LLM] Final model selection: $providerName/$modelId" }
 
-        val responseFormat = resolveResponseFormat(mode, providerName)
-        val thinkingEnabled = configService.getTyped(ConfigKeys.GENERAL_THINKING_ENABLED, taskId)
+        val nativeToolsActive = !nativeToolSchemas.isNullOrEmpty()
+        val responseFormat = if (nativeToolsActive) null else resolveResponseFormat(mode, providerName)
+        val thinkingRequested = configService.getTyped<Boolean>(ConfigKeys.GENERAL_THINKING_ENABLED, taskId)
+        val thinkingEnabled = resolveThinkingEnabled(providerName, modelId, thinkingRequested)
         val noEgressEnabled = configService.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, taskId)
         val reasoningEffortOverride = profileOverrides?.reasoningEffort
         if (reasoningEffortOverride != null) {
@@ -68,6 +73,13 @@ class TurnLLMCaller(
                 "[CALL_LLM] Subagent reasoning_effort override: $reasoningEffortOverride " +
                     "(subagent=${profileOverrides.subagentName ?: "?"})"
             }
+        }
+
+        val extraKwargs: Map<String, Any> = if (nativeToolsActive) {
+            logger.info { "[NATIVE_TOOLS] Requesting: model=$modelId, tools=${nativeToolSchemas!!.size}, mode=$mode (response_format suppressed)" }
+            mapOf("native_tools" to nativeToolSchemas!!)
+        } else {
+            emptyMap()
         }
 
         return withContext(Dispatchers.IO) {
@@ -83,7 +95,8 @@ class TurnLLMCaller(
                 reasoningEffort = reasoningEffortOverride,
                 noEgressEnabled = noEgressEnabled,
                 stream = streamCallback != null,
-                onChunk = streamCallback
+                onChunk = streamCallback,
+                kwargs = extraKwargs
             )
         }
     }
@@ -130,6 +143,29 @@ class TurnLLMCaller(
         val configModel = configService.getModel(operation, taskId)
         logger.info { "[MODEL_RESOLVE] Using config model: ${configModel.second}/${configModel.first}" }
         return ModelSelection(configModel.first, configModel.second)
+    }
+
+    /**
+     * Gate the user's `thinking` request against the resolved model's capability.
+     *
+     * Some models advertised by upstream APIs (notably non-reasoning OpenAI Chat Completions
+     * variants) reject the `thinking` parameter with HTTP 400 `Unknown parameter: 'thinking'`.
+     * We treat [ModelDefinition.supportsThinking] as authoritative: when the registry knows
+     * the model and says it can't think, we silently force `thinking = false`.
+     *
+     * Unknown models (no registry entry) pass through unchanged so locally-installed Ollama
+     * / LM Studio / generic-OpenAI models keep working without per-id whitelisting.
+     */
+    fun resolveThinkingEnabled(provider: String, model: String, requested: Boolean): Boolean {
+        if (!requested) return false
+        val definition = ModelDefinitions.getDefinition(provider, model)
+        if (definition != null && !definition.supportsThinking) {
+            logger.info {
+                "[CALL_LLM] Disabling thinking for $provider/$model — model definition declares supportsThinking=false"
+            }
+            return false
+        }
+        return true
     }
 
     fun resolveResponseFormat(mode: TaskMode, provider: String?): Map<String, String>? {
