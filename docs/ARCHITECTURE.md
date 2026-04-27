@@ -32,8 +32,9 @@ Unlike tools that send entire codebases to LLMs, Refio uses **selective context 
 | **Enhanced AgentTurnLoop** | AgentTurnLoop execution + ADR-0028/ADR-0029 profile support, caching, parallel tools |
 | **14 Context Providers** | @file, @folder, @codebase, @grep, @url, @docs, @commit, and more                     |
 | **RAG Indexing** | Automatic project indexing with language-specific analyzers                          |
-| **15 Registered Tools** | 7 read-only + 8 write tools (AGENT enables full toolset by default)                 |
+| **24 Registered Tools** | 14 read-only + 10 write tools (AGENT enables full toolset by default)               |
 | **8 LLM Adapters** | Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio, Custom OpenAI, Z.AI        |
+| **Native Function Calling** | Provider-native tool API (Ollama, OpenAI, Anthropic, Gemini) with JSON-in-text fallback |
 | **MCP Protocol** | Full Model Context Protocol with 17 built-in presets                                 |
 | **21 Built-in Subagents** | Specialized agents for code review, security, architecture, docs, business analysis, and coordination |
 | **Performance Optimizations** | Token estimation, retry logic, working memory integration                            |
@@ -70,7 +71,7 @@ Unlike tools that send entire codebases to LLMs, Refio uses **selective context 
 +-------------------------------------------------------------------------+
 |  Infrastructure Layer                                                   |
 |  +-- LLMClient (unified) -> 8 provider adapters                        |
-|  +-- ToolRegistry -> 15 registered tools with security layers            |
+|  +-- ToolRegistry -> 24 registered tools with security layers            |
 |  +-- MCPManager -> MCP server lifecycle (STDIO/HTTP)                    |
 |  +-- EmbeddingsService -> Ollama/OpenAI embeddings                      |
 |  +-- DatabaseFactory -> SQLite (WAL) + Exposed ORM                      |
@@ -449,7 +450,7 @@ mcp:
 
 ## Tech Stack
 
-- **Language/Platform**: Kotlin 1.9.25, JVM target 17, IntelliJ Platform 2024.1.7 (IC)
+- **Language/Platform**: Kotlin 1.9.25, JVM target 17, IntelliJ Platform 2024.1.7 (IC), builds 241-261.*
 - **UI**: Native IntelliJ Swing components (no webview)
 - **Core/Transport**: CoreApiRouter (composition root) + 12 domain routers; Ktor server for HTTP transport
 - **LLM/HTTP**: Ktor Client 2.3.7 with 8 provider adapters

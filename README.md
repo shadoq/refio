@@ -106,7 +106,7 @@ Same core engine, full-screen terminal interface.
 Honest assessment — developers deserve to know what they're looking at:
 
 - **Orchestration is a light router + executors**, not a deep agent engine. `IntentRouter` maps modes and dispatches; `WorkflowOrchestrator` coordinates executors (~200 LOC).
-- **No multi-agent runtime** yet. Subagents run as isolated invocations. Planner / Executor / Reviewer role model is on the roadmap.
+- **Multi-agent infrastructure exists but A2A messaging is incomplete.** `AgentEventBus`, `MultiAgentRunner`, and parallel orchestration are wired; peer-to-peer `send_message` → `answer_message` loop is not yet production-ready. Subagents currently run as isolated invocations.
 - **No git worktree isolation per task.** Agents edit files directly (with snapshot rollback), not in an isolated branch.
 - **Planning loop is basic.** Plan executor works, but no plan-refinement iterations (plan → execute → evaluate → refine → continue) yet.
 - **Security layers are pragmatic v1.** Working, but this is defense-at-depth-MVP, not hardened multi-layered security.

@@ -297,8 +297,8 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
             sessionManager.totalEstimatedTokens.collect { totalTokens ->
                 val session = sessionManager.activeSession.value
                 if (session != null) {
+                    val max = sessionManager.getMaxContextWindow()
                     SwingUtilities.invokeLater {
-                        val max = sessionManager.getMaxContextWindow()
                         updateContextFill(totalTokens, max)
                         logger.debug { "Total estimated tokens changed: $totalTokens/$max tokens" }
                     }
@@ -310,9 +310,9 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
             sessionManager.selectedModel.collect { modelString ->
                 val session = sessionManager.activeSession.value
                 if (session != null) {
+                    val current = sessionManager.totalEstimatedTokens.value
+                    val max = sessionManager.getMaxContextWindow()
                     SwingUtilities.invokeLater {
-                        val current = sessionManager.totalEstimatedTokens.value
-                        val max = sessionManager.getMaxContextWindow()
                         updateContextFill(current, max)
                         logger.debug { "Model changed to '$modelString': Context limit updated to $max tokens" }
                     }
