@@ -25,6 +25,7 @@ import pl.jclab.refio.core.llm.ModelDefinitions
 import pl.jclab.refio.core.llm.StreamChunk
 import pl.jclab.refio.core.llm.toModelConfig
 import pl.jclab.refio.core.logging.DualLogger
+import pl.jclab.refio.core.tools.base.ToolSchema
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.core.services.ConfigService
@@ -120,6 +121,16 @@ abstract class OpenAICompatibleAdapter(
         if (streaming) put("stream", true)
         with(OpenAICompatibleHelpers) { addCommonKwargs(kwargs) }
         kwargs["response_format"]?.let { put("response_format", it) }
+
+        @Suppress("UNCHECKED_CAST")
+        (kwargs["native_tools"] as? List<ToolSchema>)?.takeIf { it.isNotEmpty() }?.let { tools ->
+            put("tools", OpenAICompatibleHelpers.buildOpenAIToolsArray(tools))
+            put("tool_choice", "auto")
+            logger.info {
+                "[$providerTag][NATIVE_TOOLS] Sending ${tools.size} tool schemas: " +
+                    tools.joinToString(", ") { it.name }
+            }
+        }
     }
 
     /**
@@ -282,6 +293,16 @@ abstract class OpenAICompatibleAdapter(
             } else {
                 null
             }
+            val toolsWereRequested = requestBody.containsKey("tools")
+            val nativeToolCalls = if (toolsWereRequested) {
+                OpenAICompatibleHelpers.parseOpenAIToolCalls(message["tool_calls"])
+                    .takeIf { it.isNotEmpty() }
+                    ?.also { calls ->
+                        logger.info { "$logPrefix [NATIVE_TOOLS_RESPONSE] calls=${calls.size}" }
+                    }
+            } else {
+                null
+            }
 
             logger.apiResponse(
                 provider = provider,
@@ -300,13 +321,14 @@ abstract class OpenAICompatibleAdapter(
             )
 
             return LLMResponse(
-                content = normalizedToolCallsJson ?: content,
+                content = if (nativeToolCalls != null) content else (normalizedToolCallsJson ?: content),
                 usage = usage,
                 model = model,
                 provider = provider,
                 cost = estimateCost(usage),
                 finishReason = firstChoice["finish_reason"] as? String,
                 rawResponse = rawResponse,
+                nativeToolCalls = nativeToolCalls,
             )
         } catch (e: RefioError) {
             logger.apiError(
@@ -385,7 +407,14 @@ abstract class OpenAICompatibleAdapter(
                 }
             }
 
-            if (contentBuilder.isEmpty()) {
+            val toolsWereRequested = requestBody.containsKey("tools")
+            val streamNativeToolCalls = toolCallAccumulator
+                .toNativeToolCalls(toolsWereRequested)
+                ?.takeIf { it.isNotEmpty() }
+                ?.also { calls ->
+                    logger.info { "$logPrefix [NATIVE_TOOLS_RESPONSE] (stream) calls=${calls.size}" }
+                }
+            if (contentBuilder.isEmpty() && streamNativeToolCalls == null) {
                 toolCallAccumulator.toCanonicalJson()?.let { contentBuilder.append(it) }
             }
 
@@ -432,6 +461,7 @@ abstract class OpenAICompatibleAdapter(
                 cost = estimateCost(usage),
                 finishReason = finalFinishReason,
                 rawResponse = mapOf("content" to contentBuilder.toString()),
+                nativeToolCalls = streamNativeToolCalls,
             )
         } catch (e: RefioError) {
             logger.apiError(
