@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-const MAX_COMPARE = 4;
+const MAX_COMPARE = 6;
 
 interface CompareSelectionState {
   modelIds: string[];

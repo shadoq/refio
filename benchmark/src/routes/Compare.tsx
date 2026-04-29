@@ -16,13 +16,22 @@ import { useResults } from "@/data/queries";
 import { useFilters, applyFilters } from "@/store/filters";
 import { useCompareSelection } from "@/store/compareSelection";
 import { RadarCompare } from "@/components/charts/RadarCompare";
+import { MetricRadarCompare } from "@/components/charts/MetricRadarCompare";
+import { TaskRadarCompare } from "@/components/charts/TaskRadarCompare";
 import { normalizeScore } from "@/lib/stats";
 
 const { Title, Text } = Typography;
 
-const MAX_MODELS = 4;
+const MAX_MODELS = 6;
 
-const COLORS = ["var(--accent-2)", "var(--accent)", "var(--accent-3)", "#9b8cff"];
+const COLORS = [
+  "var(--accent-2)",
+  "var(--accent)",
+  "var(--accent-3)",
+  "#9b8cff",
+  "#ffd166",
+  "#4dd4ac",
+];
 
 interface CompareRow {
   criterionId: string;
@@ -187,6 +196,25 @@ export default function Compare() {
         <>
           <Card title="Radar: Average Score per Criterion" style={{ marginBottom: 24 }}>
             <RadarCompare
+              results={filteredResults}
+              selectedModelIds={compare.modelIds}
+              tasksFile={tasksData!}
+              modelNames={modelNames}
+            />
+          </Card>
+
+          <Card title="Radar: Derived Benchmark Metrics" style={{ marginBottom: 24 }}>
+            <MetricRadarCompare
+              results={filteredResults}
+              selectedModelIds={compare.modelIds}
+              tasksFile={tasksData!}
+              resultsFile={resultsData!}
+              modelNames={modelNames}
+            />
+          </Card>
+
+          <Card title="Radar: Model Behavior by Task" style={{ marginBottom: 24 }}>
+            <TaskRadarCompare
               results={filteredResults}
               selectedModelIds={compare.modelIds}
               tasksFile={tasksData!}

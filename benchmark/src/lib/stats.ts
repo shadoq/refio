@@ -1,5 +1,6 @@
 import type { TasksFile, Criterion } from "@/schema/tasks";
 import type { Result, ResultsFile, Model, Environment } from "@/schema/results";
+import { estimateTokenProcessing } from "@/lib/tokenSpeed";
 
 export interface LeaderboardRow {
   modelId: string;
@@ -12,6 +13,11 @@ export interface LeaderboardRow {
   totalCostUsd: number | null;
   avgCostUsd: number | null;
   avgDurationMs: number | null;
+  avgEstimatedPrefillMs: number | null;
+  avgEstimatedDecodeMs: number | null;
+  avgEstimatedLlmMs: number | null;
+  avgPrefillTokensPerSecond: number | null;
+  avgDecodeTokensPerSecond: number | null;
   passRate: number;
   avgWorksOutOfBoxScore: number | null;
   avgComplianceScore: number | null;
@@ -53,15 +59,22 @@ export function normalizeResult(result: Result, tasks: TasksFile): number {
     ...(task?.extraCriteria ?? []).map((c): [string, Criterion] => [c.id, c]),
   ]);
 
-  const normalized: number[] = [];
+  const weightedScores: Array<{ value: number; weight: number }> = [];
   for (const score of result.scores) {
     const criterion = allCriteria.get(score.criterionId);
     if (!criterion) continue;
-    normalized.push(normalizeScore(score.value, criterion.scale.values));
+    weightedScores.push({
+      value: normalizeScore(score.value, criterion.scale.values),
+      weight: criterion.weight,
+    });
   }
 
-  if (normalized.length === 0) return 0;
-  return normalized.reduce((a, b) => a + b, 0) / normalized.length;
+  const totalWeight = weightedScores.reduce((sum, score) => sum + score.weight, 0);
+  if (totalWeight === 0) return 0;
+  return (
+    weightedScores.reduce((sum, score) => sum + score.value * score.weight, 0) /
+    totalWeight
+  );
 }
 
 function standardDeviation(values: number[]): number {
@@ -146,6 +159,24 @@ export function leaderboard(
 
     const costs = group.map((r) => r.costUsd).filter((c): c is number => c != null);
     const durations = group.map((r) => r.durationMs).filter((d): d is number => d != null);
+    const tokenProcessing = group.map((r) =>
+      estimateTokenProcessing(r.tokensIn, r.tokensOut, r.durationMs),
+    );
+    const estimatedPrefillMs = tokenProcessing
+      .map((estimate) => estimate.prefillMs)
+      .filter((value): value is number => value != null);
+    const estimatedDecodeMs = tokenProcessing
+      .map((estimate) => estimate.decodeMs)
+      .filter((value): value is number => value != null);
+    const estimatedLlmMs = tokenProcessing
+      .map((estimate) => estimate.totalMs)
+      .filter((value): value is number => value != null);
+    const prefillTps = tokenProcessing
+      .map((estimate) => estimate.prefillTokensPerSecond)
+      .filter((value): value is number => value != null);
+    const decodeTps = tokenProcessing
+      .map((estimate) => estimate.decodeTokensPerSecond)
+      .filter((value): value is number => value != null);
 
     rows.push({
       modelId,
@@ -158,6 +189,22 @@ export function leaderboard(
       totalCostUsd: costs.length > 0 ? costs.reduce((a, b) => a + b, 0) : null,
       avgCostUsd: costs.length > 0 ? costs.reduce((a, b) => a + b, 0) / costs.length : null,
       avgDurationMs: durations.length > 0 ? durations.reduce((a, b) => a + b, 0) / durations.length : null,
+      avgEstimatedPrefillMs:
+        estimatedPrefillMs.length > 0
+          ? estimatedPrefillMs.reduce((a, b) => a + b, 0) / estimatedPrefillMs.length
+          : null,
+      avgEstimatedDecodeMs:
+        estimatedDecodeMs.length > 0
+          ? estimatedDecodeMs.reduce((a, b) => a + b, 0) / estimatedDecodeMs.length
+          : null,
+      avgEstimatedLlmMs:
+        estimatedLlmMs.length > 0
+          ? estimatedLlmMs.reduce((a, b) => a + b, 0) / estimatedLlmMs.length
+          : null,
+      avgPrefillTokensPerSecond:
+        prefillTps.length > 0 ? prefillTps.reduce((a, b) => a + b, 0) / prefillTps.length : null,
+      avgDecodeTokensPerSecond:
+        decodeTps.length > 0 ? decodeTps.reduce((a, b) => a + b, 0) / decodeTps.length : null,
       passRate: passCount / group.length,
       avgWorksOutOfBoxScore,
       avgComplianceScore,

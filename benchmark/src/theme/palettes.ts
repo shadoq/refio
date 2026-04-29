@@ -6,7 +6,11 @@ export type ThemeId =
   | "cyberpunk"
   | "monoGreen"
   | "dracula"
-  | "psychedelic";
+  | "psychedelic"
+  | "ocean"
+  | "ember"
+  | "synthwave"
+  | "ice";
 
 export interface BenchmarkPalette {
   id: ThemeId;
@@ -118,6 +122,54 @@ export const palettes: Record<ThemeId, BenchmarkPalette> = {
     colorText: "#fff2ff",
     colorTextSecondary: "#f0b9ff",
   },
+  ocean: {
+    id: "ocean",
+    label: "Ocean",
+    colorPrimary: "#35d0ff",
+    colorInfo: "#5cf2c8",
+    colorSuccess: "#5cf2c8",
+    colorBgBase: "#04131f",
+    colorBgContainer: "rgba(8, 35, 52, 0.82)",
+    colorBorder: "rgba(53, 208, 255, 0.22)",
+    colorText: "#e8fbff",
+    colorTextSecondary: "#9cc7d4",
+  },
+  ember: {
+    id: "ember",
+    label: "Ember",
+    colorPrimary: "#ff7a1a",
+    colorInfo: "#ffd166",
+    colorSuccess: "#91d66b",
+    colorBgBase: "#120806",
+    colorBgContainer: "rgba(42, 18, 12, 0.82)",
+    colorBorder: "rgba(255, 122, 26, 0.24)",
+    colorText: "#fff0df",
+    colorTextSecondary: "#d3a58b",
+  },
+  synthwave: {
+    id: "synthwave",
+    label: "Synthwave",
+    colorPrimary: "#ff4fd8",
+    colorInfo: "#38f8ff",
+    colorSuccess: "#faff5a",
+    colorBgBase: "#100022",
+    colorBgContainer: "rgba(34, 8, 62, 0.82)",
+    colorBorder: "rgba(255, 79, 216, 0.25)",
+    colorText: "#fff1fb",
+    colorTextSecondary: "#d7a8ff",
+  },
+  ice: {
+    id: "ice",
+    label: "Ice",
+    colorPrimary: "#b9f3ff",
+    colorInfo: "#7cb8ff",
+    colorSuccess: "#7ee6c8",
+    colorBgBase: "#071018",
+    colorBgContainer: "rgba(17, 36, 50, 0.82)",
+    colorBorder: "rgba(185, 243, 255, 0.22)",
+    colorText: "#f3fbff",
+    colorTextSecondary: "#a8c0cc",
+  },
 };
 
 export const defaultThemeId: ThemeId = "jclab";
@@ -131,6 +183,10 @@ export function isThemeId(value: string | null): value is ThemeId {
     value === "cyberpunk" ||
     value === "monoGreen" ||
     value === "dracula" ||
-    value === "psychedelic"
+    value === "psychedelic" ||
+    value === "ocean" ||
+    value === "ember" ||
+    value === "synthwave" ||
+    value === "ice"
   );
 }

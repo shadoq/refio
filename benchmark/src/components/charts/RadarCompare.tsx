@@ -22,7 +22,12 @@ interface RadarCompareProps {
 }
 
 const COLORS = [
-  "var(--accent-2)", "var(--accent)", "var(--accent-3)", "#9b8cff",
+  "var(--accent-2)",
+  "var(--accent)",
+  "var(--accent-3)",
+  "#9b8cff",
+  "#ffd166",
+  "#4dd4ac",
 ];
 
 export function RadarCompare({

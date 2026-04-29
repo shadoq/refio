@@ -16,7 +16,7 @@ import { useResults } from "@/data/queries";
 import { useFilters, applyFilters } from "@/store/filters";
 import { leaderboard, type LeaderboardRow } from "@/lib/stats";
 import { ParetoScatter } from "@/components/charts/ParetoScatter";
-import { formatCost, formatDuration } from "@/lib/format";
+import { formatCost, formatDuration, formatTokensPerSecond } from "@/lib/format";
 
 const { Title, Text } = Typography;
 
@@ -24,6 +24,9 @@ type MetricId =
   | "quality"
   | "cost"
   | "duration"
+  | "estimatedLlm"
+  | "prefillSpeed"
+  | "decodeSpeed"
   | "reliability"
   | "firstShot"
   | "localViability"
@@ -48,7 +51,7 @@ const METRICS: Record<MetricId, MetricDefinition> = {
   },
   cost: {
     id: "cost",
-    label: "Avg Cost",
+    label: "Avg API Cost",
     higherIsBetter: false,
     getValue: (row) => row.avgCostUsd,
     format: (value) => formatCost(value),
@@ -59,6 +62,28 @@ const METRICS: Record<MetricId, MetricDefinition> = {
     higherIsBetter: false,
     getValue: (row) => (row.avgDurationMs == null ? null : row.avgDurationMs / 60000),
     format: (value) => `${value.toFixed(1)}m`,
+  },
+  estimatedLlm: {
+    id: "estimatedLlm",
+    label: "Est. LLM Time",
+    higherIsBetter: false,
+    getValue: (row) =>
+      row.avgEstimatedLlmMs == null ? null : row.avgEstimatedLlmMs / 60000,
+    format: (value) => `${value.toFixed(1)}m`,
+  },
+  prefillSpeed: {
+    id: "prefillSpeed",
+    label: "Prefill Speed",
+    higherIsBetter: true,
+    getValue: (row) => row.avgPrefillTokensPerSecond,
+    format: (value) => formatTokensPerSecond(value),
+  },
+  decodeSpeed: {
+    id: "decodeSpeed",
+    label: "Decode Speed",
+    higherIsBetter: true,
+    getValue: (row) => row.avgDecodeTokensPerSecond,
+    format: (value) => formatTokensPerSecond(value),
   },
   reliability: {
     id: "reliability",
@@ -103,9 +128,9 @@ const metricOptions = Object.values(METRICS).map((metric) => ({
 }));
 
 export default function Pareto() {
-  const [xMetricId, setXMetricId] = useState<MetricId>("cost");
-  const [yMetricId, setYMetricId] = useState<MetricId>("quality");
-  const [localOnly, setLocalOnly] = useState(false);
+  const [xMetricId, setXMetricId] = useState<MetricId>("duration");
+  const [yMetricId, setYMetricId] = useState<MetricId>("localViability");
+  const [localOnly, setLocalOnly] = useState(true);
   const filters = useFilters();
   const { data: tasksData, isLoading: tasksLoading } = useTasks();
   const { data: resultsData, isLoading: resultsLoading } = useResults();
@@ -160,8 +185,8 @@ export default function Pareto() {
         <div>
           <Title level={2}>Pareto Explorer</Title>
           <p>
-            Compare trade-offs across quality, speed, cost, first-shot success,
-            reliability and local viability.
+            Compare trade-offs across local viability, speed, quality, first-shot
+            success, reliability and cloud/API cost.
           </p>
         </div>
       </div>
@@ -231,6 +256,9 @@ export default function Pareto() {
                 <div style={{ marginTop: 4, fontSize: 12, color: "var(--muted)" }}>
                   {r.avgCostUsd != null && <div>Avg cost: {formatCost(r.avgCostUsd)}</div>}
                   {r.avgDurationMs != null && <div>Avg: {formatDuration(r.avgDurationMs)}</div>}
+                  {r.avgEstimatedLlmMs != null && (
+                    <div>LLM est: {formatDuration(r.avgEstimatedLlmMs)}</div>
+                  )}
                   {r.reliabilityScore != null && (
                     <div>Reliability: {(r.reliabilityScore * 100).toFixed(1)}%</div>
                   )}

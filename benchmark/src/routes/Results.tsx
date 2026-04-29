@@ -17,8 +17,15 @@ import { ClearOutlined, EyeOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import { AttachmentViewer } from "@/components/attachments/AttachmentViewer";
 import { useResults, useTasks } from "@/data/queries";
-import { formatCost, formatDuration, formatScore, formatTokens } from "@/lib/format";
+import {
+  formatCost,
+  formatDuration,
+  formatScore,
+  formatTokens,
+  formatTokensPerSecond,
+} from "@/lib/format";
 import { getResultCriterionScore, normalizeResult } from "@/lib/stats";
+import { estimateResultTokenProcessing } from "@/lib/tokenSpeed";
 import type { Environment, Result } from "@/schema/results";
 import type { Task } from "@/schema/tasks";
 
@@ -219,6 +226,31 @@ export default function Results() {
       },
     },
     {
+      title: "LLM Est.",
+      key: "estimatedLlm",
+      width: 110,
+      render: (_, row) =>
+        formatDuration(estimateResultTokenProcessing(row.result).totalMs),
+      sorter: (a, b) =>
+        (estimateResultTokenProcessing(a.result).totalMs ?? 0) -
+        (estimateResultTokenProcessing(b.result).totalMs ?? 0),
+    },
+    {
+      title: "Token Speed",
+      key: "tokenSpeed",
+      width: 150,
+      render: (_, row) => {
+        const estimate = estimateResultTokenProcessing(row.result);
+        return (
+          <span>
+            {formatTokensPerSecond(estimate.prefillTokensPerSecond)} in
+            <br />
+            {formatTokensPerSecond(estimate.decodeTokensPerSecond)} out
+          </span>
+        );
+      },
+    },
+    {
       title: "Cost",
       key: "cost",
       width: 100,
@@ -374,7 +406,27 @@ export default function Results() {
               <Tag>attempt #{detailResult.attemptNumber}</Tag>
               <Tag>{selectedRow?.environment?.name ?? detailResult.environmentId}</Tag>
               <Tag>{formatDuration(detailResult.durationMs)}</Tag>
+              <Tag>
+                LLM est. {formatDuration(estimateResultTokenProcessing(detailResult).totalMs)}
+              </Tag>
               <Tag>{formatCost(detailResult.costUsd)}</Tag>
+            </Space>
+
+            <Space wrap>
+              <Tag>
+                Prefill {formatDuration(estimateResultTokenProcessing(detailResult).prefillMs)}
+                {" / "}
+                {formatTokensPerSecond(
+                  estimateResultTokenProcessing(detailResult).prefillTokensPerSecond,
+                )}
+              </Tag>
+              <Tag>
+                Decode {formatDuration(estimateResultTokenProcessing(detailResult).decodeMs)}
+                {" / "}
+                {formatTokensPerSecond(
+                  estimateResultTokenProcessing(detailResult).decodeTokensPerSecond,
+                )}
+              </Tag>
             </Space>
 
             {detailResult.notes && <Paragraph>{detailResult.notes}</Paragraph>}

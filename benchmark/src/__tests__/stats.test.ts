@@ -114,6 +114,22 @@ describe("normalizeResult", () => {
     ]);
     expect(normalizeResult(result, tasksFile)).toBeCloseTo(1.0);
   });
+
+  it("uses criterion weights when averaging scores", () => {
+    const weightedTasksFile: TasksFile = {
+      ...tasksFile,
+      coreCriteria: [
+        { ...coreCriteria[0], weight: 1 },
+        { ...coreCriteria[1], weight: 0.25 },
+      ],
+    };
+    const result = makeResult("r1", "m1", "e1", "snake", [
+      { criterionId: "compliance", value: 1 },
+      { criterionId: "works_out_of_box", value: 0 },
+    ]);
+
+    expect(normalizeResult(result, weightedTasksFile)).toBeCloseTo(0.8);
+  });
 });
 
 describe("leaderboard", () => {
@@ -233,6 +249,16 @@ describe("leaderboard", () => {
     const rows = leaderboard(resultsFile.results, resultsFile, tasksFile);
     const claude = rows.find((r) => r.modelId === "claude")!;
     expect(claude.avgCostUsd).toBeCloseTo(0.03);
+  });
+
+  it("estimates prefill and decode processing from token counts", () => {
+    const rows = leaderboard(resultsFile.results, resultsFile, tasksFile);
+    const qwen = rows.find((r) => r.modelId === "qwen")!;
+    expect(qwen.avgEstimatedPrefillMs).toBeCloseTo(9000);
+    expect(qwen.avgEstimatedDecodeMs).toBeCloseTo(36000);
+    expect(qwen.avgEstimatedLlmMs).toBeCloseTo(45000);
+    expect(qwen.avgPrefillTokensPerSecond).toBeCloseTo(12.25);
+    expect(qwen.avgDecodeTokensPerSecond).toBeCloseTo(5.875);
   });
 
   it("counts distinct tasks evaluated", () => {

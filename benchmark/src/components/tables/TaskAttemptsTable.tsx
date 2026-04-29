@@ -4,7 +4,14 @@ import type { ColumnsType } from "antd/es/table";
 import type { Result } from "@/schema/results";
 import type { TasksFile, Criterion } from "@/schema/tasks";
 import { normalizeScore, normalizeResult } from "@/lib/stats";
-import { formatDuration, formatCost, formatTokens, formatScore } from "@/lib/format";
+import {
+  formatDuration,
+  formatCost,
+  formatTokens,
+  formatScore,
+  formatTokensPerSecond,
+} from "@/lib/format";
+import { estimateTokenProcessing } from "@/lib/tokenSpeed";
 import { AttachmentViewer } from "@/components/attachments/AttachmentViewer";
 
 const { Text } = Typography;
@@ -20,6 +27,9 @@ interface RowData {
   durationMs: number | null | undefined;
   tokensIn: number | null | undefined;
   tokensOut: number | null | undefined;
+  estimatedLlmMs: number | null;
+  prefillTokensPerSecond: number | null;
+  decodeTokensPerSecond: number | null;
   costUsd: number | null | undefined;
   attachmentCount: number;
   result: Result | null; // null for summary rows
@@ -81,6 +91,7 @@ export function TaskAttemptsTable({
             scores[c.id] = null;
           }
         }
+        const tokenProcessing = estimateTokenProcessing(r.tokensIn, r.tokensOut, r.durationMs);
         return {
           key: r.id,
           modelId,
@@ -92,6 +103,9 @@ export function TaskAttemptsTable({
           durationMs: r.durationMs,
           tokensIn: r.tokensIn,
           tokensOut: r.tokensOut,
+          estimatedLlmMs: tokenProcessing.totalMs,
+          prefillTokensPerSecond: tokenProcessing.prefillTokensPerSecond,
+          decodeTokensPerSecond: tokenProcessing.decodeTokensPerSecond,
           costUsd: r.costUsd,
           attachmentCount: r.attachments.length,
           result: r,
@@ -116,6 +130,9 @@ export function TaskAttemptsTable({
         durationMs: avg(attemptRows.map((r) => r.durationMs)),
         tokensIn: avg(attemptRows.map((r) => r.tokensIn)),
         tokensOut: avg(attemptRows.map((r) => r.tokensOut)),
+        estimatedLlmMs: avg(attemptRows.map((r) => r.estimatedLlmMs)),
+        prefillTokensPerSecond: avg(attemptRows.map((r) => r.prefillTokensPerSecond)),
+        decodeTokensPerSecond: avg(attemptRows.map((r) => r.decodeTokensPerSecond)),
         costUsd: avg(attemptRows.map((r) => r.costUsd)),
         attachmentCount: 0,
         result: null,
@@ -196,6 +213,24 @@ export function TaskAttemptsTable({
       key: "cost",
       width: 80,
       render: (_: unknown, row: RowData) => formatCost(row.costUsd),
+    },
+    {
+      title: "LLM Est.",
+      key: "estimatedLlm",
+      width: 90,
+      render: (_: unknown, row: RowData) => formatDuration(row.estimatedLlmMs),
+    },
+    {
+      title: "Speed",
+      key: "speed",
+      width: 120,
+      render: (_: unknown, row: RowData) => (
+        <span>
+          {formatTokensPerSecond(row.prefillTokensPerSecond)} in
+          <br />
+          {formatTokensPerSecond(row.decodeTokensPerSecond)} out
+        </span>
+      ),
     },
     {
       title: "Files",

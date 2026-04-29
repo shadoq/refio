@@ -1,11 +1,12 @@
 import { Typography, Card, Row, Col, Button, Spin, Empty, Statistic } from "antd";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useMemo } from "react";
 import { LeaderboardTable } from "@/components/tables/LeaderboardTable";
 import { ParetoScatter } from "@/components/charts/ParetoScatter";
 import { useTasks } from "@/data/queries";
 import { useResults } from "@/data/queries";
 import { leaderboard } from "@/lib/stats";
+import { formatDuration } from "@/lib/format";
 import { applyFilters, useFilters } from "@/store/filters";
 
 const { Title, Paragraph } = Typography;
@@ -25,14 +26,18 @@ export default function Landing() {
   const paretoPoints = useMemo(
     () =>
       rows
-        .filter((r) => r.avgDurationMs != null || r.avgCostUsd != null)
+        .filter((r) => r.environment.type === "local")
+        .filter((r) => r.avgDurationMs != null && r.localViabilityScore != null)
         .map((r) => ({
           id: `${r.modelId}::${r.environmentId}`,
-          x: r.avgCostUsd ?? r.avgDurationMs! / 60000,
-          y: r.avgScore,
+          x: r.avgDurationMs! / 60000,
+          y: r.localViabilityScore!,
           label: r.model.name,
           provider: r.model.provider,
           attemptCount: r.attemptCount,
+          environmentType: r.environment.type,
+          xFormatted: formatDuration(r.avgDurationMs),
+          yFormatted: `${(r.localViabilityScore! * 100).toFixed(1)}%`,
         })),
     [rows],
   );
@@ -92,17 +97,17 @@ export default function Landing() {
           <span className="eyebrow">Refio evaluation</span>
           <span className="jclab-line">Passion creates. Knowledge helps.</span>
           <Title className="hero-title" level={1}>
-            Local-first agents, <span className="gradient-text">measured.</span>
+            Small tasks, <span className="gradient-text">measured.</span>
           </Title>
           <Paragraph className="hero-subtitle">
-            Real coding tasks for Refio-style agents: project context, tool use,
-            first-shot usability, reliability and local model viability in one benchmark cockpit.
+            Simple repeatable tasks for comparing local and cloud models:
+            first-shot usability, reliability, speed and local viability in one benchmark cockpit.
           </Paragraph>
           <Paragraph className="hero-note">
             This is a subjective benchmark of each test result, enriched with
             statistical data collected by the Refio plugin. It is designed to compare
-            models, especially local ones, in the practical context of working with a
-            niche coding agent.
+            models, especially local ones, on lightweight tasks where smaller models
+            still have a realistic chance to produce a usable result.
           </Paragraph>
           <div className="hero-actions">
             <Button type="primary" size="large" onClick={() => navigate("/compare")}>
@@ -210,18 +215,37 @@ export default function Landing() {
           <Col span={24}>
             <Card
               className="glass-card chart-card"
-              title="Pareto: Quality vs Avg Cost"
+              title="Local Pareto: Viability vs Avg Runtime"
               extra={
                 <Button type="link" onClick={() => navigate("/pareto")}>
                   Full view
                 </Button>
               }
             >
-              <ParetoScatter points={paretoPoints} height={320} mini />
+              <ParetoScatter
+                points={paretoPoints}
+                height={320}
+                mini
+                xLabel="Avg Duration"
+                yLabel="Local Viability"
+              />
             </Card>
           </Col>
         )}
       </Row>
+
+      {tasksData && tasksData.tasks.length > 0 && (
+        <Card className="glass-card" title="Tasks">
+          <div className="task-link-grid">
+            {tasksData.tasks.map((task) => (
+              <Link className="task-link-card" key={task.id} to={`/tasks/${task.id}`}>
+                <span>{task.name}</span>
+                <small>{task.id}</small>
+              </Link>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

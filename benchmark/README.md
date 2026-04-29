@@ -1,73 +1,40 @@
-# React + TypeScript + Vite
+# benchmark.refio
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Static benchmark viewer for evaluating which local and cloud models are a good fit for Refio.
 
-Currently, two official plugins are available:
+The benchmark is intentionally focused on simple, repeatable coding tasks. It is not trying to prove that small local models can solve complex software projects. Its purpose is to map practical model behavior for Refio's likely target use cases: lightweight coding tasks, first-shot usefulness, visible tool use, reliability, speed, API cost and local viability.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## What It Measures
 
-## React Compiler
+- Quality scores per task and criterion
+- First-shot usability
+- Reliability across repeated attempts
+- Local viability against cloud baselines
+- Runtime and estimated token throughput
+- API cost for cloud models
+- Per-task behavior and model-to-model comparisons
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## What It Is For
 
-## Expanding the ESLint configuration
+- Choosing sensible default models for Refio modes
+- Understanding where local models are good enough
+- Comparing small, medium and cloud models on the same task set
+- Keeping benchmark artifacts, screenshots and notes linkable
+- Avoiding model choices based only on intuition
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## What It Is Not
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+- A fully automated benchmark runner
+- A general LLM leaderboard
+- A claim that local models should handle large, complex agent tasks
+- A replacement for manual review of generated artifacts
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+## Development
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
+npm run build
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+Data lives in `data/tasks.json` and `data/results.json`. In development mode, the admin pages can edit those files through the Vite dev server helpers.

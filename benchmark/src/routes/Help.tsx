@@ -40,16 +40,22 @@ const leaderboardMetrics = [
       "Average runtime for the filtered attempts in a model and environment group. The admin form accepts seconds, and the UI formats longer values as minutes and seconds.",
   },
   {
-    name: "Avg Cost",
+    name: "LLM Est.",
+    formula: "duration split into 20% prefill and 80% decode",
+    description:
+      "Estimated token-processing time split into prefill and decode. This uses the measured attempt duration because the current benchmark data does not store TTFT/decode telemetry separately.",
+  },
+  {
+    name: "Token Speed",
+    formula: "tokensIn / estimated prefill time, tokensOut / estimated decode time",
+    description:
+      "Effective prefill and decode throughput derived from each run's token counts and duration. Treat it as benchmark-effective speed, not raw provider telemetry.",
+  },
+  {
+    name: "Avg API Cost",
     formula: "average(costUsd)",
     description:
       "Average cloud/API cost per attempt for the filtered model and environment group. This is usually the better cost metric for comparing one run against another.",
-  },
-  {
-    name: "Total Cost",
-    formula: "sum(costUsd)",
-    description:
-      "Total cloud/API cost recorded across all filtered attempts. This shows budget spent, but can favor models with fewer recorded attempts.",
   },
 ];
 
@@ -72,7 +78,8 @@ const resultFields = [
   },
   {
     name: "Tokens",
-    description: "Displayed as input / output tokens when token counts are available.",
+    description:
+      "Displayed as input / output tokens when token counts are available. Token counts also drive the estimated prefill/decode speed metrics.",
   },
   {
     name: "Attachments",
@@ -148,10 +155,41 @@ export default function Help() {
             children: (
               <Paragraph>
                 Pareto charts compare two metrics at once. For quality, reliability,
-                first-shot, pass rate and local viability, higher is better. For cost
-                and duration, lower is better. Points near the better edge on both
-                axes represent stronger trade-offs.
+                first-shot, pass rate, token speed and local viability, higher is
+                better. For cost, duration and estimated LLM time, lower is better.
+                Points near the better edge on both axes represent stronger trade-offs.
               </Paragraph>
+            ),
+          },
+          {
+            key: "token-processing",
+            label: "Token speed calculation",
+            children: (
+              <Space direction="vertical">
+                <Paragraph>
+                  LLM inference is split into prefill, where input tokens are processed
+                  to build model state, and decode, where output tokens are generated
+                  sequentially.
+                </Paragraph>
+                <Paragraph>
+                  Current benchmark data stores <Text code>durationMs</Text>,{" "}
+                  <Text code>tokensIn</Text> and <Text code>tokensOut</Text>, but not
+                  separate TTFT/prefill/decode timings. Until those are captured, the
+                  UI estimates the split from measured run time.
+                </Paragraph>
+                <Paragraph>
+                  When both input and output tokens exist:{" "}
+                  <Text code>prefillMs = durationMs * 0.2</Text> and{" "}
+                  <Text code>decodeMs = durationMs * 0.8</Text>. Then{" "}
+                  <Text code>input tok/s = tokensIn / (prefillMs / 1000)</Text> and{" "}
+                  <Text code>output tok/s = tokensOut / (decodeMs / 1000)</Text>.
+                </Paragraph>
+                <Paragraph>
+                  If only one token side exists, the full measured duration is assigned
+                  to that side. Leaderboard values are averages of these per-attempt
+                  estimates for the model and environment group.
+                </Paragraph>
+              </Space>
             ),
           },
         ]}

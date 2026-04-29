@@ -6,7 +6,12 @@ import { compareLeaderboardRows, leaderboard, type LeaderboardRow } from "@/lib/
 import { applyFilters, useFilters } from "@/store/filters";
 import { useTasks } from "@/data/queries";
 import { useResults } from "@/data/queries";
-import { formatDuration, formatCost, formatScore } from "@/lib/format";
+import {
+  formatDuration,
+  formatCost,
+  formatScore,
+  formatTokensPerSecond,
+} from "@/lib/format";
 
 const { Text } = Typography;
 
@@ -133,20 +138,27 @@ export function LeaderboardTable() {
       render: (_: unknown, row: LeaderboardRow) => formatDuration(row.avgDurationMs),
     },
     {
+      title: "LLM Est.",
+      key: "estimatedLlm",
+      width: 118,
+      sorter: (a: LeaderboardRow, b: LeaderboardRow) =>
+        (a.avgEstimatedLlmMs ?? Infinity) - (b.avgEstimatedLlmMs ?? Infinity),
+      render: (_: unknown, row: LeaderboardRow) =>
+        formatDuration(row.avgEstimatedLlmMs),
+    },
+    {
+      title: "Token Speed",
+      key: "tokenSpeed",
+      width: 132,
+      render: (_: unknown, row: LeaderboardRow) => renderTokenSpeed(row),
+    },
+    {
       title: "Avg Cost",
       key: "avgCost",
       width: 120,
       sorter: (a: LeaderboardRow, b: LeaderboardRow) =>
         (a.avgCostUsd ?? Infinity) - (b.avgCostUsd ?? Infinity),
       render: (_: unknown, row: LeaderboardRow) => formatCost(row.avgCostUsd),
-    },
-    {
-      title: "Total Cost",
-      key: "totalCost",
-      width: 120,
-      sorter: (a: LeaderboardRow, b: LeaderboardRow) =>
-        (a.totalCostUsd ?? Infinity) - (b.totalCostUsd ?? Infinity),
-      render: (_: unknown, row: LeaderboardRow) => formatCost(row.totalCostUsd),
     },
   ];
 
@@ -158,7 +170,7 @@ export function LeaderboardTable() {
       loading={tasksLoading || resultsLoading}
       pagination={false}
       size="middle"
-      scroll={{ x: 1240 }}
+      scroll={{ x: 1260 }}
       onRow={(row, index) => ({
         onClick: () =>
           navigate(`/compare?models=${encodeURIComponent(row.modelId)}`),
@@ -178,4 +190,18 @@ function scoreColor(score: number): string {
 function formatNullableScore(score: number | null): string {
   if (score == null) return "-";
   return formatScore(score);
+}
+
+function renderTokenSpeed(row: LeaderboardRow) {
+  if (row.avgPrefillTokensPerSecond == null && row.avgDecodeTokensPerSecond == null) {
+    return "-";
+  }
+
+  return (
+    <span style={{ whiteSpace: "nowrap" }}>
+      in {formatTokensPerSecond(row.avgPrefillTokensPerSecond)}
+      <br />
+      out {formatTokensPerSecond(row.avgDecodeTokensPerSecond)}
+    </span>
+  );
 }
