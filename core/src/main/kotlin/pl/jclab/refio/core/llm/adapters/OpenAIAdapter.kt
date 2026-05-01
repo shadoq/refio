@@ -88,6 +88,11 @@ class OpenAIAdapter(
     private fun transformRequestToResponses(requestBody: Map<String, Any>): Map<String, Any> {
         val transformed = requestBody.toMutableMap()
 
+        // stream_options is a Chat Completions concept; the Responses API rejects it
+        // (HTTP 400: Unknown parameter). Responses API streams emit usage natively via
+        // dedicated SSE events, parsed elsewhere via mapUsage(...).
+        transformed.remove("stream_options")
+
         // Remove "messages" and add "input"
         val messages = transformed.remove("messages")
         if (messages is List<*>) {
@@ -1014,15 +1019,13 @@ class OpenAIAdapter(
 
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
 
-            // Prefer real usage from the stream (stream_options.include_usage=true);
-            // fall back to estimation if the server didn't send it.
-            val inputTokensEstimate = streamUsage?.inputTokens ?: estimateInputTokens(requestBody)
-            val outputTokensFinal = streamUsage?.outputTokens ?: totalTokensEstimate
+            // Estimate final usage for logging (OpenAI doesn't send usage in stream)
+            val inputTokensEstimate = estimateInputTokens(requestBody)
 
-            val usage = streamUsage ?: LLMUsage(
+            val usage = LLMUsage(
                 inputTokens = inputTokensEstimate,
-                outputTokens = outputTokensFinal,
-                totalTokens = inputTokensEstimate + outputTokensFinal
+                outputTokens = totalTokensEstimate,
+                totalTokens = inputTokensEstimate + totalTokensEstimate
             )
 
             val cost = estimateCost(usage)
