@@ -22,7 +22,13 @@ data class ToolResultData(
     val content: String,          // Summary (or RAW if not summarized)
     val isSummarized: Boolean,    // Whether content is a summary
     val rawOutput: String? = null, // Full RAW output (optional, for UI)
-    val metadata: String? = null  // JSON metadata from tool result (e.g., path, line_count)
+    val metadata: String? = null, // JSON metadata from tool result (e.g., path, line_count)
+    // Sub-LLM usage from tools that internally call an LLM (advance_code_editing,
+    // multi_line_editor). Persisted on the TOOL ChatMessage so SessionStatsBar
+    // and per-message stats include these tokens — they are real LLM cost.
+    val subTokensIn: Int? = null,
+    val subTokensOut: Int? = null,
+    val subCost: Double? = null
 )
 
 /**

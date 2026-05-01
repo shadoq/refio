@@ -118,7 +118,13 @@ abstract class OpenAICompatibleAdapter(
         put("messages", requestMessages)
         put("temperature", temperature)
         put("max_tokens", effectiveMaxTokens)
-        if (streaming) put("stream", true)
+        if (streaming) {
+            put("stream", true)
+            // Ask the server to emit a final usage chunk so we can report real token
+            // counts (incl. reasoning_tokens for OpenRouter's o1/o3/DeepSeek-R1 etc.)
+            // instead of estimating from streamed content.
+            put("stream_options", mapOf("include_usage" to true))
+        }
         with(OpenAICompatibleHelpers) { addCommonKwargs(kwargs) }
         kwargs["response_format"]?.let { put("response_format", it) }
 
@@ -376,6 +382,9 @@ abstract class OpenAICompatibleAdapter(
         val toolCallAccumulator = ToolCallContentNormalizer.OpenAiStreamingToolCallAccumulator()
         var httpStatus: Int? = null
         var finalFinishReason: String? = null
+        // Real usage from final SSE chunk (when stream_options.include_usage=true).
+        // Includes reasoning_tokens for reasoning models proxied by OpenRouter etc.
+        var streamUsage: LLMUsage? = null
         val endpoint = "$baseUrl$chatEndpointPath"
 
         try {
@@ -401,7 +410,27 @@ abstract class OpenAICompatibleAdapter(
                                 contentBuilder.append(delta)
                                 onStreamChunk(StreamChunk(delta = delta))
                             },
-                            onRawChunk = ::onStreamRawChunk,
+                            onRawChunk = { chunk ->
+                                @Suppress("UNCHECKED_CAST")
+                                (chunk["usage"] as? Map<String, Any?>)?.let { usageMap ->
+                                    val promptTokens = (usageMap["prompt_tokens"] as? Number)?.toInt() ?: 0
+                                    val completionTokens = (usageMap["completion_tokens"] as? Number)?.toInt() ?: 0
+                                    val totalTokens = (usageMap["total_tokens"] as? Number)?.toInt()
+                                        ?: (promptTokens + completionTokens)
+                                    streamUsage = LLMUsage(
+                                        inputTokens = promptTokens,
+                                        outputTokens = completionTokens,
+                                        totalTokens = totalTokens,
+                                    )
+                                    val details = usageMap["completion_tokens_details"] as? Map<*, *>
+                                    val reasoning = (details?.get("reasoning_tokens") as? Number)?.toInt()
+                                    logger.info {
+                                        "$logPrefix [STREAM_USAGE] prompt=$promptTokens, completion=$completionTokens" +
+                                            (reasoning?.let { ", reasoning=$it (incl. in completion)" } ?: "")
+                                    }
+                                }
+                                onStreamRawChunk(chunk)
+                            },
                         )
                     }
                 }
@@ -418,23 +447,26 @@ abstract class OpenAICompatibleAdapter(
                 toolCallAccumulator.toCanonicalJson()?.let { contentBuilder.append(it) }
             }
 
-            @Suppress("UNCHECKED_CAST")
-            val inputTokensEstimate = (requestBody["messages"] as? List<Map<String, Any?>>)?.sumOf {
-                when (val content = it["content"]) {
-                    is String -> content.length
-                    is List<*> -> content.sumOf { part ->
-                        @Suppress("UNCHECKED_CAST")
-                        val partMap = part as? Map<String, Any?>
-                        (partMap?.get("text") as? String)?.length ?: 0
+            // Prefer real usage from the stream's final chunk; fall back to estimation.
+            val usage = streamUsage ?: run {
+                @Suppress("UNCHECKED_CAST")
+                val inputTokensEstimate = (requestBody["messages"] as? List<Map<String, Any?>>)?.sumOf {
+                    when (val content = it["content"]) {
+                        is String -> content.length
+                        is List<*> -> content.sumOf { part ->
+                            @Suppress("UNCHECKED_CAST")
+                            val partMap = part as? Map<String, Any?>
+                            (partMap?.get("text") as? String)?.length ?: 0
+                        }
+                        else -> 0
                     }
-                    else -> 0
-                }
-            } ?: 0
-            val usage = LLMUsage(
-                inputTokens = inputTokensEstimate,
-                outputTokens = contentBuilder.length / 4,
-                totalTokens = inputTokensEstimate + contentBuilder.length / 4,
-            )
+                } ?: 0
+                LLMUsage(
+                    inputTokens = inputTokensEstimate,
+                    outputTokens = contentBuilder.length / 4,
+                    totalTokens = inputTokensEstimate + contentBuilder.length / 4,
+                )
+            }
             onStreamChunk(StreamChunk(delta = "", finishReason = finalFinishReason, usage = usage))
 
             logger.apiResponse(

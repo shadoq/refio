@@ -1046,6 +1046,9 @@ class AgentTurnLoop(
                                 metadata = resultData.metadata,
                                 agentName = persistAgentName,
                                 agentDepth = persistAgentDepth,
+                                tokensIn = resultData.subTokensIn,
+                                tokensOut = resultData.subTokensOut,
+                                cost = resultData.subCost,
                             )
                         }
 
