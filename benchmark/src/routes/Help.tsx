@@ -162,6 +162,71 @@ export default function Help() {
             ),
           },
           {
+            key: "compare-radars",
+            label: "Compare page radars",
+            children: (
+              <Space direction="vertical">
+                <Paragraph>
+                  The Compare page renders three radar charts. Each axis is plotted on
+                  a 0-100% scale where higher is always better.
+                </Paragraph>
+                <Paragraph>
+                  <Text strong>Average Score per Criterion</Text> uses raw normalized
+                  scores per criterion (Compliance, Works out of the box, Look, Code
+                  quality, Agent logic). For each model the value on a given axis is
+                  the mean of <Text code>score.value / max(scale.values)</Text> across
+                  all attempts of that model on that criterion.
+                </Paragraph>
+                <Paragraph>
+                  <Text strong>Derived Benchmark Metrics</Text> aggregates leaderboard
+                  fields per model. To keep values stable when models are added or
+                  removed from the selection, normalization uses fixed reference
+                  points computed from the full leaderboard (all models, after global
+                  filters):
+                </Paragraph>
+                <Space direction="vertical" size={4}>
+                  <Text>
+                    <Text strong>Avg Score, Pass Rate, First-shot, Reliability,
+                    Local Viability</Text> — already in the 0-1 range, used as raw
+                    values clamped to [0, 1].
+                  </Text>
+                  <Text>
+                    <Text strong>Input Speed, Output Speed</Text> — higher is better.
+                    Value is divided by the 95th percentile of all leaderboard rows
+                    and clamped to 1: <Text code>clamp(tps / p95(tps), 0, 1)</Text>.
+                    The top tier hits 100%, slower models scale linearly.
+                  </Text>
+                  <Text>
+                    <Text strong>Avg Speed (duration), API Cost</Text> — lower is
+                    better. Value is mapped against the 5th percentile floor of all
+                    leaderboard rows: <Text code>clamp(p5(value) / value, 0, 1)</Text>.
+                    The fastest/cheapest model hits 100%; a model 2× slower or
+                    more expensive sits at 50%, 10× at 10%. Values never collapse
+                    to 0 just for being above the median.
+                  </Text>
+                </Space>
+                <Paragraph>
+                  When a model has multiple environment rows in the leaderboard, the
+                  per-axis value is averaged across them. An axis is dropped from the
+                  chart whenever <Text strong>any</Text> selected model has no data
+                  for it — partial coverage would force the missing model to 0% and
+                  visually distort the polygon. In practice this means mixing cloud
+                  and local models hides API Cost (null for local) and Local
+                  Viability (null for cloud), so only directly comparable metrics
+                  remain. Selecting different models does not change the position of
+                  any other model on the radar.
+                </Paragraph>
+                <Paragraph>
+                  <Text strong>Model Behavior by Task</Text> averages normalized
+                  criterion scores per task per model. Recharts requires at least
+                  three axes to draw a polygon, so with only one or two tasks the
+                  chart degenerates into a line — use the Per-task Breakdown table
+                  below for exact values.
+                </Paragraph>
+              </Space>
+            ),
+          },
+          {
             key: "token-processing",
             label: "Token speed calculation",
             children: (

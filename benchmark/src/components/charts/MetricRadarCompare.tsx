@@ -11,7 +11,7 @@ import {
 } from "recharts";
 import type { Result, ResultsFile } from "@/schema/results";
 import type { TasksFile } from "@/schema/tasks";
-import { leaderboard } from "@/lib/stats";
+import { leaderboard, type LeaderboardRow } from "@/lib/stats";
 
 interface MetricRadarCompareProps {
   results: Result[];
@@ -31,6 +31,14 @@ const COLORS = [
   "#4dd4ac",
 ];
 
+const CEILING_PERCENTILE = 0.95;
+const FLOOR_PERCENTILE = 0.05;
+
+interface Metric {
+  label: string;
+  getNormalized: (row: LeaderboardRow) => number | null;
+}
+
 export function MetricRadarCompare({
   results,
   selectedModelIds,
@@ -41,69 +49,53 @@ export function MetricRadarCompare({
 }: MetricRadarCompareProps) {
   const chartData = useMemo(() => {
     const rows = leaderboard(results, resultsFile, tasksFile);
-    const modelRows = selectedModelIds.map((modelId) => ({
-      modelId,
-      rows: rows.filter((row) => row.modelId === modelId),
-    }));
 
-    const metrics = [
-      {
-        label: "Avg Score",
-        getValue: (items: typeof rows) => avg(items.map((row) => row.avgScore)),
-        higherIsBetter: true,
-      },
-      {
-        label: "Pass Rate",
-        getValue: (items: typeof rows) => avg(items.map((row) => row.passRate)),
-        higherIsBetter: true,
-      },
-      {
-        label: "First-shot",
-        getValue: (items: typeof rows) => avg(items.map((row) => row.firstShotScore)),
-        higherIsBetter: true,
-      },
-      {
-        label: "Reliability",
-        getValue: (items: typeof rows) => avg(items.map((row) => row.reliabilityScore)),
-        higherIsBetter: true,
-      },
+    const collect = (selector: (row: LeaderboardRow) => number | null): number[] =>
+      rows.map(selector).filter((v): v is number => v != null);
+
+    const prefillCeil = ceiling(collect((r) => r.avgPrefillTokensPerSecond));
+    const decodeCeil = ceiling(collect((r) => r.avgDecodeTokensPerSecond));
+    const durationFloor = floor(collect((r) => r.avgDurationMs));
+    const costFloor = floor(collect((r) => r.avgCostUsd));
+
+    const metrics: Metric[] = [
+      { label: "Avg Score", getNormalized: (r) => clampNullable(r.avgScore) },
+      { label: "Pass Rate", getNormalized: (r) => clampNullable(r.passRate) },
+      { label: "First-shot", getNormalized: (r) => clampNullable(r.firstShotScore) },
+      { label: "Reliability", getNormalized: (r) => clampNullable(r.reliabilityScore) },
       {
         label: "Local Viability",
-        getValue: (items: typeof rows) => avg(items.map((row) => row.localViabilityScore)),
-        higherIsBetter: true,
+        getNormalized: (r) => clampNullable(r.localViabilityScore),
       },
       {
         label: "Input Speed",
-        getValue: (items: typeof rows) =>
-          avg(items.map((row) => row.avgPrefillTokensPerSecond)),
-        higherIsBetter: true,
+        getNormalized: (r) => normalizeHigher(r.avgPrefillTokensPerSecond, prefillCeil),
       },
       {
         label: "Output Speed",
-        getValue: (items: typeof rows) =>
-          avg(items.map((row) => row.avgDecodeTokensPerSecond)),
-        higherIsBetter: true,
+        getNormalized: (r) => normalizeHigher(r.avgDecodeTokensPerSecond, decodeCeil),
       },
       {
-        label: "Runtime",
-        getValue: (items: typeof rows) => avg(items.map((row) => row.avgDurationMs)),
-        higherIsBetter: false,
+        label: "Avg Speed",
+        getNormalized: (r) => normalizeLower(r.avgDurationMs, durationFloor),
       },
       {
         label: "API Cost",
-        getValue: (items: typeof rows) => avg(items.map((row) => row.avgCostUsd)),
-        higherIsBetter: false,
+        getNormalized: (r) => normalizeLower(r.avgCostUsd, costFloor),
       },
     ];
 
     return metrics.flatMap((metric) => {
-      const rawValues = modelRows.map(({ rows }) => metric.getValue(rows));
-      if (rawValues.every((value) => value == null)) return [];
-      const normalized = normalizeAcrossModels(rawValues, metric.higherIsBetter);
-      const point: Record<string, string | number> = { metric: metric.label };
-      selectedModelIds.forEach((modelId, index) => {
-        point[modelId] = normalized[index] ?? 0;
+      const perModel = selectedModelIds.map((modelId) => {
+        const modelRows = rows.filter((r) => r.modelId === modelId);
+        return { modelId, value: avgMetricForModel(modelRows, metric) };
       });
+      // Drop axis if any selected model has no data — partial coverage is misleading.
+      if (perModel.some((entry) => entry.value == null)) return [];
+      const point: Record<string, string | number> = { metric: metric.label };
+      for (const { modelId, value } of perModel) {
+        point[modelId] = value ?? 0;
+      }
       return [point];
     });
   }, [results, resultsFile, selectedModelIds, tasksFile]);
@@ -141,25 +133,57 @@ export function MetricRadarCompare({
   );
 }
 
-function avg(values: Array<number | null | undefined>): number | null {
-  const nums = values.filter((value): value is number => value != null);
-  if (nums.length === 0) return null;
-  return nums.reduce((a, b) => a + b, 0) / nums.length;
+function avgMetricForModel(
+  modelRows: LeaderboardRow[],
+  metric: Metric,
+): number | null {
+  const values = modelRows
+    .map((row) => metric.getNormalized(row))
+    .filter((v): v is number => v != null);
+  if (values.length === 0) return null;
+  return values.reduce((a, b) => a + b, 0) / values.length;
 }
 
-function normalizeAcrossModels(
-  values: Array<number | null>,
-  higherIsBetter: boolean,
-): Array<number | null> {
-  const nums = values.filter((value): value is number => value != null);
-  if (nums.length === 0) return values.map(() => null);
-  const min = Math.min(...nums);
-  const max = Math.max(...nums);
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
 
-  return values.map((value) => {
-    if (value == null) return null;
-    if (max === min) return 1;
-    const normalized = (value - min) / (max - min);
-    return higherIsBetter ? normalized : 1 - normalized;
-  });
+function clampNullable(value: number | null | undefined): number | null {
+  if (value == null) return null;
+  return clamp(value, 0, 1);
+}
+
+function normalizeHigher(value: number | null, ceilingValue: number): number | null {
+  if (value == null) return null;
+  if (ceilingValue <= 0) return 0;
+  return clamp(value / ceilingValue, 0, 1);
+}
+
+function normalizeLower(value: number | null, floorValue: number): number | null {
+  if (value == null) return null;
+  if (value <= 0) return 1;
+  if (floorValue <= 0) return 0;
+  return clamp(floorValue / value, 0, 1);
+}
+
+function percentile(values: number[], p: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = clamp(Math.floor(p * (sorted.length - 1)), 0, sorted.length - 1);
+  return sorted[idx];
+}
+
+function ceiling(values: number[]): number {
+  if (values.length === 0) return 1;
+  const p = percentile(values, CEILING_PERCENTILE);
+  if (p > 0) return p;
+  const max = Math.max(...values);
+  return max > 0 ? max : 1;
+}
+
+function floor(values: number[]): number {
+  if (values.length === 0) return 0;
+  const positives = values.filter((v) => v > 0);
+  if (positives.length === 0) return 0;
+  return percentile(positives, FLOOR_PERCENTILE);
 }
