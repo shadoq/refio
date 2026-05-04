@@ -3,6 +3,10 @@
 > For contributors and advanced users. See [README.md](../README.md) for product overview.
 
 > **Recent notable changes** (see [CHANGELOG.md](../CHANGELOG.md) `[Unreleased]`):
+> - **Centralized LLM metric tracking** — `LLMClient` accepts `taskRepository` + `subtaskRepository` and auto-increments `tokens_in` / `tokens_out` / `cost_usd` on the matching task and subtask rows after every successful call. The `task` row is the single source of truth; UI reads it directly instead of summing per-message tokens.
+> - **`DiffCompressor`** — content-aware diff body elision (small / pure-create / mixed paths). Saves ~8-14K input tokens on the agent iteration that follows a write tool.
+> - **Native function calling on OpenAI-compatible adapters** (OpenRouter, Z.AI, Generic OpenAI, LM Studio) plus persistent fallback list (`models.native_tools_fallbacks`) — fallback survives process restart.
+> - **`maxContextWindow` cached as a `StateFlow`** in `SessionManager` — Status bar / Context panel / Settings no longer hit SQLite from the EDT.
 > - "Slash commands" were renamed to "Prompts" (code: `SlashCommand` → `SlashPrompt`, DB enum `SLASH_COMMAND` → `SLASH_PROMPT` with V3 migration). The `/name` invocation syntax is unchanged; UI tab is now **Settings → Prompts**.
 > - Terminal command security uses a single `CommandRule` regex engine (`ALLOW` / `BLOCK` / `ASK`); the legacy `CommandWhitelist` / `CommandDenylist` classes have been removed.
 > - Models settings tab no longer triggers remote provider fetches on open — only the **Refresh** button does. Local providers (Ollama, LM Studio) use a 3 s `listModels` timeout.
@@ -64,7 +68,7 @@ Unlike tools that send entire codebases to LLMs, Refio uses **selective context 
 |  +-- PLAN/AGENT mode -> AgentTurnLoop (self-directing tool loop)        |
 +-------------------------------------------------------------------------+
 |  Core Layer (In-Process API)                                            |
-|  CoreApiRouter (composition root, ~962 LOC)                             |
+|  CoreApiRouter (composition root, ~305 LOC — zero business logic)       |
 |  +-- 12 Domain Routers (Chat, Task, Subtask, Agent, Config,             |
 |  +--   Prompts, Tool, RAG, ApiLogs, MultiAgent, ProjectContext, Subagent)|
 |  +-- ContextService (~2140 LOC) + 6 extracted sub-services              |
@@ -160,6 +164,9 @@ AgentTurnLoop includes production-grade enhancements:
 | **Retry Logic** | Exponential backoff for rate limits/timeouts (1s -> 2s -> 4s) |
 | **Token Estimation** | Pre-flight counting prevents unexpected API errors |
 | **Working Memory** | Auto-extracts knowledge from tool results for context continuity |
+| **Diff body elision** | `DiffCompressor` collapses pure-create diffs in tool results to head + tail + recovery hint; saves ~8-14K input tokens on the iteration after a write tool |
+| **Centralized stats** | `LLMClient` writes `tokens_in` / `tokens_out` / `cost_usd` directly to `task` and `subtask` rows on every successful call; UI reads the row instead of summing per-message tokens |
+| **Cached context window** | `SessionManager.maxContextWindow` `StateFlow` keeps the limit on hand; Status bar and Settings repaint without an EDT-blocking SQLite read |
 
 **Configuration:** Mode/profile settings (PLAN: 25 iterations, AGENT: 50 iterations, SUBAGENT depth limit: 3)
 

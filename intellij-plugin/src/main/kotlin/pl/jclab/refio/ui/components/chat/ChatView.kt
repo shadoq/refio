@@ -369,11 +369,13 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
 
         cs.launch {
             var previousTaskId: String? = null
+            var previousTokenSig: Triple<Int, Int, Double>? = null
             sessionManager.activeSession.collect { session ->
                 logger.info { "Received session update: mode=${session?.mode}" }
                 val newTaskId = session?.id
                 if (newTaskId != previousTaskId) {
                     previousTaskId = newTaskId
+                    previousTokenSig = null
                     // Session switch: clear the current transcript immediately.
                     // The messages StateFlow may still momentarily hold the previous
                     // session's data, so rendering that snapshot here can leave the
@@ -381,6 +383,17 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
                     lastReceivedMessages = emptyList()
                     SwingUtilities.invokeLater {
                         updateMessages(emptyList())
+                    }
+                } else if (session != null) {
+                    // Same session, but task-row tokens/cost changed (e.g. auto-naming
+                    // ran after the turn ended and bumped task.tokensIn/Out via the
+                    // LLMClient centralization). Force a stats-bar re-render so the
+                    // footer matches the header — without this, session token updates
+                    // bypass the messages collector and the bar stays stale.
+                    val sig = Triple(session.tokensIn, session.tokensOut, session.costUsd)
+                    if (sig != previousTokenSig) {
+                        previousTokenSig = sig
+                        scheduleMessagesUpdate(lastReceivedMessages)
                     }
                 }
             }
@@ -605,7 +618,7 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             isOpaque = false
             add(toolbarFactory.createConversationToolbar())
-            add(SessionStatsBar.create(messages))
+            add(SessionStatsBar.create(messages, sessionManager.activeSession.value))
         }
         messagesPanel.add(
             toolbarWithStats,

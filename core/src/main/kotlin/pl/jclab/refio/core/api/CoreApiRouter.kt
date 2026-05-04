@@ -62,7 +62,11 @@ class CoreApiRouter(
         toolRegistry = toolRegistry
     )
     val toolApprovalService = ToolApprovalService()
-    val llmClient = llmClientOverride ?: LLMClient(configService)
+    val llmClient = llmClientOverride ?: LLMClient(
+        configService = configService,
+        taskRepository = persistence.taskRepository,
+        subtaskRepository = persistence.subtaskRepository
+    )
 
     // Support services (hooks, working memory, agent plans, conversation summary, user interaction, queue).
     private val supportServices = pl.jclab.refio.core.api.modules.SupportServicesModule(

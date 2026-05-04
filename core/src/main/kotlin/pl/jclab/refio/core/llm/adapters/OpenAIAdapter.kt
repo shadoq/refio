@@ -1019,14 +1019,19 @@ class OpenAIAdapter(
 
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
 
-            // Estimate final usage for logging (OpenAI doesn't send usage in stream)
-            val inputTokensEstimate = estimateInputTokens(requestBody)
-
-            val usage = LLMUsage(
-                inputTokens = inputTokensEstimate,
-                outputTokens = totalTokensEstimate,
-                totalTokens = inputTokensEstimate + totalTokensEstimate
-            )
+            // Prefer real usage from the final stream chunk (sent when stream_options.include_usage=true,
+            // captured into `streamUsage` above). Reasoning models like gpt-5.4-mini have completion
+            // tokens that include hidden reasoning_tokens — character-count estimates undercount these
+            // by 5x+, which silently underbills cost. Fall back to estimates only if the provider
+            // omitted the usage frame.
+            val usage = streamUsage ?: run {
+                val inputTokensEstimate = estimateInputTokens(requestBody)
+                LLMUsage(
+                    inputTokens = inputTokensEstimate,
+                    outputTokens = totalTokensEstimate,
+                    totalTokens = inputTokensEstimate + totalTokensEstimate
+                )
+            }
 
             val cost = estimateCost(usage)
 

@@ -1,7 +1,7 @@
 # Onboarding: Refio
 
-> **Last Updated:** 2026-04-27
-> **Version:** 0.0.1.8
+> **Last Updated:** 2026-05-03
+> **Version:** 0.0.1.9
 > **Status:** Active Development
 
 This guide helps new contributors get up and running. For technical reference, see [overview.md](overview.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -22,17 +22,17 @@ Refio is a Kotlin/JVM project with three Gradle modules, each with its own sourc
 
 ```
 refio/
-├── core/                    # IDE-independent core (~284 Kotlin files)
+├── core/                    # IDE-independent core (~372 Kotlin files main)
 │   └── src/main/kotlin/pl/jclab/refio/core/
-├── cli/                     # Standalone TUI (~46 Kotlin files)
+├── cli/                     # Standalone TUI (~47 Kotlin files main)
 │   └── src/main/kotlin/pl/jclab/refio/cli/
-├── intellij-plugin/         # IntelliJ IDEA plugin (~118 Kotlin files)
+├── intellij-plugin/         # IntelliJ IDEA plugin (~118 Kotlin files main)
 │   └── src/main/kotlin/pl/jclab/refio/
 ├── docs/                    # Documentation
 └── .github/                 # CI/CD workflows
 ```
 
-**Total:** ~591 Kotlin files (284 core + 46 CLI + 118 plugin + 143 tests)
+**Total:** ~713 Kotlin files (537 main + 176 tests: 134 core + 41 CLI + 1 plugin)
 
 ### Architectural Layers
 
@@ -63,7 +63,7 @@ UI (IntelliJ Swing / TUI Mordant+JLine3)
 | `tools/security/` | ~7 | CommandRule (regex ALLOW/BLOCK/ASK), FileLimits, PathSandbox |
 | `services/` | ~35 | AgentTurnLoop, ContextService, RagIndexingService, ConfigService, ToolPermissionsService, etc. |
 | `services/turn/` | ~13 | AgentTurnLoop sub-components: TurnLLMCaller, TurnPromptBuilder, TurnToolExecutor, ToolApprovalService, etc. |
-| `services/context/` | ~6 | ContextBudget, WorkingMemoryService, ProjectInstructionsLoader, ToolResultCompression |
+| `services/context/` | ~7 | ContextBudget, WorkingMemoryService, ProjectInstructionsLoader, ToolResultCompression, **DiffCompressor** (content-aware diff body elision) |
 | `subagents/` | ~6 | Parser, router, profiles, tool filtering; definitions in `resources/subagents/*.md` (21 agents) |
 | `agents/` | ~6 | Multi-agent orchestration (EventBus, Runner, cycle detection) |
 | `db/` | ~31 | SQLite via Exposed ORM: tables, repositories, migrations |
@@ -139,13 +139,15 @@ Quick summary of what the engine supports:
 
 ## Development Context
 
-### Active Areas (as of v0.0.1.8, 2026-04-27)
+### Active Areas (as of v0.0.1.9, 2026-05-03)
 
-1. **Native function calling** — provider-native tool API for Ollama, OpenAI, Anthropic, Gemini; JSON-in-text fallback for the rest. Controlled by `tools.native_tools: auto|always|never`.
-2. **Multi-agent infrastructure** — `AgentEventBus`, `MultiAgentRunner`, parallel orchestration wired; peer-to-peer A2A messaging (`send_message` → `answer_message` loop) not yet production-ready.
-3. **Ongoing refactor** — CoreApiRouter and ConfigService being slimmed down; session layer migration to `:core` in progress.
-4. **CommandRule security system** — regex-based ALLOW/BLOCK/ASK replacing legacy `CommandWhitelist`. New code should use `CommandRule`.
-5. **Reference model for testing:** `ollama/qwen3.5:9b`
+1. **Native function calling** — provider-native tool API for Ollama, OpenAI, Anthropic, Gemini, plus all OpenAI-compatible providers (OpenRouter, Z.AI, Generic OpenAI, LM Studio) via `OpenAICompatibleHelpers.buildOpenAIToolsArray` / `parseOpenAIToolCalls`. JSON-in-text fallback for the rest. Controlled by `tools.native_tools: auto|always|never`. **Persistent fallback list** in `models.native_tools_fallbacks` survives process restart.
+2. **Centralized stats tracking** — `LLMClient` is now the single writer of `task.tokens_in/out/cost_usd` and (when `subtaskId` is provided) `subtask.tokens_in/out/cost_usd`. Per-call-site bookkeeping (~20 sites) was removed; new `complete()` callers just pass `taskId` / `subtaskId` and metrics increment automatically. `SessionStatsCalculator` reads the `task` row directly; `api_logs` is no longer a stats source.
+3. **Tool-result compression** — `DiffCompressor` elides bodies of large diffs in tool results (small / pure-create / mixed paths). The wrap-up agent turn no longer pays for the file the agent just generated. Subtask id is plumbed through so the recovery hint embeds the literal id.
+4. **Multi-agent infrastructure** — `AgentEventBus`, `MultiAgentRunner`, parallel orchestration wired; peer-to-peer A2A messaging (`send_message` → `answer_message` loop) not yet production-ready.
+5. **Ongoing refactor** — CoreApiRouter and ConfigService being slimmed down; session layer migration to `:core` in progress.
+6. **CommandRule security system** — regex-based ALLOW/BLOCK/ASK replacing legacy `CommandWhitelist`. New code should use `CommandRule`.
+7. **Reference model for testing:** `ollama/qwen3.5:9b`
 
 ### Key Architectural Patterns
 
@@ -165,7 +167,7 @@ Files that are large, structurally central, or require special care:
 | Area | File | Notes |
 |------|------|-------|
 | **AgentTurnLoop** | `core/services/AgentTurnLoop.kt` (~1000+ LOC) | Main execution loop: compaction, retry, parallel tools, working memory, mid-execution messages |
-| **CoreApiRouter** | `core/api/CoreApiRouter.kt` (~962 LOC) | Composition root — creates ~35 services, must remain thin (zero logic) |
+| **CoreApiRouter** | `core/api/CoreApiRouter.kt` (~305 LOC) | Composition root — creates ~35 services, must remain thin (zero logic) |
 | **ContextService** | `core/services/ContextService.kt` | Delegates to 6 sub-services, token budgeting, pruning |
 | **TuiViewModel** | `cli/tui/state/TuiViewModel.kt` (~1289 LOC) | Coordinator of 20 StateFlows, 3 sub-ViewModels |
 | **TuiRenderer** | `cli/tui/rendering/TuiRenderer.kt` | ANSI rendering, split-pane, cursor management, flicker-free |
@@ -181,6 +183,9 @@ Files that are large, structurally central, or require special care:
 5. **ToolPermissions are 3-level** — ON/ASK/OFF, not a boolean. `run_terminal_command` is ASK in AGENT by default, not ON.
 6. **Database location** — moved from `refio_poc.db` (project root) to `~/.refio/data/database.sqlite` (shared across projects).
 7. **Native tools path vs JSON path** — `AgentTurnLoop` takes the native path when `LLMResponse.nativeToolCalls != null`, skipping `ToolCallParser` entirely. Both paths must stay consistent.
+8. **`LLMClient` writes metrics, callers don't** — every successful `LLMClient.complete(...)` increments `task.tokens_in/out/cost_usd` (and `subtask.*` when `subtaskId` is non-null). New call-sites must NOT call `taskRepository.incrementMetrics(...)` themselves — that path was removed precisely because manual bookkeeping was the source of double-count and stale-stats bugs. Pass `taskId` / `subtaskId` and let the client handle it.
+9. **EDT must not read SQLite** — `SessionManager.maxContextWindow` is a `StateFlow` cached off-EDT specifically because `lifecycleService.getMaxContextWindow()` hits the DB. Settings panels, Status bar, Context panel: read `.value`. After mutating `MAX_CONTEXT_SIZE`, call `refreshMaxContextWindow()` to push a new value through the flow.
+10. **`updateSession(persistSettings = false)` for token-only refreshes** — the default `persistSettings = true` triggers `saveCurrentSessionState()` which emits ~5 `ConfigRepository` writes. Use `false` from auto-name, post-turn token refresh, and any path that only changes denormalized stats — not from settings save.
 
 ---
 
@@ -285,7 +290,7 @@ LMSTUDIO_BASE_URL    # Custom LM Studio endpoint
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Architecture diagrams, component details, design decisions |
 | [overview.md](overview.md) | Full technical reference — tools, providers, security, flows (~1500 lines) |
 | [config.md](config.md) | Complete configuration reference |
-| [files.md](files.md) | Per-package file map (~590 Kotlin files) |
+| [files.md](files.md) | Per-package file map (~537 main Kotlin files) |
 | [CHANGELOG.md](../CHANGELOG.md) | Version history |
 | [PRIVACY.md](../PRIVACY.md) | Privacy policy, no-egress mode |
 | [QUICKSTART.md](../QUICKSTART.md) | User quick start guide |

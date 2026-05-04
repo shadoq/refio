@@ -339,8 +339,10 @@ class MultiLineEditorToolTest {
         }
 
         @Test
-        fun `should update task metrics when taskId is provided`() = runBlocking {
-            // Given
+        fun `should forward taskId to LLMClient so metrics auto-attribute`() = runBlocking {
+            // Given - after centralization, the tool no longer calls
+            // taskRepository.incrementMetrics directly. Instead it passes taskId
+            // through to LLMClient.complete(), which inkrementuje przez DI w LLMClient.
             Files.writeString(tempDir.resolve("test.kt"), "content")
 
             coEvery {
@@ -353,7 +355,7 @@ class MultiLineEditorToolTest {
                     maxTokens = any(),
                     stream = false,
                     onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
-                    taskId = null,
+                    taskId = "task-123",
                     subtaskId = null,
                     source = any()
                 )
@@ -372,8 +374,23 @@ class MultiLineEditorToolTest {
                 "taskId" to "task-123"
             ))
 
-            // Then
-            coVerify { mockTaskRepository.incrementMetrics("task-123", 200, 100, 0.003) }
+            // Then - the tool MUST pass taskId through; verifying the mock was hit
+            // with taskId="task-123" (rather than null) covers the contract.
+            coVerify {
+                mockLLMClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    temperature = any(),
+                    maxTokens = any(),
+                    stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = "task-123",
+                    subtaskId = null,
+                    source = any()
+                )
+            }
         }
     }
 

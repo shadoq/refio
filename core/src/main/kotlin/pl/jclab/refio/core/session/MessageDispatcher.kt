@@ -123,7 +123,7 @@ class MessageDispatcher(
                     logger.info {
                         "[PLAN_DEBUG] Message with actions: isPlan=${assistantEnvelope!!.isPlanJson}, " +
                             "hasToolCalls=${!coreMsg.toolCallsJson.isNullOrBlank()}, " +
-                            "toolCallInfo=$toolCallInfo, " +
+                            "toolCallInfo=${formatToolCallInfoForLog(toolCallInfo)}, " +
                             "contentPreview=${coreMsg.content.take(100)}"
                     }
                 }
@@ -707,6 +707,28 @@ class MessageDispatcher(
      * IMPORTANT: Does NOT filter plan JSON (which has "plan" or "subtasks" fields).
      * Plan JSON should be preserved for ChatView specialized bubble rendering.
      */
+    // ToolCallDisplayInfo.toString() dumps the full parameters map; for tools like
+    // create_new_file/advance_code_editing that means 10K+ char file bodies in INFO logs.
+    // Truncate every parameter value and the result summary to a sane preview length.
+    private fun formatToolCallInfoForLog(info: ToolCallDisplayInfo?): String {
+        if (info == null) return "null"
+        val maxValChars = 120
+        val params = info.parameters.entries.joinToString(", ") { (k, v) ->
+            val preview = if (v.length > maxValChars) {
+                "${v.take(maxValChars)}…<${v.length} chars>"
+            } else v
+            "$k=$preview"
+        }
+        val resultPart = info.result?.let { r ->
+            val sumPreview = if (r.summary.length > maxValChars) {
+                "${r.summary.take(maxValChars)}…<${r.summary.length} chars>"
+            } else r.summary
+            "result=ToolCallResult(success=${r.success}, summary=$sumPreview)"
+        } ?: "result=null"
+        return "ToolCallDisplayInfo(toolName=${info.toolName}, toolCallId=${info.toolCallId}, " +
+            "displayType=${info.displayType}, status=${info.status}, params={$params}, $resultPart)"
+    }
+
     private fun areMessagesEqual(current: List<Message>, new: List<Message>): Boolean {
         if (current.size != new.size) return false
         return current.zip(new).all { (a, b) ->

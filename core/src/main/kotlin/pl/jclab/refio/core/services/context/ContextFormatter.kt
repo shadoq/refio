@@ -478,7 +478,7 @@ class ContextFormatter(
         compressionConfig: ToolResultCompressionConfig
     ): String {
         val fileAttr = buildToolFileAttribute(step, config.includeMetadata)
-        val content = ToolResultCompression.compress(step.result, step.summary, level, compressionConfig)
+        val content = ToolResultCompression.compress(step.result, step.summary, level, compressionConfig, step.subtaskId)
         val tagSuffix = if (fileAttr.isNotBlank()) " $fileAttr" else ""
 
         // Add compression level attribute (only show if not FULL)

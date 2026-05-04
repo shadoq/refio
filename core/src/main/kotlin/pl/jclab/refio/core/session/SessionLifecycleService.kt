@@ -303,10 +303,19 @@ class SessionLifecycleService(
         }
     }
 
-    fun updateSession(session: Session) {
-        logger.info { "Updating session: id=${session.id}, mode=${session.mode}, executionMode=${session.executionMode}" }
+    /**
+     * Push a session update to the StateFlow. When [persistSettings] is true (default),
+     * the per-session UI/general settings (model, thinking, no-egress, exec mode, ui mode)
+     * are also written to the config table — five DB roundtrips. Pass false for refreshes
+     * that only carry token/cost deltas (e.g. after auto-naming) — UI settings haven't
+     * changed and don't need to round-trip through the DB just to bump the token counter.
+     */
+    fun updateSession(session: Session, persistSettings: Boolean = true) {
+        logger.info { "Updating session: id=${session.id}, mode=${session.mode}, executionMode=${session.executionMode}, persistSettings=$persistSettings" }
         stateManager.updateSession(session)
-        saveCurrentSessionState()
+        if (persistSettings) {
+            saveCurrentSessionState()
+        }
     }
 
     suspend fun switchModeSafely(newMode: TaskMode): Session? {

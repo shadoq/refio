@@ -1,7 +1,7 @@
 # Refio - Technical Architecture Overview
 
-> **Last Updated:** 2026-04-26
-> **Version:** 0.0.1.8
+> **Last Updated:** 2026-05-03
+> **Version:** 0.0.1.9
 > **Status:** Active Development
 
 This document provides a comprehensive technical overview of Refio - a local-first AI coding assistant for IntelliJ IDEA and the terminal.
@@ -109,7 +109,7 @@ Refio runs in two environments sharing the same `:core` module:
 │      └── ToolResultSummarizer (context optimization)                    │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  Core Layer (In-Process API) — :core module                             │
-│  ├── CoreApiRouter (thin composition root ~962 LOC, 12 domain routers)   │
+│  ├── CoreApiRouter (thin composition root ~305 LOC, 12 domain routers)   │
 │  │   ├── ChatRouter → ChatService                                       │
 │  │   ├── TaskRouter, SubtaskRouter                                      │
 │  │   ├── RagRouter → RagSearchService                                   │
@@ -295,6 +295,9 @@ The primary execution engine for PLAN, AGENT, and SUBAGENT run profiles, impleme
 | **Token Estimation** | Pre-flight token counting prevents context overflow (ADR-0028) |
 | **Run Profiles** | `DEFAULT` and `SUBAGENT` with per-run overrides (ADR-0029) |
 | **Nested Metadata** | `runId`, `parentRunId`, `depth` attached to turn lifecycle (ADR-0029) |
+| **Centralized Metric Tracking** | `LLMClient` accepts `taskRepository` + `subtaskRepository` and auto-increments `tokens_in` / `tokens_out` / `cost_usd` on the `task` and `subtask` rows after every successful call. The `task` row is the single source of truth for live stats — UI reads it directly instead of summing per-message tokens. |
+| **Task Status Transitions** | AGENT turns flip `task.status` `RUNNING` on entry, `SUCCESS` / `FAILED` on completion (was previously stuck at `NEW`). Followed by a `pushSessionRefresh()` that re-reads the row and re-publishes via the `activeSession` `StateFlow`. |
+| **Skip Redundant Config Writes** | `SessionLifecycleService.updateSession(persistSettings = false)` skips the 5 `ConfigRepository` writes that `saveCurrentSessionState()` would otherwise emit on every token-only refresh (~10 fewer DB writes per turn). |
 
 ### Subtask Status Lifecycle
 
@@ -512,6 +515,29 @@ ContextService.buildProjectContext()
 | **Total** | ~28,500 | ~23,000 |
 
 Small models: ≤32KB context window
+
+#### Tool Result Compression Pipeline
+
+Tool results pass through a graceful step-down before reaching the prompt:
+
+```
+ToolResultCompression.compress(rawOutput, summary, level, config, subtaskId?)
+  ├── FULL      → DiffCompressor.compress(raw, subtaskId)
+  ├── DETAILED  → DiffCompressor → smartCompress(head+tail, detailedMaxChars)
+  └── SUMMARY   → headTailTruncate(summaryOrRaw, summaryMaxChars)
+```
+
+`DiffCompressor` operates only on ` ```diff ` fenced blocks and has three paths:
+
+| Path | Trigger | Behaviour |
+|------|---------|-----------|
+| **Pass-through** | Diff body < 100 lines | Returned untouched. |
+| **Pure-create** | No `-` lines, `+` lines > threshold | Keep file path + hunk headers + 15-line head + 8-line tail; insert `<!-- N added line(s) elided. Full content: memory(action="get_subtask_output", subtask_id="…") -->`. |
+| **Large mixed** | Has both `+` and `-` lines | Keep every `+` and `-` line verbatim (semantic changes never dropped); collapse runs of context lines to 1 representative line per hunk run. |
+
+The marker embeds the literal `subtaskId` so the agent can copy-paste it straight into `memory(get_subtask_output)` without scanning attributes on the surrounding tag. Compression is idempotent — a second pass over an already-compressed marker is a no-op (the marker line doesn't begin with `+` / `-`, so the next-iteration check sees only the head + tail and falls below the small-diff threshold).
+
+DiffCompressor is also applied in `TurnPromptBuilder` and `ContextService.resolveToolConversationContent` before TOOL messages are mapped to the LLM payload — so summarized tool results in CONVERSATION are compressed too, not just RECENT_WORK entries.
 
 ### Project Instructions
 
@@ -785,9 +811,22 @@ AgentTurnLoop
 - **Anthropic** — strips composition keywords (`oneOf`, `allOf`, `anyOf`).
 - **Gemini** — strips `additionalProperties`; converts array `type` values to a single uppercase string; adds `nullable: true` for optional fields.
 
-`NativeToolsFallbackTracker` is a session-scoped in-memory set. If a provider returns
-HTTP 400 "tools not supported", the model is added and future turns silently use the
-JSON path without requiring a restart.
+`NativeToolsFallbackTracker` is a process-wide set with **persistent backing**: when
+`bind(configService)` is called at startup, the tracker hydrates from the
+`models.native_tools_fallbacks` config key (comma-separated model ids) and every
+subsequent `markFallback()` mirrors back to disk. If a provider returns HTTP 400
+"tools not supported", the model is recorded once and skipped on every future
+process — users no longer pay the 2-nudge probe cost on every fresh session.
+Single-entry removal is exposed via `unmark(modelId)`; `clear()` clears both
+in-memory and persisted state (intended for the user-facing "retry native tools
+for all models" action).
+
+The OpenAI-compatible adapters (OpenRouter, Z.AI, Generic OpenAI, LM Studio)
+share a single native-tools wiring through `OpenAICompatibleHelpers`:
+
+- `buildOpenAIToolsArray(tools)` produces the canonical `[{type:function, function:{name, description, parameters}}]` shape, sanitized via `ToolSchemaSanitizer.forOpenAI`.
+- `parseOpenAIToolCalls(rawToolCalls)` extracts the `tool_calls` field from a chat-completions response into provider-agnostic `NativeToolCall` entries (id, name, argumentsJson).
+- The streaming path accumulates `tool_calls` deltas via `ToolCallAccumulator` and converts to `NativeToolCall` only when `tools` were actually requested in the request body.
 
 ### No-Egress Mode
 
@@ -1042,13 +1081,16 @@ when (session.mode) {
 ### Core Tables
 
 ```sql
--- Sessions (Chat/Plan/Agent)
+-- Sessions (Chat/Plan/Agent) — also the canonical row for live token/cost stats
 TasksTable (id, project_id, name, mode, description, status, ui_state_json,
             tokens_in, tokens_out, cost_usd, created_at, updated_at)
+    -- status: NEW, RUNNING, SUCCESS, FAILED  (AGENT turns now flip RUNNING/SUCCESS/FAILED)
 
--- Execution steps
+-- Execution steps — also carry per-subtask LLM cost (sub-LLM tools like
+-- advance_code_editing, multi_line_editor, fetch_webpage)
 SubtasksTable (id, task_id, order_index, kind, status, description,
-               params_json, result, summary, error_message, metrics_json)
+               params_json, result, summary, error_message, metrics_json,
+               llm_model, llm_provider, tokens_in, tokens_out, cost_usd, latency_ms)
     -- status: PENDING, RUNNING, SUCCESS, FAILED
 
 -- Conversation
@@ -1058,11 +1100,17 @@ ChatMessagesTable (id, task_id, role, content, metadata_json, metrics_json,
 -- File snapshots (for rollback)
 SnapshotsTable (id, task_id, subtask_id, file_path, content, checksum, created_at)
 
--- API call logs
+-- API call logs (audit trail; NOT a stats source)
 ApiLogsTable (id, task_id, subtask_id, provider, model, source, request_json,
               response_json, status_code, tokens_in, tokens_out, cost_usd,
               latency_ms, created_at)
 ```
+
+**Stats source-of-truth:** `LLMClient` writes directly to `task.tokens_in/out/cost_usd`
+(via `taskRepository.incrementMetrics(...)`) and, when `subtaskId` is supplied, to
+`subtask.tokens_in/out/cost_usd` (via `subtaskRepository.incrementLlmMetrics(...)`).
+UI surfaces (`SessionStatsBar`, History panel) read the `task` row directly.
+`api_logs` is an audit trail and is no longer aggregated for live stats.
 
 ### RAG Tables
 
@@ -1512,7 +1560,9 @@ When the autocomplete popup is visible:
 | ToolResultSummarizer | core/services/ | Context reduction |
 | ContextService | core/services/ | Context building (delegates to 6 sub-services) |
 | RagSearchService | core/services/ | Semantic search |
-| LLMClient | core/llm/ | LLM provider abstraction |
+| LLMClient | core/llm/ | LLM provider abstraction; also the central writer of `task` / `subtask` token + cost metrics on every successful call |
+| DiffCompressor | core/services/context/ | Content-aware diff body elision (small / pure-create / mixed paths) for tool results |
+| NativeToolsFallbackTracker | core/llm/ | Persistent set of model ids that failed native function-calling; hydrated from `models.native_tools_fallbacks` on startup |
 | ToolRegistry | core/tools/base/ | Tool catalog |
 | MCPManager | core/context/mcp/ | MCP server lifecycle |
 | SubagentRouter | core/subagents/ | Subagent operations |

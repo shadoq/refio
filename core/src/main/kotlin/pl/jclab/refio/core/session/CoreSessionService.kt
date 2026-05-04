@@ -25,6 +25,7 @@ import pl.jclab.refio.core.api.TurnRunProfile
 import pl.jclab.refio.core.api.UIAdapter
 import pl.jclab.refio.core.api.UpdateTaskRequest
 import pl.jclab.refio.core.db.ConfigScope
+import pl.jclab.refio.core.db.TaskStatus
 import pl.jclab.refio.core.db.ToolCallData
 import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.logging.dualLogger
@@ -168,6 +169,16 @@ class CoreSessionService(
 
         GlobalMetrics.setCurrentOperation(OperationInfo.ChatRequest(model ?: "auto"))
 
+        // Transition the task to RUNNING up-front so HistoryPanel reflects the active
+        // session correctly. Without this the task lingers as NEW for the entire turn,
+        // and (since we now flip to SUCCESS at the end) the row stays at NEW forever
+        // for AGENT/PLAN sessions. ChatService already does the same for CHAT mode.
+        try {
+            projectRouter.taskRepository.update(id = session.id, status = TaskStatus.RUNNING)
+        } catch (e: Exception) {
+            logger.warn(e) { "[TURN_LOOP] Failed to mark task RUNNING for ${session.id}" }
+        }
+
         try {
             var streamingMessageId: String? = null
             val streamingClosed = AtomicBoolean(false)
@@ -264,6 +275,7 @@ class CoreSessionService(
                 scope = scope,
                 stateManager = stateManager,
                 onReloadSubtasks = { subtaskTracker.scheduleReload() },
+                onReloadMessages = { messageDispatcher.loadMessages() },
                 resolveToolDisplayType = ::resolveToolDisplayType,
                 parseToolParameters = ::parseToolParameters,
             )
@@ -443,16 +455,32 @@ class CoreSessionService(
                     }
             }
 
-            val result = projectRouter.agentRouter.runTurn(
-                request = turnRequest,
-                streamCallback = streamCallback,
-                listener = turnListener,
-            )
+            val result = try {
+                projectRouter.agentRouter.runTurn(
+                    request = turnRequest,
+                    streamCallback = streamCallback,
+                    listener = turnListener,
+                )
+            } catch (e: Exception) {
+                runCatching {
+                    projectRouter.taskRepository.update(id = session.id, status = TaskStatus.FAILED)
+                }.onFailure { logger.warn(it) { "[TURN_LOOP] Failed to mark task FAILED for ${session.id}" } }
+                throw e
+            }
 
             logger.info {
                 "[TURN_LOOP] Turn complete: taskId=${session.id}, success=${result.success}, " +
                         "iterations=${result.iterations}, responseChars=${result.response.length}"
             }
+
+            // Mirror ChatService: turn finished without throwing → mark SUCCESS so
+            // HistoryPanel / status filters recognise the session as completed. If the
+            // turn ended with an internal failure flag rather than an exception, still
+            // promote the task off NEW so it isn't left in pending state forever.
+            runCatching {
+                val finalStatus = if (result.success) TaskStatus.SUCCESS else TaskStatus.FAILED
+                projectRouter.taskRepository.update(id = session.id, status = finalStatus)
+            }.onFailure { logger.warn(it) { "[TURN_LOOP] Failed to update task status for ${session.id}" } }
 
             liveRefreshJob.cancel()
             subagentStreamJob.cancel()
@@ -487,7 +515,8 @@ class CoreSessionService(
                     tokensOut = freshTask.tokensOut,
                     costUsd = freshTask.costUsd,
                 )
-                lifecycleService.updateSession(updatedSession)
+                // Token-only refresh — UI settings did not change.
+                lifecycleService.updateSession(updatedSession, persistSettings = false)
             }
 
             if (isDefaultSessionName(session.name) && stateManager.messages.value.size >= 2) {
@@ -602,7 +631,8 @@ class CoreSessionService(
                     tokensIn = freshTask.tokensIn,
                     tokensOut = freshTask.tokensOut,
                     costUsd = freshTask.costUsd,
-                )
+                ),
+                persistSettings = false,
             )
         }
     }
@@ -627,25 +657,48 @@ class CoreSessionService(
                     .ifBlank { generateSessionNameFallback(input) }
 
                 projectRouter.taskRouter.updateTask(session.id, UpdateTaskRequest(name = generatedName))
-                lifecycleService.updateSession(
-                    stateManager.getActiveSession()?.copy(name = generatedName)
-                        ?: return@launch
-                )
+                pushSessionRefresh(name = generatedName) ?: return@launch
                 logger.info { "Auto-named: '$generatedName'" }
             } catch (e: Exception) {
                 val fallback = generateSessionNameFallback(input)
                 try {
                     projectRouter.taskRouter.updateTask(session.id, UpdateTaskRequest(name = fallback))
-                    lifecycleService.updateSession(
-                        stateManager.getActiveSession()?.copy(name = fallback)
-                            ?: return@launch
-                    )
+                    pushSessionRefresh(name = fallback) ?: return@launch
                     logger.info { "Auto-named with fallback: '$fallback'" }
                 } catch (inner: Exception) {
                     logger.warn(inner) { "Auto-name failed" }
                 }
             }
         }
+    }
+
+    /**
+     * Pull fresh task metrics from DB and push a session update to the UI. Used after
+     * any LLM activity that touches the active task — generateSessionTitle adds tokens
+     * to the task row through LLMClient centralization, but without this refresh the
+     * UI keeps showing the snapshot taken before the auto-name call.
+     * Returns null when there is no active session (caller should bail).
+     */
+    private fun pushSessionRefresh(name: String? = null): Session? {
+        val active = stateManager.getActiveSession() ?: return null
+        val freshTask = projectRouter.taskRepository.findById(active.id)
+        val refreshed = if (freshTask != null) {
+            active.copy(
+                name = name ?: active.name,
+                tokensIn = freshTask.tokensIn,
+                tokensOut = freshTask.tokensOut,
+                costUsd = freshTask.costUsd,
+            )
+        } else if (name != null) {
+            active.copy(name = name)
+        } else {
+            active
+        }
+        // Token/cost deltas + (optionally) the auto-generated name. UI settings did not
+        // change — skip the 5-key persistSessionSettings roundtrip that updateSession
+        // performs by default.
+        lifecycleService.updateSession(refreshed, persistSettings = false)
+        return refreshed
     }
 
     private fun sanitizeSessionTitle(raw: String): String {

@@ -300,12 +300,13 @@ abstract class OpenAICompatibleAdapter(
                 null
             }
             val toolsWereRequested = requestBody.containsKey("tools")
+            // When tools were requested, always return a list (possibly empty) so AgentTurnLoop
+            // can distinguish "native tools wired up, model produced 0 calls = final prose answer"
+            // from "native tools were never requested" (returns null).
             val nativeToolCalls = if (toolsWereRequested) {
-                OpenAICompatibleHelpers.parseOpenAIToolCalls(message["tool_calls"])
-                    .takeIf { it.isNotEmpty() }
-                    ?.also { calls ->
-                        logger.info { "$logPrefix [NATIVE_TOOLS_RESPONSE] calls=${calls.size}" }
-                    }
+                val calls = OpenAICompatibleHelpers.parseOpenAIToolCalls(message["tool_calls"])
+                logger.info { "$logPrefix [NATIVE_TOOLS_RESPONSE] calls=${calls.size}" }
+                calls
             } else {
                 null
             }
@@ -437,12 +438,16 @@ abstract class OpenAICompatibleAdapter(
             }
 
             val toolsWereRequested = requestBody.containsKey("tools")
-            val streamNativeToolCalls = toolCallAccumulator
-                .toNativeToolCalls(toolsWereRequested)
-                ?.takeIf { it.isNotEmpty() }
-                ?.also { calls ->
-                    logger.info { "$logPrefix [NATIVE_TOOLS_RESPONSE] (stream) calls=${calls.size}" }
-                }
+            // See comment in non-streaming branch — preserve empty-list semantics.
+            val streamNativeToolCalls = if (toolsWereRequested) {
+                val calls = toolCallAccumulator.toNativeToolCalls(toolsWereRequested) ?: emptyList()
+                logger.info { "$logPrefix [NATIVE_TOOLS_RESPONSE] (stream) calls=${calls.size}" }
+                calls
+            } else {
+                null
+            }
+            // Fallback only fires when native tools were never requested (null) — a model that
+            // emits OpenAI-format tool_calls anyway gets dumped into content as JSON envelope.
             if (contentBuilder.isEmpty() && streamNativeToolCalls == null) {
                 toolCallAccumulator.toCanonicalJson()?.let { contentBuilder.append(it) }
             }
