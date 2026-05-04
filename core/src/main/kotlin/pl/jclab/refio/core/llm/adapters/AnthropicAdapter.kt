@@ -358,8 +358,18 @@ class AnthropicAdapter(
 
             @Suppress("UNCHECKED_CAST")
             val usageMap = response["usage"] as? Map<String, Any?> ?: emptyMap()
-            val inputTokens = (usageMap["input_tokens"] as? Number)?.toInt() ?: 0
+            val rawInputTokens = (usageMap["input_tokens"] as? Number)?.toInt() ?: 0
             val outputTokens = (usageMap["output_tokens"] as? Number)?.toInt() ?: 0
+            // Prompt-caching tokens. `input_tokens` from Anthropic ALREADY excludes
+            // cached tokens (it's the count of fresh, uncached input). Fold cache
+            // creation + cache reads into reported inputTokens so total matches
+            // what was actually billed and visible in dashboards.
+            val cacheCreation = (usageMap["cache_creation_input_tokens"] as? Number)?.toInt() ?: 0
+            val cacheRead = (usageMap["cache_read_input_tokens"] as? Number)?.toInt() ?: 0
+            val inputTokens = rawInputTokens + cacheCreation + cacheRead
+            if (cacheCreation > 0 || cacheRead > 0) {
+                logger.info { "[ANTHROPIC] usage: input=$rawInputTokens, cache_creation=$cacheCreation, cache_read=$cacheRead, output=$outputTokens" }
+            }
 
             val usage = LLMUsage(
                 inputTokens = inputTokens,
@@ -569,13 +579,22 @@ class AnthropicAdapter(
 
                                 when (eventType) {
                                     "message_start" -> {
-                                        // Extract input tokens from initial message
+                                        // Extract input tokens from initial message.
+                                        // input_tokens excludes cached tokens; fold cache creation/read
+                                        // into reported inputTokens to match billing.
                                         @Suppress("UNCHECKED_CAST")
                                         val message = chunk["message"] as? Map<String, Any?>
                                         @Suppress("UNCHECKED_CAST")
                                         val usage = message?.get("usage") as? Map<String, Any?>
-                                        inputTokens = (usage?.get("input_tokens") as? Number)?.toInt() ?: 0
-                                        logger.debug { "[ANTHROPIC] Stream started, input_tokens=$inputTokens" }
+                                        val rawInput = (usage?.get("input_tokens") as? Number)?.toInt() ?: 0
+                                        val cacheCreation = (usage?.get("cache_creation_input_tokens") as? Number)?.toInt() ?: 0
+                                        val cacheRead = (usage?.get("cache_read_input_tokens") as? Number)?.toInt() ?: 0
+                                        inputTokens = rawInput + cacheCreation + cacheRead
+                                        if (cacheCreation > 0 || cacheRead > 0) {
+                                            logger.info { "[ANTHROPIC] Stream usage: input=$rawInput, cache_creation=$cacheCreation, cache_read=$cacheRead" }
+                                        } else {
+                                            logger.debug { "[ANTHROPIC] Stream started, input_tokens=$inputTokens" }
+                                        }
                                     }
 
                                     "content_block_start" -> {

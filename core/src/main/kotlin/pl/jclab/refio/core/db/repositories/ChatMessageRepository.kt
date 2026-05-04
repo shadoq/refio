@@ -79,6 +79,9 @@ class ChatMessageRepository {
         metadata: String? = null,
         agentName: String? = null,
         agentDepth: Int? = null,
+        tokensIn: Int? = null,
+        tokensOut: Int? = null,
+        cost: Double? = null,
     ): ChatMessage {
         return create(
             taskId = taskId,
@@ -91,6 +94,9 @@ class ChatMessageRepository {
             rawOutput = rawOutput,
             agentName = agentName,
             agentDepth = agentDepth,
+            tokensIn = tokensIn,
+            tokensOut = tokensOut,
+            cost = cost,
         )
     }
 

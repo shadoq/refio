@@ -216,6 +216,21 @@ object ConfigKeys {
         default = ""
     )
 
+    /**
+     * Persistent list of model IDs that have failed native function-calling.
+     * Stored as a comma-separated string (provider-prefixed model id, e.g.
+     * `openrouter/amazon/nova-lite-v1,zai/glm-4.7`). Loaded into the
+     * [pl.jclab.refio.core.llm.NativeToolsFallbackTracker] on startup so users do
+     * not pay the 2-nudge native-tools probe cost on every fresh session.
+     *
+     * Cleared by switching providers or by user action via UI/CLI.
+     */
+    val MODELS_NATIVE_TOOLS_FALLBACKS = ConfigKey(
+        key = "models.native_tools_fallbacks",
+        parser = { it.takeIf { s -> s.isNotBlank() } },
+        default = ""
+    )
+
     // ==================== DEFAULT MODELS ====================
 
     val DEFAULT_MODEL_CHAT = ConfigKey(

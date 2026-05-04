@@ -15,6 +15,7 @@ import pl.jclab.refio.core.tools.DiffUtils
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.FileTool
 import pl.jclab.refio.core.tools.base.ToolCategory
+import pl.jclab.refio.core.tools.base.ToolInternalParams
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
 import pl.jclab.refio.core.tools.security.FileLimits
@@ -155,12 +156,13 @@ class AdvanceCodeEditingTool(
         val pathStr = params["path"] as? String
             ?: return ToolResult.error("Missing required parameter: 'path'")
         val editDescription = params["edit_description"] as? String
-        val taskId = params["taskId"] as? String
+        val taskId = (params[ToolInternalParams.TASK_ID] as? String) ?: (params["taskId"] as? String)
+        val subtaskId = params[ToolInternalParams.SUBTASK_ID] as? String
         val conversationContext = params["conversation_context"] as? String
 
         return try {
             if (editDescription != null) {
-                executeLLMAssistedEdit(pathStr, editDescription, taskId, startTime, stream, onChunk, conversationContext)
+                executeLLMAssistedEdit(pathStr, editDescription, taskId, subtaskId, startTime, stream, onChunk, conversationContext)
             } else {
                 ToolResult.error("Either 'edit_description' or 'old_string' must be provided")
             }
@@ -181,6 +183,7 @@ class AdvanceCodeEditingTool(
         pathStr: String,
         editDescription: String,
         taskId: String?,
+        subtaskId: String?,
         startTime: Long,
         stream: Boolean = false,
         onChunk: StreamCallback? = null,
@@ -297,8 +300,8 @@ class AdvanceCodeEditingTool(
                     maxTokens = configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE) * 2, // From limits settings
                     stream = stream,
                     onChunk = streamingCallback,
-                    taskId = null,  // Tool-level call, no task context
-                    subtaskId = null,  // Tool-level call, no subtask context
+                    taskId = taskId,
+                    subtaskId = subtaskId,
                     source = "AdvCodeEditor"  // Request source for tracking
                 )
             } catch (e: Exception) {
@@ -358,15 +361,8 @@ class AdvanceCodeEditingTool(
                         "cost_usd=$cost, diff_lines=${diff.lines().size}, duration=${duration}ms"
             }
 
-            // Update task metrics if taskId is provided
-            if (taskId != null) {
-                taskRepository.incrementMetrics(
-                    id = taskId,
-                    tokensIn = usage.inputTokens,
-                    tokensOut = usage.outputTokens,
-                    costUsd = cost
-                )
-            }
+            // Task / subtask metrics auto-incremented inside LLMClient.complete()
+            // via taskId / subtaskId passed in the call above. No manual increment here.
 
             // 10. Parse diff stats for UI display
             val (addedLines, removedLines) = DiffUtils.parseDiffStats(diff)

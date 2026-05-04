@@ -183,7 +183,7 @@ class TurnToolExecutor(
         config: TurnLoopConfig,
         profileOverrides: TurnProfileOverrides? = null,
         runId: String,
-        depth: Int
+        depth: Int,
     ): List<Pair<ToolCallData, ToolResultData>> = coroutineScope {
         val maxOrderIndex = subtaskRepository.getMaxOrderIndex(taskId) ?: -1
 
@@ -207,11 +207,11 @@ class TurnToolExecutor(
         }
 
         val indexedCalls = toolCalls.mapIndexed { index, call -> index to call }
-        val (allowedIndexed, blockedIndexed) = indexedCalls.partition { (_, toolCall) ->
+        val (allowedIndexed, profileBlockedIndexed) = indexedCalls.partition { (_, toolCall) ->
             isToolAllowedByProfile(toolCall.name, profileOverrides)
         }
 
-        val blockedResults = blockedIndexed.map { (index, toolCall) ->
+        val blockedResults = profileBlockedIndexed.map { (index, toolCall) ->
             val subtaskId = subtaskIds[toolCall.id]!!
             val errorText = buildProfileBlockedError(toolCall.name, profileOverrides)
             subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
@@ -486,14 +486,28 @@ class TurnToolExecutor(
                 listener = listener
             )
 
+            // Inject taskId into params for every tool so tools that perform their own
+            // sub-LLM calls (e.g. advance_code_editing, multi_line_editor) can attribute
+            // their token/cost usage to the owning task. Kept as legacy magic-string key
+            // for tools that read params["taskId"]; typed ToolInternalParams.TASK_ID is
+            // injected below for tools that prefer the constant.
+            argumentsMap.putIfAbsent("taskId", taskId)
+
             // Inject internal metadata for SYSTEM tools (tasks, memory, etc.)
+            // Also inject TASK_ID/SUBTASK_ID (via ToolInternalParams) for tools that
+            // internally call llmClient.complete (AdvCodeEditor, MultiLineEditor,
+            // fetch_webpage) so those calls auto-attribute via LLMClient centralization.
             val tool = toolRegistry.getTool(toolCall.name)
-            if (tool?.category == ToolCategory.SYSTEM || isDelegationTool(toolCall.name)) {
+            val isSystemOrDelegation = tool?.category == ToolCategory.SYSTEM || isDelegationTool(toolCall.name)
+            val isInnerLlmTool = toolCall.name in codingToolNames || toolCall.name == "fetch_webpage"
+            if (isSystemOrDelegation || isInnerLlmTool) {
                 argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.TASK_ID, taskId)
+                argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.SUBTASK_ID, subtaskId)
+            }
+            if (isSystemOrDelegation) {
                 argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.MODE, mode.name)
                 argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.ITERATION, iteration)
                 argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.SESSION_ID, taskId)
-                argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.SUBTASK_ID, subtaskId)
                 profileOverrides?.subagentName?.let { argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.AGENT_NAME, it) }
                 profileOverrides?.let { argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.AGENT_ID, runId) }
                 profileOverrides?.parentRunId?.let { argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.PARENT_RUN_ID, it) }
@@ -703,13 +717,22 @@ class TurnToolExecutor(
                 val metadataMap = buildToolResultMetadata(toolCall.name, argumentsMap, toolResult.metadata)
                 val metadataJson = metadataMap.takeIf { it.isNotEmpty() }?.let { gson.toJson(it) }
 
+                // Surface sub-LLM usage (advance_code_editing / multi_line_editor) on the
+                // TOOL ChatMessage so per-message stats reflect real cost.
+                val subTokensIn = (toolResult.metadata?.get("tokens_in") as? Number)?.toInt()
+                val subTokensOut = (toolResult.metadata?.get("tokens_out") as? Number)?.toInt()
+                val subCost = (toolResult.metadata?.get("cost_usd") as? Number)?.toDouble()
+
                 val resultData = ToolResultData(
                     toolCallId = toolCall.id,
                     subtaskId = subtaskId,
                     content = effectiveContent,
                     isSummarized = effectivelySummarized,
                     rawOutput = outputWithWarnings,
-                    metadata = metadataJson
+                    metadata = metadataJson,
+                    subTokensIn = subTokensIn,
+                    subTokensOut = subTokensOut,
+                    subCost = subCost
                 )
 
                 return resultData

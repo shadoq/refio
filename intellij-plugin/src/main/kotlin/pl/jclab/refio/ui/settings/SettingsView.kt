@@ -199,6 +199,17 @@ class SettingsView(
 
             logger.info { "Setting saved: $section.$key" }
 
+            // Refresh cached max-context StateFlow so UI bars reflect the new limit
+            // without anyone having to call SessionLifecycleService.getMaxContextWindow()
+            // synchronously on EDT.
+            val (maxCtxSection, maxCtxKey) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
+                ConfigKeys.MAX_CONTEXT_SIZE.key
+            )
+            if (section == maxCtxSection && key == maxCtxKey) {
+                pl.jclab.refio.services.session.SessionManager.getInstance(project)
+                    .refreshMaxContextWindow()
+            }
+
             // Optional: show subtle notification
             ApplicationManager.getApplication().invokeLater {
                 showSaveNotification("Setting saved")

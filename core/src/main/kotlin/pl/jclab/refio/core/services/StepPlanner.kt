@@ -423,13 +423,8 @@ class StepPlanner(
             }
         }
 
-        // Update task metrics
-        taskRepository.incrementMetrics(
-            id = task.id,
-            tokensIn = tokensIn,
-            tokensOut = tokensOut,
-            costUsd = cost
-        )
+        // Task / subtask metrics are auto-incremented inside LLMClient.complete()
+        // via taskId/subtaskId passed in the call above. No manual increment here.
 
         // Create tool call spec
         val toolCall = ToolCallSpec(

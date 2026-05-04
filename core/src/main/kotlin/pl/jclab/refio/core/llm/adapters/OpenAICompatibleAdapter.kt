@@ -25,6 +25,7 @@ import pl.jclab.refio.core.llm.ModelDefinitions
 import pl.jclab.refio.core.llm.StreamChunk
 import pl.jclab.refio.core.llm.toModelConfig
 import pl.jclab.refio.core.logging.DualLogger
+import pl.jclab.refio.core.tools.base.ToolSchema
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.core.services.ConfigService
@@ -117,9 +118,25 @@ abstract class OpenAICompatibleAdapter(
         put("messages", requestMessages)
         put("temperature", temperature)
         put("max_tokens", effectiveMaxTokens)
-        if (streaming) put("stream", true)
+        if (streaming) {
+            put("stream", true)
+            // Ask the server to emit a final usage chunk so we can report real token
+            // counts (incl. reasoning_tokens for OpenRouter's o1/o3/DeepSeek-R1 etc.)
+            // instead of estimating from streamed content.
+            put("stream_options", mapOf("include_usage" to true))
+        }
         with(OpenAICompatibleHelpers) { addCommonKwargs(kwargs) }
         kwargs["response_format"]?.let { put("response_format", it) }
+
+        @Suppress("UNCHECKED_CAST")
+        (kwargs["native_tools"] as? List<ToolSchema>)?.takeIf { it.isNotEmpty() }?.let { tools ->
+            put("tools", OpenAICompatibleHelpers.buildOpenAIToolsArray(tools))
+            put("tool_choice", "auto")
+            logger.info {
+                "[$providerTag][NATIVE_TOOLS] Sending ${tools.size} tool schemas: " +
+                    tools.joinToString(", ") { it.name }
+            }
+        }
     }
 
     /**
@@ -282,6 +299,17 @@ abstract class OpenAICompatibleAdapter(
             } else {
                 null
             }
+            val toolsWereRequested = requestBody.containsKey("tools")
+            // When tools were requested, always return a list (possibly empty) so AgentTurnLoop
+            // can distinguish "native tools wired up, model produced 0 calls = final prose answer"
+            // from "native tools were never requested" (returns null).
+            val nativeToolCalls = if (toolsWereRequested) {
+                val calls = OpenAICompatibleHelpers.parseOpenAIToolCalls(message["tool_calls"])
+                logger.info { "$logPrefix [NATIVE_TOOLS_RESPONSE] calls=${calls.size}" }
+                calls
+            } else {
+                null
+            }
 
             logger.apiResponse(
                 provider = provider,
@@ -300,13 +328,14 @@ abstract class OpenAICompatibleAdapter(
             )
 
             return LLMResponse(
-                content = normalizedToolCallsJson ?: content,
+                content = if (nativeToolCalls != null) content else (normalizedToolCallsJson ?: content),
                 usage = usage,
                 model = model,
                 provider = provider,
                 cost = estimateCost(usage),
                 finishReason = firstChoice["finish_reason"] as? String,
                 rawResponse = rawResponse,
+                nativeToolCalls = nativeToolCalls,
             )
         } catch (e: RefioError) {
             logger.apiError(
@@ -354,6 +383,9 @@ abstract class OpenAICompatibleAdapter(
         val toolCallAccumulator = ToolCallContentNormalizer.OpenAiStreamingToolCallAccumulator()
         var httpStatus: Int? = null
         var finalFinishReason: String? = null
+        // Real usage from final SSE chunk (when stream_options.include_usage=true).
+        // Includes reasoning_tokens for reasoning models proxied by OpenRouter etc.
+        var streamUsage: LLMUsage? = null
         val endpoint = "$baseUrl$chatEndpointPath"
 
         try {
@@ -379,33 +411,67 @@ abstract class OpenAICompatibleAdapter(
                                 contentBuilder.append(delta)
                                 onStreamChunk(StreamChunk(delta = delta))
                             },
-                            onRawChunk = ::onStreamRawChunk,
+                            onRawChunk = { chunk ->
+                                @Suppress("UNCHECKED_CAST")
+                                (chunk["usage"] as? Map<String, Any?>)?.let { usageMap ->
+                                    val promptTokens = (usageMap["prompt_tokens"] as? Number)?.toInt() ?: 0
+                                    val completionTokens = (usageMap["completion_tokens"] as? Number)?.toInt() ?: 0
+                                    val totalTokens = (usageMap["total_tokens"] as? Number)?.toInt()
+                                        ?: (promptTokens + completionTokens)
+                                    streamUsage = LLMUsage(
+                                        inputTokens = promptTokens,
+                                        outputTokens = completionTokens,
+                                        totalTokens = totalTokens,
+                                    )
+                                    val details = usageMap["completion_tokens_details"] as? Map<*, *>
+                                    val reasoning = (details?.get("reasoning_tokens") as? Number)?.toInt()
+                                    logger.info {
+                                        "$logPrefix [STREAM_USAGE] prompt=$promptTokens, completion=$completionTokens" +
+                                            (reasoning?.let { ", reasoning=$it (incl. in completion)" } ?: "")
+                                    }
+                                }
+                                onStreamRawChunk(chunk)
+                            },
                         )
                     }
                 }
             }
 
-            if (contentBuilder.isEmpty()) {
+            val toolsWereRequested = requestBody.containsKey("tools")
+            // See comment in non-streaming branch — preserve empty-list semantics.
+            val streamNativeToolCalls = if (toolsWereRequested) {
+                val calls = toolCallAccumulator.toNativeToolCalls(toolsWereRequested) ?: emptyList()
+                logger.info { "$logPrefix [NATIVE_TOOLS_RESPONSE] (stream) calls=${calls.size}" }
+                calls
+            } else {
+                null
+            }
+            // Fallback only fires when native tools were never requested (null) — a model that
+            // emits OpenAI-format tool_calls anyway gets dumped into content as JSON envelope.
+            if (contentBuilder.isEmpty() && streamNativeToolCalls == null) {
                 toolCallAccumulator.toCanonicalJson()?.let { contentBuilder.append(it) }
             }
 
-            @Suppress("UNCHECKED_CAST")
-            val inputTokensEstimate = (requestBody["messages"] as? List<Map<String, Any?>>)?.sumOf {
-                when (val content = it["content"]) {
-                    is String -> content.length
-                    is List<*> -> content.sumOf { part ->
-                        @Suppress("UNCHECKED_CAST")
-                        val partMap = part as? Map<String, Any?>
-                        (partMap?.get("text") as? String)?.length ?: 0
+            // Prefer real usage from the stream's final chunk; fall back to estimation.
+            val usage = streamUsage ?: run {
+                @Suppress("UNCHECKED_CAST")
+                val inputTokensEstimate = (requestBody["messages"] as? List<Map<String, Any?>>)?.sumOf {
+                    when (val content = it["content"]) {
+                        is String -> content.length
+                        is List<*> -> content.sumOf { part ->
+                            @Suppress("UNCHECKED_CAST")
+                            val partMap = part as? Map<String, Any?>
+                            (partMap?.get("text") as? String)?.length ?: 0
+                        }
+                        else -> 0
                     }
-                    else -> 0
-                }
-            } ?: 0
-            val usage = LLMUsage(
-                inputTokens = inputTokensEstimate,
-                outputTokens = contentBuilder.length / 4,
-                totalTokens = inputTokensEstimate + contentBuilder.length / 4,
-            )
+                } ?: 0
+                LLMUsage(
+                    inputTokens = inputTokensEstimate,
+                    outputTokens = contentBuilder.length / 4,
+                    totalTokens = inputTokensEstimate + contentBuilder.length / 4,
+                )
+            }
             onStreamChunk(StreamChunk(delta = "", finishReason = finalFinishReason, usage = usage))
 
             logger.apiResponse(
@@ -432,6 +498,7 @@ abstract class OpenAICompatibleAdapter(
                 cost = estimateCost(usage),
                 finishReason = finalFinishReason,
                 rawResponse = mapOf("content" to contentBuilder.toString()),
+                nativeToolCalls = streamNativeToolCalls,
             )
         } catch (e: RefioError) {
             logger.apiError(

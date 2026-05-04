@@ -320,14 +320,8 @@ class ChatService(
         )
         logger.info { "[CHAT_SERVICE] Saved assistant message: id=${assistantMessage.id}, tokens=${finalUsage.inputTokens}/${finalUsage.outputTokens}, cost=$${String.format("%.4f", finalCost)}" }
 
-        // Update task metrics (increment with response costs)
-        taskRepository.incrementMetrics(
-            id = task.id,
-            tokensIn = finalUsage.inputTokens,
-            tokensOut = finalUsage.outputTokens,
-            costUsd = finalCost
-        )
-        logger.info { "[CHAT_SERVICE] Incremented task metrics: +${finalUsage.inputTokens}/${finalUsage.outputTokens} tokens, +$${String.format("%.4f", finalCost)}" }
+        // Task metrics are auto-incremented inside LLMClient.complete() via the
+        // taskId we passed to the call above. No manual increment here.
 
         // Update task status based on cancellation
         val finalStatus = if (wasCancelled) TaskStatus.CANCELED else TaskStatus.SUCCESS

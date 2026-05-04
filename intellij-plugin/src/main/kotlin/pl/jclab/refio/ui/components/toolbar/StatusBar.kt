@@ -293,31 +293,23 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
             }
         }
 
+        // Drive context-fill bar from totalEstimatedTokens and the cached maxContextWindow
+        // StateFlow. SessionManager refreshes maxContextWindow off-EDT on session/model
+        // change, so we get model-switch updates here without doing any DB work.
         cs.launch {
-            sessionManager.totalEstimatedTokens.collect { totalTokens ->
-                val session = sessionManager.activeSession.value
-                if (session != null) {
-                    val max = sessionManager.getMaxContextWindow()
-                    SwingUtilities.invokeLater {
-                        updateContextFill(totalTokens, max)
-                        logger.debug { "Total estimated tokens changed: $totalTokens/$max tokens" }
+            kotlinx.coroutines.flow.combine(
+                sessionManager.totalEstimatedTokens,
+                sessionManager.maxContextWindow,
+                sessionManager.activeSession
+            ) { total, max, session -> Triple(total, max, session) }
+                .collect { (total, max, session) ->
+                    if (session != null) {
+                        SwingUtilities.invokeLater {
+                            updateContextFill(total, max)
+                            logger.debug { "Context fill updated: $total/$max tokens" }
+                        }
                     }
                 }
-            }
-        }
-
-        cs.launch {
-            sessionManager.selectedModel.collect { modelString ->
-                val session = sessionManager.activeSession.value
-                if (session != null) {
-                    val current = sessionManager.totalEstimatedTokens.value
-                    val max = sessionManager.getMaxContextWindow()
-                    SwingUtilities.invokeLater {
-                        updateContextFill(current, max)
-                        logger.debug { "Model changed to '$modelString': Context limit updated to $max tokens" }
-                    }
-                }
-            }
         }
 
         cs.launch {

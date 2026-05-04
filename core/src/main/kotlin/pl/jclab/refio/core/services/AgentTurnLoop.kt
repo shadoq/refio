@@ -25,7 +25,6 @@ import pl.jclab.refio.core.services.AgentTurnLoop.UserMessageStrategy
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 import pl.jclab.refio.core.services.turn.ToolCallParser
-import pl.jclab.refio.core.services.turn.TrivialTaskDetector
 import pl.jclab.refio.core.services.turn.TurnEventListener
 import pl.jclab.refio.core.services.turn.TurnPrompt
 import pl.jclab.refio.core.services.turn.GuardianContext
@@ -548,27 +547,7 @@ class AgentTurnLoop(
                         OperationInfo.TurnBuildingPrompt(iteration, turnPromptBuilder.getHistorySize(taskId))
                     )
 
-                    // Trivial-task harness guard: when the user prompt is "create file X with Y"
-                    // and we're on the very first iteration, narrow the tool schema to write tools
-                    // only. Stops weak models from burning 3+ turns on file_search / read_directory
-                    // pre-flight reads. Subagent profiles already had their tools filtered, so we
-                    // only narrow the top-level (DEFAULT profile) call.
-                    val schemasSnapshot = activeNativeToolSchemas
-                    val iterationNativeToolSchemas = if (
-                        iteration == 1
-                        && profileOverrides?.subagentName == null
-                        && schemasSnapshot != null
-                    ) {
-                        TrivialTaskDetector.maybeRestrictForIteration1(
-                            schemas = schemasSnapshot,
-                            userInput = userMessageStrategy.getUserMessage(taskId),
-                            iteration = iteration,
-                            modeName = mode.name
-                        )
-                    } else {
-                        schemasSnapshot
-                    }
-
+                    val iterationNativeToolSchemas = activeNativeToolSchemas
                     val useNativeTools = iterationNativeToolSchemas != null
 
                     // Auto-compact if context window is filling
@@ -694,19 +673,8 @@ class AgentTurnLoop(
                     totalTokensOut += llmResponse.usage.outputTokens
                     totalCost += llmResponse.cost
 
-                    // Persist per-iteration metrics on the task row so HistoryPanel
-                    // and live stats bar can show running totals without aggregating
-                    // from message metadata.
-                    try {
-                        taskRepository.incrementMetrics(
-                            id = taskId,
-                            tokensIn = llmResponse.usage.inputTokens,
-                            tokensOut = llmResponse.usage.outputTokens,
-                            costUsd = llmResponse.cost
-                        )
-                    } catch (e: Exception) {
-                        logger.warn(e) { "[AGENT_TURN_LOOP] Failed to increment task metrics for $taskId" }
-                    }
+                    // Per-iteration task metrics are auto-incremented inside LLMClient.complete()
+                    // via the taskId TurnLLMCaller passes; no manual increment here.
 
                     // Populate per-session metrics for Session Trace footer / cost analytics
                     GlobalMetrics.forAgent(taskId).recordTokens(
@@ -724,15 +692,22 @@ class AgentTurnLoop(
                         durationMs = llmDurationMs
                     )
 
-                    if (mode != TaskMode.CHAT && llmResponse.content.isBlank() && llmResponse.nativeToolCalls == null) {
+                    if (mode != TaskMode.CHAT
+                        && llmResponse.content.isBlank()
+                        && llmResponse.nativeToolCalls.isNullOrEmpty()
+                        && activeNativeToolSchemas == null) {
                         // Fallback 1: recover JSON from the thinking field. Some Ollama setups
                         // (qwen3 with think=true defaulted) emit the JSON envelope inside `thinking`
                         // while `content` stays empty. We accept recovery if thinking *looks like*
                         // a JSON envelope — either it parses to tool calls, OR its trimmed form
                         // starts with `{` (a final-response envelope without `actions`). The
                         // downstream pipeline handles both shapes.
-                        // Note: when nativeToolCalls != null, empty content is normal — tool calls
-                        // come via the native API channel, not as text content.
+                        //
+                        // The explicit `activeNativeToolSchemas == null` check makes the JSON-mode
+                        // branch unambiguous: native-tools mode with empty content + 0 calls is
+                        // a legitimate "model returned nothing actionable" answer (handled later
+                        // in the no-tools branch as a normal terminal response), NOT a format
+                        // failure that should be nudged into a JSON envelope.
                         val thinking = llmResponse.thinking
                         val thinkingTrimmed = thinking?.trim().orEmpty()
                         val looksLikeEnvelope = thinkingTrimmed.startsWith("{")
@@ -832,7 +807,10 @@ class AgentTurnLoop(
                     val jsonEnvelopeInspection: pl.jclab.refio.core.services.turn.ToolCallParser.JsonEnvelopeInspection
 
                     if (nativeCalls != null) {
-                        // Native function-calling path — skip JSON-in-text parsing entirely
+                        // Native function-calling path — skip JSON-in-text parsing entirely.
+                        // nativeCalls.isEmpty() is a legitimate "model returned final prose, no
+                        // tool execution needed" — falls through to the no-tools terminal branch
+                        // below WITHOUT running the noisy JSON parser on the prose content.
                         logger.info { "[NATIVE_TOOLS_PATH] taskId=$taskId, iteration=$iteration, calls=${nativeCalls.size}" }
                         contentForExtraction = llmResponse.content
                         toolCalls = nativeCalls.map { native ->
@@ -1001,7 +979,7 @@ class AgentTurnLoop(
                                 config = config,
                                 profileOverrides = profileOverrides,
                                 runId = runId,
-                                depth = depth
+                                depth = depth,
                             )
                         } catch (e: ToolRejectedException) {
                             logger.info { "[REJECTED] User rejected tool '${e.toolName}': ${e.reason ?: "no reason"}" }
@@ -1046,6 +1024,9 @@ class AgentTurnLoop(
                                 metadata = resultData.metadata,
                                 agentName = persistAgentName,
                                 agentDepth = persistAgentDepth,
+                                tokensIn = resultData.subTokensIn,
+                                tokensOut = resultData.subTokensOut,
+                                cost = resultData.subCost,
                             )
                         }
 
@@ -1317,9 +1298,11 @@ class AgentTurnLoop(
                         // Parser extracts nothing from these (shape isn't {actions:[...]}), so
                         // without this guard the turn exits as success=true with 0 actions.
                         // Observed with glm-5, glm-5.1, glm-4.7 on Z.AI.
+                        // Adapters now return emptyList (not null) when native tools were sent
+                        // and the model produced 0 calls — both shapes mean "no native calls".
                         val nativeTextEmbeddedToolCall =
                             activeNativeToolSchemas != null &&
-                                nativeCalls == null &&
+                                nativeCalls.isNullOrEmpty() &&
                                 toolCalls.isEmpty() &&
                                 looksLikeTextEmbeddedToolCall(contentForExtraction)
                         // Native-tools mode: model emitted a short intent announcement ("Let me
@@ -1328,7 +1311,7 @@ class AgentTurnLoop(
                         // once before accepting prose as a terminal answer.
                         val nativeIntentAnnouncement =
                             activeNativeToolSchemas != null &&
-                                nativeCalls == null &&
+                                nativeCalls.isNullOrEmpty() &&
                                 toolCalls.isEmpty() &&
                                 iteration == 1 &&
                                 looksLikeIntentAnnouncement(contentForExtraction)

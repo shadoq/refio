@@ -4,6 +4,9 @@ import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.CancellationException
 import pl.jclab.refio.core.llm.BaseLLMAdapter
 import pl.jclab.refio.core.llm.LLMMessage
+import pl.jclab.refio.core.llm.NativeToolCall
+import pl.jclab.refio.core.llm.ToolSchemaSanitizer
+import pl.jclab.refio.core.tools.base.ToolSchema
 import pl.jclab.refio.core.utils.GsonInstance.gson
 
 /**
@@ -45,6 +48,48 @@ internal object OpenAICompatibleHelpers {
         (kwargs["frequency_penalty"] as? Number)?.let { put("frequency_penalty", it) }
         (kwargs["presence_penalty"] as? Number)?.let { put("presence_penalty", it) }
         kwargs["stop"]?.let { put("stop", it) }
+    }
+
+    /**
+     * Build the canonical OpenAI `tools` array shape:
+     * `[{"type":"function","function":{"name":..,"description":..,"parameters":{...}}}]`.
+     *
+     * Used by every OpenAI-compatible provider that does NOT have its own bespoke
+     * tool-calling protocol (OpenRouter, Z.AI, GenericOpenAI, LM Studio).
+     */
+    fun buildOpenAIToolsArray(tools: List<ToolSchema>): List<Map<String, Any>> =
+        tools.map { rawTool ->
+            val tool = ToolSchemaSanitizer.forOpenAI(rawTool).tool
+            mapOf(
+                "type" to "function",
+                "function" to mapOf(
+                    "name" to tool.name,
+                    "description" to tool.description,
+                    "parameters" to tool.parametersJsonSchema,
+                )
+            )
+        }
+
+    /**
+     * Parse the `tool_calls` field of an OpenAI chat-completions response message
+     * into provider-agnostic [NativeToolCall] entries. Returns an empty list when
+     * the field is absent or malformed.
+     */
+    fun parseOpenAIToolCalls(rawToolCalls: Any?): List<NativeToolCall> {
+        @Suppress("UNCHECKED_CAST")
+        val toolCalls = rawToolCalls as? List<Map<String, Any?>> ?: return emptyList()
+        return toolCalls.mapNotNull { call ->
+            val id = call["id"] as? String ?: return@mapNotNull null
+            @Suppress("UNCHECKED_CAST")
+            val function = call["function"] as? Map<String, Any?> ?: return@mapNotNull null
+            val name = function["name"] as? String ?: return@mapNotNull null
+            val argsString = function["arguments"] as? String ?: "{}"
+            NativeToolCall(
+                id = id,
+                name = ToolCallContentNormalizer.normalizeToolName(name),
+                argumentsJson = argsString,
+            )
+        }
     }
 
     /**

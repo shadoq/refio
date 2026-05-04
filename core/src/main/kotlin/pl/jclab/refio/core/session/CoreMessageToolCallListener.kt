@@ -20,6 +20,7 @@ class CoreMessageToolCallListener(
     scope: CoroutineScope,
     private val stateManager: SessionStateManager,
     private val onReloadSubtasks: suspend () -> Unit,
+    private val onReloadMessages: suspend () -> Unit = {},
     private val resolveToolDisplayType: (String) -> ToolDisplayType,
     private val parseToolParameters: (String) -> Map<String, String>,
 ) : AbstractToolCallLifecycleListener(scope) {
@@ -105,5 +106,8 @@ class CoreMessageToolCallListener(
 
     override suspend fun onAfterToolLifecycleEvent(taskId: String) {
         onReloadSubtasks()
+        // Refresh chat messages so ChatView footer (token counts, generation time)
+        // updates after each AgentTurnLoop iteration, not only at turn end.
+        onReloadMessages()
     }
 }

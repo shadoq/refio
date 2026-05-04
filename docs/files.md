@@ -84,7 +84,10 @@
 ## `core/llm/` — LLM Abstraction Layer
 
 - **Base.kt** — Core data structures and abstract `BaseLLMAdapter` base class for all LLM adapters; message types, response types, universal parameter normalization.
-- **LLMClient.kt** — Unified entry point for all LLM requests; routes to appropriate adapter by provider name (facade pattern); handles token estimation, streaming, error handling.
+- **LLMClient.kt** — Unified entry point for all LLM requests; routes to appropriate adapter by provider name (facade pattern); handles token estimation, streaming, error handling. **Also the central writer of LLM stats** — accepts `taskRepository` + `subtaskRepository` and auto-increments `tokens_in` / `tokens_out` / `cost_usd` on the `task` and (when `subtaskId` is supplied) `subtask` rows after every successful call.
+- **NativeToolsFallbackTracker.kt** — Persistent set of model ids that failed native function-calling. `bind(configService)` hydrates from `models.native_tools_fallbacks` on startup; every `markFallback()` mirrors back to disk. Provides `unmark(modelId)` and `clear()` for user-driven retry.
+- **NativeToolsResolver.kt** — Central decision logic for native vs JSON-in-text tool path. `NativeToolsMode` enum (`AUTO` / `ALWAYS` / `NEVER`); precedence: fallback cache → NEVER → ALWAYS → `ModelDefinition.supportsFunctionCalling`.
+- **ToolSchemaSanitizer.kt** — Provider-aware JSON Schema normalization: OpenAI strict-mode compatibility, Anthropic composition-keyword stripping, Gemini single-type coercion + nullable fields.
 - **ModelRegistry.kt** — Dynamic model discovery with parallel provider fetching, 5-minute cache, mutex-protected single-flight requests.
 - **ModelDefinitions.kt** — Central registry (~3800 lines) of all supported models with pricing, context limits, capabilities, parameter mappings. Single source of truth.
 - **SupportedModels.kt** — Whitelist of supported models per provider; filters dynamically discovered models against tested/approved sets.
@@ -102,6 +105,8 @@
 - **GeminiAdapter.kt** — Google Gemini: converts to "contents/parts" structure, `system_instruction` param, SSE streaming, function call extraction from parts.
 - **OpenRouterAdapter.kt** — Unified API for 100+ models; OpenAI-compatible format; thinking mode for Claude models via OpenRouter.
 - **CustomOpenAIAdapter.kt** — Base class for OpenAI-compatible APIs (custom endpoints, Z.AI, LMStudio); rate limiting (mutex-based cooldown for Z.AI), tool call accumulation for streaming.
+- **OpenAICompatibleAdapter.kt** — Shared OpenAI-compatible base used by OpenRouter / Z.AI / Generic OpenAI / LM Studio. Now wires the native `tools` array via `OpenAICompatibleHelpers.buildOpenAIToolsArray` and parses `tool_calls` responses (streaming + non-streaming) into `nativeToolCalls`.
+- **OpenAICompatibleHelpers.kt** — Shared helpers for OpenAI-compatible adapters: `buildOpenAIToolsArray(tools)` (canonical `[{type:function,function:{name,description,parameters}}]` shape, sanitized via `ToolSchemaSanitizer.forOpenAI`), `parseOpenAIToolCalls(rawToolCalls)` (extracts `tool_calls` field into provider-agnostic `NativeToolCall` entries), `addCommonKwargs`, `resolveMaxTokens`.
 - **LMStudioAdapter.kt** — LM Studio local server: OpenAI-compatible wrapper; configurable base URL, optional API key; logs unsupported thinking mode.
 - **ZAIAdapter.kt** — Thin wrapper around `CustomOpenAIAdapter` for Z.AI provider; inherits rate limiting and streaming.
 - **ToolCallContentNormalizer.kt** — Normalizes tool call formats from all providers into unified canonical JSON; includes `OpenAiStreamingToolCallAccumulator` for streaming.
@@ -269,7 +274,8 @@
 - **ContextTokenEstimator.kt** — Token estimation heuristic (`text.length / 4`); used for budget enforcement.
 - **WorkingMemoryService.kt** — Per-task working memory: key-value facts with importance scoring, LRU eviction, iteration tracking.
 - **ProjectInstructionsLoader.kt** — Loads project instructions from `AGENTS.md`, `.refio/agent.md`, `.refio/rules/*.md` with glob-based activation.
-- **ToolResultCompression.kt** — Multi-level compression for tool results; adapts to budget constraints.
+- **ToolResultCompression.kt** — Multi-level compression for tool results (FULL/DETAILED/SUMMARY); accepts optional `subtaskId` and forwards it to `DiffCompressor`; HTML-noise stripping for `<style>`/`<script>` blocks; safe head+tail truncation for sub-200-char budgets.
+- **DiffCompressor.kt** — Content-aware diff body elision applied inside ` ```diff ` fences. Three paths: small diff passes through; pure-create keeps headers + 15-line head + 8-line tail with `memory(get_subtask_output, subtask_id="…")` recovery hint (literal id when supplied); large mixed preserves every `+`/`-` line and elides context (1 line per hunk run). Idempotent.
 - **CompressionLevel.kt** — Enum for compression levels.
 
 ## `core/services/analysis/` — Code Analysis
@@ -380,8 +386,8 @@
 ## `services/` — IntelliJ Plugin Services
 
 - **CoreConnectionManager.kt** — App-level service managing embedded Kotlin core connection, per-project routers, database init, config loading.
-- **SessionManager.kt** — Project-level service orchestrating session operations, workflow execution, message handling, component coordination (lazy loading).
-- **SessionLifecycleService.kt** — Session lifecycle: creation, loading, switching, mode changes, model selection, execution mode toggling, state persistence.
+- **SessionManager.kt** — Project-level service orchestrating session operations, workflow execution, message handling, component coordination (lazy loading). Caches `maxContextWindow` as a `StateFlow` (background-refreshed on session/model change) so EDT readers don't hit SQLite; expose `refreshMaxContextWindow()` for hooks after `MAX_CONTEXT_SIZE` save.
+- **SessionLifecycleService.kt** — Session lifecycle: creation, loading, switching, mode changes, model selection, execution mode toggling, state persistence. `updateSession(session, persistSettings = true)` — pass `false` from token-only refresh paths to skip 5 redundant `ConfigRepository` writes (~10 fewer DB writes per turn).
 - **SessionStateManager.kt** — Reactive state holder: StateFlows for all session state (messages, subtasks, plans, model, toggles); thread-safe mutations.
 - **MessageDispatcher.kt** — Loads/transforms DB messages into UI-ready `Message` objects; tool call parsing, content normalization, enrichment.
 - **ExecutionMonitor.kt** — Execution lifecycle: streaming, step execution, approval messages, real-time UI listener integration.

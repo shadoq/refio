@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.services
 
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
@@ -215,16 +216,31 @@ class PlanningServiceTest {
         }
 
         @Test
-        fun `should increment task metrics`() = runTest {
+        fun `should pass taskId to LLMClient so metrics auto-attribute`() = runTest {
+            // After LLMClient centralization, PlanningService no longer calls
+            // taskRepository.incrementMetrics directly. The contract is that it
+            // passes taskId through to llmClient.complete(), which inkrementuje
+            // przez wstrzyknięte repo. This test verifies the new contract.
             val request = PlanningRequest(input = "Analyze the project")
             planningService.createPlan("task-1", request)
 
-            verify {
-                taskRepository.incrementMetrics(
-                    id = "task-1",
-                    tokensIn = 200,
-                    tokensOut = 300,
-                    costUsd = 0.005
+            coVerify {
+                llmClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    maxTokens = any(),
+                    temperature = any(),
+                    responseFormat = any(),
+                    thinking = any(),
+                    noEgressEnabled = any(),
+                    stream = any(),
+                    onChunk = any(),
+                    taskId = "task-1",
+                    subtaskId = null,
+                    source = any(),
+                    contextContent = any()
                 )
             }
         }

@@ -259,14 +259,8 @@ class PlanningService(
 
         logger.info { "[PLANNING] Created ${subtasks.size} subtasks" }
 
-        // 4. Update task metrics
-        taskRepository.incrementMetrics(
-            id = task.id,
-            tokensIn = tokensIn,
-            tokensOut = tokensOut,
-            costUsd = cost
-        )
-        logger.info { "[PLANNING] Incremented task metrics: +$tokensIn/$tokensOut tokens, +\$${String.format("%.4f", cost)}" }
+        // Task metrics auto-incremented inside LLMClient.complete() via taskId
+        // passed in the call above. No manual increment here.
 
         // 5. Update task status to SUCCESS (plan created)
         taskRepository.update(id = task.id, status = TaskStatus.SUCCESS)

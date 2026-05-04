@@ -3,6 +3,7 @@ package pl.jclab.refio.ui.components.chat
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import pl.jclab.refio.api.models.Message
+import pl.jclab.refio.api.models.Session
 import pl.jclab.refio.core.services.SessionStats
 import pl.jclab.refio.core.services.SessionStatsCalculator
 import pl.jclab.refio.ui.theme.LCATheme
@@ -19,8 +20,8 @@ import javax.swing.JComponent
  */
 internal object SessionStatsBar {
 
-    fun create(messages: List<Message>): JComponent {
-        val stats = SessionStatsCalculator.compute(messages)
+    fun create(messages: List<Message>, session: Session? = null): JComponent {
+        val stats = SessionStatsCalculator.compute(messages, session)
         val panel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 8, 0)).apply {
             background = LCATheme.backgroundColor
             isOpaque = false

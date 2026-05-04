@@ -30,13 +30,30 @@ data class ModelPricing(
  * ```
  */
 fun getModelPricing(provider: String, model: String): ModelPricing {
-    // 1. First check ModelDefinitions (single source of truth, per 1M tokens)
+    // 1. First check ModelDefinitions (single source of truth, per 1M tokens).
     val definition = ModelDefinitions.getDefinition(provider, model)
-    if (definition != null) {
+    if (definition != null && (definition.costPer1MInput > 0.0 || definition.costPer1MOutput > 0.0)) {
         return ModelPricing(
             input = definition.costPer1MInput,
             output = definition.costPer1MOutput
         )
+    }
+
+    // 2. Fall back to live ModelRegistry cache (populated by adapter listModels()).
+    // OpenRouter's /models endpoint reports accurate per-model prices; this lets
+    // specific models (e.g. anthropic/claude-haiku-4.5) override the family-level
+    // baseline configured in ModelDefinitions.
+    val cached = getModelConfigFromCache(model)
+    if (cached != null && (cached.costPer1mInput > 0.0 || cached.costPer1mOutput > 0.0)) {
+        return ModelPricing(
+            input = cached.costPer1mInput,
+            output = cached.costPer1mOutput
+        )
+    }
+
+    // 3. If ModelDefinitions had a hit (even with 0/0), return it — explicit "free" baseline.
+    if (definition != null) {
+        return ModelPricing(definition.costPer1MInput, definition.costPer1MOutput)
     }
 
     return ModelPricing(0.00, 0.00)

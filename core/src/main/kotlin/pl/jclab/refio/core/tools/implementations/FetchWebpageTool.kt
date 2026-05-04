@@ -15,6 +15,7 @@ import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
+import pl.jclab.refio.core.tools.base.ToolInternalParams
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
 
@@ -49,6 +50,8 @@ class FetchWebpageTool(
             ?: return@withContext ToolResult.error("Missing 'prompt'")
         val maxContentChars = ((params["max_content_chars"] as? Number)?.toInt() ?: 20_000)
             .coerceIn(1_000, 50_000)
+        val taskId = params[ToolInternalParams.TASK_ID] as? String
+        val subtaskId = params[ToolInternalParams.SUBTASK_ID] as? String
 
         logger.info { "Fetching $url for AI processing" }
         val html = try {
@@ -85,6 +88,8 @@ class FetchWebpageTool(
                 systemPrompt = systemPrompt,
                 maxTokens = 2048,
                 stream = false,
+                taskId = taskId,
+                subtaskId = subtaskId,
                 source = "FetchWebpageTool"
             )
         } catch (e: Exception) {
@@ -100,7 +105,11 @@ class FetchWebpageTool(
             metadata = mapOf(
                 "url" to url,
                 "content_chars" to markdown.length,
-                "model" to model
+                "model" to model,
+                "provider" to provider,
+                "tokens_in" to llmResponse.usage.inputTokens,
+                "tokens_out" to llmResponse.usage.outputTokens,
+                "cost_usd" to llmResponse.cost
             )
         )
     }

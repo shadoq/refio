@@ -6,19 +6,31 @@ data class ToolResultCompressionConfig(
 )
 
 object ToolResultCompression {
+    /**
+     * @param subtaskId optional id of the subtask that produced [rawOutput] —
+     *   forwarded to [DiffCompressor] so the elision marker can embed the
+     *   literal id in `memory(get_subtask_output, subtask_id="…")` instead
+     *   of pointing at the surrounding tag attribute.
+     */
     fun compress(
         rawOutput: String,
         summary: String?,
         level: CompressionLevel,
-        config: ToolResultCompressionConfig
+        config: ToolResultCompressionConfig,
+        subtaskId: String? = null
     ): String {
         val raw = rawOutput.ifBlank { "-" }
         val summaryOrRaw = if (!summary.isNullOrBlank()) summary else raw
 
         return when (level) {
-            CompressionLevel.FULL -> raw
-            // DETAILED should preserve real tool output when budget allows.
-            CompressionLevel.DETAILED -> smartCompress(raw, config.detailedMaxChars)
+            // Even at FULL we apply diff-body compression: a 700-line +diff carries
+            // no information the agent doesn't already have (it just generated it),
+            // so eliding the body is lossless from the agent's perspective. The full
+            // tool output stays accessible via memory(get_subtask_output).
+            CompressionLevel.FULL -> DiffCompressor.compress(raw, subtaskId)
+            // DETAILED should preserve real tool output when budget allows; same
+            // diff-body compression applies before the char-budget head/tail cut.
+            CompressionLevel.DETAILED -> smartCompress(DiffCompressor.compress(raw, subtaskId), config.detailedMaxChars)
             CompressionLevel.SUMMARY -> headTailTruncate(summaryOrRaw, config.summaryMaxChars)
         }
     }

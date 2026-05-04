@@ -51,7 +51,12 @@ private val logger = coreLogger("LLMClient")
  * ```
  */
 class LLMClient(
-    private val configService: pl.jclab.refio.core.services.ConfigService? = null
+    private val configService: pl.jclab.refio.core.services.ConfigService? = null,
+    // Persistence sinks for auto-attribution of LLM cost. When a caller passes
+    // taskId / subtaskId, complete() will increment the matching row after a
+    // successful response. Optional so unit tests and standalone usage still work.
+    private val taskRepository: pl.jclab.refio.core.db.repositories.TaskRepository? = null,
+    private val subtaskRepository: pl.jclab.refio.core.db.repositories.SubtaskRepository? = null
 ) {
     // Bug #18: Load HTTP client configuration from database
     private val httpClientConfig: HttpClientConfig by lazy {
@@ -160,6 +165,7 @@ class LLMClient(
         systemMessages: List<String> = emptyList(),
         kwargs: Map<String, Any> = emptyMap()
     ): LLMResponse {
+        val callStartMs = System.currentTimeMillis()
         val preparedRequest = prepareRequestPayload(
             messages = messages,
             systemPrompt = systemPrompt,
@@ -409,6 +415,39 @@ class LLMClient(
                 )
             } catch (e: Exception) {
                 logger.error(e) { "[LLM_CLIENT] Failed to record request in global metrics" }
+            }
+
+            // Auto-attribute LLM cost to the owning task / subtask. Single source of
+            // truth so that every call-site that passes taskId / subtaskId is counted
+            // — no need to remember calling TaskRepository.incrementMetrics manually.
+            // API logs remain audit-only; user-visible stats come from task/subtask rows.
+            val latencyMs = (System.currentTimeMillis() - callStartMs).toInt()
+            if (taskId != null && taskRepository != null) {
+                try {
+                    taskRepository.incrementMetrics(
+                        id = taskId,
+                        tokensIn = finalResponse.usage.inputTokens,
+                        tokensOut = finalResponse.usage.outputTokens,
+                        costUsd = finalResponse.cost
+                    )
+                } catch (e: Exception) {
+                    logger.warn(e) { "[LLM_CLIENT] Failed to increment task metrics for $taskId" }
+                }
+            }
+            if (subtaskId != null && subtaskRepository != null) {
+                try {
+                    subtaskRepository.incrementLlmMetrics(
+                        id = subtaskId,
+                        llmModel = model,
+                        llmProvider = provider,
+                        inputTokens = finalResponse.usage.inputTokens,
+                        outputTokens = finalResponse.usage.outputTokens,
+                        costUsd = finalResponse.cost,
+                        latencyMs = latencyMs
+                    )
+                } catch (e: Exception) {
+                    logger.warn(e) { "[LLM_CLIENT] Failed to increment subtask metrics for $subtaskId" }
+                }
             }
 
             logger.info { "[LLM_CLIENT] Request completed successfully for $provider/$model" }

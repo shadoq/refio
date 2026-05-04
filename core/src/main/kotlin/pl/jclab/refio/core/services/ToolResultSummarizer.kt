@@ -259,13 +259,8 @@ class ToolResultSummarizer(
                     "tokens: ${response.usage.inputTokens}/${response.usage.outputTokens}, cost: $${response.cost}"
         }
 
-        // Update task metrics
-        taskRepository.incrementMetrics(
-            id = taskId,
-            tokensIn = response.usage.inputTokens,
-            tokensOut = response.usage.outputTokens,
-            costUsd = response.cost
-        )
+        // Task metrics auto-incremented inside LLMClient.complete() via taskId
+        // passed in the call above. No manual increment here.
 
         return ToolResultSummary(
             summary = summary,

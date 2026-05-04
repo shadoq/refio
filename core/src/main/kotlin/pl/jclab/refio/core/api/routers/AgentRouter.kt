@@ -602,7 +602,8 @@ _Execution time: ${result.durationMs}ms_
             ),
             temperature = 0.7,
             maxTokens = 1500,
-            source = "generateExecutionSummary"
+            source = "generateExecutionSummary",
+            taskId = taskId
         )
 
         val summaryText = llmResponse.content

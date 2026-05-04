@@ -1633,7 +1633,7 @@ object ModelDefinitions {
             ),
             modelType = ModelType.MULTIMODAL,
             maxContext = GEMINI_MAX_CONTEXT,
-            maxOutputTokens = 8_192,
+            maxOutputTokens = 65_536,
             costPer1MInput = 2.0,
             costPer1MOutput = 12.0,
             supportsVision = true,
@@ -1656,7 +1656,7 @@ object ModelDefinitions {
             ),
             modelType = ModelType.MULTIMODAL,
             maxContext = GEMINI_MAX_CONTEXT,
-            maxOutputTokens = 8_192,
+            maxOutputTokens = 65_536,
             costPer1MInput = 1.25,
             costPer1MOutput = 10.0,
             supportsVision = true,
@@ -1679,7 +1679,7 @@ object ModelDefinitions {
             ),
             modelType = ModelType.MULTIMODAL,
             maxContext = GEMINI_MAX_CONTEXT,
-            maxOutputTokens = 8_192,
+            maxOutputTokens = 65_536,
             costPer1MInput = 0.30,
             costPer1MOutput = 2.50,
             supportsVision = true,
@@ -1701,7 +1701,7 @@ object ModelDefinitions {
             ),
             modelType = ModelType.MULTIMODAL,
             maxContext = GEMINI_MAX_CONTEXT,
-            maxOutputTokens = 4_096,
+            maxOutputTokens = 65_536,
             costPer1MInput = 0.10,
             costPer1MOutput = 0.40,
             supportsVision = true,
@@ -1723,7 +1723,7 @@ object ModelDefinitions {
             ),
             modelType = ModelType.MULTIMODAL,
             maxContext = GEMINI_MAX_CONTEXT,
-            maxOutputTokens = 4_096,
+            maxOutputTokens = 65_536,
             costPer1MInput = 0.10,
             costPer1MOutput = 0.40,
             supportsVision = true,
@@ -1917,7 +1917,7 @@ object ModelDefinitions {
             ),
             modelType = ModelType.MULTIMODAL,
             maxContext = GEMINI_MAX_CONTEXT,
-            maxOutputTokens = 8_192,
+            maxOutputTokens = 65_536,
             costPer1MInput = 1.25,
             costPer1MOutput = 10.0,
             supportsVision = true,
@@ -1940,7 +1940,7 @@ object ModelDefinitions {
             ),
             modelType = ModelType.MULTIMODAL,
             maxContext = GEMINI_MAX_CONTEXT,
-            maxOutputTokens = 8_192,
+            maxOutputTokens = 65_536,
             costPer1MInput = 0.30,
             costPer1MOutput = 2.50,
             supportsVision = true,
@@ -1962,7 +1962,7 @@ object ModelDefinitions {
             ),
             modelType = ModelType.MULTIMODAL,
             maxContext = GEMINI_MAX_CONTEXT,
-            maxOutputTokens = 4_096,
+            maxOutputTokens = 65_536,
             costPer1MInput = 0.10,
             costPer1MOutput = 0.40,
             supportsVision = true,
@@ -1985,7 +1985,7 @@ object ModelDefinitions {
             ),
             modelType = ModelType.MULTIMODAL,
             maxContext = GEMINI_MAX_CONTEXT,
-            maxOutputTokens = 8_192,
+            maxOutputTokens = 65_536,
             costPer1MInput = 1.25,
             costPer1MOutput = 10.0,
             supportsVision = true,
@@ -4796,93 +4796,98 @@ object ModelDefinitions {
      * Matching is prefix-based in [getDefinition] (e.g. "amazon/nova-lite-v1"
      * matches entry "amazon/nova-").
      */
+    // Family-level baseline pricing (USD per 1M tokens). Sourced from openrouter.ai/models
+     // 2026-05; revisit if OpenRouter restructures tiers. Per-model prices from the live
+     // /models endpoint (parsed in OpenRouterAdapter) override these for each specific
+     // model id when the cache is warm — see getModelPricing() fallback chain.
     val OPENROUTER_MODELS = mapOf(
-        // Anthropic
-        "anthropic/claude-opus" to openrouterDef("anthropic/claude-opus-*", maxContext = 1_000_000, vision = true),
-        "anthropic/claude-sonnet" to openrouterDef("anthropic/claude-sonnet-*", maxContext = 1_000_000, vision = true),
-        "anthropic/claude-haiku" to openrouterDef("anthropic/claude-haiku-*", maxContext = 200_000, vision = true),
-        "anthropic/claude-" to openrouterDef("anthropic/claude-*", maxContext = 200_000, vision = true),
-        // OpenAI
-        "openai/gpt-5.4-pro" to openrouterDef("openai/gpt-5.4-pro", maxContext = 1_050_000, vision = true),
-        "openai/gpt-5.4" to openrouterDef("openai/gpt-5.4-*", maxContext = 400_000, vision = true),
-        "openai/gpt-5" to openrouterDef("openai/gpt-5-*", maxContext = 400_000, vision = true),
-        "openai/gpt-audio" to openrouterDef("openai/gpt-audio*", maxContext = 128_000),
-        "openai/gpt-" to openrouterDef("openai/gpt-*", maxContext = 128_000, vision = true),
-        "openai/o" to openrouterDef("openai/o*", maxContext = 200_000, reasoning = true),
-        // Google
-        "google/gemini-3" to openrouterDef("google/gemini-3*", maxContext = 1_048_576, vision = true),
-        "google/gemini-" to openrouterDef("google/gemini-*", maxContext = 1_000_000, vision = true),
-        "google/gemma-" to openrouterDef("google/gemma-*", maxContext = 262_144, vision = true),
-        // Amazon
-        "amazon/nova-" to openrouterDef("amazon/nova-*", maxContext = 300_000, vision = true),
-        // Meta
-        "meta-llama/llama-" to openrouterDef("meta-llama/llama-*", maxContext = 128_000),
-        "meta-llama/" to openrouterDef("meta-llama/*", maxContext = 128_000),
-        // Mistral
-        "mistralai/" to openrouterDef("mistralai/*", maxContext = 262_144),
-        // Qwen
-        "qwen/qwen3.6" to openrouterDef("qwen/qwen3.6-*", maxContext = 1_000_000, vision = true),
-        "qwen/qwen3.5" to openrouterDef("qwen/qwen3.5-*", maxContext = 262_144, vision = true),
+        // Anthropic — Opus tier $15/$75, Sonnet $3/$15, Haiku $0.80/$4
+        "anthropic/claude-opus" to openrouterDef("anthropic/claude-opus-*", maxContext = 1_000_000, vision = true, inPrice = 15.0, outPrice = 75.0),
+        "anthropic/claude-sonnet" to openrouterDef("anthropic/claude-sonnet-*", maxContext = 1_000_000, vision = true, inPrice = 3.0, outPrice = 15.0),
+        "anthropic/claude-haiku" to openrouterDef("anthropic/claude-haiku-*", maxContext = 200_000, vision = true, inPrice = 0.80, outPrice = 4.0),
+        "anthropic/claude-" to openrouterDef("anthropic/claude-*", maxContext = 200_000, vision = true, inPrice = 3.0, outPrice = 15.0),
+        // OpenAI — gpt-5.4-pro $30/$180, gpt-5.4 $2.50/$15, gpt-5* $5/$30, gpt-* $0.50/$1.50
+        "openai/gpt-5.4-pro" to openrouterDef("openai/gpt-5.4-pro", maxContext = 1_050_000, vision = true, inPrice = 30.0, outPrice = 180.0),
+        "openai/gpt-5.4" to openrouterDef("openai/gpt-5.4-*", maxContext = 400_000, vision = true, inPrice = 2.50, outPrice = 15.0),
+        "openai/gpt-5" to openrouterDef("openai/gpt-5-*", maxContext = 400_000, vision = true, inPrice = 5.0, outPrice = 30.0),
+        "openai/gpt-audio" to openrouterDef("openai/gpt-audio*", maxContext = 128_000, inPrice = 2.50, outPrice = 10.0),
+        "openai/gpt-" to openrouterDef("openai/gpt-*", maxContext = 128_000, vision = true, inPrice = 0.50, outPrice = 1.50),
+        // o-series reasoning — premium pricing
+        "openai/o" to openrouterDef("openai/o*", maxContext = 200_000, reasoning = true, inPrice = 15.0, outPrice = 60.0),
+        // Google — gemini-pro $2/$12, gemini-flash $0.50/$3
+        "google/gemini-3" to openrouterDef("google/gemini-3*", maxContext = 1_048_576, vision = true, inPrice = 2.0, outPrice = 12.0),
+        "google/gemini-" to openrouterDef("google/gemini-*", maxContext = 1_000_000, vision = true, inPrice = 1.25, outPrice = 5.0),
+        "google/gemma-" to openrouterDef("google/gemma-*", maxContext = 262_144, vision = true, inPrice = 0.05, outPrice = 0.10),
+        // Amazon Nova — lite $0.06/$0.24, pro $0.80/$3.20 (mid-tier baseline)
+        "amazon/nova-" to openrouterDef("amazon/nova-*", maxContext = 300_000, vision = true, inPrice = 0.80, outPrice = 3.20),
+        // Meta Llama — 3.3-70b ~$0.18/$0.18
+        "meta-llama/llama-" to openrouterDef("meta-llama/llama-*", maxContext = 128_000, inPrice = 0.20, outPrice = 0.60),
+        "meta-llama/" to openrouterDef("meta-llama/*", maxContext = 128_000, inPrice = 0.20, outPrice = 0.60),
+        // Mistral — small $0.15/$0.60 baseline
+        "mistralai/" to openrouterDef("mistralai/*", maxContext = 262_144, inPrice = 0.15, outPrice = 0.60),
+        // Qwen — 3.6-max $1.04/$6.24, 3.5-plus $0.40/$2.40, 3-* small models
+        "qwen/qwen3.6" to openrouterDef("qwen/qwen3.6-*", maxContext = 1_000_000, vision = true, inPrice = 1.05, outPrice = 6.25),
+        "qwen/qwen3.5" to openrouterDef("qwen/qwen3.5-*", maxContext = 262_144, vision = true, inPrice = 0.40, outPrice = 2.40),
         // qwen3-coder-* variants emit XML pseudo-tags instead of native tool_calls
         // (observed: `<create_new_file><path>...</path><content>...</content></create_new_file>`).
         // Prefix entry must come before "qwen/qwen3" to win the prefix match.
-        "qwen/qwen3-coder" to openrouterDef("qwen/qwen3-coder-*", maxContext = 262_144, functionCalling = false),
-        "qwen/qwen3" to openrouterDef("qwen/qwen3-*", maxContext = 262_144),
-        "qwen/" to openrouterDef("qwen/*", maxContext = 128_000),
-        // DeepSeek
-        "deepseek/" to openrouterDef("deepseek/*", maxContext = 128_000),
-        // xAI
-        "x-ai/grok-" to openrouterDef("x-ai/grok-*", maxContext = 2_000_000, vision = true),
-        // Cohere
-        "cohere/command-" to openrouterDef("cohere/command-*", maxContext = 128_000),
-        // Moonshot
-        "moonshotai/kimi" to openrouterDef("moonshotai/kimi-*", maxContext = 262_144, vision = true),
-        "moonshotai/" to openrouterDef("moonshotai/*", maxContext = 128_000),
-        // MiniMax
+        "qwen/qwen3-coder" to openrouterDef("qwen/qwen3-coder-*", maxContext = 262_144, functionCalling = false, inPrice = 0.50, outPrice = 2.0),
+        "qwen/qwen3" to openrouterDef("qwen/qwen3-*", maxContext = 262_144, inPrice = 0.20, outPrice = 0.60),
+        "qwen/" to openrouterDef("qwen/*", maxContext = 128_000, inPrice = 0.20, outPrice = 0.60),
+        // DeepSeek — v4-flash $0.14/$0.28, v4-pro $0.43/$0.87, R1 $0.27/$1.10
+        "deepseek/" to openrouterDef("deepseek/*", maxContext = 128_000, inPrice = 0.27, outPrice = 1.10),
+        // xAI Grok — grok-4 $5/$15, grok-3 $5/$25, grok-fast variants cheaper
+        "x-ai/grok-" to openrouterDef("x-ai/grok-*", maxContext = 2_000_000, vision = true, inPrice = 3.0, outPrice = 15.0),
+        // Cohere Command — command-r ~$0.50/$1.50
+        "cohere/command-" to openrouterDef("cohere/command-*", maxContext = 128_000, inPrice = 0.50, outPrice = 1.50),
+        // Moonshot Kimi — k2 $0.74/$3.49
+        "moonshotai/kimi" to openrouterDef("moonshotai/kimi-*", maxContext = 262_144, vision = true, inPrice = 0.74, outPrice = 3.49),
+        "moonshotai/" to openrouterDef("moonshotai/*", maxContext = 128_000, inPrice = 0.50, outPrice = 2.0),
+        // MiniMax — m2.5 $0.15/$1.15
         // minimax-m2.7 emits `<minimax:tool_call><invoke name="...">...</invoke></minimax:tool_call>`
         // pseudo-XML instead of native tool_calls. Force JSON envelope mode.
-        "minimax/minimax-m2.7" to openrouterDef("minimax/minimax-m2.7*", maxContext = 196_608, functionCalling = false),
-        "minimax/minimax-m2" to openrouterDef("minimax/minimax-m2*", maxContext = 196_608),
-        "minimax/" to openrouterDef("minimax/*", maxContext = 128_000),
-        // Z.AI
-        "z-ai/glm-5v" to openrouterDef("z-ai/glm-5v*", maxContext = 202_752, vision = true),
-        "z-ai/glm-" to openrouterDef("z-ai/glm-*", maxContext = 202_752),
-        "z-ai/" to openrouterDef("z-ai/*", maxContext = 128_000),
-        // ByteDance
-        "bytedance-seed/" to openrouterDef("bytedance-seed/*", maxContext = 262_144, vision = true),
-        // NVIDIA
-        "nvidia/nemotron" to openrouterDef("nvidia/nemotron-*", maxContext = 262_144),
-        "nvidia/" to openrouterDef("nvidia/*", maxContext = 128_000),
-        // InclusionAI (Ling family)
-        "inclusionai/" to openrouterDef("inclusionai/*", maxContext = 262_144),
+        "minimax/minimax-m2.7" to openrouterDef("minimax/minimax-m2.7*", maxContext = 196_608, functionCalling = false, inPrice = 0.15, outPrice = 1.15),
+        "minimax/minimax-m2" to openrouterDef("minimax/minimax-m2*", maxContext = 196_608, inPrice = 0.15, outPrice = 1.15),
+        "minimax/" to openrouterDef("minimax/*", maxContext = 128_000, inPrice = 0.15, outPrice = 1.15),
+        // Z.AI GLM — glm-5.1 $1.05/$3.50
+        "z-ai/glm-5v" to openrouterDef("z-ai/glm-5v*", maxContext = 202_752, vision = true, inPrice = 1.20, outPrice = 4.0),
+        "z-ai/glm-" to openrouterDef("z-ai/glm-*", maxContext = 202_752, inPrice = 1.05, outPrice = 3.50),
+        "z-ai/" to openrouterDef("z-ai/*", maxContext = 128_000, inPrice = 1.0, outPrice = 3.0),
+        // ByteDance Seed
+        "bytedance-seed/" to openrouterDef("bytedance-seed/*", maxContext = 262_144, vision = true, inPrice = 0.40, outPrice = 1.40),
+        // NVIDIA Nemotron — super-120b $0.09/$0.45
+        "nvidia/nemotron" to openrouterDef("nvidia/nemotron-*", maxContext = 262_144, inPrice = 0.09, outPrice = 0.45),
+        "nvidia/" to openrouterDef("nvidia/*", maxContext = 128_000, inPrice = 0.09, outPrice = 0.45),
+        // InclusionAI (Ling family) — small open models
+        "inclusionai/" to openrouterDef("inclusionai/*", maxContext = 262_144, inPrice = 0.10, outPrice = 0.20),
         // Arcee
-        "arcee-ai/" to openrouterDef("arcee-ai/*", maxContext = 262_144),
+        "arcee-ai/" to openrouterDef("arcee-ai/*", maxContext = 262_144, inPrice = 0.30, outPrice = 0.80),
         // Kwai
-        "kwaipilot/" to openrouterDef("kwaipilot/*", maxContext = 256_000),
+        "kwaipilot/" to openrouterDef("kwaipilot/*", maxContext = 256_000, inPrice = 0.30, outPrice = 0.80),
         // Reka
-        "rekaai/" to openrouterDef("rekaai/*", maxContext = 16_384, vision = true),
+        "rekaai/" to openrouterDef("rekaai/*", maxContext = 16_384, vision = true, inPrice = 0.40, outPrice = 1.20),
         // Xiaomi
-        "xiaomi/mimo" to openrouterDef("xiaomi/mimo*", maxContext = 1_048_576, vision = true),
+        "xiaomi/mimo" to openrouterDef("xiaomi/mimo*", maxContext = 1_048_576, vision = true, inPrice = 0.30, outPrice = 0.80),
         // Upstage
-        "upstage/solar" to openrouterDef("upstage/solar-*", maxContext = 128_000),
+        "upstage/solar" to openrouterDef("upstage/solar-*", maxContext = 128_000, inPrice = 0.30, outPrice = 0.30),
         // Inception
-        "inception/mercury" to openrouterDef("inception/mercury*", maxContext = 128_000),
-        // Tencent
-        "tencent/" to openrouterDef("tencent/*", maxContext = 262_144),
-        // Writer
-        "writer/palmyra" to openrouterDef("writer/palmyra-*", maxContext = 1_040_000),
+        "inception/mercury" to openrouterDef("inception/mercury*", maxContext = 128_000, inPrice = 0.50, outPrice = 1.50),
+        // Tencent Hunyuan
+        "tencent/" to openrouterDef("tencent/*", maxContext = 262_144, inPrice = 0.10, outPrice = 0.20),
+        // Writer Palmyra — premium B2B writing
+        "writer/palmyra" to openrouterDef("writer/palmyra-*", maxContext = 1_040_000, inPrice = 5.0, outPrice = 15.0),
         // Allen AI
-        "allenai/olmo" to openrouterDef("allenai/olmo-*", maxContext = 65_536),
+        "allenai/olmo" to openrouterDef("allenai/olmo-*", maxContext = 65_536, inPrice = 0.10, outPrice = 0.20),
         // StepFun
-        "stepfun/step" to openrouterDef("stepfun/step-*", maxContext = 262_144),
-        // Liquid
-        "liquid/lfm" to openrouterDef("liquid/lfm-*", maxContext = 32_768),
-        // AION
-        "aion-labs/" to openrouterDef("aion-labs/*", maxContext = 131_072),
-        // Baidu
-        "baidu/" to openrouterDef("baidu/*", maxContext = 65_536, vision = true),
-        // OpenRouter meta-models
-        "openrouter/" to openrouterDef("openrouter/*", maxContext = 200_000, vision = true)
+        "stepfun/step" to openrouterDef("stepfun/step-*", maxContext = 262_144, inPrice = 0.20, outPrice = 0.40),
+        // Liquid LFM — small efficient models
+        "liquid/lfm" to openrouterDef("liquid/lfm-*", maxContext = 32_768, inPrice = 0.10, outPrice = 0.10),
+        // AION Labs
+        "aion-labs/" to openrouterDef("aion-labs/*", maxContext = 131_072, inPrice = 0.30, outPrice = 0.80),
+        // Baidu Ernie
+        "baidu/" to openrouterDef("baidu/*", maxContext = 65_536, vision = true, inPrice = 0.20, outPrice = 0.60),
+        // OpenRouter meta-models (auto-router)
+        "openrouter/" to openrouterDef("openrouter/*", maxContext = 200_000, vision = true, inPrice = 1.0, outPrice = 3.0)
     )
 
     private fun openrouterDef(
@@ -4898,7 +4903,16 @@ object ModelDefinitions {
          * advertise function calling but actually emit pseudo-XML
          * (e.g. `<minimax:tool_call>`, `<create_new_file>...</...>`).
          */
-        functionCalling: Boolean = true
+        functionCalling: Boolean = true,
+        /**
+         * USD per 1M input tokens. Family-level baseline used when no live
+         * pricing is available from OpenRouter's `/models` endpoint.
+         * Default 0.0 → "unknown / will be overridden by live data".
+         * Live prices from [OpenRouterAdapter.parseModelsPayload] override
+         * these via [getModelPricing] cache fallback.
+         */
+        inPrice: Double = 0.0,
+        outPrice: Double = 0.0,
     ): ModelDefinition = ModelDefinition(
         id = id,
         name = id,
@@ -4915,8 +4929,8 @@ object ModelDefinitions {
         modelType = ModelType.TEXT,
         maxContext = maxContext,
         maxOutputTokens = null,
-        costPer1MInput = 0.0,
-        costPer1MOutput = 0.0,
+        costPer1MInput = inPrice,
+        costPer1MOutput = outPrice,
         supportsVision = vision,
         supportsReasoning = reasoning,
         supportsStreaming = true,

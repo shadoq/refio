@@ -155,22 +155,17 @@ class StepSummarizer(
             maxTokens = 1024,
             stream = stream,
             onChunk = if (stream) onChunk else null,
-            source = "StepSummarizer"
+            source = "StepSummarizer",
+            taskId = taskId,
+            subtaskId = subtask.id
         )
 
         val rawSummary = response.content.trim()
-        val finalUsage = response.usage
-        val finalCost = response.cost
 
         logger.info { "[SUMMARIZER] LLM summary generated (${rawSummary.length} chars)" }
 
-        // Update task metrics with LLM costs
-        taskRepository.incrementMetrics(
-            id = taskId,
-            tokensIn = finalUsage.inputTokens,
-            tokensOut = finalUsage.outputTokens,
-            costUsd = finalCost
-        )
+        // Task / subtask metrics auto-incremented inside LLMClient.complete() via
+        // taskId / subtaskId passed in the call above. No manual increment here.
 
         // Format summary with metadata
         val summaryParts = mutableListOf<String>()

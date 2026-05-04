@@ -206,9 +206,11 @@ class SubtaskRepository {
     }
 
     /**
-     * Update LLM metrics (full version with model/provider)
+     * Accumulate LLM metrics on a subtask. Safe for tools that issue multiple LLM
+     * calls in one subtask — each call adds to existing tokens/cost/latency. Model
+     * and provider are set on first call only (preserve the originating model).
      */
-    fun updateLlmMetrics(
+    fun incrementLlmMetrics(
         id: String,
         llmModel: String?,
         llmProvider: String?,
@@ -218,17 +220,23 @@ class SubtaskRepository {
         latencyMs: Int
     ): Subtask? {
         return transaction {
+            val existing = findById(id) ?: return@transaction null
+
             SubtasksTable.update({ SubtasksTable.id eq id }) {
-                it[SubtasksTable.llmModel] = llmModel
-                it[SubtasksTable.llmProvider] = llmProvider
-                it[SubtasksTable.inputTokens] = inputTokens
-                it[SubtasksTable.outputTokens] = outputTokens
-                it[SubtasksTable.costUsd] = costUsd
-                it[SubtasksTable.latencyMs] = latencyMs
+                if (existing.llmModel.isNullOrBlank() && llmModel != null) {
+                    it[SubtasksTable.llmModel] = llmModel
+                }
+                if (existing.llmProvider.isNullOrBlank() && llmProvider != null) {
+                    it[SubtasksTable.llmProvider] = llmProvider
+                }
+                it[SubtasksTable.inputTokens] = existing.inputTokens + inputTokens
+                it[SubtasksTable.outputTokens] = existing.outputTokens + outputTokens
+                it[SubtasksTable.costUsd] = existing.costUsd + costUsd
+                it[SubtasksTable.latencyMs] = existing.latencyMs + latencyMs
                 it[updatedAt] = System.currentTimeMillis()
             }
 
-            logger.info { "Updated subtask LLM metrics: id=$id, tokens=$inputTokens/$outputTokens, cost=$costUsd" }
+            logger.info { "Incremented subtask LLM metrics: id=$id, +$inputTokens/$outputTokens tokens, +$$costUsd, +${latencyMs}ms" }
             findById(id)
         }
     }

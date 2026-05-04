@@ -14,6 +14,7 @@ import pl.jclab.refio.core.llm.LLMMessageMapper
 import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 import pl.jclab.refio.core.services.ContextService
 import pl.jclab.refio.core.services.PromptsService
+import pl.jclab.refio.core.services.context.DiffCompressor
 import pl.jclab.refio.core.services.PromptTokenEstimator
 import pl.jclab.refio.core.services.PromptCache
 import pl.jclab.refio.core.logging.dualLogger
@@ -286,8 +287,13 @@ $filteredContextPrompt
                             else -> base
                         }
                     }
+                    // Compress fenced ```diff bodies the same way the ContextService path
+                    // does — keeps this fallback in sync so a 600-line +diff doesn't ride
+                    // through verbatim when ContextService is unavailable (CHAT-mode-style
+                    // direct build, or unit-test setups without the full stack).
+                    val compressed = DiffCompressor.compress(toolText, msg.subtaskId)
                     val toolName = msg.toolCallId?.let { fallbackToolNames[it] }
-                    LLMMessageMapper.fromToolResult(msg, toolText, toolName)
+                    LLMMessageMapper.fromToolResult(msg, compressed, toolName)
                 }
                 MessageRole.SYSTEM -> LLMMessage(
                     role = "system",

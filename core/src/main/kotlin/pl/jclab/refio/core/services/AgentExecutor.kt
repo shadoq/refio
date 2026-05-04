@@ -183,19 +183,9 @@ class AgentExecutor(
             // Update subtask status to PLANNED
             subtaskRepository.updateStatus(subtaskId, TaskStatus.PLANNED)
 
-            // US-027: Save LLM metrics from planning to subtask (Error #14)
-            plan.llmMetrics?.let { metrics ->
-                subtaskRepository.updateLlmMetrics(
-                    id = subtaskId,
-                    llmModel = metrics.model,
-                    llmProvider = metrics.provider,
-                    inputTokens = metrics.inputTokens,
-                    outputTokens = metrics.outputTokens,
-                    costUsd = metrics.costUsd,
-                    latencyMs = metrics.latencyMs
-                )
-                logger.info { "[EXECUTOR] Saved planning metrics: model=${metrics.model}, tokens=${metrics.inputTokens}/${metrics.outputTokens}, cost=${metrics.costUsd}" }
-            }
+            // Subtask LLM metrics auto-incremented inside LLMClient.complete() via
+            // subtaskId StepPlanner passes to its complete() call. No manual SET here
+            // (would clobber metrics from later sub-LLM calls in the same subtask).
 
             val durationMs = (System.currentTimeMillis() - startTime).toInt()
 

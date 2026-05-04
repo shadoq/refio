@@ -622,11 +622,18 @@ class GeminiAdapter(
         val usageMetadata = response["usageMetadata"] as? Map<String, Any?> ?: return null
         val promptTokens = (usageMetadata["promptTokenCount"] as? Number)?.toInt() ?: 0
         val candidateTokens = (usageMetadata["candidatesTokenCount"] as? Number)?.toInt() ?: 0
+        // Gemini 2.5 thinking models bill `thoughtsTokenCount` separately from
+        // `candidatesTokenCount`. Fold it into outputTokens so cost/stats reflect reality.
+        val thoughtsTokens = (usageMetadata["thoughtsTokenCount"] as? Number)?.toInt() ?: 0
+        val outputTokens = candidateTokens + thoughtsTokens
         val totalTokens = (usageMetadata["totalTokenCount"] as? Number)?.toInt()
-            ?: (promptTokens + candidateTokens)
+            ?: (promptTokens + outputTokens)
+        if (thoughtsTokens > 0) {
+            logger.info { "[GEMINI] usage: prompt=$promptTokens, candidates=$candidateTokens, thoughts=$thoughtsTokens (folded into output)" }
+        }
         return LLMUsage(
             inputTokens = promptTokens,
-            outputTokens = candidateTokens,
+            outputTokens = outputTokens,
             totalTokens = totalTokens
         )
     }

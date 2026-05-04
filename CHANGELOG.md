@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.0.1.9] - 2026-05-05
+
+### Added
+
+- `DiffCompressor` — content-aware elision of tool-result diff bodies (small / pure-create / large-mixed paths); recovery hint embeds the literal `subtask_id`. Saves ~8-14K tokens on the iteration after a write tool.
+- Centralized LLM stats in `LLMClient` — `tokens_in` / `tokens_out` / `cost_usd` auto-incremented on the `task` and `subtask` rows after every successful call; the ~20 `complete()` call-sites no longer track metrics manually.
+- Persistent native-tools fallback — new `models.native_tools_fallbacks` config key; `NativeToolsFallbackTracker.bind(configService)` hydrates on startup and mirrors writes back, so users no longer pay the 2-nudge probe cost on every fresh process.
+- Native function calling for OpenAI-compatible providers (OpenRouter, Z.AI, Generic OpenAI, LM Studio) via shared `OpenAICompatibleHelpers.buildOpenAIToolsArray` / `parseOpenAIToolCalls`.
+- Sub-LLM cost surfaced in tool-call bubbles — `ToolResultSummary` carries token/cost so `advance_code_editing`, `multi_line_editor`, `fetch_webpage`, etc. show their inner-LLM cost alongside the parent assistant call.
+- Cached `maxContextWindow` as `StateFlow` in `SessionManager` — Status bar / Settings / Context panel no longer hit SQLite from the EDT.
+
+### Changed
+
+- AGENT task status now transitions `NEW → RUNNING → SUCCESS/FAILED` (was stuck at `NEW`).
+- `SessionLifecycleService.updateSession(persistSettings)` — token-only refresh paths pass `false` to skip 5 redundant `ConfigRepository` writes per turn.
+- `SessionStatsCalculator` prefers `session.tokensIn/Out/costUsd` from the `task` row over per-message summing — fixes header/footer drift after auto-name turns.
+- `MessageDispatcher` re-attaches tokens from dropped messages (legacy `TOOL_CALL:` envelopes, empty assistant bubbles) to the last visible message.
+
+### Fixed
+
+- `OpenAIAdapter` streaming usage parsing — `prompt_tokens` / `completion_tokens` no longer dropped from the final usage block.
+- Removed dead `SubtaskRepository.updateLlmMetrics` (SET semantics) — only the additive `incrementLlmMetrics` is kept.
+- Header/footer token drift after auto-name or thinking-only turns.
+
+---
+
 ## [0.0.1.8] - 2026-04-27
 
 ### Added

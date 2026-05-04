@@ -8,7 +8,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -90,6 +93,12 @@ class SessionManager(private val project: Project) {
     val contextSectionTokens: StateFlow<Map<String, pl.jclab.refio.core.api.ContextSectionTokenInfo>> =
         stateManager.contextSectionTokens
     val totalEstimatedTokens: StateFlow<Int> = stateManager.totalEstimatedTokens
+
+    // Cached max context window. Refreshed off-EDT on session/model change and on explicit
+    // refreshMaxContextWindow() calls (e.g. after MAX_CONTEXT_SIZE config save). Reading
+    // .value is instant and EDT-safe — never hits SQLite.
+    private val _maxContextWindow = MutableStateFlow(8192)
+    val maxContextWindow: StateFlow<Int> = _maxContextWindow.asStateFlow()
 
     /**
      * Turn execution state (phase, iteration, tokens, active tool).
@@ -231,6 +240,12 @@ class SessionManager(private val project: Project) {
                     }
                 }
             }
+        }
+
+        // Refresh max context window off-EDT on session or model change.
+        cs.launch {
+            combine(activeSession, selectedModel) { session, model -> session?.id to model }
+                .collect { refreshMaxContextWindow() }
         }
     }
 
@@ -540,13 +555,25 @@ class SessionManager(private val project: Project) {
     }
 
     /**
-     * Get max context window for current session's model.
-     * Returns MINIMUM of model's maxContext and configured max_context_size limit.
-     *
-     * @return Max context window in tokens (fallback: 8192)
+     * Cached max context window for current session's model. Reads StateFlow value —
+     * instant, EDT-safe. Refreshed in background on session/model change and via
+     * [refreshMaxContextWindow]. Use [maxContextWindow] flow to react to changes.
      */
-    fun getMaxContextWindow(): Int {
-        return lifecycleService.getMaxContextWindow()
+    fun getMaxContextWindow(): Int = _maxContextWindow.value
+
+    /**
+     * Force a background refresh of [maxContextWindow]. Call after MAX_CONTEXT_SIZE
+     * config is mutated (settings save, yaml reload, reset) so the cached value
+     * reflects the new limit. Safe to call from EDT.
+     */
+    fun refreshMaxContextWindow() {
+        cs.launch {
+            try {
+                _maxContextWindow.value = lifecycleService.getMaxContextWindow()
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to refresh max context window" }
+            }
+        }
     }
 
     /**

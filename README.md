@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![IntelliJ](https://img.shields.io/badge/IntelliJ-2024.1+-orange.svg)](https://www.jetbrains.com/idea/)
-[![Version](https://img.shields.io/badge/version-0.0.1.8-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.0.1.9-green.svg)](CHANGELOG.md)
 [![Stage](https://img.shields.io/badge/stage-early--active-yellow.svg)](docs/ROADMAP.md)
 
 **Open-source AI coding plugin for IntelliJ IDEA, built in Kotlin.**
@@ -89,11 +89,11 @@ Same core engine, full-screen terminal interface.
 
 **Tool system** — file ops, grep, terminal, HTTP, code runner, subagent invocation, snapshots. Per-mode permissions via `ToolPermissionsService`. Session-scoped approval via `ToolApprovalService`.
 
-**Context system** — `@mention` providers for directing context, RAG with semantic chunking (5 language analyzers: Kotlin, Java, Python, TypeScript, HTML), token budget scaled to the active model's context window, tool-result compression with graceful step-down (FULL → DETAILED → SUMMARY) when context fills up. Conversation compaction at ~85% usage.
+**Context system** — `@mention` providers for directing context, RAG with semantic chunking (5 language analyzers: Kotlin, Java, Python, TypeScript, HTML), token budget scaled to the active model's context window, tool-result compression with graceful step-down (FULL → DETAILED → SUMMARY) when context fills up. Conversation compaction at ~85% usage. **Content-aware diff compression** elides the body of large pure-create diffs (a 700-line `+`-only generated file collapses to head + tail + a `memory(get_subtask_output)` recovery hint) — the wrap-up turn no longer pays for the file the agent just wrote.
 
 **Security layers** — `PathSandbox` with symlink resolution + parent-chain check + TOCTOU revalidation. `CommandRule` (regex `ALLOW` / `BLOCK` / `ASK`). Secret redaction in logs. `detectSensitiveLogging` Gradle task fails the build if an API-key pattern appears in a log statement.
 
-**Models** — 8 providers: Ollama, LM Studio, OpenAI, Anthropic, Gemini, OpenRouter, Custom OpenAI, Z.AI. Universal tool-calling protocol works with models that lack native function calling.
+**Models** — 8 providers: Ollama, LM Studio, OpenAI, Anthropic, Gemini, OpenRouter, Custom OpenAI, Z.AI. Universal tool-calling protocol works with models that lack native function calling; native function calling is now wired across the OpenAI-compatible adapters (OpenRouter / Z.AI / Generic OpenAI / LM Studio) too. Models that fail the native-tools probe are remembered across restarts via `models.native_tools_fallbacks`, so users don't pay the probe cost on every fresh process.
 
 **Extensibility** — subagents as Markdown + YAML (Claude Code compatible format). MCP protocol support (STDIO + HTTP/SSE) with built-in presets. Project instructions via `AGENTS.md`, `.refio/agent.md`, `.refio/rules/*.md` with glob-based activation. `.aiignore` for RAG exclusions.
 
@@ -218,7 +218,7 @@ See [docs/config.md](docs/config.md) for full configuration reference.
 
 | |                                          |
 |---|------------------------------------------|
-| **Version** | 0.0.1.8                                  |
+| **Version** | 0.0.1.9                                  |
 | **Stage** | Early-stage — active development         |
 | **License** | MIT                                      |
 | **Community** | Small, growing — PRs and issues welcome  |

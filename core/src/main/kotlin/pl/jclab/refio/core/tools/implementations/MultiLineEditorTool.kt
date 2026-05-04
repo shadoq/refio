@@ -18,6 +18,7 @@ import pl.jclab.refio.core.tools.DiffUtils
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.FileTool
 import pl.jclab.refio.core.tools.base.ToolCategory
+import pl.jclab.refio.core.tools.base.ToolInternalParams
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
 import pl.jclab.refio.core.tools.security.FileLimits
@@ -90,11 +91,12 @@ class MultiLineEditorTool(
             ?: return ToolResult.error("Missing required parameter: 'path'")
         val editDescription = params["edit_description"] as? String
             ?: return ToolResult.error("Missing required parameter: 'edit_description'")
-        val taskId = params["taskId"] as? String
+        val taskId = (params[ToolInternalParams.TASK_ID] as? String) ?: (params["taskId"] as? String)
+        val subtaskId = params[ToolInternalParams.SUBTASK_ID] as? String
         val conversationContext = params["conversation_context"] as? String
 
         return try {
-            executeEdit(pathStr, editDescription, taskId, startTime, stream = false, onChunk = null, conversationContext = conversationContext)
+            executeEdit(pathStr, editDescription, taskId, subtaskId, startTime, stream = false, onChunk = null, conversationContext = conversationContext)
         } catch (e: SecurityException) {
             logger.warn { "Security violation in multi_line_editor: ${e.message}" }
             ToolResult.error("Security error: ${e.message}")
@@ -115,7 +117,8 @@ class MultiLineEditorTool(
         val startTime = System.currentTimeMillis()
         val pathStr = params["path"] as? String ?: "unknown"
         val editDescription = params["edit_description"] as? String ?: ""
-        val taskId = params["taskId"] as? String
+        val taskId = (params[ToolInternalParams.TASK_ID] as? String) ?: (params["taskId"] as? String)
+        val subtaskIdInternal = params[ToolInternalParams.SUBTASK_ID] as? String
 
         logger.info {
             "[MLE_STREAM] executeWithListener called: path=$pathStr, hasListener=${listener != null}, hasSubtask=${subtask != null}"
@@ -140,7 +143,7 @@ class MultiLineEditorTool(
         }
 
         return try {
-            executeEdit(pathStr, editDescription, taskId, startTime, stream = listener != null, onChunk = onChunk, conversationContext = conversationContext)
+            executeEdit(pathStr, editDescription, taskId, subtaskIdInternal, startTime, stream = listener != null, onChunk = onChunk, conversationContext = conversationContext)
         } catch (e: SecurityException) {
             logger.warn { "Security violation in multi_line_editor: ${e.message}" }
             ToolResult.error("Security error: ${e.message}")
@@ -157,6 +160,7 @@ class MultiLineEditorTool(
         pathStr: String,
         editDescription: String,
         taskId: String?,
+        subtaskId: String?,
         startTime: Long,
         stream: Boolean,
         onChunk: StreamCallback?,
@@ -260,8 +264,8 @@ class MultiLineEditorTool(
                     maxTokens = configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE),
                     stream = stream,
                     onChunk = streamingCallback,
-                    taskId = null,
-                    subtaskId = null,
+                    taskId = taskId,
+                    subtaskId = subtaskId,
                     source = "MultiLineEditor"
                 )
             } catch (e: Exception) {
@@ -339,15 +343,8 @@ class MultiLineEditorTool(
                 "cost_usd=$cost, duration=${duration}ms"
             }
 
-            // 11. Update task metrics
-            if (taskId != null) {
-                taskRepository.incrementMetrics(
-                    id = taskId,
-                    tokensIn = usage.inputTokens,
-                    tokensOut = usage.outputTokens,
-                    costUsd = cost
-                )
-            }
+            // Task / subtask metrics auto-incremented inside LLMClient.complete()
+            // via taskId / subtaskId passed in the call above. No manual increment here.
 
             // 12. Return result
             ToolResult(
