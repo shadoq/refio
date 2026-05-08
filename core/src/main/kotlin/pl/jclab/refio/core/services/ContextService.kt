@@ -809,11 +809,18 @@ class ContextService(
         // For non-summarized messages we still apply a tight cap, because those are
         // either tiny by definition or fall through from a path that did not run the
         // summarizer at all and we cannot inflate the budget unboundedly.
-        return if (msg.isSummarized) {
+        val base = if (msg.isSummarized) {
             preferred
         } else {
             truncate(preferred, 1024)
         }
+        // Even for "summarized" tool messages the body may contain a fenced ```diff
+        // block carrying the entire generated file (advance_code_editing pure-create).
+        // RECENT_WORK already applies DiffCompressor; without this the same diff also
+        // ships verbatim through the conversation messages path, doubling the cost on
+        // every follow-up turn after a write tool. The compressor is a no-op when
+        // there is no diff fence.
+        return DiffCompressor.compress(base, msg.subtaskId)
     }
 
     /**
@@ -1021,7 +1028,7 @@ class ContextService(
         compressionConfig: ToolResultCompressionConfig
     ): String {
         val fileAttr = buildToolFileAttribute(step, config.includeMetadata)
-        val content = ToolResultCompression.compress(step.result, step.summary, level, compressionConfig)
+        val content = ToolResultCompression.compress(step.result, step.summary, level, compressionConfig, step.subtaskId)
         val tagSuffix = if (fileAttr.isNotBlank()) " $fileAttr" else ""
 
         // Add compression level attribute (only show if not FULL)

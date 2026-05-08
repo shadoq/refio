@@ -74,11 +74,23 @@ class MessageDispatcher(
                     { ToolResultSummary(
                         content = it.content,
                         isSummarized = it.isSummarized,
-                        rawOutput = it.rawOutput
+                        rawOutput = it.rawOutput,
+                        tokensIn = it.tokensIn,
+                        tokensOut = it.tokensOut,
+                        cost = it.cost
                     ) }
                 )
             // Track which tool results have been inlined into tool call bubbles
             val inlinedToolCallIds = mutableSetOf<String>()
+
+            // Tokens from messages that get dropped from the display (empty assistants
+            // from reasoning-only or stop-only LLM turns, legacy TOOL_CALL: envelopes)
+            // would otherwise vanish from session stats. Accumulate and re-attach to
+            // the last visible message so SessionStatsBar reflects real LLM cost.
+            var droppedTokensIn = 0
+            var droppedTokensOut = 0
+            var droppedCost = 0.0
+            var hasDropped = false
 
             val dbMessages = response.messages.flatMap { coreMsg ->
                 val assistantEnvelope = if (coreMsg.role == "assistant") {
@@ -111,7 +123,7 @@ class MessageDispatcher(
                     logger.info {
                         "[PLAN_DEBUG] Message with actions: isPlan=${assistantEnvelope!!.isPlanJson}, " +
                             "hasToolCalls=${!coreMsg.toolCallsJson.isNullOrBlank()}, " +
-                            "toolCallInfo=$toolCallInfo, " +
+                            "toolCallInfo=${formatToolCallInfoForLog(toolCallInfo)}, " +
                             "contentPreview=${coreMsg.content.take(100)}"
                     }
                 }
@@ -130,16 +142,28 @@ class MessageDispatcher(
                                     toolResultByToolCallId = toolResultByToolCallId,
                                     inlinedToolCallIds = inlinedToolCallIds
                                 ) ?: tc
+                                val toolRes = enriched.toolCallId?.let { toolResultByToolCallId[it] }
                                 createToolCallDisplayMessage(
                                     id = if (index == 0) coreMsg.id else "${coreMsg.id}:tc$index",
                                     taskId = coreMsg.taskId,
                                     createdAt = coreMsg.createdAt,
                                     toolCallInfo = enriched,
-                                    // Attach token/cost metrics only to the first tool-call bubble
-                                    // so SessionStatsCalculator doesn't double-count.
-                                    tokensIn = if (index == 0) coreMsg.tokensIn else null,
-                                    tokensOut = if (index == 0) coreMsg.tokensOut else null,
-                                    cost = if (index == 0) coreMsg.cost else null
+                                    // Attach assistant-call token/cost only to the first bubble
+                                    // (avoid double-counting). Always attach the matching tool's
+                                    // sub-LLM tokens (advance_code_editing etc.) — they are real
+                                    // LLM cost tied to this specific tool call.
+                                    tokensIn = sumNullable(
+                                        if (index == 0) coreMsg.tokensIn else null,
+                                        toolRes?.tokensIn
+                                    ),
+                                    tokensOut = sumNullable(
+                                        if (index == 0) coreMsg.tokensOut else null,
+                                        toolRes?.tokensOut
+                                    ),
+                                    cost = sumNullable(
+                                        if (index == 0) coreMsg.cost else null,
+                                        toolRes?.cost
+                                    )
                                 )
                             }
                         }
@@ -147,11 +171,16 @@ class MessageDispatcher(
 
                     // Has TOOL_CALL: in content (legacy format)
                     if (coreMsg.content.contains("TOOL_CALL:") && coreMsg.metadata.isNullOrBlank()) {
+                        droppedTokensIn += coreMsg.tokensIn ?: 0
+                        droppedTokensOut += coreMsg.tokensOut ?: 0
+                        droppedCost += coreMsg.cost ?: 0.0
+                        if (coreMsg.tokensIn != null || coreMsg.tokensOut != null || coreMsg.cost != null) hasDropped = true
                         return@flatMap emptyList()
                     }
 
                     // Has metadata with tool_call type - render as tool call bubble
                     if (toolCallInfo != null) {
+                        val toolRes = toolCallInfo.toolCallId?.let { toolResultByToolCallId[it] }
                         return@flatMap listOf(
                             createToolCallDisplayMessage(
                                 id = coreMsg.id,
@@ -159,9 +188,9 @@ class MessageDispatcher(
                                 createdAt = coreMsg.createdAt,
                                 toolCallInfo = toolCallInfo,
                                 metadata = coreMsg.metadata,
-                                tokensIn = coreMsg.tokensIn,
-                                tokensOut = coreMsg.tokensOut,
-                                cost = coreMsg.cost
+                                tokensIn = sumNullable(coreMsg.tokensIn, toolRes?.tokensIn),
+                                tokensOut = sumNullable(coreMsg.tokensOut, toolRes?.tokensOut),
+                                cost = sumNullable(coreMsg.cost, toolRes?.cost)
                             )
                         )
                     }
@@ -170,6 +199,10 @@ class MessageDispatcher(
                     // Native tool-call envelopes (content="", toolCallsJson populated) are
                     // handled above; anything falling through here would render as an empty
                     // "Assistant" bubble next to the real tool bubble.
+                    droppedTokensIn += coreMsg.tokensIn ?: 0
+                    droppedTokensOut += coreMsg.tokensOut ?: 0
+                    droppedCost += coreMsg.cost ?: 0.0
+                    if (coreMsg.tokensIn != null || coreMsg.tokensOut != null || coreMsg.cost != null) hasDropped = true
                     return@flatMap emptyList()
                 }
 
@@ -219,20 +252,28 @@ class MessageDispatcher(
                                 toolResultByToolCallId = toolResultByToolCallId,
                                 inlinedToolCallIds = inlinedToolCallIds
                             ) ?: tc
+                            val toolRes = enriched.toolCallId?.let { toolResultByToolCallId[it] }
                             createToolCallDisplayMessage(
                                 id = "${coreMsg.id}:tc$index",
                                 taskId = coreMsg.taskId,
                                 createdAt = coreMsg.createdAt,
-                                toolCallInfo = enriched
+                                toolCallInfo = enriched,
+                                tokensIn = toolRes?.tokensIn,
+                                tokensOut = toolRes?.tokensOut,
+                                cost = toolRes?.cost
                             )
                         }
                     } else {
+                        val toolRes = toolCallInfo.toolCallId?.let { toolResultByToolCallId[it] }
                         listOf(
                             createToolCallDisplayMessage(
                                 id = "${coreMsg.id}:toolcall",
                                 taskId = coreMsg.taskId,
                                 createdAt = coreMsg.createdAt,
-                                toolCallInfo = toolCallInfo
+                                toolCallInfo = toolCallInfo,
+                                tokensIn = toolRes?.tokensIn,
+                                tokensOut = toolRes?.tokensOut,
+                                cost = toolRes?.cost
                             )
                         )
                     }
@@ -247,14 +288,27 @@ class MessageDispatcher(
                 }
             }
 
-            val dbMessageIds = dbMessages.map { it.id }.toSet()
+            // Reattach tokens from messages that were dropped above so SessionStatsBar
+            // shows real cost. Add to the last visible message's metrics.
+            val dbMessagesWithReattached = if (hasDropped && dbMessages.isNotEmpty()) {
+                val last = dbMessages.last()
+                dbMessages.dropLast(1) + last.copy(
+                    tokensIn = (last.tokensIn ?: 0) + droppedTokensIn,
+                    tokensOut = (last.tokensOut ?: 0) + droppedTokensOut,
+                    costUsd = (last.costUsd ?: 0.0) + droppedCost
+                )
+            } else {
+                dbMessages
+            }
+
+            val dbMessageIds = dbMessagesWithReattached.map { it.id }.toSet()
             val inMemoryOnlySystemMessages = existingSystemMessages.filterNot { it.id in dbMessageIds }
             // Merge in-memory system messages into the DB list by createdAt so they
             // keep their chronological position instead of jumping to the end after reload.
             val allMessages = if (inMemoryOnlySystemMessages.isEmpty()) {
-                dbMessages
+                dbMessagesWithReattached
             } else {
-                (dbMessages + inMemoryOnlySystemMessages).sortedBy { it.createdAt }
+                (dbMessagesWithReattached + inMemoryOnlySystemMessages).sortedBy { it.createdAt }
             }
 
             val currentMessages = stateManager.messages.value
@@ -380,10 +434,24 @@ class MessageDispatcher(
         )
     }
 
+    private fun sumNullable(a: Int?, b: Int?): Int? =
+        if (a == null && b == null) null else (a ?: 0) + (b ?: 0)
+
+    @JvmName("sumNullableDouble")
+    private fun sumNullable(a: Double?, b: Double?): Double? =
+        if (a == null && b == null) null else (a ?: 0.0) + (b ?: 0.0)
+
     private data class ToolResultSummary(
         val content: String,
         val isSummarized: Boolean,
-        val rawOutput: String?
+        val rawOutput: String?,
+        // Sub-LLM usage from coding tools (advance_code_editing, multi_line_editor).
+        // Persisted on the TOOL ChatMessage; surfaced here so the inlined tool-call
+        // bubble (which replaces the dropped TOOL message) keeps these tokens visible
+        // to SessionStatsCalculator.
+        val tokensIn: Int? = null,
+        val tokensOut: Int? = null,
+        val cost: Double? = null
     )
 
     private fun enrichToolCallInfo(
@@ -639,6 +707,28 @@ class MessageDispatcher(
      * IMPORTANT: Does NOT filter plan JSON (which has "plan" or "subtasks" fields).
      * Plan JSON should be preserved for ChatView specialized bubble rendering.
      */
+    // ToolCallDisplayInfo.toString() dumps the full parameters map; for tools like
+    // create_new_file/advance_code_editing that means 10K+ char file bodies in INFO logs.
+    // Truncate every parameter value and the result summary to a sane preview length.
+    private fun formatToolCallInfoForLog(info: ToolCallDisplayInfo?): String {
+        if (info == null) return "null"
+        val maxValChars = 120
+        val params = info.parameters.entries.joinToString(", ") { (k, v) ->
+            val preview = if (v.length > maxValChars) {
+                "${v.take(maxValChars)}…<${v.length} chars>"
+            } else v
+            "$k=$preview"
+        }
+        val resultPart = info.result?.let { r ->
+            val sumPreview = if (r.summary.length > maxValChars) {
+                "${r.summary.take(maxValChars)}…<${r.summary.length} chars>"
+            } else r.summary
+            "result=ToolCallResult(success=${r.success}, summary=$sumPreview)"
+        } ?: "result=null"
+        return "ToolCallDisplayInfo(toolName=${info.toolName}, toolCallId=${info.toolCallId}, " +
+            "displayType=${info.displayType}, status=${info.status}, params={$params}, $resultPart)"
+    }
+
     private fun areMessagesEqual(current: List<Message>, new: List<Message>): Boolean {
         if (current.size != new.size) return false
         return current.zip(new).all { (a, b) ->

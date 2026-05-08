@@ -111,7 +111,7 @@ JUnit 5 + MockK + Turbine (Flow testing). Tests mirror source structure under `s
 ## Documentation
 
 - [docs/onboarding.md](docs/onboarding.md) — Onboarding guide for new team members
-- [docs/files.md](docs/files.md) — Per-package file reference (~590 Kotlin files with 1-2 sentence descriptions)
+- [docs/files.md](docs/files.md) — Per-package file reference (~537 main Kotlin files with 1-2 sentence descriptions)
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Architecture overview
 - [docs/overview.md](docs/overview.md) — Technical architecture overview (~1500 lines)
 - [docs/config.md](docs/config.md) — Configuration reference

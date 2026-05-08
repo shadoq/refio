@@ -465,15 +465,17 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
 
         // Reactively update token visualization from StateFlows (fed by lastPromptSnapshot observer in SessionManager).
         // This keeps tokenUsagePanel in sync with the actual computed context without calling getProjectContext().
+        // maxContextWindow is observed too so the bar refreshes when the user changes model/limit.
         cs.launch {
             kotlinx.coroutines.flow.combine(
                 sessionManager.contextSectionTokens,
-                sessionManager.totalEstimatedTokens
-            ) { sections, total -> sections to total }
-                .collectLatest { (sections, total) ->
+                sessionManager.totalEstimatedTokens,
+                sessionManager.maxContextWindow
+            ) { sections, total, limit -> Triple(sections, total, limit) }
+                .collectLatest { (sections, total, limit) ->
                     if (sections.isNotEmpty() || total > 0) {
                         SwingUtilities.invokeLater {
-                            tokenUsagePanel.updateTokenUsage(sections, total, getSelectedModelContextLimit())
+                            tokenUsagePanel.updateTokenUsage(sections, total, limit)
                         }
                     }
                 }
@@ -1845,10 +1847,8 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         contextStabilitySection.setContent("Stability: ~${stabilityPercent}%", html)
     }
 
-    private fun getSelectedModelContextLimit(): Int {
-        // Use SessionManager's dynamic context window calculation
-        return sessionManager.getMaxContextWindow()
-    }
+    private fun getSelectedModelContextLimit(): Int =
+        sessionManager.maxContextWindow.value
 
     /**
      * Extract content between XML tags from the LLM prompt and set it as section content.

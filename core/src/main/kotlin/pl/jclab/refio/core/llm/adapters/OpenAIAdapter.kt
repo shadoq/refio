@@ -88,6 +88,11 @@ class OpenAIAdapter(
     private fun transformRequestToResponses(requestBody: Map<String, Any>): Map<String, Any> {
         val transformed = requestBody.toMutableMap()
 
+        // stream_options is a Chat Completions concept; the Responses API rejects it
+        // (HTTP 400: Unknown parameter). Responses API streams emit usage natively via
+        // dedicated SSE events, parsed elsewhere via mapUsage(...).
+        transformed.remove("stream_options")
+
         // Remove "messages" and add "input"
         val messages = transformed.remove("messages")
         if (messages is List<*>) {
@@ -489,6 +494,11 @@ class OpenAIAdapter(
         // Add streaming parameter if requested
         if (streaming) {
             baseParams["stream"] = true
+            // Ask OpenAI to include the final `usage` object in the stream so we can
+            // report real token counts (incl. reasoning_tokens for o1/o3/gpt-5*) instead
+            // of approximating from streamed content — which yields 0 when the model
+            // returns only tool_calls or only reasoning.
+            baseParams["stream_options"] = mapOf("include_usage" to true)
         }
 
         val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)
@@ -844,6 +854,9 @@ class OpenAIAdapter(
         val contentBuilder = StringBuilder()
         val toolCallAccumulator = ToolCallContentNormalizer.OpenAiStreamingToolCallAccumulator()
         var totalTokensEstimate = 0
+        // Real usage from the stream's final chunk (only present when stream_options.include_usage=true).
+        // For reasoning models (o1, o3, gpt-5*) completion_tokens already includes reasoning_tokens.
+        var streamUsage: LLMUsage? = null
         var httpStatus: Int? = null
         var finalFinishReason: String? = null
         val endpoint = getEndpoint(definition)
@@ -930,6 +943,28 @@ class OpenAIAdapter(
                         @Suppress("UNCHECKED_CAST")
                         val chunk = gson.fromJson(data, Map::class.java) as Map<String, Any?>
 
+                        // Final usage chunk arrives with empty choices when
+                        // stream_options.include_usage=true. Capture and continue.
+                        @Suppress("UNCHECKED_CAST")
+                        val usageMap = chunk["usage"] as? Map<String, Any?>
+                        if (usageMap != null) {
+                            val promptTokens = (usageMap["prompt_tokens"] as? Number)?.toInt() ?: 0
+                            val completionTokens = (usageMap["completion_tokens"] as? Number)?.toInt() ?: 0
+                            val totalTokens = (usageMap["total_tokens"] as? Number)?.toInt()
+                                ?: (promptTokens + completionTokens)
+                            streamUsage = LLMUsage(
+                                inputTokens = promptTokens,
+                                outputTokens = completionTokens,
+                                totalTokens = totalTokens
+                            )
+                            logger.info {
+                                val details = usageMap["completion_tokens_details"] as? Map<*, *>
+                                val reasoning = (details?.get("reasoning_tokens") as? Number)?.toInt()
+                                "$logPrefix [STREAM_USAGE] prompt=$promptTokens, completion=$completionTokens" +
+                                    (reasoning?.let { ", reasoning=$it (incl. in completion)" } ?: "")
+                            }
+                        }
+
                         @Suppress("UNCHECKED_CAST")
                         val choices = chunk["choices"] as? List<Map<String, Any?>> ?: continue
                         if (choices.isEmpty()) continue
@@ -984,14 +1019,19 @@ class OpenAIAdapter(
 
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
 
-            // Estimate final usage for logging (OpenAI doesn't send usage in stream)
-            val inputTokensEstimate = estimateInputTokens(requestBody)
-
-            val usage = LLMUsage(
-                inputTokens = inputTokensEstimate,
-                outputTokens = totalTokensEstimate,
-                totalTokens = inputTokensEstimate + totalTokensEstimate
-            )
+            // Prefer real usage from the final stream chunk (sent when stream_options.include_usage=true,
+            // captured into `streamUsage` above). Reasoning models like gpt-5.4-mini have completion
+            // tokens that include hidden reasoning_tokens — character-count estimates undercount these
+            // by 5x+, which silently underbills cost. Fall back to estimates only if the provider
+            // omitted the usage frame.
+            val usage = streamUsage ?: run {
+                val inputTokensEstimate = estimateInputTokens(requestBody)
+                LLMUsage(
+                    inputTokens = inputTokensEstimate,
+                    outputTokens = totalTokensEstimate,
+                    totalTokens = inputTokensEstimate + totalTokensEstimate
+                )
+            }
 
             val cost = estimateCost(usage)
 
@@ -1013,9 +1053,9 @@ class OpenAIAdapter(
                     )
                 ),
                 "usage" to mapOf(
-                    "prompt_tokens" to inputTokensEstimate,
-                    "completion_tokens" to totalTokensEstimate,
-                    "total_tokens" to (inputTokensEstimate + totalTokensEstimate)
+                    "prompt_tokens" to usage.inputTokens,
+                    "completion_tokens" to usage.outputTokens,
+                    "total_tokens" to usage.totalTokens
                 ),
                 "model" to model
             )
@@ -1033,8 +1073,8 @@ class OpenAIAdapter(
                 requestJson = requestJson,
                 responseJson = responseJson,
                 httpStatus = httpStatus ?: 200,
-                inputTokens = inputTokensEstimate,
-                outputTokens = totalTokensEstimate,
+                inputTokens = usage.inputTokens,
+                outputTokens = usage.outputTokens,
                 costUsd = cost,
                 latencyMs = latencyMs,
                 taskId = taskId,
