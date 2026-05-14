@@ -5,9 +5,10 @@ interface HtmlSandboxProps {
   src: string;
   height?: number;
   caption?: string;
+  fill?: boolean;
 }
 
-export function HtmlSandbox({ src, height = 600, caption }: HtmlSandboxProps) {
+export function HtmlSandbox({ src, height = 600, caption, fill = false }: HtmlSandboxProps) {
   const [html, setHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,6 +32,17 @@ export function HtmlSandbox({ src, height = 600, caption }: HtmlSandboxProps) {
       <div style={{ display: "flex", justifyContent: "center", padding: 40 }}>
         <Spin />
       </div>
+    );
+  }
+
+  if (fill) {
+    return (
+      <iframe
+        sandbox="allow-scripts"
+        srcDoc={html}
+        style={{ width: "100%", height: "100%", border: "none", display: "block" }}
+        title={caption ?? "HTML attachment"}
+      />
     );
   }
 

@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Snake Game</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: #1a1a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Courier New', monospace;
+            color: #0f0;
+        }
+
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+
+        #score-board {
+            display: flex;
+            justify-content: space-between;
+            width: 600px;
+            padding: 10px;
+            background-color: #2a2a2a;
+            border: 2px solid #0f0;
+            border-radius: 5px;
+        }
+
+        .score-item {
+            text-align: center;
+        }
+
+        .score-label {
+            font-size: 12px;
+            color: #888;
+        }
+
+        .score-value {
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        #game-canvas {
+            border: 2px solid #0f0;
+            background-color: #000;
+        }
+
+        #start-menu, #game-over-screen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.9);
+            padding: 40px;
+            border: 2px solid #0f0;
+            border-radius: 10px;
+            text-align: center;
+            z-index: 100;
+        }
+
+        #game-over-screen {
+            display: none;
+        }
+
+        h1 {
+            font-size: 36px;
+            margin-bottom: 20px;
+            color: #0f0;
+            text-shadow: 0 0 10px #0f0;
+        }
+
+        h2 {
+            font-size: 28px;
+            margin-bottom: 20px;
+            color: #ff0;
+        }
+
+        .mode-btn {
+            display: block;
+            width: 100%;
+            padding: 15px;
+            margin: 10px 0;
+            background-color: #2a2a2a;
+            border: 2px solid #0f0;
+            color: #0f0;
+            font-family: inherit;
+            font-size: 18px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .mode-btn:hover {
+            background-color: #0f0;
+            color: #000;
+        }
+
+        .instructions {
+            margin-top: 20px;
+            font-size: 14px;
+            color: #888;
+            line-height: 1.6;
+        }
+
+        .key {
+            display: inline-block;
+            padding: 2px 6px;
+            background-color: #333;
+            border-radius: 3px;
+            margin: 0 2px;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="score-board">
+            <div class="score-item">
+                <div class="score-label">PLAYER 1</div>
+                <div class="score-value" id="score1">0</div>
+            </div>
+            <div class="score-item">
+                <div class="score-label">PLAYER 2</div>
+                <div class="score-value" id="score2">0</div>
+            </div>
+        </div>
+        <canvas id="game-canvas" width="600" height="600"></canvas>
+        
+        <div id="start-menu">
+            <h1>SNAKE GAME</h1>
+            <div class="mode-btn" onclick="startGame('human')">Human vs Human</div>
+            <div class="mode-btn" onclick="startGame('cpu')">CPU vs Human</div>
+            <div class="mode-btn" onclick="startGame('cpu_cpu')">CPU vs CPU</div>
+            <div class="instructions">
+                Use <span class="key">Arrow Keys</span> or <span class="key">WASD</span> to move<br>
+                Press <span class="key">Space</span> to restart after game over
+            </div>
+        </div>
+
+        <div id="game-over-screen">
+            <h2 id="game-over-title">GAME OVER</h2>
+            <div class="score-value" id="final-score" style="margin-bottom: 20px;">Score: 0</div>
+            <div class="mode-btn" onclick="restartGame()">Restart Game</div>
+            <div class="mode-btn" onclick="showStartMenu()">Main Menu</div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        const gridSize = 20;
+        const tileCount = canvas.width / gridSize;
+        
+        let gameLoop;
+        let gameMode = 'human';
+        let scores = { p1: 0, p2: 0 };
+        let food = { x: 0, y: 0 };
+        let isGameOver = false;
+
+        class Snake {
+            constructor(x, y, isCpu = false) {
+                this.body = [{ x: x, y: y }];
+                this.direction = 'right';
+                this.nextDirection = 'right';
+                this.isCpu = isCpu;
+                this.speed = 100;
+            }
+
+            changeDirection(newDir) {
+                const opposites = {
+                    'up': 'down',
+                    'down': 'up',
+                    'left': 'right',
+                    'right': 'left'
+                };
+                
+                if (opposites[newDir] !== this.direction) {
+                    this.nextDirection = newDir;
+                }
+            }
+
+            update() {
+                this.direction = this.nextDirection;
+                
+                const head = { ...this.body[0] };
+                
+                switch(this.direction) {
+                    case 'up': head.y--; break;
+                    case 'down': head.y++; break;
+                    case 'left': head.x--; break;
+                    case 'right': head.x++; break;
+                }
+
+                // Check wall collision
+                if (head.x < 0 || head.x >= tileCount || head.y < 0 || head.y >= tileCount) {
+                    return false;
+                }
+
+                // Check self collision
+                for (let segment of this.body) {
+                    if (head.x === segment.x && head.y === segment.y) {
+                        return false;
+                    }
+                }
+
+                this.body.unshift(head);
+
+                // Check food collision
+                if (head.x === food.x && head.y === food.y) {
+                    scores[this.isCpu ? 'p2' : 'p1']++;
+                    updateScore();
+                    placeFood(this);
+                    return true;
+                }
+
+                this.body.pop();
+                return true;
+            }
+
+            draw() {
+                ctx.fillStyle = '#0f0';
+                this.body.forEach((segment, index) => {
+                    ctx.fillRect(segment.x * gridSize, segment.y * gridSize, gridSize - 2, gridSize - 2);
+                });
+            }
+        }
+
+        function placeFood(snake) {
+            let validPosition = false;
+            while (!validPosition) {
+                food.x = Math.floor(Math.random() * tileCount);
+                food.y = Math.floor(Math.random() * tileCount);
+                
+                validPosition = true;
+                for (let segment of snake.body) {
+                    if (segment.x === food.x && segment.y === food.y) {
+                        validPosition = false;
+                        break;
+                    }
+                }
+            }
+        }
+
+        function updateScore() {
+            document.getElementById('score1').textContent = scores.p1;
+            document.getElementById('score2').textContent = scores.p2;
+        }
+
+        function draw() {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = '#ff0';
+            ctx.fillRect(food.x * gridSize, food.y * gridSize, gridSize - 2, gridSize - 2);
+
+            if (gameMode === 'human') {
+                player1.draw();
+                player2.draw();
+            } else if (gameMode === 'cpu') {
+                player1.draw();
+                cpuSnake.draw();
+            } else {
+                cpuSnake1.draw();
+                cpuSnake2.draw();
+            }
+        }
+
+        function update() {
+            if (isGameOver) return;
+
+            let p1Alive = player1.update();
+            let p2Alive = player2.update();
+
+            if (gameMode === 'cpu') {
+                cpuSnake.update();
+            } else if (gameMode === 'cpu_cpu') {
+                cpuSnake1.update();
+                cpuSnake2.update();
+            }
+
+            if (!p1Alive || !p2Alive) {
+                gameOver();
+            }
+
+            draw();
+        }
+
+        function gameLoopFunc() {
+            update();
+        }
+
+        function startGame(mode) {
+            gameMode = mode;
+            isGameOver = false;
+            scores = { p1: 0, p2: 0 };
+            updateScore();
+
+            document.getElementById('start-menu').style.display = 'none';
+            document.getElementById('game-over-screen').style.display = 'none';
+
+            player1 = new Snake(5, 5);
+            player2 = new Snake(24, 5);
+
+            if (gameMode === 'cpu') {
+                cpuSnake = new Snake(5, 24, true);
+            } else if (gameMode === 'cpu_cpu') {
+                cpuSnake1 = new Snake(5, 5, true);
+                cpuSnake2 = new Snake(24, 5, true);
+            }
+
+            placeFood(player1);
+
+            if (gameLoop) clearInterval(gameLoop);
+            gameLoop = setInterval(gameLoopFunc, 100);
+        }
+
+        function gameOver() {
+            isGameOver = true;
+            clearInterval(gameLoop);
+
+            const title = document.getElementById('game-over-title');
+            const scoreDisplay = document.getElementById('final-score');
+            
+            if (gameMode === 'human') {
+                title.textContent = 'GAME OVER';
+                scoreDisplay.textContent = `Player 1: ${scores.p1} | Player 2: ${scores.p2}`;
+            } else if (gameMode === 'cpu') {
+                title.textContent = scores.p1 > scores.p2 ? 'YOU WIN!' : 'CPU WINS!';
+                scoreDisplay.textContent = `Player 1: ${scores.p1} | CPU: ${scores.p2}`;
+            } else {
+                title.textContent = 'GAME OVER';
+                scoreDisplay.textContent = `CPU 1: ${scores.p2} | CPU 2: ${scores.p1}`;
+            }
+
+            document.getElementById('game-over-screen').style.display = 'block';
+        }
+
+        function restartGame() {
+            startGame(gameMode);
+        }
+
+        function showStartMenu() {
+            document.getElementById('game-over-screen').style.display = 'none';
+            document.getElementById('start-menu').style.display = 'block';
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (isGameOver) {
+                if (e.code === 'Space') {
+                    restartGame();
+                }
+                return;
+            }
+
+            if (gameMode === 'human') {
+                if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
+                    player1.changeDirection('up');
+                } else if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') {
+                    player1.changeDirection('down');
+                } else if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+                    player1.changeDirection('left');
+                } else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+                    player1.changeDirection('right');
+                }
+
+                if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
+                    player2.changeDirection('up');
+                } else if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') {
+                    player2.changeDirection('down');
+                } else if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+                    player2.changeDirection('left');
+                } else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+                    player2.changeDirection('right');
+                }
+            }
+        });
+
+        // CPU AI
+        function cpuAI(snake) {
+            const head = snake.body[0];
+            const possibleMoves = [
+                { x: 0, y: -1 }, // up
+                { x: 0, y: 1 },  // down
+                { x: -1, y: 0 }, // left
+                { x: 1, y: 0 }   // right
+            ];
+
+            // Filter out opposite direction
+            const opposites = {
+                'up': 'down',
+                'down': 'up',
+                'left': 'right',
+                'right': 'left'
+            };
+            
+            const validMoves = possibleMoves.filter(move => {
+                const newHead = { x: head.x + move.x, y: head.y + move.y };
+                return newHead.x >= 0 && newHead.x < tileCount &&
+                       newHead.y >= 0 && newHead.y < tileCount &&
+                       !snake.body.some(segment => segment.x === newHead.x && segment.y === newHead.y);
+            });
+
+            if (validMoves.length === 0) return;
+
+            // Find best move (closest to food)
+            let bestMove = validMoves[0];
+            let minDistance = Infinity;
+
+            for (const move of validMoves) {
+                const newHead = { x: head.x + move.x, y: head.y + move.y };
+                const distance = Math.abs(newHead.x - food.x) + Math.abs(newHead.y - food.y);
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    bestMove = move;
+                }
+            }
+
+            snake.nextDirection = bestMove.x === 0 ? (bestMove.y < 0 ? 'up' : 'down') : (bestMove.x < 0 ? 'left' : 'right');
+        }
+
+        // Override update for CPU snakes
+        const originalUpdate = Snake.prototype.update;
+        Snake.prototype.update = function() {
+            if (this.isCpu) {
+                cpuAI(this);
+            }
+            return originalUpdate.call(this);
+        };
+    </script>
+</body>
+</html>

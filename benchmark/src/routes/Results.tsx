@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Button,
@@ -10,12 +10,14 @@ import {
   Space,
   Spin,
   Table,
+  Tabs,
   Tag,
   Typography,
 } from "antd";
 import { ClearOutlined, EyeOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import { AttachmentViewer } from "@/components/attachments/AttachmentViewer";
+import { HtmlSandbox } from "@/components/attachments/HtmlSandbox";
 import { useResults, useTasks } from "@/data/queries";
 import {
   formatCost,
@@ -389,91 +391,227 @@ export default function Results() {
         />
       </Card>
 
+      <ResultDetailModal
+        detailResult={detailResult}
+        selectedRow={selectedRow}
+        scoreDetails={scoreDetails}
+        onClose={() => setDetailResult(null)}
+      />
+    </div>
+  );
+}
+
+interface ResultDetailModalProps {
+  detailResult: Result | null;
+  selectedRow: ResultRow | undefined;
+  scoreDetails: Array<{ id: string; name: string; raw: number | undefined; normalized: number | null }>;
+  onClose: () => void;
+}
+
+function ResultDetailModal({
+  detailResult,
+  selectedRow,
+  scoreDetails,
+  onClose,
+}: ResultDetailModalProps) {
+  const [previewIdx, setPreviewIdx] = useState<number | null>(null);
+
+  useEffect(() => {
+    setPreviewIdx(null);
+  }, [detailResult?.id]);
+
+  const htmlAttachments = useMemo(
+    () =>
+      (detailResult?.attachments ?? [])
+        .map((att, index) => ({ att, index }))
+        .filter((entry) => entry.att.type === "html"),
+    [detailResult],
+  );
+  const otherAttachments = useMemo(
+    () =>
+      (detailResult?.attachments ?? [])
+        .map((att, index) => ({ att, index }))
+        .filter((entry) => entry.att.type !== "html"),
+    [detailResult],
+  );
+  const hasHtml = htmlAttachments.length > 0;
+  const previewActive = previewIdx !== null && previewIdx >= 0 && previewIdx < htmlAttachments.length;
+  const safeHtmlIdx = previewActive ? (previewIdx as number) : 0;
+  const activeHtml = previewActive ? htmlAttachments[safeHtmlIdx].att : null;
+
+  const title = selectedRow
+    ? `${selectedRow.modelName} - ${selectedRow.task?.name ?? detailResult?.taskId}`
+    : "Result detail";
+
+  const meta = detailResult && (
+    <Space direction="vertical" size="large" style={{ width: "100%" }}>
+      <Space wrap>
+        <Tag>attempt #{detailResult.attemptNumber}</Tag>
+        <Tag>{selectedRow?.environment?.name ?? detailResult.environmentId}</Tag>
+        <Tag>{formatDuration(detailResult.durationMs)}</Tag>
+        <Tag>
+          LLM est. {formatDuration(estimateResultTokenProcessing(detailResult).totalMs)}
+        </Tag>
+        <Tag>{formatCost(detailResult.costUsd)}</Tag>
+      </Space>
+
+      <Space wrap>
+        <Tag>
+          Prefill {formatDuration(estimateResultTokenProcessing(detailResult).prefillMs)}
+          {" / "}
+          {formatTokensPerSecond(
+            estimateResultTokenProcessing(detailResult).prefillTokensPerSecond,
+          )}
+        </Tag>
+        <Tag>
+          Decode {formatDuration(estimateResultTokenProcessing(detailResult).decodeMs)}
+          {" / "}
+          {formatTokensPerSecond(
+            estimateResultTokenProcessing(detailResult).decodeTokensPerSecond,
+          )}
+        </Tag>
+      </Space>
+
+      {detailResult.notes && <Paragraph>{detailResult.notes}</Paragraph>}
+
+      <Table
+        size="small"
+        pagination={false}
+        rowKey="id"
+        dataSource={scoreDetails}
+        columns={[
+          { title: "Criterion", dataIndex: "name", key: "name" },
+          {
+            title: "Raw",
+            dataIndex: "raw",
+            key: "raw",
+            width: 90,
+            render: (value: number | undefined) => value ?? "-",
+          },
+          {
+            title: "Normalized",
+            dataIndex: "normalized",
+            key: "normalized",
+            width: 130,
+            render: (value: number | null) => (value == null ? "-" : formatScore(value)),
+          },
+        ]}
+      />
+
+      {!hasHtml && otherAttachments.length === 0 && (
+        <Empty description="No attachments for this result." />
+      )}
+
+      {hasHtml && (
+        <Space direction="vertical" style={{ width: "100%" }} size="small">
+          <Text strong>HTML previews</Text>
+          {htmlAttachments.map((entry, i) => (
+            <div
+              key={`${entry.att.src}-${entry.index}`}
+              style={{ display: "flex", alignItems: "center", gap: 12 }}
+            >
+              <Button size="small" icon={<EyeOutlined />} onClick={() => setPreviewIdx(i)}>
+                Show preview
+              </Button>
+              <Text type="secondary">{entry.att.caption ?? entry.att.src}</Text>
+            </div>
+          ))}
+        </Space>
+      )}
+
+      {otherAttachments.length > 0 && (
+        <Space direction="vertical" style={{ width: "100%" }}>
+          {otherAttachments.map(({ att, index }) => (
+            <div key={`${att.src}-${index}`}>
+              {att.caption && (
+                <Text strong style={{ display: "block", marginBottom: 8 }}>
+                  {att.caption}
+                </Text>
+              )}
+              <AttachmentViewer attachment={att} />
+            </div>
+          ))}
+        </Space>
+      )}
+    </Space>
+  );
+
+  if (!previewActive) {
+    return (
       <Modal
-        title={
-          selectedRow
-            ? `${selectedRow.modelName} - ${selectedRow.task?.name ?? detailResult?.taskId}`
-            : "Result detail"
-        }
+        title={title}
         open={!!detailResult}
-        onCancel={() => setDetailResult(null)}
+        onCancel={onClose}
         footer={null}
         width={780}
       >
-        {detailResult && (
-          <Space direction="vertical" size="large" style={{ width: "100%" }}>
-            <Space wrap>
-              <Tag>attempt #{detailResult.attemptNumber}</Tag>
-              <Tag>{selectedRow?.environment?.name ?? detailResult.environmentId}</Tag>
-              <Tag>{formatDuration(detailResult.durationMs)}</Tag>
-              <Tag>
-                LLM est. {formatDuration(estimateResultTokenProcessing(detailResult).totalMs)}
-              </Tag>
-              <Tag>{formatCost(detailResult.costUsd)}</Tag>
-            </Space>
-
-            <Space wrap>
-              <Tag>
-                Prefill {formatDuration(estimateResultTokenProcessing(detailResult).prefillMs)}
-                {" / "}
-                {formatTokensPerSecond(
-                  estimateResultTokenProcessing(detailResult).prefillTokensPerSecond,
-                )}
-              </Tag>
-              <Tag>
-                Decode {formatDuration(estimateResultTokenProcessing(detailResult).decodeMs)}
-                {" / "}
-                {formatTokensPerSecond(
-                  estimateResultTokenProcessing(detailResult).decodeTokensPerSecond,
-                )}
-              </Tag>
-            </Space>
-
-            {detailResult.notes && <Paragraph>{detailResult.notes}</Paragraph>}
-
-            <Table
-              size="small"
-              pagination={false}
-              rowKey="id"
-              dataSource={scoreDetails}
-              columns={[
-                { title: "Criterion", dataIndex: "name", key: "name" },
-                {
-                  title: "Raw",
-                  dataIndex: "raw",
-                  key: "raw",
-                  width: 90,
-                  render: (value: number | undefined) => value ?? "-",
-                },
-                {
-                  title: "Normalized",
-                  dataIndex: "normalized",
-                  key: "normalized",
-                  width: 130,
-                  render: (value: number | null) => (value == null ? "-" : formatScore(value)),
-                },
-              ]}
-            />
-
-            {detailResult.attachments.length > 0 ? (
-              <Space direction="vertical" style={{ width: "100%" }}>
-                {detailResult.attachments.map((attachment, index) => (
-                  <div key={`${attachment.src}-${index}`}>
-                    {attachment.caption && (
-                      <Text strong style={{ display: "block", marginBottom: 8 }}>
-                        {attachment.caption}
-                      </Text>
-                    )}
-                    <AttachmentViewer attachment={attachment} />
-                  </div>
-                ))}
-              </Space>
-            ) : (
-              <Empty description="No attachments for this result." />
-            )}
-          </Space>
-        )}
+        {meta}
       </Modal>
-    </div>
+    );
+  }
+
+  return (
+    <Modal
+      title={title}
+      open={!!detailResult}
+      onCancel={onClose}
+      footer={null}
+      width="90vw"
+      style={{ top: 24 }}
+      styles={{ body: { padding: 0, height: "85vh" } }}
+    >
+      <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
+        <div
+          style={{
+            flex: "0 0 40%",
+            maxWidth: 520,
+            minWidth: 320,
+            overflow: "auto",
+            padding: 24,
+            borderRight: "1px solid rgba(255,255,255,0.08)",
+          }}
+        >
+          {meta}
+        </div>
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "8px 16px 0",
+              gap: 12,
+            }}
+          >
+            {htmlAttachments.length > 1 ? (
+              <Tabs
+                activeKey={String(safeHtmlIdx)}
+                onChange={(key) => setPreviewIdx(Number(key))}
+                items={htmlAttachments.map((entry, i) => ({
+                  key: String(i),
+                  label: entry.att.caption ?? `HTML ${i + 1}`,
+                }))}
+                style={{ flex: 1, minWidth: 0 }}
+              />
+            ) : (
+              <Text type="secondary">{activeHtml?.caption ?? activeHtml?.src}</Text>
+            )}
+            <Button size="small" onClick={() => setPreviewIdx(null)}>
+              Hide preview
+            </Button>
+          </div>
+          <div style={{ flex: 1, minHeight: 0, background: "#fff" }}>
+            {activeHtml && (
+              <HtmlSandbox
+                key={`${activeHtml.src}-${safeHtmlIdx}`}
+                src={activeHtml.src}
+                caption={activeHtml.caption}
+                fill
+              />
+            )}
+          </div>
+        </div>
+      </div>
+    </Modal>
   );
 }

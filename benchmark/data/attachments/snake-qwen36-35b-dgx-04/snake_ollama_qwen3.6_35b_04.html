@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Classic Snake Game</title>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --board-bg: #000000;
+            --snake-1-color: #00ff00;
+            --snake-2-color: #00ccff;
+            --food-color: #ff3333;
+            --text-color: #ffffff;
+            --accent-color: #4CAF50;
+            --grid-line: #111;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        }
+
+        canvas {
+            background-color: var(--board-bg);
+            border: 2px solid #333;
+            display: block;
+        }
+
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        h1 {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            text-shadow: 2px 2px 0px #333;
+        }
+
+        h2 {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+            color: var(--accent-color);
+        }
+
+        p {
+            font-size: 1.2rem;
+            margin-bottom: 2rem;
+            color: #ccc;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        button {
+            background: transparent;
+            border: 2px solid var(--accent-color);
+            color: var(--accent-color);
+            padding: 12px 24px;
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border-radius: 4px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        button:hover {
+            background: var(--accent-color);
+            color: #000;
+            transform: scale(1.05);
+        }
+
+        #score-board {
+            display: flex;
+            justify-content: space-between;
+            width: 600px;
+            margin-bottom: 10px;
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+
+        .score-box {
+            padding: 5px 15px;
+            border-radius: 4px;
+            background: #222;
+            border: 1px solid #444;
+        }
+
+        .p1-score { color: var(--snake-1-color); }
+        .p2-score { color: var(--snake-2-color); }
+
+        #controls-hint {
+            margin-top: 15px;
+            font-size: 0.9rem;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="score-board" class="hidden">
+        <div class="score-box p1-score">Player 1: <span id="score1">0</span></div>
+        <div class="score-box p2-score">Player 2: <span id="score2">0</span></div>
+    </div>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="600" height="600"></canvas>
+
+        <!-- Start Menu -->
+        <div id="start-menu" class="overlay">
+            <h1>Snake Arena</h1>
+            <p>Select Game Mode</p>
+            <div class="btn-group">
+                <button onclick="startGame('pvp')">Human vs Human</button>
+                <button onclick="startGame('cpu_human')">CPU vs Human</button>
+                <button onclick="startGame('cpu_cpu')">CPU vs CPU</button>
+            </div>
+            <div id="controls-hint">
+                P1: WASD | P2: Arrow Keys
+            </div>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div id="game-over" class="overlay hidden">
+            <h1>Game Over</h1>
+            <h2 id="winner-text">Player 1 Wins!</h2>
+            <p>Press any key to restart</p>
+        </div>
+    </div>
+
+    <script>
+        // --- Configuration ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const gridSize = 20; // Size of one square
+        const tileCount = canvas.width / gridSize; // 30x30 grid
+        const gameSpeed = 100; // ms per frame
+
+        // --- Game State ---
+        let gameInterval;
+        let gameMode = 'pvp'; // 'pvp', 'cpu_human', 'cpu_cpu'
+        let isGameOver = false;
+        let isPaused = false;
+
+        // Players
+        const players = [
+            {
+                id: 1,
+                color: '#00ff00',
+                name: 'Player 1',
+                x: 5,
+                y: 15,
+                dx: 1,
+                dy: 0,
+                trail: [],
+                tail: 5,
+                score: 0,
+                isCpu: false,
+                nextDx: 1,
+                nextDy: 0
+            },
+            {
+                id: 2,
+                color: '#00ccff',
+                name: 'Player 2',
+                x: 24,
+                y: 15,
+                dx: -1,
+                dy: 0,
+                trail: [],
+                tail: 5,
+                score: 0,
+                isCpu: false,
+                nextDx: -1,
+                nextDy: 0
+            }
+        ];
+
+        let food = { x: 15, y: 15 };
+
+        // --- Input Handling ---
+        document.addEventListener('keydown', keyDownEvent);
+
+        function keyDownEvent(e) {
+            if (isGameOver) {
+                resetGame();
+                return;
+            }
+
+            // Player 1 Controls (WASD)
+            if (!players[0].isCpu) {
+                switch (e.key) {
+                    case 'ArrowLeft':
+                    case 'a':
+                    case 'A':
+                        if (players[0].dx !== 1) { players[0].nextDx = -1; players[0].nextDy = 0; }
+                        break;
+                    case 'ArrowUp':
+                    case 'w':
+                    case 'W':
+                        if (players[0].dy !== 1) { players[0].nextDx = 0; players[0].nextDy = -1; }
+                        break;
+                    case 'ArrowRight':
+                    case 'd':
+                    case 'D':
+                        if (players[0].dx !== -1) { players[0].nextDx = 1; players[0].nextDy = 0; }
+                        break;
+                    case 'ArrowDown':
+                    case 's':
+                    case 'S':
+                        if (players[0].dy !== -1) { players[0].nextDx = 0; players[0].nextDy = 1; }
+                        break;
+                }
+            }
+
+            // Player 2 Controls (Arrows)
+            if (gameMode === 'pvp' && !players[1].isCpu) {
+                switch (e.key) {
+                    case 'ArrowLeft':
+                        if (players[1].dx !== 1) { players[1].nextDx = -1; players[1].nextDy = 0; }
+                        break;
+                    case 'ArrowUp':
+                        if (players[1].dy !== 1) { players[1].nextDx = 0; players[1].nextDy = -1; }
+                        break;
+                    case 'ArrowRight':
+                        if (players[1].dx !== -1) { players[1].nextDx = 1; players[1].nextDy = 0; }
+                        break;
+                    case 'ArrowDown':
+                        if (players[1].dy !== -1) { players[1].nextDx = 0; players[1].nextDy = 1; }
+                        break;
+                }
+            }
+        }
+
+        // --- Game Logic ---
+
+        function startGame(mode) {
+            gameMode = mode;
+            document.getElementById('start-menu').classList.add('hidden');
+            document.getElementById('score-board').classList.remove('hidden');
+            document.getElementById('game-over').classList.add('hidden');
+            
+            // Configure CPU modes
+            players[0].isCpu = (mode === 'cpu_cpu');
+            players[1].isCpu = (mode === 'cpu_human' || mode === 'cpu_cpu');
+
+            // Reset State
+            players[0].x = 5; players[0].y = 15; players[0].dx = 1; players[0].dy = 0; players[0].trail = []; players[0].tail = 5; players[0].score = 0;
+            players[1].x = 24; players[1].y = 15; players[1].dx = -1; players[1].dy = 0; players[1].trail = []; players[1].tail = 5; players[1].score = 0;
+            
+            isGameOver = false;
+            isPaused = false;
+            
+            placeFood();
+            updateScoreBoard();
+
+            if (gameInterval) clearInterval(gameInterval);
+            gameInterval = setInterval(gameLoop, gameSpeed);
+        }
+
+        function resetGame() {
+            document.getElementById('game-over').classList.add('hidden');
+            document.getElementById('start-menu').classList.remove('hidden');
+            document.getElementById('score-board').classList.add('hidden');
+            isGameOver = true;
+            if (gameInterval) clearInterval(gameInterval);
+        }
+
+        function gameLoop() {
+            if (isGameOver) return;
+
+            updatePlayers();
+            checkCollisions();
+            draw();
+        }
+
+        function updatePlayers() {
+            players.forEach(p => {
+                // Apply CPU logic if needed
+                if (p.isCpu) {
+                    cpuMove(p);
+                }
+
+                // Update direction
+                p.dx = p.nextDx;
+                p.dy = p.nextDy;
+
+                // Move head
+                p.x += p.dx;
+                p.y += p.dy;
+
+                // Add to trail
+                p.trail.push({ x: p.x, y: p.y });
+                while (p.trail.length > p.tail) {
+                    p.trail.shift();
+                }
+            });
+        }
+
+        function checkCollisions() {
+            let p1Dead = false;
+            let p2Dead = false;
+
+            // Check Walls
+            players.forEach(p => {
+                if (p.x < 0 || p.x >= tileCount || p.y < 0 || p.y >= tileCount) {
+                    if (p.id === 1) p1Dead = true;
+                    else p2Dead = true;
+                }
+            });
+
+            // Check Self Collision
+            players.forEach(p => {
+                for (let i = 0; i < p.trail.length - 1; i++) {
+                    if (p.trail[i].x === p.x && p.trail[i].y === p.y) {
+                        if (p.id === 1) p1Dead = true;
+                        else p2Dead = true;
+                    }
+                }
+            });
+
+            // Check Head-to-Head Collision
+            if (players[0].x === players[1].x && players[0].y === players[1].y) {
+                p1Dead = true;
+                p2Dead = true;
+            }
+
+            // Check Head-to-Body Collision (P1 hits P2 body)
+            for (let i = 0; i < players[1].trail.length; i++) {
+                if (players[0].x === players[1].trail[i].x && players[0].y === players[1].trail[i].y) {
+                    p1Dead = true;
+                }
+            }
+            // Check Head-to-Body Collision (P2 hits P1 body)
+            for (let i = 0; i < players[0].trail.length; i++) {
+                if (players[1].x === players[0].trail[i].x && players[1].y === players[0].trail[i].y) {
+                    p2Dead = true;
+                }
+            }
+
+            if (p1Dead || p2Dead) {
+                endGame(p1Dead, p2Dead);
+            }
+        }
+
+        function endGame(p1Dead, p2Dead) {
+            isGameOver = true;
+            clearInterval(gameInterval);
+            
+            let winnerText = "";
+            if (p1Dead && p2Dead) {
+                winnerText = "It's a Draw!";
+            } else if (p1Dead) {
+                winnerText = players[1].name + " Wins!";
+            } else {
+                winnerText = players[0].name + " Wins!";
+            }
+
+            document.getElementById('winner-text').innerText = winnerText;
+            document.getElementById('game-over').classList.remove('hidden');
+        }
+
+        function placeFood() {
+            // Simple random placement, ensure not on snake (basic check)
+            let valid = false;
+            while (!valid) {
+                food.x = Math.floor(Math.random() * tileCount);
+                food.y = Math.floor(Math.random() * tileCount);
+                
+                valid = true;
+                // Check against both snakes
+                [...players[0].trail, ...players[1].trail].forEach(t => {
+                    if (t.x === food.x && t.y === food.y) valid = false;
+                });
+                // Check heads
+                if (players[0].x === food.x && players[0].y === food.y) valid = false;
+                if (players[1].x === food.x && players[1].y === food.y) valid = false;
+            }
+        }
+
+        // --- CPU AI (BFS Pathfinding) ---
+        function cpuMove(player) {
+            const head = { x: player.x, y: player.y };
+            const target = food;
+            
+            // BFS to find shortest path to food
+            const path = bfs(head, target, player);
+
+            if (path && path.length > 0) {
+                // Move towards the first step in the path
+                const nextStep = path[0];
+                player.nextDx = nextStep.x - head.x;
+                player.nextDy = nextStep.y - head.y;
+            } else {
+                // No path to food (blocked), try to survive by moving to any valid neighbor
+                const safeMove = getSafeMove(head, player);
+                if (safeMove) {
+                    player.nextDx = safeMove.x - head.x;
+                    player.nextDy = safeMove.y - head.y;
+                }
+                // If no safe move, keep current direction (will likely die)
+            }
+        }
+
+        function bfs(start, end, player) {
+            let queue = [start];
+            let cameFrom = new Map(); // key: "x,y", value: parent "x,y"
+            let visited = new Set();
+            
+            // Create a set of obstacles for O(1) lookup
+            // Obstacles include both snakes' bodies
+            let obstacles = new Set();
+            players.forEach(p => {
+                p.trail.forEach(t => obstacles.add(`${t.x},${t.y}`));
+            });
+            // Note: We allow moving into the tail of the current snake because it will move away
+            // But for simplicity in this basic AI, we treat the tail as an obstacle to be safe
+            // To improve, we could remove the tail tip from obstacles.
+            
+            cameFrom.set(`${start.x},${start.y}`, null);
+            visited.add(`${start.x},${start.y}`);
+
+            while (queue.length > 0) {
+                let current = queue.shift();
+
+                if (current.x === end.x && current.y === end.y) {
+                    // Reconstruct path
+                    let path = [];
+                    let curr = `${end.x},${end.y}`;
+                    while (curr !== null) {
+                        let [cx, cy] = curr.split(',').map(Number);
+                        path.unshift({ x: cx, y: cy });
+                        curr = cameFrom.get(curr);
+                    }
+                    return path;
+                }
+
+                const neighbors = [
+                    { x: current.x + 1, y: current.y },
+                    { x: current.x - 1, y: current.y },
+                    { x: current.x, y: current.y + 1 },
+                    { x: current.x, y: current.y - 1 }
+                ];
+
+                for (let next of neighbors) {
+                    // Check bounds
+                    if (next.x < 0 || next.x >= tileCount || next.y < 0 || next.y >= tileCount) continue;
+
+                    // Check obstacles
+                    if (obstacles.has(`${next.x},${next.y}`)) continue;
+
+                    // Check visited
+                    if (visited.has(`${next.x},${next.y}`)) continue;
+
+                    cameFrom.set(`${next.x},${next.y}`, `${current.x},${current.y}`);
+                    visited.add(`${next.x},${next.y}`);
+                    queue.push(next);
+                }
+            }
+            return null; // No path found
+        }
+
+        function getSafeMove(head, player) {
+            const neighbors = [
+                { x: head.x + 1, y: head.y },
+                { x: head.x - 1, y: head.y },
+                { x: head.x, y: head.y + 1 },
+                { x: head.x, y: head.y - 1 }
+            ];
+
+            // Filter out reverse direction (can't turn 180)
+            const validDirs = neighbors.filter(n => 
+                !(n.x === head.x - player.dx && n.y === head.y - player.dy)
+            );
+
+            for (let n of validDirs) {
+                if (n.x >= 0 && n.x < tileCount && n.y >= 0 && n.y < tileCount) {
+                    // Check collision with self or other
+                    let collision = false;
+                    // Check self
+                    for (let t of player.trail) {
+                        if (t.x === n.x && t.y === n.y) collision = true;
+                    }
+                    // Check other
+                    let other = players.find(p => p.id !== player.id);
+                    for (let t of other.trail) {
+                        if (t.x === n.x && t.y === n.y) collision = true;
+                    }
+                    // Check head collision
+                    if (other.x === n.x && other.y === n.y) collision = true;
+
+                    if (!collision) return n;
+                }
+            }
+            return null;
+        }
+
+        // --- Rendering ---
+
+        function draw() {
+            // Clear screen
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Grid (Optional, subtle)
+            ctx.strokeStyle = '#111';
+            ctx.lineWidth = 1;
+            for (let i = 0; i < tileCount; i++) {
+                ctx.beginPath();
+                ctx.moveTo(i * gridSize, 0);
+                ctx.lineTo(i * gridSize, canvas.height);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(0, i * gridSize);
+                ctx.lineTo(canvas.width, i * gridSize);
+                ctx.stroke();
+            }
+
+            // Draw Food
+            ctx.fillStyle = '#ff3333';
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#ff3333';
+            ctx.fillRect(food.x * gridSize, food.y * gridSize, gridSize - 2, gridSize - 2);
+            ctx.shadowBlur = 0;
+
+            // Draw Snakes
+            players.forEach(p => {
+                ctx.fillStyle = p.color;
+                p.trail.forEach((t, index) => {
+                    // Make tail fade slightly
+                    if (index === p.trail.length - 1) {
+                        ctx.fillStyle = p.color; // Head is solid
+                    } else {
+                        ctx.fillStyle = p.color;
+                    }
+                    
+                    // Draw segment
+                    ctx.fillRect(t.x * gridSize, t.y * gridSize, gridSize - 2, gridSize - 2);
+                    
+                    // Draw eyes on head
+                    if (index === p.trail.length - 1) {
+                        ctx.fillStyle = '#000';
+                        // Simple logic to place eyes based on direction
+                        let eyeSize = 4;
+                        let ex1, ey1, ex2, ey2;
+                        
+                        if (p.dx === 1) { // Right
+                            ex1 = t.x * gridSize + 12; ey1 = t.y * gridSize + 5;
+                            ex2 = t.x * gridSize + 12; ey2 = t.y * gridSize + 13;
+                        } else if (p.dx === -1) { // Left
+                            ex1 = t.x * gridSize + 4; ey1 = t.y * gridSize + 5;
+                            ex2 = t.x * gridSize + 4; ey2 = t.y * gridSize + 13;
+                        } else if (p.dy === -1) { // Up
+                            ex1 = t.x * gridSize + 5; ey1 = t.y * gridSize + 4;
+                            ex2 = t.x * gridSize + 13; ey2 = t.y * gridSize + 4;
+                        } else { // Down
+                            ex1 = t.x * gridSize + 5; ey1 = t.y * gridSize + 12;
+                            ex2 = t.x * gridSize + 13; ey2 = t.y * gridSize + 12;
+                        }
+                        
+                        ctx.fillRect(ex1, ey1, eyeSize, eyeSize);
+                        ctx.fillRect(ex2, ey2, eyeSize, eyeSize);
+                    }
+                });
+            });
+        }
+
+        function updateScoreBoard() {
+            document.getElementById('score1').innerText = players[0].score;
+            document.getElementById('score2').innerText = players[1].score;
+        }
+
+        // Initial Draw
+        draw();
+
+    </script>
+</body>
+</html>

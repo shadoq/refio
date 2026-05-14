@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Todo App</title>
+<style>
+body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f5f5f5; }
+#app { max-width: 600px; margin: 50px auto; background: #fff; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,.1); }
+h1 { text-align: center; }
+#new-todo { width: 100%; padding: 10px; font-size: 16px; box-sizing: border-box; }
+ul { list-style: none; padding: 0; margin: 0; }
+li { display: flex; align-items: center; padding: 10px 0; border-bottom: 1px solid #eee; }
+li:last-child { border-bottom: none; }
+li.completed span { text-decoration: line-through; color: #999; }
+li button { margin-left: auto; background: none; border: none; color: #c00; cursor: pointer; }
+.filter { text-align: center; margin-top: 10px; }
+.filter button { margin: 0 5px; padding: 5px 10px; }
+.filter button.active { font-weight: bold; }
+</style>
+</head>
+<body>
+<div id="app">
+<h1>Todo List</h1>
+<input id="new-todo" type="text" placeholder="What needs to be done?" autocomplete="off">
+<ul id="todo-list"></ul>
+<div class="filter">
+<button data-filter="all" class="active">All</button>
+<button data-filter="active">Active</button>
+<button data-filter="completed">Completed</button>
+</div>
+</div>
+<script>
+const STORAGE_KEY = 'todos';
+let todos = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+let filter = 'all';
+
+const newTodoInput = document.getElementById('new-todo');
+const todoList = document.getElementById('todo-list');
+const filterButtons = document.querySelectorAll('.filter button');
+
+function save() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(todos));
+}
+
+function render() {
+  todoList.innerHTML = '';
+  const filtered = todos.filter(t => {
+    if (filter === 'active') return !t.completed;
+    if (filter === 'completed') return t.completed;
+    return true;
+  });
+  filtered.forEach((t, i) => {
+    const li = document.createElement('li');
+    li.className = t.completed ? 'completed' : '';
+    const span = document.createElement('span');
+    span.textContent = t.text;
+    span.style.cursor = 'pointer';
+    span.onclick = () => toggleComplete(i);
+    const del = document.createElement('button');
+    del.textContent = '✕';
+    del.onclick = () => deleteTodo(i);
+    li.appendChild(span);
+    li.appendChild(del);
+    todoList.appendChild(li);
+  });
+}
+
+function addTodo(text) {
+  if (!text.trim()) return;
+  todos.push({ text: text.trim(), completed: false });
+  save();
+  render();
+}
+
+function toggleComplete(index) {
+  todos[index].completed = !todos[index].completed;
+  save();
+  render();
+}
+
+function deleteTodo(index) {
+  todos.splice(index, 1);
+  save();
+  render();
+}
+
+newTodoInput.addEventListener('keypress', e => {
+  if (e.key === 'Enter') {
+    addTodo(newTodoInput.value);
+    newTodoInput.value = '';
+  }
+});
+
+filterButtons.forEach(btn => {
+  btn.addEventListener('click', () => {
+    filterButtons.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    filter = btn.dataset.filter;
+    render();
+  });
+});
+
+render();
+</script>
+</body>
+</html>

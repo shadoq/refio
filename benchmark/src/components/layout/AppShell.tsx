@@ -1,6 +1,6 @@
 import { Suspense, type ReactNode } from "react";
 import { Layout } from "antd";
-import { Navigate } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 import { Nav } from "./Nav";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { GlobalFilters } from "@/components/filters/GlobalFilters";
@@ -20,11 +20,18 @@ interface AppShellProps {
 }
 
 export function AppShell({ children, themeId, onThemeChange }: AppShellProps) {
+  const location = useLocation();
+  const isAdmin = location.pathname.startsWith("/admin");
+  const shellClass = isAdmin ? "app-shell app-shell--no-ambient" : "app-shell";
   return (
-    <Layout className="app-shell">
-      <div className="ambient ambient-a" />
-      <div className="ambient ambient-b" />
-      <div className="ambient ambient-c" />
+    <Layout className={shellClass}>
+      {!isAdmin && (
+        <>
+          <div className="ambient ambient-a" />
+          <div className="ambient ambient-b" />
+          <div className="ambient ambient-c" />
+        </>
+      )}
       <Header className="app-header">
         <span className="brand">
           <span className="brand-mark">r</span>
