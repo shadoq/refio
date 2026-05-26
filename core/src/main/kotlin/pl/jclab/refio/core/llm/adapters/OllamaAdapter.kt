@@ -860,7 +860,7 @@ class OllamaAdapter(
         }
     }
 
-    private fun parseNativeOllamaToolCalls(rawCalls: List<Map<String, Any?>>): List<NativeToolCall> {
+    internal fun parseNativeOllamaToolCalls(rawCalls: List<Map<String, Any?>>): List<NativeToolCall> {
         return rawCalls.mapNotNull { call ->
             @Suppress("UNCHECKED_CAST")
             val function = call["function"] as? Map<String, Any?> ?: return@mapNotNull null
@@ -880,7 +880,7 @@ class OllamaAdapter(
         }
     }
 
-    private fun extractOllamaToolCalls(messageMap: Map<String, Any?>): List<Map<String, Any?>> {
+    internal fun extractOllamaToolCalls(messageMap: Map<String, Any?>): List<Map<String, Any?>> {
         @Suppress("UNCHECKED_CAST")
         val toolCalls = messageMap["tool_calls"] as? List<Map<String, Any?>> ?: return emptyList()
         return toolCalls

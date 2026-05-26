@@ -109,7 +109,13 @@ class TurnPromptBuilder(
             profileOverrides?.contextProfile
         } else null
 
-        val history = chatMessageRepository.findByTaskId(taskId)
+        // Isolate subagent history: each subagent invocation tags its rows with its own
+        // agentInstanceId (see SubagentRouter). Pass null for the parent run so it does
+        // not see subagent intermediate steps either.
+        val history = chatMessageRepository.findHistoryForInvocation(
+            taskId,
+            profileOverrides?.agentInstanceId
+        )
         val stickyRequirements = buildStickyRequirementsBlock(history)
         val promptSections = mutableListOf(
             PromptSection("base_system_prompt", baseSystemPrompt, stable = true)
@@ -405,7 +411,13 @@ $filteredContextPrompt
             logger.error { "[PLAN_PROMPT] Tool descriptions are EMPTY! This will cause LLM to return error." }
         }
 
-        val toolSelectionMatrix = toolDescriptionBuilder.getToolSelectionMatrix(mode, taskId)
+        // Filter the When-to-use matrix by profile too — see buildAgentSystemPrompt.
+        val toolSelectionMatrix = if (profileOverrides != null) {
+            val filteredTools = resolveToolsForProfile(mode, taskId, profileOverrides)
+            toolDescriptionBuilder.buildSelectionMatrix(filteredTools)
+        } else {
+            toolDescriptionBuilder.getToolSelectionMatrix(mode, taskId)
+        }
 
         return promptsService.getSystemPrompt(
             type = PromptType.SYSTEM_PLAN,
@@ -501,7 +513,15 @@ $filteredContextPrompt
 
         val iterationInfo = buildIterationInfo(currentIteration, maxIterations, writeToolsExecutedInTurn)
 
-        val toolSelectionMatrix = toolDescriptionBuilder.getToolSelectionMatrix(mode, taskId)
+        // Filter the When-to-use matrix by profile too — otherwise subagents see all
+        // ~29 tools in the system prompt even though only 4-6 are actually available
+        // (their <available_tools> AND native tool_calls channel are both filtered).
+        val toolSelectionMatrix = if (profileOverrides != null) {
+            val filteredTools = resolveToolsForProfile(mode, taskId, profileOverrides)
+            toolDescriptionBuilder.buildSelectionMatrix(filteredTools)
+        } else {
+            toolDescriptionBuilder.getToolSelectionMatrix(mode, taskId)
+        }
 
         val basePrompt = promptsService.getSystemPrompt(
             type = PromptType.SYSTEM_AGENT,

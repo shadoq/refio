@@ -36,6 +36,7 @@ internal class MarkdownRenderingService(
     private val htmlRenderer = HtmlRenderer.builder()
         .extensions(markdownExtensions)
         .escapeHtml(true)
+        .softbreak("<br />")
         .build()
 
     private val thinkingTagRegex = Regex(

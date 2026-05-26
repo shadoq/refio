@@ -43,7 +43,10 @@ internal class ModelSelectionService(private val configService: ConfigService) {
 
         if (selectedModel != null && selectedModel.isNotBlank() && !selectedModel.equals("auto", ignoreCase = true)) {
             val (providerFromString, modelIdFromString) = parseModelString(selectedModel)
-            logger.info { "Using user-selected model for $operation: $modelIdFromString (provider=$providerFromString)" }
+            // Demoted to DEBUG: called 4-5× per turn (per LLM call + per context build) and
+            // the result is the same every time the user hasn't switched models. INFO-level
+            // floods the log without adding signal.
+            logger.debug { "Using user-selected model for $operation: $modelIdFromString (provider=$providerFromString)" }
             return Pair(modelIdFromString, providerFromString)
         }
 
@@ -62,13 +65,13 @@ internal class ModelSelectionService(private val configService: ConfigService) {
         if (operation == ModelOperation.EMBEDDING) {
             if (config?.value != null) {
                 val (provider, model) = parseModelString(config.value)
-                logger.info { "Using embedding model from DB: $model (provider=$provider)" }
+                logger.debug { "Using embedding model from DB: $model (provider=$provider)" }
                 return Pair(model, provider)
             }
             val yamlModel = configService.yamlLoader.getDefaultEmbeddingModel()
             if (yamlModel != null) {
                 val (provider, model) = parseModelString(yamlModel)
-                logger.info { "Using embedding model from YAML: $model (provider=$provider)" }
+                logger.debug { "Using embedding model from YAML: $model (provider=$provider)" }
                 return Pair(model, provider)
             }
             return fallbackModelForOperation(operation)
@@ -77,11 +80,11 @@ internal class ModelSelectionService(private val configService: ConfigService) {
         if (config != null) {
             val data = gson.fromJson(config.value, ModelConfigData::class.java)
             if (operation != ModelOperation.DEFAULT && isInheritedModelConfig(data)) {
-                logger.info { "Using inherited $label model -> default model" }
+                logger.debug { "Using inherited $label model -> default model" }
                 return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
             }
             if (data.modelId != null && data.provider != null) {
-                logger.info { "Using $label model from DB: ${data.modelId}" }
+                logger.debug { "Using $label model from DB: ${data.modelId}" }
                 return Pair(data.modelId, data.provider)
             }
         }
@@ -96,7 +99,7 @@ internal class ModelSelectionService(private val configService: ConfigService) {
         }
         if (yamlModel != null) {
             val (provider, model) = parseModelString(yamlModel)
-            logger.info { "Using $label model from YAML: $model (provider=$provider)" }
+            logger.debug { "Using $label model from YAML: $model (provider=$provider)" }
             return Pair(model, provider)
         }
 
@@ -105,7 +108,7 @@ internal class ModelSelectionService(private val configService: ConfigService) {
         }
 
         val fallback = fallbackModelForOperation(operation)
-        logger.info { "No config found for $operation, using fallback: ${fallback.first}" }
+        logger.debug { "No config found for $operation, using fallback: ${fallback.first}" }
         return fallback
     }
 
@@ -117,11 +120,11 @@ internal class ModelSelectionService(private val configService: ConfigService) {
         if (config != null) {
             val data = gson.fromJson(config.value, ModelConfigData::class.java)
             if (isInheritedModelConfig(data)) {
-                logger.info { "Using inherited strong model -> default model" }
+                logger.debug { "Using inherited strong model -> default model" }
                 return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
             }
             if (data.modelId != null && data.provider != null) {
-                logger.info { "Using strong model from DB: ${data.modelId}" }
+                logger.debug { "Using strong model from DB: ${data.modelId}" }
                 return Pair(data.modelId, data.provider)
             }
         }
@@ -129,7 +132,7 @@ internal class ModelSelectionService(private val configService: ConfigService) {
         val yamlModel = configService.yamlLoader.getDefaultStrongModel()
         if (yamlModel != null) {
             val (provider, model) = parseModelString(yamlModel)
-            logger.info { "Using strong model from YAML: $model (provider=$provider)" }
+            logger.debug { "Using strong model from YAML: $model (provider=$provider)" }
             return Pair(model, provider)
         }
 

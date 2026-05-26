@@ -2736,7 +2736,9 @@ object ModelDefinitions {
             active = true
         ),
 
+        //
         // Qwen 3.5 - Multimodal (vision+language), 256K context, tool use
+        //
         "qwen3.5:0.8b" to ModelDefinition(
             id = "qwen3.5:0.8b",
             name = "Qwen 3.5 0.8B",
@@ -2854,7 +2856,7 @@ object ModelDefinitions {
 
         "qwen3.5:35b" to ModelDefinition(
             id = "qwen3.5:35b",
-            name = "Qwen 3.5 35B MoE",
+            name = "Qwen 3.5 35B MoE (A3B)",
             provider = "ollama",
             description = "MoE multimodal model (35B total, 3B active) with 256K context",
             capabilities = listOf(
@@ -2877,7 +2879,7 @@ object ModelDefinitions {
 
         "qwen3.5:122b" to ModelDefinition(
             id = "qwen3.5:122b",
-            name = "Qwen 3.5 122B MoE",
+            name = "Qwen 3.5 122B MoE (A10B)",
             provider = "ollama",
             description = "Large MoE multimodal model (122B total, 10B active) with 256K context",
             capabilities = listOf(
@@ -2898,10 +2900,12 @@ object ModelDefinitions {
             active = true
         ),
 
+        //
         // Qwen 3.6 - 35B MoE (3B active), 256K context, multimodal with tool use
+        //
         "qwen3.6:latest" to ModelDefinition(
             id = "qwen3.6:latest",
-            name = "Qwen 3.6 35B MoE",
+            name = "Qwen 3.6 35B MoE (A3B)",
             provider = "ollama",
             description = "Latest Qwen 3.6 MoE (35B total, 3B active) multimodal model with 256K context",
             capabilities = listOf(
@@ -2947,9 +2951,9 @@ object ModelDefinitions {
 
         "qwen3.6:35b" to ModelDefinition(
             id = "qwen3.6:35b",
-            name = "Qwen 3.6 35B",
+            name = "Qwen 3.6 35B MoE (A3B)",
             provider = "ollama",
-            description = "Qwen 3.6 35B multimodal model with 256K context and native tool use",
+            description = "Qwen 3.6 MoE (35B total, 3B active) multimodal model with 256K context",
             capabilities = listOf(
                 ModelCapability.CHAT_COMPLETION,
                 ModelCapability.VISION,

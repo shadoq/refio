@@ -596,7 +596,7 @@ class OpenAIAdapter(
         }
     }
 
-    private fun buildOpenAIToolsArray(tools: List<ToolSchema>): List<Map<String, Any>> =
+    internal fun buildOpenAIToolsArray(tools: List<ToolSchema>): List<Map<String, Any>> =
         tools.map { rawTool ->
             val tool = ToolSchemaSanitizer.forOpenAI(rawTool).tool
             mapOf(
@@ -609,7 +609,7 @@ class OpenAIAdapter(
             )
         }
 
-    private fun buildResponsesToolsArray(tools: List<ToolSchema>): List<Map<String, Any>> =
+    internal fun buildResponsesToolsArray(tools: List<ToolSchema>): List<Map<String, Any>> =
         tools.map { rawTool ->
             val sanitized = ToolSchemaSanitizer.forOpenAI(rawTool)
             if (!sanitized.strict) {
@@ -628,7 +628,7 @@ class OpenAIAdapter(
             )
         }
 
-    private fun parseNativeOpenAIToolCalls(rawToolCalls: Any?): List<NativeToolCall> {
+    internal fun parseNativeOpenAIToolCalls(rawToolCalls: Any?): List<NativeToolCall> {
         @Suppress("UNCHECKED_CAST")
         val toolCalls = rawToolCalls as? List<Map<String, Any?>> ?: return emptyList()
         return toolCalls.mapNotNull { call ->

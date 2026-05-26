@@ -490,7 +490,29 @@ class ChatService(
     }
 
     private fun buildLlmMessages(history: List<ChatMessage>): List<LLMMessage> =
-        history.map { msg -> LLMMessage(role = msg.role.name.lowercase(), content = msg.content) }
+        history.filterNot { isSubagentNoise(it) }
+            .map { msg -> LLMMessage(role = msg.role.name.lowercase(), content = msg.content) }
+
+    /**
+     * Subagent isolation: when a `!agent` invocation runs inside a CHAT session, the
+     * intermediate tool calls/results land in the same chat history (tagged with
+     * agentDepth>=1). Including them in the NEXT CHAT turn's context would bloat the
+     * prompt with content the user doesn't see and the parent chat doesn't need —
+     * a 27-subtask business-analyst run added ~50k tokens of tool noise in one observed
+     * session. Keep the user's `!agent ...` invocation and the subagent's final
+     * synthesized answer (an ASSISTANT message with no tool_calls); drop the rest.
+     *
+     * agentDepth=null and agentDepth=0 are top-level CHAT messages and pass through.
+     */
+    private fun isSubagentNoise(msg: ChatMessage): Boolean {
+        val depth = msg.agentDepth ?: return false
+        if (depth < 1) return false
+        return when (msg.role) {
+            MessageRole.TOOL -> true
+            MessageRole.ASSISTANT -> !msg.toolCalls.isNullOrEmpty()
+            else -> false
+        }
+    }
 
     private fun buildCumulativeContext(history: List<ChatMessage>): List<ContextReference> {
         val refs = mutableListOf<ContextReference>()

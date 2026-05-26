@@ -7,9 +7,12 @@ import io.ktor.client.statement.*
 import io.ktor.http.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import pl.jclab.refio.core.llm.NoEgressViolationException
 import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.core.security.NetworkPolicy
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.tools.base.Tool
+import pl.jclab.refio.core.tools.base.ToolInternalParams
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
@@ -18,7 +21,8 @@ import pl.jclab.refio.core.utils.GsonInstance
 private val logger = dualLogger("WebSearchTool")
 
 class WebSearchTool(
-    private val configService: ConfigService
+    private val configService: ConfigService,
+    private val networkPolicy: NetworkPolicy = NetworkPolicy(configService)
 ) : Tool {
     override val name = "web_search"
     override val description = "Search the web and return results with titles, URLs, and snippets. " +
@@ -39,8 +43,15 @@ class WebSearchTool(
         val query = params["query"] as? String
             ?: return@withContext ToolResult.error("Missing required parameter: 'query'")
         val maxResults = ((params["max_results"] as? Number)?.toInt() ?: 10).coerceIn(1, 20)
+        val taskId = params[ToolInternalParams.TASK_ID] as? String
 
         val provider = getConfig("tools.web_search.provider") ?: "duckduckgo"
+
+        try {
+            networkPolicy.assertEgressAllowed(name, "web_search:$provider", taskId)
+        } catch (e: NoEgressViolationException) {
+            return@withContext ToolResult.error(e.message ?: "no-egress mode blocks this call")
+        }
 
         val results: List<SearchResult> = try {
             when (provider) {
@@ -60,15 +71,27 @@ class WebSearchTool(
                 "duckduckgo" -> searchDuckDuckGo(query, maxResults)
                 else -> return@withContext ToolResult.error("Unknown search provider: $provider")
             }
+        } catch (e: WebSearchProviderException) {
+            logger.warn { "Web search provider error ($provider): ${e.message}" }
+            return@withContext ToolResult.error(
+                "Web search provider '$provider' failed: ${e.message}. " +
+                    "Configure a different provider (brave/serpapi) in ~/.refio/config.yaml or retry later."
+            )
         } catch (e: Exception) {
             logger.error(e) { "Web search failed: ${e.message}" }
             return@withContext ToolResult.error("Web search failed: ${e.message}")
         }
 
         if (results.isEmpty()) {
+            // DuckDuckGo Instant Answer is not a general web search — explicit hint avoids the
+            // agent retrying the same query (observed in session 2c7c570d: 2× identical queries).
+            val hint = if (provider == "duckduckgo") {
+                " (DuckDuckGo provider uses Instant Answer API which has limited coverage; " +
+                    "configure 'brave' or 'serpapi' for general web search)"
+            } else ""
             return@withContext ToolResult(
                 success = true,
-                output = "No results found for: $query",
+                output = "No results found for: $query$hint",
                 durationMs = elapsed(startTime)
             )
         }
@@ -109,8 +132,7 @@ class WebSearchTool(
             }
             val responseText = response.bodyAsText()
             if (!response.status.isSuccess()) {
-                logger.warn { "Brave Search HTTP ${response.status}: ${responseText.take(200)}" }
-                return emptyList()
+                throw WebSearchProviderException("HTTP ${response.status.value}: ${responseText.take(200)}")
             }
             val body = GsonInstance.gson.fromJson(responseText, Map::class.java)
             @Suppress("UNCHECKED_CAST")
@@ -137,7 +159,9 @@ class WebSearchTool(
                 parameter("api_key", apiKey)
                 parameter("engine", "google")
             }
-            if (!response.status.isSuccess()) return emptyList()
+            if (!response.status.isSuccess()) {
+                throw WebSearchProviderException("HTTP ${response.status.value}: ${response.bodyAsText().take(200)}")
+            }
             val body = GsonInstance.gson.fromJson(response.bodyAsText(), Map::class.java)
             @Suppress("UNCHECKED_CAST")
             val organicResults = body["organic_results"] as? List<Map<*, *>> ?: emptyList()
@@ -162,7 +186,9 @@ class WebSearchTool(
                 parameter("no_html", "1")
                 parameter("skip_disambig", "1")
             }
-            if (!response.status.isSuccess()) return emptyList()
+            if (!response.status.isSuccess()) {
+                throw WebSearchProviderException("HTTP ${response.status.value}: ${response.bodyAsText().take(200)}")
+            }
             val body = GsonInstance.gson.fromJson(response.bodyAsText(), Map::class.java)
             val results = mutableListOf<SearchResult>()
 
@@ -214,4 +240,6 @@ class WebSearchTool(
     )
 
     data class SearchResult(val title: String, val url: String, val snippet: String)
+
+    private class WebSearchProviderException(message: String) : RuntimeException(message)
 }

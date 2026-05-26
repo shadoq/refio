@@ -164,7 +164,7 @@ class TaskRepository {
                 it[updatedAt] = System.currentTimeMillis()
             }
 
-            logger.info { "Incremented task metrics: id=$id, +$tokensIn/${+tokensOut} tokens, +$$costUsd" }
+            logger.info { "Incremented task metrics: id=$id, +$tokensIn/$tokensOut tokens, +\$${"%.6f".format(costUsd)}" }
 
             findById(id)
         }

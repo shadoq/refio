@@ -77,6 +77,7 @@ class ChatMessageRepository {
         isSummarized: Boolean = false,
         rawOutput: String? = null,
         metadata: String? = null,
+        agentInstanceId: String? = null,
         agentName: String? = null,
         agentDepth: Int? = null,
         tokensIn: Int? = null,
@@ -92,6 +93,7 @@ class ChatMessageRepository {
             subtaskId = subtaskId,
             isSummarized = isSummarized,
             rawOutput = rawOutput,
+            agentInstanceId = agentInstanceId,
             agentName = agentName,
             agentDepth = agentDepth,
             tokensIn = tokensIn,
@@ -219,6 +221,32 @@ class ChatMessageRepository {
             ChatMessagesTable.selectAll()
                 .where { ChatMessagesTable.agentInstanceId eq agentInstanceId }
                 .orderBy(ChatMessagesTable.seq to SortOrder.ASC)
+                .map { rowToChatMessage(it) }
+        }
+    }
+
+    /**
+     * Load chat history for a specific invocation context.
+     *
+     * Isolates parent and subagent threads so each LLM call sees only the history
+     * relevant to its own invocation:
+     *
+     * - `agentInstanceId == null` → parent thread (only rows where `agentInstanceId IS NULL`)
+     * - `agentInstanceId != null` → that subagent invocation only
+     *
+     * Sibling subagent invocations in the same task remain isolated from each other.
+     * Ordering is `seq ASC`, consistent with [findByTaskId].
+     */
+    fun findHistoryForInvocation(taskId: String, agentInstanceId: String?): List<ChatMessage> {
+        return transaction {
+            val query = ChatMessagesTable.selectAll().where {
+                if (agentInstanceId == null) {
+                    (ChatMessagesTable.taskId eq taskId) and ChatMessagesTable.agentInstanceId.isNull()
+                } else {
+                    (ChatMessagesTable.taskId eq taskId) and (ChatMessagesTable.agentInstanceId eq agentInstanceId)
+                }
+            }
+            query.orderBy(ChatMessagesTable.seq to SortOrder.ASC)
                 .map { rowToChatMessage(it) }
         }
     }

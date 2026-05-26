@@ -37,6 +37,12 @@ class SubtaskTracker(
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
 
+    // Direct callers (SessionLifecycle, ExecutionMonitor, CRUD ops) can fire loadSubtasks
+    // back-to-back from different code paths around the same lifecycle moment — observed
+    // 5 sequential calls in 80ms after a parallel tool batch completes. Coalesce calls
+    // that arrive within COALESCE_WINDOW_MS of a prior successful load. Set to 0 to disable.
+    private val lastLoadedAtMs = java.util.concurrent.atomic.AtomicLong(0L)
+
     init {
         @OptIn(FlowPreview::class)
         scope.launch {
@@ -57,6 +63,18 @@ class SubtaskTracker(
 
     suspend fun loadSubtasks() {
         val currentSession = stateManager.getActiveSession() ?: return
+
+        // Coalesce calls that arrive within COALESCE_WINDOW_MS of the previous successful load.
+        // Different code paths (lifecycle listener, ExecutionMonitor end-of-step, MessageDispatcher
+        // PLAN_DEBUG resolver, session restore) hit this method around the same moment after a
+        // tool batch — without this guard we observed 5 sequential DB reads in 80ms.
+        val now = System.currentTimeMillis()
+        val prev = lastLoadedAtMs.get()
+        if (prev != 0L && now - prev < COALESCE_WINDOW_MS) {
+            logger.debug { "[SUBTASK] loadSubtasks coalesced (within ${COALESCE_WINDOW_MS}ms of last load)" }
+            return
+        }
+        lastLoadedAtMs.set(now)
 
         try {
             logger.info { "[SUBTASK] loadSubtasks start: taskId=${currentSession.id}" }
@@ -353,6 +371,14 @@ class SubtaskTracker(
 
     companion object {
         private const val RELOAD_DEBOUNCE_MS = 300L
+
+        /**
+         * Window during which back-to-back loadSubtasks() calls collapse to a no-op. Keep
+         * this much smaller than RELOAD_DEBOUNCE_MS so user-initiated refreshes (clicks,
+         * post-CRUD reloads) still feel instant; this only blocks duplicate calls that
+         * happen within the same UI tick. Set to 0 to disable.
+         */
+        private const val COALESCE_WINDOW_MS = 100L
     }
 
     private fun areSubtasksEqual(current: List<SubtaskResponse>, new: List<SubtaskResponse>): Boolean {

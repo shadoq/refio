@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.tools.base
 
 import pl.jclab.refio.core.llm.LLMClient
+import pl.jclab.refio.core.security.NetworkPolicy
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.ProcessManager
 import pl.jclab.refio.core.services.PromptsService
@@ -41,6 +42,7 @@ class ToolFactory(
     private val sandbox = PathSandbox.withConfig(projectRoot, configService)
     private val registry = toolRegistry
     private val processManager = ProcessManager()
+    private val networkPolicy = NetworkPolicy(configService)
 
     /**
      * Create and register all available tools
@@ -94,8 +96,8 @@ class ToolFactory(
             ThinkTool(),
 
             // Web tools
-            WebSearchTool(configService),
-            FetchWebpageTool(llmClient, configService),
+            WebSearchTool(configService, networkPolicy),
+            FetchWebpageTool(llmClient, configService, networkPolicy),
 
             // Code intelligence
             CodeIntelligenceTool(sandbox),
@@ -131,7 +133,7 @@ class ToolFactory(
             RunTerminalCommandTool(sandbox, commandLimits, CommandRuleDefaults.createDefaultMatcher()),
 
             // Network operations
-            HttpRequestTool(sandbox),
+            HttpRequestTool(sandbox = sandbox, networkPolicy = networkPolicy),
 
             // Code execution
             RunCodeTool(sandbox),

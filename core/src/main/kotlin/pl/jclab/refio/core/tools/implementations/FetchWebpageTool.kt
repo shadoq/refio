@@ -11,7 +11,9 @@ import org.jsoup.nodes.Element
 import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
+import pl.jclab.refio.core.llm.NoEgressViolationException
 import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.core.security.NetworkPolicy
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
@@ -23,7 +25,8 @@ private val logger = dualLogger("FetchWebpageTool")
 
 class FetchWebpageTool(
     private val llmClient: LLMClient,
-    private val configService: ConfigService
+    private val configService: ConfigService,
+    private val networkPolicy: NetworkPolicy = NetworkPolicy(configService)
 ) : Tool {
     override val name = "fetch_webpage"
     override val description = "Fetch a URL, convert HTML to Markdown, then extract information with AI using your prompt. " +
@@ -53,6 +56,12 @@ class FetchWebpageTool(
         val taskId = params[ToolInternalParams.TASK_ID] as? String
         val subtaskId = params[ToolInternalParams.SUBTASK_ID] as? String
 
+        try {
+            networkPolicy.assertEgressAllowed(name, url, taskId)
+        } catch (e: NoEgressViolationException) {
+            return@withContext ToolResult.error(e.message ?: "no-egress mode blocks this call")
+        }
+
         logger.info { "Fetching $url for AI processing" }
         val html = try {
             fetchHtml(url)
@@ -63,7 +72,7 @@ class FetchWebpageTool(
         val markdown = htmlToMarkdown(html, url, maxContentChars)
 
         val (model, provider) = try {
-            configService.getWeakModel()
+            configService.getModel(ModelOperation.WEAK, taskId)
         } catch (e: Exception) {
             return@withContext ToolResult.error("No LLM model configured: ${e.message}")
         }

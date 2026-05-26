@@ -64,7 +64,9 @@ enum class SubtaskKind {
     HTTP_REQUEST,
     RUN_CODE,
     KNOWLEDGE_BASE,
-    INVOKE_SUBAGENT
+    INVOKE_SUBAGENT,
+    WEB_SEARCH,
+    FETCH_WEBPAGE
 }
 
 /**

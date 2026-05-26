@@ -248,7 +248,7 @@ class AnthropicAdapter(
         }
     }
 
-    private fun buildAnthropicToolsArray(tools: List<ToolSchema>): List<Map<String, Any>> =
+    internal fun buildAnthropicToolsArray(tools: List<ToolSchema>): List<Map<String, Any>> =
         tools.map { rawTool ->
             val tool = ToolSchemaSanitizer.forAnthropic(rawTool)
             mapOf(
@@ -269,7 +269,7 @@ class AnthropicAdapter(
         return schema.filterKeys { it !in forbidden }
     }
 
-    private fun parseNativeAnthropicToolCalls(contentBlocks: List<Map<String, Any?>>): List<NativeToolCall> {
+    internal fun parseNativeAnthropicToolCalls(contentBlocks: List<Map<String, Any?>>): List<NativeToolCall> {
         return contentBlocks.mapNotNull { block ->
             if (block["type"] != "tool_use") return@mapNotNull null
             val id = block["id"] as? String ?: return@mapNotNull null

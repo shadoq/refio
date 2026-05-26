@@ -638,6 +638,12 @@ class TurnToolExecutor(
                             }
                             ToolResultSummary(deterministic, wasSummarized = true, 0, 0, 0.0)
                         }
+                        // Short-circuit small outputs before entering the suspend summarizer
+                        // function. The summarizer has its own GLOBAL_MIN_SKIP_THRESHOLD (2048)
+                        // fast path, but skipping the call entirely avoids one suspend boundary
+                        // per tool — adds up across 50+ tool calls per task.
+                        outputWithWarnings.length <= ToolResultSummarizer.GLOBAL_MIN_SKIP_THRESHOLD ->
+                            ToolResultSummary(outputWithWarnings, wasSummarized = false, 0, 0, 0.0)
                         outputWithWarnings.isNotBlank() ->
                             // Pass argumentsMap so the summarizer can pick the right context
                             // type — e.g. read_file on .json should not run code-analysis prompt.
