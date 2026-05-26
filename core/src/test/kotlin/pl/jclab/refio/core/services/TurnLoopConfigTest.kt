@@ -17,7 +17,9 @@ class TurnLoopConfigTest {
     fun `plan config should allow more analysis retries`() {
         val config = TurnLoopConfig.plan()
 
-        assertEquals(50, config.maxIterations)
+        // PLAN was bumped 50 → 100 (2026-05-26) to match AGENT and align with industry
+        // baselines (Gemini CLI 100, Hermes 90). PLAN is read-only so iterations are cheap.
+        assertEquals(100, config.maxIterations)
         assertEquals(3, config.maxFormatRetries)
     }
 }

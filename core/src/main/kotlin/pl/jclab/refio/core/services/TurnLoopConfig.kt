@@ -86,8 +86,13 @@ data class TurnLoopConfig(
          * PLAN mode is read-only, focused on analysis and planning.
          */
         fun plan() = TurnLoopConfig(
-            maxIterations = 50,
-            warningThreshold = 20,
+            // Bumped from 50 → 100 to align with industry baselines (Gemini CLI 100,
+            // Hermes 90). PLAN is read-only so iterations are cheap; the previous cap
+            // was hitting prematurely on large-codebase exploration tasks. AGENT was
+            // already at 100. Iteration cost is bounded by ToolErrorTracker (≥70%
+            // error rate aborts) and TurnRepetitionTracker (output-hash × 4 aborts).
+            maxIterations = 100,
+            warningThreshold = 30,
             parallelReadTools = true,
             // Bumped from 3 → 6: filesystem reads are cheap and IO-bound. Real-world batches
             // are 4-6 files at once (typical "read these 4 candidates" pattern from PLAN),

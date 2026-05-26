@@ -100,7 +100,7 @@ class ToolFactory(
             FetchWebpageTool(llmClient, configService, networkPolicy),
 
             // Code intelligence
-            CodeIntelligenceTool(sandbox),
+            CodeIntelligenceTool(sandbox, fileLimits),
 
             // Process monitoring (read-only — only reads output)
             MonitorProcessTool(processManager),

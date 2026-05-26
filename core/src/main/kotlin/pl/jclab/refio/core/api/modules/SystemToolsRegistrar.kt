@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.api.modules
 
 import pl.jclab.refio.core.agents.events.AgentEventBus
+import pl.jclab.refio.core.agents.events.AgentInboxRegistry
 import pl.jclab.refio.core.db.repositories.SubtaskRepository
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.logging.dualLogger
@@ -25,6 +26,7 @@ internal class SystemToolsRegistrar(
     private val workingMemoryService: WorkingMemoryService,
     private val subtaskRepository: SubtaskRepository,
     private val agentEventBus: AgentEventBus,
+    private val agentInboxRegistry: AgentInboxRegistry,
     private val subagentRouterProvider: () -> SubagentRouter?,
     private val runTurnCallback: suspend (
         pl.jclab.refio.core.api.TurnRequest,
@@ -62,14 +64,15 @@ internal class SystemToolsRegistrar(
                 subtaskRepository = subtaskRepository
             )
             val manageSubagentTool = pl.jclab.refio.core.tools.implementations.ManageSubagentTool(subagentRouterProvider)
-            val sendMessageTool = pl.jclab.refio.core.tools.implementations.SendMessageTool(agentEventBus)
+            val sendMessageTool = pl.jclab.refio.core.tools.implementations.SendMessageTool(agentEventBus, agentInboxRegistry)
+            val answerMessageTool = pl.jclab.refio.core.tools.implementations.AnswerMessageTool(agentEventBus, agentInboxRegistry)
 
-            listOf(tasksTool, memoryTool, manageSubagentTool, sendMessageTool).forEach { tool ->
+            listOf(tasksTool, memoryTool, manageSubagentTool, sendMessageTool, answerMessageTool).forEach { tool ->
                 if (!toolRegistry.hasTool(tool.name)) {
                     toolRegistry.register(tool)
                 }
             }
-            logger.info { "SYSTEM tools registered (tasks, memory, manage_subagent, send_message)" }
+            logger.info { "SYSTEM tools registered (tasks, memory, manage_subagent, send_message, answer_message)" }
         } catch (e: Exception) {
             logger.warn(e) { "Failed to register system tools" }
         }

@@ -38,6 +38,7 @@ internal object CoreApiRouterBootstrap {
             workingMemoryService = router.workingMemoryServiceInternal,
             subtaskRepository = router.persistenceInternal.subtaskRepository,
             agentEventBus = router.agentEventBus,
+            agentInboxRegistry = router.agentInboxRegistry,
             subagentRouterProvider = { router.subagentRouter },
             runTurnCallback = { request, listener, stream ->
                 router.agentRouter.runTurn(

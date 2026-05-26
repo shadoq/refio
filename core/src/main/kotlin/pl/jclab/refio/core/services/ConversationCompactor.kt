@@ -39,8 +39,16 @@ class ConversationCompactor(
     /**
      * Check if compaction is needed and perform it.
      *
+     * **Contract for `currentTokens`:** must be the token count of the FINAL rendered prompt
+     * (after TurnPromptBuilder + ContextService compression), NOT a raw sum of stored
+     * `ChatMessage.content` lengths. The sole production caller (AgentTurnLoop.kt) passes
+     * `tokenEstimator.checkFits(tempPrompt, ...).second` which satisfies this. Don't change
+     * the caller to pass raw stored content — see ConversationSummaryService for why that
+     * would cause premature compaction (large unsummarized tool results inflate the count
+     * ~20× over what actually reaches the LLM).
+     *
      * @param taskId Task ID
-     * @param currentTokens Current estimated token count
+     * @param currentTokens Token count of the rendered prompt (see contract above)
      * @param maxTokens Maximum context window
      * @param threshold Compaction threshold (0.0-1.0)
      * @return True if compaction was performed

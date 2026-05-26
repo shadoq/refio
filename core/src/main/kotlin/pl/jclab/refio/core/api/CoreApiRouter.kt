@@ -49,6 +49,9 @@ class CoreApiRouter(
         setRepository(persistence.agentEventSqlRepository)
     }
 
+    // Per-session, per-agent inbox lookup for A2A peer messaging (spec docs/0054-multiagent.md).
+    val agentInboxRegistry = pl.jclab.refio.core.agents.events.AgentInboxRegistry()
+
     // Core services (public for cross-module access by plugin services)
     val taskRepository get() = persistence.taskRepository
     val configService = ConfigService(
@@ -185,6 +188,7 @@ class CoreApiRouter(
         toolApprovalService = toolApprovalService,
         toolPermissionsService = toolPermissionsService,
         agentEventBus = agentEventBus,
+        agentInboxRegistry = agentInboxRegistry,
         promptSectionProviders = promptSectionProviders,
         projectRoot = projectRoot,
     ).build(toolRegistry, toolExecutor)
@@ -209,7 +213,7 @@ class CoreApiRouter(
     // composition-root concerns stay separated from public API wiring.
 
     val multiAgentRunner by lazy {
-        pl.jclab.refio.core.agents.MultiAgentRunner(agentEventBus)
+        pl.jclab.refio.core.agents.MultiAgentRunner(agentEventBus, agentInboxRegistry)
     }
 
     private val domainRouters = pl.jclab.refio.core.api.modules.DomainRouters(

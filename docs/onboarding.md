@@ -1,7 +1,7 @@
 # Onboarding: Refio
 
 > **Last Updated:** 2026-05-03
-> **Version:** 0.0.1.9
+> **Version:** 0.0.1.10
 > **Status:** Active Development
 
 This guide helps new contributors get up and running. For technical reference, see [overview.md](overview.md) and [ARCHITECTURE.md](ARCHITECTURE.md).

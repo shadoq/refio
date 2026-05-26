@@ -119,7 +119,13 @@ data class TurnRequest(
      * Used by MultiAgentRouter to attribute per-turn events to a specific sub-agent.
      * Defaults to [taskId] when null.
      */
-    val emitSourceAgentId: String? = null
+    val emitSourceAgentId: String? = null,
+    /**
+     * Stable agent name (e.g. "analyst", "coder") used for A2A routing in a multi-agent session.
+     * Threaded into `ToolInternalParams.AGENT_NAME` so `send_message` / `answer_message` and the
+     * inbox lookup all key by the same identifier the YAML spec / LLM use. Null for single-agent runs.
+     */
+    val agentName: String? = null
 )
 
 data class ToolDefinitionInfo(

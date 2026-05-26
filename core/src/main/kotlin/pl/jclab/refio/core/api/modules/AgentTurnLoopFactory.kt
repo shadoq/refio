@@ -24,6 +24,7 @@ internal class AgentTurnLoopFactory(
     private val toolApprovalService: ToolApprovalService,
     private val toolPermissionsService: ToolPermissionsService,
     private val agentEventBus: pl.jclab.refio.core.agents.events.AgentEventBus,
+    private val agentInboxRegistry: pl.jclab.refio.core.agents.events.AgentInboxRegistry,
     private val promptSectionProviders: List<PromptSectionProvider>,
     private val projectRoot: java.nio.file.Path?,
 ) {
@@ -59,7 +60,8 @@ internal class AgentTurnLoopFactory(
             tokenEstimator = tokenEstimator,
             promptCache = null,
             sectionProviders = promptSectionProviders,
-            configService = configService
+            configService = configService,
+            agentInboxRegistry = agentInboxRegistry
         )
 
         val toolCallParser = ToolCallParser(

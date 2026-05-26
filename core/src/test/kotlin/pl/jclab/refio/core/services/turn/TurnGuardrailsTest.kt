@@ -81,7 +81,7 @@ class TurnGuardrailsTest {
     @Nested
     inner class TurnRepetitionTrackerTest {
 
-        // ─── Count-based abort ─────────────────────────────────────────────
+        // ─── Effect-key isolation ──────────────────────────────────────────
 
         @Test
         fun `same url with different bodies should not trip the loop`() {
@@ -105,26 +105,10 @@ class TurnGuardrailsTest {
         }
 
         @Test
-        fun `same url with same body aborts at threshold`() {
-            val tracker = TurnGuardrails.TurnRepetitionTracker(abortThreshold = 5)
-            val args = mapOf<String, Any?>(
-                "url" to "https://api.example.com/x",
-                "method" to "POST",
-                "body" to """{"action":"help"}"""
-            )
-            val statuses = (1..5).map { tracker.record("http_request", args) }
-            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[0])
-            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[1])
-            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[2])
-            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[3])
-            assertIs<TurnGuardrails.LoopStatus.ABORT>(statuses[4])
-        }
-
-        @Test
         fun `body as Map vs equivalent body as String share the same key`() {
             // After the HttpRequestTool body-coercion fix, the LLM may pass the body
             // either as a String or as a Map. Both must land in the same effect key.
-            val tracker = TurnGuardrails.TurnRepetitionTracker(abortThreshold = 100)
+            val tracker = TurnGuardrails.TurnRepetitionTracker()
             val mapBody = linkedMapOf("a" to "b")
             val stringBody = mapBody.toString() // same .toString() => same hash
             val argsMap = mapOf<String, Any?>("url" to "https://x", "body" to mapBody)
@@ -136,10 +120,11 @@ class TurnGuardrailsTest {
         }
 
         @Test
-        fun `default thresholds are loose enough for typical game API workflow`() {
-            // ~20 varied http_request turns — different bodies → different keys →
-            // no effect key ever reaches abortThreshold.
-            val tracker = TurnGuardrails.TurnRepetitionTracker() // defaults
+        fun `many varied calls without identical output stay OK`() {
+            // ~20 varied http_request turns — different bodies → different keys,
+            // no output passed → only the count side could ever trigger and
+            // count-based abort was removed.
+            val tracker = TurnGuardrails.TurnRepetitionTracker()
             val url = "https://hub.ag3nts.org/verify"
             for (i in 1..20) {
                 val args = mapOf<String, Any?>(
@@ -157,28 +142,103 @@ class TurnGuardrailsTest {
 
         @Test
         fun `non-tracked tool returns OK indefinitely`() {
-            val tracker = TurnGuardrails.TurnRepetitionTracker(abortThreshold = 3)
-            val args = mapOf<String, Any?>("path" to "a.kt")
+            // `think` and `memory` stay un-tracked — their repetition is by design
+            // (no-op reasoning slot, cross-turn state store). Read-only exploration
+            // tools (read_file, rag_search, etc.) ARE tracked — see dedicated tests.
+            val tracker = TurnGuardrails.TurnRepetitionTracker()
+            val args = mapOf<String, Any?>("thought" to "considering options")
             repeat(10) {
-                val status = tracker.record("read_file", args)
+                val status = tracker.record("think", args)
                 assertIs<TurnGuardrails.LoopStatus.OK>(status)
             }
         }
 
         @Test
-        fun `code editing on same path aborts at threshold`() {
-            val tracker = TurnGuardrails.TurnRepetitionTracker(abortThreshold = 5)
+        fun `rag_search with identical query and output aborts at output threshold`() {
+            // Test 4 pathology: weak model re-issues the same rag_search query 5×
+            // with byte-identical results. identicalOutputAbortThreshold defaults to 4.
+            val tracker = TurnGuardrails.TurnRepetitionTracker()
+            val args = mapOf<String, Any?>(
+                "query" to "auto compaction conversation context window",
+                "content_type" to "PROJECT_CODE"
+            )
+            val output = "Found 3 fragment(s)\n--- [1] foo.kt ---\n..."
+            val statuses = (1..4).map { tracker.record("rag_search", args, output) }
+            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[0])
+            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[1])
+            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[2])
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(statuses[3])
+        }
+
+        @Test
+        fun `rag_search varying query stays OK across many calls`() {
+            // Legitimate exploration: different queries each time, default 15-call
+            // count threshold is never approached, output hashes vary.
+            val tracker = TurnGuardrails.TurnRepetitionTracker()
+            repeat(8) { i ->
+                val args = mapOf<String, Any?>("query" to "query number $i")
+                val status = tracker.record("rag_search", args, "result for $i")
+                assertIs<TurnGuardrails.LoopStatus.OK>(status)
+            }
+        }
+
+        @Test
+        fun `read_file identical reads abort at output threshold`() {
+            val tracker = TurnGuardrails.TurnRepetitionTracker()
+            val args = mapOf<String, Any?>("path" to "src/Main.kt")
+            val output = "package x\nclass Main { fun main() = Unit }\n"
+            val statuses = (1..4).map { tracker.record("read_file", args, output) }
+            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[0])
+            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[1])
+            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[2])
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(statuses[3])
+        }
+
+        @Test
+        fun `read_file across different paths stays OK`() {
+            val tracker = TurnGuardrails.TurnRepetitionTracker()
+            repeat(10) { i ->
+                val args = mapOf<String, Any?>("path" to "src/File$i.kt")
+                val status = tracker.record("read_file", args, "content $i")
+                assertIs<TurnGuardrails.LoopStatus.OK>(status)
+            }
+        }
+
+        @Test
+        fun `grep_search uses pattern+path as effect key`() {
+            val tracker = TurnGuardrails.TurnRepetitionTracker()
+            // Same pattern + path with identical output → abort at 4th
+            val args = mapOf<String, Any?>("pattern" to "TODO", "path" to "src")
+            val output = "no matches"
+            val statuses = (1..4).map { tracker.record("grep_search", args, output) }
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(statuses[3])
+        }
+
+        @Test
+        fun `code_intelligence keyed by action plus target`() {
+            val tracker = TurnGuardrails.TurnRepetitionTracker()
+            val args = mapOf<String, Any?>("action" to "find_usages", "symbol" to "foo")
+            val output = "no usages found"
+            val statuses = (1..4).map { tracker.record("code_intelligence", args, output) }
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(statuses[3])
+        }
+
+        @Test
+        fun `code editing on same path with no output stays OK`() {
+            // Write tools typically don't pass output. Without count-based abort,
+            // identical-arg repeats are NOT caught by the repetition tracker —
+            // they fall to ToolErrorTracker (when the edits genuinely fail) or
+            // to legitimate refactor work (when each call has a different effect).
+            val tracker = TurnGuardrails.TurnRepetitionTracker()
             val args = mapOf<String, Any?>(
                 "path" to "src/main.kt",
                 "old_string" to "x",
                 "new_string" to "y"
             )
-            val statuses = (1..5).map { tracker.record("code_editing", args) }
-            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[0])
-            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[1])
-            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[2])
-            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[3])
-            assertIs<TurnGuardrails.LoopStatus.ABORT>(statuses[4])
+            repeat(20) {
+                val status = tracker.record("code_editing", args)
+                assertIs<TurnGuardrails.LoopStatus.OK>(status)
+            }
         }
 
         // ─── Output-hash abort ─────────────────────────────────────────────
@@ -274,6 +334,8 @@ class TurnGuardrailsTest {
             assertIs<TurnGuardrails.LoopStatus.ABORT>(tracker.record("run_code", args, "error B"))
         }
 
+        // ─── Content-chanting tests live in their own nested class below.
+
         @Test
         fun `run_code tracker separates languages`() {
             val tracker = TurnGuardrails.TurnRepetitionTracker(identicalOutputAbortThreshold = 3)
@@ -288,6 +350,77 @@ class TurnGuardrailsTest {
             assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("run_code", kt, sameTail))
             // py bucket gets 3rd identical → abort (threshold is 3).
             assertIs<TurnGuardrails.LoopStatus.ABORT>(tracker.record("run_code", py, sameTail))
+        }
+    }
+
+    @Nested
+    inner class ContentChantingDetectorTest {
+
+        @Test
+        fun `short content passes`() {
+            // Below the size floor — can't reach threshold even if entirely a chant.
+            val short = "hello hello hello hello"
+            assertIs<TurnGuardrails.LoopStatus.OK>(
+                TurnGuardrails.ContentChantingDetector.inspect(short)
+            )
+        }
+
+        @Test
+        fun `normal prose passes`() {
+            val prose = """
+                The user asked me to analyze the file structure. I read the main entry point
+                and found three modules. The first module handles authentication, the second
+                module provides the API layer, and the third manages the database connection.
+                Based on this review, I recommend extracting the auth logic into a separate
+                package for testability. The current coupling makes unit tests difficult.
+            """.trimIndent()
+            assertIs<TurnGuardrails.LoopStatus.OK>(
+                TurnGuardrails.ContentChantingDetector.inspect(prose)
+            )
+        }
+
+        @Test
+        fun `chant of identical sentence aborts`() {
+            // 30× identical 60-char sentence — clear pathology.
+            val chant = ("I will check the file. ".repeat(40)).trim()
+            val status = TurnGuardrails.ContentChantingDetector.inspect(chant)
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(status)
+            assertTrue(status.reason.contains("Content chanting detected"))
+        }
+
+        @Test
+        fun `enumeration with varied items passes`() {
+            // Tens of bullet points, each slightly different — legitimate output, not a chant.
+            val list = (1..30).joinToString("\n") { i ->
+                "- Item $i: this is a unique description about item number $i that varies in content"
+            }
+            assertIs<TurnGuardrails.LoopStatus.OK>(
+                TurnGuardrails.ContentChantingDetector.inspect(list)
+            )
+        }
+
+        @Test
+        fun `code-style legitimate repeats pass`() {
+            // Common Kotlin pattern that produces some hash collisions but stays below threshold.
+            val code = (1..8).joinToString("\n\n") { i ->
+                "fun method$i(param: String): Int {\n    return param.length + $i\n}"
+            }
+            assertIs<TurnGuardrails.LoopStatus.OK>(
+                TurnGuardrails.ContentChantingDetector.inspect(code)
+            )
+        }
+
+        @Test
+        fun `chant report includes sample phrase`() {
+            val phrase = "Let me check the configuration file now. "
+            val chant = phrase.repeat(20)
+            val status = TurnGuardrails.ContentChantingDetector.inspect(chant)
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(status)
+            // The sample should contain part of the repeated phrase for diagnostic value.
+            assertTrue(
+                status.reason.contains("check the configuration"),
+                "Reason should include sample of repeated phrase, got: ${status.reason}"
+            )
         }
     }
 }

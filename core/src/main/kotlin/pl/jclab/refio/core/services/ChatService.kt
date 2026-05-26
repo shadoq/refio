@@ -188,6 +188,14 @@ class ChatService(
             variables = emptyMap()  // Context is now passed separately
         )
 
+        // Auto-optimize trigger: measure tokens on the already-rendered `messages` (List<LLMMessage>)
+        // built from buildLlmMessages, NOT on raw ChatMessage.content. Today this is safe because
+        // CHAT mode produces no TOOL messages (toolCalls=emptyList()) and isSubagentNoise() filters
+        // subagent TOOL bodies (depth>=1) out of buildLlmMessages. If either invariant ever
+        // changes — e.g. CHAT starts allowing tool calls, or a depth-0 TOOL message slips through
+        // — this trigger will start counting raw stored content and may misfire. In that case
+        // mirror ConversationSummaryService: pass a contentResolver that returns the prompt-side
+        // rendering of TOOL messages instead of msg.content.
         val autoOptimizePercentage = configService.getTyped(ConfigKeys.AUTO_OPTIMIZE_PERCENTAGE)
         if (autoOptimizePercentage > 0) {
             val modelMaxContext = TokenEstimator.getMaxContextForModel(model, provider, configService)

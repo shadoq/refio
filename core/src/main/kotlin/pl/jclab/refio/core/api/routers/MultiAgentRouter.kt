@@ -92,7 +92,8 @@ class MultiAgentRouter(
                         model = spec.model ?: request.model,
                         provider = request.provider,
                         emitSessionId = session.id,
-                        emitSourceAgentId = agentId
+                        emitSourceAgentId = agentId,
+                        agentName = spec.name
                     ),
                     streamCallback
                 )

@@ -202,7 +202,42 @@ class AnthropicAdapter(
             }
 
             if (finalSystemPrompt != null) {
-                put("system", finalSystemPrompt)
+                // Prompt-prefix caching: when [TurnPromptBuilder] reports a stable-prefix
+                // boundary via `cacheable_system_length` (= chars), split the system prompt
+                // into two blocks and mark the prefix with `cache_control: ephemeral`.
+                // Anthropic then caches the prefix and bills subsequent turns at the
+                // discounted cache-hit rate as long as the prefix bytes stay identical.
+                // Falls back to the simple string form when no boundary is supplied.
+                //
+                // Safety: the length we receive is an offset into the original system
+                // prompt. When the LLMClient is called with multiple system messages,
+                // they get joined into `combinedSystemPrompt` and the offset no longer
+                // maps cleanly. Disable caching in that case rather than risk a
+                // misaligned split that ships a half-sentence as the cache key.
+                val cacheableLen = (kwargs["cacheable_system_length"] as? Number)?.toInt() ?: 0
+                val cacheEligible = cacheableLen > 0 && systemMessages.size <= 1
+                val systemValue: Any = if (cacheEligible && cacheableLen < finalSystemPrompt.length) {
+                    val stablePrefix = finalSystemPrompt.substring(0, cacheableLen)
+                    val volatileSuffix = finalSystemPrompt.substring(cacheableLen)
+                    logger.info {
+                        "[ANTHROPIC] prompt-prefix cache enabled: stable=${stablePrefix.length} chars, " +
+                            "volatile=${volatileSuffix.length} chars"
+                    }
+                    listOf(
+                        mapOf(
+                            "type" to "text",
+                            "text" to stablePrefix,
+                            "cache_control" to mapOf("type" to "ephemeral")
+                        ),
+                        mapOf(
+                            "type" to "text",
+                            "text" to volatileSuffix
+                        )
+                    )
+                } else {
+                    finalSystemPrompt
+                }
+                put("system", systemValue)
                 if (responseFormat != null) {
                     logger.info { "[ANTHROPIC] Enforcing JSON mode via system prompt" }
                 }
