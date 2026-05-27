@@ -8,8 +8,11 @@ import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
+import pl.jclab.refio.core.tools.security.FileLimits
 import java.nio.file.Files
+import java.nio.file.Path
 import java.util.concurrent.TimeUnit
+import kotlin.io.path.isRegularFile
 
 private val logger = dualLogger("CodeIntelligenceTool")
 
@@ -17,22 +20,27 @@ private val logger = dualLogger("CodeIntelligenceTool")
  * Code intelligence without requiring IDE or IntelliJ PSI.
  *
  * Actions:
- * - find_usages:    Find all uses of a symbol (method, class, variable) — uses grep
- * - find_definition: Find where a symbol is defined — uses ctags or grep
- * - list_symbols:  List all symbols in a file or directory — uses ctags
+ * - find_usages:    Find all uses of a symbol (method, class, variable) — internal scan
+ * - find_definition: Find where a symbol is defined — uses ctags if available, else internal scan
+ * - list_symbols:  List all symbols in a file or directory — requires ctags
  * - get_diagnostics: Run compiler/linter and return errors — uses language-specific CLI
+ *
+ * Symbol scanning is implemented in pure Kotlin (Files.walk + Regex) so it works on
+ * Windows without external `grep` — previous versions shelled out to `grep` which
+ * failed on Windows with `CreateProcess error=2`.
  */
 class CodeIntelligenceTool(
-    private val sandbox: PathSandbox
+    private val sandbox: PathSandbox,
+    private val limits: FileLimits = FileLimits.DEFAULT
 ) : Tool {
     override val name = "code_intelligence"
     override val description = "Analyze code structure: find symbol usages, definitions, list symbols, get compiler diagnostics. " +
-        "Works without IntelliJ PSI — uses ctags and grep. " +
+        "Works without IntelliJ PSI — pure-Kotlin symbol scan (no external grep), optional ctags for list_symbols. " +
         "Actions: find_usages, find_definition, list_symbols, get_diagnostics."
     override val mode = ToolMode.READ_ONLY
     override val category = ToolCategory.DATA_PRODUCING
     override val selectionHint =
-        "Code navigation: find_usages, find_definition, list_symbols, get_diagnostics (ctags-based)."
+        "Code navigation: find_usages, find_definition, list_symbols (ctags), get_diagnostics."
 
     override fun validateParams(params: Map<String, Any>) {
         val action = params["action"] as? String
@@ -62,26 +70,14 @@ class CodeIntelligenceTool(
     }
 
     private fun findUsages(symbol: String, path: String, startTime: Long): ToolResult {
-        val root = sandbox.resolve(path).toAbsolutePath()
-
-        val grepCmd = buildList {
-            add("grep")
-            add("-rn")
-            add("--include=*.kt")
-            add("--include=*.java")
-            add("--include=*.ts")
-            add("--include=*.py")
-            add("--include=*.js")
-            add("--color=never")
-            add("\\b${Regex.escape(symbol)}\\b")
-            add(root.toString())
-        }
+        val root = sandbox.resolve(path.replace('\\', '/')).toAbsolutePath()
+        if (!Files.exists(root)) return ToolResult.error("Path not found: $path")
 
         return try {
-            val output = runCommand(grepCmd, root.toFile())
-            val lines = output.lines().filter { it.isNotBlank() }.take(100)
+            val pattern = Regex("\\b${Regex.escape(symbol)}\\b")
+            val matches = scanForRegex(root, pattern, maxResults = 100)
 
-            if (lines.isEmpty()) {
+            if (matches.isEmpty()) {
                 return ToolResult(
                     success = true,
                     output = "No usages of '$symbol' found in $path",
@@ -89,27 +85,25 @@ class CodeIntelligenceTool(
                 )
             }
 
+            val sandboxBase = sandbox.resolve(".").toAbsolutePath()
             val formatted = buildString {
                 appendLine("Usages of '$symbol' ($path):")
-                appendLine("Found: ${lines.size} occurrences\n")
-                lines.forEach { line ->
-                    val parts = line.split(":", limit = 3)
-                    if (parts.size >= 3) {
-                        val file = parts[0].removePrefix(root.toString()).trimStart('/', '\\')
-                        appendLine("  $file:${parts[1]}  ${parts[2].trim()}")
-                    } else {
-                        appendLine("  $line")
-                    }
+                appendLine("Found: ${matches.size} occurrences\n")
+                matches.forEach { m ->
+                    val rel = relativize(sandboxBase, m.file)
+                    appendLine("  $rel:${m.lineNumber}  ${m.line}")
                 }
             }
             ToolResult(success = true, output = formatted, durationMs = elapsed(startTime))
         } catch (e: Exception) {
+            logger.error(e) { "find_usages failed for symbol='$symbol'" }
             ToolResult.error("find_usages failed: ${e.message}")
         }
     }
 
     private fun findDefinition(symbol: String, path: String, language: String?, startTime: Long): ToolResult {
-        val root = sandbox.resolve(path).toAbsolutePath()
+        val root = sandbox.resolve(path.replace('\\', '/')).toAbsolutePath()
+        if (!Files.exists(root)) return ToolResult.error("Path not found: $path")
 
         if (isCtagsAvailable()) {
             val ctagsResult = runCtagsForSymbol(symbol, root.toFile())
@@ -122,33 +116,29 @@ class CodeIntelligenceTool(
             }
         }
 
+        // Pure-Kotlin definition scan. Looks for common declaration shapes across
+        // Kotlin/Java/Python/TypeScript/JavaScript. Single Files.walk pass tested
+        // against multiple regexes in parallel — cheaper than walking N times.
+        val escapedSymbol = Regex.escape(symbol)
         val defPatterns = listOf(
-            "fun $symbol",
-            "class $symbol",
-            "interface $symbol",
-            "object $symbol",
-            "def $symbol",
-            "function $symbol",
-            "public.*$symbol\\(",
-            "val $symbol",
-            "var $symbol"
+            Regex("\\bfun\\s+$escapedSymbol\\b"),
+            Regex("\\bclass\\s+$escapedSymbol\\b"),
+            Regex("\\binterface\\s+$escapedSymbol\\b"),
+            Regex("\\bobject\\s+$escapedSymbol\\b"),
+            Regex("\\bdef\\s+$escapedSymbol\\b"),
+            Regex("\\bfunction\\s+$escapedSymbol\\b"),
+            Regex("\\b(?:val|var)\\s+$escapedSymbol\\b"),
+            Regex("\\b(?:public|private|protected|internal|static)\\b.*\\b$escapedSymbol\\s*\\(")
         )
 
-        val allLines = mutableListOf<String>()
-        defPatterns.forEach { pattern ->
-            try {
-                val cmd = listOf(
-                    "grep", "-rn", "--color=never", "-E", pattern,
-                    "--include=*.kt", "--include=*.java", "--include=*.ts",
-                    "--include=*.py", "--include=*.js", root.toString()
-                )
-                val out = runCommand(cmd, root.toFile())
-                allLines.addAll(out.lines().filter { it.isNotBlank() })
-            } catch (_: Exception) {
-            }
+        val matches = try {
+            scanForAnyRegex(root, defPatterns, maxResults = 50)
+        } catch (e: Exception) {
+            logger.error(e) { "find_definition scan failed for symbol='$symbol'" }
+            return ToolResult.error("find_definition failed: ${e.message}")
         }
 
-        if (allLines.isEmpty()) {
+        if (matches.isEmpty()) {
             return ToolResult(
                 success = true,
                 output = "Definition of '$symbol' not found in $path. " +
@@ -157,13 +147,19 @@ class CodeIntelligenceTool(
             )
         }
 
-        val output = "Definition of '$symbol':\n" +
-            allLines.distinct().take(20).joinToString("\n") { "  $it" }
-        return ToolResult(success = true, output = output, durationMs = elapsed(startTime))
+        val sandboxBase = sandbox.resolve(".").toAbsolutePath()
+        val output = buildString {
+            appendLine("Definition of '$symbol':")
+            matches.distinctBy { it.file to it.lineNumber }.take(20).forEach { m ->
+                val rel = relativize(sandboxBase, m.file)
+                appendLine("  $rel:${m.lineNumber}  ${m.line}")
+            }
+        }
+        return ToolResult(success = true, output = output.trimEnd(), durationMs = elapsed(startTime))
     }
 
     private fun listSymbols(path: String, language: String?, startTime: Long): ToolResult {
-        val root = sandbox.resolve(path).toAbsolutePath()
+        val root = sandbox.resolve(path.replace('\\', '/')).toAbsolutePath()
 
         if (!isCtagsAvailable()) {
             return ToolResult(
@@ -219,7 +215,7 @@ class CodeIntelligenceTool(
     }
 
     private fun getDiagnostics(path: String, language: String?, startTime: Long): ToolResult {
-        val root = sandbox.resolve(path).toAbsolutePath()
+        val root = sandbox.resolve(path.replace('\\', '/')).toAbsolutePath()
         val detectedLang = language ?: detectProjectLanguage(root)
 
         val cmd: List<String> = when (detectedLang?.lowercase()) {
@@ -255,6 +251,76 @@ class CodeIntelligenceTool(
             ToolResult.error("get_diagnostics failed: ${e.message}")
         }
     }
+
+    private data class ScanMatch(val file: Path, val lineNumber: Int, val line: String)
+
+    /** Single-regex scan over project tree honoring sandbox + FileLimits. */
+    private fun scanForRegex(root: Path, regex: Regex, maxResults: Int): List<ScanMatch> =
+        scanForAnyRegex(root, listOf(regex), maxResults)
+
+    /**
+     * Walk [root], for each accepted file check every line against any of [regexes].
+     * Excludes match GrepSearchTool: build/.git/node_modules dirs via FileLimits.shouldExcludeDirectory,
+     * binary/large files via shouldExcludeFile + maxFileSize. Stops early at maxResults.
+     */
+    private fun scanForAnyRegex(root: Path, regexes: List<Regex>, maxResults: Int): List<ScanMatch> {
+        if (regexes.isEmpty()) return emptyList()
+        val results = mutableListOf<ScanMatch>()
+        val extensions = setOf("kt", "kts", "java", "ts", "tsx", "js", "jsx", "py")
+
+        if (root.isRegularFile()) {
+            scanFile(root, regexes, results, maxResults)
+            return results
+        }
+        if (!Files.isDirectory(root)) return results
+
+        Files.walk(root, limits.maxSearchDepth).use { stream ->
+            val iterator = stream
+                .filter { p ->
+                    val rel = try { root.relativize(p) } catch (_: Exception) { p }
+                    rel.none { seg -> limits.shouldExcludeDirectory(seg.toString()) }
+                }
+                .filter { it.isRegularFile() }
+                .filter { it.fileName.toString().substringAfterLast('.', "").lowercase() in extensions }
+                .iterator()
+
+            while (iterator.hasNext()) {
+                val file = iterator.next()
+                if (limits.shouldExcludeFile(file.fileName.toString())) continue
+                scanFile(file, regexes, results, maxResults)
+                if (results.size >= maxResults) break
+            }
+        }
+        return results
+    }
+
+    private fun scanFile(
+        file: Path,
+        regexes: List<Regex>,
+        results: MutableList<ScanMatch>,
+        maxResults: Int
+    ) {
+        try {
+            val size = Files.size(file)
+            if (size > limits.maxFileSize) return
+            val lines = Files.readString(file).lines()
+            for ((idx, line) in lines.withIndex()) {
+                if (regexes.any { it.containsMatchIn(line) }) {
+                    results += ScanMatch(file, idx + 1, line.trim())
+                    if (results.size >= maxResults) return
+                }
+            }
+        } catch (e: Exception) {
+            logger.debug { "Failed to read ${file.fileName}: ${e.message}" }
+        }
+    }
+
+    private fun relativize(base: Path, file: Path): String =
+        try {
+            base.relativize(file).toString().replace('\\', '/')
+        } catch (_: Exception) {
+            file.toString()
+        }
 
     private fun isCtagsAvailable(): Boolean {
         return try {

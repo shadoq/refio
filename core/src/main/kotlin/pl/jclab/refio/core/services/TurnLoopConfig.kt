@@ -33,7 +33,6 @@ import java.time.Duration
  * @property workingMemoryMaxEntries Maximum working memory entries to include
  * @property enableVerification Enable optional verification step
  * @property verificationIterationThreshold Iteration count to trigger verification
- * @property maxConsecutiveReadOnlyIterations Max consecutive read-only iterations before nudging agent to write
  * @property loopMaxConsecutiveRepeats Max consecutive calls to the same tool before aborting
  * @property loopMaxSameToolTotal Max total calls to the same tool before aborting
  * @property loopWarnConsecutiveThreshold Warn after this many consecutive same-tool calls
@@ -74,9 +73,6 @@ data class TurnLoopConfig(
     val enableVerification: Boolean,
     val verificationIterationThreshold: Int,
 
-    // Read-only budget guard (ADR-0044)
-    val maxConsecutiveReadOnlyIterations: Int,
-
     // Loop detection
     val loopMaxConsecutiveRepeats: Int,
     val loopMaxSameToolTotal: Int,
@@ -90,10 +86,18 @@ data class TurnLoopConfig(
          * PLAN mode is read-only, focused on analysis and planning.
          */
         fun plan() = TurnLoopConfig(
-            maxIterations = 50,
-            warningThreshold = 20,
+            // Bumped from 50 → 100 to align with industry baselines (Gemini CLI 100,
+            // Hermes 90). PLAN is read-only so iterations are cheap; the previous cap
+            // was hitting prematurely on large-codebase exploration tasks. AGENT was
+            // already at 100. Iteration cost is bounded by ToolErrorTracker (≥70%
+            // error rate aborts) and TurnRepetitionTracker (output-hash × 4 aborts).
+            maxIterations = 100,
+            warningThreshold = 30,
             parallelReadTools = true,
-            maxParallelReadTools = 3,
+            // Bumped from 3 → 6: filesystem reads are cheap and IO-bound. Real-world batches
+            // are 4-6 files at once (typical "read these 4 candidates" pattern from PLAN),
+            // and capping at 3 forces a needless serialisation chunk for the 4th-6th items.
+            maxParallelReadTools = 6,
             enableSnapshots = false,
             toolTimeout = Duration.ofSeconds(30),
             enableAutoCompaction = true,
@@ -110,7 +114,6 @@ data class TurnLoopConfig(
             workingMemoryMaxEntries = 20,
             enableVerification = false,
             verificationIterationThreshold = 0,
-            maxConsecutiveReadOnlyIterations = 15, // PLAN mode is read-only by design
             loopMaxConsecutiveRepeats = 10,
             loopMaxSameToolTotal = 20,
             loopWarnConsecutiveThreshold = 6,
@@ -126,7 +129,8 @@ data class TurnLoopConfig(
             maxIterations = 100,
             warningThreshold = 30,
             parallelReadTools = true,
-            maxParallelReadTools = 3,
+            // See plan() — same rationale, bumped to 6.
+            maxParallelReadTools = 6,
             enableSnapshots = true,
             toolTimeout = Duration.ofMinutes(2),
             enableAutoCompaction = true,
@@ -143,7 +147,6 @@ data class TurnLoopConfig(
             workingMemoryMaxEntries = 50,
             enableVerification = true,
             verificationIterationThreshold = 40,
-            maxConsecutiveReadOnlyIterations = 20, // Allow deeper analysis before nudging agent to write
             loopMaxConsecutiveRepeats = 40,
             loopMaxSameToolTotal = 40,
             loopWarnConsecutiveThreshold = 20,

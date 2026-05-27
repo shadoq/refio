@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import pl.jclab.refio.core.agents.events.AgentEvent
 import pl.jclab.refio.core.agents.events.AgentEventBus
+import pl.jclab.refio.core.agents.events.AgentInboxRegistry
+import pl.jclab.refio.core.agents.events.AgentMessageInbox
 import pl.jclab.refio.core.services.logging.coreLogger
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import java.util.UUID
@@ -30,7 +32,8 @@ private val logger = coreLogger("MultiAgentRunner")
  * ```
  */
 class MultiAgentRunner(
-    private val eventBus: AgentEventBus
+    private val eventBus: AgentEventBus,
+    private val inboxRegistry: AgentInboxRegistry = AgentInboxRegistry()
 ) {
     /**
      * Detect cycles in agent dependency graph using DFS.
@@ -136,6 +139,17 @@ class MultiAgentRunner(
                         dependsOn = spec.dependsOn
                     ))
 
+                    // Register this agent's inbox so peers (or this agent itself) can route
+                    // messages by spec.name via AgentInboxRegistry. The inbox's coroutines die
+                    // with `this` (the supervisorScope launch) when the agent completes.
+                    val inbox = AgentMessageInbox(
+                        agentName = spec.name,
+                        sessionId = sessionId,
+                        eventBus = eventBus,
+                        scope = this,
+                    )
+                    inboxRegistry.register(inbox)
+
                     try {
                         val result = executor(spec, agentId)
                         results[spec.name] = result
@@ -186,6 +200,8 @@ class MultiAgentRunner(
 
                         logger.error(e) { "[MULTI_AGENT] Agent '${spec.name}' failed: $errorMsg" }
                     } finally {
+                        inbox.close()
+                        inboxRegistry.unregister(sessionId, spec.name)
                         GlobalMetrics.removeAgent(agentId)
                         completedAgents.update { it + spec.name }
                     }

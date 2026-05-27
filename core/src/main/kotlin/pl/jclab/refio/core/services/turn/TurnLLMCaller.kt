@@ -75,11 +75,16 @@ class TurnLLMCaller(
             }
         }
 
-        val extraKwargs: Map<String, Any> = if (nativeToolsActive) {
-            logger.info { "[NATIVE_TOOLS] Requesting: model=$modelId, tools=${nativeToolSchemas!!.size}, mode=$mode (response_format suppressed)" }
-            mapOf("native_tools" to nativeToolSchemas!!)
-        } else {
-            emptyMap()
+        val extraKwargs: Map<String, Any> = buildMap {
+            if (nativeToolsActive) {
+                logger.info { "[NATIVE_TOOLS] Requesting: model=$modelId, tools=${nativeToolSchemas!!.size}, mode=$mode (response_format suppressed)" }
+                put("native_tools", nativeToolSchemas!!)
+            }
+            // Forward the prompt-prefix cache boundary so adapters that support
+            // it (currently Anthropic) can place a `cache_control` marker at the
+            // stable/volatile boundary. Adapters that don't recognize the key
+            // ignore it, so this is safe to send to every provider.
+            prompt.cacheableSystemLength?.takeIf { it > 0 }?.let { put("cacheable_system_length", it) }
         }
 
         return withContext(Dispatchers.IO) {

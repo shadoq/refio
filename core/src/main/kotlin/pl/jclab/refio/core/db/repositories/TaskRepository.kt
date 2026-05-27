@@ -164,7 +164,7 @@ class TaskRepository {
                 it[updatedAt] = System.currentTimeMillis()
             }
 
-            logger.info { "Incremented task metrics: id=$id, +$tokensIn/${+tokensOut} tokens, +$$costUsd" }
+            logger.info { "Incremented task metrics: id=$id, +$tokensIn/$tokensOut tokens, +\$${"%.6f".format(costUsd)}" }
 
             findById(id)
         }
@@ -382,9 +382,49 @@ class TaskRepository {
             costUsd = row[TasksTable.costUsd],
             sourcePlanId = row[TasksTable.sourcePlanId],
             planVersion = row[TasksTable.planVersion],
+            completionCondition = row[TasksTable.completionCondition],
             createdAt = row[TasksTable.createdAt],
             updatedAt = row[TasksTable.updatedAt]
         )
+    }
+
+    /**
+     * Set or clear the `/goal` completion condition for a task.
+     *
+     * When non-null, [pl.jclab.refio.core.services.turn.NextSpeakerJudgeGuardian] switches
+     * to a goal-aware prompt that asks "has this condition been met based on the agent's
+     * response?" instead of the generic "is the turn finished?". Pass `null` to clear.
+     *
+     * @return true when the task existed (and the update ran), false when no task matched.
+     */
+    fun setCompletionCondition(id: String, condition: String?): Boolean {
+        return transaction {
+            val updated = TasksTable.update({ TasksTable.id eq id }) {
+                it[completionCondition] = condition
+                it[updatedAt] = System.currentTimeMillis()
+            }
+            if (updated > 0) {
+                logger.info { "Set completion condition for task $id: ${condition?.take(80) ?: "(cleared)"}" }
+                true
+            } else {
+                logger.warn { "Task not found for setCompletionCondition: id=$id" }
+                false
+            }
+        }
+    }
+
+    /**
+     * Get the active completion condition for a task, or null if none is set.
+     * Called by the turn loop on every guardian evaluation (cheap point read by PK).
+     */
+    fun getCompletionCondition(id: String): String? {
+        return transaction {
+            TasksTable
+                .select(TasksTable.completionCondition)
+                .where { TasksTable.id eq id }
+                .singleOrNull()
+                ?.get(TasksTable.completionCondition)
+        }
     }
 }
 

@@ -24,6 +24,7 @@ internal class AgentTurnLoopFactory(
     private val toolApprovalService: ToolApprovalService,
     private val toolPermissionsService: ToolPermissionsService,
     private val agentEventBus: pl.jclab.refio.core.agents.events.AgentEventBus,
+    private val agentInboxRegistry: pl.jclab.refio.core.agents.events.AgentInboxRegistry,
     private val promptSectionProviders: List<PromptSectionProvider>,
     private val projectRoot: java.nio.file.Path?,
 ) {
@@ -59,7 +60,8 @@ internal class AgentTurnLoopFactory(
             tokenEstimator = tokenEstimator,
             promptCache = null,
             sectionProviders = promptSectionProviders,
-            configService = configService
+            configService = configService,
+            agentInboxRegistry = agentInboxRegistry
         )
 
         val toolCallParser = ToolCallParser(
@@ -97,7 +99,19 @@ internal class AgentTurnLoopFactory(
             chatMessageRepository = chatMessageRepository
         )
 
-        val completionGuardians = GuardianRegistry()
+        // Next-speaker judge runs at the terminal point of every AGENT turn to confirm
+        // the agent actually finished (vs. paused mid-task after a sub-step). See
+        // [NextSpeakerJudgeGuardian]. PLAN / CHAT modes self-skip inside the guardian.
+        // maxReentries matches NextSpeakerJudgeGuardian.MAX_JUDGE_REENTRIES so the
+        // registry's hard cap and the guardian's self-cap stay in sync.
+        val nextSpeakerJudge = NextSpeakerJudgeGuardian(
+            llmClient = llmClient,
+            configService = configService
+        )
+        val completionGuardians = GuardianRegistry(
+            guardians = listOf(nextSpeakerJudge),
+            maxReentries = NextSpeakerJudgeGuardian.MAX_JUDGE_REENTRIES
+        )
 
         val turnSubagentValidator = TurnSubagentValidator(
             maxSubagentDepth = 3

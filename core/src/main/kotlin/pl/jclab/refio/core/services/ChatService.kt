@@ -188,6 +188,14 @@ class ChatService(
             variables = emptyMap()  // Context is now passed separately
         )
 
+        // Auto-optimize trigger: measure tokens on the already-rendered `messages` (List<LLMMessage>)
+        // built from buildLlmMessages, NOT on raw ChatMessage.content. Today this is safe because
+        // CHAT mode produces no TOOL messages (toolCalls=emptyList()) and isSubagentNoise() filters
+        // subagent TOOL bodies (depth>=1) out of buildLlmMessages. If either invariant ever
+        // changes — e.g. CHAT starts allowing tool calls, or a depth-0 TOOL message slips through
+        // — this trigger will start counting raw stored content and may misfire. In that case
+        // mirror ConversationSummaryService: pass a contentResolver that returns the prompt-side
+        // rendering of TOOL messages instead of msg.content.
         val autoOptimizePercentage = configService.getTyped(ConfigKeys.AUTO_OPTIMIZE_PERCENTAGE)
         if (autoOptimizePercentage > 0) {
             val modelMaxContext = TokenEstimator.getMaxContextForModel(model, provider, configService)
@@ -490,7 +498,29 @@ class ChatService(
     }
 
     private fun buildLlmMessages(history: List<ChatMessage>): List<LLMMessage> =
-        history.map { msg -> LLMMessage(role = msg.role.name.lowercase(), content = msg.content) }
+        history.filterNot { isSubagentNoise(it) }
+            .map { msg -> LLMMessage(role = msg.role.name.lowercase(), content = msg.content) }
+
+    /**
+     * Subagent isolation: when a `!agent` invocation runs inside a CHAT session, the
+     * intermediate tool calls/results land in the same chat history (tagged with
+     * agentDepth>=1). Including them in the NEXT CHAT turn's context would bloat the
+     * prompt with content the user doesn't see and the parent chat doesn't need —
+     * a 27-subtask business-analyst run added ~50k tokens of tool noise in one observed
+     * session. Keep the user's `!agent ...` invocation and the subagent's final
+     * synthesized answer (an ASSISTANT message with no tool_calls); drop the rest.
+     *
+     * agentDepth=null and agentDepth=0 are top-level CHAT messages and pass through.
+     */
+    private fun isSubagentNoise(msg: ChatMessage): Boolean {
+        val depth = msg.agentDepth ?: return false
+        if (depth < 1) return false
+        return when (msg.role) {
+            MessageRole.TOOL -> true
+            MessageRole.ASSISTANT -> !msg.toolCalls.isNullOrEmpty()
+            else -> false
+        }
+    }
 
     private fun buildCumulativeContext(history: List<ChatMessage>): List<ContextReference> {
         val refs = mutableListOf<ContextReference>()

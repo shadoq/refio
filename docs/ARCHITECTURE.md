@@ -3,9 +3,17 @@
 > For contributors and advanced users. See [README.md](../README.md) for product overview.
 
 > **Recent notable changes** (see [CHANGELOG.md](../CHANGELOG.md) `[Unreleased]`):
+> - **`/goal` autonomous workflow** — `/goal <condition>` sets an explicit completion condition on the active task. `NextSpeakerJudgeGuardian` switches from generic "is the turn finished?" to strict goal-aware evaluation that verifies the transcript shows demonstrable evidence the condition is met. AGENT-only. Available in TUI and IntelliJ. Condition persisted on the `tasks` table, survives session restart.
+> - **LLM judge `checkNextSpeaker` (Gemini CLI pattern)** — at the terminal of every AGENT turn, `NextSpeakerJudgeGuardian` runs a cheap `ModelOperation.WEAK` call to decide whether the agent really finished or just paused mid-task. "model" verdict → `GuardianDecision.Reenter` with a SYSTEM nudge; "user" / "uncertain" / parse-fail → `Pass`. Capped at 3 re-entries per turn (`MAX_JUDGE_REENTRIES`). Pre-filter skips the LLM call for clarifying questions (`?`) and — in generic mode only — short / explicitly-finished replies.
+> - **Content-chanting loop detection** — `TurnGuardrails.ContentChantingDetector` hard-aborts the turn when the assistant message contains the same word phrase repeated 10+ times consecutively. Catches the runaway-generation pathology common with weak local models.
+> - **Anthropic prompt-prefix caching** — `TurnPromptBuilder.StructuredPromptBuilder.render()` reports a `stablePrefixLength`; `AnthropicAdapter` splits the system prompt into two blocks and marks the stable prefix with `cache_control: ephemeral`. Subsequent turns billed at the cache-hit rate (~10% of normal input cost, 5-min TTL).
+> - **Iter cap PLAN 50 → 100** — `TurnLoopConfig.plan()` matches AGENT and aligns with Gemini CLI (100) / Hermes (90). PLAN is read-only so iterations are cheap.
+> - **`TurnGuardrails` simplification** — removed `looksLikeIntentAnnouncement`, `looksLikeToolMarkerOnly`, and the count-based `TurnRepetitionTracker` abort. Format-retry only fires on objectively-broken outputs (empty envelope, native-text-embedded tool call, malformed JSON). Aligns with Codex / Claude Code "trust the model" philosophy.
+> - **Universal `<tool_use_enforcement>`** — system-agent.md and system-plan.md now embed an explicit "do not narrate intent without a tool call" block. Replaces the previous `ModelFamilyClassifier`-based dynamic injection.
+> - **Multi-agent A2A messaging** — `AgentInboxRegistry` + `AgentMessageInbox` give each agent a queue; `send_message` enqueues, `answer_message` replies; the next turn's prompt builder injects pending inbound messages. Production wiring for the previously-incomplete A2A loop.
 > - **Centralized LLM metric tracking** — `LLMClient` accepts `taskRepository` + `subtaskRepository` and auto-increments `tokens_in` / `tokens_out` / `cost_usd` on the matching task and subtask rows after every successful call. The `task` row is the single source of truth; UI reads it directly instead of summing per-message tokens.
 > - **`DiffCompressor`** — content-aware diff body elision (small / pure-create / mixed paths). Saves ~8-14K input tokens on the agent iteration that follows a write tool.
-> - **Native function calling on OpenAI-compatible adapters** (OpenRouter, Z.AI, Generic OpenAI, LM Studio) plus persistent fallback list (`models.native_tools_fallbacks`) — fallback survives process restart.
+> - **Native function calling on OpenAI-compatible adapters** (OpenRouter, Z.AI, Generic OpenAI, LM Studio) plus persistent fallback list (`models.native_tools_fallbacks`) — fallback survives process restart. New test suites (`AnthropicAdapterToolsTest`, `OllamaAdapterToolsTest`, `OpenAIAdapterToolsTest`, `NativeToolsResolverTest`) lock the per-provider wire format.
 > - **`maxContextWindow` cached as a `StateFlow`** in `SessionManager` — Status bar / Context panel / Settings no longer hit SQLite from the EDT.
 > - "Slash commands" were renamed to "Prompts" (code: `SlashCommand` → `SlashPrompt`, DB enum `SLASH_COMMAND` → `SLASH_PROMPT` with V3 migration). The `/name` invocation syntax is unchanged; UI tab is now **Settings → Prompts**.
 > - Terminal command security uses a single `CommandRule` regex engine (`ALLOW` / `BLOCK` / `ASK`); the legacy `CommandWhitelist` / `CommandDenylist` classes have been removed.
@@ -38,7 +46,11 @@ Unlike tools that send entire codebases to LLMs, Refio uses **selective context 
 | **RAG Indexing** | Automatic project indexing with language-specific analyzers                          |
 | **24 Registered Tools** | 14 read-only + 10 write tools (AGENT enables full toolset by default)               |
 | **8 LLM Adapters** | Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio, Custom OpenAI, Z.AI        |
-| **Native Function Calling** | Provider-native tool API (Ollama, OpenAI, Anthropic, Gemini) with JSON-in-text fallback |
+| **Native Function Calling** | Provider-native tool API (Ollama, OpenAI, Anthropic, Gemini, OpenRouter, Z.AI, LM Studio, Generic OpenAI) with JSON-in-text fallback |
+| **`/goal` Autonomous Workflow** | Explicit completion condition + LLM judge (Gemini CLI `checkNextSpeaker` pattern) verifies goal is *demonstrably* met before turn closes |
+| **Anthropic Prompt Caching** | `cache_control: ephemeral` on stable system-prompt prefix; subsequent turns ~10% of input cost |
+| **Multi-Agent A2A Messaging** | Per-agent inboxes; `send_message` / `answer_message` tools |
+| **Loop-Detection Safety** | Content-chanting detection, tool-error-rate circuit breaker, output-hash repetition tracker, format-retry on objective triggers only |
 | **MCP Protocol** | Full Model Context Protocol with 17 built-in presets                                 |
 | **21 Built-in Subagents** | Specialized agents for code review, security, architecture, docs, business analysis, and coordination |
 | **Performance Optimizations** | Token estimation, retry logic, working memory integration                            |
@@ -168,7 +180,80 @@ AgentTurnLoop includes production-grade enhancements:
 | **Centralized stats** | `LLMClient` writes `tokens_in` / `tokens_out` / `cost_usd` directly to `task` and `subtask` rows on every successful call; UI reads the row instead of summing per-message tokens |
 | **Cached context window** | `SessionManager.maxContextWindow` `StateFlow` keeps the limit on hand; Status bar and Settings repaint without an EDT-blocking SQLite read |
 
-**Configuration:** Mode/profile settings (PLAN: 25 iterations, AGENT: 50 iterations, SUBAGENT depth limit: 3)
+**Configuration:** Mode/profile settings (PLAN: 100 iterations, AGENT: 100 iterations, SUBAGENT depth limit: 3)
+
+### Turn Completion Guardian System
+
+After the LLM produces a tool-call-free reply (i.e. the turn is *about* to finish), a `GuardianRegistry` runs all registered `TurnCompletionGuardian`s sequentially. The first `GuardianDecision.Reenter` short-circuits the rest and pushes the loop back with a SYSTEM nudge. Registry has a hard `maxReentries` cap (default 3) so a misbehaving guardian cannot create an infinite loop.
+
+| Guardian | What it checks | When it fires |
+|---|---|---|
+| `NextSpeakerJudgeGuardian` | "Is the agent really done?" — LLM judge using `ModelOperation.WEAK`. Two modes: generic ("is this a finished answer?") and goal-aware ("has the user's `/goal` condition been demonstrably met?"). | AGENT mode only; PLAN / CHAT self-skip |
+
+Per-guardian pre-filter (`looksClearlyDone`) skips the LLM call for unambiguous cases: trailing `?` always; in generic mode also short text and explicit completion markers. Defensive: any parse failure or exception returns `Pass` — a broken guardian never blocks a turn.
+
+Cap mechanics (3 layers):
+- `looksClearlyDone()` pre-filter → 0 LLM calls for hot paths
+- Guardian self-skip when `priorReentries >= MAX_JUDGE_REENTRIES (3)`
+- `GuardianRegistry(maxReentries = 3)` hard cap before guardian even runs
+
+### Loop-Detection Guards (`TurnGuardrails`)
+
+Three independent abort signals operating BELOW the guardian layer (inside the iteration, not at turn-end):
+
+| Guard | Pathology | Trigger |
+|---|---|---|
+| `ToolErrorTracker` | Tool calls failing repeatedly | ≥70% error rate over last 10 calls |
+| `TurnRepetitionTracker` | Same tool produces byte-identical output | Identical output hash 4× in a row on same `(tool, target)` key |
+| `ContentChantingDetector` | Model echoes itself in a runaway loop | Same word phrase (length 1-10) repeated ≥10× consecutively |
+
+Earlier prose-pattern detectors (`looksLikeIntentAnnouncement`, `looksLikeToolMarkerOnly`) were removed: the system prompt already enforces "don't narrate without a tool call", and regex detection on top produced false positives on legitimate trailing prose. Format-retry now fires only on objectively-broken outputs (empty envelope, native-text-embedded tool call, malformed JSON).
+
+### `/goal` — Completion Condition Flow
+
+```
+User: /goal all tests in src/test pass
+       |
+       v
+TaskRouter.setGoal(taskId, condition)
+       |
+       v
+TaskRepository.setCompletionCondition(taskId, condition)
+       |
+       v
+tasks.completion_condition column (DB, survives restart)
+
+[ next AGENT turn ]
+       |
+       v
+AgentTurnLoop iter N: model produces text reply, no tool calls
+       |
+       v
+GuardianContext(..., completionCondition = taskRepository.getCompletionCondition(taskId))
+       |
+       v
+NextSpeakerJudgeGuardian.check(context)
+       |
+       +-- if condition != null → GOAL_AWARE_JUDGE_PROMPT (strict, evidence-based)
+       |   "Has THIS condition been demonstrably met from the transcript?"
+       |
+       +-- if condition == null → JUDGE_SYSTEM_PROMPT (generic terminal detection)
+       |
+       v
+Verdict:
+  USER       → Pass, turn finishes naturally
+  MODEL      → Reenter(nudge with goal text), loop iterates
+  UNCERTAIN  → Pass (defensive)
+```
+
+API surface:
+- `TaskRouter.setGoal(taskId, condition: String?)` — `null` clears; throws `IllegalArgumentException` if condition > 4000 chars (Claude Code parity)
+- `TaskRouter.getGoal(taskId): String?`
+- `TaskRouter.clearGoal(taskId): Boolean`
+
+UX:
+- **TUI**: `/goal <text>` set, `/goal` status, `/goal clear|stop|off|reset|none|cancel` clear
+- **IntelliJ**: same syntax in prompt input; balloon notification group "Refio / Goal"; intercepted before `isOperationRunning` so users can set it mid-execution
 
 ---
 
@@ -356,6 +441,20 @@ Its description is generated dynamically from currently enabled subagents (name,
 | **Research** | `research-analyst` |
 
 Legacy invocations `!security-reviewer` and `!security-auditor` are aliased to `!security-engineer` for backward compatibility.
+
+### Multi-Agent A2A Messaging
+
+When multiple agents run on the same task (e.g. `multi-agent-coordinator` orchestrating peers), they communicate via per-agent message inboxes:
+
+| Component | Role |
+|---|---|
+| `AgentInboxRegistry` | Keeps an `AgentMessageInbox` per `(taskId, agentInstanceId)` pair; supports lookup and iteration |
+| `AgentMessageInbox` | Per-agent FIFO queue of inbound `AgentMessage`s with sender / message-id / payload |
+| `SendMessageTool` | Agent calls `send_message(target_agent, content)` → enqueues to the target's inbox |
+| `AnswerMessageTool` | Agent calls `answer_message(message_id, content)` → replies to a specific inbound message (more deterministic than broadcasting) |
+| Prompt builder | On each turn, injects pending inbound messages into the agent's context so the LLM sees them |
+
+Integration tests: `MultiAgentA2ATest`, `AgentMessageInboxTest`, `ChatMessageRepositoryIsolationTest` (verifies per-agent message scoping when multiple agents share a task).
 
 ### Custom Agents
 

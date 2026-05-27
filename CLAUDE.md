@@ -2,6 +2,70 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Rules
+
+These rules apply to every task in this project unless explicitly overridden.
+Bias: caution over speed on non-trivial work.
+
+### Rule 1 — Think Before Coding
+State assumptions explicitly. Ask rather than guess.
+Push back when a simpler approach exists. Stop when confused.
+
+### Rule 2 — Simplicity First
+Minimum code that solves the problem. Nothing speculative.
+No abstractions for single-use code.
+Prefer minimum viable change, unless it increases future maintenance risk in an already known hotspot.
+
+### Rule 3 — Surgical Changes
+Touch only what you must. Don't improve adjacent code.
+Match existing style. Don't refactor what isn't broken.
+If root cause is outside the initial scope, stop and report it instead of patching symptoms.
+
+### Rule 4 — Goal-Driven Execution
+Define success criteria. Loop until verified.
+Strong success criteria let Claude loop independently.
+
+### Rule 5 — Use the model only for judgment calls
+Use for: classification, drafting, summarization, extraction.
+Do NOT use for: routing, retries, deterministic transforms.
+If code can answer, code answers.
+Use code for routing when the routing criteria are explicit. Use model judgment only when intent or context is ambiguous.
+
+### Rule 6 — Token budgets are not advisory
+small task: 8k
+medium task: 24k
+large task: 60k
+session hard cap: configurable
+If approaching budget, summarize and start fresh.
+Surface the breach. Do not silently overrun.
+
+### Rule 7 — Surface conflicts, don't average them
+If two patterns contradict, pick one (more recent / more tested).
+Explain why. Flag the other for cleanup.
+
+### Rule 8 — Read before you write
+Before adding code, read exports, immediate callers, shared utilities.
+If unsure why existing code is structured a certain way, ask.
+Ask when the decision changes product behavior, public API, data model, security, or irreversible state. Otherwise make the smallest reversible assumption and state it.
+
+### Rule 9 — Tests verify intent, not just behavior
+Tests must encode WHY behavior matters, not just WHAT it does.
+A test that can't fail when business logic changes is wrong.
+
+### Rule 10 — Checkpoint after every significant step
+Summarize what was done, what's verified, what's left.
+Don't continue from a state you can't describe back.
+
+### Rule 11 — Match the codebase's conventions, even if you disagree
+Conformance > taste inside the codebase.
+If you think a convention is harmful, surface it. Don't fork silently.
+
+### Rule 12 — Fail loud
+"Completed" is wrong if anything was skipped silently.
+"Tests pass" is wrong if any were skipped.
+Default to surfacing uncertainty, not hiding it.
+
+
 ## What is Refio
 
 Local-first AI coding assistant for IntelliJ IDEA and the terminal. Kotlin/JVM project with three Gradle modules, each with its own source tree.
@@ -33,11 +97,11 @@ Local-first AI coding assistant for IntelliJ IDEA and the terminal. Kotlin/JVM p
 
 Three Gradle modules, each with its own source directory:
 
-- **`:core`** — IDE-independent logic (LLM clients, tools, RAG, agents, DB). Kotlin 1.9.25. Source in `core/src/main/kotlin/`.
-- **`:intellij-plugin`** — IntelliJ plugin UI and services. Kotlin 1.9.25 + gradle-intellij-plugin 1.17.4. Source in `intellij-plugin/src/main/kotlin/`. Depends on `:core`. Targets IntelliJ 2024.1.7 (IC), builds 241-253.*.
-- **`:cli`** — Standalone TUI. Kotlin 2.0.21. Source in `cli/src/main/kotlin/`. Depends on `:core`. Uses Clikt 5.0.2 + Mordant 3.0.1 + JLine 3.26.3.
+- **`:core`** — IDE-independent logic (LLM clients, tools, RAG, agents, DB). Source in `core/src/main/kotlin/`. Targets JDK 17.
+- **`:intellij-plugin`** — IntelliJ plugin UI and services. Uses the IntelliJ Platform Gradle Plugin 2.x. Source in `intellij-plugin/src/main/kotlin/`. Depends on `:core`. Targets IntelliJ 2026.1 (IC), builds `241`-`261.*`. Compiled against JDK 21.
+- **`:cli`** — Standalone TUI. Source in `cli/src/main/kotlin/`. Depends on `:core`. Uses Clikt 5.0.2 + Mordant 3.0.1 + JLine 3.26.3. Targets JDK 17.
 
-All modules target JDK 17.
+All modules use the Kotlin 2.3.20 compiler with `apiVersion`/`languageVersion` pinned to 1.9 for source compatibility.
 
 ## Key Architectural Layers
 
@@ -77,7 +141,7 @@ Each module has its own source tree:
 - `core/services/context/` — Context building helpers (ContextBudget, ContextSection, WorkingMemoryService, ProjectInstructionsLoader, ToolResultCompression, ContextTokenEstimator)
 - `core/context/providers/` — IntelliJ-dependent context providers (excluded from `:core` module)
 - `core/context/providers/standalone/` — IDE-independent context providers (included in `:core`)
-- `core/security/` — PathSandbox, CommandWhitelist, CommandRule, FileLimits
+- `core/security/` — PathSandbox, CommandWhitelist, CommandRule, FileLimits, NetworkPolicy (no-egress gate for web tools)
 - `core/db/` — Exposed ORM tables + repositories + migration system
 - `core/subagents/` — Subagent parser, router, profiles; definitions in `src/main/resources/subagents/*.md`
 - `core/agents/` — Multi-agent orchestration (events, runner, cycle detection)
@@ -104,7 +168,7 @@ JUnit 5 + MockK + Turbine (Flow testing). Tests mirror source structure under `s
 - **Thin router pattern**: CoreApiRouter is a composition root (~300 LOC) that creates dependencies and exposes 12 domain routers. Callers use domain routers directly (e.g., `coreApiRouter.taskRouter.createTask()`). No facade methods — zero business logic in CoreApiRouter.
 - **StateFlow reactivity**: SessionManager exposes 11 StateFlows; UI observes via `Flow.collect`.
 - **Separate source trees**: Each module has its own `src/main/kotlin`. When adding new core files, ensure they don't depend on IntelliJ Platform APIs — the `:core` module has no IntelliJ dependency.
-- **Security layers**: PathSandbox restricts file ops to project root; CommandRule (regex-based ALLOW/BLOCK/ASK) replaces legacy CommandWhitelist for terminal commands; FileLimits enforces size/extension restrictions. ToolPermissionsService provides 3-level (ON/ASK/OFF) per-mode access control. ToolApprovalService handles user approval flow with session trust rules.
+- **Security layers**: PathSandbox restricts file ops to project root; CommandRule (regex-based ALLOW/BLOCK/ASK) replaces legacy CommandWhitelist for terminal commands; FileLimits enforces size/extension restrictions; NetworkPolicy is the single egress gate consulted by `WebSearchTool`, `FetchWebpageTool`, and `HttpRequestTool` so `general.no_egress_enabled` blocks all outbound traffic, not just LLM providers. ToolPermissionsService provides 3-level (ON/ASK/OFF) per-mode access control. ToolApprovalService handles user approval flow with session trust rules.
 
 ---
 

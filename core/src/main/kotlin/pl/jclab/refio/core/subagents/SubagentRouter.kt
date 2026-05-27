@@ -48,10 +48,13 @@ class SubagentRouter(
     private val registry = SubagentRegistry(projectRoot, parser)
 
     init {
-        // Auto-initialize registry on construction
+        // Auto-initialize registry on construction.
+        // Note: we explicitly read .getAll() once to force the first load, then read size()
+        // from the now-cached state — avoids the historical "double refresh" where refresh()
+        // + size() each triggered a full disk scan because lastLoadedAt was not being updated.
         logger.info { "[SubagentRouter] Auto-initializing on construction..." }
         registry.refresh()
-        logger.info { "[SubagentRouter] Initialized with ${registry.size()} subagents" }
+        logger.info { "[SubagentRouter] Initialized with ${registry.getAllSubagents(includeDisabled = true).size} subagents" }
     }
 
     override suspend fun initialize() {
@@ -166,6 +169,12 @@ class SubagentRouter(
             "Ensure CoreApiRouter.initialize() has been called."
         }
 
+        // Fresh invocation ID isolates this subagent's history from the parent and from
+        // sibling subagents. AgentTurnLoop reads it from profileOverrides and tags every
+        // chat row it writes — TurnPromptBuilder then loads only rows matching it.
+        val agentInstanceId = java.util.UUID.randomUUID().toString()
+        val agentDepth = 1
+
         val request = TurnRequest(
             taskId = taskId,
             userInput = prompt,
@@ -183,7 +192,8 @@ class SubagentRouter(
                 modelOverride = resolvedModel,
                 providerOverride = resolvedProvider,
                 maxIterationsOverride = definition.maxSteps,
-                depth = 0,
+                agentInstanceId = agentInstanceId,
+                depth = agentDepth,
                 subagentChain = emptyList(),
                 contextProfile = definition.contextProfile,
                 reasoningEffort = definition.reasoningEffort

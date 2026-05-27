@@ -69,29 +69,16 @@ class GrepSearchTool(
             val detail = ((params["detail"] as? String) ?: "normal").lowercase()
 
             // Normalize path for security (backslash → forward slash)
-            var normalizedPathStr = pathStr.replace('\\', '/')
-
-            // Special case: if path looks like a bare filename, assume user wants to search current dir
-            // (grep_search expects directory, not file path)
-            if (!normalizedPathStr.contains('/') && normalizedPathStr != "." && normalizedPathStr.isNotBlank()) {
-                logger.info { "GrepSearchTool: converted bare filename '$pathStr' to '.' (search current directory)" }
-                normalizedPathStr = "."
-            }
+            val normalizedPathStr = pathStr.replace('\\', '/')
 
             // Resolve and validate path
             val path = sandbox.resolve(normalizedPathStr)
 
             logger.info { "Grep search: pattern='$pattern', relative='$pathStr', absolute='${path.toAbsolutePath()}', filePattern='$filePattern', caseSensitive=$caseSensitive, maxResults=$maxResults" }
 
-            // Check if directory exists
             if (!Files.exists(path)) {
-                logger.warn { "Directory not found: $pathStr (resolved to ${path.toAbsolutePath()})" }
-                return ToolResult.error("Directory not found: $pathStr")
-            }
-
-            if (!path.isDirectory()) {
-                logger.warn { "Not a directory: $pathStr (is file: ${path.isRegularFile()})" }
-                return ToolResult.error("Not a directory: $pathStr")
+                logger.warn { "Path not found: $pathStr (resolved to ${path.toAbsolutePath()})" }
+                return ToolResult.error("Path not found: $pathStr")
             }
 
             // Create regex for content search
@@ -101,83 +88,57 @@ class GrepSearchTool(
                 Regex(pattern, RegexOption.IGNORE_CASE)
             }
 
-            // Create regex for file filtering
-            val fileRegex = globToRegex(filePattern)
-
-            // Search files
             val results = mutableListOf<GrepResult>()
             var filesSearched = 0
             var filesSkipped = 0
-            var limitReached = false
 
-            Files.walk(path, limits.maxSearchDepth).use { stream ->
-                val iterator = stream
-                    .filter { filePath ->
-                        // Exclude blacklisted directories from traversal
-                        // Check each path segment to ensure we don't enter excluded directories
-                        val relativePath = try {
-                            path.relativize(filePath)
-                        } catch (e: Exception) {
-                            filePath
-                        }
+            // Single-file mode: skip the walk, agents often pass a concrete file path here.
+            // The "Not a directory" rejection cost a whole turn for a trivial intent mismatch.
+            if (path.isRegularFile()) {
+                val fileName = path.fileName.toString()
+                if (limits.shouldExcludeFile(fileName)) {
+                    return ToolResult.error("File extension excluded by safety limits: $fileName")
+                }
+                searchInFile(path, contentRegex, results, maxResults)?.let { filesSkipped += it }
+                filesSearched = 1
+            } else if (path.isDirectory()) {
+                val fileRegex = globToRegex(filePattern)
+                var limitReached = false
 
-                        val shouldInclude = relativePath.none { segment ->
-                            limits.shouldExcludeDirectory(segment.toString())
-                        }
-                        shouldInclude
-                    }
-                    .filter { it.isRegularFile() }
-                    .filter { fileRegex.matches(it.fileName.toString()) }
-                    .iterator()
-
-                while (iterator.hasNext() && !limitReached) {
-                    val file = iterator.next()
-                    val fileName = file.fileName.toString()
-
-                    // Skip excluded file extensions (binary files, compiled code, etc.)
-                    if (limits.shouldExcludeFile(fileName)) {
-                        logger.debug { "Skipping excluded file: $fileName (blacklisted extension)" }
-                        continue
-                    }
-
-                    filesSearched++
-                    val fileSize = Files.size(file)
-
-                    logger.debug { "Searching file: ${file.toAbsolutePath()}, size=$fileSize bytes" }
-
-                    // Skip large files
-                    if (fileSize > limits.maxFileSize) {
-                        filesSkipped++
-                        logger.debug { "Skipping large file: ${file.toAbsolutePath()}, size=$fileSize bytes (max ${limits.maxFileSize})" }
-                        continue
-                    }
-
-                    try {
-                        val content = Files.readString(file)
-                        val lines = content.lines()
-
-                        for ((index, line) in lines.withIndex()) {
-                            if (contentRegex.containsMatchIn(line)) {
-                                val relativePath = sandbox.resolve(".").relativize(file).toString()
-                                results.add(
-                                    GrepResult(
-                                        file = relativePath,
-                                        lineNumber = index + 1,
-                                        line = line.trim()
-                                    )
-                                )
-
-                                // Stop if limit reached
-                                if (results.size >= maxResults) {
-                                    limitReached = true
-                                    break
-                                }
+                Files.walk(path, limits.maxSearchDepth).use { stream ->
+                    val iterator = stream
+                        .filter { filePath ->
+                            val relativePath = try {
+                                path.relativize(filePath)
+                            } catch (e: Exception) {
+                                filePath
+                            }
+                            relativePath.none { segment ->
+                                limits.shouldExcludeDirectory(segment.toString())
                             }
                         }
-                    } catch (e: Exception) {
-                        logger.debug { "Failed to read file: ${file.fileName} - ${e.message}" }
+                        .filter { it.isRegularFile() }
+                        .filter { fileRegex.matches(it.fileName.toString()) }
+                        .iterator()
+
+                    while (iterator.hasNext() && !limitReached) {
+                        val file = iterator.next()
+                        val fileName = file.fileName.toString()
+
+                        if (limits.shouldExcludeFile(fileName)) {
+                            logger.debug { "Skipping excluded file: $fileName (blacklisted extension)" }
+                            continue
+                        }
+
+                        filesSearched++
+                        val skipped = searchInFile(file, contentRegex, results, maxResults)
+                        if (skipped != null) filesSkipped += skipped
+                        if (results.size >= maxResults) limitReached = true
                     }
                 }
+            } else {
+                logger.warn { "Unsupported path type: $pathStr (not file or directory)" }
+                return ToolResult.error("Path is neither a file nor a directory: $pathStr")
             }
 
             // Check result limit
@@ -229,6 +190,34 @@ class GrepSearchTool(
             logger.error(e) { "Failed to grep search" }
             return ToolResult.error("Failed to grep search: ${e.message}")
         }
+    }
+
+    // Returns 1 if file was skipped due to size, null otherwise. Caller tracks `filesSkipped`.
+    private fun searchInFile(
+        file: java.nio.file.Path,
+        contentRegex: Regex,
+        results: MutableList<GrepResult>,
+        maxResults: Int
+    ): Int? {
+        val fileSize = Files.size(file)
+        if (fileSize > limits.maxFileSize) {
+            logger.debug { "Skipping large file: ${file.toAbsolutePath()}, size=$fileSize bytes (max ${limits.maxFileSize})" }
+            return 1
+        }
+        try {
+            val content = Files.readString(file)
+            val lines = content.lines()
+            val relativePath = sandbox.resolve(".").relativize(file).toString()
+            for ((index, line) in lines.withIndex()) {
+                if (contentRegex.containsMatchIn(line)) {
+                    results.add(GrepResult(file = relativePath, lineNumber = index + 1, line = line.trim()))
+                    if (results.size >= maxResults) return null
+                }
+            }
+        } catch (e: Exception) {
+            logger.debug { "Failed to read file: ${file.fileName} - ${e.message}" }
+        }
+        return null
     }
 
     private fun globToRegex(pattern: String): Regex {

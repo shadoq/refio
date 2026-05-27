@@ -480,4 +480,85 @@ class TaskRepositoryTest {
             }
         }
     }
+
+    @Nested
+    inner class CompletionConditionTests {
+
+        @Test
+        fun `getCompletionCondition returns null for newly created task`() {
+            transaction {
+                val task = repository.create(
+                    name = "Goal Task",
+                    mode = TaskMode.AGENT,
+                    projectId = "proj-1",
+                    projectPath = "/x"
+                )
+
+                assertNull(repository.getCompletionCondition(task.id))
+                assertNull(repository.findById(task.id)?.completionCondition)
+            }
+        }
+
+        @Test
+        fun `setCompletionCondition then get returns the same value`() {
+            transaction {
+                val task = repository.create(
+                    name = "Goal Task",
+                    mode = TaskMode.AGENT,
+                    projectId = "proj-1",
+                    projectPath = "/x"
+                )
+                val condition = "all tests in src/test pass and migration runs cleanly"
+
+                val ok = repository.setCompletionCondition(task.id, condition)
+
+                assertTrue(ok)
+                assertEquals(condition, repository.getCompletionCondition(task.id))
+                // Same value also visible through findById (full-row read)
+                assertEquals(condition, repository.findById(task.id)?.completionCondition)
+            }
+        }
+
+        @Test
+        fun `setCompletionCondition with null clears existing condition`() {
+            transaction {
+                val task = repository.create(
+                    name = "Goal Task",
+                    mode = TaskMode.AGENT,
+                    projectId = "proj-1",
+                    projectPath = "/x"
+                )
+                repository.setCompletionCondition(task.id, "all tests pass")
+
+                val ok = repository.setCompletionCondition(task.id, null)
+
+                assertTrue(ok)
+                assertNull(repository.getCompletionCondition(task.id))
+            }
+        }
+
+        @Test
+        fun `setCompletionCondition returns false for non-existent task`() {
+            transaction {
+                val ok = repository.setCompletionCondition("does-not-exist", "anything")
+                assertFalse(ok)
+            }
+        }
+
+        @Test
+        fun `setCompletionCondition overwrites previous value`() {
+            transaction {
+                val task = repository.create(
+                    name = "Goal Task",
+                    mode = TaskMode.AGENT,
+                    projectId = "proj-1",
+                    projectPath = "/x"
+                )
+                repository.setCompletionCondition(task.id, "first condition")
+                repository.setCompletionCondition(task.id, "second condition")
+
+                assertEquals("second condition", repository.getCompletionCondition(task.id))
+            }
+        }
+    }
 }

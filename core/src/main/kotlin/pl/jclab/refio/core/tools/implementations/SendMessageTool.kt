@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.tools.implementations
 
 import pl.jclab.refio.core.agents.events.AgentEventBus
+import pl.jclab.refio.core.agents.events.AgentInboxRegistry
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
@@ -20,7 +21,8 @@ import java.util.UUID
  * - blocker: cannot continue without help (turn suspended)
  */
 class SendMessageTool(
-    private val agentEventBus: AgentEventBus
+    private val agentEventBus: AgentEventBus,
+    private val agentInboxRegistry: AgentInboxRegistry? = null
 ) : Tool {
     override val name = "send_message"
     override val description = """Send a message to the parent orchestrator or another agent.
@@ -60,8 +62,32 @@ The parent agent may ask the user if it doesn't know the answer."""
         val type = params["type"] as? String ?: "question"
         val to = params["to"] as? String ?: "parent"
 
+        // Routing rules (Phase 1, spec §3.3 / Step 6):
+        //   - "parent": resolved via PARENT_RUN_ID (subagent → invoking turn). Kept unchanged.
+        //   - named peer: validated against AgentInboxRegistry. Unknown peer fails fast instead of
+        //     letting AgentTurnLoop suspend for 5 minutes on a response that will never come.
+        //   - blank: rejected. Broadcast (no target) is not supported in Phase 1.
+        val targetAgentId: String = when {
+            to == "parent" -> parentRunId
+                ?: return ToolResult.error("'to: parent' used outside a subagent invocation (no PARENT_RUN_ID)")
+            to.isBlank() -> return ToolResult.error(
+                "'to' is required — use an agent name (peer) or 'parent' (invoking turn). Broadcast is not supported."
+            )
+            else -> {
+                if (agentInboxRegistry != null && sessionId.isNotBlank() &&
+                    !agentInboxRegistry.isRegistered(sessionId, to)
+                ) {
+                    val known = agentInboxRegistry.listAgents(sessionId).sorted()
+                    return ToolResult.error(
+                        "No agent named '$to' in session $sessionId. " +
+                            "Known peers: ${if (known.isEmpty()) "(none)" else known.joinToString()}"
+                    )
+                }
+                to
+            }
+        }
+
         val requestId = UUID.randomUUID().toString()
-        val targetAgentId = if (to == "parent") parentRunId else to
 
         // Emit DataRequest event to the bus
         agentEventBus.emit(

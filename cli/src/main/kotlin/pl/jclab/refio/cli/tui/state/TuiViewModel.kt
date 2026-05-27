@@ -1135,6 +1135,77 @@ class TuiViewModel(
         }
     }
 
+    /**
+     * `/goal <condition>` — set a completion condition for the active task. When set, the
+     * next-speaker judge (in AGENT mode) switches to strict goal-aware evaluation: it
+     * keeps pushing the loop back until the transcript demonstrates that the condition
+     * holds, instead of accepting the agent's first "Done." reply.
+     *
+     * The condition persists across session restarts (stored on the task in the DB).
+     * Pass an empty/blank string from the caller side to surface a usage hint instead.
+     */
+    fun setGoal(condition: String) {
+        val r = router ?: return
+        val tid = taskId ?: run {
+            chat.addSystemMessage("No active session — start a conversation first, then set a goal.")
+            return
+        }
+        if (condition.isBlank()) {
+            chat.addSystemMessage("Usage: /goal <completion condition>  (e.g. \"all tests in src/test pass\")")
+            return
+        }
+        scope.launch(Dispatchers.IO) {
+            try {
+                r.taskRouter.setGoal(tid, condition)
+                chat.addSystemMessage("◎ goal set: ${condition.take(120)}${if (condition.length > 120) "…" else ""}")
+            } catch (e: IllegalArgumentException) {
+                chat.addSystemMessage("Failed to set goal: ${e.message}")
+            } catch (e: Exception) {
+                chat.addSystemMessage("Failed to set goal: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * `/goal clear` — remove the active completion condition. The judge falls back to
+     * generic "is the turn finished?" evaluation.
+     */
+    fun clearGoal() {
+        val r = router ?: return
+        val tid = taskId ?: run {
+            chat.addSystemMessage("No active session.")
+            return
+        }
+        scope.launch(Dispatchers.IO) {
+            try {
+                val had = r.taskRouter.getGoal(tid) != null
+                r.taskRouter.clearGoal(tid)
+                chat.addSystemMessage(if (had) "goal cleared" else "no goal was set")
+            } catch (e: Exception) {
+                chat.addSystemMessage("Failed to clear goal: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * `/goal` (no args) — print the currently active condition or report none.
+     */
+    fun showGoalStatus() {
+        val r = router ?: return
+        val tid = taskId ?: run {
+            chat.addSystemMessage("No active session.")
+            return
+        }
+        scope.launch(Dispatchers.IO) {
+            try {
+                val goal = r.taskRouter.getGoal(tid)
+                chat.addSystemMessage(if (goal != null) "◎ goal: $goal" else "(no goal set — use /goal <condition> to set one)")
+            } catch (e: Exception) {
+                chat.addSystemMessage("Failed to get goal: ${e.message}")
+            }
+        }
+    }
+
     fun addSnippetContext(filePath: String, startLine: Int?, endLine: Int?) {
         if (filePath.isBlank()) {
             chat.addSystemMessage("Usage: /snippet <file> [startLine] [endLine]")

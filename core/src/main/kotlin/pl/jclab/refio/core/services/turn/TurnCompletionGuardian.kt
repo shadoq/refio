@@ -61,7 +61,21 @@ data class GuardianContext(
     /** How many verification (read-only) tool calls happened after the last write. */
     val verificationToolsExecutedAfterWrite: Int,
     /** How many times any guardian has already requested re-entry in this turn. */
-    val priorReentries: Int
+    val priorReentries: Int,
+    /**
+     * Snapshot of [toolsUsed].size at the moment of the most recent guardian re-entry.
+     * Zero when no re-entry has happened yet in this turn. Lets a guardian detect that the
+     * previous nudge produced no new tool call (i.e. the agent kept emitting plain text)
+     * and short-circuit further re-entries instead of wasting tokens on the same loop.
+     */
+    val toolsUsedSizeAtPriorReentry: Int,
+    /**
+     * User-defined completion condition for `/goal`-style autonomous workflows. When non-null,
+     * [pl.jclab.refio.core.services.turn.NextSpeakerJudgeGuardian] switches from generic
+     * "is the turn finished?" judging to goal-aware "has THIS condition been met?" judging.
+     * `null` (default) preserves the pre-`/goal` behavior verbatim.
+     */
+    val completionCondition: String? = null
 )
 
 /**

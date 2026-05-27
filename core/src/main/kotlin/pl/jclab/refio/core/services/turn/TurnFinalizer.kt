@@ -31,6 +31,7 @@ class TurnFinalizer(
         depth: Int,
         persistAssistantMessage: Boolean,
         metadata: String? = null,
+        agentInstanceId: String? = null,
         agentName: String? = null,
         agentDepth: Int? = null,
     ): TurnResult {
@@ -43,6 +44,7 @@ class TurnFinalizer(
                 role = MessageRole.ASSISTANT,
                 content = content,
                 metadata = metadata,
+                agentInstanceId = agentInstanceId,
                 agentName = agentName,
                 agentDepth = agentDepth,
             )

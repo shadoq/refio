@@ -215,7 +215,7 @@ class DualLogger(
         }
         info {
             "[$component] API Response from $provider/$model: " +
-            "status=$httpStatus, tokens=$inputTokens/$outputTokens, cost=$$costUsd, latency=${latencyMs}ms"
+            "status=$httpStatus, tokens=$inputTokens/$outputTokens, cost=\$${"%.6f".format(costUsd)}, latency=${latencyMs}ms"
         }
         debug { "[$component] Response body: $truncated" }
         if (!rawApiResponseChunk.isNullOrBlank()) {

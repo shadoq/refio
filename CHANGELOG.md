@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.1.10] - 2026-05-27
+
+### Added
+
+- `/goal <condition>` command — set an explicit completion condition for the active task; the LLM judge keeps re-entering the loop until the condition is met from transcript evidence. Available in TUI (`/goal …`, `/goal clear`) and the IntelliJ chat input (intercepted mid-execution). Persists across restarts. Solves weak models stopping mid-task ("I've migrated the main models. Done.") before tests actually run.
+- LLM "next speaker" judge in AGENT mode — after a tool-call-free reply, a cheap weak-model call decides whether the agent finished or just stopped. "Stopped" verdict re-enters the loop with a brief SYSTEM nudge; capped at 3 re-entries per turn. Toggle: `general.next_speaker_judge_enabled` (default on). Falls back to "pass" on any judge error so a broken judge never blocks an otherwise-finished turn.
+- Content-chanting loop detection — aborts the turn when the assistant message contains the same word n-gram repeated 10+ times consecutively (model echoing itself, runaway lists). Adjacent-repetition only, so legitimate enumerations and bullet lists don't trip it.
+- Anthropic prompt-prefix caching — system prompt split into stable / volatile parts; subsequent turns billed at the ~10% cache-hit rate while the prefix stays identical (5-min TTL). Token accounting folds `cache_creation_input_tokens` + `cache_read_input_tokens` into the reported `inputTokens` so billing dashboards still match.
+- Multi-agent A2A messaging — each agent gets its own message queue; `send_message` enqueues to a peer, `answer_message` replies to a specific inbound message instead of broadcasting. Integration tests cover per-agent scoping when multiple agents share a task.
+- Native function calling — per-provider test suites (Anthropic, Ollama, OpenAI, `NativeToolsResolver`) lock the wire format; minor robustness fixes around tool-call extraction in `OllamaAdapter` / `OpenAIAdapter`.
+- Universal `<tool_use_enforcement>` block in `system-agent.md` / `system-plan.md` — replaces the previous `ModelFamilyClassifier`-based dynamic injection. 250 tokens are negligible on strong models and meaningful on weak ones. `system-agent.md` also adds a `<task_planning>` block pushing the `tasks` tool harder for non-trivial multi-step work.
+- PLAN iteration cap raised 50 → 100 (warning at 30), matching AGENT and aligning with Gemini CLI / Hermes. PLAN is read-only so extra iterations are cheap.
+- `EmbeddingCircuitBreaker` — resilience layer for embedding provider failures.
+- `CodeIntelligenceTool`, `GrepSearchTool`, `ReadFileTool`, `ReadDirectoryTool` — expanded actions, improved output formatting, refined token budgeting.
+- `WebSearchTool`, `FetchWebpageTool`, `HttpRequestTool` — refined error handling and network policy integration; new `NetworkPolicyTest`.
+
+### Changed
+
+- `TurnGuardrails` simplified — removed `looksLikeIntentAnnouncement` / `looksLikeToolMarkerOnly` prose-pattern detectors and the count-based abort in `TurnRepetitionTracker`. Only objectively-broken triggers remain (empty envelope, native-text-embedded tool call, malformed JSON, output-hash repeat). Aligns with Codex / Claude Code: trust the model, don't algorithmically detect "lapsed into prose".
+- `AgentTurnLoop` format-retry only fires on objective broken outputs — legitimate plain-text final answers in native-tools mode no longer get nudged into a JSON envelope they weren't asked to emit.
+- `ModelFamilyClassifier` removed — replaced by the universal `<tool_use_enforcement>` block.
+
+### Fixed
+
+- `MultiAgentRunner` — edge cases around agent instance ID propagation through the turn loop.
+- `ChatService` / `ContextService` — minor refactors and bug fixes.
+- `SubtaskTracker` — improved lifecycle accuracy.
+
 ---
 
 ## [0.0.1.9] - 2026-05-05

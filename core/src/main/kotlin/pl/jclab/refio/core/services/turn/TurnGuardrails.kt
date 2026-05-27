@@ -63,29 +63,121 @@ class TurnGuardrails {
     }
 
     /**
+     * Content-chanting detector — catches the "model echoes itself" failure mode
+     * where the assistant message contains the same short phrase repeated many
+     * times consecutively (a single sentence chanted 20-50× in a row, or a
+     * runaway list generation that lost its termination condition).
+     *
+     * Modeled after Gemini CLI's `loopDetectionService` (`packages/core/src/services/
+     * loopDetectionService.ts`). Unlike Gemini's per-chunk streaming check, this
+     * version runs post-response on the assembled content — simpler to wire into
+     * Refio's turn loop (which already gates on `contentForExtraction` after
+     * streaming completes) and avoids touching the streaming path. The cost is
+     * detecting one iteration later than Gemini; the benefit is no streaming-state
+     * coupling.
+     *
+     * **Algorithm: consecutive repetition of word phrases.**
+     *
+     * For each word position and each phrase length in [PHRASE_WORD_LENGTHS],
+     * walk forward and count how many times the same phrase appears immediately
+     * after itself with no gap. If any such run reaches [MIN_REPEATS], abort.
+     *
+     * Why "consecutive" rather than "total count anywhere in text":
+     *
+     *   - **Chants are inherently adjacent.** Real model loops produce text like
+     *     "X. X. X. X." — the same phrase touching itself repeatedly. Sparse
+     *     repetition spread across the response is normal structured output
+     *     (enumerations, bullet lists, "for each item, do Y" patterns) and must
+     *     not trigger.
+     *   - **Resilient to phrase-length variation.** Whether the model is
+     *     chanting a single word ("Yes Yes Yes …"), a sentence ("I will check.
+     *     I will check. …"), or a paragraph cycle, one of the phrase lengths in
+     *     the scan set will catch it.
+     *   - **Robust against char-offset misalignment.** Character-window
+     *     approaches drift when the chant period doesn't align with the window
+     *     step. Word-aligned phrases sidestep this entirely.
+     *
+     * Phrase length set covers: 1-word ("yes" chants), 2-word ("first second"
+     * cycles), 3 / 5 / 10 — sentence-length and paragraph-cycle chants.
+     * [MIN_REPEATS] of 10 means a phrase must touch itself 10 times in a row —
+     * unmistakably pathological.
+     */
+    object ContentChantingDetector {
+
+        private const val MIN_REPEATS = 10
+        // Dense range up to 10 — sparse lists missed common 7-word sentence cycles.
+        // Per phrase length the scan is O(W × phraseLen); total O(W × Σ phraseLen) =
+        // O(W × 55) which is trivial even at 10k-word responses.
+        private val PHRASE_WORD_LENGTHS = (1..10).toList()
+        private val WHITESPACE_REGEX = Regex("\\s+")
+
+        /**
+         * Inspect the model's final response text for chanting.
+         * Returns [LoopStatus.ABORT] if any word-phrase appears immediately
+         * after itself at least [MIN_REPEATS] times in a row; else [LoopStatus.OK].
+         */
+        fun inspect(content: String): LoopStatus {
+            val rawWords = content.trim().split(WHITESPACE_REGEX).filter { it.isNotBlank() }
+            if (rawWords.size < MIN_REPEATS) return LoopStatus.OK
+            val words = rawWords.map { it.lowercase() }
+
+            for (phraseLen in PHRASE_WORD_LENGTHS) {
+                if (words.size < phraseLen * MIN_REPEATS) continue
+                var i = 0
+                while (i + phraseLen * MIN_REPEATS <= words.size) {
+                    val phrase = words.subList(i, i + phraseLen)
+                    var runCount = 1
+                    var j = i + phraseLen
+                    while (j + phraseLen <= words.size &&
+                        words.subList(j, j + phraseLen) == phrase
+                    ) {
+                        runCount++
+                        j += phraseLen
+                    }
+                    if (runCount >= MIN_REPEATS) {
+                        val sample = rawWords.subList(i, i + phraseLen).joinToString(" ")
+                        return LoopStatus.ABORT(
+                            "Content chanting detected: phrase \"${sample.take(80)}${if (sample.length > 80) "…" else ""}\" " +
+                                "repeated $runCount times consecutively. " +
+                                "The model is stuck in a generation loop — terminating the turn."
+                        )
+                    }
+                    i++
+                }
+            }
+            return LoopStatus.OK
+        }
+    }
+
+    /**
      * Unified repetition tracker. Keyed by `(tool, primary-target)` — e.g. the
      * edited file path, the shell command, the HTTP URL+body.
      *
-     * Aborts the turn on two overlapping "stuck on same object" patterns:
+     * Aborts the turn on **byte-identical normalized tail** of a tool's output
+     * repeated [identicalOutputAbortThreshold] times in a row. This is the
+     * strongest "no progress" signal: the environment keeps reporting the same
+     * thing despite the agent's attempted variations.
      *
-     *   1. **Count-based** — total invocations of the same (tool, target) crosses
-     *      [abortThreshold]. Catches the "edit→run→edit→run on the same file
-     *      15+ times" pattern.
-     *
-     *   2. **Output-based** — byte-identical normalized tail of a tool's output
-     *      repeated [identicalOutputAbortThreshold] times in a row. Strongest
-     *      "no progress" signal: even if each call is a textual variation, the
-     *      environment keeps reporting the same thing.
+     * The previous count-based abort (15× same (tool, target) regardless of
+     * output) was removed — legitimate iterative work (refactor touching one
+     * file 20 times with different edits, exploration reading many sections of
+     * one large file) repeatedly tripped false positives. Real write loops are
+     * caught by [ToolErrorTracker] (≥70% error rate over last 10) instead;
+     * read-loops are caught by output-hash since identical query+output is the
+     * pathology, not "same target many times".
      *
      * `run_code` is keyed by language only (`run_code@python`) — otherwise each
-     * micro-edit to the script would reset the counter and the tracker could
-     * never fire on the "tweak-and-rerun" failure mode.
+     * micro-edit to the script would reset the hash window and the tracker
+     * could never fire on the "tweak-and-rerun" failure mode.
      *
-     * Tools without a meaningful primary target (read_file, grep_search, think,
-     * memory) are not tracked: repetition on pure exploration is normal.
+     * Read-only exploration tools (read_file, grep_search, rag_search,
+     * read_directory, file_search, code_intelligence) ARE tracked too — the
+     * output-hash signal catches the pathology of "5 identical rag_search
+     * calls returning the same 3 hits" (observed with weak models that ignore
+     * turn-N tool results and re-issue the previous query verbatim). Pure no-op
+     * tools (think, memory) stay un-tracked — their repetition is by design.
      */
     class TurnRepetitionTracker(
-        private val abortThreshold: Int = 15,
         private val identicalOutputAbortThreshold: Int = 4,
         private val tailBytesForHash: Int = 800,
         private val maxHistory: Int = 200
@@ -121,13 +213,6 @@ class TurnGuardrails {
 
             val state = states.getOrPut(key) { State() }
             state.callCount += 1
-
-            if (state.callCount >= abortThreshold) {
-                return LoopStatus.ABORT(
-                    "Tool $toolName has been invoked ${state.callCount} times on the same target ($key). " +
-                        "The agent is stuck on this object."
-                )
-            }
 
             if (output != null) {
                 val hash = normalizeTail(output).hashCode()
@@ -180,6 +265,40 @@ class TurnGuardrails {
                     val method = (args["method"] as? String)?.uppercase() ?: "GET"
                     val url = args["url"] as? String ?: return null
                     "http_request@$method@$url@${bodySignature(args["body"])}"
+                }
+                // Read-only exploration tools: tracked so the output-hash mechanism
+                // catches identical repeats. Offset/limit/case_sensitive intentionally
+                // ignored from the key — varying those is legitimate exploration; only
+                // identical-query+identical-output repetition is pathological.
+                "read_file" -> {
+                    val path = args["path"] as? String ?: return null
+                    "read_file@$path"
+                }
+                "read_directory" -> {
+                    val path = args["path"] as? String ?: return null
+                    "read_directory@$path"
+                }
+                "grep_search" -> {
+                    val pattern = args["pattern"] as? String ?: return null
+                    val path = (args["path"] as? String) ?: "."
+                    "grep_search@$pattern@$path"
+                }
+                "file_search" -> {
+                    val pattern = args["pattern"] as? String ?: return null
+                    val path = (args["path"] as? String) ?: "."
+                    "file_search@$pattern@$path"
+                }
+                "rag_search" -> {
+                    val query = args["query"] as? String ?: return null
+                    val contentType = (args["content_type"] as? String) ?: "*"
+                    "rag_search@$query@$contentType"
+                }
+                "code_intelligence" -> {
+                    val action = args["action"] as? String ?: return null
+                    val target = (args["symbol"] as? String)
+                        ?: (args["path"] as? String)
+                        ?: return null
+                    "code_intelligence@$action@$target"
                 }
                 else -> null
             }

@@ -17,6 +17,7 @@ import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.testutil.MockFactory
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class ConversationSummaryServiceTest {
 
@@ -70,6 +71,23 @@ class ConversationSummaryServiceTest {
         )
 
         assertFalse(service.shouldSummarize(messages, maxTokens = 300))
+    }
+
+    @Test
+    fun `contentResolver controls token estimation`() {
+        // Raw msg.content would dwarf the budget (~10k tokens at 4 chars/token), but the
+        // resolver reports the prompt-side rendering (TOOL bodies truncated to ~1024 chars).
+        // Decision must follow the resolver — otherwise large unsummarized read_file dumps
+        // trigger premature summarization even though only a tiny fraction reaches the LLM.
+        val messages = listOf(
+            MockFactory.createChatMessage(role = MessageRole.TOOL, content = "x".repeat(40_000))
+        )
+        val promptSideResolver: (pl.jclab.refio.core.db.ChatMessage) -> String = { "tiny" }
+
+        // Without resolver — old behavior: counts the full 40k chars → above threshold.
+        assertTrue(service.shouldSummarize(messages, maxTokens = 1000))
+        // With resolver — new behavior: counts only what truly reaches the LLM → well below.
+        assertFalse(service.shouldSummarize(messages, maxTokens = 1000, contentResolver = promptSideResolver))
     }
 
     @Test

@@ -672,11 +672,25 @@ class TuiInputHandler(private val terminal: Terminal) {
      * All system operations (history, settings, export, etc.) are accessed
      * through GUI keybindings and screens, not slash prompts.
      * Slash prompts: /explain, /refactor, etc. — prompt templates from SlashPrompt.BUILTINS
+     *
+     * One control-style exception: `/goal …` sets/clears/inspects the per-task completion
+     * condition consumed by `NextSpeakerJudgeGuardian`. Treated here rather than expanded as
+     * a prompt template because it mutates persistent task state instead of producing a
+     * user message.
      */
     internal fun handleCommand(input: String, viewModel: TuiViewModel): Boolean {
-        // Slash prompts (prompt templates) are NOT handled here.
-        // They are expanded inline in TuiViewModel.sendMessage() — same as the plugin.
-        // Unknown /names are passed through as normal messages.
-        return false
+        if (!input.startsWith("/goal")) return false
+        val args = input.removePrefix("/goal").trim()
+        when {
+            args.isEmpty() -> viewModel.showGoalStatus()
+            args.equals("clear", ignoreCase = true) ||
+                args.equals("stop", ignoreCase = true) ||
+                args.equals("off", ignoreCase = true) ||
+                args.equals("reset", ignoreCase = true) ||
+                args.equals("none", ignoreCase = true) ||
+                args.equals("cancel", ignoreCase = true) -> viewModel.clearGoal()
+            else -> viewModel.setGoal(args)
+        }
+        return true
     }
 }

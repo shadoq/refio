@@ -8,11 +8,14 @@ import io.ktor.http.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import pl.jclab.refio.core.llm.NoEgressViolationException
 import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.core.security.NetworkPolicy
 import pl.jclab.refio.core.security.UrlPolicy
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
+import pl.jclab.refio.core.tools.base.ToolInternalParams
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
 import pl.jclab.refio.core.utils.GsonInstance
@@ -74,7 +77,8 @@ class HttpRequestTool(
     private val sandbox: PathSandbox? = null,
     private val maxResponseSize: Int = MAX_RESPONSE_SIZE,
     private val timeoutMs: Long = TIMEOUT_MS,
-    private val urlPolicy: UrlPolicy = UrlPolicy()
+    private val urlPolicy: UrlPolicy = UrlPolicy(),
+    private val networkPolicy: NetworkPolicy? = null
 ) : Tool {
 
     override val name = "http_request"
@@ -104,6 +108,12 @@ class HttpRequestTool(
         try {
             val url = params["url"] as? String
                 ?: return@withContext ToolResult.error("Missing required parameter: 'url'")
+            val taskId = params[ToolInternalParams.TASK_ID] as? String
+            try {
+                networkPolicy?.assertEgressAllowed(name, url, taskId)
+            } catch (e: NoEgressViolationException) {
+                return@withContext ToolResult.error(e.message ?: "no-egress mode blocks this call")
+            }
             urlPolicy.validate(url)
             val method = (params["method"] as? String)?.uppercase() ?: "GET"
             val bodyFile = params["body_file"] as? String
