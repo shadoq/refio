@@ -123,7 +123,7 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
     fun showHelp() {
         // Help is independent of content initialization — open browser directly.
         logger.info { "Show help requested" }
-        com.intellij.ide.BrowserUtil.browse("https://github.com/jclab-joseph/refio")
+        com.intellij.ide.BrowserUtil.browse("https://github.com/shadoq/refio/blob/main/docs/overview.md")
     }
 
     fun setAdvancedViewEnabled(enabled: Boolean) = run { it.setAdvancedViewEnabled(enabled) }

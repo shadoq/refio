@@ -408,6 +408,11 @@ class AgentTurnLoop(
         var lastFailureSignature: String? = null
         // beforeFinish guardian re-entry counter (capped by GuardianRegistry.maxReentries).
         var guardianReentryCount = 0
+        // Snapshot of usedTools.size at the moment of the most recent guardian re-entry.
+        // Lets NextSpeakerJudgeGuardian detect "previous nudge produced no new tool call"
+        // and short-circuit the loop instead of burning another judge call + LLM iteration
+        // on the same stuck pattern. See [NextSpeakerJudgeGuardian.check].
+        var usedToolsSizeAtLastReentry = 0
         // Plain-text guard (AGENT mode only): counts nudges sent when the model replies with
         // prose instead of the required JSON envelope. Bounded to 2 — if the model cannot
         // recover after two explicit reminders, further retries won't help and we fall
@@ -1608,11 +1613,14 @@ class AgentTurnLoop(
                                 toolsUsed = usedTools.distinct(),
                                 writeToolsExecutedInTurn = writeToolsExecutedInTurn,
                                 verificationToolsExecutedAfterWrite = verificationToolsExecutedAfterWrite,
-                                priorReentries = guardianReentryCount
+                                priorReentries = guardianReentryCount,
+                                toolsUsedSizeAtPriorReentry = usedToolsSizeAtLastReentry,
+                                completionCondition = taskRepository.getCompletionCondition(taskId)
                             )
                             when (val decision = completionGuardians.runChecks(guardianContext)) {
                                 is GuardianDecision.Reenter -> {
                                     guardianReentryCount++
+                                    usedToolsSizeAtLastReentry = usedTools.size
                                     chatMessageRepository.create(
                                         taskId = taskId,
                                         role = MessageRole.SYSTEM,

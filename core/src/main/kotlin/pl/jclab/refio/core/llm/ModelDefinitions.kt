@@ -3226,6 +3226,33 @@ object ModelDefinitions {
             active = true
         ),
 
+        // Nemotron 3 Nano Omni — multimodal LLM that unifies video, audio, image,
+        // and text understanding for Q&A, summarization, transcription, and
+        // document-intelligence workflows. 33B params, 128K context.
+        "nemotron3:33b" to ModelDefinition(
+            id = "nemotron3:33b",
+            name = "Nemotron 3 Nano Omni 33B",
+            provider = "ollama",
+            description = "NVIDIA Nemotron 3 Nano Omni 33B — multimodal (video/audio/image/text) with native tool use",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
         "qwen3-coder:30b" to ModelDefinition(
             id = "qwen3-coder:30b",
             name = "Qwen 3 Coder 30B",
@@ -3711,6 +3738,61 @@ object ModelDefinitions {
             active = true
         ),
 
+        // Mistral Medium 3.5 — Mistral AI's first flagship model merging
+        // instruction-following, reasoning, and coding in a single 128B-weight set.
+        // Vision-capable, 256K context.
+        "mistral-medium-3.5:latest" to ModelDefinition(
+            id = "mistral-medium-3.5:latest",
+            name = "Mistral Medium 3.5",
+            provider = "ollama",
+            description = "Mistral AI flagship 128B — instruction-following, reasoning, coding, vision, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "mistral-medium-3.5:128b" to ModelDefinition(
+            id = "mistral-medium-3.5:128b",
+            name = "Mistral Medium 3.5 128B",
+            provider = "ollama",
+            description = "Mistral AI flagship 128B — instruction-following, reasoning, coding, vision, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
         "mistral:7b" to ModelDefinition(
             id = "mistral:7b",
             name = "Mistral 7B",
@@ -3746,6 +3828,84 @@ object ModelDefinitions {
             ),
             modelType = ModelType.TEXT,
             maxContext = 32_768,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        // ═══════════════════════════════════════════════════════════════════
+        // IBM GRANITE FAMILY
+        // ═══════════════════════════════════════════════════════════════════
+        // Enterprise-ready open foundation models (Apache 2.0). Multilingual,
+        // coding, RAG, tool use, structured JSON output. Text-only, 128K context.
+
+        "granite4.1:3b" to ModelDefinition(
+            id = "granite4.1:3b",
+            name = "IBM Granite 4.1 3B",
+            provider = "ollama",
+            description = "IBM Granite 4.1 3B — enterprise foundation model with tool use and structured JSON output",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "granite4.1:8b" to ModelDefinition(
+            id = "granite4.1:8b",
+            name = "IBM Granite 4.1 8B",
+            provider = "ollama",
+            description = "IBM Granite 4.1 8B — enterprise foundation model with tool use and structured JSON output",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "granite4.1:30b" to ModelDefinition(
+            id = "granite4.1:30b",
+            name = "IBM Granite 4.1 30B",
+            provider = "ollama",
+            description = "IBM Granite 4.1 30B — enterprise foundation model with tool use and structured JSON output",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
             maxOutputTokens = null,
             costPer1MInput = 0.0,
             costPer1MOutput = 0.0,

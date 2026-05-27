@@ -99,7 +99,19 @@ internal class AgentTurnLoopFactory(
             chatMessageRepository = chatMessageRepository
         )
 
-        val completionGuardians = GuardianRegistry()
+        // Next-speaker judge runs at the terminal point of every AGENT turn to confirm
+        // the agent actually finished (vs. paused mid-task after a sub-step). See
+        // [NextSpeakerJudgeGuardian]. PLAN / CHAT modes self-skip inside the guardian.
+        // maxReentries matches NextSpeakerJudgeGuardian.MAX_JUDGE_REENTRIES so the
+        // registry's hard cap and the guardian's self-cap stay in sync.
+        val nextSpeakerJudge = NextSpeakerJudgeGuardian(
+            llmClient = llmClient,
+            configService = configService
+        )
+        val completionGuardians = GuardianRegistry(
+            guardians = listOf(nextSpeakerJudge),
+            maxReentries = NextSpeakerJudgeGuardian.MAX_JUDGE_REENTRIES
+        )
 
         val turnSubagentValidator = TurnSubagentValidator(
             maxSubagentDepth = 3

@@ -166,7 +166,7 @@ class ToolbarComponent(
 
     private fun onHelpClicked() {
         logger.info { "Help button clicked" }
-        com.intellij.ide.BrowserUtil.browse("https://github.com/jclab-joseph/refio")
+        com.intellij.ide.BrowserUtil.browse("https://github.com/shadoq/refio/blob/main/docs/overview.md")
     }
 
     /**

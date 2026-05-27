@@ -2,6 +2,9 @@ package pl.jclab.refio.ui.components.chat
 
 import com.intellij.codeInsight.AutoPopupController
 import com.intellij.codeInsight.lookup.LookupManager
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
+import com.intellij.notification.Notifications
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CustomShortcutSet
 import com.intellij.openapi.actionSystem.DataContext
@@ -425,6 +428,16 @@ class PromptInputPanel(
         val text = promptEditor.text.trim()
         if (text.isEmpty()) return
 
+        // /goal control command — mutates per-task completion condition consumed by
+        // NextSpeakerJudgeGuardian. Intercepted here (before isOperationRunning check)
+        // so the user can set/clear/inspect a goal mid-execution without the input
+        // being queued or sent as a chat message.
+        if (text.startsWith("/goal") && (text.length == 5 || text[5].isWhitespace())) {
+            handleGoalCommand(text.removePrefix("/goal").trim())
+            promptEditor.text = ""
+            return
+        }
+
         if (isOperationRunning) {
             // Agent is running — queue message for next iteration
             val activeSession = sessionManager.activeSession.value
@@ -529,6 +542,68 @@ class PromptInputPanel(
                 // Error handled by SessionManager
             }
         }
+    }
+
+    /**
+     * Handle `/goal …` control commands. Three shapes:
+     *   - `/goal`                 → show current condition (or "none")
+     *   - `/goal clear|stop|off`  → clear condition
+     *   - `/goal <text>`          → set condition (capped at 4000 chars upstream)
+     *
+     * Results surface as IntelliJ balloon notifications (group "Refio") — same channel
+     * the rest of the plugin uses for non-modal status messages.
+     */
+    private fun handleGoalCommand(args: String) {
+        val api = coreApiClient
+        if (api == null) {
+            notifyGoal("Refio core not connected — start a conversation first.", NotificationType.WARNING)
+            return
+        }
+        val taskId = sessionManager.activeSession.value?.id
+        if (taskId == null) {
+            notifyGoal("No active session — start a conversation first, then set a goal.", NotificationType.WARNING)
+            return
+        }
+        val isClear = args.equals("clear", ignoreCase = true) ||
+            args.equals("stop", ignoreCase = true) ||
+            args.equals("off", ignoreCase = true) ||
+            args.equals("reset", ignoreCase = true) ||
+            args.equals("none", ignoreCase = true) ||
+            args.equals("cancel", ignoreCase = true)
+        cs.launch(Dispatchers.IO) {
+            try {
+                when {
+                    args.isEmpty() -> {
+                        val current = api.taskRouter.getGoal(taskId)
+                        notifyGoal(
+                            if (current != null) "◎ goal: $current" else "(no goal set — use /goal <condition> to set one)",
+                            NotificationType.INFORMATION
+                        )
+                    }
+                    isClear -> {
+                        val had = api.taskRouter.getGoal(taskId) != null
+                        api.taskRouter.clearGoal(taskId)
+                        notifyGoal(if (had) "goal cleared" else "no goal was set", NotificationType.INFORMATION)
+                    }
+                    else -> {
+                        api.taskRouter.setGoal(taskId, args)
+                        notifyGoal(
+                            "◎ goal set: ${args.take(120)}${if (args.length > 120) "…" else ""}",
+                            NotificationType.INFORMATION
+                        )
+                    }
+                }
+            } catch (e: IllegalArgumentException) {
+                notifyGoal("Failed to set goal: ${e.message}", NotificationType.WARNING)
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to handle /goal command" }
+                notifyGoal("Failed to handle /goal: ${e.message}", NotificationType.ERROR)
+            }
+        }
+    }
+
+    private fun notifyGoal(content: String, type: NotificationType) {
+        Notifications.Bus.notify(Notification("Refio", "Goal", content, type), project)
     }
 
     /**

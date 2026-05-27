@@ -116,6 +116,11 @@ object TasksTable : Table("tasks") {
     val sourcePlanId = varchar("source_plan_id", 128).nullable()  // Link to source plan for AGENT sessions
     val planVersion = integer("plan_version").nullable()  // Plan version at execution time
 
+    // Goal / completion condition (Claude Code-style `/goal`). When non-null,
+    // NextSpeakerJudgeGuardian uses a goal-aware prompt that asks "has this condition
+    // been met?" instead of generic "is the turn finished?". Survives session restart.
+    val completionCondition = text("completion_condition").nullable()
+
     override val primaryKey = PrimaryKey(id)
 
     init {
@@ -148,6 +153,7 @@ data class Task(
     val costUsd: Double = 0.0,  // Total cost in USD for this task
     val sourcePlanId: String? = null,  // Link to source plan for AGENT sessions (US-001)
     val planVersion: Int? = null,  // Plan version at execution time (US-001)
+    val completionCondition: String? = null,  // User-set goal for /goal-aware NextSpeakerJudge
     val createdAt: Long,
     val updatedAt: Long
 )

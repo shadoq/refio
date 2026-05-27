@@ -157,6 +157,23 @@ object ConfigKeys {
         yamlAccessor = { it.getGeneralNoEgressEnabled() }
     )
 
+    /**
+     * AGENT-only "is the agent done?" judge. When enabled, a cheap LLM call (WEAK model)
+     * confirms that a tool-call-free assistant response really means "task complete"
+     * before the turn terminates. If the judge says the agent paused mid-task, the loop
+     * is re-entered with a brief SYSTEM nudge. See [NextSpeakerJudgeGuardian].
+     *
+     * Default `true`: the cost is bounded (≤ 1 + maxReentries judge calls per user
+     * message, only at the terminal point of a turn) and the benefit on weak / mid-tier
+     * models is significant. Disable on cost-sensitive deployments using only top-tier
+     * models that rarely stop mid-task.
+     */
+    val GENERAL_NEXT_SPEAKER_JUDGE_ENABLED = ConfigKey(
+        key = "general.next_speaker_judge_enabled",
+        parser = String::toBooleanStrictOrNull,
+        default = true
+    )
+
     val UI_INTENT_CLASSIFICATION_ENABLED = ConfigKey(
         key = "ui.intent_classification_enabled",
         parser = String::toBooleanStrictOrNull,

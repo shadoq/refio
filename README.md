@@ -78,7 +78,9 @@ Same core engine, full-screen terminal interface.
 
 ## What's under the hood
 
-**Execution modes** are dispatched by `WorkflowOrchestrator` → mode-specific executors (`ChatExecutor`, `PlanExecutor`, `StepExecutor`) and the `AgentTurnLoop` (Plan / Agent) with iteration limits and cycle detection.
+**Execution modes** are dispatched by `WorkflowOrchestrator` → mode-specific executors (`ChatExecutor`, `PlanExecutor`, `StepExecutor`) and the `AgentTurnLoop` (Plan / Agent) with iteration limits, output-hash repetition tracking, error-rate circuit breaker, and **content-chanting detection** (Gemini CLI's loop-detection pattern — aborts when the model repeats the same word phrase 10+ times consecutively).
+
+**`/goal`** — set an explicit completion condition for the active task (`/goal all tests in src/test pass`). A `NextSpeakerJudgeGuardian` (Gemini CLI's `checkNextSpeaker` pattern) runs after each terminal-of-turn moment in AGENT mode: a cheap weak-model call confirms whether the goal is *demonstrably* met against transcript evidence, or pushes the loop back into another iteration with a nudge re-injecting the goal text. Closes the failure mode where weak models stop mid-task ("Done.") after a single step. Works in both TUI and IntelliJ; condition persisted on the task row across restarts.
 
 **Tool system** - file ops, grep, terminal, HTTP, code runner, subagent invocation, snapshots. Per-mode permissions via `ToolPermissionsService`. Session-scoped approval via `ToolApprovalService`.
 
@@ -86,7 +88,7 @@ Same core engine, full-screen terminal interface.
 
 **Security layers** - `PathSandbox` with symlink resolution + parent-chain check + TOCTOU revalidation. `CommandRule` (regex `ALLOW` / `BLOCK` / `ASK`). Secret redaction in logs. `detectSensitiveLogging` Gradle task fails the build if an API-key pattern appears in a log statement.
 
-**Models** - 8 providers: Ollama, LM Studio, OpenAI, Anthropic, Gemini, OpenRouter, Custom OpenAI, Z.AI. Universal tool-calling protocol works with models that lack native function calling; native function calling is now wired across the OpenAI-compatible adapters (OpenRouter / Z.AI / Generic OpenAI / LM Studio) too. Models that fail the native-tools probe are remembered across restarts via `models.native_tools_fallbacks`, so users don't pay the probe cost on every fresh process.
+**Models** - 8 providers: Ollama, LM Studio, OpenAI, Anthropic, Gemini, OpenRouter, Custom OpenAI, Z.AI. Universal tool-calling protocol works with models that lack native function calling; native function calling is now wired across the OpenAI-compatible adapters (OpenRouter / Z.AI / Generic OpenAI / LM Studio) too. Models that fail the native-tools probe are remembered across restarts via `models.native_tools_fallbacks`, so users don't pay the probe cost on every fresh process. **Anthropic prompt-prefix caching** — the system prompt is split at a stable/volatile boundary and the stable prefix carries a `cache_control: ephemeral` marker; subsequent turns in the same 5-minute window are billed at the cache-hit rate (~10% of normal input cost).
 
 **Extensibility** - subagents as Markdown + YAML (Claude Code compatible format). MCP protocol support (STDIO + HTTP/SSE) with built-in presets. Project instructions via `AGENTS.md`, `.refio/agent.md`, `.refio/rules/*.md` with glob-based activation. `.aiignore` for RAG exclusions.
 
@@ -99,7 +101,7 @@ Same core engine, full-screen terminal interface.
 Honest assessment - developers deserve to know what they're looking at:
 
 - **Orchestration is a light router + executors**, not a deep agent engine. `IntentRouter` maps modes and dispatches; `WorkflowOrchestrator` coordinates executors (~200 LOC).
-- **Multi-agent infrastructure exists but A2A messaging is incomplete.** `AgentEventBus`, `MultiAgentRunner`, and parallel orchestration are wired; peer-to-peer `send_message` → `answer_message` loop is not yet production-ready. Subagents currently run as isolated invocations.
+- **Multi-agent A2A messaging is now wired** via per-agent inboxes (`AgentInboxRegistry` + `AgentMessageInbox`). `send_message` enqueues to a peer's inbox; the peer reads it on the next turn via the prompt builder; `answer_message` replies to a specific inbound message. Integration-tested but still maturing — production-grade orchestration coverage is incomplete.
 - **No git worktree isolation per task.** Agents edit files directly (with snapshot rollback), not in an isolated branch.
 - **Planning loop is basic.** Plan executor works, but no plan-refinement iterations (plan → execute → evaluate → refine → continue) yet.
 - **Security layers are pragmatic v1.** Working, but this is defense-at-depth-MVP, not hardened multi-layered security.
@@ -124,6 +126,9 @@ See [**docs/ROADMAP.md**](docs/ROADMAP.md) for where each of these is heading.
 - **File snapshots** - automatic backup before every write operation, zlib compressed with SHA-256 dedup
 - **Auto-compaction** - prevents context overflow during long agent sessions
 - **Parallel tool execution** - READ_ONLY tools run concurrently (~2-3x faster for multi-file analysis)
+- **`/goal` command** - explicit completion condition with LLM-judged verification (Claude Code parity, AGENT-only); content-chanting detection aborts runaway generation loops
+- **Anthropic prompt caching** - stable system-prompt prefix marked with `cache_control: ephemeral`; subsequent turns ~10% of normal input cost
+- **Multi-agent A2A** - per-agent inboxes, `send_message` / `answer_message` tools
 - **Native Swing UI + TUI** - IntelliJ Swing components and standalone terminal interface, no WebView
 
 ---
@@ -178,6 +183,7 @@ RefIo ships a standalone CLI with a full-screen TUI that mirrors the IntelliJ pl
 | Ctrl+D | Summarize conversation |
 | Ctrl+Y | Copy selected (or last) message |
 | `@` / `!` / `/` | Context / subagent / prompt autocomplete |
+| `/goal <condition>` | Set completion condition (AGENT mode); `/goal` shows status, `/goal clear` removes |
 | Ctrl+Q | Quit |
 
 ### Architecture
