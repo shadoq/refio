@@ -12,6 +12,7 @@ import pl.jclab.refio.core.tools.security.FileLimits
 import pl.jclab.refio.core.tools.security.FileTooLargeException
 import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Files
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.fileSize
 import kotlin.io.path.isDirectory
 import kotlin.io.path.isRegularFile
@@ -77,11 +78,18 @@ class ReadFileTool(
             val detail = ((params["detail"] as? String) ?: "normal").lowercase()
             // detail=summary trims to first 40 lines unless caller passed an explicit limit.
             // detail=full ignores summary truncation. detail=normal preserves caller offset/limit.
-            val limit = when {
+            val baseLimit = when {
                 explicitLimit != null -> explicitLimit
                 detail == "summary" -> 40
                 else -> null
             }
+            // Auto-expand limit on re-read of the same file within one task — observed
+            // in plugin sessions where the agent walks a 500-line file in 40-line offsets
+            // (4–5 round-trips). Caps at MAX_AUTO_EXPAND_LIMIT so we don't accidentally
+            // pull a multi-MB log into one prompt. See [readHistory] for the tracker.
+            val taskId = params["taskId"] as? String
+            val limit = maybeAutoExpand(taskId, pathStr, baseLimit)
+            val limitAutoExpanded = limit != null && baseLimit != null && limit > baseLimit
             val pageStart = toIntOrNull(params["page_start"])
             val pageEnd = toIntOrNull(params["page_end"])
             val requestedPages = if (pageStart != null || pageEnd != null) {
@@ -302,6 +310,9 @@ class ReadFileTool(
 
             logger.info { "Successfully read file: $pathStr ($readLineCount lines, ${duration}ms)" }
 
+            // Record this read AFTER success so failures don't bump the counter.
+            recordRead(taskId, pathStr)
+
             val truncated = startLine > 1 || endLine < totalLineCount
             val metadata = mutableMapOf<String, Any>(
                 "file_size" to fileSize,
@@ -310,7 +321,8 @@ class ReadFileTool(
                 "start_line" to startLine,
                 "end_line" to endLine,
                 "path" to pathStr,
-                "truncated" to truncated
+                "truncated" to truncated,
+                "limit_auto_expanded" to limitAutoExpanded
             )
             if (truncated && endLine < totalLineCount) {
                 metadata["next_offset"] = endLine + 1
@@ -346,6 +358,46 @@ class ReadFileTool(
 
     private fun getSandboxRoot(): String {
         return sandbox.getProjectRoot().toString()
+    }
+
+    // Tracks (taskId -> path -> read count) to drive auto-expand on re-read.
+    // Bounded so long-running processes don't leak memory — outer map keeps the most
+    // recent MAX_TRACKED_TASKS entries (FIFO eviction; not strict LRU since the cost
+    // of tracking access order outweighs the benefit for this small bound).
+    private val readHistory = ConcurrentHashMap<String, ConcurrentHashMap<String, Int>>()
+
+    private fun maybeAutoExpand(taskId: String?, pathStr: String, baseLimit: Int?): Int? {
+        // Cannot scope without taskId, and no need to expand if caller didn't set a limit
+        // (whole-file read is already the upper bound).
+        if (taskId == null || baseLimit == null) return baseLimit
+        val taskMap = readHistory[taskId] ?: return baseLimit
+        val prevCount = taskMap[pathStr] ?: 0
+        if (prevCount == 0) return baseLimit
+        // Exponential growth: 2x on first re-read, 4x on second, etc., capped.
+        val factor = (1 shl prevCount).coerceAtMost(MAX_AUTO_EXPAND_FACTOR)
+        val expanded = (baseLimit.toLong() * factor).coerceAtMost(MAX_AUTO_EXPAND_LIMIT.toLong()).toInt()
+        if (expanded > baseLimit) {
+            logger.info {
+                "Auto-expanding read limit for $pathStr: baseLimit=$baseLimit -> $expanded " +
+                    "(prevReads=$prevCount, taskId=$taskId)"
+            }
+        }
+        return expanded
+    }
+
+    private fun recordRead(taskId: String?, pathStr: String) {
+        if (taskId == null) return
+        // FIFO bound — clear oldest task entries when we exceed MAX_TRACKED_TASKS.
+        if (readHistory.size >= MAX_TRACKED_TASKS && !readHistory.containsKey(taskId)) {
+            val iterator = readHistory.keys.iterator()
+            var toRemove = readHistory.size - MAX_TRACKED_TASKS + 1
+            while (iterator.hasNext() && toRemove-- > 0) {
+                iterator.next()
+                iterator.remove()
+            }
+        }
+        val taskMap = readHistory.computeIfAbsent(taskId) { ConcurrentHashMap() }
+        taskMap.merge(pathStr, 1) { old, _ -> old + 1 }
     }
 
     /**
@@ -423,6 +475,22 @@ class ReadFileTool(
         "pyc", "pyo", "pyd",
         "iso", "img", "dmg"
     )
+
+    companion object {
+        // Upper bound on auto-expanded limit (lines). 500 lines ≈ 25 KB of source —
+        // big enough to swallow most "I'm walking this file" patterns in one read,
+        // small enough to keep individual reads bounded even for huge logs.
+        private const val MAX_AUTO_EXPAND_LIMIT = 500
+
+        // Cap on exponential growth: 2^N stops at 8x to avoid runaway expansion when
+        // the agent loops on the same file (a separate, deeper bug — but at least
+        // bounded here).
+        private const val MAX_AUTO_EXPAND_FACTOR = 8
+
+        // Bound on tracked tasks to prevent unbounded memory growth on long-running
+        // server processes.
+        private const val MAX_TRACKED_TASKS = 200
+    }
 
     private fun isBinaryFile(path: java.nio.file.Path, mediaType: String?): Boolean {
         // Layer 1: MIME type

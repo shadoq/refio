@@ -50,6 +50,8 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
     private val embeddingStatsLabel = JBLabel("")
     private val lastRefreshLabel = JBLabel("")
     private var isRefreshing = false
+    private var refreshDebounceJob: Job? = null
+    private val refreshDebounceMs = 1500L
 
     // RAG Search UI
     private val searchQueryField = JBTextField()
@@ -112,20 +114,29 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
 
         add(contentPanel, BorderLayout.CENTER)
 
-        // Listen to session changes
+        // Listen to session changes — debounce because session updates fire ~6×/min
+        // (mode toggles, model selects, message sends). Burst refreshes were observed
+        // 6× in 10 minutes for the same project; coalesce into one refresh after
+        // refreshDebounceMs of quiet.
         cs.launch {
             sessionManager.activeSession.collectLatest { session ->
                 session?.let {
                     logger.debug { "Active session changed: ${it.id}" }
-                    SwingUtilities.invokeLater {
-                        refreshData()
-                    }
+                    scheduleDebouncedRefresh()
                 }
             }
         }
 
-        // Initial load
+        // Initial load — direct, no debounce.
         refreshData()
+    }
+
+    private fun scheduleDebouncedRefresh() {
+        refreshDebounceJob?.cancel()
+        refreshDebounceJob = cs.launch {
+            delay(refreshDebounceMs)
+            SwingUtilities.invokeLater { refreshData() }
+        }
     }
 
     private fun createFilesTable(): JComponent {
@@ -265,8 +276,28 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
             ""
         }
 
-        embeddingStatsLabel.text = embeddingStatsText
-        logger.debug { "Stats updated: $statsText | Embeddings: $embeddingStatsText" }
+        // Append circuit-breaker warnings (e.g. Ollama unreachable → embeddings disabled).
+        // Previously these were silent in the UI; users only saw "RAG disabled" with no clue why.
+        val openCircuits = pl.jclab.refio.core.services.EmbeddingCircuitBreaker.getNonClosedCircuits()
+        val breakerText = if (openCircuits.isNotEmpty()) {
+            val parts = openCircuits.joinToString(", ") { snap ->
+                val cooldownSec = (snap.cooldownRemainingMs / 1000).coerceAtLeast(0)
+                "${snap.providerKey} ${snap.state}" +
+                    if (snap.state == "OPEN" && cooldownSec > 0) " (retry in ${cooldownSec}s)" else ""
+            }
+            "<br><font color='red'>⚠ Embedding provider: $parts</font>"
+        } else ""
+
+        val combined = if (embeddingStatsText.startsWith("<html>")) {
+            embeddingStatsText.removeSuffix("</html>") + breakerText + (if (breakerText.isNotBlank()) "</html>" else "")
+        } else if (breakerText.isNotBlank()) {
+            "<html>$breakerText</html>"
+        } else {
+            embeddingStatsText
+        }
+
+        embeddingStatsLabel.text = combined
+        logger.debug { "Stats updated: $statsText | Embeddings: $combined" }
     }
 
     private fun viewSelectedChunks() {

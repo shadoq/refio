@@ -197,7 +197,9 @@ class AgentTurnLoop(
         /** Override for AgentEvent.sessionId (see TurnRequest.emitSessionId). */
         emitSessionId: String? = null,
         /** Override for AgentEvent.sourceAgentId (see TurnRequest.emitSourceAgentId). */
-        emitSourceAgentId: String? = null
+        emitSourceAgentId: String? = null,
+        /** Stable agent name for A2A routing (see TurnRequest.agentName). */
+        agentName: String? = null
     ): TurnResult {
         val runId = UUID.randomUUID().toString()
         val parentRunId = profileOverrides?.parentRunId
@@ -232,6 +234,7 @@ class AgentTurnLoop(
             taskId = taskId,
             role = MessageRole.USER,
             content = userInput,
+            agentInstanceId = profileOverrides?.agentInstanceId,
             agentName = profileOverrides?.subagentName,
             agentDepth = profileOverrides?.subagentName?.let { (profileOverrides.depth) + 1 },
         )
@@ -254,7 +257,8 @@ class AgentTurnLoop(
             source = TurnSource.RUN,
             userMessageStrategy = UserMessageStrategy { userInput },
             emitSessionId = emitSessionId,
-            emitSourceAgentId = emitSourceAgentId
+            emitSourceAgentId = emitSourceAgentId,
+            agentName = agentName
         )
     }
 
@@ -283,7 +287,9 @@ class AgentTurnLoop(
         runProfile: TurnRunProfile = TurnRunProfile.DEFAULT,
         profileOverrides: TurnProfileOverrides? = null,
         emitSessionId: String? = null,
-        emitSourceAgentId: String? = null
+        emitSourceAgentId: String? = null,
+        /** Stable agent name for A2A routing (see TurnRequest.agentName). */
+        agentName: String? = null
     ): TurnResult {
         val runId = UUID.randomUUID().toString()
         val parentRunId = profileOverrides?.parentRunId
@@ -319,9 +325,10 @@ class AgentTurnLoop(
             parentRunId = parentRunId,
             depth = depth,
             source = TurnSource.CONTINUE,
-            userMessageStrategy = UserMessageStrategy { getLastUserMessage(taskId) },
+            userMessageStrategy = UserMessageStrategy { getLastUserMessage(taskId, profileOverrides?.agentInstanceId) },
             emitSessionId = emitSessionId,
-            emitSourceAgentId = emitSourceAgentId
+            emitSourceAgentId = emitSourceAgentId,
+            agentName = agentName
         )
 
     }
@@ -372,7 +379,9 @@ class AgentTurnLoop(
         source: TurnSource,
         userMessageStrategy: UserMessageStrategy,
         emitSessionId: String? = null,
-        emitSourceAgentId: String? = null
+        emitSourceAgentId: String? = null,
+        /** Stable agent name for A2A routing — injected into tool params as AGENT_NAME. */
+        agentName: String? = null
     ): TurnResult {
         // sessionId/sourceAgentId used in AgentEvent emissions. Default to taskId so
         // single-agent sessions remain self-contained; multi-agent overrides with parent ids.
@@ -399,6 +408,11 @@ class AgentTurnLoop(
         var lastFailureSignature: String? = null
         // beforeFinish guardian re-entry counter (capped by GuardianRegistry.maxReentries).
         var guardianReentryCount = 0
+        // Snapshot of usedTools.size at the moment of the most recent guardian re-entry.
+        // Lets NextSpeakerJudgeGuardian detect "previous nudge produced no new tool call"
+        // and short-circuit the loop instead of burning another judge call + LLM iteration
+        // on the same stuck pattern. See [NextSpeakerJudgeGuardian.check].
+        var usedToolsSizeAtLastReentry = 0
         // Plain-text guard (AGENT mode only): counts nudges sent when the model replies with
         // prose instead of the required JSON envelope. Bounded to 2 — if the model cannot
         // recover after two explicit reminders, further retries won't help and we fall
@@ -422,6 +436,9 @@ class AgentTurnLoop(
 
         // When running as a subagent, persist messages with agentName / agentDepth so the
         // IntelliJ chat bubble renderer groups them under a per-agent header.
+        // agentInstanceId isolates the subagent's chat history from the parent and from
+        // sibling subagents — see ChatMessageRepository.findHistoryForInvocation.
+        val persistAgentInstanceId: String? = profileOverrides?.agentInstanceId
         val persistAgentName: String? = profileOverrides?.subagentName
         val persistAgentDepth: Int? = if (persistAgentName != null) (profileOverrides?.depth ?: 0) + 1 else null
 
@@ -556,7 +573,8 @@ class AgentTurnLoop(
                         val tempPrompt = buildPrompt(
                             taskId, mode, iteration, maxIterations,
                             userContextRefs, runProfile, profileOverrides,
-                            writeToolsExecutedInTurn, useNativeTools
+                            writeToolsExecutedInTurn, useNativeTools,
+                            agentName = agentName, sessionId = evSessionId
                         )
                         val (fits, estimated) = tokenEstimator.checkFits(tempPrompt, maxTokens, provider = effectiveProvider)
 
@@ -573,7 +591,8 @@ class AgentTurnLoop(
                     var prompt = buildPrompt(
                         taskId, mode, iteration, maxIterations,
                         userContextRefs, runProfile, profileOverrides,
-                        writeToolsExecutedInTurn, useNativeTools
+                        writeToolsExecutedInTurn, useNativeTools,
+                        agentName = agentName, sessionId = evSessionId
                     )
 
                     // Call LLM
@@ -637,7 +656,8 @@ class AgentTurnLoop(
                             prompt = buildPrompt(
                                 taskId, mode, iteration, maxIterations,
                                 userContextRefs, runProfile, profileOverrides,
-                                writeToolsExecutedInTurn, false
+                                writeToolsExecutedInTurn, false,
+                                agentName = agentName, sessionId = evSessionId
                             )
                         }
                     }
@@ -752,6 +772,7 @@ class AgentTurnLoop(
                                         tokensIn = llmResponse.usage.inputTokens,
                                         tokensOut = llmResponse.usage.outputTokens,
                                         cost = llmResponse.cost,
+                                        agentInstanceId = persistAgentInstanceId,
                                         agentName = persistAgentName,
                                         agentDepth = persistAgentDepth,
                                     )
@@ -766,6 +787,7 @@ class AgentTurnLoop(
                                         "\"response\":\"...\",\"intent\":\"implementation\"}. " +
                                         "No prose, no markdown fences.",
                                     toolCalls = null,
+                                    agentInstanceId = persistAgentInstanceId,
                                     agentName = persistAgentName,
                                     agentDepth = persistAgentDepth,
                                 )
@@ -793,7 +815,7 @@ class AgentTurnLoop(
                                 cost = totalCost,
                                 toolsUsed = usedTools.distinct()
                             )
-                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
                         }
                     }
 
@@ -873,7 +895,7 @@ class AgentTurnLoop(
                             cost = totalCost,
                             toolsUsed = usedTools.distinct()
                         )
-                        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
                     }
 
                     if (toolCalls.isNotEmpty()) {
@@ -895,7 +917,28 @@ class AgentTurnLoop(
                         // Fall back to a JSON envelope only when the model produced no text at all.
                         logger.info { "[TOOL_CALLS] taskId=$taskId, count=${toolCalls.size}" }
                         val assistantContent = if (nativeCalls != null) {
-                            llmResponse.content.takeIf { it.isNotBlank() } ?: buildActionsEnvelopeJson(toolCalls)
+                            // Native path: tool calls live in `toolCalls` structurally; UI renders
+                            // ToolCallBubble from toolCallInfo (not from content), and Plan bubble is
+                            // explicitly skipped when toolCallInfo is present (AssistantBubbleRenderer
+                            // line 93). So content here is only for genuine prose like "I'll create
+                            // the file…".
+                            //
+                            // Deepseek (and similar weak models) emit BOTH native tool_calls AND a
+                            // duplicate {actions:[...]} envelope as text. Strip the envelope outright
+                            // — do NOT regenerate one, because regeneration just rewrites the same
+                            // noise into the next turn's history and confuses subsequent calls.
+                            val raw = llmResponse.content
+                            when {
+                                raw.isBlank() -> ""
+                                isJsonEnvelopeFallback(raw) -> {
+                                    logger.warn {
+                                        "[NATIVE_DUPLICATE_ENVELOPE] taskId=$taskId, model=${effectiveModel ?: "?"} — " +
+                                            "stripping duplicate JSON envelope from assistant content (${raw.length} chars)"
+                                    }
+                                    ""
+                                }
+                                else -> raw
+                            }
                         } else {
                             llmResponse.content
                         }
@@ -908,6 +951,7 @@ class AgentTurnLoop(
                             tokensIn = llmResponse.usage.inputTokens,
                             tokensOut = llmResponse.usage.outputTokens,
                             cost = llmResponse.cost,
+                            agentInstanceId = persistAgentInstanceId,
                             agentName = persistAgentName,
                             agentDepth = persistAgentDepth,
                         )
@@ -980,6 +1024,8 @@ class AgentTurnLoop(
                                 profileOverrides = profileOverrides,
                                 runId = runId,
                                 depth = depth,
+                                agentName = agentName,
+                                sessionId = evSessionId,
                             )
                         } catch (e: ToolRejectedException) {
                             logger.info { "[REJECTED] User rejected tool '${e.toolName}': ${e.reason ?: "no reason"}" }
@@ -987,6 +1033,7 @@ class AgentTurnLoop(
                                 taskId = taskId,
                                 role = MessageRole.SYSTEM,
                                 content = "User rejected tool '${e.toolName}'. Reason: ${e.reason ?: "not specified"}",
+                                agentInstanceId = persistAgentInstanceId,
                                 agentName = persistAgentName,
                                 agentDepth = persistAgentDepth,
                             )
@@ -1006,7 +1053,7 @@ class AgentTurnLoop(
                             return turnFinalizer.completeTurn(
                                 taskId, result, listener, runId, parentRunId, depth,
                                 persistAssistantMessage = false, metadata = subagentMetadata,
-                                agentName = persistAgentName, agentDepth = persistAgentDepth,
+                                agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth,
                             )
                         }
 
@@ -1022,6 +1069,7 @@ class AgentTurnLoop(
                                 isSummarized = resultData.isSummarized,
                                 rawOutput = resultData.rawOutput,
                                 metadata = resultData.metadata,
+                                agentInstanceId = persistAgentInstanceId,
                                 agentName = persistAgentName,
                                 agentDepth = persistAgentDepth,
                                 tokensIn = resultData.subTokensIn,
@@ -1102,6 +1150,7 @@ class AgentTurnLoop(
                                     taskId = taskId,
                                     role = MessageRole.SYSTEM,
                                     content = responseContent,
+                                    agentInstanceId = persistAgentInstanceId,
                                     agentName = persistAgentName,
                                     agentDepth = persistAgentDepth,
                                 )
@@ -1169,7 +1218,7 @@ class AgentTurnLoop(
                                 cost = totalCost,
                                 toolsUsed = usedTools.distinct()
                             )
-                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
                         }
 
                         val writeToolCalls = turnToolExecutor.countWriteToolCalls(toolCalls)
@@ -1196,7 +1245,7 @@ class AgentTurnLoop(
                                 cost = totalCost,
                                 toolsUsed = usedTools.distinct()
                             )
-                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
                         }
 
                         if (errorTracker.shouldAbort(config.errorRateThreshold)) {
@@ -1209,7 +1258,7 @@ class AgentTurnLoop(
                                 cost = totalCost,
                                 toolsUsed = usedTools.distinct()
                             )
-                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
                         }
 
                         // Check for mid-execution user messages after tool execution
@@ -1220,6 +1269,7 @@ class AgentTurnLoop(
                                 role = MessageRole.SYSTEM,
                                 content = "[New user message above — address it next]",
                                 toolCalls = null,
+                                agentInstanceId = persistAgentInstanceId,
                                 agentName = persistAgentName,
                                 agentDepth = persistAgentDepth,
                             )
@@ -1237,6 +1287,7 @@ class AgentTurnLoop(
                                 role = MessageRole.SYSTEM,
                                 content = "[New user message above — address it before finishing]",
                                 toolCalls = null,
+                                agentInstanceId = persistAgentInstanceId,
                                 agentName = persistAgentName,
                                 agentDepth = persistAgentDepth,
                             )
@@ -1251,6 +1302,7 @@ class AgentTurnLoop(
                                 tokensIn = llmResponse.usage.inputTokens,
                                 tokensOut = llmResponse.usage.outputTokens,
                                 cost = llmResponse.cost,
+                                agentInstanceId = persistAgentInstanceId,
                                 agentName = persistAgentName,
                                 agentDepth = persistAgentDepth,
                             )
@@ -1280,6 +1332,40 @@ class AgentTurnLoop(
                         // contradict the intentional simplification in TurnGuardrails.
                         val hasIncompleteJsonEnvelope =
                             jsonEnvelopeInspection.hasJsonEnvelope && !jsonEnvelopeInspection.isComplete
+
+                        // Content-chanting check: the model is in a runaway generation loop,
+                        // repeating the same 50-char phrase 10+ times. Caught here (post-stream)
+                        // rather than mid-stream to keep the streaming path simple. See
+                        // TurnGuardrails.ContentChantingDetector for the heuristic rationale.
+                        // We only inspect non-empty content, and only when the response did not
+                        // produce a tool call (a chant inside a comment block of a tool call is
+                        // typically still semantically useful — let the tool execute).
+                        if (contentForExtraction.isNotBlank() &&
+                            nativeCalls.isNullOrEmpty() &&
+                            toolCalls.isEmpty()
+                        ) {
+                            val chantingStatus = TurnGuardrails.ContentChantingDetector.inspect(contentForExtraction)
+                            if (chantingStatus is TurnGuardrails.LoopStatus.ABORT) {
+                                logger.warn { "[CONTENT_CHANTING] taskId=$taskId, iteration=$iteration: ${chantingStatus.reason}" }
+                                val result = TurnResult(
+                                    success = false,
+                                    response = chantingStatus.reason,
+                                    iterations = iteration,
+                                    tokensIn = totalTokensIn,
+                                    tokensOut = totalTokensOut,
+                                    cost = totalCost,
+                                    toolsUsed = usedTools.distinct()
+                                )
+                                return turnFinalizer.completeTurn(
+                                    taskId, result, listener, runId, parentRunId, depth,
+                                    persistAssistantMessage = true,
+                                    metadata = subagentMetadata,
+                                    agentInstanceId = persistAgentInstanceId,
+                                    agentName = persistAgentName,
+                                    agentDepth = persistAgentDepth,
+                                )
+                            }
+                        }
                         // Detect "effectively empty" JSON envelope: model returned a complete object
                         // like `{}` or `{"response":""}` with no actions/subtasks and no prose.
                         // Seen with MiniMax under native-tools + response_format=json_object conflict
@@ -1300,29 +1386,22 @@ class AgentTurnLoop(
                         // Observed with glm-5, glm-5.1, glm-4.7 on Z.AI.
                         // Adapters now return emptyList (not null) when native tools were sent
                         // and the model produced 0 calls — both shapes mean "no native calls".
+                        //
+                        // This is the only kept "format" detector — it RECOVERS data (the model
+                        // had real tool intent, just used the wrong channel). The previous prose-
+                        // pattern detectors (`looksLikeIntentAnnouncement`, `looksLikeToolMarkerOnly`)
+                        // were removed: the system prompt already tells the model not to announce
+                        // intent without a tool call, and regex detection on top added redundant
+                        // nudges + false-positive risk on legitimate trailing prose like "Let me
+                        // summarize what I found...". Weak models that ignore the prompt rule
+                        // simply exit silently; users retry. Matches Codex / Claude Code / Continue
+                        // philosophy — trust the model, no algorithmic detection of "model lapsed
+                        // into prose".
                         val nativeTextEmbeddedToolCall =
                             activeNativeToolSchemas != null &&
                                 nativeCalls.isNullOrEmpty() &&
                                 toolCalls.isEmpty() &&
                                 looksLikeTextEmbeddedToolCall(contentForExtraction)
-                        // Native-tools mode: model emitted a short intent announcement ("Let me
-                        // first check...", "I'll create the game...") without any tool call, on
-                        // iteration 1. User asked for work to be done, model is stalling. Nudge
-                        // once before accepting prose as a terminal answer.
-                        val nativeIntentAnnouncement =
-                            activeNativeToolSchemas != null &&
-                                nativeCalls.isNullOrEmpty() &&
-                                toolCalls.isEmpty() &&
-                                iteration == 1 &&
-                                looksLikeIntentAnnouncement(contentForExtraction)
-                        // In the JSON-envelope path, AGENT mode never uses plain text as a
-                        // terminal signal — completion is `{"actions": []}`. So ANY blank/prose
-                        // reply (no envelope) is a format lapse, regardless of whether the model
-                        // previously produced valid envelopes. We used to skip the nudge when
-                        // `usedTools` was non-empty (assuming prose = "I'm done"), but weaker
-                        // models routinely emit a tool call in turn 1 and then lapse into prose
-                        // like "File doesn't exist. I'll create X..." in turn 2 without ever
-                        // re-emitting the envelope. That produced silent success with no action.
                         val isRepeatedPlainText =
                             !looksLikeJsonResponse &&
                                 contentForExtraction.isNotBlank() &&
@@ -1335,9 +1414,14 @@ class AgentTurnLoop(
                         // nudged into a JSON envelope the model was never asked to emit.
                         val nativeToolsActive = activeNativeToolSchemas != null
 
+                        // Format retry fires only for objectively-broken outputs:
+                        //   - empty JSON envelope ({} or {"response":""}), or
+                        //   - tool call embedded in text instead of native channel, or
+                        //   - (AGENT, JSON-in-text mode only) missing/malformed envelope.
+                        // PLAN never opted into the JSON envelope contract so it gets only the
+                        // first two triggers via the native-channel path.
                         val requiresFormatRetry =
-                            nativeCalls == null &&
-                                mode == TaskMode.AGENT &&
+                            nativeCalls.isNullOrEmpty() &&
                                 contentForExtraction.isNotBlank() &&
                                 plainTextNudgeCount < 2 &&
                                 iteration < maxIterations &&
@@ -1345,18 +1429,19 @@ class AgentTurnLoop(
                                 (
                                     isEffectivelyEmptyEnvelope ||
                                         nativeTextEmbeddedToolCall ||
-                                        nativeIntentAnnouncement ||
-                                        (!nativeToolsActive && (hasIncompleteJsonEnvelope || !looksLikeJsonResponse))
+                                        (mode == TaskMode.AGENT && !nativeToolsActive &&
+                                            (hasIncompleteJsonEnvelope || !looksLikeJsonResponse))
                                 )
 
-                        // Hard-fail when nudges are exhausted (or model is repeating itself).
-                        // Returning prose as `success=true` would let the UI claim the task is
-                        // done while the model has neither executed a tool this turn nor emitted
-                        // a proper terminal envelope. Does not apply in native tool-calling mode.
+                        // Hard-fail only after nudge bounds are exhausted on a tracked failure
+                        // mode. Because requiresFormatRetry now fires only on objectively-broken
+                        // outputs, plainTextNudgeCount can only be >= 1 when one of those was
+                        // detected — legitimate plain-text final answers in native mode never
+                        // trigger a nudge and so can never trip this gate. `isRepeatedPlainText`
+                        // gives an early-exit when the model returns byte-identical content after
+                        // the first nudge (nothing further is going to change).
                         val shouldHardFailFormat =
-                            !nativeToolsActive &&
-                                nativeCalls == null &&
-                                mode == TaskMode.AGENT &&
+                            nativeCalls.isNullOrEmpty() &&
                                 contentForExtraction.isNotBlank() &&
                                 !looksLikeJsonResponse &&
                                 !hasIncompleteJsonEnvelope &&
@@ -1390,6 +1475,7 @@ class AgentTurnLoop(
                                 depth,
                                 persistAssistantMessage = true,
                                 metadata = subagentMetadata,
+                                agentInstanceId = persistAgentInstanceId,
                                 agentName = persistAgentName,
                                 agentDepth = persistAgentDepth,
                             )
@@ -1401,7 +1487,6 @@ class AgentTurnLoop(
                             val retryReason = when {
                                 isEffectivelyEmptyEnvelope -> "LLM returned empty JSON envelope (no actions, no response)"
                                 nativeTextEmbeddedToolCall -> "LLM emitted tool call in text content instead of native tool_calls channel"
-                                nativeIntentAnnouncement -> "LLM announced intent in prose without emitting a native tool call"
                                 hasIncompleteJsonEnvelope -> "LLM returned incomplete JSON envelope"
                                 else -> "LLM returned plain text without JSON structure"
                             }
@@ -1421,6 +1506,7 @@ class AgentTurnLoop(
                                     tokensIn = llmResponse.usage.inputTokens,
                                     tokensOut = llmResponse.usage.outputTokens,
                                     cost = llmResponse.cost,
+                                    agentInstanceId = persistAgentInstanceId,
                                     agentName = persistAgentName,
                                     agentDepth = persistAgentDepth,
                                 )
@@ -1431,15 +1517,11 @@ class AgentTurnLoop(
                                 content = when {
                                     nativeTextEmbeddedToolCall ->
                                         "Your previous reply embedded a tool call inside the text content " +
-                                            "(e.g. <tool_call>...</tool_call> or JSON in prose). Those are " +
-                                            "ignored. Tools must be invoked through the native tool_calls / " +
-                                            "tool_use channel of this API — emit them as structured tool_calls, " +
-                                            "not as text. Retry now using the native channel."
-                                    nativeIntentAnnouncement ->
-                                        "You announced an intent (\"let me check\", \"I'll create...\") but did " +
-                                            "not invoke any tool. Do not narrate — call the tool directly via " +
-                                            "the native tool_calls channel. If the task is already complete, " +
-                                            "reply with the final answer instead of an intent announcement."
+                                            "(e.g. <tool_call>...</tool_call> or {\"name\":\"...\",\"arguments\":{...}} in prose). " +
+                                            "Those are ignored — the harness only dispatches tool calls received through the " +
+                                            "provider's native tool_calls / tool_use channel. Re-emit the same intent now as a " +
+                                            "structured native tool call (the SDK / API does this automatically when you " +
+                                            "invoke a function); do not write the tool call as text."
                                     hasIncompleteJsonEnvelope ->
                                         "Your previous reply contained incomplete JSON. Generate the full JSON envelope again from scratch. " +
                                             "Do not continue or patch the previous output. Reply with JSON only: " +
@@ -1453,6 +1535,7 @@ class AgentTurnLoop(
                                             "No prose, no markdown fences."
                                 },
                                 toolCalls = null,
+                                agentInstanceId = persistAgentInstanceId,
                                 agentName = persistAgentName,
                                 agentDepth = persistAgentDepth,
                             )
@@ -1483,6 +1566,7 @@ class AgentTurnLoop(
                                 depth,
                                 persistAssistantMessage = true,
                                 metadata = subagentMetadata,
+                                agentInstanceId = persistAgentInstanceId,
                                 agentName = persistAgentName,
                                 agentDepth = persistAgentDepth,
                             )
@@ -1499,7 +1583,7 @@ class AgentTurnLoop(
                                 cost = totalCost,
                                 toolsUsed = usedTools.distinct()
                             )
-                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
                         }
 
                         val shouldRunTaskVerification =
@@ -1508,7 +1592,7 @@ class AgentTurnLoop(
                         // NO_CHANGES_NEEDED reconfirmation: let LLM reconsider once
                         // Task verification
                         val userMessageForVerification = userMessageStrategy.getUserMessage(taskId)
-                        if (!verifyTaskCompletionIfNeeded(taskId, shouldRunTaskVerification, userMessageForVerification, llmResponse.content)) {
+                        if (!verifyTaskCompletionIfNeeded(taskId, shouldRunTaskVerification, userMessageForVerification, llmResponse.content, persistAgentInstanceId, persistAgentName, persistAgentDepth)) {
                             continue
                         }
 
@@ -1529,16 +1613,20 @@ class AgentTurnLoop(
                                 toolsUsed = usedTools.distinct(),
                                 writeToolsExecutedInTurn = writeToolsExecutedInTurn,
                                 verificationToolsExecutedAfterWrite = verificationToolsExecutedAfterWrite,
-                                priorReentries = guardianReentryCount
+                                priorReentries = guardianReentryCount,
+                                toolsUsedSizeAtPriorReentry = usedToolsSizeAtLastReentry,
+                                completionCondition = taskRepository.getCompletionCondition(taskId)
                             )
                             when (val decision = completionGuardians.runChecks(guardianContext)) {
                                 is GuardianDecision.Reenter -> {
                                     guardianReentryCount++
+                                    usedToolsSizeAtLastReentry = usedTools.size
                                     chatMessageRepository.create(
                                         taskId = taskId,
                                         role = MessageRole.SYSTEM,
                                         content = decision.nudge,
                                         toolCalls = null,
+                                        agentInstanceId = persistAgentInstanceId,
                                         agentName = persistAgentName,
                                         agentDepth = persistAgentDepth,
                                     )
@@ -1566,6 +1654,7 @@ class AgentTurnLoop(
                             tokensIn = llmResponse.usage.inputTokens,
                             tokensOut = llmResponse.usage.outputTokens,
                             cost = llmResponse.cost,
+                            agentInstanceId = persistAgentInstanceId,
                             agentName = persistAgentName,
                             agentDepth = persistAgentDepth,
                         )
@@ -1587,7 +1676,7 @@ class AgentTurnLoop(
                             "iterations" to iteration.toString(),
                             "agentName" to (profileOverrides?.subagentName ?: "default")
                         ))
-                        val finalResult = turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = false, metadata = subagentMetadata, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                        val finalResult = turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = false, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
                         updateTurnState { TurnStateSnapshot() }
                         return finalResult
                     }
@@ -1661,7 +1750,7 @@ class AgentTurnLoop(
                 cost = totalCost,
                 toolsUsed = usedTools.distinct()
             )
-            val finalResult = turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentName = persistAgentName, agentDepth = persistAgentDepth)
+            val finalResult = turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
             updateTurnState { TurnStateSnapshot() }
             return finalResult
         } catch (e: CancellationException) {
@@ -1681,7 +1770,7 @@ class AgentTurnLoop(
                 cost = totalCost,
                 toolsUsed = usedTools.distinct()
             )
-            val finalResult = turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentName = persistAgentName, agentDepth = persistAgentDepth)
+            val finalResult = turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
             updateTurnState { TurnStateSnapshot() }
             return finalResult
         }
@@ -1704,7 +1793,7 @@ class AgentTurnLoop(
             cost = totalCost,
             toolsUsed = usedTools.distinct()
         )
-        val finalResult = turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentName = persistAgentName, agentDepth = persistAgentDepth)
+        val finalResult = turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
         updateTurnState { TurnStateSnapshot() }
         return finalResult
     }
@@ -1733,7 +1822,9 @@ class AgentTurnLoop(
         runProfile: TurnRunProfile = TurnRunProfile.DEFAULT,
         profileOverrides: TurnProfileOverrides? = null,
         writeToolsExecutedInTurn: Int = 0,
-        useNativeTools: Boolean = false
+        useNativeTools: Boolean = false,
+        agentName: String? = null,
+        sessionId: String? = null
     ): TurnPrompt {
         val turnPrompt = turnPromptBuilder.buildPrompt(
             taskId = taskId,
@@ -1744,7 +1835,9 @@ class AgentTurnLoop(
             runProfile = runProfile,
             profileOverrides = profileOverrides,
             writeToolsExecutedInTurn = writeToolsExecutedInTurn,
-            nativeToolsActive = useNativeTools
+            nativeToolsActive = useNativeTools,
+            agentName = agentName,
+            sessionId = sessionId
         )
 
         // Build PromptSnapshot for UI inspection
@@ -1838,14 +1931,17 @@ class AgentTurnLoop(
         taskId: String,
         shouldRunVerification: Boolean,
         userRequestFallback: String?,
-        llmContent: String
+        llmContent: String,
+        agentInstanceId: String? = null,
+        agentName: String? = null,
+        agentDepth: Int? = null
     ): Boolean {
         if (!shouldRunVerification) {
             return true
         }
 
         val userRequest = userRequestFallback?.takeIf { it.isNotBlank() }
-            ?: getLastUserMessage(taskId)
+            ?: getLastUserMessage(taskId, agentInstanceId)
             ?: throw IllegalStateException("Missing user message for task verification: $taskId")
 
         val verification = taskVerifier.verifyCompletion(taskId, userRequest, llmContent)
@@ -1862,34 +1958,12 @@ class AgentTurnLoop(
             taskId = taskId,
             role = MessageRole.SYSTEM,
             content = "Task verification failed: ${verification.reason}.$suggested",
-            toolCalls = null
+            toolCalls = null,
+            agentInstanceId = agentInstanceId,
+            agentName = agentName,
+            agentDepth = agentDepth,
         )
         return false
-    }
-
-    /**
-     * Serialize tool calls into the canonical `{response, actions}` JSON envelope used
-     * by the JSON-in-text path and by the UI's plan-bubble renderer. Called on the native
-     * function-calling path so the persisted assistant message has the same shape regardless
-     * of which transport the model actually used.
-     */
-    private fun buildActionsEnvelopeJson(toolCalls: List<ToolCallData>): String {
-        val actions = toolCalls.map { tc ->
-            val argsMap: Map<String, Any?> = runCatching {
-                @Suppress("UNCHECKED_CAST")
-                pl.jclab.refio.core.utils.GsonInstance.gson
-                    .fromJson(tc.arguments, Map::class.java) as? Map<String, Any?>
-            }.getOrNull() ?: emptyMap()
-            mapOf(
-                "tool" to tc.name,
-                "args" to argsMap
-            )
-        }
-        val envelope = mapOf(
-            "response" to "",
-            "actions" to actions
-        )
-        return pl.jclab.refio.core.utils.GsonInstance.gson.toJson(envelope)
     }
 
     /**
@@ -1956,29 +2030,11 @@ class AgentTurnLoop(
     }
 
     /**
-     * Detect short intent-announcement prose from models that "thought out loud"
-     * instead of calling a tool. Matches leading phrases like "Let me...", "I'll...",
-     * "First, I'll..." with short total length (real informational answers are longer).
-     * Heuristic only — used once on iteration 1 in native-tools mode to nudge the model
-     * back onto the tool_calls channel.
-     */
-    private fun looksLikeIntentAnnouncement(content: String): Boolean {
-        val trimmed = content.trim()
-        if (trimmed.isBlank() || trimmed.length > 300) return false
-        val lower = trimmed.lowercase()
-        val openers = listOf(
-            "let me ", "let's ", "i'll ", "i will ", "i am going to ", "i'm going to ",
-            "first, i", "first i", "checking ", "i need to ", "i should ", "i'll first"
-        )
-        return openers.any { lower.startsWith(it) }
-    }
-
-    /**
      * Get last user message from history.
      */
-    private fun getLastUserMessage(taskId: String): String? {
+    private fun getLastUserMessage(taskId: String, agentInstanceId: String? = null): String? {
         return try {
-            chatMessageRepository.findByTaskId(taskId)
+            chatMessageRepository.findHistoryForInvocation(taskId, agentInstanceId)
                 .lastOrNull { it.role == MessageRole.USER }
                 ?.content
         } catch (e: Exception) {

@@ -62,6 +62,13 @@ data class TurnProfileOverrides(
     val providerOverride: String? = null,
     val maxIterationsOverride: Int? = null,
     val parentRunId: String? = null,
+    /**
+     * Unique ID per subagent invocation. Set by SubagentRouter (and equivalents) when
+     * spawning a subagent run. Used to isolate the subagent's chat history from the
+     * parent and from sibling subagents — see ChatMessageRepository.findHistoryForInvocation.
+     * Null = main (parent) run.
+     */
+    val agentInstanceId: String? = null,
     val depth: Int = 0,
     val subagentChain: List<String> = emptyList(),
     val contextProfile: pl.jclab.refio.core.subagents.models.SubagentContextProfile? = null,
@@ -112,7 +119,13 @@ data class TurnRequest(
      * Used by MultiAgentRouter to attribute per-turn events to a specific sub-agent.
      * Defaults to [taskId] when null.
      */
-    val emitSourceAgentId: String? = null
+    val emitSourceAgentId: String? = null,
+    /**
+     * Stable agent name (e.g. "analyst", "coder") used for A2A routing in a multi-agent session.
+     * Threaded into `ToolInternalParams.AGENT_NAME` so `send_message` / `answer_message` and the
+     * inbox lookup all key by the same identifier the YAML spec / LLM use. Null for single-agent runs.
+     */
+    val agentName: String? = null
 )
 
 data class ToolDefinitionInfo(

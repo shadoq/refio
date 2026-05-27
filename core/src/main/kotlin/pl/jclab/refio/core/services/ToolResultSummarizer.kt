@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.services
 
+import kotlinx.coroutines.withTimeoutOrNull
 import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
@@ -114,7 +115,7 @@ class ToolResultSummarizer(
         val effectiveMinLength = maxOf(configMinLength, GLOBAL_MIN_SKIP_THRESHOLD)
 
         if (rawOutput.length <= effectiveMinLength) {
-            logger.info {
+            logger.debug {
                 "[SUMMARIZER_SKIP] Tool $toolName output (${rawOutput.length} chars) below " +
                     "effective min ($effectiveMinLength), keeping raw."
             }
@@ -132,7 +133,7 @@ class ToolResultSummarizer(
         // can make better decisions about how much to keep based on available
         // context window. See design spec: 2026-04-12-agent-execution-reliability.
         if (toolName == "read_file" && rawOutput.length < 524_288) {
-            logger.info {
+            logger.debug {
                 "[SUMMARIZER_SKIP] read_file output (${rawOutput.length} chars) below " +
                     "lazy-compression threshold (512KB), deferring to RECENT_WORK budget."
             }
@@ -152,7 +153,7 @@ class ToolResultSummarizer(
         // 506-char outputs triggering 80s+ WEAK calls for 8 chars of "compression"
         // while paraphrasing critical IDs.
         if (contextType == SummaryContextType.RAW_OUTPUT && rawOutput.length < RAW_OUTPUT_SKIP_THRESHOLD) {
-            logger.info {
+            logger.debug {
                 "[SUMMARIZER_SKIP] Tool $toolName output (${rawOutput.length} chars) below " +
                     "RAW_OUTPUT_SKIP_THRESHOLD ($RAW_OUTPUT_SKIP_THRESHOLD), keeping raw."
             }
@@ -171,7 +172,7 @@ class ToolResultSummarizer(
         // commentary. Observed in documentation-engineer sessions where 19 extra LLM
         // calls were made for small doc files, each taking 20-35s on Ollama.
         if (contextType == SummaryContextType.DATA_FILE && rawOutput.length < DATA_FILE_SKIP_THRESHOLD) {
-            logger.info {
+            logger.debug {
                 "[SUMMARIZER_SKIP] Tool $toolName output (${rawOutput.length} chars) below " +
                     "DATA_FILE_SKIP_THRESHOLD ($DATA_FILE_SKIP_THRESHOLD), keeping raw."
             }
@@ -233,18 +234,42 @@ class ToolResultSummarizer(
         // Explicitly pass thinking=false to ensure all output goes to content.
         // Models like qwen3.5 may generate thinking tokens even without think=true,
         // which wastes tokens on reasoning instead of producing summary content.
-        val response = llmClient.complete(
-            provider = provider,
-            model = model,
-            messages = listOf(LLMMessage(role = "user", content = userPrompt)),
-            systemPrompt = buildSystemPrompt(toolName, contextType),
-            maxTokens = maxTokens,
-            temperature = 0.3,
-            thinking = false,
-            source = "ToolResultSummarizer",
-            taskId = taskId,
-            subtaskId = null
-        )
+        //
+        // Hard timeout on the LLM call: in parallel tool batches a single hung
+        // provider stream stalls the whole turn forever (no chunks → adapter
+        // never returns → outer turn loop blocks on the parallel join). Observed
+        // in production: 1 of 3 concurrent summarizer calls hung indefinitely
+        // while the other two finished in ~7s, leaving the turn deadlocked.
+        // On timeout we cancel the inner request and fall back to deterministic
+        // compression — same path used for empty-response failures.
+        val response = withTimeoutOrNull(SUMMARIZER_LLM_TIMEOUT_MS) {
+            llmClient.complete(
+                provider = provider,
+                model = model,
+                messages = listOf(LLMMessage(role = "user", content = userPrompt)),
+                systemPrompt = buildSystemPrompt(toolName, contextType),
+                maxTokens = maxTokens,
+                temperature = 0.3,
+                thinking = false,
+                source = "ToolResultSummarizer",
+                taskId = taskId,
+                subtaskId = null
+            )
+        }
+
+        if (response == null) {
+            logger.warn {
+                "[SUMMARIZER_TIMEOUT] $provider/$model exceeded ${SUMMARIZER_LLM_TIMEOUT_MS}ms for " +
+                    "tool=$toolName, inputLen=${rawOutput.length}. Using deterministic compression."
+            }
+            return ToolResultSummary(
+                summary = compressToolResult(rawOutput, null, CompressionLevel.SUMMARY),
+                wasSummarized = true,
+                tokensIn = 0,
+                tokensOut = 0,
+                cost = 0.0
+            )
+        }
 
         val summary = response.content.trim().ifBlank {
             logger.warn {
@@ -601,6 +626,15 @@ Guidelines:
          * compression step regardless of what the WEAK summarizer model decides.
          */
         const val SUMMARIZER_INPUT_BUDGET = 16394
+
+        /**
+         * Hard timeout for a single summarizer LLM call. WEAK-model summarizers
+         * usually finish in 5–15s; 60s catches genuinely hung provider streams
+         * (observed: one of three concurrent calls never returned, deadlocking
+         * the turn). On timeout we cancel the request and fall back to
+         * deterministic compression via [compressToolResult].
+         */
+        const val SUMMARIZER_LLM_TIMEOUT_MS = 60_000L
 
         /**
          * File extensions treated as DATA_FILE rather than CODE_ANALYSIS.

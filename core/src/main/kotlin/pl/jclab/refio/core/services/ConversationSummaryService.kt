@@ -27,16 +27,29 @@ class ConversationSummaryService(
         private const val MIN_KEEP_RECENT_MESSAGES = 2
     }
 
-    fun shouldSummarize(messages: List<ChatMessage>, maxTokens: Int): Boolean {
+    /**
+     * @param contentResolver maps a ChatMessage to the string that will actually appear in the
+     *   LLM prompt. Default uses `msg.content` (raw stored value), but callers that compress
+     *   tool results before sending — see ContextService.resolveToolConversationContent — must
+     *   pass a resolver so the trigger reflects realistic prompt size, not raw DB content.
+     *   Without this a 95k-char read_file dump in TOOL.content counts as ~24k tokens even
+     *   though only ~256 tokens (1024-char truncation) reach the LLM.
+     */
+    fun shouldSummarize(
+        messages: List<ChatMessage>,
+        maxTokens: Int,
+        contentResolver: (ChatMessage) -> String = { it.content }
+    ): Boolean {
         if (messages.isEmpty() || maxTokens <= 0) return false
-        val totalTokens = messages.sumOf { ContextTokenEstimator.estimateTokens(it.content) }
+        val totalTokens = messages.sumOf { ContextTokenEstimator.estimateTokens(contentResolver(it)) }
         return totalTokens > (maxTokens * SUMMARY_THRESHOLD_RATIO).toInt()
     }
 
     suspend fun ensureSummaryIfNeeded(
         taskId: String,
         messages: List<ChatMessage>,
-        maxTokens: Int
+        maxTokens: Int,
+        contentResolver: (ChatMessage) -> String = { it.content }
     ): List<ChatMessage> {
         if (messages.isEmpty() || maxTokens <= 0) return messages
 
@@ -51,14 +64,15 @@ class ConversationSummaryService(
         }
 
         // Trigger is purely budget-based: only when the uncompressed tail
-        // exceeds the configured ratio of the conversation budget.
-        if (!shouldSummarize(messagesSinceSummary, maxTokens)) return messages
+        // exceeds the configured ratio of the conversation budget. Tokens are
+        // measured on the contentResolver output, not raw msg.content (see KDoc).
+        if (!shouldSummarize(messagesSinceSummary, maxTokens, contentResolver)) return messages
 
         // Walk oldest-first and collect just enough messages to bring the
         // remaining tail below SUMMARY_TARGET_RATIO of the budget. Always
         // preserve at least MIN_KEEP_RECENT_MESSAGES at the end so the model
         // still sees fresh context (current user query, latest tool result).
-        val tokensPerMessage = messagesSinceSummary.map { ContextTokenEstimator.estimateTokens(it.content) }
+        val tokensPerMessage = messagesSinceSummary.map { ContextTokenEstimator.estimateTokens(contentResolver(it)) }
         val totalTokens = tokensPerMessage.sum()
         val target = (maxTokens * SUMMARY_TARGET_RATIO).toInt().coerceAtLeast(1)
         val tokensToReduce = (totalTokens - target).coerceAtLeast(1)

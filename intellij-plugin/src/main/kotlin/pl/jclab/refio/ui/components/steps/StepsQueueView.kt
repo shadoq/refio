@@ -180,7 +180,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
             // Render each step in order
             sortedSubtasks.forEachIndexed { index, subtask ->
                 val stepNumber = index + 1
-                logger.debug { "Rendering step $stepNumber: ${subtask.description?.take(50)} [${subtask.status}]" }
+                logger.debug { "Rendering step $stepNumber: ${subtask.description.take(50)} [${subtask.status}]" }
 
                 val itemPanel = createStepItem(subtask, stepNumber)
                 stepsPanel.add(itemPanel)
@@ -241,7 +241,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
                 })
             }
 
-            val fullDesc = subtask.description ?: subtask.kind
+            val fullDesc = subtask.description.ifBlank { subtask.kind }
             val descLabel = JBLabel(fullDesc).apply {
                 font = font.deriveFont(11f)
                 toolTipText = fullDesc
@@ -508,7 +508,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
             finishedAtMs - startedAtMs
         } else null
 
-        if (subtask.model == null && executionMs == null && subtask.latencyMs == null) return null
+        if (subtask.model == null && executionMs == null && subtask.latencyMs <= 0) return null
 
         return JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
@@ -538,12 +538,12 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
                 }
 
                 // Tokens chip
-                if (subtask.tokensIn != null && subtask.tokensOut != null) {
+                if (subtask.tokensIn > 0 || subtask.tokensOut > 0) {
                     add(createMetricChip("📊", "${subtask.tokensIn}/${subtask.tokensOut}"))
                 }
 
                 // Cost chip
-                if (subtask.costUsd != null) {
+                if (subtask.costUsd > 0.0) {
                     add(createMetricChip("💰", "$${String.format("%.4f", subtask.costUsd)}"))
                 }
             }
@@ -685,10 +685,10 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
             appendLine()
             appendLine("llm_model: ${subtask.model.orEmpty()}")
             appendLine("llm_provider: ${subtask.provider.orEmpty()}")
-            appendLine("input_tokens: ${subtask.tokensIn?.toString().orEmpty()}")
-            appendLine("output_tokens: ${subtask.tokensOut?.toString().orEmpty()}")
+            appendLine("input_tokens: ${subtask.tokensIn}")
+            appendLine("output_tokens: ${subtask.tokensOut}")
             appendLine("cost_usd: ${formatCost(subtask.costUsd).orEmpty()}")
-            appendLine("latency_ms: ${subtask.latencyMs?.toString().orEmpty()}")
+            appendLine("latency_ms: ${subtask.latencyMs}")
             appendLine()
             appendLine("created_at: ${formatTimestamp(subtask.createdAt).orEmpty()}")
             appendLine("updated_at: ${formatTimestamp(subtask.updatedAt).orEmpty()}")
@@ -887,14 +887,6 @@ private class StepDetailsDialog(
         contentPanel.add(Box.createVerticalStrut(LCATheme.spacingLg))
         contentPanel.add(createTextSection("Description", subtask.description))
         contentPanel.add(Box.createVerticalStrut(LCATheme.spacingLg))
-        contentPanel.add(createTextSection("Summary", subtask.summary ?: subtask.resultSummary))
-        contentPanel.add(Box.createVerticalStrut(LCATheme.spacingLg))
-        contentPanel.add(createTextSection("Result", subtask.result))
-
-        subtask.errorMessage?.takeIf { it.isNotBlank() }?.let {
-            contentPanel.add(Box.createVerticalStrut(LCATheme.spacingLg))
-            contentPanel.add(createTextSection("Error", it, isError = true))
-        }
 
         subtask.paramsJson?.takeIf { it.isNotBlank() }?.let {
             contentPanel.add(Box.createVerticalStrut(LCATheme.spacingLg))
@@ -904,6 +896,15 @@ private class StepDetailsDialog(
         subtask.stepPlanJson?.takeIf { it.isNotBlank() }?.let {
             contentPanel.add(Box.createVerticalStrut(LCATheme.spacingLg))
             contentPanel.add(createPayloadSection("Step Plan JSON", it))
+        }
+
+        contentPanel.add(createTextSection("Summary", subtask.summary ?: subtask.resultSummary))
+        contentPanel.add(Box.createVerticalStrut(LCATheme.spacingLg))
+        contentPanel.add(createTextSection("Result", subtask.result))
+
+        subtask.errorMessage?.takeIf { it.isNotBlank() }?.let {
+            contentPanel.add(Box.createVerticalStrut(LCATheme.spacingLg))
+            contentPanel.add(createTextSection("Error", it, isError = true))
         }
 
         panel.add(JBScrollPane(contentPanel).apply {
@@ -983,9 +984,9 @@ private class StepDetailsDialog(
             gbc.gridy++
             addField(this, gbc, "Output Tokens:", formatNumber(subtask.tokensOut))
             gbc.gridy++
-            addField(this, gbc, "Cost (USD):", subtask.costUsd?.let { String.format("$%.6f", it) } ?: "-")
+            addField(this, gbc, "Cost (USD):", if (subtask.costUsd > 0.0) String.format("$%.6f", subtask.costUsd) else "-")
             gbc.gridy++
-            addField(this, gbc, "Latency:", subtask.latencyMs?.let { "${formatNumber(it)} ms" } ?: "-")
+            addField(this, gbc, "Latency:", if (subtask.latencyMs > 0) "${formatNumber(subtask.latencyMs)} ms" else "-")
         }
     }
 

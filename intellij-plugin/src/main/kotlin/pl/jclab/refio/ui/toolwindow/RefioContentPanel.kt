@@ -262,7 +262,7 @@ class RefioContentPanel(
 
     fun showHelp() {
         logger.info { "Show help requested" }
-        com.intellij.ide.BrowserUtil.browse("https://github.com/jclab-joseph/refio")
+        com.intellij.ide.BrowserUtil.browse("https://github.com/shadoq/refio/blob/main/docs/overview.md")
     }
 
     private fun scrollChatToBottom() {

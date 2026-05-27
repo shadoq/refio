@@ -172,4 +172,34 @@ object EmbeddingCircuitBreaker {
             return (COOLDOWN_MS - elapsed).coerceAtLeast(0)
         }
     }
+
+    /**
+     * Snapshot of providers that are currently NOT in CLOSED state. Used by the
+     * RAG panel to surface circuit-breaker activity (OPEN/HALF_OPEN) to the user —
+     * without this the breaker silently disables RAG and the user only sees
+     * "RAG search disabled" with no explanation.
+     */
+    data class CircuitSnapshot(
+        val providerKey: String,
+        val state: String,
+        val failureCount: Int,
+        val cooldownRemainingMs: Long
+    )
+
+    fun getNonClosedCircuits(): List<CircuitSnapshot> {
+        val now = System.currentTimeMillis()
+        return circuits.entries.mapNotNull { (key, status) ->
+            synchronized(status) {
+                if (status.state == CircuitState.CLOSED) null
+                else CircuitSnapshot(
+                    providerKey = key,
+                    state = status.state.name,
+                    failureCount = status.failureCount,
+                    cooldownRemainingMs = if (status.state == CircuitState.OPEN) {
+                        (COOLDOWN_MS - (now - status.lastFailureTime)).coerceAtLeast(0)
+                    } else 0
+                )
+            }
+        }
+    }
 }

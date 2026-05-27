@@ -134,16 +134,50 @@ class ReadDirectoryTool(
     }
 
     private fun listRecursive(path: java.nio.file.Path, maxDepth: Int): List<FileEntry> {
+        // SKIP_SUBTREE on excluded directories is the difference between a 30-second walk
+        // on a Node/Python project (.venv + node_modules + .git, hundreds of MB of irrelevant
+        // files) and a fast walk over the actual source tree. Files.walk has no way to skip
+        // subtrees so we use walkFileTree with a custom FileVisitor.
         val entries = mutableListOf<FileEntry>()
 
-        Files.walk(path, maxDepth).use { stream ->
-            stream.forEach { file ->
-                // Skip the root directory itself
-                if (file != path) {
-                    toEntrySafe(file, path)?.let { entries.add(it) }
+        Files.walkFileTree(
+            path,
+            emptySet(),
+            maxDepth,
+            object : java.nio.file.SimpleFileVisitor<java.nio.file.Path>() {
+                override fun preVisitDirectory(
+                    dir: java.nio.file.Path,
+                    attrs: java.nio.file.attribute.BasicFileAttributes
+                ): java.nio.file.FileVisitResult {
+                    // Skip excluded directory subtrees (.git, node_modules, .venv, build, etc.)
+                    if (dir != path && limits.shouldExcludeDirectory(dir.fileName.toString())) {
+                        return java.nio.file.FileVisitResult.SKIP_SUBTREE
+                    }
+                    if (dir != path) {
+                        toEntrySafe(dir, path)?.let { entries.add(it) }
+                    }
+                    return java.nio.file.FileVisitResult.CONTINUE
+                }
+
+                override fun visitFile(
+                    file: java.nio.file.Path,
+                    attrs: java.nio.file.attribute.BasicFileAttributes
+                ): java.nio.file.FileVisitResult {
+                    if (file != path) {
+                        toEntrySafe(file, path)?.let { entries.add(it) }
+                    }
+                    return java.nio.file.FileVisitResult.CONTINUE
+                }
+
+                override fun visitFileFailed(
+                    file: java.nio.file.Path,
+                    exc: java.io.IOException
+                ): java.nio.file.FileVisitResult {
+                    logger.warn { "Skipping unreadable entry: $file (${exc.javaClass.simpleName}: ${exc.message})" }
+                    return java.nio.file.FileVisitResult.CONTINUE
                 }
             }
-        }
+        )
 
         return entries.sortedWith(compareBy({ it.depth }, { it.relativePath }))
     }

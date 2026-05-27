@@ -230,7 +230,14 @@ suspend fun getAllModels(
 
         data class ProviderFetch(val name: String, val models: List<ModelConfig>)
 
-        val providerNames = listOf("ollama", "openai", "anthropic", "openrouter", "gemini", "lmstudio", "generic_openai", "zai")
+        val genericOpenAiConfigured = configService
+            ?.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_BASE_URL)
+            ?.isNotBlank() == true
+        val providerNames = buildList {
+            add("ollama"); add("openai"); add("anthropic"); add("openrouter")
+            add("gemini"); add("lmstudio"); add("zai")
+            if (genericOpenAiConfigured) add("generic_openai")
+        }
 
         val results = coroutineScope {
             providerNames.map { name ->

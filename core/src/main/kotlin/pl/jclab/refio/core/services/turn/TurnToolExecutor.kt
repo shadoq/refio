@@ -184,6 +184,10 @@ class TurnToolExecutor(
         profileOverrides: TurnProfileOverrides? = null,
         runId: String,
         depth: Int,
+        /** Stable agent name for A2A routing (multi-agent). Falls back to profileOverrides.subagentName. */
+        agentName: String? = null,
+        /** Multi-agent session id used by send_message / answer_message + inbox lookups. Defaults to taskId. */
+        sessionId: String? = null,
     ): List<Pair<ToolCallData, ToolResultData>> = coroutineScope {
         val maxOrderIndex = subtaskRepository.getMaxOrderIndex(taskId) ?: -1
 
@@ -334,7 +338,9 @@ class TurnToolExecutor(
                         runId = runId,
                         depth = depth,
                         profileOverrides = profileOverrides,
-                        _subtaskIds = subtaskIds
+                        _subtaskIds = subtaskIds,
+                        agentName = agentName,
+                        sessionId = sessionId,
                     )
                     originalIndex to (toolCall to result)
                 }
@@ -396,7 +402,9 @@ class TurnToolExecutor(
         runId: String,
         depth: Int,
         profileOverrides: TurnProfileOverrides?,
-        _subtaskIds: Map<String, String>
+        _subtaskIds: Map<String, String>,
+        agentName: String? = null,
+        sessionId: String? = null,
     ): ToolResultData {
         if (toolCall.error != null) {
             val errorText = "Error: ${toolCall.error}"
@@ -507,9 +515,17 @@ class TurnToolExecutor(
             if (isSystemOrDelegation) {
                 argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.MODE, mode.name)
                 argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.ITERATION, iteration)
-                argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.SESSION_ID, taskId)
-                profileOverrides?.subagentName?.let { argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.AGENT_NAME, it) }
-                profileOverrides?.let { argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.AGENT_ID, runId) }
+                // SESSION_ID is the multi-agent session id when provided (see TurnRequest.emitSessionId);
+                // falls back to taskId for single-agent runs.
+                argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.SESSION_ID, sessionId ?: taskId)
+                // AGENT_NAME: subagentName for nested invocations, request.agentName for peer multi-agent.
+                val resolvedAgentName = profileOverrides?.subagentName ?: agentName
+                resolvedAgentName?.let { argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.AGENT_NAME, it) }
+                // AGENT_ID accompanies every agent context (subagent or multi-agent peer). Single-agent
+                // turns (no overrides, no agentName) keep the previous behavior where AGENT_ID is unset.
+                if (profileOverrides != null || resolvedAgentName != null) {
+                    argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.AGENT_ID, runId)
+                }
                 profileOverrides?.parentRunId?.let { argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.PARENT_RUN_ID, it) }
             }
 
@@ -638,6 +654,12 @@ class TurnToolExecutor(
                             }
                             ToolResultSummary(deterministic, wasSummarized = true, 0, 0, 0.0)
                         }
+                        // Short-circuit small outputs before entering the suspend summarizer
+                        // function. The summarizer has its own GLOBAL_MIN_SKIP_THRESHOLD (2048)
+                        // fast path, but skipping the call entirely avoids one suspend boundary
+                        // per tool — adds up across 50+ tool calls per task.
+                        outputWithWarnings.length <= ToolResultSummarizer.GLOBAL_MIN_SKIP_THRESHOLD ->
+                            ToolResultSummary(outputWithWarnings, wasSummarized = false, 0, 0, 0.0)
                         outputWithWarnings.isNotBlank() ->
                             // Pass argumentsMap so the summarizer can pick the right context
                             // type — e.g. read_file on .json should not run code-analysis prompt.

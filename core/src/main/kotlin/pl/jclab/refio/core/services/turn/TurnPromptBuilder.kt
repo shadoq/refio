@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.services.turn
 
 import pl.jclab.refio.api.models.ContextReference
+import pl.jclab.refio.core.agents.events.AgentInboxRegistry
 import pl.jclab.refio.core.api.TurnProfileOverrides
 import pl.jclab.refio.core.api.TurnRunProfile
 import pl.jclab.refio.core.db.ChatMessage
@@ -36,10 +37,31 @@ class TurnPromptBuilder(
     private val tokenEstimator: PromptTokenEstimator = PromptTokenEstimator(),
     private val promptCache: PromptCache? = null,
     private val sectionProviders: List<PromptSectionProvider> = emptyList(),
-    private val configService: pl.jclab.refio.core.services.ConfigService? = null
+    private val configService: pl.jclab.refio.core.services.ConfigService? = null,
+    private val agentInboxRegistry: AgentInboxRegistry? = null
 ) {
     class StructuredPromptBuilder {
+        /**
+         * Render the prompt with stable sections first, then non-stable.
+         * Single-string output for callers that don't need the cache boundary.
+         */
         fun buildSystemPrompt(sections: List<PromptSection>): String {
+            return render(sections).text
+        }
+
+        /**
+         * Render the prompt and report the byte length of the stable prefix.
+         *
+         * Output shape: `<stable>\n\n<dynamic>` (or just `<stable>` / `<dynamic>`
+         * if one side is empty). [Rendered.stablePrefixLength] is the offset where
+         * the dynamic content begins — equivalently, the length of the cacheable
+         * prefix. When everything is dynamic, returns 0 (no prefix to cache).
+         * When everything is stable, returns the full text length.
+         *
+         * Used by [TurnPrompt.cacheableSystemLength] / [AnthropicAdapter] to wire
+         * Anthropic `cache_control` markers.
+         */
+        fun render(sections: List<PromptSection>): Rendered {
             val stablePart = sections
                 .filter { it.stable && it.content.isNotBlank() }
                 .joinToString("\n\n") { it.content.trim() }
@@ -47,10 +69,15 @@ class TurnPromptBuilder(
                 .filter { !it.stable && it.content.isNotBlank() }
                 .joinToString("\n\n") { it.content.trim() }
 
-            return listOf(stablePart, dynamicPart)
-                .filter { it.isNotBlank() }
-                .joinToString("\n\n")
+            return when {
+                stablePart.isBlank() && dynamicPart.isBlank() -> Rendered("", 0)
+                stablePart.isBlank() -> Rendered(dynamicPart, 0)
+                dynamicPart.isBlank() -> Rendered(stablePart, stablePart.length)
+                else -> Rendered("$stablePart\n\n$dynamicPart", stablePart.length)
+            }
         }
+
+        data class Rendered(val text: String, val stablePrefixLength: Int)
     }
 
     companion object {
@@ -90,7 +117,11 @@ class TurnPromptBuilder(
         runProfile: TurnRunProfile,
         profileOverrides: TurnProfileOverrides?,
         writeToolsExecutedInTurn: Int = 0,
-        nativeToolsActive: Boolean = false
+        nativeToolsActive: Boolean = false,
+        /** Stable A2A agent name (multi-agent). When set together with [sessionId], pending incoming requests are injected. */
+        agentName: String? = null,
+        /** Multi-agent session id. Used to look up the inbox in [AgentInboxRegistry]. */
+        sessionId: String? = null,
     ): TurnPrompt {
         // Build system prompt based on mode/profile
         val baseSystemPrompt = resolveSystemPrompt(
@@ -109,11 +140,29 @@ class TurnPromptBuilder(
             profileOverrides?.contextProfile
         } else null
 
-        val history = chatMessageRepository.findByTaskId(taskId)
+        // Isolate subagent history: each subagent invocation tags its rows with its own
+        // agentInstanceId (see SubagentRouter). Pass null for the parent run so it does
+        // not see subagent intermediate steps either.
+        val history = chatMessageRepository.findHistoryForInvocation(
+            taskId,
+            profileOverrides?.agentInstanceId
+        )
         val stickyRequirements = buildStickyRequirementsBlock(history)
         val promptSections = mutableListOf(
             PromptSection("base_system_prompt", baseSystemPrompt, stable = true)
         )
+        // Iteration warning (only emits when remaining <= 12) — marked stable=false so
+        // it lands AFTER the stable prefix. The cacheable prefix (identity + tools +
+        // family guidance) stays byte-stable as `iteration` increments, instead of
+        // invalidating the prefix-cache the moment the warning kicks in.
+        val iterationInfo = buildIterationInfo(currentIteration, maxIterations, writeToolsExecutedInTurn)
+        if (iterationInfo.isNotBlank()) {
+            promptSections += PromptSection(
+                id = "iteration_status",
+                content = iterationInfo,
+                stable = false
+            )
+        }
         if (stickyRequirements.isNotBlank()) {
             promptSections += PromptSection(
                 id = "task_requirements",
@@ -148,7 +197,15 @@ $stickyRequirements
             }
         }
 
-        var systemPrompt = structuredPromptBuilder.buildSystemPrompt(promptSections)
+        // Render once and capture the stable-prefix boundary. Subsequent appends
+        // (working memory, project context, contextProfile truncation) only add
+        // non-stable content after the boundary, so this captured length stays
+        // accurate for the final prompt — it is the value passed to providers
+        // that support prompt-prefix caching (currently the Anthropic adapter
+        // via cache_control markers).
+        val initialRender = structuredPromptBuilder.render(promptSections)
+        var systemPrompt = initialRender.text
+        var cacheableSystemLen = initialRender.stablePrefixLength
 
         // Use ContextService for messages and project context (for PLAN and AGENT modes)
         if ((mode == TaskMode.PLAN || mode == TaskMode.AGENT) && contextService != null && projectRoot != null) {
@@ -232,12 +289,18 @@ $filteredContextPrompt
                     }
                 }
 
+                // Clamp cacheableSystemLen — if truncation cut into the stable
+                // prefix, the boundary now points past the end of the string and
+                // would be rejected by the Anthropic adapter.
+                cacheableSystemLen = cacheableSystemLen.coerceAtMost(systemPrompt.length)
+
                 logger.info { "[BUILD_PROMPT] Using ContextService: ${filteredMessages.size} messages, context=${filteredContextPrompt.length} chars" +
                     if (contextProfile != null) ", contextProfile applied" else "" }
 
                 return TurnPrompt(
                     systemPrompt = systemPrompt,
-                    messages = filteredMessages
+                    messages = appendInboxMessage(filteredMessages, sessionId, agentName),
+                    cacheableSystemLength = cacheableSystemLen.takeIf { it > 0 }
                 )
             } catch (e: Exception) {
                 logger.warn(e) { "[BUILD_PROMPT] Failed to use ContextService, falling back to direct: ${e.message}" }
@@ -304,8 +367,38 @@ $filteredContextPrompt
 
         return TurnPrompt(
             systemPrompt = systemPrompt,
-            messages = messages
+            messages = appendInboxMessage(messages, sessionId, agentName),
+            cacheableSystemLength = cacheableSystemLen.takeIf { it > 0 }
         )
+    }
+
+    /**
+     * Multi-agent A2A: if this agent has an inbox in [AgentInboxRegistry] with pending
+     * requests from peers, append a system message describing them and instructing the
+     * model to reply via `answer_message`. Idempotent — once the agent replies, the
+     * inbox drops the request (see [pl.jclab.refio.core.agents.events.AgentMessageInbox]).
+     */
+    private fun appendInboxMessage(
+        messages: List<LLMMessage>,
+        sessionId: String?,
+        agentName: String?
+    ): List<LLMMessage> {
+        if (sessionId == null || agentName == null) return messages
+        val registry = agentInboxRegistry ?: return messages
+        val inbox = registry.find(sessionId, agentName) ?: return messages
+        val pending = inbox.snapshotPending()
+        if (pending.isEmpty()) return messages
+        val content = buildString {
+            appendLine("You have pending incoming messages from other agents in this session.")
+            appendLine("Reply using the `answer_message` tool with the matching requestId.")
+            appendLine()
+            pending.forEach { req ->
+                val type = req.context["type"] ?: "message"
+                appendLine("- from=${req.sourceAgentId}  type=$type  requestId=${req.id}")
+                appendLine("  query: ${req.query}")
+            }
+        }
+        return messages + LLMMessage(role = "system", content = content)
     }
 
     private fun buildStickyRequirementsBlock(history: List<ChatMessage>): String {
@@ -405,7 +498,13 @@ $filteredContextPrompt
             logger.error { "[PLAN_PROMPT] Tool descriptions are EMPTY! This will cause LLM to return error." }
         }
 
-        val toolSelectionMatrix = toolDescriptionBuilder.getToolSelectionMatrix(mode, taskId)
+        // Filter the When-to-use matrix by profile too — see buildAgentSystemPrompt.
+        val toolSelectionMatrix = if (profileOverrides != null) {
+            val filteredTools = resolveToolsForProfile(mode, taskId, profileOverrides)
+            toolDescriptionBuilder.buildSelectionMatrix(filteredTools)
+        } else {
+            toolDescriptionBuilder.getToolSelectionMatrix(mode, taskId)
+        }
 
         return promptsService.getSystemPrompt(
             type = PromptType.SYSTEM_PLAN,
@@ -471,7 +570,13 @@ $filteredContextPrompt
 
     /**
      * System prompt for AGENT mode (all tools).
+     *
+     * `currentIteration`, `maxIterations`, `writeToolsExecutedInTurn` are accepted for
+     * API symmetry with [buildPlanSystemPrompt] / [buildSubagentSystemPrompt] but
+     * intentionally NOT used here — iteration-dependent content moved out of the
+     * stable prompt prefix to preserve prompt-cache hit ratios across iterations.
      */
+    @Suppress("UNUSED_PARAMETER")
     fun buildAgentSystemPrompt(
         mode: TaskMode,
         taskId: String,
@@ -499,11 +604,22 @@ $filteredContextPrompt
             toolDescriptionBuilder.getToolDescriptions(mode, taskId)
         }
 
-        val iterationInfo = buildIterationInfo(currentIteration, maxIterations, writeToolsExecutedInTurn)
+        // Filter the When-to-use matrix by profile too — otherwise subagents see all
+        // ~29 tools in the system prompt even though only 4-6 are actually available
+        // (their <available_tools> AND native tool_calls channel are both filtered).
+        val toolSelectionMatrix = if (profileOverrides != null) {
+            val filteredTools = resolveToolsForProfile(mode, taskId, profileOverrides)
+            toolDescriptionBuilder.buildSelectionMatrix(filteredTools)
+        } else {
+            toolDescriptionBuilder.getToolSelectionMatrix(mode, taskId)
+        }
 
-        val toolSelectionMatrix = toolDescriptionBuilder.getToolSelectionMatrix(mode, taskId)
-
-        val basePrompt = promptsService.getSystemPrompt(
+        // Iteration info is intentionally NOT appended here — it changes every iteration
+        // once remaining <= 12 (warning kicks in), which would invalidate the prompt-prefix
+        // cache. [buildPrompt] injects it as a separate non-stable PromptSection that sits
+        // after the stable prefix, so the cacheable portion (identity + rules + tools +
+        // multi-agent guidance) stays byte-stable across turn iterations.
+        return promptsService.getSystemPrompt(
             type = PromptType.SYSTEM_AGENT,
             variables = mapOf(
                 "tool_descriptions" to toolDescriptions,
@@ -512,16 +628,6 @@ $filteredContextPrompt
                 "multi_agent_section" to resolveMultiAgentSection(mode, taskId, profileOverrides)
             )
         )
-
-        return if (iterationInfo.isNotEmpty()) {
-            """
-$basePrompt
-
-$iterationInfo
-            """.trimIndent()
-        } else {
-            basePrompt
-        }
     }
 
     /**
@@ -548,8 +654,11 @@ $iterationInfo
                 nativeToolsActive = nativeToolsActive,
                 profileOverrides = overrides
             )
-        val iterationInfo = buildIterationInfo(currentIteration, maxIterations, writeToolsExecutedInTurn)
 
+        // Iteration info NOT appended here — see buildAgentSystemPrompt for why
+        // (cache-prefix stability). [buildPrompt] injects it as a non-stable section
+        // after the stable subagent prefix. The remaining content (tool_call_contract
+        // + available_tools) is byte-stable for the subagent invocation.
         return buildString {
             appendLine(basePrompt)
             if (toolDescriptions.isNotBlank()) {
@@ -576,10 +685,6 @@ $iterationInfo
                 appendLine("""If no tools are needed, respond with {"actions":[],"response":"your answer","intent":"response"}.""")
             }
             appendLine("</tool_call_contract>")
-            if (iterationInfo.isNotBlank()) {
-                appendLine()
-                appendLine(iterationInfo)
-            }
         }.trim()
     }
 

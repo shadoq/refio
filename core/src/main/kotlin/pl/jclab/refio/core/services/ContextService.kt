@@ -748,7 +748,19 @@ class ContextService(
 
         val allMessages = transaction { chatMessageRepository.findByTaskId(taskId) }
         val summarizedMessages = if (conversationSummaryService != null && conversationBudget > 0) {
-            conversationSummaryService.ensureSummaryIfNeeded(taskId, allMessages, conversationBudget)
+            // Pass the same resolver that convertChatMessageToLLMMessage uses below, so the
+            // summarizer's token estimate reflects the rendered prompt (TOOL bodies truncated
+            // to 1024 chars when not summarized) instead of raw stored content. Without this,
+            // one large `read_file` tool result can fake a 24k-token conversation and trigger
+            // premature summarization after 2-3 turns.
+            conversationSummaryService.ensureSummaryIfNeeded(
+                taskId = taskId,
+                messages = allMessages,
+                maxTokens = conversationBudget,
+                contentResolver = { msg ->
+                    if (msg.role == MessageRole.TOOL) resolveToolConversationContent(msg) else msg.content
+                }
+            )
         } else {
             allMessages
         }

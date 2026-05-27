@@ -156,6 +156,48 @@ class TaskRouter(
         return taskRepository.getLastForProject(projectId)?.toResponse()
     }
 
+    // ===== Goal (`/goal`) Operations =====
+
+    /**
+     * Set the completion condition for a task. Pass `null` to clear.
+     *
+     * When set, `NextSpeakerJudgeGuardian` switches to goal-aware judging: instead of
+     * deciding "is the turn finished?" it decides "has THIS condition been demonstrably
+     * met based on the transcript?". Condition is capped at 4000 chars (Claude Code parity).
+     *
+     * @return true on success, false when task not found.
+     * @throws IllegalArgumentException if the condition exceeds 4000 chars.
+     */
+    fun setGoal(taskId: String, condition: String?): Boolean {
+        val trimmed = condition?.trim()?.takeIf { it.isNotEmpty() }
+        if (trimmed != null && trimmed.length > MAX_GOAL_LENGTH) {
+            throw IllegalArgumentException(
+                "Goal condition exceeds $MAX_GOAL_LENGTH characters (was ${trimmed.length}). " +
+                    "Shorten the condition or split into smaller goals."
+            )
+        }
+        logger.info { "[TaskRouter] ${if (trimmed != null) "Setting" else "Clearing"} goal for task $taskId" }
+        return taskRepository.setCompletionCondition(taskId, trimmed)
+    }
+
+    /**
+     * Get the active completion condition for a task, or null when none is set.
+     */
+    fun getGoal(taskId: String): String? = taskRepository.getCompletionCondition(taskId)
+
+    /**
+     * Clear the active completion condition. Equivalent to `setGoal(taskId, null)`.
+     */
+    fun clearGoal(taskId: String): Boolean {
+        logger.info { "[TaskRouter] Clearing goal for task $taskId" }
+        return taskRepository.setCompletionCondition(taskId, null)
+    }
+
+    companion object {
+        /** Max length of a `/goal` completion condition. Matches Claude Code's 4000-char limit. */
+        const val MAX_GOAL_LENGTH = 4000
+    }
+
     /**
      * Health check.
      */

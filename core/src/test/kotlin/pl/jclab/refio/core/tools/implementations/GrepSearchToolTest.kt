@@ -533,20 +533,20 @@ class GrepSearchToolTest {
         }
 
         @Test
-        fun `should return error when path is a file not directory`() = runBlocking {
-            // Given
-            Files.writeString(tempDir.resolve("file.txt"), "content")
+        fun `should search file directly when path is a regular file`() = runBlocking {
+            // B3: grep_search now accepts a single file path — agents commonly pass a
+            // concrete file when they want to scan one file's contents. Previously this
+            // returned "Not a directory" and cost a wasted turn.
+            Files.writeString(tempDir.resolve("file.txt"), "line one\nmatch me\nline three")
 
-            // When - use ./ prefix to avoid bare filename conversion
             val result = tool.execute(mapOf(
-                "pattern" to "test",
+                "pattern" to "match",
                 "path" to "./file.txt"
             ))
 
-            // Then
-            assertFalse(result.success)
-            assertNotNull(result.error)
-            assertTrue(result.error!!.contains("not a directory", ignoreCase = true))
+            assertTrue(result.success, "Expected single-file grep to succeed: ${result.error}")
+            assertNotNull(result.output)
+            assertTrue(result.output!!.contains("match me"), "Output should contain matched line: ${result.output}")
         }
     }
 

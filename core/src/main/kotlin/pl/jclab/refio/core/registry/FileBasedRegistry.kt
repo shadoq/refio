@@ -35,6 +35,7 @@ abstract class FileBasedRegistry<T>(
     protected val userFileItems = ConcurrentHashMap<String, T>()
     protected val projectFileItems = ConcurrentHashMap<String, T>()
 
+    @Volatile
     private var lastLoadedAt: Long = 0
     private val cacheTtlMs = 60_000L // 1 minute
 
@@ -76,8 +77,10 @@ abstract class FileBasedRegistry<T>(
         projectRoot?.let { root ->
             loadFromDirectory(root.resolve(".refio/$resourceDir"), DefinitionScope.PROJECT, projectFileItems)
         }
-
-        lastLoadedAt = System.currentTimeMillis()
+        // Note: lastLoadedAt update lives in refresh() (the single public entry point that
+        // calls loadAll). This way subclass loadAll() overrides — e.g. SubagentRegistry —
+        // automatically get TTL bookkeeping without having to remember it. Otherwise every
+        // get()/size() call would see lastLoadedAt=0 and re-trigger refresh.
     }
 
     /**
@@ -124,6 +127,7 @@ abstract class FileBasedRegistry<T>(
     fun refresh() {
         logger.info { "Refreshing cache..." }
         loadAll()
+        lastLoadedAt = System.currentTimeMillis()
         logger.info { "Loaded ${builtinItems.size} builtin, ${userFileItems.size} user, ${projectFileItems.size} project items" }
     }
 

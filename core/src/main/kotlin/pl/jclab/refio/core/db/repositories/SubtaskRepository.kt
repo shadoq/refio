@@ -236,7 +236,7 @@ class SubtaskRepository {
                 it[updatedAt] = System.currentTimeMillis()
             }
 
-            logger.info { "Incremented subtask LLM metrics: id=$id, +$inputTokens/$outputTokens tokens, +$$costUsd, +${latencyMs}ms" }
+            logger.info { "Incremented subtask LLM metrics: id=$id, +$inputTokens/$outputTokens tokens, +\$${"%.6f".format(costUsd)}, +${latencyMs}ms" }
             findById(id)
         }
     }
