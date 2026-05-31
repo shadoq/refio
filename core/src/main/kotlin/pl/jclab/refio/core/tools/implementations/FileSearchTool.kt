@@ -56,7 +56,7 @@ class FileSearchTool(
                 ?: return ToolResult.error("Missing required parameter: 'pattern'")
 
             val pathStr = (params["path"] as? String) ?: "."
-            val maxDepth = (params["max_depth"] as? Number)?.toInt() ?: limits.maxSearchDepth
+            val requestedDepth = (params["max_depth"] as? Number)?.toInt()
             val offset = (params["offset"] as? Number)?.toInt() ?: 0
             val rawLimit = (params["limit"] as? Number)?.toInt() ?: limits.maxSearchResults
             val detail = ((params["detail"] as? String) ?: "normal").lowercase()
@@ -71,8 +71,24 @@ class FileSearchTool(
                 return ToolResult.error("Parameter 'limit' must be >= 1")
             }
 
-            // Validate max depth
-            val effectiveMaxDepth = maxDepth.coerceAtMost(limits.maxSearchDepth)
+            // Recursion-depth resolution.
+            //
+            // A bare-name glob ("*.kt", "Foo.kt", "*") or any `**` pattern means "find by
+            // name ANYWHERE" — it must search the whole tree. Honouring a small caller
+            // `max_depth` here silently returns nothing on deep package trees (observed
+            // 2026-05: the business-analyst subagent ran `*.kt` with max_depth=1/2 against
+            // core/src/main/kotlin — whose first .kt is ~8 levels deep — got 0 hits, and
+            // looped). For those patterns we ignore a caller depth smaller than the
+            // configured maximum and search to limits.maxSearchDepth.
+            //
+            // Patterns that anchor to a path segment (contain "/" but not "**", e.g.
+            // "subdir/*.txt") keep honouring max_depth, since depth is positional there.
+            val recursiveByName = !pattern.contains('/') || pattern.contains("**")
+            val effectiveMaxDepth = if (recursiveByName) {
+                limits.maxSearchDepth
+            } else {
+                (requestedDepth ?: limits.maxSearchDepth).coerceAtMost(limits.maxSearchDepth)
+            }
 
             // Normalize path for security (backslash → forward slash)
             var normalizedPathStr = pathStr.replace('\\', '/')
@@ -269,8 +285,10 @@ class FileSearchTool(
                 ),
                 "max_depth" to mapOf(
                     "type" to "integer",
-                    "description" to "Maximum search depth",
-                    "default" to 10
+                    "description" to "Maximum search depth. Ignored for by-name globs (\"*.kt\") " +
+                        "and `**` patterns — those always search the whole tree. Only honoured " +
+                        "for path-anchored patterns like \"subdir/*.txt\".",
+                    "default" to 15
                 ),
                 "offset" to mapOf(
                     "type" to "integer",

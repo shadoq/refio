@@ -13,6 +13,10 @@ enum class TaskStatus {
     RUNNING,
     SUCCESS,
     FAILED,
+    // Turn ended WITHOUT delivering the user's request (a completion guardian gave up: the
+    // request was not delivered and no further re-entry would help). Distinct from FAILED (an
+    // error) and SUCCESS (delivered). Stored by name in the varchar(16) status column.
+    INCOMPLETE,
     CANCELED
 }
 

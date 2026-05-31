@@ -458,7 +458,11 @@ class ProjectContextRouter(
             return try {
                 val turnMessages = contextService.buildAgentTurnMessages(
                     taskId = taskId, projectRoot = projectRoot,
-                    userContextRefs = userContextRefs, query = query
+                    userContextRefs = userContextRefs, query = query,
+                    // Preview only needs the message list; the projectContextPrompt is discarded
+                    // here, so skip its redundant rebuild — halves buildProjectContext calls per
+                    // getProjectContext for PLAN/AGENT.
+                    includeProjectContext = false
                 ).messages.toMutableList()
                 appendPendingUserMessage(turnMessages, pendingUserInput)
                 turnMessages

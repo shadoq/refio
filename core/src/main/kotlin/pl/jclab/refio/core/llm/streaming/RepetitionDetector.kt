@@ -83,6 +83,12 @@ class RepetitionDetector(
         // higher chance of being accidental (e.g. a list of similar items).
         for (k in minPeriod..effectiveMaxPeriod) {
             if (isPeriodicSuffix(tail, k, repeatThreshold)) {
+                // A periodic suffix made of ONE repeated character is an ASCII rule /
+                // separator / box-drawing line (────, ====, ....), not a model
+                // generation loop — and it's periodic at every k, so it would always
+                // trip here. Real loops are multi-char blocks (code, lists). Skip it.
+                if (isSingleCharRun(tail, k * repeatThreshold)) continue
+
                 val preview = tail.substring(tail.length - k)
                     .replace("\n", "\\n")
                     .take(120)
@@ -107,13 +113,26 @@ class RepetitionDetector(
     private fun isPeriodicSuffix(s: String, k: Int, copies: Int): Boolean {
         val needed = k * copies
         if (s.length < needed) return false
-        val start = s.length - needed
         // The tail block against which all preceding copies are compared.
         val blockStart = s.length - k
         // Check copies 2..copies (first copy is the block itself, trivially equal).
         for (i in 2..copies) {
             val copyStart = s.length - i * k
             if (!s.regionMatches(copyStart, s, blockStart, k)) return false
+        }
+        return true
+    }
+
+    /**
+     * Returns true if the last [len] chars of [s] are all the same character —
+     * i.e. a horizontal rule / separator run rather than a repeated content block.
+     */
+    private fun isSingleCharRun(s: String, len: Int): Boolean {
+        if (len <= 0 || len > s.length) return false
+        val start = s.length - len
+        val first = s[start]
+        for (idx in start + 1 until s.length) {
+            if (s[idx] != first) return false
         }
         return true
     }

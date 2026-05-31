@@ -75,6 +75,20 @@ class RagSearchServiceTest {
         createdAt = System.currentTimeMillis()
     )
 
+    private fun createChunkRanged(id: Int, fileId: Int, content: String, startLine: Int, endLine: Int) = IndexChunk(
+        id = id,
+        fileId = fileId,
+        content = content,
+        contentHash = "hash-$id",
+        startLine = startLine,
+        endLine = endLine,
+        startChar = null,
+        endChar = null,
+        chunkIndex = 0,
+        metadata = null,
+        createdAt = System.currentTimeMillis()
+    )
+
     private fun createFile(id: Int, path: String) = IndexFile(
         id = id,
         projectRoot = projectRoot,
@@ -318,6 +332,115 @@ class RagSearchServiceTest {
 
             // Then
             assertEquals(1, results.size)
+        }
+    }
+
+    @Nested
+    inner class RedundantRegionDedupTests {
+
+        @Test
+        fun `collapses byte-identical chunks into a single result`() = runBlocking {
+            // Regression: session 1fc544f9 returned 5 identical fragments (same text, same
+            // embedding) for every query. Two distinct chunkIds with identical content must
+            // collapse to one result regardless of which files they live in.
+            val dims = 3
+            val queryVector = unitVector(0, dims)
+            coEvery { embeddingProvider.generateEmbedding("test query", model) } returns queryVector
+            every { ragRepository.countEmbeddings(projectRoot, model, null) } returns 2
+
+            every {
+                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0L, 500)
+            } returns listOf(
+                createEmbeddingRecord(1, 1, unitVector(0, dims)),  // similarity = 1.0
+                createEmbeddingRecord(2, 2, unitVector(0, dims))   // similarity = 1.0 (identical)
+            )
+            every { ragRepository.getChunksBatch(any()) } returns listOf(
+                createChunk(1, 1, "IDENTICAL CONTENT"),
+                createChunk(2, 2, "IDENTICAL CONTENT")
+            )
+            every { ragRepository.getFilesBatch(any()) } returns listOf(
+                createFile(1, "a.kt"),
+                createFile(2, "b.kt")
+            )
+
+            val results = service.search(
+                projectRoot = projectRoot,
+                query = "test query",
+                model = model,
+                topK = 5,
+                similarityThreshold = 0.5f
+            )
+
+            assertEquals(1, results.size, "Identical-content chunks must collapse to one result")
+        }
+
+        @Test
+        fun `drops a chunk whose range is contained in a higher-similarity result from the same file`() = runBlocking {
+            // Overlapping chunks of one region (full-file/class ⊃ method). When the larger,
+            // containing chunk ranks higher, the contained one is redundant and must be dropped.
+            val dims = 3
+            val queryVector = floatArrayOf(1f, 1f, 0f)
+            coEvery { embeddingProvider.generateEmbedding("test query", model) } returns queryVector
+            every { ragRepository.countEmbeddings(projectRoot, model, null) } returns 2
+
+            every {
+                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0L, 500)
+            } returns listOf(
+                createEmbeddingRecord(1, 1, floatArrayOf(1f, 1f, 0f)),  // similarity 1.0 (outer)
+                createEmbeddingRecord(2, 2, floatArrayOf(1f, 0f, 0f))   // similarity ~0.707 (inner)
+            )
+            every { ragRepository.getChunksBatch(any()) } returns listOf(
+                createChunkRanged(1, 1, "outer region text", startLine = 1, endLine = 100),
+                createChunkRanged(2, 1, "inner method text", startLine = 10, endLine = 20)
+            )
+            every { ragRepository.getFilesBatch(any()) } returns listOf(
+                createFile(1, "same.kt")
+            )
+
+            val results = service.search(
+                projectRoot = projectRoot,
+                query = "test query",
+                model = model,
+                topK = 5,
+                similarityThreshold = 0.1f
+            )
+
+            assertEquals(1, results.size, "Contained chunk must be dropped")
+            assertEquals(1, results[0].startLine, "The containing (outer) chunk must be the survivor")
+        }
+
+        @Test
+        fun `keeps distinct non-overlapping chunks from the same file`() = runBlocking {
+            // Guard: dedup is narrow — adjacent, non-overlapping regions of one file are
+            // legitimately distinct and must both survive.
+            val dims = 3
+            val queryVector = floatArrayOf(1f, 1f, 0f)
+            coEvery { embeddingProvider.generateEmbedding("test query", model) } returns queryVector
+            every { ragRepository.countEmbeddings(projectRoot, model, null) } returns 2
+
+            every {
+                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0L, 500)
+            } returns listOf(
+                createEmbeddingRecord(1, 1, floatArrayOf(1f, 1f, 0f)),
+                createEmbeddingRecord(2, 2, floatArrayOf(1f, 0f, 0f))
+            )
+            every { ragRepository.getChunksBatch(any()) } returns listOf(
+                createChunkRanged(1, 1, "first method", startLine = 1, endLine = 20),
+                createChunkRanged(2, 1, "second method", startLine = 30, endLine = 50)
+            )
+            every { ragRepository.getFilesBatch(any()) } returns listOf(
+                createFile(1, "same.kt")
+            )
+
+            val results = service.search(
+                projectRoot = projectRoot,
+                query = "test query",
+                model = model,
+                topK = 5,
+                similarityThreshold = 0.1f
+            )
+
+            assertEquals(2, results.size, "Non-overlapping distinct regions must both survive")
         }
     }
 

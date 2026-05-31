@@ -24,6 +24,9 @@ enum class TaskStatus {
     RUNNING,
     SUCCESS,
     FAILED,
+    // Turn ended WITHOUT delivering the request (a completion guardian gave up). Distinct from
+    // FAILED (an error) and SUCCESS (delivered). Kept in sync with core.db.TaskStatus.
+    INCOMPLETE,
     CANCELED
 }
 

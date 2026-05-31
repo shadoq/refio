@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Snake Game</title>
+<style>
+  body, html {
+    margin: 0; padding: 0; height: 100%; background: #222; color: #eee;
+    font-family: monospace, monospace;
+    display: flex; justify-content: center; align-items: center;
+    flex-direction: column;
+  }
+  canvas {
+    background: #000;
+    display: block;
+    margin-bottom: 10px;
+    image-rendering: pixelated;
+  }
+  #menu, #gameover {
+    text-align: center;
+  }
+  button {
+    background: #444;
+    border: none;
+    color: #eee;
+    padding: 8px 16px;
+    margin-top: 10px;
+    font-size: 16px;
+    cursor: pointer;
+  }
+  button:hover {
+    background: #666;
+  }
+  #scoreboard {
+    font-size: 18px;
+    margin-bottom: 10px;
+  }
+</style>
+</head>
+<body>
+<div id="menu">
+  <h1>Snake Game</h1>
+  <p>Select Game Mode:</p>
+  <button id="mode-hvh">Human vs Human</button>
+  <button id="mode-cvh">CPU vs Human</button>
+  <button id="mode-cvc">CPU vs CPU</button>
+  <p>Use arrow keys for player 1, WASD for player 2.</p>
+</div>
+<div id="scoreboard" style="display:none;"></div>
+<canvas id="gameCanvas" width="600" height="600" style="display:none;"></canvas>
+<div id="gameover" style="display:none;">
+  <h2>Game Over</h2>
+  <p id="finalScore"></p>
+  <p>Press R to Restart</p>
+</div>
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const gridSize = 30;
+  const cellSize = canvas.width / gridSize;
+  const directions = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0],
+                       KeyW: [0, -1], KeyS: [0, 1], KeyA: [-1, 0], KeyD: [1, 0] };
+
+  let gameMode = null;
+  let snakes = [];
+  let food = null;
+  let gameInterval = null;
+  let scores = [0, 0];
+  let gameOver = false;
+
+  function resetGame() {
+    snakes = [
+      { body: [[5, 15], [4, 15], [3, 15]], dir: [1, 0], nextDir: [1, 0], cpu: false },
+      { body: [[25, 15], [26, 15], [27, 15]], dir: [-1, 0], nextDir: [-1, 0], cpu: false }
+    ];
+    scores = [0, 0];
+    placeFood();
+    gameOver = false;
+    updateScoreboard();
+  }
+
+  function placeFood() {
+    let x, y, collision;
+    do {
+      x = Math.floor(Math.random() * gridSize);
+      y = Math.floor(Math.random() * gridSize);
+      collision = snakes.some(snake => snake.body.some(part => part[0] === x && part[1] === y));
+    } while (collision);
+    food = [x, y];
+  }
+
+  function drawCell(x, y, color) {
+    ctx.fillStyle = color;
+    ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Draw food
+    drawCell(food[0], food[1], 'red');
+    // Draw snakes
+    snakes.forEach((snake, i) => {
+      snake.body.forEach((part, idx) => {
+        drawCell(part[0], part[1], idx === 0 ? (i === 0 ? 'lime' : 'cyan') : 'green');
+      });
+    });
+  }
+
+  function moveSnake(snake) {
+    snake.dir = snake.nextDir;
+    const head = snake.body[0];
+    const newHead = [head[0] + snake.dir[0], head[1] + snake.dir[1]];
+    snake.body.unshift(newHead);
+    // Check food collision
+    if (newHead[0] === food[0] && newHead[1] === food[1]) {
+      scores[snakes.indexOf(snake)]++;
+      placeFood();
+    } else {
+      snake.body.pop();
+    }
+  }
+
+  function checkCollision(snake) {
+    const head = snake.body[0];
+    // Wall collision
+    if (head[0] < 0 || head[0] >= gridSize || head[1] < 0 || head[1] >= gridSize) {
+      return true;
+    }
+    // Self collision
+    for (let i = 1; i < snake.body.length; i++) {
+      if (head[0] === snake.body[i][0] && head[1] === snake.body[i][1]) {
+        return true;
+      }
+    }
+    // Collision with other snake
+    for (let other of snakes) {
+      if (other === snake) continue;
+      for (let part of other.body) {
+        if (head[0] === part[0] && head[1] === part[1]) return true;
+      }
+    }
+    return false;
+  }
+
+  function updateScoreboard() {
+    const scoreboard = document.getElementById('scoreboard');
+    scoreboard.textContent = `Score: Player 1 = ${scores[0]} | Player 2 = ${scores[1]}`;
+  }
+
+  // Simple BFS pathfinder for CPU snake to find food
+  function findPath(start, goal, obstacles) {
+    const queue = [[start]];
+    const visited = new Set();
+    visited.add(start.toString());
+
+    while(queue.length > 0) {
+      const path = queue.shift();
+      const current = path[path.length - 1];
+      if (current[0] === goal[0] && current[1] === goal[1]) {
+        return path;
+      }
+      // neighbors
+      const neighbors = [
+        [current[0] + 1, current[1]],
+        [current[0] - 1, current[1]],
+        [current[0], current[1] + 1],
+        [current[0], current[1] - 1]
+      ];
+      for (const n of neighbors) {
+        const [x, y] = n;
+        if (x < 0 || y < 0 || x >= gridSize || y >= gridSize) continue;
+        if (visited.has(n.toString())) continue;
+        if (obstacles.has(n.toString())) continue;
+        visited.add(n.toString());
+        queue.push(path.concat([n]));
+      }
+    }
+    return null;
+  }
+
+  // CPU snake logic to set next direction
+  function cpuControl(snake) {
+    const head = snake.body[0];
+    const obstacles = new Set();
+    snakes.forEach(s => s.body.forEach(p => obstacles.add(p.toString())));
+    obstacles.delete(head.toString());
+
+    const path = findPath(head, food, obstacles);
+    if (!path || path.length < 2) {
+      // no path or already at food, just keep going
+      return;
+    }
+    const next = path[1];
+    const dx = next[0] - head[0];
+    const dy = next[1] - head[1];
+    snake.nextDir = [dx, dy];
+  }
+
+  function gameStep() {
+    if (gameOver) return;
+    snakes.forEach((snake, idx) => {
+      if (snake.cpu) cpuControl(snake);
+      moveSnake(snake);
+    });
+    // Check collisions
+    for (const snake of snakes) {
+      if (checkCollision(snake)) {
+        gameOver = true;
+        clearInterval(gameInterval);
+        showGameOver();
+        return;
+      }
+    }
+    draw();
+    updateScoreboard();
+  }
+
+  function showGame() {
+    document.getElementById('menu').style.display = 'none';
+    document.getElementById('gameCanvas').style.display = 'block';
+    document.getElementById('scoreboard').style.display = 'block';
+    document.getElementById('gameover').style.display = 'none';
+  }
+
+  function showMenu() {
+    document.getElementById('menu').style.display = 'block';
+    document.getElementById('gameCanvas').style.display = 'none';
+    document.getElementById('scoreboard').style.display = 'none';
+    document.getElementById('gameover').style.display = 'none';
+  }
+
+  function showGameOver() {
+    document.getElementById('gameover').style.display = 'block';
+    document.getElementById('finalScore').textContent = `Player 1: ${scores[0]} | Player 2: ${scores[1]}`;
+  }
+
+  document.getElementById('mode-hvh').addEventListener('click', () => {
+    gameMode = 'hvh';
+    snakes[0].cpu = false;
+    snakes[1].cpu = false;
+    startGame();
+  });
+  document.getElementById('mode-cvh').addEventListener('click', () => {
+    gameMode = 'cvh';
+    snakes[0].cpu = true;
+    snakes[1].cpu = false;
+    startGame();
+  });
+  document.getElementById('mode-cvc').addEventListener('click', () => {
+    gameMode = 'cvc';
+    snakes[0].cpu = true;
+    snakes[1].cpu = true;
+    startGame();
+  });
+
+  function startGame() {
+    resetGame();
+    showGame();
+    if (gameInterval) clearInterval(gameInterval);
+    gameInterval = setInterval(gameStep, 150);
+  }
+
+  window.addEventListener('keydown', e => {
+    if (gameOver) {
+      if (e.key.toLowerCase() === 'r') {
+        startGame();
+      }
+      return;
+    }
+    if (gameMode === 'hvh' || gameMode === 'cvh') {
+      // Player 1 controls (arrow keys)
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+        const snake = snakes[0];
+        const dir = directions[e.code];
+        if (dir && (dir[0] !== -snake.dir[0] || dir[1] !== -snake.dir[1])) {
+          snake.nextDir = dir;
+        }
+      }
+    }
+    if (gameMode === 'hvh') {
+      // Player 2 controls (WASD)
+      if (['KeyW', 'KeyA', 'KeyS', 'KeyD'].includes(e.code)) {
+        const snake = snakes[1];
+        const dir = directions[e.code];
+        if (dir && (dir[0] !== -snake.dir[0] || dir[1] !== -snake.dir[1])) {
+          snake.nextDir = dir;
+        }
+      }
+    }
+  });
+
+  showMenu();
+})();
+</script>
+</body>
+</html>

@@ -29,6 +29,7 @@ object TuiColors {
     val statusRunning = brightBlue
     val statusSuccess = brightGreen
     val statusFailed = brightRed
+    val statusIncomplete = brightYellow
 
     // === Log level colors (counterpart of LogsPanel row colors) ===
     val logDebug = gray

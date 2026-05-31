@@ -474,11 +474,17 @@ class CoreSessionService(
             }
 
             // Mirror ChatService: turn finished without throwing → mark SUCCESS so
-            // HistoryPanel / status filters recognise the session as completed. If the
-            // turn ended with an internal failure flag rather than an exception, still
-            // promote the task off NEW so it isn't left in pending state forever.
+            // HistoryPanel / status filters recognise the session as completed. A turn that a
+            // completion guardian flagged INCOMPLETE (request not delivered, no further re-entry
+            // would help) is recorded as INCOMPLETE — distinct from FAILED — so an abandoned
+            // multi-step task is never silently shown as SUCCESS. Either way the task is promoted
+            // off NEW so it isn't left pending forever.
             runCatching {
-                val finalStatus = if (result.success) TaskStatus.SUCCESS else TaskStatus.FAILED
+                val finalStatus = when {
+                    result.incomplete -> TaskStatus.INCOMPLETE
+                    result.success -> TaskStatus.SUCCESS
+                    else -> TaskStatus.FAILED
+                }
                 projectRouter.taskRepository.update(id = session.id, status = finalStatus)
             }.onFailure { logger.warn(it) { "[TURN_LOOP] Failed to update task status for ${session.id}" } }
 

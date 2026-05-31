@@ -27,7 +27,10 @@ class PathSandbox(
         // Use toRealPath() to resolve symlinks (e.g. macOS /var -> /private/var)
         // so that sandbox root matches paths resolved by validatePath's toRealPath() call.
         normalizedRoot = projectRoot.toRealPath()
-        logger.info { "PathSandbox initialized: projectRoot=$projectRoot, normalizedRoot=$normalizedRoot" }
+        // debug, not info: a fresh PathSandbox is constructed per context build and per context
+        // reference (resolver + each @file/@folder provider), so at INFO this line floods the log
+        // dozens of times per message. The construction is the signal; keep it out of INFO noise.
+        logger.debug { "PathSandbox initialized: projectRoot=$projectRoot, normalizedRoot=$normalizedRoot" }
     }
 
     /**

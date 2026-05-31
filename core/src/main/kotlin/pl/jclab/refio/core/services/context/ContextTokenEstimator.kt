@@ -1,16 +1,22 @@
 package pl.jclab.refio.core.services.context
 
-import kotlin.math.max
+import pl.jclab.refio.core.services.PromptTokenEstimator
 
+/**
+ * Lightweight token estimator used by ContextService and friends during section budget math.
+ *
+ * Delegates to [PromptTokenEstimator.estimateBase] so all three estimators in :core share
+ * the same chars/token ratio ([PromptTokenEstimator.CHARS_PER_TOKEN_BASE]). This used to be
+ * a 4 chars/token implementation, which diverged ~14% from the 3.5 ratio in
+ * [PromptTokenEstimator] and caused compaction to fire at different thresholds than
+ * section truncation.
+ */
 object ContextTokenEstimator {
-    fun estimateTokens(text: String): Int {
-        if (text.isBlank()) return 0
-        return max(1, text.length / 4)
-    }
+    fun estimateTokens(text: String): Int = PromptTokenEstimator.estimateBase(text)
 
     fun truncateToTokens(text: String, maxTokens: Int): String {
         if (maxTokens <= 0 || text.isBlank()) return ""
-        val maxChars = maxTokens * 4
+        val maxChars = PromptTokenEstimator.maxCharsForTokens(maxTokens)
         if (text.length <= maxChars) return text
 
         val suffix = "\n... (truncated ${text.length - maxChars} more chars)"

@@ -59,7 +59,14 @@ class TurnGuardrails {
 
     sealed class LoopStatus {
         object OK : LoopStatus()
-        data class ABORT(val reason: String) : LoopStatus()
+
+        /**
+         * @property incomplete true when the abort means the deliverable was never produced but the
+         * turn is abandonment, not a hard error — maps to [pl.jclab.refio.core.db.TaskStatus.INCOMPLETE]
+         * (set by the no-op-write streak in [TurnRepetitionTracker]). Defaults false: a plain loop
+         * abort (byte-identical output, content chanting) is a failure, not an incomplete delivery.
+         */
+        data class ABORT(val reason: String, val incomplete: Boolean = false) : LoopStatus()
     }
 
     /**
@@ -113,8 +120,10 @@ class TurnGuardrails {
 
         /**
          * Inspect the model's final response text for chanting.
-         * Returns [LoopStatus.ABORT] if any word-phrase appears immediately
-         * after itself at least [MIN_REPEATS] times in a row; else [LoopStatus.OK].
+         * Returns [LoopStatus.ABORT] if any word-phrase that contains at least one
+         * alphanumeric character appears immediately after itself at least [MIN_REPEATS]
+         * times in a row; else [LoopStatus.OK]. Pure-symbol runs (box-drawing, table
+         * borders, separator rules) are exempt — they are structure, not a generation loop.
          */
         fun inspect(content: String): LoopStatus {
             val rawWords = content.trim().split(WHITESPACE_REGEX).filter { it.isNotBlank() }
@@ -134,7 +143,14 @@ class TurnGuardrails {
                         runCount++
                         j += phraseLen
                     }
-                    if (runCount >= MIN_REPEATS) {
+                    // Only treat a run as a chant when the phrase carries at least one
+                    // alphanumeric character. Pure symbol/box-drawing runs ("│ │ │ …",
+                    // "─ ─ ─", "| | |", "=== === ===") are STRUCTURE — ASCII diagrams,
+                    // markdown tables, separator rules — which the user often explicitly
+                    // asks for (session 188eb64b: "produce a combined architectural diagram
+                    // (ASCII)" was killed by 14 consecutive "│"). A real generation loop
+                    // chants words, not table borders.
+                    if (runCount >= MIN_REPEATS && phrase.any { word -> word.any(Char::isLetterOrDigit) }) {
                         val sample = rawWords.subList(i, i + phraseLen).joinToString(" ")
                         return LoopStatus.ABORT(
                             "Content chanting detected: phrase \"${sample.take(80)}${if (sample.length > 80) "…" else ""}\" " +
@@ -180,11 +196,15 @@ class TurnGuardrails {
     class TurnRepetitionTracker(
         private val identicalOutputAbortThreshold: Int = 4,
         private val tailBytesForHash: Int = 800,
-        private val maxHistory: Int = 200
+        private val maxHistory: Int = 200,
+        private val noopWriteAbortThreshold: Int = 3
     ) {
         private class State {
             var callCount: Int = 0
             val outputHashes: ArrayDeque<Int> = ArrayDeque()
+            // Consecutive WRITE calls on this target that changed nothing (changeSummary.noop).
+            // Reset by any effective (non-no-op) call on the same target. See [record].
+            var consecutiveNoopWrites: Int = 0
         }
 
         private val states = mutableMapOf<String, State>()
@@ -199,7 +219,12 @@ class TurnGuardrails {
          * meaningful only on successful runs — a failing call's error text is
          * tracked by [ToolErrorTracker] instead.
          */
-        fun record(toolName: String, args: Map<String, Any?>, output: String? = null): LoopStatus {
+        fun record(
+            toolName: String,
+            args: Map<String, Any?>,
+            output: String? = null,
+            isNoopWrite: Boolean = false
+        ): LoopStatus {
             val key = effectKey(toolName, args) ?: return LoopStatus.OK
 
             if (callOrder.size >= maxHistory) {
@@ -213,6 +238,26 @@ class TurnGuardrails {
 
             val state = states.getOrPut(key) { State() }
             state.callCount += 1
+
+            // No-op-write streak: a WRITE that changed nothing, repeated on the same target, means the
+            // editing model cannot act on the request. Invisible to [ToolErrorTracker] (the tool returns
+            // success=true) and to the output-hash abort below (the "no changes" message varies slightly
+            // per call — token counts differ), so it needs its own counter. Aborts as INCOMPLETE: the
+            // deliverable was never produced, but this is abandonment, not a hard error.
+            if (isNoopWrite) {
+                state.consecutiveNoopWrites += 1
+                if (state.consecutiveNoopWrites >= noopWriteAbortThreshold) {
+                    return LoopStatus.ABORT(
+                        "Tool $toolName produced no change ${state.consecutiveNoopWrites} times in a row " +
+                            "on the same target ($key) — the editing model cannot act on this request. " +
+                            "Stopping the turn.",
+                        incomplete = true
+                    )
+                }
+            } else {
+                // Any effective (non-no-op) call on this target clears the futile-edit streak.
+                state.consecutiveNoopWrites = 0
+            }
 
             if (output != null) {
                 val hash = normalizeTail(output).hashCode()
@@ -320,6 +365,53 @@ class TurnGuardrails {
                 .replace(Regex("\\s+"), " ")
                 .trim()
                 .lowercase()
+        }
+    }
+
+    /**
+     * Consecutive assistant-TEXT repetition detector. Catches the cross-iteration failure
+     * mode where the model emits the SAME final text (no tool call) on successive terminal
+     * points — typically after a guardian re-entry / format nudge pushes it back and it just
+     * repeats itself verbatim (observed session a28cfcaa: the identical "…Now let me search
+     * for the retry mechanism." sentence on two consecutive iterations, one of them a 40s LLM
+     * call, with nothing detecting it).
+     *
+     * Why neither existing guard sees this:
+     *   - [TurnRepetitionTracker] only records on TOOL execution; these iterations issue no
+     *     tool call, so its `record` is never reached.
+     *   - [ContentChantingDetector] measures repetition WITHIN one response (a phrase chanted
+     *     10× in a row), not the SAME whole response repeated across iterations.
+     *
+     * Aborts when the normalized text is recorded [identicalRepeatAbortThreshold] times in a
+     * row. Blank text is ignored (handled by the empty-envelope recovery paths). Fed only from
+     * the no-tool-call branch, so a single terminal answer that exits immediately never trips
+     * it — a second identical answer only exists because the loop re-entered.
+     */
+    class ConsecutiveTextRepetitionTracker(
+        private val identicalRepeatAbortThreshold: Int = 2
+    ) {
+        private var lastHash: Int? = null
+        private var consecutiveCount: Int = 0
+
+        fun record(text: String): LoopStatus {
+            val normalized = text.trim().replace(Regex("\\s+"), " ").lowercase()
+            if (normalized.isBlank()) return LoopStatus.OK
+
+            val hash = normalized.hashCode()
+            if (hash == lastHash) {
+                consecutiveCount++
+            } else {
+                lastHash = hash
+                consecutiveCount = 1
+            }
+
+            if (consecutiveCount >= identicalRepeatAbortThreshold) {
+                return LoopStatus.ABORT(
+                    "Model produced byte-identical text $consecutiveCount times in a row with no " +
+                        "tool call — no progress is being made. Terminating the turn."
+                )
+            }
+            return LoopStatus.OK
         }
     }
 

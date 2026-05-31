@@ -55,6 +55,7 @@ import pl.jclab.refio.core.llm.ToolsNotSupportedException
 import pl.jclab.refio.core.llm.parseNativeToolsMode
 import pl.jclab.refio.core.llm.shouldUseNativeTools
 import pl.jclab.refio.core.db.ToolCallData
+import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.logging.dualLogger
 import java.util.*
 import java.util.concurrent.CancellationException
@@ -239,27 +240,35 @@ class AgentTurnLoop(
             agentDepth = profileOverrides?.subagentName?.let { (profileOverrides.depth) + 1 },
         )
 
-        // Step 2: Execute turn loop
-        return executeTurnLoop(
-            taskId = taskId,
-            mode = mode,
-            executionMode = executionMode,
-            listener = listener,
-            streamCallback = streamCallback,
-            model = model,
-            provider = provider,
-            userContextRefs = userContextRefs,
-            runProfile = runProfile,
-            profileOverrides = profileOverrides,
-            runId = runId,
-            parentRunId = parentRunId,
-            depth = depth,
-            source = TurnSource.RUN,
-            userMessageStrategy = UserMessageStrategy { userInput },
-            emitSessionId = emitSessionId,
-            emitSourceAgentId = emitSourceAgentId,
-            agentName = agentName
-        )
+        // Step 2: Execute turn loop.
+        // Mark the turn active so background RAG indexing/embedding yields the SQLite
+        // WAL writer-lock for its duration — concurrent RAG writes otherwise stalled
+        // tool subtask-status writes ~122s. try/finally keeps the count balanced.
+        GlobalMetrics.beginAgentTurn()
+        return try {
+            executeTurnLoop(
+                taskId = taskId,
+                mode = mode,
+                executionMode = executionMode,
+                listener = listener,
+                streamCallback = streamCallback,
+                model = model,
+                provider = provider,
+                userContextRefs = userContextRefs,
+                runProfile = runProfile,
+                profileOverrides = profileOverrides,
+                runId = runId,
+                parentRunId = parentRunId,
+                depth = depth,
+                source = TurnSource.RUN,
+                userMessageStrategy = UserMessageStrategy { userInput },
+                emitSessionId = emitSessionId,
+                emitSourceAgentId = emitSourceAgentId,
+                agentName = agentName
+            )
+        } finally {
+            GlobalMetrics.endAgentTurn()
+        }
     }
 
     /**
@@ -396,11 +405,33 @@ class AgentTurnLoop(
         // failure modes with a single state: (a) the same (tool, target) pair invoked
         // many times total, and (b) the same tool producing byte-identical output on
         // successive successful runs. See TurnGuardrails.TurnRepetitionTracker.
-        val repetitionTracker = TurnRepetitionTracker()
+        //
+        // Subagent budget control: when depth >= 1 we tighten the byte-identical abort
+        // threshold from 4 → 2. Subagents have narrower goals than top-level turns and
+        // smaller token budgets — a second byte-identical read of the same large file
+        // (observed 2026-05 with qwen3.5:9b reading AgentTurnLoop.kt 4× = ~500K input
+        // tokens before abort) is already a strong "no progress" signal worth cutting
+        // on. Top-level turns keep the default of 4 because user-driven exploration
+        // legitimately re-reads the same file across user-driven sub-tasks.
+        val repetitionTracker = TurnRepetitionTracker(
+            identicalOutputAbortThreshold = if (depth >= 1) 2 else 4
+        )
+        // Cross-iteration assistant-text repetition guard: catches the model repeating the
+        // SAME no-tool-call text on successive terminal points (e.g. after a guardian / format
+        // nudge re-entry) — invisible to [repetitionTracker] (records only on tool execution)
+        // and to ContentChantingDetector (intra-response only). See TurnGuardrails.
+        val textRepetitionTracker = TurnGuardrails.ConsecutiveTextRepetitionTracker()
         // Counter for write tools executed in the current turn — still tracked because
         // buildPrompt and the completion guardians both want to know.
         var writeToolsExecutedInTurn = 0
         var verificationToolsExecutedAfterWrite = 0
+        // "Read forever, never deliver" soft guard: consecutive information-gathering calls
+        // (reads/searches) with no write/persist/deliver in between. A long read-only spree
+        // loses its own evidence — older tool outputs get compressed out of RECENT_WORK before
+        // the model writes anything — so we nudge it to consolidate (persist to memory / deliver
+        // incrementally). Resets on any progress; bounded to MAX_CONSOLIDATION_NUDGES.
+        var consecutiveGatheringCalls = 0
+        var consolidationNudgeCount = 0
         // Definitive-loop guard: counts consecutive failures of the SAME (tool + args).
         // Resets whenever arguments change, a different tool is used, or any tool succeeds.
         // Catches true retry loops while allowing the agent to explore with varied calls.
@@ -408,11 +439,25 @@ class AgentTurnLoop(
         var lastFailureSignature: String? = null
         // beforeFinish guardian re-entry counter (capped by GuardianRegistry.maxReentries).
         var guardianReentryCount = 0
+        // Set when a completion guardian marks the turn INCOMPLETE (request not delivered and no
+        // further re-entry will help). Non-null → the final TurnResult carries incomplete=true so
+        // CoreSessionService records the task as INCOMPLETE instead of silently SUCCESS.
+        var turnIncompleteReason: String? = null
         // Snapshot of usedTools.size at the moment of the most recent guardian re-entry.
         // Lets NextSpeakerJudgeGuardian detect "previous nudge produced no new tool call"
         // and short-circuit the loop instead of burning another judge call + LLM iteration
         // on the same stuck pattern. See [NextSpeakerJudgeGuardian.check].
         var usedToolsSizeAtLastReentry = 0
+        // The first terminal text response that a guardian re-entry discarded. The model had
+        // already streamed this answer to the user's bubble; re-entering the loop drops it
+        // (we `continue` before persisting). If the re-entry then produces NO new tool call
+        // (the judge's no-progress short-circuit to Pass), the follow-up response is usually a
+        // degraded re-phrasing — finalizing it would replace the good answer the user saw with
+        // a worse one and lose the original from history entirely (observed 2026-05, sessions
+        // 54cf9c8c / 070ab0e5). We keep the discarded answer here and restore it at finalize
+        // when the re-entry added no tool work. Captured once (first re-entry) so the earliest,
+        // most-complete terminal answer wins.
+        var candidateFinalResponse: pl.jclab.refio.core.llm.LLMResponse? = null
         // Plain-text guard (AGENT mode only): counts nudges sent when the model replies with
         // prose instead of the required JSON envelope. Bounded to 2 — if the model cannot
         // recover after two explicit reminders, further retries won't help and we fall
@@ -567,9 +612,17 @@ class AgentTurnLoop(
                     val iterationNativeToolSchemas = activeNativeToolSchemas
                     val useNativeTools = iterationNativeToolSchemas != null
 
-                    // Auto-compact if context window is filling
+                    // Auto-compact if context window is filling.
+                    // ModelWindow.resolve honors the user's provider override
+                    // (PROVIDER_OLLAMA_CONTEXT_SIZE etc.) — getSafeTokenLimit alone did not,
+                    // which is why compaction never fired when the user shrunk the Ollama window.
                     if (config.enableAutoCompaction && conversationCompactor != null) {
-                        val maxTokens = tokenEstimator.getSafeTokenLimit(effectiveProvider, effectiveModel)
+                        val maxTokens = pl.jclab.refio.core.llm.ModelWindow.resolve(
+                            provider = effectiveProvider,
+                            model = effectiveModel,
+                            configService = configService,
+                            taskId = taskId,
+                        )
                         val tempPrompt = buildPrompt(
                             taskId, mode, iteration, maxIterations,
                             userContextRefs, runProfile, profileOverrides,
@@ -640,7 +693,11 @@ class AgentTurnLoop(
                     var llmResponse: pl.jclab.refio.core.llm.LLMResponse
                     while (true) {
                         try {
-                            llmResponse = callModelWithPrompt(prompt, iterationNativeToolSchemas)
+                            // Pass the MUTABLE activeNativeToolSchemas (not the frozen
+                            // iterationNativeToolSchemas snapshot) so a fallback catch below that
+                            // sets it to null actually drops native tools on the retry — otherwise
+                            // the rebuilt JSON-contract prompt would still ship native schemas.
+                            llmResponse = callModelWithPrompt(prompt, activeNativeToolSchemas)
                             break
                         } catch (e: ToolsNotSupportedException) {
                             val modelKey = effectiveModel ?: "unknown"
@@ -651,6 +708,30 @@ class AgentTurnLoop(
                             logger.warn {
                                 "[NATIVE_TOOLS_FALLBACK] taskId=$taskId, model=$modelKey — " +
                                     "rebuilding prompt and retrying on JSON path"
+                            }
+                            activeNativeToolSchemas = null
+                            prompt = buildPrompt(
+                                taskId, mode, iteration, maxIterations,
+                                userContextRefs, runProfile, profileOverrides,
+                                writeToolsExecutedInTurn, false,
+                                agentName = agentName, sessionId = evSessionId
+                            )
+                        } catch (e: RefioError.LLMError) {
+                            // Ollama's qwen tool-call template can 500 server-side on malformed
+                            // function-call XML the model emits (observed: "XML syntax error ...
+                            // <parameter> closed by </function>"). That is a per-prompt generation
+                            // glitch, NOT a provider capability gap — the same model uses native
+                            // tools fine on simpler prompts — so do a ONE-SHOT retry on the
+                            // JSON-envelope path WITHOUT persisting a fallback (contrast the
+                            // ToolsNotSupportedException branch above, which marks the model
+                            // permanently via NativeToolsFallbackTracker). If native tools were
+                            // already dropped, rethrow — nothing left to fall back to.
+                            if (activeNativeToolSchemas == null || !isNativeToolTemplateParseError(e)) {
+                                throw e
+                            }
+                            logger.warn {
+                                "[NATIVE_TOOLS_PARSE_FALLBACK] taskId=$taskId, model=${effectiveModel ?: "unknown"} — " +
+                                    "provider rejected a malformed tool-call template; one-shot JSON-path retry (no persistent fallback)"
                             }
                             activeNativeToolSchemas = null
                             prompt = buildPrompt(
@@ -712,6 +793,86 @@ class AgentTurnLoop(
                         durationMs = llmDurationMs
                     )
 
+                    // Native-tools mode: empty content + zero tool calls is NEVER legitimate.
+                    // It used to be treated as "model returned final prose, no tools needed" and
+                    // fell through as success=true with an empty ASSISTANT message — that silently
+                    // hid Ollama context overflow (input > num_ctx → truncation → empty output).
+                    // No nudge here: the model didn't pick the wrong format, it produced nothing
+                    // at all. Fail loud with a diagnostic that points at the most common cause.
+                    if (mode != TaskMode.CHAT
+                        && llmResponse.content.isBlank()
+                        && llmResponse.nativeToolCalls.isNullOrEmpty()
+                        && activeNativeToolSchemas != null) {
+
+                        // Recovery before hard-fail: a guardian re-entry may have discarded a
+                        // COMPLETE prior answer (stashed in candidateFinalResponse) and the
+                        // re-entry then produced nothing new — empty content, no native tool
+                        // calls, no new tool work. The answer the user already saw is the correct
+                        // result; finalize it as success instead of failing the whole turn.
+                        // Same restore condition as the terminal-text branch below
+                        // (guardianReentryCount > 0 && no new tool work since the re-entry). This
+                        // is what saved the "run git 3× then summarize" task from being marked
+                        // FAILED after the judge wrongly re-entered a completed turn.
+                        val recoverable = candidateFinalResponse
+                            ?.takeIf { guardianReentryCount > 0 && usedTools.size <= usedToolsSizeAtLastReentry }
+                        if (recoverable != null) {
+                            logger.warn {
+                                "[TURN_NATIVE_EMPTY_RECOVERED] taskId=$taskId, iteration=$iteration — " +
+                                    "re-entry produced empty native response with no new tool work; " +
+                                    "finalizing the pre-re-entry answer the user already saw."
+                            }
+                            val recoveredText = toolCallParser.extractTextResponse(recoverable.content)
+                            chatMessageRepository.create(
+                                taskId = taskId,
+                                role = MessageRole.ASSISTANT,
+                                content = recoveredText.ifEmpty { recoverable.content },
+                                thinking = turnResponseProcessor.resolveAssistantThinking(recoverable),
+                                toolCalls = null,
+                                tokensIn = recoverable.usage.inputTokens,
+                                tokensOut = recoverable.usage.outputTokens,
+                                cost = recoverable.cost,
+                                agentInstanceId = persistAgentInstanceId,
+                                agentName = persistAgentName,
+                                agentDepth = persistAgentDepth,
+                            )
+                            val result = TurnResult(
+                                success = true,
+                                response = recoveredText.ifEmpty { recoverable.content },
+                                iterations = iteration,
+                                tokensIn = totalTokensIn,
+                                tokensOut = totalTokensOut,
+                                cost = totalCost,
+                                toolsUsed = usedTools.distinct()
+                            )
+                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = false, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                        }
+
+                        logger.error {
+                            "[TURN_FAILED_NATIVE_EMPTY] taskId=$taskId, iteration=$iteration, " +
+                                "mode=$mode, provider=$effectiveProvider, model=$effectiveModel, " +
+                                "finishReason=${llmResponse.finishReason}, " +
+                                "inputTokens=${llmResponse.usage.inputTokens}, " +
+                                "outputTokens=${llmResponse.usage.outputTokens}. " +
+                                "Model returned empty content with zero native tool calls — most likely " +
+                                "the prompt exceeded the provider's context window and was silently truncated."
+                        }
+                        val response = "Model returned no content and no tool calls. " +
+                            "This usually means the prompt exceeded the model's context window " +
+                            "(inputTokens=${llmResponse.usage.inputTokens}, finishReason=${llmResponse.finishReason}). " +
+                            "Try: (a) shrink the conversation history, (b) increase providers.${effectiveProvider}.${effectiveProvider}_context_size, " +
+                            "or (c) switch to a model with a larger window."
+                        val result = TurnResult(
+                            success = false,
+                            response = response,
+                            iterations = iteration,
+                            tokensIn = totalTokensIn,
+                            tokensOut = totalTokensOut,
+                            cost = totalCost,
+                            toolsUsed = usedTools.distinct()
+                        )
+                        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                    }
+
                     if (mode != TaskMode.CHAT
                         && llmResponse.content.isBlank()
                         && llmResponse.nativeToolCalls.isNullOrEmpty()
@@ -723,11 +884,10 @@ class AgentTurnLoop(
                         // starts with `{` (a final-response envelope without `actions`). The
                         // downstream pipeline handles both shapes.
                         //
-                        // The explicit `activeNativeToolSchemas == null` check makes the JSON-mode
-                        // branch unambiguous: native-tools mode with empty content + 0 calls is
-                        // a legitimate "model returned nothing actionable" answer (handled later
-                        // in the no-tools branch as a normal terminal response), NOT a format
-                        // failure that should be nudged into a JSON envelope.
+                        // The explicit `activeNativeToolSchemas == null` check separates this from
+                        // the symmetric native-tools branch above — they need different handling
+                        // (this one can nudge the model toward the JSON envelope; the native branch
+                        // can't because the model wasn't asked to emit one).
                         val thinking = llmResponse.thinking
                         val thinkingTrimmed = thinking?.trim().orEmpty()
                         val looksLikeEnvelope = thinkingTrimmed.startsWith("{")
@@ -1029,6 +1189,21 @@ class AgentTurnLoop(
                             )
                         } catch (e: ToolRejectedException) {
                             logger.info { "[REJECTED] User rejected tool '${e.toolName}': ${e.reason ?: "no reason"}" }
+                            // Persist a TOOL result message for the rejected tool call so the
+                            // assistant message's toolCallsJson pairs up with an actual result
+                            // on reload. Without this, MessageDispatcher derives the bubble
+                            // status as EXECUTING (no result) — better than the old hardcoded
+                            // COMPLETED, but still wrong for a rejection. With the result row
+                            // in place, the bubble correctly renders as ✗ Failed.
+                            chatMessageRepository.createToolResult(
+                                taskId = taskId,
+                                toolCallId = e.toolCallId,
+                                subtaskId = null,
+                                result = "Error: User rejected — ${e.reason ?: "no reason"}",
+                                agentInstanceId = persistAgentInstanceId,
+                                agentName = persistAgentName,
+                                agentDepth = persistAgentDepth,
+                            )
                             chatMessageRepository.create(
                                 taskId = taskId,
                                 role = MessageRole.SYSTEM,
@@ -1174,7 +1349,12 @@ class AgentTurnLoop(
                         // Definitive loop = the SAME tool with the SAME arguments failing repeatedly.
                         // Varying either resets the counter so the agent can still explore freely.
                         var repetitionAbort: TurnGuardrails.LoopStatus.ABORT? = null
+                        // Ids of write calls whose generated content was identical to the file (no-op).
+                        // A no-op write is NOT consolidation progress (P1) — it must not reset the
+                        // read-only spree counter below, otherwise a futile edit masks a read-forever loop.
+                        val noopCallIds = mutableSetOf<String>()
                         for ((toolCall, result) in toolResults) {
+                            if (result.noop) noopCallIds.add(toolCall.id)
                             val success = !result.content.startsWith("Error:")
                             errorTracker.recordResult(success)
                             if (success) {
@@ -1198,8 +1378,13 @@ class AgentTurnLoop(
                             if (parsedArgs != null) {
                                 // Output is only forwarded on success — a failing call's error
                                 // text belongs to the error tracker, not the output-hash signal.
-                                val output = if (success) result.content else null
-                                when (val status = repetitionTracker.record(toolCall.name, parsedArgs, output)) {
+                                // Use loopSignature (raw output sans hints/nudge) so the progressive
+                                // "[⚠ possible loop]" nudge — whose tail embeds a per-call subtask UUID
+                                // — cannot make every repeated read look "different" and defeat the
+                                // byte-identical hard-abort. Falls back to content for paths that don't
+                                // set a signature (blocked/error/synthetic results carry no nudge anyway).
+                                val output = if (success) (result.loopSignature ?: result.content) else null
+                                when (val status = repetitionTracker.record(toolCall.name, parsedArgs, output, isNoopWrite = result.noop)) {
                                     is TurnGuardrails.LoopStatus.ABORT ->
                                         if (repetitionAbort == null) repetitionAbort = status
                                     TurnGuardrails.LoopStatus.OK -> Unit
@@ -1208,15 +1393,19 @@ class AgentTurnLoop(
                         }
 
                         if (repetitionAbort != null) {
-                            logger.warn { "[REPETITION_ABORT] taskId=$taskId, reason=${repetitionAbort.reason}" }
+                            logger.warn { "[REPETITION_ABORT] taskId=$taskId, incomplete=${repetitionAbort.incomplete}, reason=${repetitionAbort.reason}" }
                             val result = TurnResult(
                                 success = false,
-                                response = "Loop detected: ${repetitionAbort.reason} Stopping the turn.",
+                                response = if (repetitionAbort.incomplete) repetitionAbort.reason
+                                           else "Loop detected: ${repetitionAbort.reason} Stopping the turn.",
                                 iterations = iteration,
                                 tokensIn = totalTokensIn,
                                 tokensOut = totalTokensOut,
                                 cost = totalCost,
-                                toolsUsed = usedTools.distinct()
+                                toolsUsed = usedTools.distinct(),
+                                // Futile-edit aborts (no-op-write streak, P2) are INCOMPLETE: the
+                                // deliverable was never produced, but it is abandonment, not a hard error.
+                                incomplete = repetitionAbort.incomplete
                             )
                             return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
                         }
@@ -1228,6 +1417,41 @@ class AgentTurnLoop(
                             verificationToolsExecutedAfterWrite = 0
                         } else if (writeToolsExecutedInTurn > 0) {
                             verificationToolsExecutedAfterWrite += verificationToolCalls
+                        }
+
+                        // "Read forever, never deliver" soft nudge. Top-level AGENT only:
+                        // subagents are frequently read-only-by-design (and already have the
+                        // tighter byte-identical abort), and PLAN cannot write files so the
+                        // "produce a deliverable" half of the advice is moot there.
+                        if (mode == TaskMode.AGENT && depth == 0 && iteration < maxIterations) {
+                            if (turnToolExecutor.batchMakesConsolidationProgress(toolCalls, noopCallIds)) {
+                                consecutiveGatheringCalls = 0
+                            } else {
+                                consecutiveGatheringCalls += turnToolExecutor.countGatheringToolCalls(toolCalls)
+                            }
+                            if (consecutiveGatheringCalls >= READ_ONLY_CONSOLIDATION_THRESHOLD &&
+                                consolidationNudgeCount < MAX_CONSOLIDATION_NUDGES
+                            ) {
+                                logger.info {
+                                    "[CONSOLIDATION_NUDGE] taskId=$taskId, gatheringCalls=$consecutiveGatheringCalls, " +
+                                        "nudge=${consolidationNudgeCount + 1}/$MAX_CONSOLIDATION_NUDGES"
+                                }
+                                chatMessageRepository.create(
+                                    taskId = taskId,
+                                    role = MessageRole.SYSTEM,
+                                    content = buildConsolidationNudge(consecutiveGatheringCalls),
+                                    // Tagged as guardian_nudge so the UI renders it as a gentle
+                                    // "agent guidance" note (same category: internal steering),
+                                    // not a full alarming SYSTEM bubble. See MessageMetadataExtractor.
+                                    metadata = """{"type":"guardian_nudge"}""",
+                                    toolCalls = null,
+                                    agentInstanceId = persistAgentInstanceId,
+                                    agentName = persistAgentName,
+                                    agentDepth = persistAgentDepth,
+                                )
+                                consolidationNudgeCount++
+                                consecutiveGatheringCalls = 0
+                            }
                         }
 
                         if (consecutiveIdenticalFailures >= maxConsecutiveIdenticalFailures) {
@@ -1350,6 +1574,37 @@ class AgentTurnLoop(
                                 val result = TurnResult(
                                     success = false,
                                     response = chantingStatus.reason,
+                                    iterations = iteration,
+                                    tokensIn = totalTokensIn,
+                                    tokensOut = totalTokensOut,
+                                    cost = totalCost,
+                                    toolsUsed = usedTools.distinct()
+                                )
+                                return turnFinalizer.completeTurn(
+                                    taskId, result, listener, runId, parentRunId, depth,
+                                    persistAssistantMessage = true,
+                                    metadata = subagentMetadata,
+                                    agentInstanceId = persistAgentInstanceId,
+                                    agentName = persistAgentName,
+                                    agentDepth = persistAgentDepth,
+                                )
+                            }
+                        }
+
+                        // Cross-iteration text-repetition guard (see ConsecutiveTextRepetitionTracker).
+                        // The model emitted a no-tool-call text; if it is byte-identical to the
+                        // previous such text, the loop is stuck repeating itself (typically after a
+                        // guardian/format nudge re-entry) and no further progress is possible — abort.
+                        if (contentForExtraction.isNotBlank() &&
+                            nativeCalls.isNullOrEmpty() &&
+                            toolCalls.isEmpty()
+                        ) {
+                            val textRepeatStatus = textRepetitionTracker.record(contentForExtraction)
+                            if (textRepeatStatus is TurnGuardrails.LoopStatus.ABORT) {
+                                logger.warn { "[TEXT_REPETITION] taskId=$taskId, iteration=$iteration: ${textRepeatStatus.reason}" }
+                                val result = TurnResult(
+                                    success = false,
+                                    response = textRepeatStatus.reason,
                                     iterations = iteration,
                                     tokensIn = totalTokensIn,
                                     tokensOut = totalTokensOut,
@@ -1610,7 +1865,11 @@ class AgentTurnLoop(
                                 maxIterations = maxIterations,
                                 userRequest = userMessageForVerification,
                                 finalResponse = guardianTextResponse.ifEmpty { llmResponse.content },
-                                toolsUsed = usedTools.distinct(),
+                                // Full call list (with repeats), NOT distinct: the judge must see
+                                // that e.g. run_terminal_command ran 3× to verify "use it three
+                                // times" requirements. Collapsing to distinct names lost the count
+                                // and made the judge wrongly re-enter a completed multi-call task.
+                                toolsUsed = usedTools.toList(),
                                 writeToolsExecutedInTurn = writeToolsExecutedInTurn,
                                 verificationToolsExecutedAfterWrite = verificationToolsExecutedAfterWrite,
                                 priorReentries = guardianReentryCount,
@@ -1619,18 +1878,43 @@ class AgentTurnLoop(
                             )
                             when (val decision = completionGuardians.runChecks(guardianContext)) {
                                 is GuardianDecision.Reenter -> {
+                                    // Preserve the answer the user already saw before we drop it
+                                    // by re-entering. Keep only the FIRST one — later re-entries
+                                    // tend to degrade. Restored at finalize if the re-entry adds
+                                    // no tool work (see [candidateFinalResponse]).
+                                    if (candidateFinalResponse == null &&
+                                        guardianTextResponse.ifEmpty { llmResponse.content }.isNotBlank()) {
+                                        candidateFinalResponse = llmResponse
+                                    }
                                     guardianReentryCount++
                                     usedToolsSizeAtLastReentry = usedTools.size
                                     chatMessageRepository.create(
                                         taskId = taskId,
                                         role = MessageRole.SYSTEM,
                                         content = decision.nudge,
+                                        // Flag as an internal guardian steering message so the UI
+                                        // renders a gentle "agent guidance" note instead of the full
+                                        // SYSTEM bubble with the alarming "STOP — the turn is NOT
+                                        // finished" wall of text (which is model-facing, not for the
+                                        // user). Full text stays in DB. See OtherBubbleRenderer.
+                                        metadata = """{"type":"guardian_nudge"}""",
                                         toolCalls = null,
                                         agentInstanceId = persistAgentInstanceId,
                                         agentName = persistAgentName,
                                         agentDepth = persistAgentDepth,
                                     )
                                     continue
+                                }
+                                is GuardianDecision.Incomplete -> {
+                                    // Judge says the request was NOT delivered and no further
+                                    // re-entry will help (single re-entry spent / prior nudge
+                                    // produced no new tool call). Finalize the turn but flag it
+                                    // INCOMPLETE so it is never recorded as SUCCESS. The
+                                    // candidateFinalResponse restore below still keeps the best
+                                    // text the user already saw.
+                                    logger.info { "[TURN_INCOMPLETE] taskId=$taskId reason=${decision.reason}" }
+                                    turnIncompleteReason = decision.reason
+                                    // fall through to finalize (do NOT continue)
                                 }
                                 GuardianDecision.Pass -> {
                                     // proceed to finalize
@@ -1642,31 +1926,41 @@ class AgentTurnLoop(
                         updateTurnState { copy(phase = TurnPhase.FINALIZING) }
                         logger.info { "[TURN_COMPLETE] taskId=$taskId, iterations=$iteration" }
 
-                        val textResponse = toolCallParser.extractTextResponse(llmResponse.content)
-                        turnResponseProcessor.tryCreatePlanSubtasks(taskId, mode, executionMode, llmResponse, runProfile)
+                        // If a guardian re-entry discarded a good answer and the re-entry then
+                        // added NO tool work (usedTools unchanged since the re-entry snapshot),
+                        // finalize the original answer the user already saw instead of the
+                        // degraded re-phrasing that followed the nudge. When the re-entry DID
+                        // call a tool (usedTools grew), its later response incorporates that new
+                        // work and is the right one to keep.
+                        val effectiveResponse = candidateFinalResponse
+                            ?.takeIf { guardianReentryCount > 0 && usedTools.size <= usedToolsSizeAtLastReentry }
+                            ?: llmResponse
+                        val textResponse = toolCallParser.extractTextResponse(effectiveResponse.content)
+                        turnResponseProcessor.tryCreatePlanSubtasks(taskId, mode, executionMode, effectiveResponse, runProfile)
 
                         chatMessageRepository.create(
                             taskId = taskId,
                             role = MessageRole.ASSISTANT,
-                            content = textResponse.ifEmpty { llmResponse.content },
-                            thinking = turnResponseProcessor.resolveAssistantThinking(llmResponse),
+                            content = textResponse.ifEmpty { effectiveResponse.content },
+                            thinking = turnResponseProcessor.resolveAssistantThinking(effectiveResponse),
                             toolCalls = null,
-                            tokensIn = llmResponse.usage.inputTokens,
-                            tokensOut = llmResponse.usage.outputTokens,
-                            cost = llmResponse.cost,
+                            tokensIn = effectiveResponse.usage.inputTokens,
+                            tokensOut = effectiveResponse.usage.outputTokens,
+                            cost = effectiveResponse.cost,
                             agentInstanceId = persistAgentInstanceId,
                             agentName = persistAgentName,
                             agentDepth = persistAgentDepth,
                         )
 
                         val result = TurnResult(
-                            success = true,
-                            response = textResponse.ifEmpty { llmResponse.content },
+                            success = turnIncompleteReason == null,
+                            response = textResponse.ifEmpty { effectiveResponse.content },
                             iterations = iteration,
                             tokensIn = totalTokensIn,
                             tokensOut = totalTokensOut,
                             cost = totalCost,
-                            toolsUsed = usedTools.distinct()
+                            toolsUsed = usedTools.distinct(),
+                            incomplete = turnIncompleteReason != null
                         )
 
                         updateTurnState { copy(phase = TurnPhase.COMPLETED, tokensUsed = totalTokensIn + totalTokensOut) }
@@ -1868,6 +2162,7 @@ class AgentTurnLoop(
                 toolNames = toolNames,
                 contextTrace = contextTrace,
                 systemPromptPreview = turnPrompt.systemPrompt.take(500),
+                renderedRequest = renderTurnPromptForInspection(mode, turnPrompt),
                 sectionTokens = sectionTokens
             )
         }
@@ -1876,6 +2171,37 @@ class AgentTurnLoop(
             systemPrompt = turnPrompt.systemPrompt,
             messages = turnPrompt.messages
         )
+    }
+
+    /**
+     * Render the turn's final prompt (system + messages) as a single string for the IntelliJ
+     * "View Full" inspector. Captured at the moment of the LLM call so it reflects the actual
+     * post-compaction / post-truncation payload, NOT a re-computed approximation.
+     *
+     * Format mirrors [pl.jclab.refio.core.api.routers.ProjectContextRouter.renderActiveRequestPreview]
+     * so users get the same shape whether they hit "Refresh" (recomputed preview) or read what
+     * was just sent (this snapshot).
+     */
+    private fun renderTurnPromptForInspection(
+        mode: TaskMode,
+        prompt: TurnPrompt
+    ): String = buildString {
+        appendLine("Mode: ${mode.name}")
+        appendLine()
+        appendLine("SYSTEM PROMPT (${tokenEstimator.estimateString(prompt.systemPrompt)} tokens, ${prompt.systemPrompt.length} chars):")
+        appendLine(prompt.systemPrompt)
+        appendLine()
+        appendLine("MESSAGES (${prompt.messages.size}):")
+        if (prompt.messages.isEmpty()) {
+            appendLine("(none)")
+        } else {
+            prompt.messages.forEachIndexed { index, msg ->
+                appendLine("[MESSAGE ${index + 1}] role=${msg.role}")
+                appendLine(msg.content)
+                appendLine()
+            }
+        }
+        if (isNotEmpty() && last() == '\n') setLength(length - 1)
     }
 
     /**
@@ -1967,6 +2293,28 @@ class AgentTurnLoop(
     }
 
     /**
+     * True when an [RefioError.LLMError] is Ollama's server-side tool-call *template* parser
+     * choking on malformed function-call XML the model emitted (HTTP 500, e.g. "XML syntax
+     * error on line N: element <parameter> closed by </function>"). This is a per-prompt
+     * generation glitch specific to native function calling — recoverable by retrying on the
+     * JSON-envelope path — NOT a sign the model can never do native tools. Walks the cause
+     * chain because the signature lives in the wrapped provider exception.
+     */
+    internal fun isNativeToolTemplateParseError(error: Throwable): Boolean {
+        var cause: Throwable? = error
+        var depth = 0
+        while (cause != null && depth < 5) {
+            val msg = cause.message?.lowercase() ?: ""
+            if (msg.contains("xml syntax error") || msg.contains("element <parameter>")) {
+                return true
+            }
+            cause = cause.cause
+            depth++
+        }
+        return false
+    }
+
+    /**
      * Heuristic: does `content` look like a `{response, actions}` JSON envelope the model
      * emitted in text instead of using native tool_calls? Used to trigger the native→JSON
      * fallback path without waiting for a provider-level [ToolsNotSupportedException].
@@ -2041,6 +2389,52 @@ class AgentTurnLoop(
             null
         }
     }
+
+    /**
+     * Model-facing nudge injected after a long run of information-gathering with no write/persist.
+     * Inlined (like the other short steering nudges in this loop) since TurnNudgeBuilder was removed.
+     * Addresses the c19 failure: the model reads 25+ files and never writes, while RECENT_WORK
+     * truncation silently drops the evidence it gathered, so it can never assemble the deliverable.
+     */
+    private fun buildConsolidationNudge(gatheringCalls: Int): String = buildString {
+        appendLine("[⚠ progressive hint — lots of reading, nothing produced yet]")
+        appendLine(
+            "You have made $gatheringCalls information-gathering calls (reads/searches) in a row " +
+                "without writing a file, persisting findings, or delivering a result."
+        )
+        appendLine(
+            "Long read-heavy runs lose their own evidence: older tool outputs are compressed out of " +
+                "your recent-work context, so by the time you try to write the result, the details " +
+                "(and the file:line citations) you gathered are already gone — which is why reading " +
+                "even more before consolidating does not help."
+        )
+        appendLine("Consolidate NOW — do at least one of:")
+        appendLine(
+            "  (1) persist what you have learned so far with `memory(action=\"write\", ...)` " +
+                "(the key facts + exact file:line citations you need), so it survives compaction;"
+        )
+        appendLine(
+            "  (2) start producing the requested deliverable incrementally — write a partial file / " +
+                "the first sections now and extend them — instead of reading everything first;"
+        )
+        append(
+            "  (3) if the task is too large to hold at once, finish one self-contained part " +
+                "(write it out) before gathering more."
+        )
+    }
+
+    companion object {
+        /**
+         * After this many consecutive information-gathering calls (reads/searches) with no
+         * write/persist/deliver, inject the consolidation nudge. Set above a normal multi-file
+         * read pass (a thorough exploration legitimately reads ~10 files) so it fires on the
+         * "read forever, never deliver" pathology, not on healthy exploration.
+         */
+        private const val READ_ONLY_CONSOLIDATION_THRESHOLD = 14
+
+        /** Bound on consolidation nudges per turn — a soft hint, not a hard stop; never spam it. */
+        private const val MAX_CONSOLIDATION_NUDGES = 2
+    }
 }
 
 /**
@@ -2057,5 +2451,12 @@ data class TurnResult(
     val rejectedByUser: Boolean = false,
     val rejectedToolName: String? = null,
     val rejectionReason: String? = null,
-    val unansweredQuestions: List<String>? = null
+    val unansweredQuestions: List<String>? = null,
+    /**
+     * True when the turn finalized WITHOUT delivering the user's request — a completion guardian
+     * (e.g. NextSpeakerJudgeGuardian) determined the request was not delivered and no further
+     * re-entry would help. Maps to [pl.jclab.refio.core.db.TaskStatus.INCOMPLETE], a distinct
+     * state from FAILED (an error) and SUCCESS (delivered).
+     */
+    val incomplete: Boolean = false
 )

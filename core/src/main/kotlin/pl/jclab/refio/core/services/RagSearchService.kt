@@ -263,8 +263,7 @@ class RagSearchService(
                 "Results above threshold: ${results.size}/$totalEmbeddings"
         }
 
-        val topResults = finalResults
-            .sortedByDescending { it.similarity }
+        val topResults = dedupeRedundantRegions(finalResults)
             .take(config.topK)
 
         logger.info {
@@ -273,6 +272,37 @@ class RagSearchService(
         }
 
         return topResults
+    }
+
+    /**
+     * Collapse results that are redundant with a higher-similarity one. The chunker can emit
+     * overlapping chunks of the same file region (full-file ⊃ class ⊃ method) whose embeddings
+     * are near-identical, so a single region can occupy the whole top-K as copies — starving a
+     * weak model of distinct signal and driving it into re-search loops (observed 2026-05,
+     * session 1fc544f9: 5 identical ConversationCompactor fragments returned for every query).
+     *
+     * Walking highest-similarity first, a result is dropped when an already-kept result from the
+     * same file either has identical text or fully contains its line range (the kept one already
+     * carries that content). Distinct regions and adjacent context chunks survive untouched.
+     */
+    private fun dedupeRedundantRegions(results: List<RagSearchResult>): List<RagSearchResult> {
+        val kept = mutableListOf<RagSearchResult>()
+        for (candidate in results.sortedByDescending { it.similarity }) {
+            val redundant = kept.any { k -> isRedundantWith(kept = k, candidate = candidate) }
+            if (!redundant) kept.add(candidate)
+        }
+        return kept
+    }
+
+    private fun isRedundantWith(kept: RagSearchResult, candidate: RagSearchResult): Boolean {
+        if (kept.content == candidate.content) return true
+        if (kept.filePath != candidate.filePath) return false
+        val keptStart = kept.startLine ?: return false
+        val keptEnd = kept.endLine ?: return false
+        val candStart = candidate.startLine ?: return false
+        val candEnd = candidate.endLine ?: return false
+        // kept fully contains candidate's range → candidate adds nothing new.
+        return keptStart <= candStart && keptEnd >= candEnd
     }
 
     /**

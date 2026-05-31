@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Snake Arena</title>
+  <style>
+    :root {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background-color: #050505;
+      color: #f0f0f0;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at top, rgba(255, 255, 255, 0.08), transparent 40%),
+        #030303;
+    }
+
+    #gameWrapper {
+      position: relative;
+      text-align: center;
+    }
+
+    canvas {
+      display: block;
+      margin: 0 auto;
+      border: 4px solid rgba(255, 255, 255, 0.4);
+      box-shadow: 0 0 25px rgba(0, 0, 0, 0.6);
+      background: #050505;
+    }
+
+    #statusPanel {
+      margin-top: 16px;
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+      font-weight: 600;
+      font-size: 1rem;
+    }
+
+    #menuOverlay,
+    #gameOverOverlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(3, 3, 3, 0.92);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .menu-card {
+      background: rgba(18, 18, 18, 0.95);
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      padding: 32px;
+      border-radius: 16px;
+      text-align: center;
+      min-width: 280px;
+      max-width: 360px;
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
+    }
+
+    .menu-card h1 {
+      margin: 0 0 12px;
+      font-size: 2rem;
+    }
+
+    .menu-card p {
+      margin: 8px 0;
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .menu-buttons {
+      margin-top: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .menu-buttons button {
+      padding: 12px 18px;
+      border-radius: 999px;
+      border: none;
+      font-size: 1rem;
+      background: linear-gradient(120deg, #4ecbff, #5d95ff);
+      color: #050505;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .menu-buttons button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+    }
+
+    .status-chip {
+      padding: 6px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.4);
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .game-over-message {
+      margin: 12px 0;
+      font-size: 1rem;
+      color: #ffd44d;
+    }
+  </style>
+</head>
+<body>
+  <div id="gameWrapper">
+    <canvas id="gameCanvas" width="600" height="600"></canvas>
+    <div id="menuOverlay">
+      <div class="menu-card">
+        <h1>Snake Arena</h1>
+        <p>Classic 30×30 grid Snake. Choose your battle mode.</p>
+        <div class="menu-buttons">
+          <button data-mode="hvh">Human vs Human</button>
+          <button data-mode="cpu-human">CPU vs Human</button>
+          <button data-mode="cpu-cpu">CPU vs CPU</button>
+        </div>
+        <p>Controls: Arrow keys (Player 1) + W/A/S/D (Player 2)</p>
+      </div>
+    </div>
+    <div id="gameOverOverlay" class="hidden">
+      <div class="menu-card">
+        <h1>Game Over</h1>
+        <p class="game-over-message"></p>
+        <p>Press Enter or Space to restart the arena.</p>
+      </div>
+    </div>
+  </div>
+  <div id="statusPanel">Choose a mode to begin. Use arrows + WASD to steer.</div>
+  <script>
+    (function () {
+      const canvas = document.getElementById("gameCanvas");
+      const ctx = canvas.getContext("2d");
+      const gridSize = 30;
+      const cellSize = canvas.width / gridSize;
+      const statusPanel = document.getElementById("statusPanel");
+      const menuOverlay = document.getElementById("menuOverlay");
+      const gameOverOverlay = document.getElementById("gameOverOverlay");
+      const gameOverMessage = document.querySelector(".game-over-message");
+      const modeButtons = document.querySelectorAll("[data-mode]");
+      const states = {
+        MENU: "menu",
+        RUNNING: "running",
+        GAMEOVER: "gameover",
+      };
+      const MOVE_INTERVAL = 120;
+      const directionVectors = [
+        { x: 0, y: -1 },
+        { x: 0, y: 1 },
+        { x: 1, y: 0 },
+        { x: -1, y: 0 },
+      ];
+
+      const modeConfig = {
+        hvh: ["human", "human"],
+        "cpu-human": ["cpu", "human"],
+        "cpu-cpu": ["cpu", "cpu"],
+      };
+
+      let state = states.MENU;
+      let snakes = [];
+      let food = null;
+      let scores = [0, 0];
+      let lastModeKey = null;
+
+      function setState(newState) {
+        state = newState;
+        menuOverlay.classList.toggle("hidden", newState !== states.MENU);
+        gameOverOverlay.classList.toggle("hidden", newState !== states.GAMEOVER);
+        updateStatusPanel();
+      }
+
+      function updateStatusPanel() {
+        if (state === states.MENU) {
+          statusPanel.textContent = "Choose a mode to begin. Use arrows + WASD to steer.";
+          return;
+        }
+        const chips = snakes.map((snake, index) => {
+          const label = `${snake.label}: ${scores[index]}`;
+          return `<span class="status-chip" style="border-color:${snake.color};color:${snake.color}">${label}</span>`;
+        });
+        statusPanel.innerHTML = chips.join("");
+      }
+
+      function startGame(modeKey) {
+        const config = modeConfig[modeKey];
+        if (!config) return;
+        lastModeKey = modeKey;
+        initSnakes(config);
+        food = generateFoodPosition();
+        scores = [0, 0];
+        updateStatusPanel();
+        setState(states.RUNNING);
+      }
+
+      function initSnakes(types) {
+        snakes = types.map((type, index) => createSnake(index, type));
+      }
+
+      function createSnake(index, type) {
+        const startY = Math.floor(gridSize / 2);
+        const startX = index === 0 ? 5 : gridSize - 6;
+        const color = index === 0 ? "#4ee6ff" : "#ff6363";
+        const dir = index === 0 ? { x: 1, y: 0 } : { x: -1, y: 0 };
+        const positions = [];
+        for (let i = 0; i < 3; i++) {
+          positions.push({ x: startX - dir.x * i, y: startY - dir.y * i });
+        }
+        return {
+          label: type === "cpu" ? `CPU ${index + 1}` : `Player ${index + 1}`,
+          color,
+          dir: { ...dir },
+          pendingDir: { ...dir },
+          positions,
+          isHuman: type === "human",
+          isCPU: type === "cpu",
+          alive: true,
+        };
+      }
+
+      function generateFoodPosition() {
+        const occupied = new Set();
+        snakes.forEach((snake) => {
+          snake.positions.forEach((pos) => occupied.add(posKey(pos)));
+        });
+        if (occupied.size >= gridSize * gridSize) {
+          return null;
+        }
+        let candidate;
+        do {
+          candidate = {
+            x: Math.floor(Math.random() * gridSize),
+            y: Math.floor(Math.random() * gridSize),
+          };
+        } while (occupied.has(posKey(candidate)));
+        return candidate;
+      }
+
+      function posKey(pos) {
+        return `${pos.x},${pos.y}`;
+      }
+
+      function inBounds(pos) {
+        return pos.x >= 0 && pos.x < gridSize && pos.y >= 0 && pos.y < gridSize;
+      }
+
+      function isOpposite(dirA, dirB) {
+        return dirA.x + dirB.x === 0 && dirA.y + dirB.y === 0;
+      }
+
+      function collidesWithSnakes(position) {
+        return snakes.some((snake) =>
+          snake.positions.some((segment) => segment.x === position.x && segment.y === position.y)
+        );
+      }
+
+      function updateGame() {
+        snakes.forEach((snake, index) => {
+          if (!snake.alive) {
+            return;
+          }
+          if (snake.isHuman) {
+            if (snake.pendingDir && !isOpposite(snake.pendingDir, snake.dir)) {
+              snake.dir = { ...snake.pendingDir };
+            }
+          } else if (snake.isCPU) {
+            const cpuDir = getCpuDirection(snake);
+            if (cpuDir && !isOpposite(cpuDir, snake.dir)) {
+              snake.dir = { ...cpuDir };
+            }
+          }
+          const nextHead = {
+            x: snake.positions[0].x + snake.dir.x,
+            y: snake.positions[0].y + snake.dir.y,
+          };
+          if (!inBounds(nextHead) || collidesWithSnakes(nextHead)) {
+            snake.alive = false;
+            return;
+          }
+          snake.positions.unshift(nextHead);
+          const ateFood = food && nextHead.x === food.x && nextHead.y === food.y;
+          if (ateFood) {
+            scores[index] += 1;
+            food = generateFoodPosition();
+          } else {
+            snake.positions.pop();
+          }
+        });
+
+        const aliveCount = snakes.filter((snake) => snake.alive).length;
+        if (aliveCount === 0) {
+          endGame();
+        }
+        updateStatusPanel();
+      }
+
+      function endGame() {
+        updateStatusPanel();
+        const summary = snakes
+          .map((snake, index) => `${snake.label}: ${scores[index]}`)
+          .join(" | ");
+        gameOverMessage.textContent = `Final Scores — ${summary}`;
+        setState(states.GAMEOVER);
+      }
+
+      function getCpuDirection(snake) {
+        if (!food) {
+          return findSafeDirection(snake);
+        }
+        const path = findPathToFood(snake.positions[0], food);
+        if (path && path.length) {
+          const nextStep = path[0];
+          return {
+            x: nextStep.x - snake.positions[0].x,
+            y: nextStep.y - snake.positions[0].y,
+          };
+        }
+        return findSafeDirection(snake);
+      }
+
+      function findPathToFood(start, target) {
+        const obstacles = new Set();
+        snakes.forEach((snake) => {
+          if (!snake.alive) {
+            return;
+          }
+          snake.positions.forEach((pos) => obstacles.add(posKey(pos)));
+        });
+
+        const queue = [{ x: start.x, y: start.y, path: [] }];
+        const visited = new Set([posKey(start)]);
+        while (queue.length) {
+          const current = queue.shift();
+          if (current.x === target.x && current.y === target.y) {
+            return current.path;
+          }
+          for (const dir of directionVectors) {
+            const next = { x: current.x + dir.x, y: current.y + dir.y };
+            const key = posKey(next);
+            if (!inBounds(next) || visited.has(key) || obstacles.has(key)) {
+              continue;
+            }
+            visited.add(key);
+            queue.push({
+              x: next.x,
+              y: next.y,
+              path: [...current.path, next],
+            });
+          }
+        }
+        return null;
+      }
+
+      function findSafeDirection(snake) {
+        for (const dir of directionVectors) {
+          if (isOpposite(dir, snake.dir)) {
+            continue;
+          }
+          const candidate = {
+            x: snake.positions[0].x + dir.x,
+            y: snake.positions[0].y + dir.y,
+          };
+          if (!inBounds(candidate)) {
+            continue;
+          }
+          if (!collidesWithSnakes(candidate)) {
+            return dir;
+          }
+        }
+        return snake.dir;
+      }
+
+      function drawGame() {
+        ctx.fillStyle = "#050505";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.04)";
+        ctx.lineWidth = 1;
+        for (let i = 0; i <= gridSize; i++) {
+          const position = i * cellSize;
+          ctx.beginPath();
+          ctx.moveTo(position, 0);
+          ctx.lineTo(position, canvas.height);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(0, position);
+          ctx.lineTo(canvas.width, position);
+          ctx.stroke();
+        }
+        snakes.forEach((snake) => {
+          if (!snake) {
+            return;
+          }
+          ctx.fillStyle = snake.color;
+          snake.positions.forEach((segment, index) => {
+            ctx.globalAlpha = index === 0 ? 1 : 0.85;
+            ctx.fillRect(segment.x * cellSize + 1, segment.y * cellSize + 1, cellSize - 2, cellSize - 2);
+          });
+          ctx.globalAlpha = 1;
+        });
+        if (food) {
+          ctx.fillStyle = "#ffd54d";
+          ctx.fillRect(food.x * cellSize + 4, food.y * cellSize + 4, cellSize - 8, cellSize - 8);
+        }
+      }
+
+      function handleKeyDown(event) {
+        const key = event.key;
+        if (state === states.GAMEOVER && (key === "Enter" || key === " ")) {
+          if (lastModeKey) {
+            startGame(lastModeKey);
+          } else {
+            setState(states.MENU);
+          }
+          return;
+        }
+        if (state !== states.RUNNING) {
+          return;
+        }
+        const mapping = {
+          ArrowUp: { idx: 0, dir: { x: 0, y: -1 } },
+          ArrowDown: { idx: 0, dir: { x: 0, y: 1 } },
+          ArrowLeft: { idx: 0, dir: { x: -1, y: 0 } },
+          ArrowRight: { idx: 0, dir: { x: 1, y: 0 } },
+          w: { idx: 1, dir: { x: 0, y: -1 } },
+          s: { idx: 1, dir: { x: 0, y: 1 } },
+          a: { idx: 1, dir: { x: -1, y: 0 } },
+          d: { idx: 1, dir: { x: 1, y: 0 } },
+          W: { idx: 1, dir: { x: 0, y: -1 } },
+          S: { idx: 1, dir: { x: 0, y: 1 } },
+          A: { idx: 1, dir: { x: -1, y: 0 } },
+          D: { idx: 1, dir: { x: 1, y: 0 } },
+        };
+        const action = mapping[key];
+        if (action) {
+          const snake = snakes[action.idx];
+          if (snake && snake.alive && snake.isHuman) {
+            if (!isOpposite(action.dir, snake.dir)) {
+              snake.pendingDir = { ...action.dir };
+            }
+          }
+        }
+      }
+
+      modeButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          const modeKey = button.getAttribute("data-mode");
+          startGame(modeKey);
+        });
+      });
+
+      document.addEventListener("keydown", handleKeyDown);
+
+      function gameLoop() {
+        if (state === states.RUNNING) {
+          updateGame();
+        }
+        drawGame();
+      }
+
+      setState(states.MENU);
+      setInterval(gameLoop, MOVE_INTERVAL);
+    })();
+  </script>
+</body>
+</html>

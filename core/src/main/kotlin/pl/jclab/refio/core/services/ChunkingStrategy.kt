@@ -299,7 +299,16 @@ class SemanticChunkingStrategy(
             )
         }
 
-        return chunks
+        // Drop chunks whose text is byte-identical to an earlier one. For a file that is
+        // essentially a single class, the full-file chunk, the class chunk, and even a method
+        // chunk can all truncate (maxChunkChars) down to the SAME leading region, and some
+        // analyzers report a span more than once. Identical text → identical embedding →
+        // rag_search top-K fills with copies of one fragment (observed 2026-05, session
+        // 1fc544f9: 5× identical ConversationCompactor:29-349 returned for every query,
+        // which sent a weak model into a 15-iteration re-search loop). Keep the first
+        // occurrence so the richer/earlier chunk (full_file → class → function) wins.
+        val seenContent = HashSet<String>()
+        return chunks.filter { seenContent.add(it.content) }
     }
 
     private fun extractContent(
@@ -311,12 +320,14 @@ class SemanticChunkingStrategy(
         if (startLine == null || endLine == null) {
             return lines.joinToString("\n").take(maxChunkChars)
         }
-        val safeEnd = endLine.coerceAtMost(lines.size)
-        val slice = if (startLine <= safeEnd) {
-            lines.subList(startLine - 1, safeEnd)
-        } else {
-            emptyList()
-        }
+        // startLine is 1-based; analyzers occasionally emit 0 or out-of-range values for
+        // malformed/edge-case inputs (observed 2026-05: styles.css produced startLine=0,
+        // making subList(-1, …) throw IndexOutOfBoundsException and abort the entire RAG
+        // index pass). Clamp both bounds to a valid [0, lines.size] window so one bad
+        // element degrades to an empty slice instead of crashing indexing.
+        val safeEnd = endLine.coerceIn(0, lines.size)
+        val safeStart = (startLine - 1).coerceIn(0, safeEnd)
+        val slice = lines.subList(safeStart, safeEnd)
         val text = slice.joinToString("\n")
         return if (text.length <= maxChunkChars) {
             text

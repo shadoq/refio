@@ -1,0 +1,241 @@
+We need to create a new file with the content. The file currently empty. We need to output the complete file content. Use markdown code fence with language html. Provide full HTML with CSS and JS. Must be a single file. Let's craft.
+
+We need to implement:
+
+- 30x30 grid, each cell 20px => canvas 600x600.
+
+- Two snakes: snake1, snake2. Each has body array of positions {x,y}. Each has direction: {dx,dy}. Each has score.
+
+- Game modes: human vs human (both controlled by keys), cpu vs human (one human, one cpu), cpu vs cpu (both cpu). We'll have a start menu to choose mode. Use simple UI: overlay with buttons.
+
+- Start menu: show title, three buttons: "Human vs Human", "CPU vs Human", "CPU vs CPU". On click, set mode and start game.
+
+- Game over screen: show "Game Over" and scores, and "Press R to Restart".
+
+- Keyboard controls: For human snakes: snake1 uses arrow keys, snake2 uses WASD. For CPU snakes: automatically move.
+
+- CPU snake: simple AI: compute direction that reduces Manhattan distance to food, avoid collisions. If no safe direction, pick random safe direction.
+
+- Food: random position not on any snake body.
+
+- Continuous movement: use setInterval or requestAnimationFrame with tick. We'll use setInterval at 150ms.
+
+- Score: each time snake eats food, length increases, score increments.
+
+- Game ends if any snake collides with wall or any snake body (including other snake). When game ends, stop loop, show game over screen.
+
+- Restart: pressing 'R' restarts game.
+
+- Display score during gameplay: show on top left for each snake.
+
+- Implementation details: Use canvas context to draw grid, snakes, food.
+
+- We'll use simple CSS for overlay.
+
+Let's craft the file.
+
+We'll write:
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Snake Game</title>
+<style>
+body{margin:0;background:#222;color:#fff;font-family:Arial,Helvetica,sans-serif;}
+#gameCanvas{display:block;margin:auto;background:#000;}
+#overlay{position:absolute;top:0;left:0;width:100%;height:100%;display:flex;flex-direction:column;justify-content:center;align-items:center;background:rgba(0,0,0,0.8);color:#fff;}
+#overlay button{margin:10px;padding:10px 20px;font-size:18px;}
+#score{position:absolute;top:10px;left:10px;font-size:18px;}
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="600" height="600"></canvas>
+<div id="score"></div>
+<div id="overlay">
+<h1>Snake Game</h1>
+<button id="mode1">Human vs Human</button>
+<button id="mode2">CPU vs Human</button>
+<button id="mode3">CPU vs CPU</button>
+</div>
+<script>
+const canvas=document.getElementById('gameCanvas');
+const ctx=canvas.getContext('2d');
+const overlay=document.getElementById('overlay');
+const scoreDiv=document.getElementById('score');
+const gridSize=30;
+const cellSize=20;
+const directions={ArrowUp:{x:0,y:-1},ArrowDown:{x:0,y:1},ArrowLeft:{x:-1,y:0},ArrowRight:{x:1,y:0},w:{x:0,y:-1},s:{x:0,y:1},a:{x:-1,y:0},d:{x:1,y:0}};
+let mode=0; //1 human vs human,2 cpu vs human,3 cpu vs cpu
+let gameInterval;
+let food;
+let snakes=[];
+let gameOver=false;
+
+function initGame(){
+    snakes=[{
+        body:[{x:5,y:5},{x:4,y:5},{x:3,y:5}],
+        dir:{x:1,y:0},
+        pendingDir:{x:1,y:0},
+        color:'#0f0',
+        score:0,
+        isCPU:mode===2||mode===3
+    },{
+        body:[{x:24,y:24},{x:25,y:24},{x:26,y:24}],
+        dir:{x:-1,y:0},
+        pendingDir:{x:-1,y:0},
+        color:'#f00',
+        score:0,
+        isCPU:mode===1||mode===3
+    }];
+    placeFood();
+    gameOver=false;
+    scoreDiv.textContent='';
+    if(gameInterval)clearInterval(gameInterval);
+    gameInterval=setInterval(gameLoop,150);
+}
+
+function placeFood(){
+    let empty=true;
+    while(empty){
+        empty=false;
+        const x=Math.floor(Math.random()*gridSize);
+        const y=Math.floor(Math.random()*gridSize);
+        for(const s of snakes){
+            if(s.body.some(p=>p.x===x&&p.y===y)){
+                empty=true;break;
+            }
+        }
+        if(!empty){food={x,y};break;}
+    }
+}
+
+function gameLoop(){
+    if(gameOver)return;
+    for(const s of snakes){
+        if(s.isCPU){
+            cpuMove(s);
+        }else{
+            s.dir={...s.pendingDir};
+        }
+        const newHead={x:s.body[0].x+s.dir.x,y:s.body[0].y+s.dir.y};
+        // collision with walls
+        if(newHead.x<0||newHead.x>=gridSize||newHead.y<0||newHead.y>=gridSize){
+            gameOver=true;break;
+        }
+        // collision with any snake
+        for(const other of snakes){
+            if(other.body.some(p=>p.x===newHead.x&&p.y===newHead.y)){
+                gameOver=true;break;
+            }
+        }
+        if(gameOver)break;
+        s.body.unshift(newHead);
+        // food
+        if(newHead.x===food.x&&newHead.y===food.y){
+            s.score+=1;
+            placeFood();
+        }else{
+            s.body.pop();
+        }
+    }
+    draw();
+    if(gameOver){
+        clearInterval(gameInterval);
+        showGameOver();
+    }
+}
+
+function cpuMove(s){
+    const dirs=[{x:0,y:-1},{x:0,y:1},{x:-1,y:0},{x:1,y:0}];
+    let best=null;
+    let bestDist=Infinity;
+    for(const d of dirs){
+        const nx=s.body[0].x+d.x,ny=s.body[0].y+d.y;
+        if(nx<0||nx>=gridSize||ny<0||ny>=gridSize)continue;
+        let collision=false;
+        for(const other of snakes){
+            if(other.body.some(p=>p.x===nx&&p.y===ny)){
+                collision=true;break;
+            }
+        }
+        if(collision)continue;
+        const dist=Math.abs(nx-food.x)+Math.abs(ny-food.y);
+        if(dist<bestDist){
+            bestDist=dist;best=d;
+        }
+    }
+    if(best) s.dir=best;
+    else{
+        // random safe
+        const safe=dirs.filter(d=>{
+            const nx=s.body[0].x+d.x,ny=s.body[0].y+d.y;
+            if(nx<0||nx>=gridSize||ny<0||ny>=gridSize)return false;
+            for(const other of snakes){
+                if(other.body.some(p=>p.x===nx&&p.y===ny))return false;
+            }
+            return true;
+        });
+        if(safe.length>0)s.dir=safe[Math.floor(Math.random()*safe.length)];
+    }
+}
+
+function draw(){
+    ctx.fillStyle='#000';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    // draw food
+    ctx.fillStyle='#ff0';
+    ctx.fillRect(food.x*cellSize,food.y*cellSize,cellSize,cellSize);
+    // draw snakes
+    for(const s of snakes){
+        ctx.fillStyle=s.color;
+        for(const p of s.body){
+            ctx.fillRect(p.x*cellSize,p.y*cellSize,cellSize,cellSize);
+        }
+    }
+    // score
+    scoreDiv.textContent=`Snake 1: ${snakes[0].score}   Snake 2: ${snakes[1].score}`;
+}
+
+function showGameOver(){
+    overlay.innerHTML='<h1>Game Over</h1><p>Snake 1: '+snakes[0].score+'</p><p>Snake 2: '+snakes[1].score+'</p><p>Press R to Restart</p>';
+    overlay.style.display='flex';
+}
+
+document.addEventListener('keydown',e=>{
+    if(e.key==='r'||e.key==='R'){
+        if(gameOver){
+            overlay.style.display='none';
+            initGame();
+        }
+    }
+    if(e.key==='ArrowUp'||e.key==='ArrowDown'||e.key==='ArrowLeft'||e.key==='ArrowRight'){
+        if(!snakes[0].isCPU){
+            const dir=directions[e.key];
+            if(dir){
+                // prevent reverse
+                if(!(dir.x===-snakes[0].dir.x && dir.y===-snakes[0].dir.y)){
+                    snakes[0].pendingDir=dir;
+                }
+            }
+        }
+    }
+    if(e.key==='w'||e.key==='a'||e.key==='s'||e.key==='d'){
+        if(!snakes[1].isCPU){
+            const dir=directions[e.key];
+            if(dir){
+                if(!(dir.x===-snakes[1].dir.x && dir.y===-snakes[1].dir.y)){
+                    snakes[1].pendingDir=dir;
+                }
+            }
+        }
+    }
+});
+
+document.getElementById('mode1').addEventListener('click',()=>{mode=1;overlay.style.display='none';initGame();});
+document.getElementById('mode2').addEventListener('click',()=>{mode=2;overlay.style.display='none';initGame();});
+document.getElementById('mode3').addEventListener('click',()=>{mode=3;overlay.style.display='none';initGame();});
+
+</script>
+</body>
+</html>

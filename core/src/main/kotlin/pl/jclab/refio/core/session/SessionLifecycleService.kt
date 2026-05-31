@@ -15,7 +15,9 @@ import pl.jclab.refio.api.models.TaskStatus
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.api.UpdateTaskRequest
+import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.config.ConfigKeys
+import pl.jclab.refio.core.llm.ModelWindow
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
 import pl.jclab.refio.core.logging.dualLogger
@@ -523,32 +525,31 @@ class SessionLifecycleService(
     fun getMaxContextWindow(): Int {
         val session = stateManager.getActiveSession()
         if (session == null) {
-            logger.debug { "No active session, using default context window: 8192" }
+            logger.debug { "No active session, using default context window: $DEFAULT_CONTEXT_SIZE" }
             return DEFAULT_CONTEXT_SIZE
         }
 
-        val modelString = stateManager.getSelectedModel()
-        val modelId = if (modelString.contains("/")) {
-            modelString.split("/").getOrNull(1) ?: "qwen2.5:7b"
-        } else {
-            modelString
-        }
-
         return try {
-            val modelConfig = pl.jclab.refio.core.llm.getModelConfigFromCache(modelId)
-
-            val modelMaxContext = modelConfig?.maxContext ?: DEFAULT_CONTEXT_SIZE
-            val configuredLimit = configService.getTyped(ConfigKeys.MAX_CONTEXT_SIZE, session.id)
-            val effectiveContextWindow = minOf(modelMaxContext, configuredLimit)
-
-            logger.debug {
-                "Context window for model '$modelId': model=$modelMaxContext, " +
-                    "limit=$configuredLimit, effective=$effectiveContextWindow tokens"
-            }
-            effectiveContextWindow
-
+            // Resolve (model, provider) and the window through the SAME path the engine's context
+            // budget uses (ContextBudgetResolver.resolveContextSize): getModel() applies the canonical
+            // selected-model parsing + provider fallback, and ModelWindow is the single resolver
+            // (provider override → ModelDefinitions prefix match → MAX_CONTEXT_SIZE fallback). This
+            // keeps the StatusBar window in lockstep with the context panel.
+            //
+            // The previous implementation parsed the id with split("/")[1], which for multi-segment
+            // OpenRouter model strings ("openrouter/deepseek/deepseek-v4-flash") grabbed the vendor
+            // segment ("deepseek"), missed every cache/definition lookup, and fell back to
+            // DEFAULT_CONTEXT_SIZE (32768) — the StatusBar showed 32K while the engine used 128K.
+            //
+            // Operation is DEFAULT because the UI exposes a single mode-independent model selector and
+            // a user-selected model wins for every operation; this matches the old behaviour (which
+            // read getSelectedModel() regardless of mode).
+            val (model, provider) = configService.getModel(ModelOperation.DEFAULT, session.id)
+            val window = ModelWindow.resolve(provider, model, configService, session.id)
+            logger.debug { "Context window for model '$model' (provider=$provider): $window tokens" }
+            window
         } catch (e: Exception) {
-            logger.warn(e) { "Failed to get context window for model '$modelId', using default: $DEFAULT_CONTEXT_SIZE" }
+            logger.warn(e) { "Failed to get context window, using default: $DEFAULT_CONTEXT_SIZE" }
             DEFAULT_CONTEXT_SIZE
         }
     }

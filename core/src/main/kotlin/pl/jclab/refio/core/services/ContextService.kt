@@ -429,8 +429,8 @@ class ContextService(
      * Build LLM context prompt (REFACTORED - ADR 0017).
      * Organized by TIER priority: Essential → Work → Supplementary → Reference
      */
-    fun buildLLMContextPrompt(context: ProjectContextDTO): String {
-        val budget = pruner.resolveContextBudget(context, modelOperation = null)
+    fun buildLLMContextPrompt(context: ProjectContextDTO, staticPrefixTokens: Int = 0): String {
+        val budget = pruner.resolveContextBudget(context, modelOperation = null, staticPrefixTokens = staticPrefixTokens)
         val parts = mutableListOf<String>()
         val usage = mutableListOf<String>()
         val actualUsage = mutableMapOf<ContextSection, Int>()
@@ -681,38 +681,6 @@ class ContextService(
         return contextPrompt
     }
 
-    private fun truncateSectionToBudget(content: String, maxTokens: Int): String {
-        if (maxTokens <= 0 || content.isBlank()) return ""
-
-        val wrappedSectionRegex = Regex("""^\s*<([A-Z_]+)>\s*([\s\S]*?)\s*</\1>\s*$""")
-        val match = wrappedSectionRegex.matchEntire(content)
-        if (match == null) {
-            return ContextTokenEstimator.truncateToTokens(content, maxTokens)
-        }
-
-        val tag = match.groupValues[1]
-        val innerContent = match.groupValues[2].trim()
-        val wrapper = "<$tag>\n\n</$tag>"
-        val wrapperTokens = ContextTokenEstimator.estimateTokens(wrapper)
-        val innerBudget = (maxTokens - wrapperTokens).coerceAtLeast(1)
-        val truncatedInner = ContextTokenEstimator.truncateToTokens(innerContent, innerBudget).trim()
-        return "<$tag>\n$truncatedInner\n</$tag>"
-    }
-
-    private fun resolveContextBudget(
-        context: ProjectContextDTO,
-        modelOperation: ModelOperation?
-    ): ContextBudget {
-        val taskId = context.currentTask?.id
-        val resolvedOperation = modelOperation ?: resolveModelOperationFromContext(context)
-        return configService.getContextBudget(taskId, resolvedOperation)
-    }
-
-    private fun resolveModelOperationFromContext(context: ProjectContextDTO): ModelOperation? {
-        val mode = context.executionMetadata.agentMode ?: return null
-        return runCatching { ModelOperation.fromTaskMode(TaskMode.valueOf(mode)) }.getOrNull()
-    }
-
     // ===========================
     // AGENT TURN LOOP INTEGRATION
     // ===========================
@@ -736,14 +704,34 @@ class ContextService(
         taskId: String,
         projectRoot: Path,
         userContextRefs: List<ContextReference> = emptyList(),
-        query: String? = null
+        query: String? = null,
+        /**
+         * Estimated tokens consumed by the static system prompt prefix (system markdown +
+         * tool descriptions + response contract + provider sections). Passed through to the
+         * context budget resolver so dynamic sections fit alongside the prefix inside the
+         * model's context window. Default 0 keeps callers that don't track the prefix size
+         * (CLI standalone bootstrap, legacy tests) working without behavior change.
+         */
+        staticPrefixTokens: Int = 0,
+        /**
+         * When false, skip building the project-context prompt (the expensive second
+         * [buildProjectContext] call) and return an empty `projectContextPrompt`. The context
+         * panel's runtime-prompt preview consumes only `.messages` and discards the prompt, so
+         * for that path the rebuild is pure waste — it ran a full project-context build on every
+         * UI refresh, doubling the builds per `getProjectContext`. The real turn loop
+         * (TurnPromptBuilder) keeps the default `true` and is unaffected.
+         */
+        includeProjectContext: Boolean = true,
     ): AgentTurnMessagesResult {
-        logger.info { "[AGENT_TURN] Building messages for task=$taskId, contextRefs=${userContextRefs.size}" }
+        logger.info {
+            "[AGENT_TURN] Building messages for task=$taskId, contextRefs=${userContextRefs.size}, " +
+                "staticPrefixTokens=$staticPrefixTokens"
+        }
 
         // 1. Load conversation history with filtering
         val taskMode = transaction { taskRepository.findById(taskId)?.mode }
         val modelOperation = taskMode?.let { ModelOperation.fromTaskMode(it) }
-        val budget = configService.getContextBudget(taskId, modelOperation)
+        val budget = configService.getContextBudget(taskId, modelOperation, staticPrefixTokens)
         val conversationBudget = budget.budgetFor(ContextSection.CONVERSATION)
 
         val allMessages = transaction { chatMessageRepository.findByTaskId(taskId) }
@@ -780,15 +768,19 @@ class ContextService(
             )
         }
 
-        // 4. Build project context (with user context refs)
-        val projectContextPrompt = try {
+        // 4. Build project context (with user context refs). Skipped when the caller only needs
+        // the message list (the context-panel preview discards projectContextPrompt) — this
+        // avoids a redundant full buildProjectContext on every UI refresh.
+        val projectContextPrompt = if (!includeProjectContext) {
+            ""
+        } else try {
             val projectContext = buildProjectContext(
                 projectRoot = projectRoot,
                 taskId = taskId,
                 query = query,
                 userContextRefs = userContextRefs
             )
-            buildLLMContextPrompt(projectContext)
+            buildLLMContextPrompt(projectContext, staticPrefixTokens)
         } catch (e: Exception) {
             logger.warn(e) { "[AGENT_TURN] Failed to build project context: ${e.message}" }
             ""  // Continue without project context if it fails

@@ -207,6 +207,14 @@ $stickyRequirements
         var systemPrompt = initialRender.text
         var cacheableSystemLen = initialRender.stablePrefixLength
 
+        // Static prefix tokens = everything we've assembled so far (system markdown + tool
+        // descriptions + response contract + provider sections). Passed to ContextService so
+        // the dynamic section budget (RECENT_WORK, CONVERSATION, ...) is sized AGAINST the
+        // remaining window after the prefix, not against the full window. Before this, the
+        // budget pretended the system prompt didn't exist, so an 18k prefix + 13k of sections
+        // happily blew past a 16k Ollama window (see [CONTEXT_OVERFLOW] in OllamaAdapter).
+        val staticPrefixTokens = pl.jclab.refio.core.services.PromptTokenEstimator.estimateBase(systemPrompt)
+
         // Use ContextService for messages and project context (for PLAN and AGENT modes)
         if ((mode == TaskMode.PLAN || mode == TaskMode.AGENT) && contextService != null && projectRoot != null) {
             try {
@@ -218,7 +226,8 @@ $stickyRequirements
                     taskId = taskId,
                     projectRoot = projectRoot,
                     userContextRefs = allContextRefs,
-                    query = lastUserMessage
+                    query = lastUserMessage,
+                    staticPrefixTokens = staticPrefixTokens,
                 )
 
                 // Apply context profile filtering for subagents

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Todo App</title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 2rem; background: #f4f4f4; }
+  h1 { text-align: center; }
+  #todo-form { display: flex; justify-content: center; margin-bottom: 1rem; }
+  #new-todo { flex: 1; padding: 0.5rem; font-size: 1rem; }
+  #add-btn { padding: 0.5rem 1rem; margin-left: 0.5rem; font-size: 1rem; }
+  #filters { text-align: center; margin-bottom: 1rem; }
+  #filters button { margin: 0 0.5rem; padding: 0.5rem 1rem; }
+  #todo-list { list-style: none; padding: 0; }
+  .todo-item { display: flex; align-items: center; background: #fff; margin-bottom: 0.5rem; padding: 0.5rem; border-radius: 4px; }
+  .todo-item.completed .todo-text { text-decoration: line-through; color: #888; }
+  .todo-text { flex: 1; margin-left: 0.5rem; }
+  .delete-btn { background: none; border: none; color: #c00; cursor: pointer; font-size: 1.2rem; }
+</style>
+</head>
+<body>
+<h1>Todo App</h1>
+
+<div id="todo-form">
+  <input type="text" id="new-todo" placeholder="Add a new todo" autocomplete="off">
+  <button id="add-btn">Add</button>
+</div>
+
+<div id="filters">
+  <button data-filter="all" class="filter-btn">All</button>
+  <button data-filter="active" class="filter-btn">Active</button>
+  <button data-filter="completed" class="filter-btn">Completed</button>
+</div>
+
+<ul id="todo-list"></ul>
+
+<script>
+/* ==============================
+   Todo App Core Logic
+   ============================== */
+const STORAGE_KEY = 'todos';
+let todos = [];          // Array of todo objects {id, text, completed}
+let currentFilter = 'all'; // 'all', 'active', 'completed'
+
+/* Load todos from localStorage */
+function loadTodos() {
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (stored) {
+    try {
+      todos = JSON.parse(stored);
+    } catch (e) {
+      console.error('Failed to parse todos from localStorage', e);
+      todos = [];
+    }
+  }
+}
+
+/* Save todos to localStorage */
+function saveTodos() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(todos));
+}
+
+/* Render the todo list based on current filter */
+function renderTodos() {
+  const listEl = document.getElementById('todo-list');
+  listEl.innerHTML = ''; // Clear existing items
+
+  const filtered = todos.filter(todo => {
+    if (currentFilter === 'active') return !todo.completed;
+    if (currentFilter === 'completed') return todo.completed;
+    return true; // 'all'
+  });
+
+  filtered.forEach(todo => {
+    const li = document.createElement('li');
+    li.className = 'todo-item' + (todo.completed ? ' completed' : '');
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = todo.completed;
+    checkbox.addEventListener('change', () => toggleComplete(todo.id));
+
+    const span = document.createElement('span');
+    span.className = 'todo-text';
+    span.textContent = todo.text;
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'delete-btn';
+    deleteBtn.textContent = '✕';
+    deleteBtn.addEventListener('click', () => deleteTodo(todo.id));
+
+    li.appendChild(checkbox);
+    li.appendChild(span);
+    li.appendChild(deleteBtn);
+    listEl.appendChild(li);
+  });
+}
+
+/* Add a new todo */
+function addTodo(text) {
+  if (!text.trim()) return;
+  const newTodo = {
+    id: Date.now(),
+    text: text.trim(),
+    completed: false
+  };
+  todos.push(newTodo);
+  saveTodos();
+  renderTodos();
+}
+
+/* Toggle completion status */
+function toggleComplete(id) {
+  const todo = todos.find(t => t.id === id);
+  if (todo) {
+    todo.completed = !todo.completed;
+    saveTodos();
+    renderTodos();
+  }
+}
+
+/* Delete a todo */
+function deleteTodo(id) {
+  todos = todos.filter(t => t.id !== id);
+  saveTodos();
+  renderTodos();
+}
+
+/* Set filter and re-render */
+function setFilter(filter) {
+  currentFilter = filter;
+  renderTodos();
+}
+
+/* ==============================
+   Event Listeners
+   ============================== */
+document.getElementById('add-btn').addEventListener('click', () => {
+  const input = document.getElementById('new-todo');
+  addTodo(input.value);
+  input.value = '';
+});
+
+document.getElementById('new-todo').addEventListener('keypress', e => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    document.getElementById('add-btn').click();
+  }
+});
+
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => setFilter(btn.dataset.filter));
+});
+
+/* ==============================
+   Initialization
+   ============================== */
+loadTodos();
+renderTodos();
+</script>
+</body>
+</html>

@@ -121,9 +121,13 @@ data class ContextBudget(
     }
 
     companion object {
+        // NOTE: SYSTEM_PROMPT and TOOL_DESCRIPTIONS are intentionally NOT here —
+        // those sections are materialized by TurnPromptBuilder (system prompt) and
+        // never go through ContextService section allocation. Reserving budget for
+        // them here was a ghost allocation that stole space from RECENT_WORK and
+        // CONVERSATION without bounding the actual system prompt size. The system
+        // prompt's contribution is accounted for separately via PromptBudget.staticPrefixTokens.
         private val defaultBudgets = mapOf(
-            ContextSection.SYSTEM_PROMPT to 3000,
-            ContextSection.TOOL_DESCRIPTIONS to 2000,
             ContextSection.WORKING_MEMORY to 3000,
             ContextSection.PROJECT_CONTEXT to 1500,
             ContextSection.RECENT_WORK to 8000,
@@ -137,9 +141,18 @@ data class ContextBudget(
             contextSize: Int,
             inputRatio: Double = 0.85,
             overrides: Map<ContextSection, Int> = emptyMap(),
-            totalTokensOverride: Int? = null
+            totalTokensOverride: Int? = null,
+            /**
+             * Tokens already committed to the system prompt (system markdown + tool
+             * descriptions + response contract + provider sections). Subtracted from the
+             * available budget so dynamic sections (RECENT_WORK, CONVERSATION, ...) get
+             * a realistic allocation — without this, an 18k system prompt with a 16k window
+             * would still try to allocate 13k for sections, blowing past num_ctx.
+             */
+            staticPrefixTokens: Int = 0,
         ): ContextBudget {
-            val available = totalTokensOverride ?: max(1, (contextSize * inputRatio).toInt())
+            val rawInput = totalTokensOverride ?: (contextSize * inputRatio).toInt()
+            val available = max(1, rawInput - staticPrefixTokens.coerceAtLeast(0))
             val base = scaleBudgetsForAvailableTokens(available)
             val merged = base.toMutableMap().apply { putAll(overrides) }
             return ContextBudget(

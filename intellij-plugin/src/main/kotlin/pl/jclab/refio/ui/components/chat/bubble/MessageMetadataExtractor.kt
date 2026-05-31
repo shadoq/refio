@@ -198,6 +198,25 @@ internal object MessageMetadataExtractor {
         }
     }
 
+    /**
+     * True when the SYSTEM message is an internal guardian re-entry nudge (tagged with
+     * `{"type":"guardian_nudge"}` by AgentTurnLoop). The nudge body is a model-facing
+     * "STOP — the turn is NOT finished" instruction; the UI renders these gently as an
+     * "agent guidance" note rather than showing the raw alarming text.
+     */
+    fun isGuardianNudge(message: Message): Boolean {
+        val metadata = message.metadata ?: return false
+        return try {
+            val metadataMap = com.google.gson.Gson().fromJson(
+                metadata,
+                com.google.gson.reflect.TypeToken.get(Map::class.java).type
+            ) as? Map<*, *> ?: return false
+            (metadataMap["type"] as? String) == "guardian_nudge"
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     fun extractUserContextMetadata(message: Message): UserContextMetadata? {
         val metadata = message.metadata ?: return null
         if (metadata.isBlank()) return null

@@ -59,6 +59,12 @@ class TurnToolExecutor(
     var turnStateUpdater: ((TurnPhase) -> Unit)? = null
 
     private val streamingToolNames = setOf("advance_code_editing", "multi_line_editor")
+
+    // A single tool call should never take this long. Above it we emit a per-phase WARN so the
+    // NEXT manual-test trace localizes the stall instead of guessing. Observed but unexplained:
+    // ~120s read_file blocks (2 of 4 parallel reads) correlated with concurrent RAG indexing,
+    // even though read_file makes no LLM call and ReadFileTool holds no locks. Observability only.
+    private val slowToolWarnMs = 5_000L
     private val codingToolNames = setOf("advance_code_editing", "multi_line_editor")
 
     private fun isDelegationTool(name: String): Boolean =
@@ -122,6 +128,41 @@ class TurnToolExecutor(
     }
 
     companion object {
+        /**
+         * A single tool call is "information gathering" — a read/search of the codebase or web
+         * (read_file, grep_search, file_search, rag_search, code_intelligence, view_diff,
+         * web_search, fetch_webpage, http_request). These accumulate the "long read-only spree"
+         * counter that drives the consolidation nudge. SYSTEM-category state tools
+         * (memory, tasks, messages) and `think` are NOT gathering — they don't read user code.
+         *
+         * Pure (mode/category passed in) so it is unit-testable without a full executor.
+         */
+        internal fun isGatheringCall(name: String, mode: ToolMode?, category: ToolCategory?): Boolean =
+            mode == ToolMode.READ_ONLY && category != ToolCategory.SYSTEM && name != "think"
+
+        /**
+         * A single tool call makes progress that justifies RESETTING the read-only spree counter:
+         * it wrote/produced a file (WRITE mode), persisted/delivered/planned via a SYSTEM tool
+         * (memory, tasks, answer_message, send_message, ask_user — but not the reflective `think`),
+         * or delegated the work (delegate_to_strong_model, invoke_subagent). A batch of only
+         * reads/searches — or only `think` — does NOT reset it.
+         *
+         * [isNoopWrite] demotes a WRITE that changed nothing (changeSummary.noop): an edit the model
+         * could not act on is the OPPOSITE of progress and must NOT reset the streak, otherwise a
+         * futile edit masks an ongoing read-forever loop (session f998771b / c19). The flag only
+         * gates the WRITE branch — SYSTEM/delegation progress is never a byte-diff, so it is unaffected.
+         */
+        internal fun isConsolidationProgressCall(
+            name: String,
+            mode: ToolMode?,
+            category: ToolCategory?,
+            isNoopWrite: Boolean = false
+        ): Boolean =
+            (mode == ToolMode.WRITE && !isNoopWrite) ||
+                (category == ToolCategory.SYSTEM && name != "think") ||
+                name == "delegate_to_strong_model" ||
+                name == "invoke_subagent"
+
         /** Max raw output size (chars) to preserve in-context for DATA_PRODUCING tools */
         const val DATA_PRODUCING_RAW_OUTPUT_BUFFER = 16_000
 
@@ -451,6 +492,11 @@ class TurnToolExecutor(
                     is ToolApprovalService.ApprovalDecision.Approved -> { /* continue */ }
                     is ToolApprovalService.ApprovalDecision.Trusted -> { /* continue, pattern saved */ }
                     is ToolApprovalService.ApprovalDecision.Rejected -> {
+                        val errorText = "Error: User rejected — ${decision.reason ?: "no reason"}"
+                        // Drive the temp-message lifecycle to FAILED before throwing, so the
+                        // in-memory bubble flips to "✗ Failed" immediately (without waiting
+                        // for the post-turn DB reload to correct it).
+                        listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
                         subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
                         subtaskRepository.updateResult(
                             subtaskId, result = null,
@@ -458,6 +504,7 @@ class TurnToolExecutor(
                         )
                         throw ToolRejectedException(
                             toolName = toolCall.name,
+                            toolCallId = toolCall.id,
                             reason = decision.reason
                         )
                     }
@@ -545,6 +592,7 @@ class TurnToolExecutor(
                 params = argumentsMap
             )
 
+            val tExecStart = System.currentTimeMillis()
             val toolResult = if (listener != null && toolCall.name in streamingToolNames) {
                 val subtask = subtaskRepository.findById(subtaskId)
                     ?: throw IllegalStateException("Subtask not found for tool call: $subtaskId")
@@ -584,6 +632,16 @@ class TurnToolExecutor(
                 )
             } else {
                 toolExecutor.executeTool(toolCallRequest, taskId)
+            }
+
+            val execMs = System.currentTimeMillis() - tExecStart
+            if (execMs >= slowToolWarnMs) {
+                logger.warn {
+                    "[SLOW_TOOL] tool=${toolCall.name} iteration=$iteration execMs=$execMs — tool " +
+                        "execution phase exceeded ${slowToolWarnMs}ms. Read-only tool (no LLM call) => " +
+                        "suspect VFS/file-lock/dispatcher contention with concurrent RAG indexing; " +
+                        "LLM-calling tool => suspect OllamaRequestGate queue behind embeddings."
+                }
             }
 
             if (toolResult.success) {
@@ -629,6 +687,7 @@ class TurnToolExecutor(
                     else -> outputWithWarnings
                 }
 
+                val tSummStart = System.currentTimeMillis()
                 val summaryToken = GlobalMetrics.beginOperation(
                     OperationInfo.TurnToolSummarization(toolCall.name, iteration)
                 )
@@ -686,6 +745,18 @@ class TurnToolExecutor(
                     ToolResultSummary(compressed, wasSummarized = true, 0, 0, 0.0)
                 } finally {
                     GlobalMetrics.endOperation(summaryToken)
+                }
+
+                val summMs = System.currentTimeMillis() - tSummStart
+                if (summMs >= slowToolWarnMs) {
+                    logger.warn {
+                        "[SLOW_SUMMARIZER] tool=${toolCall.name} iteration=$iteration summMs=$summMs " +
+                            "wasSummarized=${summaryResult.wasSummarized} — WEAK-model tool-result " +
+                            "summarizer call was slow. Usual causes: high latency on the WEAK " +
+                            "model/provider (cloud API under load), or — for a local WEAK model — " +
+                            "queueing on OllamaRequestGate behind RAG embeddings. Check the matching " +
+                            "API log latency to tell which."
+                    }
                 }
 
                 listener?.onToolExecutionCompleted(taskId, toolCall, summaryResult.summary, true)
@@ -751,7 +822,14 @@ class TurnToolExecutor(
                     content = effectiveContent,
                     isSummarized = effectivelySummarized,
                     rawOutput = outputWithWarnings,
+                    // `rawOutput` above (the tool's own output, before hints/repeatedCallNudge) — NOT
+                    // outputWithWarnings, whose nudge embeds a per-call subtask UUID that would defeat
+                    // the byte-identical repeated-call abort.
+                    loopSignature = rawOutput,
                     metadata = metadataJson,
+                    // Structured futile-edit signal for the turn loop (no JSON re-parse): a WRITE tool
+                    // sets metadata["noop"]=true when the generated content was identical to the file.
+                    noop = (toolResult.metadata?.get("noop") as? Boolean) == true,
                     subTokensIn = subTokensIn,
                     subTokensOut = subTokensOut,
                     subCost = subCost
@@ -909,6 +987,29 @@ class TurnToolExecutor(
     fun countVerificationToolCalls(toolCalls: List<ToolCallData>): Int {
         return toolCalls.count { it.name in setOf("run_terminal_command", "grep_search", "read_file", "view_diff") }
     }
+
+    /**
+     * Count information-gathering calls (reads/searches) in a batch. Feeds the consolidation
+     * nudge's "long read-only spree" counter. See [isGatheringCall].
+     */
+    fun countGatheringToolCalls(toolCalls: List<ToolCallData>): Int =
+        toolCalls.count {
+            val tool = toolRegistry.getTool(it.name)
+            isGatheringCall(it.name, tool?.mode, tool?.category)
+        }
+
+    /**
+     * True when a batch wrote/persisted/delivered/delegated — i.e. did something other than pure
+     * reading — so the read-only spree counter should reset. See [isConsolidationProgressCall].
+     */
+    fun batchMakesConsolidationProgress(
+        toolCalls: List<ToolCallData>,
+        noopCallIds: Set<String> = emptySet()
+    ): Boolean =
+        toolCalls.any {
+            val tool = toolRegistry.getTool(it.name)
+            isConsolidationProgressCall(it.name, tool?.mode, tool?.category, isNoopWrite = it.id in noopCallIds)
+        }
 
     /**
      * Check if tool is WRITE type.

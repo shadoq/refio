@@ -26,11 +26,12 @@ class ContextPruner(
      */
     fun resolveContextBudget(
         context: ProjectContextDTO,
-        modelOperation: ModelOperation?
+        modelOperation: ModelOperation?,
+        staticPrefixTokens: Int = 0,
     ): ContextBudget {
         val taskId = context.currentTask?.id
         val resolvedOperation = modelOperation ?: resolveModelOperationFromContext(context)
-        return configService.getContextBudget(taskId, resolvedOperation)
+        return configService.getContextBudget(taskId, resolvedOperation, staticPrefixTokens)
     }
 
     /**

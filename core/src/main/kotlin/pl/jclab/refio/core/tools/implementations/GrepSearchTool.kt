@@ -102,7 +102,19 @@ class GrepSearchTool(
                 searchInFile(path, contentRegex, results, maxResults)?.let { filesSkipped += it }
                 filesSearched = 1
             } else if (path.isDirectory()) {
-                val fileRegex = globToRegex(filePattern)
+                // file_pattern is a NAME filter, but models often pass a path-anchored
+                // glob ("core/.../services/*.kt"). globToRegex anchors with ^...$ and we
+                // match it against the bare file name, so any '/' silently yields 0 hits.
+                // The directory is already scoped by `path`, so reduce a path-like pattern
+                // to its last segment ("*.kt") instead of failing the whole search.
+                val effectiveFilePattern = if (filePattern.contains('/')) {
+                    val basename = filePattern.substringAfterLast('/').ifBlank { "*" }
+                    logger.info { "Grep file_pattern '$filePattern' contains '/'; matching by name segment '$basename' (dir already scoped by path)" }
+                    basename
+                } else {
+                    filePattern
+                }
+                val fileRegex = globToRegex(effectiveFilePattern)
                 var limitReached = false
 
                 Files.walk(path, limits.maxSearchDepth).use { stream ->
@@ -265,7 +277,7 @@ class GrepSearchTool(
                 ),
                 "file_pattern" to mapOf(
                     "type" to "string",
-                    "description" to "File name filter (glob syntax: *.kt)",
+                    "description" to "File NAME filter (glob, e.g. \"*.kt\") — NOT a path. Scope the directory with `path`, not here. A path-anchored value like \"src/**/*.kt\" is reduced to its last segment (\"*.kt\").",
                     "default" to "*"
                 ),
                 "case_sensitive" to mapOf(

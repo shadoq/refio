@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![IntelliJ](https://img.shields.io/badge/IntelliJ-2024.1+-orange.svg)](https://www.jetbrains.com/idea/)
-[![Version](https://img.shields.io/badge/version-0.0.1.10-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.0.1.11-green.svg)](CHANGELOG.md)
 [![Stage](https://img.shields.io/badge/stage-early--active-yellow.svg)](docs/ROADMAP.md)
 
 ## A coding agent for developers who want control
@@ -21,7 +21,7 @@ Concretely:
 - **Visible everything.** Each tool call, each token, each cost, each file write - surfaced in the chat stream, not summarized away.
 - **MIT licensed.** Inspect it, fork it, audit it. The repo *is* the spec.
 
-**Stage:** v0.0.1.10, early and actively developed. JetBrains-only by design - no VS Code plans. Not a drop-in replacement for inline completion (different category) and not competing head-on with mature agents like Claude Code (RefIo is earlier on the curve). If you want a polished, mass-market AI coding tool *today*, pick something else. If you want the leverage of AI without giving up observability - read on.
+**Stage:** v0.0.1.11, early and actively developed. JetBrains-only by design - no VS Code plans. Not a drop-in replacement for inline completion (different category) and not competing head-on with mature agents like Claude Code (RefIo is earlier on the curve). If you want a polished, mass-market AI coding tool *today*, pick something else. If you want the leverage of AI without giving up observability - read on.
 
 See the [**Roadmap**](docs/ROADMAP.md) for where it's heading and where you can help.
 
@@ -217,7 +217,7 @@ See [docs/config.md](docs/config.md) for full configuration reference.
 
 | |                                          |
 |---|------------------------------------------|
-| **Version** | 0.0.1.10                                  |
+| **Version** | 0.0.1.11                                  |
 | **Stage** | Early-stage - active development         |
 | **License** | MIT                                      |
 | **Community** | Small, growing - PRs and issues welcome  |

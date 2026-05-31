@@ -33,10 +33,6 @@ import java.time.Duration
  * @property workingMemoryMaxEntries Maximum working memory entries to include
  * @property enableVerification Enable optional verification step
  * @property verificationIterationThreshold Iteration count to trigger verification
- * @property loopMaxConsecutiveRepeats Max consecutive calls to the same tool before aborting
- * @property loopMaxSameToolTotal Max total calls to the same tool before aborting
- * @property loopWarnConsecutiveThreshold Warn after this many consecutive same-tool calls
- * @property loopWarnTotalThreshold Warn after this many total same-tool calls
  */
 data class TurnLoopConfig(
     // Iteration limits
@@ -72,12 +68,6 @@ data class TurnLoopConfig(
     // Verification
     val enableVerification: Boolean,
     val verificationIterationThreshold: Int,
-
-    // Loop detection
-    val loopMaxConsecutiveRepeats: Int,
-    val loopMaxSameToolTotal: Int,
-    val loopWarnConsecutiveThreshold: Int,
-    val loopWarnTotalThreshold: Int
 ) {
     companion object {
         /**
@@ -114,10 +104,6 @@ data class TurnLoopConfig(
             workingMemoryMaxEntries = 20,
             enableVerification = false,
             verificationIterationThreshold = 0,
-            loopMaxConsecutiveRepeats = 10,
-            loopMaxSameToolTotal = 20,
-            loopWarnConsecutiveThreshold = 6,
-            loopWarnTotalThreshold = 12
         )
 
         /**
@@ -147,10 +133,6 @@ data class TurnLoopConfig(
             workingMemoryMaxEntries = 50,
             enableVerification = true,
             verificationIterationThreshold = 40,
-            loopMaxConsecutiveRepeats = 40,
-            loopMaxSameToolTotal = 40,
-            loopWarnConsecutiveThreshold = 20,
-            loopWarnTotalThreshold = 26
         )
 
         /**

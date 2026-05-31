@@ -18,8 +18,18 @@ class ContextBudgetResolver(private val configService: ConfigService) {
 
     /**
      * Resolve context budget for prompt building.
+     *
+     * @param staticPrefixTokens tokens already committed to the system prompt (system markdown
+     *   + tool descriptions + response contract). When > 0, these are deducted from the available
+     *   input budget so dynamic sections fit alongside the static prefix inside the model's
+     *   context window. Default 0 keeps callers that don't yet know the prefix size working
+     *   as before.
      */
-    fun getContextBudget(taskId: String? = null, operation: ModelOperation? = null): ContextBudget {
+    fun getContextBudget(
+        taskId: String? = null,
+        operation: ModelOperation? = null,
+        staticPrefixTokens: Int = 0,
+    ): ContextBudget {
         val inputRatio = getInputRatio(taskId)
         val contextSize = resolveContextSize(operation, taskId)
         val totalOverride = getTotalTokensOverride(taskId)
@@ -30,6 +40,7 @@ class ContextBudgetResolver(private val configService: ConfigService) {
             inputRatio = inputRatio,
             overrides = overrides,
             totalTokensOverride = totalOverride,
+            staticPrefixTokens = staticPrefixTokens,
         )
     }
 
@@ -66,14 +77,10 @@ class ContextBudgetResolver(private val configService: ConfigService) {
     }
 
     private fun resolveContextSize(operation: ModelOperation?, taskId: String?): Int {
-        val fallback = configService.getTyped(ConfigKeys.MAX_CONTEXT_SIZE, taskId)
-        if (operation == null) return fallback
-
-        val (_, provider) = configService.getModel(operation, taskId)
-        return when (provider.lowercase()) {
-            "ollama" -> configService.getTyped(ConfigKeys.PROVIDER_OLLAMA_CONTEXT_SIZE)
-            "lmstudio" -> configService.getTyped(ConfigKeys.PROVIDER_LM_STUDIO_CONTEXT_SIZE)
-            else -> fallback
+        if (operation == null) {
+            return configService.getTyped(ConfigKeys.MAX_CONTEXT_SIZE, taskId)
         }
+        val (model, provider) = configService.getModel(operation, taskId)
+        return pl.jclab.refio.core.llm.ModelWindow.resolve(provider, model, configService, taskId)
     }
 }

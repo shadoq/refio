@@ -211,9 +211,6 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private var isLoading = false
     private var currentLLMPrompt: String? = null
     private var currentRawContext: String? = null
-    private var lastStreamingActive = false
-    private var streamingSuppressStartMs: Long? = null
-    private var pendingAutoRefreshAfterStreaming = false
     private var latestPromptSnapshot: PromptSnapshot? = null
     private var autoRefreshBlockedLogged = false
 
@@ -346,15 +343,23 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         // Priority: Project Meta → Task → User Context → Conversation → Work History
         applySectionOrder(sectionEntries.sortedBy { it.order })
 
-        // Debounced refresh listener - collects all events and triggers refresh only once per time window
-        // This prevents excessive refreshes when multiple flows emit events simultaneously
+        // Debounced refresh listener — auto-refresh now ONLY fires on session change.
+        // Per-message / per-subtask / per-isGenerating transitions used to feed
+        // `requestAutoRefresh` here, which routed back into a full `getProjectContext()`
+        // call (disk IO + prompts FileBasedRegistry cache invalidation + ProjectAnalyzer)
+        // every 1.5 s during normal work. That defeated the prompts cache and surfaced
+        // as constant "Refreshing cache..." log noise. Token bar + prompt trace already
+        // update reactively from `sessionManager.lastPromptSnapshot` (see below), so the
+        // expensive section rebuild is reserved for the explicit ▾ Refresh button.
         cs.launch {
             refreshTrigger
-                .debounce(1500) // 1.5 second debounce window
+                .debounce(1500)
                 .collectLatest {
                     if (isAutoRefreshBlocked()) {
-                        pendingAutoRefreshAfterStreaming = true
-                        logger.debug { "Debounce window expired during streaming/generation, deferring auto-refresh" }
+                        // Generation still in flight when the debounce fired — skip. The post-turn
+                        // activeSession re-emit (status + token sync) triggers a fresh refresh once
+                        // generation ends, so the panel is not left stale.
+                        logger.debug { "Debounce window expired during streaming/generation, skipping auto-refresh" }
                         return@collectLatest
                     }
 
@@ -363,7 +368,8 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                 }
         }
 
-        // Listen to session changes and trigger debounced refresh
+        // Session activation is the only auto-trigger left. Switching to a new session
+        // needs a full render — sections were previously empty / wrong-session content.
         cs.launch {
             sessionManager.activeSession.collectLatest { session ->
                 session?.let {
@@ -372,64 +378,12 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
             }
         }
 
-        // Listen to messages changes (all modes including CHAT)
-        cs.launch {
-            sessionManager.messages.collectLatest {
-                sessionManager.activeSession.value?.let { session ->
-                    val streamingActive = it.any { msg -> msg.isStreaming }
-                    if (streamingActive) {
-                        if (!lastStreamingActive) {
-                            streamingSuppressStartMs = System.currentTimeMillis()
-                            pendingAutoRefreshAfterStreaming = true
-                            logger.debug {
-                                "Messages changed for session: ${session.id}, streaming active - suppressing refresh"
-                            }
-                        }
-                        lastStreamingActive = true
-                        return@collectLatest
-                    }
-
-                    if (lastStreamingActive) {
-                        lastStreamingActive = false
-                        val suppressedMs = streamingSuppressStartMs?.let { startMs ->
-                            (System.currentTimeMillis() - startMs).coerceAtLeast(0)
-                        } ?: 0L
-                        streamingSuppressStartMs = null
-                        logger.debug {
-                            "Streaming completed for session: ${session.id}, suppressedMs=${suppressedMs}, pendingAutoRefresh=$pendingAutoRefreshAfterStreaming"
-                        }
-                        if (pendingAutoRefreshAfterStreaming) {
-                            pendingAutoRefreshAfterStreaming = false
-                            refreshTrigger.tryEmit(Unit)
-                        }
-                        return@collectLatest
-                    }
-
-                    requestAutoRefresh("Messages changed for session: ${session.id}")
-                }
-            }
-        }
-
-        // Listen to subtask changes (work progress)
-        cs.launch {
-            sessionManager.subtasks.collectLatest {
-                sessionManager.activeSession.value?.let { session ->
-                    requestAutoRefresh("Subtasks changed for session: ${session.id}")
-                }
-            }
-        }
-
-        // Listen to isGenerating transitions: when generation completes, fire pending refresh
-        cs.launch {
-            sessionManager.isGenerating.collectLatest { generating ->
-                if (!generating && pendingAutoRefreshAfterStreaming) {
-                    pendingAutoRefreshAfterStreaming = false
-                    autoRefreshBlockedLogged = false
-                    logger.debug { "Generation completed, firing pending context refresh" }
-                    refreshTrigger.tryEmit(Unit)
-                }
-            }
-        }
+        // NOTE: previous auto-refresh listeners on `messages`, `subtasks`, and
+        // `isGenerating` have been removed. The token usage panel and prompt trace
+        // are kept in sync by the lastPromptSnapshot / contextSectionTokens StateFlow
+        // observers below — those are cheap and don't touch ContextService. Section
+        // bodies (recent work, conversation, ...) refresh on demand via the toolbar
+        // button or when the user switches sessions.
 
         // Listen to model changes (context limit changes with model)
         cs.launch {
@@ -458,6 +412,17 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                     SwingUtilities.invokeLater {
                         latestPromptSnapshot = snapshot
                         updatePromptTrace(snapshot)
+                        // Wire the snapshot's rendered request into the "View Full" / Copy / Save
+                        // buttons so they show the prompt AS ACTUALLY SENT to the model — not a
+                        // recomputed approximation from ProjectContextRouter. Without this, after
+                        // the auto-refresh-on-messages was removed, these buttons would still
+                        // show whatever was loaded on session activation (often empty or stale).
+                        snapshot?.renderedRequest?.takeIf { it.isNotBlank() }?.let { rendered ->
+                            currentLLMPrompt = rendered
+                            copyPromptButton.isEnabled = true
+                            savePromptButton.isEnabled = true
+                            viewPromptButton.isEnabled = true
+                        }
                     }
                 }
             }
@@ -504,7 +469,6 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         }
 
         if (!manual && isAutoRefreshBlocked()) {
-            pendingAutoRefreshAfterStreaming = true
             logger.debug { "Skipping auto-refresh while streaming/generation is active" }
             return
         }
@@ -597,7 +561,6 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
 
     private fun requestAutoRefresh(reason: String) {
         if (isAutoRefreshBlocked()) {
-            pendingAutoRefreshAfterStreaming = true
             if (!autoRefreshBlockedLogged) {
                 logger.debug { "$reason, but auto-refresh is blocked during streaming/generation" }
                 autoRefreshBlockedLogged = true
@@ -611,8 +574,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     }
 
     private fun isAutoRefreshBlocked(): Boolean {
-        return lastStreamingActive ||
-            sessionManager.isGenerating.value ||
+        return sessionManager.isGenerating.value ||
             sessionManager.messages.value.any { it.isStreaming } ||
             GlobalMetrics.currentOperation.value !is OperationInfo.Idle
     }
