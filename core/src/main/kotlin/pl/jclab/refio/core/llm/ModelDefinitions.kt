@@ -1268,7 +1268,32 @@ object ModelDefinitions {
             active = true
         ),
 
+        //
         // Opus models (premium intelligence)
+        //
+        "claude-opus-4-8" to ModelDefinition(
+            id = "claude-opus-4-8",
+            name = "Claude Opus 4.8",
+            provider = "anthropic",
+            description = "Most capable Claude model for complex reasoning and agentic coding, 1M context with adaptive thinking",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 5.00,
+            costPer1MOutput = 25.00,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            removeParams = listOf("temperature"),
+            active = true
+        ),
         "claude-opus-4-7" to ModelDefinition(
             id = "claude-opus-4-7",
             name = "Claude Opus 4.7",

@@ -112,7 +112,7 @@ class MessageDispatcher(
 
                 // Parse toolCallInfo from metadata OR toolCallsJson
                 val toolCallInfo = enrichToolCallInfo(
-                    info = parseToolCallInfo(coreMsg.metadata, coreMsg.toolCallsJson),
+                    info = parseToolCallInfo(coreMsg.metadata, coreMsg.toolCallsJson, toolResultByToolCallId),
                     toolResultPathByToolCallId = toolResultPathByToolCallId,
                     toolResultByToolCallId = toolResultByToolCallId,
                     inlinedToolCallIds = inlinedToolCallIds
@@ -133,7 +133,7 @@ class MessageDispatcher(
                 if (coreMsg.role == "assistant" && finalContent.isBlank()) {
                     // Has toolCallsJson - create tool call display messages for ALL tool calls
                     if (!coreMsg.toolCallsJson.isNullOrBlank()) {
-                        val allToolCalls = parseAllToolCallsFromJson(coreMsg.toolCallsJson)
+                        val allToolCalls = parseAllToolCallsFromJson(coreMsg.toolCallsJson, toolResultByToolCallId)
                         if (!allToolCalls.isNullOrEmpty()) {
                             return@flatMap allToolCalls.mapIndexed { index, tc ->
                                 val enriched = enrichToolCallInfo(
@@ -243,7 +243,7 @@ class MessageDispatcher(
                 }
 
                 if (coreMsg.role == "assistant" && toolCallInfo != null && displayContent.isNotBlank()) {
-                    val allToolCalls = parseAllToolCallsFromJson(coreMsg.toolCallsJson)
+                    val allToolCalls = parseAllToolCallsFromJson(coreMsg.toolCallsJson, toolResultByToolCallId)
                     val toolCallMessages = if (!allToolCalls.isNullOrEmpty()) {
                         allToolCalls.mapIndexed { index, tc ->
                             val enriched = enrichToolCallInfo(
@@ -367,13 +367,17 @@ class MessageDispatcher(
      * Parse ToolCallDisplayInfo from metadata JSON or toolCallsJson.
      * Prioritizes metadata (already formatted) over toolCallsJson (raw tool calls).
      */
-    private fun parseToolCallInfo(metadata: String?, toolCallsJson: String?): ToolCallDisplayInfo? {
+    private fun parseToolCallInfo(
+        metadata: String?,
+        toolCallsJson: String?,
+        toolResultByToolCallId: Map<String, ToolResultSummary> = emptyMap()
+    ): ToolCallDisplayInfo? {
         val metadataInfo = if (!metadata.isNullOrBlank()) {
             ToolCallDisplayInfo.fromMetadataJson(metadata)
         } else {
             null
         }
-        val toolCallsInfo = parseToolCallInfoFromToolCallsJson(toolCallsJson)
+        val toolCallsInfo = parseToolCallInfoFromToolCallsJson(toolCallsJson, toolResultByToolCallId)
 
         return when {
             metadataInfo != null && toolCallsInfo != null -> mergeToolCallInfo(
@@ -385,15 +389,29 @@ class MessageDispatcher(
         }
     }
 
-    private fun parseToolCallInfoFromToolCallsJson(toolCallsJson: String?): ToolCallDisplayInfo? {
-        return parseAllToolCallsFromJson(toolCallsJson)?.firstOrNull()
+    private fun parseToolCallInfoFromToolCallsJson(
+        toolCallsJson: String?,
+        toolResultByToolCallId: Map<String, ToolResultSummary> = emptyMap()
+    ): ToolCallDisplayInfo? {
+        return parseAllToolCallsFromJson(toolCallsJson, toolResultByToolCallId)?.firstOrNull()
     }
 
     /**
      * Parse ALL tool calls from toolCallsJson (not just the first one).
      * Used to create separate display messages for each tool call in multi-tool-call messages.
+     *
+     * Status is derived from the matching tool result (if any):
+     * - missing result   → EXECUTING (tool is still running, or was rejected before a result was persisted)
+     * - error content    → FAILED
+     * - normal content   → COMPLETED
+     *
+     * This replaces a previous unconditional COMPLETED, which caused tool bubbles to render
+     * the "Done" badge before the tool had actually finished — and even when it was rejected.
      */
-    private fun parseAllToolCallsFromJson(toolCallsJson: String?): List<ToolCallDisplayInfo>? {
+    private fun parseAllToolCallsFromJson(
+        toolCallsJson: String?,
+        toolResultByToolCallId: Map<String, ToolResultSummary> = emptyMap()
+    ): List<ToolCallDisplayInfo>? {
         if (toolCallsJson.isNullOrBlank()) return null
         val toolCalls = ToolCallData.fromJsonList(toolCallsJson)
         if (toolCalls.isNullOrEmpty()) return null
@@ -404,9 +422,36 @@ class MessageDispatcher(
                 toolCallId = call.id,
                 displayType = inferDisplayType(call.name),
                 parameters = parseToolArguments(call.arguments),
-                status = ToolCallStatus.COMPLETED
+                status = deriveToolCallStatus(toolResultByToolCallId[call.id])
             )
         }
+    }
+
+    /**
+     * Derive the bubble status from the persisted tool result.
+     *
+     * Tools that haven't produced a result yet (still running, approval pending,
+     * rejected) stay in EXECUTING so the UI does not falsely show "Done".
+     */
+    private fun deriveToolCallStatus(result: ToolResultSummary?): ToolCallStatus {
+        if (result == null) return ToolCallStatus.EXECUTING
+        return if (isErrorResultContent(result.content)) {
+            ToolCallStatus.FAILED
+        } else {
+            ToolCallStatus.COMPLETED
+        }
+    }
+
+    /**
+     * Tool errors are conventionally emitted as content starting with "Error" or
+     * "Error:" (see TurnToolExecutor) — match that without being fooled by normal
+     * content that happens to mention the word.
+     */
+    private fun isErrorResultContent(content: String): Boolean {
+        val trimmed = content.trim()
+        if (trimmed.isEmpty()) return false
+        val lower = trimmed.lowercase()
+        return lower.startsWith("error:") || lower.startsWith("error ") || lower == "error"
     }
 
     private fun mergeToolCallInfo(primary: ToolCallDisplayInfo, fallback: ToolCallDisplayInfo): ToolCallDisplayInfo {
@@ -475,14 +520,24 @@ class MessageDispatcher(
             }
         }
 
-        // Enrich with tool result content (for inline display in tool call bubble)
+        // Enrich with tool result content (for inline display in tool call bubble).
+        // `success` is derived from the result content (not from `enriched.status`) so a
+        // metadata-driven info that arrives with status=EXECUTING still gets the right
+        // success flag once the tool result is matched.
         if (enriched.result == null) {
             val toolResult = toolResultByToolCallId[info.toolCallId]
             if (toolResult != null && toolResult.content.isNotBlank()) {
+                val isError = isErrorResultContent(toolResult.content)
                 val summary = createCompactResultSummary(toolResult.content, info.toolName)
+                val updatedStatus = if (enriched.status == ToolCallStatus.EXECUTING) {
+                    if (isError) ToolCallStatus.FAILED else ToolCallStatus.COMPLETED
+                } else {
+                    enriched.status
+                }
                 enriched = enriched.copy(
+                    status = updatedStatus,
                     result = ToolCallResult(
-                        success = enriched.status == ToolCallStatus.COMPLETED,
+                        success = !isError,
                         summary = summary
                     )
                 )

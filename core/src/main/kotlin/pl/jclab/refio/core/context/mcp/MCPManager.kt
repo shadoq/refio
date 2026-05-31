@@ -67,6 +67,9 @@ object MCPManager {
                 runCatching { connectServer(projectId, config.id) }
                     .onFailure { e -> logger.error(e) { "Failed to connect MCP server ${config.id}" } }
             }
+            // Fan in tools from already-connected global servers (their single connection lives
+            // under _global and would otherwise never reach this project's ToolRegistry).
+            registerGlobalToolsInto(state)
         }
 
         logger.info { "MCP Manager initialized for projectId=$projectId with ${configs.size} servers, toolRegistry=${if (toolRegistry != null) "present" else "missing"}" }
@@ -88,17 +91,8 @@ object MCPManager {
         state.toolRegistry = toolRegistry
 
         if (!hadRegistry) {
-            logger.info { "ToolRegistry set for projectId=$projectId - re-registering tools for connected servers" }
-            // Re-register tools for already connected READ_WRITE servers
-            scope.launch {
-                state.connections.values.forEach { connection ->
-                    val config = state.serverConfigs[connection.serverId]
-                    if (config?.toolsEnabled == true && (config.toolsExposureMode ?: MCPToolsExposureMode.TOOLS) == MCPToolsExposureMode.TOOLS) {
-                        runCatching { registerTools(state, connection) }
-                            .onFailure { e -> logger.error(e) { "Failed to register tools for ${connection.serverId}" } }
-                    }
-                }
-            }
+            logger.info { "ToolRegistry set for projectId=$projectId - registering tools for connected servers (incl. global)" }
+            scope.launch { registerConnectedTools(state) }
         }
     }
 
@@ -186,6 +180,10 @@ object MCPManager {
         state.toolCache.remove(serverId)
         ContextProviderRegistry.unregister(serverId)
         unregisterTools(state, serverId)
+        if (projectId == null) {
+            // Global server tools were fanned out into every project registry — remove them there too.
+            projectStates.values.filter { it.projectId != null }.forEach { ps -> unregisterTools(ps, serverId) }
+        }
     }
 
     suspend fun getResources(projectId: String?, serverId: String): List<MCPResource> {
@@ -246,25 +244,81 @@ object MCPManager {
         val provider = MCPContextProvider(serverId, config, connection)
         ContextProviderRegistry.register(provider)
 
-        if (config.toolsEnabled && (config.toolsExposureMode ?: MCPToolsExposureMode.TOOLS) == MCPToolsExposureMode.TOOLS) {
-            if (state.toolRegistry == null) {
-                logger.warn { "Connected MCP server $serverId but ToolRegistry not available - tools will NOT be registered. Tools will be registered when session is created." }
+        if (projectId == null) {
+            // Global server: its single connection feeds every project's ToolRegistry.
+            propagateGlobalToolsToProjects(connection, config)
+        } else {
+            val registry = state.toolRegistry
+            if (registry == null) {
+                logger.warn { "Connected MCP server '$serverId' but project ToolRegistry not available yet - tools register once the project router/session is created." }
+            } else {
+                registerToolsInto(registry, connection, config, state.registeredTools)
             }
-            registerTools(state, connection)
         }
     }
 
-    private suspend fun registerTools(state: MCPProjectState, connection: MCPConnection) {
+    /**
+     * Register every tool the given project state should expose: its own connected servers
+     * plus all globally-scoped connected servers (a global server's single connection fans out
+     * to each project's ToolRegistry).
+     */
+    private suspend fun registerConnectedTools(state: MCPProjectState) {
         val registry = state.toolRegistry ?: return
-        if (connection.getCapabilities()?.tools != true) {
+        state.connections.values.forEach { connection ->
+            runCatching { registerToolsInto(registry, connection, state.serverConfigs[connection.serverId], state.registeredTools) }
+                .onFailure { e -> logger.error(e) { "Failed to register tools for ${connection.serverId}" } }
+        }
+        registerGlobalToolsInto(state)
+    }
+
+    /** Register all connected global servers' tools into [targetState]'s registry. No-op for the global state itself. */
+    private suspend fun registerGlobalToolsInto(targetState: MCPProjectState) {
+        val registry = targetState.toolRegistry ?: return
+        if (targetState.projectId == null) return
+        val global = projectStates[GLOBAL_PROJECT_KEY] ?: return
+        global.connections.values.forEach { connection ->
+            runCatching { registerToolsInto(registry, connection, global.serverConfigs[connection.serverId], targetState.registeredTools) }
+                .onFailure { e -> logger.error(e) { "Failed to register global tool ${connection.serverId} into project ${targetState.projectId}" } }
+        }
+    }
+
+    /** Register a freshly-connected global server's tools into every already-initialized project registry. */
+    private suspend fun propagateGlobalToolsToProjects(connection: MCPConnection, config: MCPServerConfig) {
+        val targets = projectStates.values.filter { it.projectId != null && it.toolRegistry != null }
+        if (targets.isEmpty()) {
+            logger.info { "Global MCP server '${connection.serverId}' connected; no project registries yet - tools register when a project opens." }
             return
         }
-        val toolDefs = getTools(state.projectId, connection.serverId)
-        val toolMode = if (state.serverConfigs[connection.serverId]?.accessMode == MCPAccessMode.READ) {
+        targets.forEach { ps ->
+            runCatching { registerToolsInto(ps.toolRegistry!!, connection, config, ps.registeredTools) }
+                .onFailure { e -> logger.error(e) { "Failed to register global tool ${connection.serverId} into project ${ps.projectId}" } }
+        }
+    }
+
+    /**
+     * Register a single connection's tools into [registry], recording the registered names under
+     * the serverId in [bookkeeping] for later unregistration. When the server is connected but
+     * exposes no agent tools (CONTEXT mode, disabled, or no `tools` capability) nothing is registered
+     * and the reason is logged at WARN — see [MCPToolExposure]. Previously this gate was silent.
+     */
+    private suspend fun registerToolsInto(
+        registry: ToolRegistry,
+        connection: MCPConnection,
+        config: MCPServerConfig?,
+        bookkeeping: ConcurrentHashMap<String, List<String>>
+    ) {
+        if (config == null) return
+        val unavailableReason = MCPToolExposure.agentToolUnavailableReason(config, connection.getCapabilities())
+        if (unavailableReason != null) {
+            logger.warn { "MCP server '${connection.serverId}' is connected but exposes no agent tools: $unavailableReason" }
+            return
+        }
+        val toolMode = if (config.accessMode == MCPAccessMode.READ) {
             pl.jclab.refio.core.tools.base.ToolMode.READ_ONLY
         } else {
             pl.jclab.refio.core.tools.base.ToolMode.WRITE
         }
+        val toolDefs = connection.getCachedTools().ifEmpty { connection.refreshTools() }
         val registered = mutableListOf<String>()
         toolDefs.forEach { toolDef ->
             val wrapper = MCPToolWrapper(connection, toolDef, toolMode)
@@ -276,7 +330,8 @@ object MCPManager {
             }
         }
         if (registered.isNotEmpty()) {
-            state.registeredTools[connection.serverId] = registered
+            bookkeeping[connection.serverId] = (bookkeeping[connection.serverId].orEmpty() + registered).distinct()
+            logger.info { "Registered ${registered.size} agent tool(s) from MCP server '${connection.serverId}': ${registered.joinToString()}" }
         }
     }
 }

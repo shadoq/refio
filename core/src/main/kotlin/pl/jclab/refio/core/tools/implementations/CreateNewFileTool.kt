@@ -85,17 +85,27 @@ class CreateNewFileTool(
                     logger.warn { "File already exists: $pathStr (resolved to ${path.toAbsolutePath()})" }
                     return@withLockedFile ToolResult.error(
                         message = "File already exists: $pathStr. create_new_file refuses to overwrite.",
-                        recovery = "DO NOT retry create_new_file for this path. Instead: " +
-                            "1) read_file($pathStr) to inspect current content, " +
-                            "2) decide whether the file already satisfies the request " +
-                            "(it might — in that case skip the write entirely and report it), " +
-                            "3) if changes are needed, use code_editing / multi_edit / multi_line_editor " +
-                            "to modify the existing file in place.",
+                        // The prior recovery hedged with "decide whether it already satisfies the
+                        // request (it might — skip the write and report it)". On a "save/write the
+                        // report to <path>" task that clause backfired: models saw the file existed,
+                        // declared success, and either printed the content into chat or ended the turn
+                        // WITHOUT ever writing the file (observed manual-test sessions 06320e8a /
+                        // 9467f4a9). Make the recovery decisive: if the task is to write content,
+                        // OVERWRITE it this turn; only skip after confirming the existing content
+                        // already matches.
+                        recovery = "DO NOT retry create_new_file for this path — it will fail again. " +
+                            "The file ALREADY EXISTS with older content. If your task is to WRITE/SAVE " +
+                            "content to $pathStr, you MUST overwrite it in THIS SAME turn: call " +
+                            "advance_code_editing(path=$pathStr) to replace the whole file with your " +
+                            "intended content, or code_editing / multi_line_editor for a partial edit. " +
+                            "Printing the content into chat does NOT write the file and does NOT satisfy " +
+                            "the request. Only skip the write if you have first CONFIRMED via " +
+                            "read_file($pathStr) that the existing content already matches what was asked.",
                         nextActionHints = listOf(
-                            "read_file path=$pathStr — inspect current content first",
+                            "advance_code_editing path=$pathStr — overwrite the whole file with the intended content (use for 'save/write the report' tasks)",
                             "code_editing — for small targeted edits to the existing file",
                             "multi_line_editor — for semantic edits where exact strings are unknown",
-                            "advance_code_editing — only if a near-total rewrite is required"
+                            "read_file path=$pathStr — only to CONFIRM existing content before deciding to skip"
                         )
                     )
                 }

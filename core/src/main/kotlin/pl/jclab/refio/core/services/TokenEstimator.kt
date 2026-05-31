@@ -13,17 +13,37 @@ private val logger = dualLogger("TokenEstimator")
  * Based on average characters per token (3.5) with provider-specific adjustments.
  *
  * Reference: ADR-0028 - Context Management
- */
-/**
- * Note: This is the prompt-level estimator with provider-specific multipliers (3.5 chars/token).
- * The simpler [pl.jclab.refio.core.llm.TokenEstimator] (4 chars/token) is used for
- * context size validation in LLMClient.
+ *
+ * **Single source of truth for chars/token ratio**: [CHARS_PER_TOKEN_BASE] in the companion
+ * object below is referenced by [pl.jclab.refio.core.services.context.ContextTokenEstimator]
+ * and [pl.jclab.refio.core.llm.TokenEstimator] so all three estimators agree on the base
+ * ratio. PromptTokenEstimator adds optional code-block / JSON overhead and provider
+ * multipliers on top — used only on the compaction hot path where provider is known.
  */
 class PromptTokenEstimator {
 
     companion object {
-        // Average chars per token (conservative estimate)
-        private const val CHARS_PER_TOKEN_ESTIMATE = 3.5
+        /** Base chars-per-token estimate, shared across all estimators in :core. */
+        const val CHARS_PER_TOKEN_BASE: Double = 3.5
+
+        /**
+         * Plain char/token estimate without code-block or JSON overhead.
+         * Used by lightweight estimators (ContextTokenEstimator, llm.TokenEstimator)
+         * that don't have provider context.
+         */
+        fun estimateBase(text: String): Int {
+            if (text.isBlank()) return 0
+            return kotlin.math.max(1, (text.length / CHARS_PER_TOKEN_BASE).toInt())
+        }
+
+        /**
+         * Inverse of [estimateBase] — how many characters fit in the given token budget.
+         * Used by truncation helpers.
+         */
+        fun maxCharsForTokens(maxTokens: Int): Int {
+            if (maxTokens <= 0) return 0
+            return (maxTokens * CHARS_PER_TOKEN_BASE).toInt()
+        }
 
         // Provider-specific multipliers
         private val PROVIDER_MULTIPLIERS = mapOf(
@@ -68,7 +88,7 @@ class PromptTokenEstimator {
         val codeBlockCount = Regex("```").findAll(text).count()
         val jsonObjectCount = Regex("\\{[^}]+\\}").findAll(text).count()
 
-        val baseEstimate = (text.length / CHARS_PER_TOKEN_ESTIMATE).toInt()
+        val baseEstimate = estimateBase(text)
         val overhead = codeBlockCount * 3 + jsonObjectCount * 2
 
         return baseEstimate + overhead

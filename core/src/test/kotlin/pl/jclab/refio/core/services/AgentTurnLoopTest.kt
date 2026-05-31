@@ -13,12 +13,17 @@ import pl.jclab.refio.core.db.*
 import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.db.repositories.SubtaskRepository
 import pl.jclab.refio.core.db.repositories.TaskRepository
+import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.tools.base.ToolResult
+import pl.jclab.refio.core.services.turn.GuardianContext
+import pl.jclab.refio.core.services.turn.GuardianDecision
+import pl.jclab.refio.core.services.turn.GuardianRegistry
+import pl.jclab.refio.core.services.turn.TurnCompletionGuardian
 import pl.jclab.refio.core.services.turn.TurnFinalizer
 import pl.jclab.refio.core.services.turn.TurnGuardrails
 import pl.jclab.refio.core.services.turn.TurnLLMCaller
@@ -115,7 +120,10 @@ class AgentTurnLoopTest {
         agentTurnLoop = buildAgentTurnLoop(NoopTaskVerifier())
     }
 
-    private fun buildAgentTurnLoop(taskVerifier: TaskVerifier): AgentTurnLoop {
+    private fun buildAgentTurnLoop(
+        taskVerifier: TaskVerifier,
+        completionGuardians: GuardianRegistry = GuardianRegistry()
+    ): AgentTurnLoop {
         val tokenEstimator = pl.jclab.refio.core.services.PromptTokenEstimator()
 
         val turnPromptBuilder = TurnPromptBuilder(
@@ -182,7 +190,8 @@ class AgentTurnLoopTest {
             tokenEstimator = tokenEstimator,
             conversationCompactor = null,
             llmRetryHandler = null,
-            workingMemoryIntegration = null
+            workingMemoryIntegration = null,
+            completionGuardians = completionGuardians
         )
     }
 
@@ -1228,4 +1237,187 @@ class AgentTurnLoopTest {
             }
         }
     }
+
+    /**
+     * Regression tests for the guardian re-entry answer-preservation fix (option A).
+     *
+     * Bug (observed 2026-05, sessions 54cf9c8c / 070ab0e5): the model streams a complete answer
+     * to the user's bubble, [NextSpeakerJudgeGuardian] returns a MODEL verdict (false positive on
+     * a weak judge model), and the loop re-enters BEFORE persisting that answer. When the re-entry
+     * adds no new tool call (the judge's no-progress short-circuit to Pass), the degraded follow-up
+     * response was finalized instead — replacing the good answer the user saw and losing it from
+     * history. The fix keeps the discarded answer and restores it at finalize, but only when the
+     * re-entry produced no tool work; if a tool ran, the later (now-evidenced) response wins.
+     *
+     * Uses a scripted guardian (re-enter once, then Pass) so the behaviour is deterministic and
+     * does not depend on the weak judge model's verdicts.
+     */
+    @Nested
+    inner class GuardianReentryAnswerPreservationTests {
+
+        private fun reenterOnceRegistry() =
+            GuardianRegistry(listOf(ScriptedReenterOnceGuardian()))
+
+        @Test
+        fun `restores the discarded answer when a re-entry adds no tool work`() = runTest {
+            // iter1: a complete answer (shown to the user) -> guardian re-enters.
+            // iter2: a degraded re-phrasing with no tool call -> guardian short-circuits to Pass.
+            // The fix must finalize iter1's answer, not iter2's.
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                createLLMResponse("""{"actions":[],"response":"GOOD COMPLETE ANSWER","intent":"analysis"}"""),
+                createLLMResponse("""{"actions":[],"response":"worse re-phrasing","intent":"analysis"}""")
+            )
+
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), reenterOnceRegistry())
+
+            val result = loop.runTurn(
+                taskId = testTaskId,
+                userInput = "Summarize the three mechanisms",
+                mode = TaskMode.AGENT
+            )
+
+            assertTrue(result.success)
+            assertEquals(2, result.iterations, "expected one re-entry")
+            // result.response is the exact value finalize persists as the assistant message
+            // (both derive from the same effectiveResponse), so asserting it proves the
+            // discarded answer — not the degraded re-phrasing — is what survives.
+            assertEquals(
+                "GOOD COMPLETE ANSWER",
+                result.response,
+                "the answer the user saw must survive a no-progress re-entry, not be replaced by the degraded one"
+            )
+        }
+
+        @Test
+        fun `keeps the re-entry answer when a tool ran after the re-entry`() = runTest {
+            // iter1: partial answer -> guardian re-enters.
+            // iter2: the nudge works, the model calls a read-only tool (real progress).
+            // iter3: a now-evidenced final answer -> guardian Pass.
+            // Because a tool ran AFTER the re-entry, the iter3 answer (not the stale iter1
+            // candidate) must be finalized — otherwise completed work would be hidden.
+            val readFileTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "read_file"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.READ_ONLY
+            }
+            every { toolRegistry.getTool("read_file") } returns readFileTool
+            every { toolRegistry.toSubtaskKind(any()) } answers {
+                SubtaskKind.valueOf(firstArg<String>().uppercase())
+            }
+            every { subtaskRepository.getMaxOrderIndex(testTaskId) } returns -1
+            every {
+                subtaskRepository.create(
+                    taskId = any(), orderIndex = any(), kind = any(), description = any(),
+                    paramsJson = any(), stepPlanJson = any(), requiresApproval = any(),
+                    status = any(), llmModel = any(), llmProvider = any()
+                )
+            } answers {
+                createMockSubtask(
+                    id = "subtask-1", orderIndex = secondArg(), kind = thirdArg(),
+                    status = arg(7), description = arg(3), paramsJson = arg(4)
+                )
+            }
+            coEvery { toolExecutor.executeTool(any(), any()) } returns
+                ToolResult(success = true, output = "file contents: evidence here")
+            coEvery { toolResultSummarizer.summarizeToolResult(any(), any(), any()) } answers {
+                ToolResultSummary(summary = secondArg(), wasSummarized = false, tokensIn = 0, tokensOut = 0, cost = 0.0)
+            }
+
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                createLLMResponse("""{"actions":[],"response":"partial, still working","intent":"analysis"}"""),
+                createLLMResponse("""{"actions":[{"tool":"read_file","arguments":{"path":"x.kt"}}],"response":"reading the file","intent":"implementation"}"""),
+                createLLMResponse("""{"actions":[],"response":"COMPLETE WITH EVIDENCE","intent":"analysis"}""")
+            )
+
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), reenterOnceRegistry())
+
+            val result = loop.runTurn(
+                taskId = testTaskId,
+                userInput = "Find and summarize the file",
+                mode = TaskMode.AGENT
+            )
+
+            assertTrue(result.success)
+            assertEquals(3, result.iterations)
+            assertEquals(
+                "COMPLETE WITH EVIDENCE",
+                result.response,
+                "when the re-entry produced real tool work, its later answer must win — not the stale pre-re-entry candidate"
+            )
+        }
+    }
+
+    @Nested
+    inner class NativeToolTemplateParseErrorTests {
+
+        // The discriminator that decides whether a 500 gets the one-shot native→JSON retry.
+        // It MUST fire only on Ollama's tool-call template parser signature — never on a
+        // generic server error — otherwise a genuinely fatal 500 would be masked by a futile
+        // JSON-path retry instead of surfacing.
+
+        @Test
+        fun `detects Ollama tool-template XML syntax error on the wrapped cause`() {
+            val e = RefioError.LLMError(
+                provider = "ollama",
+                model = "qwen3.5:9b",
+                originalCause = IllegalStateException(
+                    "Ollama API error (HTTP 500): {\"error\":\"XML syntax error on line 18: " +
+                        "element <parameter> closed by </function>\"}"
+                )
+            )
+            assertTrue(agentTurnLoop.isNativeToolTemplateParseError(e))
+        }
+
+        @Test
+        fun `detects the parse signature nested deeper in the cause chain`() {
+            val root = IllegalStateException("element <parameter> closed by </function>")
+            val wrapped = RuntimeException("stream processing failed", root)
+            assertTrue(agentTurnLoop.isNativeToolTemplateParseError(wrapped))
+        }
+
+        @Test
+        fun `does not match an unrelated 500 so real fatal errors still surface`() {
+            val e = RefioError.LLMError(
+                provider = "ollama",
+                model = "qwen3.5:9b",
+                originalCause = IllegalStateException(
+                    "Ollama API error (HTTP 500): {\"error\":\"model runner has unexpectedly stopped\"}"
+                )
+            )
+            assertFalse(agentTurnLoop.isNativeToolTemplateParseError(e))
+        }
+
+        @Test
+        fun `does not match a transient timeout`() {
+            assertFalse(agentTurnLoop.isNativeToolTemplateParseError(RuntimeException("request timed out")))
+        }
+    }
+}
+
+/**
+ * Test guardian that re-enters exactly once (first terminal point) then passes — mirrors
+ * [NextSpeakerJudgeGuardian]'s single-bounded-re-entry shape, including the no-progress
+ * short-circuit to Pass on later checks, without depending on a weak judge model.
+ */
+private class ScriptedReenterOnceGuardian : TurnCompletionGuardian {
+    override val name: String = "scripted_reenter_once"
+    override suspend fun check(context: GuardianContext): GuardianDecision =
+        if (context.priorReentries == 0) {
+            GuardianDecision.Reenter(nudge = "STOP — finish the task with a concrete tool call.", reason = "scripted: not done")
+        } else {
+            GuardianDecision.Pass
+        }
 }

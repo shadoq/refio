@@ -1,16 +1,17 @@
 package pl.jclab.refio.core.llm
 
 import pl.jclab.refio.core.services.ConfigService
+import pl.jclab.refio.core.services.PromptTokenEstimator
 
 /**
  * Utility for estimating token counts and validating context size.
  *
- * Uses a simple heuristic: ~4 characters = 1 token (industry standard approximation).
- * This is conservative for English text; actual tokenization varies by model.
+ * Delegates the chars/token math to [PromptTokenEstimator.estimateBase] so all three
+ * estimators in :core agree on the base ratio ([PromptTokenEstimator.CHARS_PER_TOKEN_BASE]
+ * = 3.5). Was a separate 4 chars/token implementation; the ~14% divergence caused
+ * [validateContextSize] to accept prompts that the rest of the stack considered too large.
  */
 object TokenEstimator {
-
-    private const val CHARS_PER_TOKEN = 4
 
     /**
      * Estimate token count for a string.
@@ -18,10 +19,7 @@ object TokenEstimator {
      * @param text Text to estimate tokens for
      * @return Estimated token count (minimum 1 for non-empty text)
      */
-    fun estimateTokens(text: String): Int {
-        if (text.isEmpty()) return 0
-        return (text.length / CHARS_PER_TOKEN).coerceAtLeast(1)
-    }
+    fun estimateTokens(text: String): Int = PromptTokenEstimator.estimateBase(text)
 
     /**
      * Estimate total tokens for LLM request.
@@ -36,22 +34,22 @@ object TokenEstimator {
         systemPrompt: String? = null,
         systemMessages: List<String> = emptyList()
     ): Int {
-        var totalChars = 0
+        val sb = StringBuilder()
 
         // System prompt (backward compatibility)
-        systemPrompt?.let { totalChars += it.length }
+        systemPrompt?.let { sb.append(it) }
 
-        // Additional system messages
+        // Additional system messages — include role overhead ~10 chars each
         systemMessages.forEach { sysMsg ->
-            totalChars += sysMsg.length + 10  // Include overhead for each system message
+            sb.append(sysMsg).append("          ")
         }
 
-        // Messages (include role overhead ~10 chars per message)
+        // Messages — include role overhead ~10 chars per message
         messages.forEach { msg ->
-            totalChars += msg.content.length + 10
+            sb.append(msg.content).append("          ")
         }
 
-        return (totalChars / CHARS_PER_TOKEN).coerceAtLeast(1)
+        return PromptTokenEstimator.estimateBase(sb.toString())
     }
 
     /**

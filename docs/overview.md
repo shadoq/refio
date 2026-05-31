@@ -1,7 +1,7 @@
 # Refio - Technical Architecture Overview
 
-> **Last Updated:** 2026-05-03
-> **Version:** 0.0.1.10
+> **Last Updated:** 2026-05-31
+> **Version:** 0.0.1.11
 > **Status:** Active Development
 
 This document provides a comprehensive technical overview of Refio - a local-first AI coding assistant for IntelliJ IDEA and the terminal.
@@ -296,7 +296,7 @@ The primary execution engine for PLAN, AGENT, and SUBAGENT run profiles, impleme
 | **Run Profiles** | `DEFAULT` and `SUBAGENT` with per-run overrides (ADR-0029) |
 | **Nested Metadata** | `runId`, `parentRunId`, `depth` attached to turn lifecycle (ADR-0029) |
 | **Centralized Metric Tracking** | `LLMClient` accepts `taskRepository` + `subtaskRepository` and auto-increments `tokens_in` / `tokens_out` / `cost_usd` on the `task` and `subtask` rows after every successful call. The `task` row is the single source of truth for live stats — UI reads it directly instead of summing per-message tokens. |
-| **Task Status Transitions** | AGENT turns flip `task.status` `RUNNING` on entry, `SUCCESS` / `FAILED` on completion (was previously stuck at `NEW`). Followed by a `pushSessionRefresh()` that re-reads the row and re-publishes via the `activeSession` `StateFlow`. |
+| **Task Status Transitions** | AGENT turns flip `task.status` `RUNNING` on entry, `SUCCESS` / `FAILED` / `INCOMPLETE` on completion (was previously stuck at `NEW`). `INCOMPLETE` marks a turn that stopped without delivering the request (a completion guardian gave up, or a no-op-write / read-spree abort fired) — distinct from `FAILED` (an error) and `SUCCESS` (delivered). Followed by a `pushSessionRefresh()` that re-reads the row and re-publishes via the `activeSession` `StateFlow`. |
 | **Skip Redundant Config Writes** | `SessionLifecycleService.updateSession(persistSettings = false)` skips the 5 `ConfigRepository` writes that `saveCurrentSessionState()` would otherwise emit on every token-only refresh (~10 fewer DB writes per turn). |
 
 ### Subtask Status Lifecycle
@@ -1084,7 +1084,7 @@ when (session.mode) {
 -- Sessions (Chat/Plan/Agent) — also the canonical row for live token/cost stats
 TasksTable (id, project_id, name, mode, description, status, ui_state_json,
             tokens_in, tokens_out, cost_usd, created_at, updated_at)
-    -- status: NEW, RUNNING, SUCCESS, FAILED  (AGENT turns now flip RUNNING/SUCCESS/FAILED)
+    -- status: NEW, RUNNING, SUCCESS, FAILED, INCOMPLETE  (AGENT turns now flip RUNNING/SUCCESS/FAILED/INCOMPLETE)
 
 -- Execution steps — also carry per-subtask LLM cost (sub-LLM tools like
 -- advance_code_editing, multi_line_editor, fetch_webpage)

@@ -221,6 +221,22 @@ class MCPSettingsPanel(private val project: Project) : JBPanel<MCPSettingsPanel>
             }
         )
 
+        // Agent-tool visibility: a connected server in CONTEXT mode (or with tools off) is NOT
+        // callable by the agent — surface that here so it isn't a silent surprise.
+        val exposure = config.toolsExposureMode ?: MCPToolsExposureMode.TOOLS
+        val (agentToolNote, agentToolColor) = when {
+            !config.toolsEnabled -> "Agent tools: off (toolsEnabled=false)" to "#FF9800"
+            exposure != MCPToolsExposureMode.TOOLS ->
+                "Agent can't call this — $exposure mode. Use @${config.id}, or set Tools exposure = TOOLS." to "#FF9800"
+            else -> "Agent tools: exposed (TOOLS mode)" to "#4CAF50"
+        }
+        details.add(Box.createVerticalStrut(2))
+        details.add(
+            JBLabel("<html><font color='$agentToolColor'>$agentToolNote</font></html>").apply {
+                foreground = LCATheme.descriptionForeground
+            }
+        )
+
         // Buttons row
         val buttonsPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
             isOpaque = false

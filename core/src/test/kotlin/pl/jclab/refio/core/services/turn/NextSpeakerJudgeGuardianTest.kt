@@ -7,7 +7,6 @@ import io.mockk.mockk
 import io.mockk.slot
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import pl.jclab.refio.core.api.ModelOperation
@@ -33,11 +32,12 @@ class NextSpeakerJudgeGuardianTest {
         priorReentries: Int = 0,
         toolsUsed: List<String> = listOf("read_file"),
         toolsUsedSizeAtPriorReentry: Int = 0,
-        completionCondition: String? = null
+        completionCondition: String? = null,
+        runProfile: TurnRunProfile = TurnRunProfile.DEFAULT
     ) = GuardianContext(
         taskId = "task-1",
         mode = mode,
-        runProfile = TurnRunProfile.DEFAULT,
+        runProfile = runProfile,
         iteration = 3,
         maxIterations = 50,
         userRequest = "Fix the bug in config parsing",
@@ -101,11 +101,35 @@ class NextSpeakerJudgeGuardianTest {
     }
 
     @Test
-    fun `passes immediately in PLAN mode without calling LLM`() = runBlocking {
-        val decision = guardian().check(ctx(mode = TaskMode.PLAN))
-        assertEquals(GuardianDecision.Pass, decision)
-        coVerify(exactly = 0) {
-            llmClient.complete(provider = any(), model = any(), messages = any())
+    fun `consults judge in PLAN mode (intent-without-action also bites in PLAN)`() = runBlocking {
+        // Regression for the qwen3.5:9b loop: in PLAN the model emitted "Let me read the file…"
+        // without any tool_call and the turn ended with no answer. PLAN drives a tool loop too,
+        // so the intent-without-action stall must be pushed back once (single bounded re-entry).
+        stubJudgeEnabled()
+        stubModel()
+        stubLlmResponse("""{"speaker": "model", "reason": "intent announced, no tool called"}""")
+
+        val decision = guardian().check(
+            ctx(
+                mode = TaskMode.PLAN,
+                response = "Let me read the files with explicit offset/limit parameters " +
+                    "to get the complete content, starting with the TurnLoopConfig.kt file:",
+                toolsUsed = listOf("read_file"),
+                priorReentries = 0,
+                toolsUsedSizeAtPriorReentry = 0
+            )
+        )
+
+        // MODEL verdict at priorReentries=0 → single bounded re-entry with a focus nudge.
+        assertTrue(decision is GuardianDecision.Reenter)
+        coVerify(exactly = 1) {
+            llmClient.complete(
+                provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                maxTokens = any(), temperature = any(), responseFormat = any(),
+                thinking = any(), reasoningEffort = any(), noEgressEnabled = any(),
+                stream = any(), onChunk = any(), taskId = any(), subtaskId = any(),
+                source = any(), contextContent = any(), systemMessages = any(), kwargs = any()
+            )
         }
     }
 
@@ -132,11 +156,13 @@ class NextSpeakerJudgeGuardianTest {
     }
 
     @Test
-    fun `passes immediately when prior re-entry produced no new tool call`() = runBlocking {
-        // Reproduces the qwen3 / Ollama loop: agent did 2 tool calls earlier in the turn,
-        // guardian re-entered once (snapshot=2), agent then emitted "Let me find X" again
-        // without calling any new tool (toolsUsed.size is still 2). Nudging again would
-        // just burn tokens — short-circuit to Pass without calling the judge LLM.
+    fun `marks turn INCOMPLETE when prior re-entry produced no new tool call`() = runBlocking {
+        // Reproduces the qwen3 / Ollama loop (sessions df4ba13c / 164d417d): the agent did 2 tool
+        // calls earlier, the guardian re-entered once (snapshot=2), then the agent emitted
+        // "Now let me find X" AGAIN with no new tool call (toolsUsed.size still 2). Nudging again
+        // would just burn tokens — AND the request was never delivered, so the turn must finalize
+        // as INCOMPLETE (previously it silently short-circuited to Pass → SUCCESS) without calling
+        // the judge LLM.
         stubJudgeEnabled()
         val decision = guardian().check(
             ctx(
@@ -146,10 +172,32 @@ class NextSpeakerJudgeGuardianTest {
                 toolsUsedSizeAtPriorReentry = 2
             )
         )
-        assertEquals(GuardianDecision.Pass, decision)
+        assertTrue(decision is GuardianDecision.Incomplete)
         coVerify(exactly = 0) {
             llmClient.complete(provider = any(), model = any(), messages = any())
         }
+    }
+
+    @Test
+    fun `marks turn INCOMPLETE when judge still says MODEL but re-entry budget is spent`() = runBlocking {
+        // The agent DID call a new tool after the first nudge (snapshot=2, current=3) and reached
+        // a fresh terminal point, but the judge STILL says the request is not delivered. The single
+        // bounded re-entry is spent (priorReentries=1, gated on ==0), so we cannot nudge again — the
+        // turn must finalize as INCOMPLETE rather than a silent Pass → SUCCESS.
+        stubJudgeEnabled()
+        stubModel()
+        stubLlmResponse("""{"speaker": "model", "reason": "still not delivered"}""")
+
+        val decision = guardian().check(
+            ctx(
+                response = "I have gathered the data; the analysis is still in progress.",
+                priorReentries = 1,
+                toolsUsed = listOf("read_file", "grep_search", "read_file"),
+                toolsUsedSizeAtPriorReentry = 2
+            )
+        )
+
+        assertTrue(decision is GuardianDecision.Incomplete)
     }
 
     @Test
@@ -186,6 +234,7 @@ class NextSpeakerJudgeGuardianTest {
         // Defense in depth: priorReentries=0 means snapshot is still 0; the short-circuit
         // must not fire on the very first guardian invocation regardless of toolsUsed.
         // Response is intentionally >30 chars to bypass the length-based pre-filter.
+        // MODEL verdict at priorReentries=0 → single bounded re-entry.
         stubJudgeEnabled()
         stubModel()
         stubLlmResponse("""{"speaker": "model", "reason": "agent paused"}""")
@@ -200,6 +249,15 @@ class NextSpeakerJudgeGuardianTest {
         )
 
         assertTrue(decision is GuardianDecision.Reenter)
+        coVerify(exactly = 1) {
+            llmClient.complete(
+                provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                maxTokens = any(), temperature = any(), responseFormat = any(),
+                thinking = any(), reasoningEffort = any(), noEgressEnabled = any(),
+                stream = any(), onChunk = any(), taskId = any(), subtaskId = any(),
+                source = any(), contextContent = any(), systemMessages = any(), kwargs = any()
+            )
+        }
     }
 
     @Test
@@ -248,16 +306,72 @@ class NextSpeakerJudgeGuardianTest {
     }
 
     @Test
-    fun `judge MODEL verdict produces Reenter with nudge`() = runBlocking {
+    fun `judge MODEL verdict produces single bounded re-entry`() = runBlocking {
+        // MODEL verdict at priorReentries=0 → exactly one re-entry with a hard SYSTEM nudge.
+        // (An interim 2026-05 revision made this observability-only / always-Pass, but
+        // manual-tests showed qwen3.5:9b then silently abandoned multi-step tasks on bare
+        // intent announcements, so the single bounded re-entry was restored.)
         stubJudgeEnabled()
         stubModel()
         stubLlmResponse("""{"speaker": "model", "reason": "agent announced next step but didn't act"}""")
 
         val decision = guardian().check(ctx(response = "I will now edit the bug fix into config.yaml."))
 
-        assertTrue(decision is GuardianDecision.Reenter, "expected Reenter, got $decision")
-        assertTrue(decision.nudge.isNotBlank(), "nudge should not be blank")
-        assertTrue(decision.reason.contains("judge"))
+        assertTrue(decision is GuardianDecision.Reenter)
+        val nudge = (decision as GuardianDecision.Reenter).nudge
+        assertTrue(nudge.contains("NOT finished"), "nudge should name the failure mode")
+    }
+
+    @Test
+    fun `DEFAULT-profile re-entry nudge tells the parent to write the file itself`() = runBlocking {
+        // The parent (depth-0) orchestrator CAN write files and is responsible for persisting a
+        // delegated subagent's analysis to disk — so its nudge keeps the file-deliverable steer.
+        stubJudgeEnabled()
+        stubModel()
+        stubLlmResponse("""{"speaker": "model", "reason": "file deliverable not written yet"}""")
+
+        val decision = guardian().check(
+            ctx(
+                response = "I'll now write the analysis to ./tmp/c9/analysis.md.",
+                runProfile = TurnRunProfile.DEFAULT
+            )
+        )
+
+        assertTrue(decision is GuardianDecision.Reenter)
+        val nudge = (decision as GuardianDecision.Reenter).nudge
+        assertTrue(
+            nudge.contains("write the file yourself"),
+            "parent nudge must keep the write-the-file steer"
+        )
+    }
+
+    @Test
+    fun `SUBAGENT-profile re-entry nudge does NOT tell a read-only subagent to write files`() = runBlocking {
+        // Regression: the file-deliverable nudge ("you must then write the file yourself") fired
+        // INSIDE a read-only subagent (business-analyst), which physically cannot write — it spun
+        // re-reading the same file until loop-detection aborted it. A subagent's deliverable is the
+        // COMPLETE text it returns to the caller, not a file it writes itself.
+        stubJudgeEnabled()
+        stubModel()
+        stubLlmResponse("""{"speaker": "model", "reason": "analysis not yet delivered"}""")
+
+        val decision = guardian().check(
+            ctx(
+                response = "Now I have all the data I need. Let me produce the final analysis.",
+                runProfile = TurnRunProfile.SUBAGENT
+            )
+        )
+
+        assertTrue(decision is GuardianDecision.Reenter)
+        val nudge = (decision as GuardianDecision.Reenter).nudge
+        assertTrue(
+            !nudge.contains("write the file yourself"),
+            "subagent nudge must NOT instruct a read-only subagent to write files"
+        )
+        assertTrue(
+            nudge.contains("final text reply"),
+            "subagent nudge should anchor on returning the complete result to the caller"
+        )
     }
 
     @Test
@@ -273,6 +387,8 @@ class NextSpeakerJudgeGuardianTest {
         )
 
         val decision = guardian().check(ctx(response = "Now I will run the tests next."))
+        // Parse path is exercised: a fenced MODEL verdict still parses to MODEL, which at
+        // priorReentries=0 yields a single bounded re-entry.
         assertTrue(decision is GuardianDecision.Reenter)
     }
 
@@ -371,7 +487,9 @@ class NextSpeakerJudgeGuardianTest {
     fun `goal-aware mode does NOT short-circuit on textual completion markers`() = runBlocking {
         // In generic mode "Refactor applied. Task complete." short-circuits via the pre-filter
         // because the heuristic trusts the textual claim. In goal mode the same claim must be
-        // verified by the LLM judge against transcript evidence.
+        // verified by the LLM judge against transcript evidence — this test exists to confirm
+        // the judge LLM is actually consulted (the goal-mode pre-filter does not bypass it).
+        // MODEL verdict at priorReentries=0 → single bounded re-entry; the judge LLM must run.
         stubJudgeEnabled()
         stubModel()
         stubLlmResponse("""{"speaker": "model", "reason": "no test run in transcript"}""")
@@ -428,7 +546,9 @@ class NextSpeakerJudgeGuardianTest {
     }
 
     @Test
-    fun `goal-aware MODEL verdict Reenter nudge includes the goal text`() = runBlocking {
+    fun `goal-aware MODEL verdict produces single bounded re-entry that re-injects the goal`() = runBlocking {
+        // MODEL verdict in goal mode → single bounded re-entry whose nudge re-injects the
+        // completion condition so the model re-anchors on the contract.
         stubJudgeEnabled()
         stubModel()
         stubLlmResponse("""{"speaker": "model", "reason": "agent edited files but never ran tests"}""")
@@ -442,8 +562,10 @@ class NextSpeakerJudgeGuardianTest {
         )
 
         assertTrue(decision is GuardianDecision.Reenter)
-        assertTrue(decision.nudge.contains(goal), "nudge should re-inject the goal text, was: ${decision.nudge}")
-        assertEquals("judge: goal not yet met", decision.reason)
+        assertTrue(
+            (decision as GuardianDecision.Reenter).nudge.contains(goal),
+            "goal-mode nudge should re-inject the completion condition"
+        )
     }
 
     @Test
@@ -471,8 +593,10 @@ class NextSpeakerJudgeGuardianTest {
 
         // The goal-aware system prompt mentions "user-defined completion condition"; the
         // generic prompt does not. Distinguishing on a stable phrase keeps the test robust
-        // to minor wording tweaks elsewhere in either prompt.
-        val sys = systemSlot.captured ?: ""
+        // to minor wording tweaks. Whitespace is normalised first because the prompt wraps
+        // the phrase across a line break ("…completion\ncondition…") — the discriminator is
+        // the words, not their line layout.
+        val sys = (systemSlot.captured ?: "").replace(Regex("\\s+"), " ")
         assertTrue(
             sys.contains("user-defined completion condition", ignoreCase = true),
             "expected goal-aware prompt, got: ${sys.take(120)}"
@@ -502,7 +626,7 @@ class NextSpeakerJudgeGuardianTest {
 
         guardian().check(ctx())  // no completionCondition
 
-        val sys = systemSlot.captured ?: ""
+        val sys = (systemSlot.captured ?: "").replace(Regex("\\s+"), " ")
         assertTrue(
             !sys.contains("user-defined completion condition", ignoreCase = true),
             "expected generic prompt, but goal-aware text leaked through: ${sys.take(120)}"

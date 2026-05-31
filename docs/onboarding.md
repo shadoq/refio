@@ -1,7 +1,7 @@
 # Onboarding: Refio
 
-> **Last Updated:** 2026-05-03
-> **Version:** 0.0.1.10
+> **Last Updated:** 2026-05-31
+> **Version:** 0.0.1.11
 > **Status:** Active Development
 
 This guide helps new contributors get up and running. For technical reference, see [overview.md](overview.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -139,7 +139,7 @@ Quick summary of what the engine supports:
 
 ## Development Context
 
-### Active Areas (as of v0.0.1.9, 2026-05-03)
+### Active Areas (as of v0.0.1.11, 2026-05-31)
 
 1. **Native function calling** — provider-native tool API for Ollama, OpenAI, Anthropic, Gemini, plus all OpenAI-compatible providers (OpenRouter, Z.AI, Generic OpenAI, LM Studio) via `OpenAICompatibleHelpers.buildOpenAIToolsArray` / `parseOpenAIToolCalls`. JSON-in-text fallback for the rest. Controlled by `tools.native_tools: auto|always|never`. **Persistent fallback list** in `models.native_tools_fallbacks` survives process restart.
 2. **Centralized stats tracking** — `LLMClient` is now the single writer of `task.tokens_in/out/cost_usd` and (when `subtaskId` is provided) `subtask.tokens_in/out/cost_usd`. Per-call-site bookkeeping (~20 sites) was removed; new `complete()` callers just pass `taskId` / `subtaskId` and metrics increment automatically. `SessionStatsCalculator` reads the `task` row directly; `api_logs` is no longer a stats source.
@@ -148,6 +148,8 @@ Quick summary of what the engine supports:
 5. **Ongoing refactor** — CoreApiRouter and ConfigService being slimmed down; session layer migration to `:core` in progress.
 6. **CommandRule security system** — regex-based ALLOW/BLOCK/ASK replacing legacy `CommandWhitelist`. New code should use `CommandRule`.
 7. **Reference model for testing:** `ollama/qwen3.5:9b`
+8. **Turn-loop reliability (v0.0.1.11)** — `INCOMPLETE` task status for turns that stop without delivering, read-spree consolidation nudge, no-op-write streak abort, `ConsecutiveTextRepetitionTracker`, and loop detectors that exempt ASCII diagrams/separators.
+9. **MCP & model resolution (v0.0.1.11)** — global-server tools exposed to the agent as `mcp_<server>_*`; `ModelWindow` as the single context-window resolver; RAG duplicate/overlapping-chunk dedup and batched index writes.
 
 ### Key Architectural Patterns
 

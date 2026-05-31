@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.1.11] - 2026-05-31
+
+### Added
+
+- `INCOMPLETE` task status — turns that stop without delivering the request (a completion guardian gives up, or a no-op-write / read-spree abort fires) are recorded as `INCOMPLETE` instead of `SUCCESS`. Shown with its own colour in the TUI and a `◐ Incomplete` badge in the IntelliJ History panel.
+- Read-spree consolidation nudge — after a long run of read/search calls with no write or delivery, a SYSTEM nudge tells the agent to persist to memory or deliver incrementally (top-level AGENT only). Targets the "read 25 files, write nothing" failure mode.
+- No-op-write streak abort — a WRITE that changes nothing three times in a row on the same target aborts the turn as `INCOMPLETE`; previously a no-op reported success and reset every progress guard, so a futile-edit loop ran to the iteration cap.
+- `ConsecutiveTextRepetitionTracker` — aborts when the model repeats byte-identical final text with no tool call across iterations (a nudge re-entry it answers by repeating itself).
+- MCP global-server tool exposure — `GLOBAL`/`TOOLS` servers now register `mcp_<server>_*` tools into every project registry (and the CLI's), so the agent can actually call them; the `context7` preset switched `CONTEXT` → `TOOLS`, with a fail-loud `WARN` and a settings hint when a server exposes no tools. Caveat: a server already in the DB stays `CONTEXT` until re-added/edited.
+- `ModelWindow` — single context-window resolver, replacing four that disagreed and silently truncated the Ollama prompt; `claude-opus-4-8` (Claude Opus 4.8) added to `ModelDefinitions`.
+
+### Changed
+
+- Next-speaker judge now runs in PLAN as well as AGENT, and passes the tool-use *count* (not just distinct names) so a "use tool X three times" task isn't judged done after one call; recovers a stashed answer on an empty native reply instead of re-entering.
+- Loop detectors exempt pure-symbol runs — a requested ASCII diagram (`│`) or `────`/`====` separator rule no longer trips the content-chanting or streaming repetition aborts.
+- LLM stream idle-timeout clamped to 300 s, independent of the total API-call timeout, so a dead stream fails fast instead of hanging for the full timeout (observed: a 122B model stream hung 53 min).
+- Ollama request sizing — `num_predict` is clamped so input + output fits inside `num_ctx`, with an overflow warning before the server silently truncates; a streaming watchdog makes Stop respond immediately on slow models.
+- RAG quality / indexing — duplicate and fully-contained chunks dropped at chunk time and in `rag_search` results (top-K no longer fills with copies of one fragment); out-of-range chunk line bounds clamped (no more index-pass crash); chunk/embedding inserts batched and the active turn yields the SQLite WAL writer-lock to cut contention that stalled tool writes ~122 s.
+- Context-panel auto-refresh now fires only on session change (was re-running a full `getProjectContext()` every ~1.5 s); token bar / prompt trace stay in sync via `lastPromptSnapshot`, sections refresh on demand. Preview path skips the redundant project-context rebuild. Removed unused `loop*` fields from `TurnLoopConfig`; `PathSandbox` init logs at `debug`.
+
+### Fixed
+
+- Output-repetition hard-abort defeated by the loop nudge — the "[⚠ possible loop]" nudge appended a varying `subtask_id` to the output, defeating the byte-identical tracker; `ToolResultData.loopSignature` now feeds the tracker the raw, un-nudged output.
+- Rejected-tool bubble flips to "✗ Failed" immediately instead of waiting for the post-turn DB reload.
+- Guardian re-entry nudges render as a gentle "Agent guidance" note (attributed to the originating subagent) instead of a raw "STOP — the turn is NOT finished" wall of text.
+
 ## [0.0.1.10] - 2026-05-27
 
 ### Added

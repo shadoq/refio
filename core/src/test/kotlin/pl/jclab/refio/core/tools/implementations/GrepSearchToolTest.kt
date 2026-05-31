@@ -335,6 +335,28 @@ class GrepSearchToolTest {
         }
 
         @Test
+        fun `should treat path-anchored file_pattern as a name glob`() = runBlocking {
+            // Regression (session 35f562ed, 2026-05): models pass a full path glob in
+            // file_pattern (e.g. "subdir/*.txt") instead of a bare name glob. The regex
+            // was anchored (^...$) and matched against the bare file name, so any '/'
+            // silently yielded 0 hits. The directory is already scoped by `path`, so a
+            // path-like pattern must be reduced to its last segment ("*.txt").
+            createTestFiles()
+
+            val result = tool.execute(mapOf(
+                "pattern" to "println",
+                "file_pattern" to "core/src/main/kotlin/**/*.kt"
+            ))
+
+            assertTrue(result.success)
+            assertFalse(
+                result.output!!.contains("No matches found"),
+                "Path-anchored file_pattern should match by name segment, not yield 0 hits"
+            )
+            assertTrue(result.output!!.contains("println"))
+        }
+
+        @Test
         fun `should support question mark in file pattern`() = runBlocking {
             // Given
             Files.writeString(tempDir.resolve("file1.txt"), "hello")

@@ -55,7 +55,21 @@ data class PromptSnapshot(
     val toolCount: Int,
     val toolNames: List<String>,
     val contextTrace: ContextDecisionTrace,
+    /**
+     * Truncated preview kept for backward compatibility / quick inspection (max ~500 chars).
+     * Use [renderedRequest] for the full prompt that actually went to the model.
+     */
     val systemPromptPreview: String? = null,
+    /**
+     * The complete request as actually sent to the LLM — system prompt + messages, rendered in
+     * the same format used by ProjectContextRouter.renderActiveRequestPreview. This is what the
+     * IntelliJ Context panel's "View Full" button shows, and it is captured AT THE MOMENT OF
+     * THE LLM CALL, so it reflects what the model really saw (post-compaction, post-truncation,
+     * post-summarization). Replaces the previous flow where the panel re-built a preview on
+     * demand via ProjectContextRouter — that path diverged from the actual sent prompt because
+     * it recomputed everything from scratch instead of capturing the rendered turn.
+     */
+    val renderedRequest: String? = null,
     /**
      * Granular section token breakdown for UI visualization.
      * Keys match ContextSectionColorPalette (e.g. "system_prompt", "recent_work", "key_components").

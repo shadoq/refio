@@ -351,6 +351,84 @@ class TurnGuardrailsTest {
             // py bucket gets 3rd identical → abort (threshold is 3).
             assertIs<TurnGuardrails.LoopStatus.ABORT>(tracker.record("run_code", py, sameTail))
         }
+
+        // ─── No-op write abort (P2) ─────────────────────────────────────────
+
+        @Test
+        fun `repeated no-op writes on the same target abort as INCOMPLETE`() {
+            // Session f998771b / c19: advance_code_editing kept returning "content identical to the
+            // existing file" — the editing model could not act on the edit_description. The result is
+            // success=true and the output is NOT byte-identical (token counts vary per call), so neither
+            // the error tracker nor the output-hash abort fires; the turn ran to maxIterations (828K
+            // tokens). A no-op-write streak on one target is the missing "futile edit" signal.
+            val tracker = TurnGuardrails.TurnRepetitionTracker(noopWriteAbortThreshold = 3)
+            val args = mapOf<String, Any?>("path" to "tmp/report.md", "edit_description" to "fix citations")
+            val s1 = tracker.record("advance_code_editing", args, "⚠ No changes applied (1)", isNoopWrite = true)
+            val s2 = tracker.record("advance_code_editing", args, "⚠ No changes applied (2)", isNoopWrite = true)
+            val s3 = tracker.record("advance_code_editing", args, "⚠ No changes applied (3)", isNoopWrite = true)
+            assertIs<TurnGuardrails.LoopStatus.OK>(s1)
+            assertIs<TurnGuardrails.LoopStatus.OK>(s2)
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(s3)
+            assertTrue(
+                (s3 as TurnGuardrails.LoopStatus.ABORT).incomplete,
+                "a futile-edit abort is INCOMPLETE (deliverable never produced), not a hard failure"
+            )
+        }
+
+        @Test
+        fun `no-op writes interleaved with reads still abort on the same target`() {
+            // The futile edits are interleaved with greps (different effect keys). The no-op streak is
+            // per-target, so interleaved reads on OTHER keys must not reset it — exactly the c19 shape.
+            val tracker = TurnGuardrails.TurnRepetitionTracker(noopWriteAbortThreshold = 3)
+            val edit = mapOf<String, Any?>("path" to "tmp/report.md")
+            val grep = mapOf<String, Any?>("pattern" to "DEFAULT_BASE_URL", "path" to "src")
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("advance_code_editing", edit, "noop a", isNoopWrite = true))
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("grep_search", grep, "5 matches"))
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("advance_code_editing", edit, "noop b", isNoopWrite = true))
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("grep_search", grep, "6 matches"))
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(tracker.record("advance_code_editing", edit, "noop c", isNoopWrite = true))
+        }
+
+        @Test
+        fun `a real edit between no-ops resets the no-op streak`() {
+            // A write that actually changed bytes (isNoopWrite=false) means the editing model CAN act —
+            // so the futile-edit counter must restart.
+            val tracker = TurnGuardrails.TurnRepetitionTracker(noopWriteAbortThreshold = 3)
+            val args = mapOf<String, Any?>("path" to "tmp/report.md")
+            tracker.record("advance_code_editing", args, "noop 1", isNoopWrite = true)
+            tracker.record("advance_code_editing", args, "noop 2", isNoopWrite = true)
+            // Real change → reset the streak.
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("advance_code_editing", args, "Edited (+5/-2)", isNoopWrite = false))
+            // Two more no-ops: below threshold again, no abort.
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("advance_code_editing", args, "noop 3", isNoopWrite = true))
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("advance_code_editing", args, "noop 4", isNoopWrite = true))
+        }
+
+        @Test
+        fun `no-op writes on different files are independent`() {
+            val tracker = TurnGuardrails.TurnRepetitionTracker(noopWriteAbortThreshold = 3)
+            val a = mapOf<String, Any?>("path" to "a.md")
+            val b = mapOf<String, Any?>("path" to "b.md")
+            tracker.record("advance_code_editing", a, "noop", isNoopWrite = true) // a=1
+            tracker.record("advance_code_editing", b, "noop", isNoopWrite = true) // b=1
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("advance_code_editing", a, "noop", isNoopWrite = true)) // a=2
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("advance_code_editing", b, "noop", isNoopWrite = true)) // b=2
+            // a reaches 3 → abort; b is still at 2 and untouched.
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(tracker.record("advance_code_editing", a, "noop", isNoopWrite = true)) // a=3
+        }
+
+        @Test
+        fun `non-no-op writes never trip the no-op abort`() {
+            // Regression guard for the default path: a long run of REAL edits on one file (legitimate
+            // iterative refactor) passes isNoopWrite=false every time and must never abort here.
+            val tracker = TurnGuardrails.TurnRepetitionTracker(noopWriteAbortThreshold = 3)
+            val args = mapOf<String, Any?>("path" to "src/Main.kt")
+            repeat(20) {
+                assertIs<TurnGuardrails.LoopStatus.OK>(
+                    tracker.record("advance_code_editing", args, "Edited (+$it/-1)", isNoopWrite = false)
+                )
+            }
+        }
     }
 
     @Nested
@@ -421,6 +499,92 @@ class TurnGuardrailsTest {
                 status.reason.contains("check the configuration"),
                 "Reason should include sample of repeated phrase, got: ${status.reason}"
             )
+        }
+
+        @Test
+        fun `ascii box-drawing column does not abort`() {
+            // WHY: session 188eb64b — user explicitly asked for "a combined architectural
+            // diagram (ASCII)". A vertical column of box-drawing chars produced 14 consecutive
+            // "│" tokens and the detector killed the legitimate deliverable. A run of pure
+            // symbols is STRUCTURE (table border / diagram), never a generation loop.
+            val diagram = (1..14).joinToString(" ") { "│" }
+            assertIs<TurnGuardrails.LoopStatus.OK>(
+                TurnGuardrails.ContentChantingDetector.inspect(diagram)
+            )
+        }
+
+        @Test
+        fun `separator-rule symbols do not abort`() {
+            // "=== === ===" rules / "| | |" markdown table spines are structure, not chants.
+            val rule = ("=== ".repeat(20)).trim()
+            assertIs<TurnGuardrails.LoopStatus.OK>(
+                TurnGuardrails.ContentChantingDetector.inspect(rule)
+            )
+        }
+
+        @Test
+        fun `word chant interleaved with symbols still aborts`() {
+            // The exemption is ONLY for pure-symbol phrases — a real word repeated must still
+            // trip even if the chant phrase also carries punctuation.
+            val chant = ("No. ".repeat(20)).trim()
+            val status = TurnGuardrails.ContentChantingDetector.inspect(chant)
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(status)
+        }
+    }
+
+    @Nested
+    inner class ConsecutiveTextRepetitionTrackerTest {
+
+        @Test
+        fun `first text response stays OK`() {
+            val tracker = TurnGuardrails.ConsecutiveTextRepetitionTracker()
+            assertIs<TurnGuardrails.LoopStatus.OK>(
+                tracker.record("Good, I found the circuit breaker code. Now let me search for retry.")
+            )
+        }
+
+        @Test
+        fun `two identical consecutive responses abort`() {
+            // Test 4 pathology (session a28cfcaa iter 9 & 10): the model emitted the SAME
+            // intent sentence twice in a row with no tool call. The tool-output tracker can
+            // never see this (no tool ran); this tracker is the only thing that catches it.
+            val tracker = TurnGuardrails.ConsecutiveTextRepetitionTracker()
+            val text = "Good, I found the circuit breaker code. Now let me search for the retry mechanism."
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record(text))
+            val second = tracker.record(text)
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(second)
+            assertTrue(
+                second.reason.contains("identical text", ignoreCase = true),
+                "abort reason should name the repeated-text failure mode, got: ${second.reason}"
+            )
+        }
+
+        @Test
+        fun `different consecutive responses stay OK and reset the run`() {
+            val tracker = TurnGuardrails.ConsecutiveTextRepetitionTracker()
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("Reading the first file."))
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("Reading the second file."))
+            // Back to the first text — counter restarted, so a single occurrence is still OK.
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("Reading the first file."))
+        }
+
+        @Test
+        fun `whitespace and case differences still count as identical`() {
+            // Normalisation must collapse whitespace and lowercase so a trivially re-rendered
+            // repeat (e.g. extra spaces, different capitalisation) is still caught.
+            val tracker = TurnGuardrails.ConsecutiveTextRepetitionTracker()
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("Let me check the file."))
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(tracker.record("let me   check   the FILE."))
+        }
+
+        @Test
+        fun `blank text is ignored and never aborts`() {
+            // Empty/blank assistant text is handled by other guards (empty-envelope recovery);
+            // it must not be treated as a repeated chant.
+            val tracker = TurnGuardrails.ConsecutiveTextRepetitionTracker()
+            repeat(5) {
+                assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("   "))
+            }
         }
     }
 }

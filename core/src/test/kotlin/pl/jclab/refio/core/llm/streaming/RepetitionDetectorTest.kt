@@ -78,6 +78,17 @@ class RepetitionDetectorTest {
         }
 
         @Test
+        fun `still fires when the repeated block has more than one distinct character`() {
+            // Guard: the single-character ASCII-rule exemption must stay narrow and
+            // NOT swallow genuine multi-char loops. A 20-char two-distinct-char block
+            // repeated back-to-back is still a loop, not a separator.
+            val block = "ab".repeat(10)  // 20 chars, distinct a/b
+            val result = feedUntilAbort(block, rounds = 10)
+            assertTrue(result != null, "A 2-distinct-char block loop must still fire")
+            assertEquals("REPETITION_LOOP", result.code)
+        }
+
+        @Test
         fun `does not fire on 3 consecutive repetitions (below threshold)`() {
             val block = "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt uuuu vvvv wwww xxxx\n"
             val result = feedUntilAbort(block, rounds = 3, repeatThreshold = 4)
@@ -193,6 +204,34 @@ class RepetitionDetectorTest {
                 assertTrue(
                     decision is StreamGuardrail.Decision.Continue,
                     "Markdown bullets must not trip the detector: got $decision"
+                )
+            }
+        }
+
+        @Test
+        fun `does not fire on a long single-character ASCII rule`() {
+            // Regression (session 81253ffc, 2026-05): a user-requested ASCII
+            // architecture diagram contained a horizontal rule of 80+ box-drawing
+            // chars ("────…"). A single repeated character is periodic at every
+            // period and used to trip REPETITION_LOOP, aborting a legitimate diagram.
+            val detector = RepetitionDetector(checkEveryNDeltas = 1)
+            val rule = "─".repeat(120)
+            val decision = detector.onDelta(rule, rule.length, rule, 0L)
+            assertTrue(
+                decision is StreamGuardrail.Decision.Continue,
+                "A single-character ASCII rule must not trip the detector: got $decision"
+            )
+        }
+
+        @Test
+        fun `does not fire on common single-character separators`() {
+            for (ch in listOf("=", ".", "-", "*", "_", " ")) {
+                val detector = RepetitionDetector(checkEveryNDeltas = 1)
+                val rule = ch.repeat(200)
+                val decision = detector.onDelta(rule, rule.length, rule, 0L)
+                assertTrue(
+                    decision is StreamGuardrail.Decision.Continue,
+                    "Separator run of '$ch' must not trip the detector: got $decision"
                 )
             }
         }

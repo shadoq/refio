@@ -1,8 +1,10 @@
 package pl.jclab.refio.core.services
 
 import pl.jclab.refio.core.db.RagContentType
+import pl.jclab.refio.core.db.repositories.ChunkInsert
 import pl.jclab.refio.core.db.repositories.IndexingProgressRepository
 import pl.jclab.refio.core.db.repositories.RagRepository
+import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.analysis.CodeElements
 import pl.jclab.refio.core.services.analysis.CppLanguageAnalyzer
 import pl.jclab.refio.core.services.analysis.CssLanguageAnalyzer
@@ -155,6 +157,13 @@ class RagIndexingService(
                 coroutineContext.ensureActive()
                 batch.forEach { file ->
                     coroutineContext.ensureActive()
+                    // RAG is secondary: yield the SQLite writer-lock to any active agent
+                    // turn before touching the DB, so background indexing can't stall tool
+                    // subtask-status writes.
+                    if (GlobalMetrics.isAgentTurnActive()) {
+                        logger.info { "[RAG_PAUSE] Agent turn active — pausing indexing before ${file.relativePath}" }
+                        GlobalMetrics.awaitAgentTurnIdle()
+                    }
                     try {
                         indexSingleFile(absoluteRoot, file, existingFiles[file.relativePath], contentType)
                     } catch (e: Exception) {
@@ -399,20 +408,21 @@ class RagIndexingService(
             )
         }
 
-        chunks.take(maxChunks).forEachIndexed { index, chunk ->
-            ragRepository.createChunk(
+        // Single batched insert (one writer-lock acquisition) instead of one transaction
+        // per chunk — see RagRepository.createChunksBatch.
+        val chunkInserts = chunks.take(maxChunks).mapIndexed { index, chunk ->
+            ChunkInsert(
                 fileId = fileId,
                 chunkIndex = index,
                 content = chunk.content,
                 startLine = chunk.startLine,
                 endLine = chunk.endLine,
-                startChar = null,
-                endChar = null,
                 metadata = chunk.metadata
                     .takeIf { it != ChunkMetadata() }
                     ?.let { metadata -> gson.toJson(metadata) }
             )
         }
+        ragRepository.createChunksBatch(chunkInserts)
     }
 
     private fun analyzeContent(path: Path, content: String): CodeElements {

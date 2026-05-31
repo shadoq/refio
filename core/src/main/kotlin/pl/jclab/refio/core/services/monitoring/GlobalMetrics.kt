@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.services.monitoring
 
 import pl.jclab.refio.core.services.logging.coreLogger
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,6 +21,12 @@ object GlobalMetrics {
 
     // Cancellation flag (thread-safe)
     private val _isCancelled = AtomicBoolean(false)
+
+    // Active agent-turn gate (thread-safe, counts nested/concurrent turns).
+    // Background RAG indexing/embedding yields the single SQLite WAL writer-lock while
+    // this is > 0 — see awaitAgentTurnIdle(). Concurrent RAG writes otherwise stalled
+    // tool subtask-status writes ~122s (writer-lock + busy_timeout retry stacking).
+    private val _activeAgentTurns = AtomicInteger(0)
 
     // Request counters
     private val _totalRequests = AtomicInteger(0)
@@ -175,6 +182,40 @@ object GlobalMetrics {
      * @return true if user requested cancellation
      */
     fun isCancelled(): Boolean = _isCancelled.get()
+
+    /**
+     * Mark an agent turn as active. Pairs with [endAgentTurn] in a try/finally so the
+     * count stays balanced even when a turn throws. Background RAG work pauses while any
+     * turn is active (see [awaitAgentTurnIdle]).
+     */
+    fun beginAgentTurn() {
+        _activeAgentTurns.incrementAndGet()
+    }
+
+    /**
+     * Mark an agent turn as finished. Guards against an unbalanced call leaving a
+     * negative count (which would falsely report no turn active).
+     */
+    fun endAgentTurn() {
+        if (_activeAgentTurns.decrementAndGet() < 0) {
+            _activeAgentTurns.set(0)
+        }
+    }
+
+    /** True while at least one agent turn (main or nested subagent) is running. */
+    fun isAgentTurnActive(): Boolean = _activeAgentTurns.get() > 0
+
+    /**
+     * Suspend until no agent turn is active. Called by background RAG indexing/embedding
+     * between work items so they yield the single SQLite WAL writer-lock to active turns.
+     * RAG is a secondary feature — turns take priority. [delay] is cancellable, so a
+     * cancelled indexing job exits the wait promptly.
+     */
+    suspend fun awaitAgentTurnIdle(pollMs: Long = 250L) {
+        while (isAgentTurnActive()) {
+            delay(pollMs)
+        }
+    }
 
     /**
      * Record a cache access (hit or miss) for the named cache.

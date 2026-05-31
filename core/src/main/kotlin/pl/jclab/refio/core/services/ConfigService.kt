@@ -208,8 +208,12 @@ class ConfigService(
 
     private val contextBudgetResolver = ContextBudgetResolver(this)
 
-    fun getContextBudget(taskId: String? = null, operation: ModelOperation? = null): ContextBudget =
-        contextBudgetResolver.getContextBudget(taskId, operation)
+    fun getContextBudget(
+        taskId: String? = null,
+        operation: ModelOperation? = null,
+        staticPrefixTokens: Int = 0,
+    ): ContextBudget =
+        contextBudgetResolver.getContextBudget(taskId, operation, staticPrefixTokens)
 
     fun isCompactPrompts(operation: ModelOperation? = null, taskId: String? = null): Boolean =
         contextBudgetResolver.isCompactPrompts(operation, taskId)

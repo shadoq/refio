@@ -170,7 +170,10 @@ object MCPServerPresets {
                     enabled = true,
                     resourcesEnabled = true,
                     toolsEnabled = true,
-                    toolsExposureMode = MCPToolsExposureMode.CONTEXT,
+                    // TOOLS (not CONTEXT) so the agent can call resolve-library-id / get-library-docs
+                    // directly as mcp_context7_* tools. In CONTEXT mode the server connects but is
+                    // never registered as an agent tool — it only feeds the @context7 context path.
+                    toolsExposureMode = MCPToolsExposureMode.TOOLS,
                     toolParamMapping = mapOf(
                         "resolve-library-id" to "libraryName",
                         "get-library-docs" to "context7CompatibleLibraryID"

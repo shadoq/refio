@@ -99,9 +99,10 @@ internal class AgentTurnLoopFactory(
             chatMessageRepository = chatMessageRepository
         )
 
-        // Next-speaker judge runs at the terminal point of every AGENT turn to confirm
-        // the agent actually finished (vs. paused mid-task after a sub-step). See
-        // [NextSpeakerJudgeGuardian]. PLAN / CHAT modes self-skip inside the guardian.
+        // Next-speaker judge runs at the terminal point of every PLAN/AGENT turn to confirm
+        // the agent actually finished (vs. paused mid-task after announcing intent without
+        // calling a tool). See [NextSpeakerJudgeGuardian]. CHAT mode self-skips inside the
+        // guardian (no tool loop to re-enter).
         // maxReentries matches NextSpeakerJudgeGuardian.MAX_JUDGE_REENTRIES so the
         // registry's hard cap and the guardian's self-cap stay in sync.
         val nextSpeakerJudge = NextSpeakerJudgeGuardian(

@@ -9,6 +9,30 @@ import org.jetbrains.exposed.sql.statements.api.ExposedBlob
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.security.MessageDigest
 
+/** One chunk row for [RagRepository.createChunksBatch]. */
+data class ChunkInsert(
+    val fileId: Int,
+    val chunkIndex: Int,
+    val content: String,
+    val startLine: Int?,
+    val endLine: Int?,
+    val startChar: Int? = null,
+    val endChar: Int? = null,
+    val metadata: String? = null
+)
+
+/**
+ * One embedding row for [RagRepository.createEmbeddingsBatch]. Plain class (not data)
+ * because it holds a [ByteArray] — no value-equality needed and it sidesteps the
+ * array-in-data-class warning.
+ */
+class EmbeddingInsert(
+    val chunkId: Int,
+    val model: String,
+    val vector: ByteArray,
+    val dimensions: Int
+)
+
 /**
  * Repository for RAG (Retrieval-Augmented Generation) operations.
  *
@@ -202,6 +226,27 @@ class RagRepository {
     }
 
     /**
+     * Insert all chunks of a file in ONE transaction via batchInsert. Replaces N
+     * per-chunk [createChunk] calls (N separate writer-lock acquisitions) with a single
+     * lock acquisition — cuts the SQLite write pressure that contends with agent tool
+     * writes during background indexing. Returns the number of rows inserted.
+     */
+    fun createChunksBatch(chunks: List<ChunkInsert>): Int = transaction {
+        if (chunks.isEmpty()) return@transaction 0
+        IndexChunksTable.batchInsert(chunks) { c ->
+            this[IndexChunksTable.fileId] = c.fileId
+            this[IndexChunksTable.chunkIndex] = c.chunkIndex
+            this[IndexChunksTable.content] = c.content
+            this[IndexChunksTable.contentHash] = calculateContentHash(c.content)
+            this[IndexChunksTable.startLine] = c.startLine
+            this[IndexChunksTable.endLine] = c.endLine
+            this[IndexChunksTable.startChar] = c.startChar
+            this[IndexChunksTable.endChar] = c.endChar
+            this[IndexChunksTable.metadata] = c.metadata
+        }.size
+    }
+
+    /**
      * Update chunk metadata JSON (nullable to allow clearing).
      */
     fun updateChunkMetadata(chunkId: Int, metadata: String?) = transaction {
@@ -317,6 +362,22 @@ class RagRepository {
             it[EmbeddingsTable.vector] = ExposedBlob(vector)
             it[EmbeddingsTable.dimensions] = dimensions
         }?.value
+    }
+
+    /**
+     * Insert a batch of embeddings in ONE transaction (INSERT OR IGNORE per row, same
+     * semantics as [createEmbedding]). Replaces N per-chunk [createEmbedding] calls during
+     * background embedding generation with a single writer-lock acquisition. Returns the
+     * number of rows the batch attempted (duplicates ignored by SQLite are not subtracted).
+     */
+    fun createEmbeddingsBatch(items: List<EmbeddingInsert>): Int = transaction {
+        if (items.isEmpty()) return@transaction 0
+        EmbeddingsTable.batchInsert(items, ignore = true) { e ->
+            this[EmbeddingsTable.chunkId] = e.chunkId
+            this[EmbeddingsTable.model] = e.model
+            this[EmbeddingsTable.vector] = ExposedBlob(e.vector)
+            this[EmbeddingsTable.dimensions] = e.dimensions
+        }.size
     }
 
     /**

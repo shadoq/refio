@@ -135,6 +135,54 @@ class RagRepositoryTest {
                 assertEquals(2, chunks.size)
             }
         }
+
+        @Test
+        fun `createChunksBatch inserts every chunk in one transaction`() {
+            transaction {
+                // Given
+                val fileId = repository.createIndexedFile(
+                    projectRoot = "/test/project",
+                    filePath = "/test.kt",
+                    fileHash = "hash",
+                    fileSize = 100,
+                    lastModified = System.currentTimeMillis(),
+                    mimeType = "text/x-kotlin"
+                )
+
+                // When — batched path used by RagIndexingService instead of N createChunk calls
+                val inserted = repository.createChunksBatch(
+                    listOf(
+                        ChunkInsert(fileId, 0, "chunk 0", 1, 5),
+                        ChunkInsert(fileId, 1, "chunk 1", 6, 10),
+                        ChunkInsert(fileId, 2, "chunk 2", 11, 15)
+                    )
+                )
+
+                // Then — all rows persisted, order/content preserved (intent: indexing must
+                // not silently drop chunks when we batch the insert).
+                assertEquals(3, inserted)
+                val chunks = repository.getChunksForFile(fileId).sortedBy { it.chunkIndex }
+                assertEquals(3, chunks.size)
+                assertEquals("chunk 1", chunks[1].content)
+            }
+        }
+
+        @Test
+        fun `createChunksBatch on empty list is a no-op`() {
+            transaction {
+                val fileId = repository.createIndexedFile(
+                    projectRoot = "/test/project",
+                    filePath = "/empty.kt",
+                    fileHash = "hash",
+                    fileSize = 0,
+                    lastModified = System.currentTimeMillis(),
+                    mimeType = "text/x-kotlin"
+                )
+
+                assertEquals(0, repository.createChunksBatch(emptyList()))
+                assertEquals(0, repository.getChunksForFile(fileId).size)
+            }
+        }
     }
 
     @Nested
@@ -160,6 +208,67 @@ class RagRepositoryTest {
 
                 // Then
                 assertEquals(2, deleted)
+            }
+        }
+    }
+
+    @Nested
+    inner class EmbeddingBatchTests {
+
+        @Test
+        fun `createEmbeddingsBatch inserts an embedding per chunk`() {
+            transaction {
+                // Given
+                val fileId = repository.createIndexedFile(
+                    projectRoot = "/test/project",
+                    filePath = "/emb.kt",
+                    fileHash = "hash",
+                    fileSize = 100,
+                    lastModified = System.currentTimeMillis(),
+                    mimeType = "text/x-kotlin"
+                )
+                val c0 = repository.createChunk(fileId, 0, "chunk 0", 1, 5)
+                val c1 = repository.createChunk(fileId, 1, "chunk 1", 6, 10)
+                val model = "ollama/nomic-embed-text"
+
+                // When — batched path used by RagEmbeddingService instead of N createEmbedding calls
+                val inserted = repository.createEmbeddingsBatch(
+                    listOf(
+                        EmbeddingInsert(c0, model, byteArrayOf(1, 2, 3, 4), 4),
+                        EmbeddingInsert(c1, model, byteArrayOf(5, 6, 7, 8), 4)
+                    )
+                )
+
+                // Then — every chunk ends up with an embedding (intent: batching must not
+                // drop embeddings, or RAG search silently loses recall).
+                assertEquals(2, inserted)
+                assertNotNull(repository.getEmbedding(c0, model))
+                assertNotNull(repository.getEmbedding(c1, model))
+            }
+        }
+
+        @Test
+        fun `createEmbeddingsBatch ignores a duplicate (chunkId, model)`() {
+            transaction {
+                // Given an existing embedding
+                val fileId = repository.createIndexedFile(
+                    projectRoot = "/test/project",
+                    filePath = "/emb2.kt",
+                    fileHash = "hash",
+                    fileSize = 100,
+                    lastModified = System.currentTimeMillis(),
+                    mimeType = "text/x-kotlin"
+                )
+                val c0 = repository.createChunk(fileId, 0, "chunk 0", 1, 5)
+                val model = "ollama/nomic-embed-text"
+                repository.createEmbedding(c0, model, byteArrayOf(1, 2), 2)
+
+                // When re-inserting the same (chunkId, model) — must not throw (INSERT OR IGNORE,
+                // matching createEmbedding's semantics during concurrent re-index).
+                repository.createEmbeddingsBatch(listOf(EmbeddingInsert(c0, model, byteArrayOf(9, 9), 2)))
+
+                // Then the original survives.
+                assertNotNull(repository.getEmbedding(c0, model))
             }
         }
     }

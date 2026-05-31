@@ -29,8 +29,11 @@ import pl.jclab.refio.core.services.OllamaRequestGate
 import pl.jclab.refio.core.logging.dualLogger
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import pl.jclab.refio.core.services.ConfigService
 
@@ -62,6 +65,32 @@ class OllamaAdapter(
         const val DEFAULT_BASE_URL = "http://localhost:11434"
         const val CHAT_ENDPOINT = "/api/chat"
         const val TAGS_ENDPOINT = "/api/tags"
+
+        /** Floor for num_predict so the model can always produce at least a short reply. */
+        const val OLLAMA_MIN_OUTPUT_TOKENS = 512
+
+        /** Headroom inside num_ctx beyond estimated input — accounts for tokenizer drift. */
+        const val OLLAMA_OUTPUT_SAFETY_MARGIN = 256
+    }
+
+    /**
+     * Estimate how many tokens the rendered chat payload will consume on the server.
+     * Uses the shared [pl.jclab.refio.core.services.PromptTokenEstimator.estimateBase] ratio
+     * so this number is comparable with the budget math done upstream by [ContextService].
+     *
+     * Includes message content, native tool schemas (rough JSON serialization), and a small
+     * per-message overhead for role tokens. Not exact — Ollama's actual tokenization differs
+     * by model — but consistently sized so the warning fires before silent truncation.
+     */
+    private fun estimateOllamaInputTokens(
+        messages: List<Map<String, String>>,
+        tools: List<ToolSchema>?,
+    ): Int {
+        val messageChars = messages.sumOf { (it["content"]?.length ?: 0) + 10 }
+        val toolChars = tools?.sumOf { schema ->
+            schema.name.length + schema.description.length + schema.parametersJsonSchema.toString().length
+        } ?: 0
+        return pl.jclab.refio.core.services.PromptTokenEstimator.estimateBase("x".repeat(messageChars + toolChars))
     }
 
     // Get timeout from ConfigService (fallback to 120s for Ollama local models)
@@ -231,9 +260,27 @@ class OllamaAdapter(
             put("options", buildMap {
                 put("temperature", temperature)
 
-                val contextSize = configService?.get(ConfigKeys.PROVIDER_OLLAMA_CONTEXT_SIZE.key)?.toIntOrNull()
-                    ?: DEFAULT_CONTEXT_SIZE
+                // ModelWindow.resolveProvider handles the user override + default in one
+                // place. Falls back to DEFAULT_CONTEXT_SIZE only if configService is null
+                // (standalone bootstrap with no config bound).
+                val contextSize = configService?.let {
+                    pl.jclab.refio.core.llm.ModelWindow.resolveProvider("ollama", it, taskId)
+                } ?: DEFAULT_CONTEXT_SIZE
                 put("num_ctx", contextSize)
+
+                // Pre-flight estimate of how many tokens the rendered prompt will consume.
+                // Ollama silently truncates from the head when input exceeds num_ctx — we want a
+                // loud warning before that happens, and we want num_predict to leave room for the
+                // input rather than reserving the entire window for output.
+                val estimatedInputTokens = estimateOllamaInputTokens(ollamaMessages, tools)
+                if (estimatedInputTokens > contextSize) {
+                    logger.warn {
+                        "[OLLAMA_CONTEXT_OVERFLOW] Estimated input ~${estimatedInputTokens} tokens " +
+                            "exceeds num_ctx=$contextSize for model=$model. Ollama will silently " +
+                            "truncate from the head — expect empty or low-quality output. " +
+                            "Increase providers.ollama.ollama_context_size or reduce the prompt."
+                    }
+                }
 
                 val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)
                     ?: ConfigKeys.MAX_OUTPUT_SIZE.default
@@ -243,17 +290,29 @@ class OllamaAdapter(
                 }
                 val modelLimit =
                     pl.jclab.refio.core.llm.ModelDefinitions.getDefinition("ollama", model)?.maxOutputTokens
-                val effectiveMaxTokens = if (modelLimit != null && modelLimit > 0 && requestedMaxTokens > modelLimit) {
+
+                // Clamp num_predict so input + output fits inside num_ctx with a safety margin.
+                // Previously num_predict defaulted to MAX_OUTPUT_SIZE (16384) which, with a
+                // 16384 num_ctx, left zero tokens for input — Ollama then truncated input and
+                // the model generated nothing useful. Floor at 512 so the model can always emit
+                // at least a short reply or error.
+                val outputBudget = (contextSize - estimatedInputTokens - OLLAMA_OUTPUT_SAFETY_MARGIN)
+                    .coerceAtLeast(OLLAMA_MIN_OUTPUT_TOKENS)
+                val effectiveMaxTokens = when {
+                    modelLimit != null && modelLimit > 0 -> minOf(requestedMaxTokens, modelLimit, outputBudget)
+                    else -> minOf(requestedMaxTokens, outputBudget)
+                }
+                if (effectiveMaxTokens < requestedMaxTokens) {
                     logger.warn {
-                        "[OLLAMA] Requested num_predict=$requestedMaxTokens exceeds model limit ($modelLimit) for $model - clamping to safe value"
+                        "[OLLAMA_NUM_PREDICT_CLAMPED] Requested num_predict=$requestedMaxTokens " +
+                            "clamped to $effectiveMaxTokens (num_ctx=$contextSize, " +
+                            "estimatedInput=$estimatedInputTokens, modelLimit=${modelLimit ?: "n/a"})"
                     }
-                    modelLimit
-                } else {
-                    requestedMaxTokens
                 }
                 put("num_predict", effectiveMaxTokens)
                 logger.info {
-                    "[OLLAMA] Using maxTokens=$effectiveMaxTokens, context=$contextSize, temp=$temperature " +
+                    "[OLLAMA] Using num_predict=$effectiveMaxTokens, num_ctx=$contextSize, " +
+                        "estInput=$estimatedInputTokens, temp=$temperature " +
                         "(requested=$maxTokens, configLimit=$maxOutputLimit, modelLimit=${modelLimit ?: "n/a"})"
                 }
             })
@@ -509,8 +568,23 @@ class OllamaAdapter(
 
                 val channel: io.ktor.utils.io.ByteReadChannel = httpResponse.body()
 
-                // Read NDJSON stream line by line
+                // Read NDJSON stream line by line.
+                // Watchdog: a suspended `readUTF8Line` will not see the cancellation flag until
+                // the next NDJSON chunk arrives, which can be 30+ s on a slow model. Forcibly
+                // cancel the channel from a sibling coroutine so the read returns immediately.
                 var chunkCount = 0
+                coroutineScope {
+                    val cancelWatchdog = launch {
+                        while (isActive) {
+                            if (pl.jclab.refio.core.services.monitoring.GlobalMetrics.isCancelled()) {
+                                logger.info { "$logPrefix Cancellation detected — forcibly closing read channel" }
+                                channel.cancel(CancellationException("User requested cancellation"))
+                                break
+                            }
+                            delay(100)
+                        }
+                    }
+                    try {
                 while (!channel.isClosedForRead) {
                     // Check cancellation - break to return partial response
                     if (pl.jclab.refio.core.services.monitoring.GlobalMetrics.isCancelled()) {
@@ -597,6 +671,19 @@ class OllamaAdapter(
                     } catch (e: Exception) {
                         logger.warn { "$logPrefix Failed to parse chunk : ${line.take(100)} - ${e.message}" }
                         continue
+                    }
+                }
+                    } catch (e: CancellationException) {
+                        // Watchdog cancelled the channel because the user clicked Stop.
+                        // Convert to a clean partial-response path instead of bubbling up as an error.
+                        if (pl.jclab.refio.core.services.monitoring.GlobalMetrics.isCancelled()) {
+                            logger.info { "$logPrefix Stream read cancelled by watchdog - returning partial response" }
+                            finalDoneReason = "cancelled"
+                        } else {
+                            throw e
+                        }
+                    } finally {
+                        cancelWatchdog.cancel()
                     }
                 }
                 }
@@ -778,10 +865,9 @@ class OllamaAdapter(
             }
 
             // Get context size from ConfigService (global setting for all Ollama models)
-            val contextSize =
-                configService?.get(ConfigKeys.PROVIDER_OLLAMA_CONTEXT_SIZE.key)
-                    ?.toIntOrNull()
-                    ?: DEFAULT_CONTEXT_SIZE
+            val contextSize = configService?.let {
+                pl.jclab.refio.core.llm.ModelWindow.resolveProvider("ollama", it)
+            } ?: DEFAULT_CONTEXT_SIZE
 
             logger.info { "[OLLAMA] Using context size: $contextSize tokens (from config)" }
 

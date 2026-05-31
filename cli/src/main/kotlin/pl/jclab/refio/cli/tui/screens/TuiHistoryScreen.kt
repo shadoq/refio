@@ -74,6 +74,7 @@ object TuiHistoryScreen {
                     "SUCCESS" -> TuiColors.statusSuccess
                     "FAILED" -> TuiColors.statusFailed
                     "RUNNING" -> TuiColors.statusRunning
+                    "INCOMPLETE" -> TuiColors.statusIncomplete
                     else -> TuiColors.statusPending
                 }
                 val status = statusColor(session.status.take(statusW).padEnd(statusW))

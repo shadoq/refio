@@ -381,7 +381,16 @@ internal class AssistantBubbleRenderer(
             font = LCATheme.boldFont
             foreground = LCATheme.toolNameForeground
         })
+        val statusIcon = when (info.status) {
+            ToolCallStatus.EXECUTING -> "\u27F3"
+            ToolCallStatus.COMPLETED -> "\u2713"
+            ToolCallStatus.FAILED -> "\u2717"
+        }
+        headerRow.add(JLabel(statusIcon).apply { font = LCATheme.bodyFont })
+        addRow(headerRow)
 
+        // Main param (path, query, pattern, etc.) on its own row so long values
+        // stay visible instead of wrapping or getting truncated in the header.
         val mainParam = info.parameters["path"]
             ?: info.parameters["file"]
             ?: info.parameters["pattern"]
@@ -391,19 +400,17 @@ internal class AssistantBubbleRenderer(
             ?: info.parameters["subagent_name"]
             ?: info.parameters.values.firstOrNull { it.isNotBlank() }
         if (!mainParam.isNullOrBlank()) {
-            val shortValue = if (mainParam.length > 100) "${mainParam.take(100)}..." else mainParam
-            headerRow.add(JLabel(shortValue).apply {
-                foreground = LCATheme.monoTextColor
-                font = java.awt.Font(LCATheme.monoFont.family, java.awt.Font.PLAIN, LCATheme.bodyFont.size)
-            })
+            val shortValue = if (mainParam.length > 200) "${mainParam.take(200)}\u2026" else mainParam
+            addRow(
+                JLabel(shortValue).apply {
+                    foreground = LCATheme.monoTextColor
+                    font = java.awt.Font(LCATheme.monoFont.family, java.awt.Font.PLAIN, LCATheme.bodyFont.size)
+                    toolTipText = mainParam
+                    border = LCATheme.paddedBorder(0, 4, 0, 4)
+                },
+                topInset = context.bubbleCompactGap
+            )
         }
-        val statusIcon = when (info.status) {
-            ToolCallStatus.EXECUTING -> "\u27F3"
-            ToolCallStatus.COMPLETED -> "\u2713"
-            ToolCallStatus.FAILED -> "\u2717"
-        }
-        headerRow.add(JLabel(statusIcon).apply { font = LCATheme.bodyFont })
-        addRow(headerRow)
 
         // Show tool result summary inline (compact form)
         info.result?.summary?.let { summary ->

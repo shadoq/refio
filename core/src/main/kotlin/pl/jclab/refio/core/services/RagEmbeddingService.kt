@@ -1,8 +1,10 @@
 package pl.jclab.refio.core.services
 
 import pl.jclab.refio.core.config.ConfigKeys
+import pl.jclab.refio.core.db.repositories.EmbeddingInsert
 import pl.jclab.refio.core.db.repositories.RagRepository
 import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.llm.TokenEstimator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -99,6 +101,12 @@ class RagEmbeddingService(
         val batchSize = configService?.getTyped<Int>(ConfigKeys.RAG_EMBEDDINGS_BATCH_SIZE) ?: BATCH_SIZE
 
         chunks.chunked(batchSize).forEach { batch ->
+            // RAG is secondary: yield the SQLite writer-lock to any active agent turn
+            // before embedding+writing this batch, so it can't stall tool DB writes.
+            if (GlobalMetrics.isAgentTurnActive()) {
+                logger.info { "[RAG_PAUSE] Agent turn active — pausing embedding before chunk ${batch.first().id}" }
+                GlobalMetrics.awaitAgentTurnIdle()
+            }
             val preparedBatch = batch.map { chunk ->
                 chunk to clampContent(chunk, maxInputChars)
             }
@@ -121,24 +129,26 @@ class RagEmbeddingService(
                     throw IllegalStateException("Embedding batch returned ${vectors.size} vectors for ${preparedBatch.size} chunks")
                 }
 
-                preparedBatch.zip(vectors).forEach { (chunkWithContent, vector) ->
+                val expectedDimensions = embeddingProvider.getEmbeddingDimensions(model)
+                val embeddingInserts = preparedBatch.zip(vectors).map { (chunkWithContent, vector) ->
                     val (chunk, _) = chunkWithContent
-                    val expectedDimensions = embeddingProvider.getEmbeddingDimensions(model)
                     if (vector.size != expectedDimensions) {
                         logger.warn {
                             "Embedding dimension mismatch: expected=$expectedDimensions, got=${vector.size} for chunk ${chunk.id}"
                         }
                     }
-
-                    ragRepository.createEmbedding(
+                    EmbeddingInsert(
                         chunkId = chunk.id,
                         model = model,
                         vector = serializeVector(vector),
                         dimensions = vector.size
                     )
-                    successCount++
-                    processedChunks++
                 }
+                // Single batched insert (one writer-lock acquisition) instead of one
+                // transaction per chunk — see RagRepository.createEmbeddingsBatch.
+                ragRepository.createEmbeddingsBatch(embeddingInserts)
+                successCount += embeddingInserts.size
+                processedChunks += embeddingInserts.size
 
                 if (PER_CHUNK_THROTTLE_MS > 0) {
                     delay(PER_CHUNK_THROTTLE_MS)

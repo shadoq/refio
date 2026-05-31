@@ -28,6 +28,8 @@ Use `context_refs` for specific files instead of pasting content. Avoid vague go
 
 **Do not re-do subagent work.** Treat its report as authoritative unless you see a concrete inconsistency.
 
+**Subagents return text to YOU, they do not create files.** Most subagents are read-only (e.g. `business-analyst`, `code-reviewer`, `research-analyst` have only read tools — no `create_new_file` / `code_editing`). If the user asked for a file deliverable ("save the analysis to `<path>`", "write a report to `<path>`"), the subagent CANNOT produce it — it hands its analysis back to you in its final message. After it returns, YOU write that result to the requested path with a write tool in the SAME turn. Never assume the subagent saved the file, and never close the turn on a file-deliverable task until you have called the write tool yourself.
+
 **Parallel:** multiple `invoke_subagent` calls in one `actions` array run concurrently.
 
 **Pipeline:** if B depends on A, run B in the next turn after reading A's output.

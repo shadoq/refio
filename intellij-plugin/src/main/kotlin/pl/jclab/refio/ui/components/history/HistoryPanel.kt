@@ -72,6 +72,7 @@ class HistoryPanel(
         FAILED("✗ Failed", TaskStatus.FAILED),
         RUNNING("⟳ Running", TaskStatus.RUNNING),
         CANCELED("⊘ Canceled", TaskStatus.CANCELED),
+        INCOMPLETE("◐ Incomplete", TaskStatus.INCOMPLETE),
         NEW("New", TaskStatus.NEW),
         PENDING("Pending", TaskStatus.PENDING);
 
@@ -545,6 +546,7 @@ class HistoryPanel(
             TaskStatus.FAILED -> "✗" to LCATheme.statusRed
             TaskStatus.RUNNING -> "⟳" to LCATheme.statusBlue
             TaskStatus.CANCELED -> "⊘" to LCATheme.grayColor
+            TaskStatus.INCOMPLETE -> "◐" to LCATheme.statusOrange
             else -> "" to LCATheme.grayColor
         }
 

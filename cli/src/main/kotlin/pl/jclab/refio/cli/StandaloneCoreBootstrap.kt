@@ -106,10 +106,12 @@ class StandaloneCoreBootstrap(
         projectRouter.initialize(dbPath)
         this.projectRouter = projectRouter
 
-        // 7. MCP manager (optional, may fail if no configs)
+        // 7. MCP manager (optional, may fail if no configs).
+        //    Pass the project ToolRegistry so TOOLS-mode MCP servers actually register their
+        //    tools for the agent — without it the CLI connected servers but never exposed tools.
         try {
             val projectId = ProjectIdGenerator.generate(absolutePath)
-            MCPManager.initialize(projectId, null)
+            MCPManager.initialize(projectId, projectRouter.getToolRegistry())
         } catch (e: Exception) {
             logger.warn { "MCP initialization skipped: ${e.message}" }
         }

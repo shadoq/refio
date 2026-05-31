@@ -54,7 +54,12 @@ data class GuardianContext(
     val userRequest: String?,
     /** Final assistant text the model is about to send. */
     val finalResponse: String,
-    /** Distinct names of tools used during this turn. */
+    /**
+     * Names of tools used during this turn, one entry per call (repeats preserved, in call
+     * order). NOT deduplicated — a guardian needs the call count to verify "use tool X N times"
+     * requirements (e.g. three `run_terminal_command` calls). Use `.distinct()` at the call site
+     * if only the set of names matters.
+     */
     val toolsUsed: List<String>,
     /** How many WRITE-mode tools executed in this turn. */
     val writeToolsExecutedInTurn: Int,
@@ -92,6 +97,15 @@ sealed class GuardianDecision {
      * @param reason Short human-readable reason for logging / metrics.
      */
     data class Reenter(val nudge: String, val reason: String) : GuardianDecision()
+
+    /**
+     * The guardian determined the turn is NOT complete — the user's request was not delivered —
+     * but no further re-entry will help (the single bounded re-entry is spent, or the prior nudge
+     * produced no new tool call). The turn still finalizes (the assistant's last text is persisted)
+     * but is reported as INCOMPLETE rather than SUCCESS, so an abandoned multi-step task is never
+     * silently recorded as done. [reason] is logged.
+     */
+    data class Incomplete(val reason: String) : GuardianDecision()
 }
 
 /**
@@ -135,6 +149,12 @@ class GuardianRegistry(
                 logger.info {
                     "[GUARDIAN] taskId=${context.taskId} guardian=${guardian.name} requested re-entry " +
                         "(${context.priorReentries + 1}/$maxReentries): ${decision.reason}"
+                }
+                return decision
+            }
+            if (decision is GuardianDecision.Incomplete) {
+                logger.info {
+                    "[GUARDIAN] taskId=${context.taskId} guardian=${guardian.name} marked turn INCOMPLETE: ${decision.reason}"
                 }
                 return decision
             }
