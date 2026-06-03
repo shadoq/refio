@@ -179,6 +179,7 @@ class AgentTurnLoopTest {
             configService = configService,
             toolRegistry = toolRegistry,
             toolDescriptionBuilder = toolDescriptionBuilder,
+            toolPermissionsService = toolPermissionsService,
             taskVerifier = taskVerifier,
             turnPromptBuilder = turnPromptBuilder,
             toolCallParser = toolCallParser,
@@ -817,6 +818,65 @@ class AgentTurnLoopTest {
             assertTrue(result.response.contains("could not recover after retrying", ignoreCase = true))
             assertEquals(3, result.iterations)
             coVerify(exactly = 3) {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            }
+        }
+
+        @Test
+        fun `should fall back to JSON path when native tools return empty, then succeed`() = runTest {
+            // Regression (benchmark sessions 00e9f6af / 3b672fbe): a model with native tool schemas
+            // attached can return content="" + zero tool_calls (gemma4:26b's broken Ollama tool
+            // template does this on every call; under NATIVE_TOOLS_MODE=ALWAYS that bypasses the
+            // supportsFunctionCalling guard and the empty response killed the turn with
+            // TURN_FAILED_NATIVE_EMPTY). The loop must retry ONCE on the JSON-envelope path — the
+            // non-exception twin of NATIVE_TOOLS_PARSE_FALLBACK — and recover instead of failing.
+            //
+            // We activate native tools via the documented AUTO default + a model whose definition
+            // has supportsFunctionCalling=true (gpt-5.5). That reaches the SAME empty→fallback
+            // branch without stubbing NATIVE_TOOLS_MODE (re-stubbing the generic getTyped answer
+            // does not reliably override the @BeforeEach one in this harness).
+            every { toolRegistry.getToolSchemas(any(), any(), any()) } returns listOf(
+                pl.jclab.refio.core.tools.base.ToolSchema("read_file", "Read a file", mapOf("type" to "object"))
+            )
+
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                LLMResponse(
+                    content = "",
+                    usage = LLMUsage(inputTokens = 16614, outputTokens = 192, totalTokens = 16806),
+                    model = "gpt-5.5",
+                    provider = "openai",
+                    cost = 0.0,
+                    finishReason = "stop"
+                ),
+                createLLMResponse("""{"actions":[],"response":"Recovered via JSON path","intent":"analysis"}""")
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Build the page",
+                mode = TaskMode.AGENT,
+                model = "gpt-5.5",
+                provider = "openai"
+            )
+
+            assertTrue(result.success, "expected native-empty → JSON fallback recovery, got: ${result.response}")
+            // The fallback retries inside the same iteration's call loop (like the parse-error
+            // fallback), so it must NOT advance the iteration counter.
+            assertEquals(1, result.iterations)
+            assertEquals("Recovered via JSON path", result.response)
+            coVerify(exactly = 2) {
                 llmClient.complete(
                     provider = any(), model = any(), messages = any(), systemPrompt = any(),
                     maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),

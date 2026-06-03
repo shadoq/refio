@@ -333,26 +333,6 @@ class HttpServer(
                 call.respond(result)
             }
         }
-
-        // Plan a subtask step (legacy plan-based execution)
-        post("/api/agent/plan-step") {
-            val body = call.receiveText()
-            val json = JsonParser.parseString(body).asJsonObject
-            val taskId = json.get("taskId").asString
-            val subtaskId = json.get("subtaskId").asString
-            val result = router.agentRouter.planSubtaskStep(taskId, subtaskId)
-            call.respond(result)
-        }
-
-        // Execute a subtask step (legacy plan-based execution)
-        post("/api/agent/execute-step") {
-            val body = call.receiveText()
-            val json = JsonParser.parseString(body).asJsonObject
-            val taskId = json.get("taskId").asString
-            val subtaskId = json.get("subtaskId").asString
-            val result = router.agentRouter.executeSubtaskStep(taskId, subtaskId)
-            call.respond(result)
-        }
     }
 
     // ========== Config Routes ==========

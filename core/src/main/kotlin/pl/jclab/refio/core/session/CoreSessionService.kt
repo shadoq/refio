@@ -34,10 +34,6 @@ import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.TurnResult
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
-import pl.jclab.refio.core.workflow.WorkflowOrchestrator
-import pl.jclab.refio.core.workflow.models.IntentResult
-import pl.jclab.refio.core.workflow.models.UIState
-import pl.jclab.refio.core.workflow.models.WorkflowRequest
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -117,7 +113,7 @@ class CoreSessionService(
             stateManager.appendMessage(userMessage)
 
             when (session.mode) {
-                TaskMode.CHAT -> sendMessageUsingChatWorkflow(session, input, contextRefs, model, provider, stream, executionMode)
+                TaskMode.CHAT -> sendMessageUsingChatWorkflow(session, input, contextRefs, model, provider, stream)
                 TaskMode.PLAN, TaskMode.AGENT -> sendMessageUsingTurnLoop(session, input, contextRefs, model, provider, stream, executionMode)
             }
         } catch (e: RefioError.MalformedResponse) {
@@ -543,75 +539,47 @@ class CoreSessionService(
         model: String?,
         provider: String?,
         stream: Boolean,
-        executionMode: ExecutionMode,
     ): Message {
         logger.info {
-            "[CHAT_WORKFLOW] Starting chat: taskId=${session.id}, inputChars=${input.length}"
+            "[CHAT] Starting chat: taskId=${session.id}, inputChars=${input.length}"
         }
 
-        val uiState = UIState(
-            taskId = session.id,
-            mode = session.mode,
-            executionMode = executionMode,
-            input = input,
-            contextRefs = contextRefs,
-            model = model,
-            provider = provider,
-            streamingEnabled = stream,
-            thinkingEnabled = stateManager.getThinkingEnabled(),
-            noEgressEnabled = stateManager.getNoEgressEnabled(),
-        )
-
+        // CHAT goes straight to ChatService (the old WorkflowOrchestrator/intent dispatch was removed).
+        // The streaming listener renders incremental output into the session's message list.
         val listener = DefaultWorkflowStreamingListener(
             taskId = session.id,
             stateManager = stateManager,
             scope = scope,
             streamingEnabled = stream,
         )
+        listener.onChatStarted()
 
-        val projectAnalysis = try {
-            projectRouter.projectContextRouter.getProjectAnalysisSummary()
-        } catch (e: Exception) {
-            logger.warn(e) { "[SESSION] Failed to generate project analysis, using null" }
-            null
-        }
-
-        val result = projectRouter.workflowOrchestrator.execute(
-            request = WorkflowRequest(
-                uiState = uiState,
-                projectAnalysis = projectAnalysis,
+        val response = projectRouter.chatRouter.chat(
+            request = pl.jclab.refio.core.models.api.ChatRequest(
+                taskId = session.id,
+                mode = pl.jclab.refio.core.db.TaskMode.valueOf(session.mode.name),
+                input = input,
+                contextRefs = contextRefs,
+                params = pl.jclab.refio.core.models.api.LLMParams(model = model, provider = provider),
             ),
-            listener = listener,
+            stream = stream,
+            onChunk = if (stream) {
+                { chunk -> listener.onStreamChunk(chunk.accumulated) }
+            } else null,
         )
+        listener.onStreamComplete(response.output)
 
-        logger.info { "[CHAT_WORKFLOW] Workflow result: taskId=${session.id}, type=${result::class.simpleName}" }
+        logger.info { "[CHAT] Chat response: taskId=${response.taskId}, outputChars=${response.output.length}" }
 
-        when (result) {
-            is IntentResult.ChatResult -> {
-                val response = result.response
-                logger.info {
-                    "[CHAT_WORKFLOW] Chat response: taskId=${response.taskId}, outputChars=${response.output.length}"
-                }
-                if (response.taskId != session.id) {
-                    logger.info { "[CHAT] Task ID changed: ${session.id} -> ${response.taskId}, syncing session" }
-                    uiAdapter.log("INFO", "Session ID changed: ${session.id} -> ${response.taskId}")
-                    val newSession = session.copy(id = response.taskId)
-                    stateManager.setActiveSession(newSession)
-                }
-                updateSessionCosts(stateManager.getActiveSession() ?: session)
-                autoNameSessionIfNeeded(stateManager.getActiveSession() ?: session, input)
-                messageDispatcher.loadMessages()
-            }
-
-            is IntentResult.SubagentResult -> {
-                logger.info { "[CHAT_WORKFLOW] Subagent response: taskId=${session.id}" }
-                messageDispatcher.loadMessages()
-            }
-
-            else -> {
-                logger.warn { "[CHAT_WORKFLOW] Unexpected result type in CHAT mode: ${result::class.simpleName}" }
-            }
+        if (response.taskId != session.id) {
+            logger.info { "[CHAT] Task ID changed: ${session.id} -> ${response.taskId}, syncing session" }
+            uiAdapter.log("INFO", "Session ID changed: ${session.id} -> ${response.taskId}")
+            val newSession = session.copy(id = response.taskId)
+            stateManager.setActiveSession(newSession)
         }
+        updateSessionCosts(stateManager.getActiveSession() ?: session)
+        autoNameSessionIfNeeded(stateManager.getActiveSession() ?: session, input)
+        messageDispatcher.loadMessages()
 
         return stateManager.messages.value.last()
     }

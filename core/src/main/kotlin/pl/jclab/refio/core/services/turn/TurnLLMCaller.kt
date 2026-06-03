@@ -67,6 +67,7 @@ class TurnLLMCaller(
         val thinkingRequested = configService.getTyped<Boolean>(ConfigKeys.GENERAL_THINKING_ENABLED, taskId)
         val thinkingEnabled = resolveThinkingEnabled(providerName, modelId, thinkingRequested)
         val noEgressEnabled = configService.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, taskId)
+        val decisionTemperature = configService.getTyped<Double>(ConfigKeys.AGENT_DECISION_TEMPERATURE, taskId)
         val reasoningEffortOverride = profileOverrides?.reasoningEffort
         if (reasoningEffortOverride != null) {
             logger.info {
@@ -95,6 +96,12 @@ class TurnLLMCaller(
                 systemPrompt = prompt.systemPrompt,
                 taskId = taskId,
                 source = "AgentTurnLoop",
+                // Decision-turn temperature (ConfigKeys.AGENT_DECISION_TEMPERATURE, default 0.7).
+                // The PLAN/AGENT turn picks the tool and emits the response-format envelope;
+                // higher temperatures make small/local models more likely to deviate from the
+                // contract (e.g. dump a whole file inline and hit the output-token cap →
+                // truncated JSON → failed turn). Tunable per-deployment via config / Advanced UI.
+                temperature = decisionTemperature,
                 responseFormat = responseFormat,
                 thinking = thinkingEnabled,
                 reasoningEffort = reasoningEffortOverride,

@@ -18,6 +18,11 @@ internal class ConfigResolver(
     private val yamlLoader: HierarchicalConfigLoader,
     private val cache: ConfigCache,
     private val defaultProjectId: String?,
+    /**
+     * Run-scope overrides (key → raw string), highest priority, read-only. Checked before
+     * cache/DB/YAML/default and never persisted. See [pl.jclab.refio.core.services.ConfigService].
+     */
+    private val runOverrides: Map<String, String> = emptyMap(),
 ) {
 
     /**
@@ -29,6 +34,12 @@ internal class ConfigResolver(
      * 3. The key's built-in default
      */
     fun <T> getTyped(configKey: ConfigKey<T>, taskId: String? = null): T {
+        // Run-scope override wins over everything (cache/DB/YAML/default) and is never cached or
+        // persisted. A non-parseable override falls through to the normal chain (the CLI layer
+        // validates and rejects bad values loudly upstream).
+        runOverrides[configKey.key]?.let { raw ->
+            configKey.parser(raw)?.let { return it }
+        }
         val cacheKey = "typed:${configKey.key}:task=${taskId.orEmpty()}"
         return cache.getOrCompute(cacheKey) {
             val dbConfig = getConfigWithPrecedence(key = configKey.key, taskId = taskId)
@@ -71,6 +82,8 @@ internal class ConfigResolver(
         taskId: String? = null,
         projectId: String? = null,
     ): String? {
+        // Run-scope override wins over DB/YAML regardless of scope; read-only, never persisted.
+        runOverrides[key]?.let { return it }
         val resolvedProject = resolveProjectId(projectId)
         val cacheKey = "raw:$key:scope=${scope.name}:task=${taskId.orEmpty()}:project=${resolvedProject.orEmpty()}"
         return cache.getOrCompute(cacheKey) {

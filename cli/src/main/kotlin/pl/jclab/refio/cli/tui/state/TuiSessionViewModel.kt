@@ -378,40 +378,6 @@ class TuiSessionViewModel(
         }
     }
 
-    fun executeStep(index: Int) {
-        val subtask = stateManager.getSubtasks().getOrNull(index) ?: return
-        if (subtask.status !in listOf("NEW", "PENDING", "APPROVED")) {
-            addSystemMessage("Step '${subtask.description}' is ${subtask.status}, cannot execute")
-            return
-        }
-        scope.launch {
-            val r = getRouter() ?: return@launch
-            val tid = getTaskId() ?: return@launch
-            try {
-                _executionStatus.value = "Executing: ${subtask.description}"
-                stateManager.setSubtasks(
-                    stateManager.getSubtasks().map {
-                        if (it.id == subtask.id) it.copy(status = "RUNNING") else it
-                    }
-                )
-                val result = r.agentRouter.executeSubtaskStep(tid, subtask.id)
-                loadSubtasksFromDb(r, tid)
-                loadMessagesFromDb(r, tid)
-                refreshApiLogs(r)
-                _executionStatus.value = "Idle"
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to execute step: ${subtask.id}" }
-                stateManager.setSubtasks(
-                    stateManager.getSubtasks().map {
-                        if (it.id == subtask.id) it.copy(status = "FAILED", errorMessage = e.message) else it
-                    }
-                )
-                _executionStatus.value = "Error"
-                addSystemMessage("Step execution failed: ${e.message}")
-            }
-        }
-    }
-
     fun replanSteps() {
         scope.launch {
             val r = getRouter() ?: return@launch

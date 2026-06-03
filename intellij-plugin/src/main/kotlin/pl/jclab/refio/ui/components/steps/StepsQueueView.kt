@@ -281,18 +281,15 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
 
         val panel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0))
 
-        // Run button
-        if (subtask.status in listOf("PENDING", "PLANNED", "PENDING_APPROVAL")) {
-            panel.add(createCompactButton("▶", "Run step") {
+        // Approve button (mark a planned/awaiting step as approved). The legacy "run this
+        // step now" execution was removed with the old plan/step model.
+        if (subtask.status == "PENDING_APPROVAL") {
+            panel.add(createCompactButton("✔", "Approve step") {
                 cs.launch {
                     try {
-                        if (subtask.status == "PENDING_APPROVAL") {
-                            sessionManager.approveSubtask(subtask.id)
-                        } else {
-                            sessionManager.executeSubtaskById(subtask.id)
-                        }
+                        sessionManager.approveSubtask(subtask.id)
                     } catch (e: Exception) {
-                        logger.error(e) { "Failed to execute step" }
+                        logger.error(e) { "Failed to approve step" }
                     }
                 }
             })
@@ -337,21 +334,16 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
         return JPanel(FlowLayout(FlowLayout.CENTER, 2, 0)).apply {
             isOpaque = false
 
-            // Run button (only for PENDING/PLANNED steps)
-            if (subtask.status in listOf("PENDING", "PLANNED", "PENDING_APPROVAL")) {
-                add(createActionButton("▶", "Run this step") {
+            // Approve button (mark an awaiting step approved). The legacy "run this step now"
+            // execution was removed with the old plan/step model.
+            if (subtask.status == "PENDING_APPROVAL") {
+                add(createActionButton("✔", "Approve this step") {
                     cs.launch {
                         try {
-                            // For PENDING_APPROVAL steps, use approveSubtask
-                            // For other steps, use executeSubtaskById
-                            if (subtask.status == "PENDING_APPROVAL") {
-                                sessionManager.approveSubtask(subtask.id)
-                            } else {
-                                sessionManager.executeSubtaskById(subtask.id)
-                            }
-                            logger.info { "Executed step: ${subtask.id}" }
+                            sessionManager.approveSubtask(subtask.id)
+                            logger.info { "Approved step: ${subtask.id}" }
                         } catch (e: Exception) {
-                            logger.error(e) { "Failed to execute step" }
+                            logger.error(e) { "Failed to approve step" }
                         }
                     }
                 })

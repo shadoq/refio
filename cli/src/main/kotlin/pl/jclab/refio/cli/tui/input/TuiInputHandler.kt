@@ -498,7 +498,6 @@ class TuiInputHandler(private val terminal: Terminal) {
                             else -> {} // fall through for other chars (typing in input)
                         }
                         if (action.char == 'C') { viewModel.cancelAllPending(); return }
-                        if (action.char == 'R') { viewModel.executeStep(idx); return }
                     }
                     // When not panel-focused, fall through to input handling
                 }

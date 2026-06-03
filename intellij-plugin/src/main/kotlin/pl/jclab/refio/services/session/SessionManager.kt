@@ -251,22 +251,13 @@ class SessionManager(private val project: Project) {
 
     private fun initializeServices() {
         executionMonitor = ExecutionMonitor(
-            projectRouter = projectRouter,
             stateManager = stateManager,
             stepExecutionService = stepExecutionService,
-            scope = cs,
-            loadMessages = { messageDispatcher.loadMessages() },
-            loadSubtasks = { subtaskTracker.loadSubtasks() },
-            prepareNextStep = { subtaskTracker.prepareNextStep() }
         )
 
         subtaskTracker = SubtaskTracker(
             projectRouter = projectRouter,
             stateManager = stateManager,
-            vfsRefresher = pl.jclab.refio.services.project.IntelliJVfsRefresher(project),
-            loadMessages = { messageDispatcher.loadMessages() },
-            executeCurrentStep = { subtaskId -> executionMonitor.executeCurrentStep(subtaskId) },
-            showApprovalMessageForNextSubtask = { executionMonitor.showApprovalMessageForNextSubtask() },
             scope = cs,
         )
 
@@ -678,41 +669,49 @@ class SessionManager(private val project: Project) {
         }
     }
 
+    // Subtask data operations (approve/skip/reorder/delete) act on the DB subtask records the
+    // turn produced. The legacy per-step *execution* (run a planned step via the removed
+    // AgentExecutor) is gone; these only edit subtask state for display.
     suspend fun approveSubtask(subtaskId: String) {
-        subtaskTracker.approveSubtask(subtaskId)
+        val taskId = stateManager.getActiveSession()?.id ?: return
+        projectRouter.subtaskRouter.approveSubtask(taskId, subtaskId)
+        subtaskTracker.loadSubtasks()
     }
 
     suspend fun skipSubtask(subtaskId: String) {
-        subtaskTracker.skipSubtask(subtaskId)
+        val taskId = stateManager.getActiveSession()?.id ?: return
+        projectRouter.subtaskRouter.rejectSubtask(taskId, subtaskId)
+        subtaskTracker.loadSubtasks()
     }
 
     suspend fun moveStepUp(subtaskId: String) {
-        subtaskTracker.moveStepUp(subtaskId)
+        val taskId = stateManager.getActiveSession()?.id ?: return
+        val sorted = stateManager.getSubtasks().sortedBy { it.orderIndex }
+        val idx = sorted.indexOfFirst { it.id == subtaskId }
+        if (idx <= 0) return
+        projectRouter.subtaskRouter.swapSubtaskOrder(taskId, sorted[idx].id, sorted[idx - 1].id)
+        subtaskTracker.loadSubtasks()
     }
 
     suspend fun moveStepDown(subtaskId: String) {
-        subtaskTracker.moveStepDown(subtaskId)
+        val taskId = stateManager.getActiveSession()?.id ?: return
+        val sorted = stateManager.getSubtasks().sortedBy { it.orderIndex }
+        val idx = sorted.indexOfFirst { it.id == subtaskId }
+        if (idx < 0 || idx >= sorted.size - 1) return
+        projectRouter.subtaskRouter.swapSubtaskOrder(taskId, sorted[idx].id, sorted[idx + 1].id)
+        subtaskTracker.loadSubtasks()
     }
 
     suspend fun deleteStep(subtaskId: String) {
-        subtaskTracker.deleteStep(subtaskId)
+        val taskId = stateManager.getActiveSession()?.id ?: return
+        projectRouter.subtaskRouter.deleteSubtask(taskId, subtaskId)
+        subtaskTracker.loadSubtasks()
     }
-
-    suspend fun prepareNextStep(): pl.jclab.refio.core.api.PlanStepResponse? {
-        return subtaskTracker.prepareNextStep()
-    }
-
-    suspend fun executeCurrentStep(subtaskId: String): pl.jclab.refio.core.api.ExecuteStepResponse? {
-        return executionMonitor.executeCurrentStep(subtaskId)
-    }
-
-    suspend fun executeSubtaskById(subtaskId: String) {
-        subtaskTracker.executeSubtaskById(subtaskId)
-    }
-
 
     suspend fun cancelAllPendingSteps() {
-        subtaskTracker.cancelAllPendingSteps()
+        val taskId = stateManager.getActiveSession()?.id ?: return
+        projectRouter.subtaskRouter.deletePendingSubtasks(taskId)
+        subtaskTracker.loadSubtasks()
     }
 
     companion object {

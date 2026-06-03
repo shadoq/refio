@@ -19,13 +19,11 @@ import pl.jclab.refio.core.api.routers.TaskRouter
 import pl.jclab.refio.core.api.routers.ToolRouter
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
-import pl.jclab.refio.core.services.AgentExecutor
 import pl.jclab.refio.core.services.AgentTurnLoop
 import pl.jclab.refio.core.services.ChatService
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.ContextService
 import pl.jclab.refio.core.services.EmbeddingProvider
-import pl.jclab.refio.core.services.PlanningService
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.services.SnapshotService
 import pl.jclab.refio.core.services.ToolPermissionsService
@@ -36,8 +34,6 @@ import pl.jclab.refio.core.services.orchestration.UserInteraction
 import pl.jclab.refio.core.services.turn.PromptSectionProvider
 import pl.jclab.refio.core.subagents.SubagentRouter
 import pl.jclab.refio.core.tools.base.ToolRegistry
-import pl.jclab.refio.core.workflow.IntentRouter
-import pl.jclab.refio.core.workflow.WorkflowOrchestrator
 import java.nio.file.Path
 
 /**
@@ -58,7 +54,6 @@ internal class DomainRouters(
     private val toolRegistry: ToolRegistry?,
     private val toolPermissionsService: ToolPermissionsService,
     private val toolDescriptionBuilder: ToolDescriptionBuilder,
-    private val agentExecutor: AgentExecutor?,
     private val agentTurnLoop: AgentTurnLoop?,
     private val userInteraction: UserInteraction,
     private val multiAgentRunner: MultiAgentRunner,
@@ -70,7 +65,6 @@ internal class DomainRouters(
     private val codebaseCacheInvalidator: (projectRoot: String) -> Unit,
 ) {
     private val chatService get() = chatPlanning.chatService
-    private val planningService get() = chatPlanning.planningService
     private val ragSearchService get() = analysisStack.ragSearchService
     private val embeddingsService get() = analysisStack.embeddingsService
     private val fileAnalyzerService get() = analysisStack.fileAnalyzerService
@@ -103,7 +97,6 @@ internal class DomainRouters(
 
     val agentRouter: AgentRouter by lazy {
         AgentRouter(
-            agentExecutor = agentExecutor,
             taskRepository = persistence.taskRepository,
             subtaskRepository = persistence.subtaskRepository,
             chatMessageRepository = persistence.chatMessageRepository,
@@ -194,21 +187,6 @@ internal class DomainRouters(
             richProjectAnalysisEngine = richProjectAnalysisEngine,
             promptSectionProviders = promptSectionProviders,
             configService = configService,
-        )
-    }
-
-    val workflowOrchestrator: WorkflowOrchestrator by lazy {
-        val intentRouter = IntentRouter(
-            subtaskRepository = persistence.subtaskRepository,
-            subagentRouter = subagentRouter,
-        )
-        WorkflowOrchestrator(
-            intentRouter = intentRouter,
-            chatService = chatService,
-            planningService = planningService,
-            agentRouter = agentRouter,
-            subagentRouter = subagentRouter,
-            userInteraction = userInteraction,
         )
     }
 

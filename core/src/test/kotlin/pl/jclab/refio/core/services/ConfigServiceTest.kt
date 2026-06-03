@@ -4,6 +4,7 @@ import pl.jclab.refio.core.config.ConfigKeys
 
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
@@ -408,6 +409,103 @@ class ConfigServiceTest {
             assertEquals(2, overrides.size)
             assertEquals(true, overrides["security-reviewer"])
             assertEquals(false, overrides["code-analyzer"])
+        }
+    }
+
+    /**
+     * Run-scope config overrides (docs/0063): values injected at process start (CLI --config /
+     * --config-file) that must win over DB/YAML/default WITHOUT being persisted back to the
+     * shared database. Powers headless e2e/benchmark of different settings.
+     */
+    @Nested
+    inner class RunOverrideTests {
+
+        @Test
+        fun `run override takes precedence over database value`() {
+            // Given - DB has a value, but a run-scope override is also present
+            every {
+                configRepository.getWithPrecedence(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.key, any(), any())
+            } returns createConfig(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.key, "7")
+            val svc = ConfigService(
+                configRepository,
+                defaultProjectId = "test-project",
+                runConfigOverrides = mapOf(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.key to "9")
+            )
+
+            // When
+            val result: Int = svc.getTyped(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS)
+
+            // Then - the override wins over the DB value
+            assertEquals(9, result)
+        }
+
+        @Test
+        fun `run override takes precedence over built-in default`() {
+            // Given - no DB value, only a run-scope override
+            every { configRepository.getWithPrecedence(any(), any(), any()) } returns null
+            val svc = ConfigService(
+                configRepository,
+                defaultProjectId = "test-project",
+                runConfigOverrides = mapOf(ConfigKeys.MAX_ITERATIONS.key to "80")
+            )
+
+            // When
+            val result: Int = svc.getTyped(ConfigKeys.MAX_ITERATIONS)
+
+            // Then
+            assertEquals(80, result)
+        }
+
+        @Test
+        fun `raw get returns run override over database`() {
+            // Given - DB has a different value for the same key
+            every { configRepository.get("some.key", ConfigScope.APP) } returns
+                createConfig("some.key", "db-value")
+            val svc = ConfigService(
+                configRepository,
+                defaultProjectId = "test-project",
+                runConfigOverrides = mapOf("some.key" to "override-value")
+            )
+
+            // When
+            val result = svc.get("some.key")
+
+            // Then
+            assertEquals("override-value", result)
+        }
+
+        @Test
+        fun `run override read does not propagate to database`() {
+            // Given - override present, no DB value
+            every { configRepository.getWithPrecedence(any(), any(), any()) } returns null
+            val svc = ConfigService(
+                configRepository,
+                defaultProjectId = "test-project",
+                runConfigOverrides = mapOf(ConfigKeys.MAX_ITERATIONS.key to "80")
+            )
+
+            // When - reading the overridden key
+            svc.getTyped(ConfigKeys.MAX_ITERATIONS)
+
+            // Then - the override is read-only; it never writes back to the shared DB
+            verify(exactly = 0) { configRepository.set(any(), any(), any(), any(), any(), any()) }
+        }
+
+        @Test
+        fun `unparseable run override falls through to default`() {
+            // Given - override is garbage for an int key, no DB value
+            every { configRepository.getWithPrecedence(any(), any(), any()) } returns null
+            val svc = ConfigService(
+                configRepository,
+                defaultProjectId = "test-project",
+                runConfigOverrides = mapOf(ConfigKeys.MAX_ITERATIONS.key to "not-a-number")
+            )
+
+            // When
+            val result: Int = svc.getTyped(ConfigKeys.MAX_ITERATIONS)
+
+            // Then - falls through to the key's default (CLI layer rejects bad values loudly upstream)
+            assertEquals(ConfigKeys.MAX_ITERATIONS.default, result)
         }
     }
 }

@@ -91,6 +91,8 @@ class TurnLLMCallerTest {
                 messages = any(),
                 systemPrompt = "system",
                 maxTokens = null,
+                // Decision-turn temperature is read from ConfigKeys.AGENT_DECISION_TEMPERATURE;
+                // the mock returns each key's default, so this is the 0.7 default. See TurnLLMCaller.
                 temperature = 0.7,
                 responseFormat = mapOf("type" to "json_object"),
                 thinking = true,

@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.api
 
 import org.junit.jupiter.api.Test
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.project.ProjectHandle
 import pl.jclab.refio.core.project.StandaloneProjectHandle
 import java.nio.file.Path
@@ -39,6 +40,17 @@ class CoreApiRouterProjectHandleTest {
     fun `should construct with no parameters`() {
         val router = CoreApiRouter()
         assertFalse(router.hasIdeProject())
+    }
+
+    @Test
+    fun `run config overrides reach the router config service`() {
+        // docs/0063: overrides injected at construction must win over DB/default for this router's
+        // ConfigService, without any DB access (the override short-circuits before the repository).
+        val router = CoreApiRouter(
+            runConfigOverrides = mapOf(ConfigKeys.MAX_ITERATIONS.key to "80")
+        )
+
+        assertEquals(80, router.configService.getTyped(ConfigKeys.MAX_ITERATIONS))
     }
 
     @Test

@@ -24,6 +24,7 @@ import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 import pl.jclab.refio.core.services.AgentTurnLoop.UserMessageStrategy
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
+import pl.jclab.refio.core.services.turn.CostLimitGuard
 import pl.jclab.refio.core.services.turn.ToolCallParser
 import pl.jclab.refio.core.services.turn.TurnEventListener
 import pl.jclab.refio.core.services.turn.TurnPrompt
@@ -570,6 +571,10 @@ class AgentTurnLoop(
         val toolStartNanos = java.util.concurrent.ConcurrentHashMap<String, Long>()
         val toolDurationsMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
+        // Per-session cost ceiling (--max-cost / agent.max_cost_usd). 0 = disabled. Config doesn't
+        // change mid-turn, so resolve once here and re-read only the live task cost per iteration.
+        val maxCostUsd = configService.getTyped(ConfigKeys.AGENT_MAX_COST_USD, taskId)
+
         try {
             while (iteration < maxIterations) {
                 if (GlobalMetrics.isCancelled()) {
@@ -578,6 +583,27 @@ class AgentTurnLoop(
                 iteration++
 
                 logger.info { "[TURN_ITERATION] taskId=$taskId, iteration=$iteration/$maxIterations" }
+
+                // Hard cost ceiling (docs/0063 §6.1): stop BEFORE paying for another LLM call once the
+                // session's live cost (auto-incremented in LLMClient.complete) reaches --max-cost.
+                if (maxCostUsd > 0.0) {
+                    val currentCostUsd = taskRepository.findById(taskId)?.costUsd ?: 0.0
+                    if (CostLimitGuard.isExceeded(currentCostUsd, maxCostUsd)) {
+                        logger.warn { "[COST_LIMIT_EXCEEDED] taskId=$taskId, cost=$currentCostUsd >= max=$maxCostUsd — aborting turn" }
+                        val result = TurnResult(
+                            success = false,
+                            response = "COST_LIMIT_EXCEEDED: session cost \$%.4f reached the --max-cost ceiling of \$%.4f. Stopping the turn."
+                                .format(currentCostUsd, maxCostUsd),
+                            iterations = iteration,
+                            tokensIn = totalTokensIn,
+                            tokensOut = totalTokensOut,
+                            cost = totalCost,
+                            toolsUsed = usedTools.distinct(),
+                            incomplete = true
+                        )
+                        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                    }
+                }
 
                 // Emit TurnStarted for Session Trace panel
                 val iterationStartMs = System.currentTimeMillis()
@@ -698,6 +724,38 @@ class AgentTurnLoop(
                             // sets it to null actually drops native tools on the retry — otherwise
                             // the rebuilt JSON-contract prompt would still ship native schemas.
                             llmResponse = callModelWithPrompt(prompt, activeNativeToolSchemas)
+                            // One-shot JSON fallback for an EMPTY native response (HTTP 200,
+                            // content="" + zero tool_calls — not an exception). For models whose
+                            // Ollama tool template is broken (the gemma family: supportsFunctionCalling
+                            // =false in ModelDefinitions) the AUTO guard already routes them to JSON,
+                            // but NATIVE_TOOLS_MODE=ALWAYS bypasses that guard and ships tool schemas
+                            // anyway — gemma then returns nothing and the turn used to die with
+                            // TURN_FAILED_NATIVE_EMPTY. Retry ONCE on the JSON-envelope path: the
+                            // non-exception twin of NATIVE_TOOLS_PARSE_FALLBACK below. No persistent
+                            // fallback — ALWAYS stays "force native" next turn; we only rescue this one.
+                            // `activeNativeToolSchemas != null` is the one-shot guard: the retry sets it
+                            // null, so a still-empty JSON response can't loop back here. Skip when this is
+                            // a guardian re-entry that produced empty — the stashed candidateFinalResponse
+                            // is the answer the user already saw, and the empty-native branch finalizes it
+                            // (same predicate as the recovery there).
+                            if (activeNativeToolSchemas != null
+                                && llmResponse.content.isBlank()
+                                && llmResponse.nativeToolCalls.isNullOrEmpty()
+                                && !(candidateFinalResponse != null && guardianReentryCount > 0 && usedTools.size <= usedToolsSizeAtLastReentry)
+                            ) {
+                                logger.warn {
+                                    "[NATIVE_TOOLS_EMPTY_FALLBACK] taskId=$taskId, model=${effectiveModel ?: "unknown"} — " +
+                                        "native response was empty (blank content, zero tool calls); one-shot JSON-path retry (no persistent fallback)"
+                                }
+                                activeNativeToolSchemas = null
+                                prompt = buildPrompt(
+                                    taskId, mode, iteration, maxIterations,
+                                    userContextRefs, runProfile, profileOverrides,
+                                    writeToolsExecutedInTurn, false,
+                                    agentName = agentName, sessionId = evSessionId
+                                )
+                                continue
+                            }
                             break
                         } catch (e: ToolsNotSupportedException) {
                             val modelKey = effectiveModel ?: "unknown"

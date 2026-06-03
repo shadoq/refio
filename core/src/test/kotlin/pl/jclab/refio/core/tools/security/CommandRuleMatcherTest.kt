@@ -72,6 +72,34 @@ class CommandRuleMatcherTest {
             val matcher = CommandRuleDefaults.createDefaultMatcher()
             assertEquals(RuleAction.BLOCK, matcher.match("mkfs.ext4 /dev/sda1").action)
         }
+
+        // Windows / PowerShell destructive deletes — the agent runs through
+        // powershell.exe, where these verbs alias Remove-Item and escaped the
+        // POSIX `rm` rules entirely (a real benchmark FAILED session deleted its
+        // own deliverable via `del`). Mirror the recursive/force rm philosophy.
+        @Test
+        fun `should block del with quiet flag`() {
+            val matcher = CommandRuleDefaults.createDefaultMatcher()
+            assertEquals(RuleAction.BLOCK, matcher.match("del *.html /q").action)
+        }
+
+        @Test
+        fun `should block rmdir recursive (Windows)`() {
+            val matcher = CommandRuleDefaults.createDefaultMatcher()
+            assertEquals(RuleAction.BLOCK, matcher.match("rmdir build /s").action)
+        }
+
+        @Test
+        fun `should block Remove-Item -Recurse (PowerShell)`() {
+            val matcher = CommandRuleDefaults.createDefaultMatcher()
+            assertEquals(RuleAction.BLOCK, matcher.match("Remove-Item .\\dist -Recurse").action)
+        }
+
+        @Test
+        fun `should block del -Force PowerShell alias regardless of case`() {
+            val matcher = CommandRuleDefaults.createDefaultMatcher()
+            assertEquals(RuleAction.BLOCK, matcher.match("DEL site.html -Force").action)
+        }
     }
 
     @Nested
@@ -131,6 +159,16 @@ class CommandRuleMatcherTest {
         fun `should ask for unknown commands`() {
             val matcher = CommandRuleDefaults.createDefaultMatcher()
             assertEquals(RuleAction.ASK, matcher.match("totally-unknown-program --flag").action)
+        }
+
+        // Parity with plain `rm <file>` (ASK, not BLOCK): a single-file delete with
+        // no recursive/force flag must NOT be hard-blocked — that would break legit
+        // cleanup. The deliverable-deletion failure is fenced by the system prompt
+        // (don't delete your own just-written file), not by hard-blocking `del`.
+        @Test
+        fun `should ask for plain single-file del`() {
+            val matcher = CommandRuleDefaults.createDefaultMatcher()
+            assertEquals(RuleAction.ASK, matcher.match("del website_museum.html").action)
         }
     }
 

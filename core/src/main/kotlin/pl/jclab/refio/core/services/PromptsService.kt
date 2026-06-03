@@ -32,12 +32,8 @@ class PromptsService(
         const val SYSTEM_CHAT_NAME = "System Chat"
         const val SYSTEM_PLAN_NAME = "System Plan"
         const val SYSTEM_AGENT_NAME = "System Agent"
-        const val SYSTEM_STEP_PLANNER_NAME = "System Step Planner"
-        const val SYSTEM_STEP_SUMMARIZER_NAME = "System Step Summarizer"
-        const val SYSTEM_ORCHESTRATOR_NAME = "System Orchestrator"
         const val SYSTEM_EXECUTION_SUMMARY_NAME = "System Execution Summary"
         const val SYSTEM_CONVERSATION_SUMMARY_NAME = "System Conversation Summary"
-        const val SYSTEM_INTENT_CLASSIFIER_NAME = "System Intent Classifier"
         const val SYSTEM_TOOL_SUMMARY_NAME = "System Tool Summary"
         const val CODE_EDITING_SYSTEM_NAME = "code_editing_system"
         const val CODE_EDITING_USER_NAME = "code_editing_user"
@@ -49,12 +45,8 @@ class PromptsService(
         PromptType.SYSTEM_CHAT to SYSTEM_CHAT_NAME,
         PromptType.SYSTEM_PLAN to SYSTEM_PLAN_NAME,
         PromptType.SYSTEM_AGENT to SYSTEM_AGENT_NAME,
-        PromptType.SYSTEM_STEP_PLANNER to SYSTEM_STEP_PLANNER_NAME,
-        PromptType.SYSTEM_STEP_SUMMARIZER to SYSTEM_STEP_SUMMARIZER_NAME,
-        PromptType.SYSTEM_ORCHESTRATOR to SYSTEM_ORCHESTRATOR_NAME,
         PromptType.SYSTEM_EXECUTION_SUMMARY to SYSTEM_EXECUTION_SUMMARY_NAME,
         PromptType.SYSTEM_CONVERSATION_SUMMARY to SYSTEM_CONVERSATION_SUMMARY_NAME,
-        PromptType.SYSTEM_INTENT_CLASSIFIER to SYSTEM_INTENT_CLASSIFIER_NAME,
         PromptType.SYSTEM_TOOL_SUMMARY to SYSTEM_TOOL_SUMMARY_NAME,
         PromptType.CODE_EDITING_SYSTEM to CODE_EDITING_SYSTEM_NAME,
         PromptType.CODE_EDITING_USER to CODE_EDITING_USER_NAME,
@@ -395,12 +387,8 @@ class PromptsService(
         PromptType.SYSTEM_CHAT -> "system-chat"
         PromptType.SYSTEM_PLAN -> "system-plan"
         PromptType.SYSTEM_AGENT -> "system-agent"
-        PromptType.SYSTEM_STEP_PLANNER -> "system-step-planner"
-        PromptType.SYSTEM_STEP_SUMMARIZER -> "system-step-summarizer"
-        PromptType.SYSTEM_ORCHESTRATOR -> "system-orchestrator"
         PromptType.SYSTEM_EXECUTION_SUMMARY -> "system-execution-summary"
         PromptType.SYSTEM_CONVERSATION_SUMMARY -> "system-conversation-summary"
-        PromptType.SYSTEM_INTENT_CLASSIFIER -> "system-intent-classifier"
         PromptType.SYSTEM_TOOL_SUMMARY -> "system-tool-summary"
         PromptType.CODE_EDITING_SYSTEM -> "code-editing-system"
         PromptType.CODE_EDITING_USER -> "code-editing-user"

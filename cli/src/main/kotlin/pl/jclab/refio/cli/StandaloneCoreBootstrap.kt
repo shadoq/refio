@@ -31,7 +31,12 @@ private val logger = dualLogger("StandaloneCoreBootstrap")
  * ```
  */
 class StandaloneCoreBootstrap(
-    private val projectPath: Path
+    private val projectPath: Path,
+    /**
+     * Run-scope config overrides (docs/0063) from `--config` / `--config-file`. Threaded into the
+     * app router and forwarded to the project router. Highest priority, read-only, never persisted.
+     */
+    private val runConfigOverrides: Map<String, String> = emptyMap()
 ) {
     private var appRouter: CoreApiRouter? = null
     private var projectRouter: CoreApiRouter? = null
@@ -65,8 +70,13 @@ class StandaloneCoreBootstrap(
         if (!refioDataDir.exists()) refioDataDir.mkdirs()
         val dbPath = File(refioDataDir, "database.sqlite").absolutePath
 
-        // 2. App-level router (no tools, no project root — shared services)
-        val appRouter = CoreApiRouter(toolRegistry = null, projectRoot = null)
+        // 2. App-level router (no tools, no project root — shared services).
+        //    Run-scope overrides flow here and are forwarded to the project router below.
+        val appRouter = CoreApiRouter(
+            toolRegistry = null,
+            projectRoot = null,
+            runConfigOverrides = runConfigOverrides
+        )
         appRouter.initialize(dbPath)
         this.appRouter = appRouter
 

@@ -2782,7 +2782,7 @@ object ModelDefinitions {
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
-            supportsFunctionCalling = true,
+            supportsFunctionCalling = false,
             defaultParams = mapOf("temperature" to 0.7),
             active = true
         ),
@@ -2805,7 +2805,7 @@ object ModelDefinitions {
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
-            supportsFunctionCalling = true,
+            supportsFunctionCalling = false,
             defaultParams = mapOf("temperature" to 0.7),
             active = true
         ),
@@ -2828,7 +2828,7 @@ object ModelDefinitions {
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
-            supportsFunctionCalling = true,
+            supportsFunctionCalling = false,
             defaultParams = mapOf("temperature" to 0.7),
             active = true
         ),
@@ -2851,7 +2851,7 @@ object ModelDefinitions {
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
-            supportsFunctionCalling = true,
+            supportsFunctionCalling = false,
             defaultParams = mapOf("temperature" to 0.7),
             active = true
         ),

@@ -1047,7 +1047,6 @@ class TuiViewModel(
     fun moveStepUp(index: Int) = session.moveStepUp(index)
     fun moveStepDown(index: Int) = session.moveStepDown(index)
     fun cancelAllPending() = session.cancelAllPending()
-    fun executeStep(index: Int) = session.executeStep(index)
     fun replanSteps() = session.replanSteps()
     fun addStep(description: String) = session.addStep(description)
     fun togglePause() = session.togglePause()

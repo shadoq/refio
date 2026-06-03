@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Headless CLI self-testing surface (`cli/main.kt`) — scriptable flags for driving a turn without the GUI: `--output json` + `--output-file` write a `run.json` with per-turn metrics (tokens/cost/iterations/status) via `SessionDebugExporter`; `--debug-level minimal|standard|full|judge`; `--config k=v` (repeatable) / `--config-file` run-scope overrides; `--print-config` (dry, no LLM call, writes nothing); `--max-cost <usd>` hard per-session ceiling; `--auto-approve "<regex>"` approval gate (auto-approve matching tool commands, reject the rest); `--no-egress`. Documented in `CLAUDE.md` under "Headless CLI Self-Testing", with a consent rule — the agent proposes a command and waits for approval before running a turn.
+- `--verbose` / `-v` headless flag + `HeadlessTurnListener` — turn/tool events are mirrored to `~/.refio/refio-cli.log` and stderr (`▶ turn started`, `→ tool`, `✓/✗ tool`, `■ turn complete`), so a headless run isn't a black box; `-v` additionally streams live LLM token deltas to stderr. stdout stays reserved for the `run.json` document.
+
+### Changed
+
+- Legacy plan/step execution path removed — `WorkflowOrchestrator`, `IntentRouter`, `PlanningService`, `StepPlanner`, `StepSummarizer`, `AgentExecutor` and their models/tests deleted. CHAT now calls `ChatService` directly; PLAN/AGENT in the TUI, IntelliJ plugin, **and headless CLI** all run the single `AgentTurnLoop` via `agentRouter.runTurn`. Headless previously used the orchestrator's AGENT branch, which only produced a plan and stopped — so headless/benchmark runs never executed tools or wrote files. Orphaned `PromptType`s (`SYSTEM_STEP_PLANNER`, `SYSTEM_STEP_SUMMARIZER`, `SYSTEM_ORCHESTRATOR`, `SYSTEM_INTENT_CLASSIFIER`) and their prompt files removed; `WorkflowEventListener` slimmed to a pure streaming interface.
+- Headless turn calls now stream — `runHeadless` always passes a stream callback to `runTurn`/`chat` (matching the IntelliJ plugin, which always streams for its UI), so the turn LLM call streams even without `-v` (`-v` only controls whether deltas are echoed). A non-streaming request sends no bytes until the whole response is ready, so a slow/cold local model that took minutes to produce the full body looked like a dead connection and was killed at the socket-idle timeout — which is why `qwen3.5` timed out headless but worked in the plugin (same core, same `num_ctx`). Streaming resets the idle timer per token. Verified: `qwen3.5:4b/9b`, previously timing out, now complete.
+- `STREAM_IDLE_CEILING_MS` raised 300 s → 600 s — a cold large *dense* model with a big context window (e.g. `qwen3.5:27b` at `num_ctx=131072`) can take >5 min before its first token, which the 5-min idle ceiling false-aborted at ~300 s even though the model was merely slow to start, not dead. Effective idle stays `min(limits.api_call_timeout, ceiling)`, so a first token beyond the API-call timeout still needs that raised too.
+
 ## [0.0.1.11] - 2026-05-31
 
 ### Added

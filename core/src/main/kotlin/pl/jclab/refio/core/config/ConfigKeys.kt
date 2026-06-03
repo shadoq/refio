@@ -26,7 +26,17 @@ data class ConfigKey<T>(
      * with the offending key/value, rather than silently using a broken config.
      */
     val validator: (T) -> Boolean = { true }
-)
+) {
+    /**
+     * True when [raw] both parses to a valid value AND passes this key's [validator].
+     * Lets run-scope override parsing (docs/0063) reject bad `--config` values loudly without
+     * exposing the generic type `T` to callers holding a `ConfigKey<*>`.
+     */
+    fun acceptsRaw(raw: String): Boolean {
+        val parsed = parser(raw) ?: return false
+        return validator(parsed)
+    }
+}
 
 /**
  * Central registry of all typed configuration keys.
@@ -688,6 +698,35 @@ object ConfigKeys {
         default = 50
     )
 
+    /**
+     * Per-session hard cost ceiling in USD. `0.0` (default) disables the guard. When > 0, the turn
+     * loop aborts before an iteration once the session's live cost reaches this value
+     * (docs/0063 §6.1). Surfaced via the CLI `--max-cost` flag (sugar over a run-scope override).
+     */
+    val AGENT_MAX_COST_USD = ConfigKey(
+        key = "agent.max_cost_usd",
+        parser = String::toDoubleOrNull,
+        default = 0.0,
+        validator = { it >= 0.0 }
+    )
+
+    /**
+     * Sampling temperature for the PLAN/AGENT decision turn — the turn that picks a tool and
+     * emits the response-format envelope. Defaults to `0.7` (the LLM-wide default).
+     *
+     * Lowering it (e.g. `0.5`) sharpens the softmax so small/local models are less likely to
+     * deviate from the response contract (dumping a whole file inline, narrating instead of
+     * emitting JSON, malformed envelopes). Raising it gives more variety at the cost of more
+     * contract drift. The creative editing sub-call (`advance_code_editing`) keeps its own lower
+     * temperature and is unaffected by this key.
+     */
+    val AGENT_DECISION_TEMPERATURE = ConfigKey(
+        key = "agent.decision_temperature",
+        parser = String::toDoubleOrNull,
+        default = 0.7,
+        validator = { it in 0.0..2.0 }
+    )
+
     val JSON_THINKING_XML_TAGS = ConfigKey(
         key = "agent.json_thinking_xml_tags",
         parser = { raw ->
@@ -805,6 +844,8 @@ object ConfigKeys {
             TASK_VERIFICATION_ENABLED,
             MAX_CONSECUTIVE_TOOL_ERRORS,
             MAX_ITERATIONS,
+            AGENT_MAX_COST_USD,
+            AGENT_DECISION_TEMPERATURE,
             JSON_THINKING_XML_TAGS
         ).associateBy { it.key }
     }

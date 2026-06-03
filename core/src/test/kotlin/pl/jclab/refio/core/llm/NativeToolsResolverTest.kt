@@ -103,4 +103,26 @@ class NativeToolsResolverTest {
         assertFalse(shouldUseNativeTools(NativeToolsMode.AUTO, model("broken-model", true), "broken-model", flags))
         assertTrue(shouldUseNativeTools(NativeToolsMode.AUTO, model("healthy-model", true), "healthy-model", flags))
     }
+
+    // ----- gemma is gated at the registry, not here -----
+    // Gemma's Ollama tool template is broken (returns empty content, zero tool_calls).
+    // That is handled at the source: ModelDefinitions marks every gemma model
+    // supportsFunctionCalling=false (asserted in ModelDefinitionsCharacterizationTest),
+    // so AUTO mode already routes them through the JSON path. The resolver itself carries
+    // no model-name knowledge — it only reads the definition's capability flag. These
+    // cases lock in that contract so a future change can't reintroduce a name blocklist
+    // by accident, and they document the deliberate ALWAYS-mode escape hatch.
+
+    @Test
+    fun `gemma definition with function calling disabled takes JSON path in AUTO mode`() {
+        val gemma = model("gemma4:26b", supportsTools = false)
+        assertFalse(shouldUseNativeTools(NativeToolsMode.AUTO, gemma, "gemma4:26b"))
+    }
+
+    @Test
+    fun `ALWAYS mode is an explicit override and still forces native tools for gemma`() {
+        // ALWAYS means the user deliberately demanded native tools; the resolver honors
+        // that even for a gemma id. Default behavior (AUTO) is what protects gemma.
+        assertTrue(shouldUseNativeTools(NativeToolsMode.ALWAYS, null, "gemma4:26b"))
+    }
 }

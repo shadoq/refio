@@ -31,7 +31,13 @@ class CoreApiRouter(
     /** Platform-agnostic project handle. When provided, platformProject is derived from projectHandle.platformProject. */
     val projectHandle: pl.jclab.refio.core.project.ProjectHandle? = null,
     /** Callback to invalidate codebase context cache after RAG operations. Set by plugin layer. */
-    private val codebaseCacheInvalidator: (projectRoot: String) -> Unit = {}
+    private val codebaseCacheInvalidator: (projectRoot: String) -> Unit = {},
+    /**
+     * Run-scope config overrides (docs/0063) threaded into this router's [configService] and any
+     * project router it spawns via [createProjectRouter]. Highest priority, read-only, never
+     * persisted. Empty by default — plugin and normal callers are unaffected.
+     */
+    private val runConfigOverrides: Map<String, String> = emptyMap()
 ) {
     private val routerProjectId: String? = projectHandle?.id ?: projectRoot?.let { ProjectIdGenerator.generate(it) }
     private val routerProjectPath: String? = projectHandle?.rootPath?.toAbsolutePath()?.normalize()?.toString()
@@ -56,7 +62,16 @@ class CoreApiRouter(
     val taskRepository get() = persistence.taskRepository
     val configService = ConfigService(
         configRepository = persistence.configRepository,
-        defaultProjectId = routerProjectId
+        defaultProjectId = routerProjectId,
+        runConfigOverrides = runConfigOverrides
+    )
+
+    /** Builds the structured `run.json` session snapshot for the CLI `--output json` (docs/0063). */
+    val sessionDebugExporter = pl.jclab.refio.core.debug.SessionDebugExporter(
+        taskRepository = persistence.taskRepository,
+        subtaskRepository = persistence.subtaskRepository,
+        apiLogRepository = persistence.apiLogRepository,
+        chatMessageRepository = persistence.chatMessageRepository,
     )
     private val promptRegistry = pl.jclab.refio.core.prompts.PromptRegistry(projectRoot)
     val promptsService = PromptsService(persistence.promptsRepository, promptRegistry)
@@ -148,29 +163,19 @@ class CoreApiRouter(
         llmClient = llmClient,
         promptsService = promptsService,
         toolDescriptionBuilder = toolDescriptionBuilder,
-        toolRegistry = toolRegistry,
-        toolPermissionsService = toolPermissionsService,
         contextService = contextService,
         projectRoot = projectRoot,
     )
 
-    // Agent execution stack (StepPlanner, ToolExecutor, AgentExecutor) — null
-    // when toolRegistry is absent (app-level router without a project selected).
+    // ToolExecutor used by AgentTurnLoop — null when toolRegistry is absent
+    // (app-level router without a project selected).
     private val agentExecutionModule = pl.jclab.refio.core.api.modules.AgentExecutionModule(
         persistence = persistence,
-        llmClient = llmClient,
-        configService = configService,
-        promptsService = promptsService,
-        toolDescriptionBuilder = toolDescriptionBuilder,
         toolPermissionsService = toolPermissionsService,
-        toolApprovalService = toolApprovalService,
-        contextService = contextService,
         snapshotService = snapshotService,
-        projectRoot = projectRoot,
         toolRegistry = toolRegistry
     )
     private val toolExecutor get() = agentExecutionModule.toolExecutor
-    private val agentExecutor get() = agentExecutionModule.agentExecutor
 
     /**
      * AgentTurnLoop — Turn-based execution loop implementing the Codex CLI-style pattern.
@@ -226,7 +231,6 @@ class CoreApiRouter(
         toolRegistry = toolRegistry,
         toolPermissionsService = toolPermissionsService,
         toolDescriptionBuilder = toolDescriptionBuilder,
-        agentExecutor = agentExecutor,
         agentTurnLoop = agentTurnLoop,
         userInteraction = userInteraction,
         multiAgentRunner = multiAgentRunner,
@@ -250,7 +254,6 @@ class CoreApiRouter(
     val subagentRouter get() = domainRouters.subagentRouter
     val snapshotRouter get() = domainRouters.snapshotRouter
     val projectContextRouter get() = domainRouters.projectContextRouter
-    val workflowOrchestrator get() = domainRouters.workflowOrchestrator
     val multiAgentRouter get() = domainRouters.multiAgentRouter
 
     // Internal accessors for modules in `api.modules` package
@@ -292,6 +295,7 @@ class CoreApiRouter(
         configService = configService,
         promptsService = promptsService,
         taskRepository = taskRepository,
+        runConfigOverrides = runConfigOverrides,
     )
 
     /** Initialize core components (database, prompt defaults, RAG tool). */
