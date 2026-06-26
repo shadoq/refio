@@ -12,11 +12,15 @@ import pl.jclab.refio.core.services.PromptTokenEstimator
  * section truncation.
  */
 object ContextTokenEstimator {
-    fun estimateTokens(text: String): Int = PromptTokenEstimator.estimateBase(text)
+    /**
+     * @param modelId resolved model id for model-aware estimation (docs/0057). When null,
+     *   falls back to the shared flat-base ratio (backward compatible).
+     */
+    fun estimateTokens(text: String, modelId: String? = null): Int = PromptTokenEstimator.estimateBase(text, modelId)
 
-    fun truncateToTokens(text: String, maxTokens: Int): String {
+    fun truncateToTokens(text: String, maxTokens: Int, modelId: String? = null): String {
         if (maxTokens <= 0 || text.isBlank()) return ""
-        val maxChars = PromptTokenEstimator.maxCharsForTokens(maxTokens)
+        val maxChars = PromptTokenEstimator.maxCharsForTokens(maxTokens, modelId)
         if (text.length <= maxChars) return text
 
         val suffix = "\n... (truncated ${text.length - maxChars} more chars)"

@@ -274,12 +274,14 @@ class AdvanceCodeEditingTool(
                 add(LLMMessage(role = "user", content = userPrompt))
             }
 
-            // Get model from config (uses CODING operation type)
+            // Resolve the editor sub-model of the architect/editor split (docs/0059). EDITOR
+            // inherits the CODING/agent slot when default_model.editor is unset, so this is a
+            // no-op for users who never configure a separate editor model.
             val (model, provider) = configService.getModel(
-                operation = ModelOperation.CODING,
+                operation = ModelOperation.EDITOR,
                 taskId = taskId
             )
-            logger.info { "Using agent model for edit (${originalContent.lines().size} lines): $model ($provider), stream=$stream, hasOnChunk=${onChunk != null}" }
+            logger.info { "Using editor model for edit (${originalContent.lines().size} lines): $model ($provider), stream=$stream, hasOnChunk=${onChunk != null}" }
 
             // RFC 0032: Use unified complete() with stream flag
             var didStream = false
@@ -290,23 +292,64 @@ class AdvanceCodeEditingTool(
                 null
             }
 
-            val response = try {
-                llmClient.complete(
-                    provider = provider,
-                    model = model,
-                    messages = messages,
-                    systemPrompt = systemPrompt,
-                    temperature = 0.2, // Low temperature for deterministic output
-                    maxTokens = configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE) * 2, // From limits settings
-                    stream = stream,
-                    onChunk = streamingCallback,
-                    taskId = taskId,
-                    subtaskId = subtaskId,
-                    source = "AdvCodeEditor"  // Request source for tracking
+            // Extraction-repair loop (docs/0059, Faza 2): a weak editor model sometimes replies
+            // with prose or an unterminated/unfenced block, so extractCodeBlock yields null. Rather
+            // than fail the whole turn on the first such miss, re-prompt the editor with a corrective
+            // hint and retry, bounded to MAX_EXTRACTION_ATTEMPTS, then fail loud (Rule 12). There is
+            // no diff to "apply" here — the model returns the FULL file and the write happens only
+            // after a clean extraction — so this guards extraction, not diff application, and there
+            // is never a partial write to roll back.
+            val attemptMessages = messages.toMutableList()
+            var response: pl.jclab.refio.core.llm.LLMResponse? = null
+            var newContent: String? = null
+            var attempt = 0
+            while (attempt < MAX_EXTRACTION_ATTEMPTS) {
+                attempt++
+                val attemptResponse = try {
+                    llmClient.complete(
+                        provider = provider,
+                        model = model,
+                        messages = attemptMessages,
+                        systemPrompt = systemPrompt,
+                        temperature = 0.2, // Low temperature for deterministic output
+                        maxTokens = configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE) * 2, // From limits settings
+                        stream = stream,
+                        onChunk = streamingCallback,
+                        taskId = taskId,
+                        subtaskId = subtaskId,
+                        source = "AdvCodeEditor"  // Request source for tracking
+                    )
+                } catch (e: Exception) {
+                    logger.error(e) { "LLM request failed" }
+                    return@withLockedFile ToolResult.error("LLM request failed: ${e.message}. Try again or use simple search-replace mode.")
+                }
+                response = attemptResponse
+
+                val extracted = extractCodeBlock(attemptResponse.content, language)
+                if (extracted != null) {
+                    newContent = extracted
+                    break
+                }
+
+                logger.warn {
+                    "[EDITOR] code-block extraction failed (attempt=$attempt/$MAX_EXTRACTION_ATTEMPTS) for $pathStr — " +
+                            "editor model returned no usable fenced code block"
+                }
+                if (attempt < MAX_EXTRACTION_ATTEMPTS) {
+                    attemptMessages.add(LLMMessage(role = "assistant", content = attemptResponse.content))
+                    attemptMessages.add(LLMMessage(role = "user", content = extractionRepairHint(language)))
+                }
+            }
+
+            if (response == null || newContent == null) {
+                // 5. Exhausted the repair budget — fail loud with a diagnostic (Rule 12). Nothing
+                // has been written to disk, so there is no partial state to clean up.
+                return@withLockedFile ToolResult.error(
+                    "LLM did not return a usable code block after $MAX_EXTRACTION_ATTEMPTS attempt(s). " +
+                            "The editor model kept replying with prose or an unterminated block. " +
+                            "Try rephrasing the edit description, set a stronger editor model via default_model.editor, " +
+                            "or use code_editing / multi_line_editor with an exact string to match."
                 )
-            } catch (e: Exception) {
-                logger.error(e) { "LLM request failed" }
-                return@withLockedFile ToolResult.error("LLM request failed: ${e.message}. Try again or use simple search-replace mode.")
             }
 
             val responseContent = response.content
@@ -325,12 +368,6 @@ class AdvanceCodeEditingTool(
                     )
                 )
             }
-
-            // 5. Extract code from response
-            val newContent = extractCodeBlock(responseContent, language)
-                ?: return@withLockedFile ToolResult.error(
-                    "LLM did not return valid code block. Try rephrasing the edit description or use simple search-replace mode."
-                )
 
             // 6. Generate diff (delegated to shared DiffUtils)
             val diff = DiffUtils.generateUnifiedDiff(
@@ -460,6 +497,16 @@ class AdvanceCodeEditingTool(
     }
 
     /**
+     * Corrective re-prompt for the extraction-repair loop (docs/0059, Faza 2): tells a model that
+     * replied without a clean fenced code block to re-emit the whole file inside a single fence and
+     * nothing else. Terse and verbatim — the model still has the file and edit description in context.
+     */
+    private fun extractionRepairHint(language: String): String =
+        "Your previous reply did not contain a usable code block. " +
+            "Reply again with the COMPLETE file content inside a single fenced code block " +
+            "(```$language ... ```) and nothing else — no explanation, no prose before or after the fence."
+
+    /**
      * Detect programming language from file extension
      */
     private fun detectLanguage(extension: String): String {
@@ -542,6 +589,15 @@ class AdvanceCodeEditingTool(
             ),
             "required" to listOf("path")
         )
+    }
+
+    companion object {
+        /**
+         * Bound on the extraction-repair loop (docs/0059, Faza 2): the initial editor call plus
+         * one corrective re-prompt. A weak model that still cannot emit a clean code block after a
+         * reminder will not recover with more — fail loud instead of looping and burning tokens.
+         */
+        private const val MAX_EXTRACTION_ATTEMPTS = 2
     }
 
 }

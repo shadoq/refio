@@ -36,9 +36,9 @@ internal object MessageMetadataExtractor {
         val subtaskId = match?.groupValues?.get(1)
 
         if (subtaskId != null) {
-            logger.debug { "Extracted subtask ID: $subtaskId from message" }
+            logger.trace { "Extracted subtask ID: $subtaskId from message" }
         } else {
-            logger.debug { "No subtask ID found in message content" }
+            logger.trace { "No subtask ID found in message content" }
         }
 
         return subtaskId
@@ -87,13 +87,13 @@ internal object MessageMetadataExtractor {
     }
 
     fun extractCodeChanges(message: Message): CodeChangesData? {
-        logger.debug { "[EXTRACT] Extracting code changes from message ${message.id}" }
+        logger.trace { "[EXTRACT] Extracting code changes from message ${message.id}" }
 
         val metadata = message.metadata ?: run {
-            logger.debug { "[EXTRACT] No metadata in message ${message.id}" }
+            logger.trace { "[EXTRACT] No metadata in message ${message.id}" }
             return null
         }
-        logger.debug { "[EXTRACT] Raw metadata: $metadata" }
+        logger.trace { "[EXTRACT] Raw metadata: $metadata" }
 
         try {
             val metadataMap = com.google.gson.Gson().fromJson(
@@ -102,12 +102,12 @@ internal object MessageMetadataExtractor {
                 logger.warn { "[EXTRACT] Failed to parse metadata JSON: $metadata" }
                 return null
             }
-            logger.debug { "[EXTRACT] Parsed metadata map: $metadataMap" }
+            logger.trace { "[EXTRACT] Parsed metadata map: $metadataMap" }
 
             val type = metadataMap["type"] as? String
-            logger.debug { "[EXTRACT] Metadata type: $type" }
+            logger.trace { "[EXTRACT] Metadata type: $type" }
             if (type != "code_changes") {
-                logger.info { "[EXTRACT] Type is not 'code_changes', skipping" }
+                logger.trace { "[EXTRACT] Type is not 'code_changes', skipping" }
                 return null
             }
 

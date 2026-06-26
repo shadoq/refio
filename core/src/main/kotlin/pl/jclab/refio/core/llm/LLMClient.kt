@@ -309,6 +309,12 @@ class LLMClient(
                 StreamGuardrails.defaults(wallClockMs)
             } else null
 
+            // Per-index accumulation of a streaming native tool call's arguments (docs/0064), so the
+            // api StreamChunk can carry a ready-to-render ToolCallProgress snapshot. Scoped to this
+            // single complete() call; the adapter remains the source of truth for the final calls.
+            val toolArgsByIndex = linkedMapOf<Int, StringBuilder>()
+            val toolNameByIndex = linkedMapOf<Int, String>()
+
             val streamCallback: ((pl.jclab.refio.core.llm.StreamChunk) -> Unit)? = if (stream) { llmChunk ->
                 contentBuilder.append(llmChunk.delta)
 
@@ -339,6 +345,18 @@ class LLMClient(
 
                 logger.debug { "[LLM_CLIENT] Stream chunk received: delta=${llmChunk.delta.length} chars, hasOnChunk=${onChunk != null}, finishReason=${llmChunk.finishReason}" }
 
+                // Accumulate native tool-call argument deltas into a renderable progress snapshot.
+                val toolCallProgress = llmChunk.toolCallDelta?.let { d ->
+                    val buf = toolArgsByIndex.getOrPut(d.index) { StringBuilder() }
+                    d.argumentsDelta?.let { buf.append(it) }
+                    d.nameDelta?.let { toolNameByIndex[d.index] = it }
+                    pl.jclab.refio.core.api.ToolCallProgress(
+                        index = d.index,
+                        name = toolNameByIndex[d.index],
+                        accumulatedArguments = buf.toString()
+                    )
+                }
+
                 // Convert to API StreamChunk and call user callback
                 onChunk?.invoke(StreamChunk(
                     delta = llmChunk.delta,
@@ -346,7 +364,8 @@ class LLMClient(
                     isComplete = llmChunk.finishReason != null,
                     source = source,
                     usage = llmChunk.usage,
-                    cost = chunkCost
+                    cost = chunkCost,
+                    toolCallProgress = toolCallProgress
                 ))
 
                 // Capture final usage/finishReason

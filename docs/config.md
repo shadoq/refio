@@ -155,6 +155,7 @@ models:
     chat: "ollama/qwen3.5:9b"           # Chat/conversation model
     plan: "ollama/qwen3.5:9b"           # Planning operations
     coding: "ollama/qwen3.5:9b"   # Coding/agent tasks
+    editor: "ollama/qwen3.5-coder:7b"   # File-edit sub-model (architect/editor split); inherits `coding` when unset
     weak: "ollama/qwen3.5:4b"           # Auxiliary operations (summaries)
     embedding: "ollama/nomic-embed-text" # RAG embeddings
 
@@ -184,6 +185,8 @@ models:
       defaultModel: "ollama/qwen3:14b"
       # planModel, codingModel, weakModel default to defaultModel when omitted
 ```
+
+**Architect / editor split.** `multi_line_editor` and `advance_code_editing` generate file content with a dedicated LLM call resolved from the `editor` slot (`default_model.editor`), independent of the turn model — the proven "strong model plans, cheap model edits" pattern for local models. Point `plan`/`coding` at a capable reasoner and `editor` at a fast code model. When `editor` is unset it inherits `coding`, so existing single-model setups are unaffected. See [ARCHITECTURE.md](ARCHITECTURE.md) → Architect / Editor Split.
 
 ### System Limits
 
@@ -240,11 +243,16 @@ tools:
 
 Configure the Retrieval-Augmented Generation system.
 
+> **Navigation default (docs/0060):** agentic `grep_search` / `file_search` is the primary
+> code-navigation path; vector RAG is an **opt-in aid** (best for prose/docs). Auto-indexing is
+> therefore **OFF by default** — a cold start pays no CPU/embedding cost. The `rag_search` tool
+> stays available; set `indexOnStartup` / `autoIndexOnContextBuild` to `true` to index your project.
+
 ```yaml
 rag:
-  enabled: true                 # Enable RAG features
-  indexOnStartup: true          # Index project at IDE startup
-  autoIndexOnContextBuild: true # Auto-index when building context
+  enabled: true                  # Enable RAG features (rag_search tool stays available)
+  indexOnStartup: false          # OFF by default — opt in to index project at IDE startup
+  autoIndexOnContextBuild: false # OFF by default — opt in to auto-index when building context
   maxFileSizeMB: 2              # Max file size for indexing
   maxChunksPerFile: 100         # Max chunks per file
   indexBatchSize: 10            # Files per indexing batch
@@ -403,6 +411,7 @@ mcp:
 | `models.defaults.chat` | `default_model.chat` | `qwen3.5:9b` |
 | `models.defaults.plan` | `default_model.plan` | `qwen3.5:9b` |
 | `models.defaults.coding` | `default_model.agent` | `qwen3.5:9b` |
+| `models.defaults.editor` | `default_model.editor` | - (optional, inherits coding) |
 | `models.defaults.weak` | `default_model.weak` | `qwen3.5:9b` |
 | `models.defaults.embedding` | `models.embedding_model` | `nomic-embed-text` |
 | `models.defaults.strong` | `default_model.strong` | - (optional, no fallback) |
@@ -414,7 +423,8 @@ mcp:
 | `advanced.readOnlyMode` | `advanced.read_only_mode` | `false` |
 | `security.allowSymlinks` | `security.allow_symlinks` | `false` |
 | `rag.enabled` | `rag.enabled` | `true` |
-| `rag.indexOnStartup` | `rag.index_on_startup` | `true` |
+| `rag.indexOnStartup` | `rag.index_on_startup` | `false` |
+| `rag.autoIndexOnContextBuild` | `rag.auto_index_on_context_build` | `false` |
 | `rag.searchSimilarityThreshold` | `rag.search_similarity_threshold` | `0.5` |
 | `rag.searchTopK` | `rag.search_top_k` | `5` |
 | `rag.searchHybridEnabled` | `rag.search_hybrid_enabled` | `false` |

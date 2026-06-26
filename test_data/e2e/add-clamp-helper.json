@@ -1,0 +1,22 @@
+{
+  "id": "add-clamp-helper",
+  "mode": "AGENT",
+  "max_iterations": 25,
+  "fixture": "fixtures/clamp",
+  "prompt_file": "prompts/add-clamp-helper.md",
+  "assert": {
+    "tool_order": ["read_file", "advance_code_editing"],
+    "needles_in_file": [
+      { "path": "src/Main.kt", "regex": "fun[[:space:]]+clamp[[:space:]]*\\(" },
+      { "path": "src/Main.kt", "regex": "clamp[[:space:]]*\\([[:space:]]*score" }
+    ],
+    "build_cmd": "kotlinc src -include-runtime -d build/out.jar",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "clamp is a correct min/max clamp (not a one-off inline if).",
+      "normalize calls clamp(score, 0, 100); main is unchanged."
+    ]
+  }
+}

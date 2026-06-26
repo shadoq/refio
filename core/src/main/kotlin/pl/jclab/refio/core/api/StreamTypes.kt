@@ -32,5 +32,28 @@ data class StreamChunk(
     val isComplete: Boolean,
     val source: String? = null,
     val usage: pl.jclab.refio.core.llm.LLMUsage? = null,
-    val cost: Double = 0.0
+    val cost: Double = 0.0,
+    /**
+     * Present only while the model is streaming a NATIVE tool call's arguments (docs/0064).
+     * On such a chunk [delta] is typically empty — the model is emitting a structured tool call,
+     * not text. Consumers use this to render a progressive "building <tool>(<args>)" indicator.
+     */
+    val toolCallProgress: ToolCallProgress? = null
+)
+
+/**
+ * Snapshot of a native tool call being assembled during streaming.
+ *
+ * Emitted incrementally as the model streams a tool call's arguments. [accumulatedArguments] is the
+ * full raw arguments JSON received so far for this call (often still a prefix mid-stream), so a
+ * consumer can render the latest state without keeping its own per-index buffer.
+ *
+ * @param index Position in the parallel tool_calls array (identifies the call across chunks).
+ * @param name Tool name once known (null on the very first chunks of some providers).
+ * @param accumulatedArguments Raw arguments JSON accumulated so far for this call.
+ */
+data class ToolCallProgress(
+    val index: Int,
+    val name: String?,
+    val accumulatedArguments: String
 )

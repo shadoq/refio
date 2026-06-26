@@ -122,6 +122,8 @@ class TurnPromptBuilder(
         agentName: String? = null,
         /** Multi-agent session id. Used to look up the inbox in [AgentInboxRegistry]. */
         sessionId: String? = null,
+        /** Resolved model id for model-aware token estimation (docs/0057). Null = flat-base ratio. */
+        modelId: String? = null,
     ): TurnPrompt {
         // Build system prompt based on mode/profile
         val baseSystemPrompt = resolveSystemPrompt(
@@ -228,6 +230,7 @@ $stickyRequirements
                     userContextRefs = allContextRefs,
                     query = lastUserMessage,
                     staticPrefixTokens = staticPrefixTokens,
+                    modelId = modelId,
                 )
 
                 // Apply context profile filtering for subagents
@@ -290,8 +293,9 @@ $filteredContextPrompt
                         if (remainingBudget > 0) {
                             filteredMessages = truncateMessagesToTokenBudget(filteredMessages, remainingBudget)
                         } else {
-                            // Truncate system prompt to fit within budget
-                            val maxChars = (contextProfile.maxContextTokens * 3.5).toInt()
+                            // Truncate system prompt to fit within budget (docs/0057: model-aware,
+                            // was a hardcoded * 3.5 that duplicated CHARS_PER_TOKEN_BASE).
+                            val maxChars = PromptTokenEstimator.maxCharsForTokens(contextProfile.maxContextTokens, modelId)
                             systemPrompt = systemPrompt.take(maxChars)
                             filteredMessages = emptyList()
                         }

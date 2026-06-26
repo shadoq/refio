@@ -27,22 +27,76 @@ class PromptTokenEstimator {
         const val CHARS_PER_TOKEN_BASE: Double = 3.5
 
         /**
+         * Downward safety margin applied to the chars/token ratio when computing *capacity*
+         * (how many chars fit in a token budget). Under-estimating capacity is the safe
+         * direction — better to leave a little window unused than to overflow it and have
+         * Ollama silently truncate from the head (docs/0057 Tier 3, §3.1).
+         */
+        private const val BUDGET_SAFETY_FACTOR = 0.9
+
+        /**
+         * Tier-1 chars/token prior keyed by model-name fragment (docs/0057 §3.1).
+         *
+         * The ratio is dominated by *content* (code ~3.0, prose ~4.0) more than by the model,
+         * but cloud tokenizers (gpt/claude BPE) and local code-model tokenizers (qwen/llama)
+         * differ enough that a per-family cold-start prior beats one flat constant. Once real
+         * usage is observed, [TokenRatioCalibrator] overrides this per model.
+         */
+        fun charsPerToken(modelId: String?): Double = when {
+            modelId == null -> CHARS_PER_TOKEN_BASE
+            modelId.contains("gpt") || modelId.contains("claude") -> 3.6
+            modelId.contains("qwen") || modelId.contains("coder") ||
+                modelId.contains("llama") || modelId.contains("mistral") -> 3.2
+            else -> CHARS_PER_TOKEN_BASE // 3.5
+        }
+
+        /** Resolve the best chars/token ratio for [modelId]: calibrated EMA, then family prior, then base. */
+        private fun resolveRatio(modelId: String?): Double =
+            if (modelId == null) CHARS_PER_TOKEN_BASE else TokenRatioCalibrator.ratioFor(modelId)
+
+        /**
          * Plain char/token estimate without code-block or JSON overhead.
          * Used by lightweight estimators (ContextTokenEstimator, llm.TokenEstimator)
          * that don't have provider context.
          */
-        fun estimateBase(text: String): Int {
+        fun estimateBase(text: String): Int = estimateBase(text, null)
+
+        /**
+         * Model-aware variant of [estimateBase]. Uses the calibrated/family ratio for [modelId]
+         * so dense local-model prompts are not under-counted. [modelId] = null keeps the legacy
+         * flat-base behavior for callers without model context (docs/0057 §1.2).
+         */
+        fun estimateBase(text: String, modelId: String?): Int {
             if (text.isBlank()) return 0
-            return kotlin.math.max(1, (text.length / CHARS_PER_TOKEN_BASE).toInt())
+            return estimateTokensForChars(text.length, modelId)
+        }
+
+        /**
+         * Token estimate from a precomputed character count, for callers that only have a length
+         * (e.g. summed message sizes) and don't want to materialize the text. Same ratio and
+         * rounding as [estimateBase] — the single chars→tokens conversion in :core, so every
+         * estimator agrees instead of sprinkling ad-hoc `length / 4` divisions (docs/0057 §6).
+         */
+        fun estimateTokensForChars(chars: Int, modelId: String? = null): Int {
+            if (chars <= 0) return 0
+            return kotlin.math.max(1, (chars / resolveRatio(modelId)).toInt())
         }
 
         /**
          * Inverse of [estimateBase] — how many characters fit in the given token budget.
          * Used by truncation helpers.
          */
-        fun maxCharsForTokens(maxTokens: Int): Int {
+        fun maxCharsForTokens(maxTokens: Int): Int = maxCharsForTokens(maxTokens, null)
+
+        /**
+         * Model-aware variant of [maxCharsForTokens]. Applies the [BUDGET_SAFETY_FACTOR] for
+         * known models so capacity is under-estimated (never overflowed). [modelId] = null keeps
+         * the legacy flat-base behavior with no margin for backward compatibility (docs/0057 §3.1).
+         */
+        fun maxCharsForTokens(maxTokens: Int, modelId: String?): Int {
             if (maxTokens <= 0) return 0
-            return (maxTokens * CHARS_PER_TOKEN_BASE).toInt()
+            val ratio = if (modelId == null) CHARS_PER_TOKEN_BASE else resolveRatio(modelId) * BUDGET_SAFETY_FACTOR
+            return (maxTokens * ratio).toInt()
         }
 
         // Provider-specific multipliers

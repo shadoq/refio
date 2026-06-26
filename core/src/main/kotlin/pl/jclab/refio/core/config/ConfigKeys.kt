@@ -290,6 +290,14 @@ object ConfigKeys {
         default = null
     )
 
+    // Editor sub-model of the architect/editor split (docs/0059). Optional: when unset the
+    // editor inherits the CODING/agent slot, so behaviour is unchanged from before the split.
+    val DEFAULT_MODEL_EDITOR = ConfigKey<String?>(
+        key = "default_model.editor",
+        parser = { it.takeIf { s -> s.isNotBlank() } },
+        default = null
+    )
+
     val OLLAMA_MAX_CONCURRENT = ConfigKey(
         key = "providers.ollama_max_concurrent",
         parser = String::toIntOrNull,
@@ -305,17 +313,21 @@ object ConfigKeys {
         yamlAccessor = { it.getRagEnabled() }
     )
 
+    // docs/0060: agentic grep/file search is the primary navigation path; vector RAG is an
+    // opt-in aid (proven 2025–2026: keyword search reaches ~RAG quality on *code* without the
+    // indexing tax). Default OFF so a cold start never pays CPU + embedding cost for users who
+    // never use rag_search. Enable explicitly to restore the old auto-indexing behaviour.
     val RAG_AUTO_INDEX_ON_CONTEXT = ConfigKey(
         key = "rag.auto_index_on_context_build",
         parser = String::toBooleanStrictOrNull,
-        default = true,
+        default = false,
         yamlAccessor = { it.getRagAutoIndexOnContextBuild() }
     )
 
     val RAG_INDEX_ON_STARTUP = ConfigKey(
         key = "rag.index_on_startup",
         parser = String::toBooleanStrictOrNull,
-        default = true,
+        default = false,
         yamlAccessor = { it.getRagIndexOnStartup() }
     )
 

@@ -1,0 +1,18 @@
+{
+  "id": "extract-validation",
+  "mode": "AGENT",
+  "max_iterations": 30,
+  "fixture": "fixtures/extract-dup",
+  "prompt_file": "prompts/extract-validation.md",
+  "assert": {
+    "tool_order": ["read_file", "advance_code_editing"],
+    "needles_in_file": [
+      { "path": "src/Orders.kt", "regex": "fun[[:space:]]+validate" },
+      { "path": "src/Orders.kt", "regex": "validate\\(qty,[[:space:]]*price\\)", "min_count": 2 },
+      { "path": "src/Orders.kt", "text": "qty <= 0", "max_count": 1 }
+    ],
+    "build_cmd": "kotlinc src -include-runtime -d build/out.jar",
+    "no_context_overflow": true
+  },
+  "judge": { "criteria": ["A single validate(qty, price) helper is called from both functions; the duplicated checks live in one place; behaviour preserved."] }
+}

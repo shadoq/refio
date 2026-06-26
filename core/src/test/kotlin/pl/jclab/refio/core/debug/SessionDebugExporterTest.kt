@@ -77,6 +77,28 @@ class SessionDebugExporterTest {
     }
 
     @Test
+    fun `contextOverflow surfaces in run json metrics when a task overflowed the window`() {
+        ContextOverflowTracker.reset()
+        try {
+            stub()
+            // Before any overflow: false (silence must never read as a truncated run).
+            val clean = exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.STANDARD))
+            assertEquals(false, clean.metrics.contextOverflow)
+
+            // After the adapter/turn-loop records an overflow for this task: true.
+            ContextOverflowTracker.markOverflow("t1")
+            val overflowed = exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.STANDARD))
+            assertTrue(overflowed.metrics.contextOverflow, "overflow must propagate to run.json")
+            assertTrue(
+                exporter.toJson(overflowed).contains("\"contextOverflow\": true"),
+                "run.json must carry contextOverflow=true for the e2e harness (docs/0061)"
+            )
+        } finally {
+            ContextOverflowTracker.reset()
+        }
+    }
+
+    @Test
     fun `toJson carries schemaVersion and session metrics`() {
         stub(task = task(tokensIn = 123))
         val json = exporter.toJson(exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.STANDARD)))

@@ -136,6 +136,8 @@ class HierarchicalConfigLoader private constructor(
 
     fun getDefaultStrongModel(): String? = getConfig().models?.defaults?.strong
 
+    fun getDefaultEditorModel(): String? = getConfig().models?.defaults?.editor
+
     fun getModelsVisibility(): Map<String, Boolean>? = getConfig().models?.visibility
 
     // ═══════════════════════════════════════════════════════════════════════════════

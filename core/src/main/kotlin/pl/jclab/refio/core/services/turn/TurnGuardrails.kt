@@ -382,36 +382,75 @@ class TurnGuardrails {
      *   - [ContentChantingDetector] measures repetition WITHIN one response (a phrase chanted
      *     10× in a row), not the SAME whole response repeated across iterations.
      *
-     * Aborts when the normalized text is recorded [identicalRepeatAbortThreshold] times in a
-     * row. Blank text is ignored (handled by the empty-envelope recovery paths). Fed only from
-     * the no-tool-call branch, so a single terminal answer that exits immediately never trips
-     * it — a second identical answer only exists because the loop re-entered.
+     * Aborts when the text is recorded [identicalRepeatAbortThreshold] times in a row, where
+     * "the same" means byte-identical OR a near-identical PARAPHRASE — token-set similarity
+     * (Dice coefficient) at or above [similarityThreshold] (docs/0066). Exact-hash matching alone
+     * missed the common weak-model pathology where the model re-renders the SAME intent with a
+     * couple of words swapped ("…standardowe skanowanie…" → "…standardowe wyszukiwanie…", Dice
+     * ~0.88) — different hashes, so the run reset and nothing fired.
+     *
+     * Blank text is ignored (handled by the empty-envelope recovery paths). Fed only from the
+     * no-tool-call branch, so a single terminal answer that exits immediately never trips it — a
+     * second near-identical answer only exists because the loop re-entered. Short texts (either
+     * side under [minTokensForFuzzy] tokens) fall back to exact matching only, since a single
+     * distinct word in a short sentence is a real difference, not a paraphrase.
      */
     class ConsecutiveTextRepetitionTracker(
-        private val identicalRepeatAbortThreshold: Int = 2
+        private val identicalRepeatAbortThreshold: Int = 2,
+        private val similarityThreshold: Double = 0.85,
+        private val minTokensForFuzzy: Int = 4
     ) {
-        private var lastHash: Int? = null
+        private var lastNormalized: String? = null
+        private var lastTokens: Set<String> = emptySet()
         private var consecutiveCount: Int = 0
 
         fun record(text: String): LoopStatus {
             val normalized = text.trim().replace(Regex("\\s+"), " ").lowercase()
             if (normalized.isBlank()) return LoopStatus.OK
 
-            val hash = normalized.hashCode()
-            if (hash == lastHash) {
+            val tokens = tokenize(normalized)
+            val previous = lastNormalized
+            val isRepeat = previous != null && (
+                normalized == previous ||
+                    (
+                        tokens.size >= minTokensForFuzzy &&
+                            lastTokens.size >= minTokensForFuzzy &&
+                            diceSimilarity(tokens, lastTokens) >= similarityThreshold
+                    )
+                )
+
+            if (isRepeat) {
                 consecutiveCount++
             } else {
-                lastHash = hash
                 consecutiveCount = 1
             }
+            lastNormalized = normalized
+            lastTokens = tokens
 
             if (consecutiveCount >= identicalRepeatAbortThreshold) {
                 return LoopStatus.ABORT(
-                    "Model produced byte-identical text $consecutiveCount times in a row with no " +
+                    "Model produced near-identical text $consecutiveCount times in a row with no " +
                         "tool call — no progress is being made. Terminating the turn."
                 )
             }
             return LoopStatus.OK
+        }
+
+        // Unicode-aware: split on the already-collapsed single spaces, then strip surrounding
+        // punctuation per token. Deliberately NOT a `\W` split — in the JVM `\w`/`\W` are ASCII-only
+        // by default, which would shred non-ASCII words (e.g. Polish "dało" → "da"/"o").
+        private fun tokenize(normalized: String): Set<String> =
+            normalized.split(' ')
+                .map { token -> token.trim { ch -> !ch.isLetterOrDigit() } }
+                .filter { it.isNotEmpty() }
+                .toSet()
+
+        private fun diceSimilarity(a: Set<String>, b: Set<String>): Double {
+            if (a.isEmpty() || b.isEmpty()) {
+                return if (a == b) 1.0 else 0.0
+            }
+            val intersection = a.count { it in b }
+            return (2.0 * intersection) / (a.size + b.size)
         }
     }
 

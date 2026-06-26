@@ -586,5 +586,47 @@ class TurnGuardrailsTest {
                 assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("   "))
             }
         }
+
+        @Test
+        fun `two near-identical paraphrases abort even when not byte-identical`() {
+            // Test 0066 (session qwen3.6:35b, PLAN): the model paraphrased the SAME intent sentence
+            // on two consecutive no-tool-call iterations — differing only in 2 of 17 words. Exact-hash
+            // matching missed it (different hashCode each time) so the turn churned to INCOMPLETE via
+            // the guardian. Dice over token sets (~0.88 here) must recognise it as no-progress.
+            val tracker = TurnGuardrails.ConsecutiveTextRepetitionTracker()
+            val first = "Dobrze, standardowe skanowanie nie dało głębokich wyników. " +
+                "Teraz podejmuję bardziej zaawansowane poszukiwania ukrytych elementów w kodzie źródłowym."
+            val paraphrase = "Dobra, standardowe wyszukiwanie nie dało głębokich wyników. " +
+                "Teraz podejmuję bardziej zaawansowane poszukiwania ukrytych elementów w kodzie źródłowym."
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record(first))
+            val second = tracker.record(paraphrase)
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(second)
+            assertTrue(
+                second.reason.contains("identical text", ignoreCase = true),
+                "abort reason should name the repeated-text failure mode, got: ${second.reason}"
+            )
+        }
+
+        @Test
+        fun `genuinely different prose below the similarity threshold stays OK`() {
+            // The fuzzy upgrade must not fire on two distinct actions that merely share boilerplate.
+            // "the circuit breaker" vs "the retry handler" overlap is well below 0.85 Dice.
+            val tracker = TurnGuardrails.ConsecutiveTextRepetitionTracker()
+            assertIs<TurnGuardrails.LoopStatus.OK>(
+                tracker.record("Good, now I will read the circuit breaker implementation in detail.")
+            )
+            assertIs<TurnGuardrails.LoopStatus.OK>(
+                tracker.record("Next, I will inspect the database migration runner for ordering bugs.")
+            )
+        }
+
+        @Test
+        fun `a one-word change in a short sentence does not abort`() {
+            // Short sentences must keep their strictness: a single distinct word is a real difference,
+            // not a paraphrase. "first" vs "second" file is a legitimate two-step plan.
+            val tracker = TurnGuardrails.ConsecutiveTextRepetitionTracker()
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("Reading the first file."))
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("Reading the second file."))
+        }
     }
 }

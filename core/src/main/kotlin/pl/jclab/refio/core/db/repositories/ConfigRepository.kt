@@ -92,12 +92,12 @@ class ConfigRepository {
         }
         return try {
             transaction {
-                logger.debug { "[ORCHESTRATION-DEBUG] getWithPrecedence: key=$key, taskId=$taskId, projectId=$projectId" }
+                logger.trace { "[ORCHESTRATION-DEBUG] getWithPrecedence: key=$key, taskId=$taskId, projectId=$projectId" }
 
                 if (taskId != null) {
                     val taskConfig = get(key, ConfigScope.TASK, taskId = taskId)
                     if (taskConfig != null) {
-                        logger.debug { "[ORCHESTRATION-DEBUG] Found task config: key=$key, value=${taskConfig.value}" }
+                        logger.trace { "[ORCHESTRATION-DEBUG] Found task config: key=$key, value=${taskConfig.value}" }
                         return@transaction taskConfig
                     }
                 }
@@ -105,13 +105,13 @@ class ConfigRepository {
                 if (projectId != null) {
                     val projectConfig = get(key, ConfigScope.PROJECT, projectId = projectId)
                     if (projectConfig != null) {
-                        logger.debug { "[ORCHESTRATION-DEBUG] Found project config: key=$key, value=${projectConfig.value}" }
+                        logger.trace { "[ORCHESTRATION-DEBUG] Found project config: key=$key, value=${projectConfig.value}" }
                         return@transaction projectConfig
                     }
                 }
 
                 val appConfig = get(key, ConfigScope.APP)
-                logger.debug { "[ORCHESTRATION-DEBUG] App config result: key=$key, value=${appConfig?.value}, found=${appConfig != null}" }
+                logger.trace { "[ORCHESTRATION-DEBUG] App config result: key=$key, value=${appConfig?.value}, found=${appConfig != null}" }
                 appConfig
             }
         } catch (e: Exception) {

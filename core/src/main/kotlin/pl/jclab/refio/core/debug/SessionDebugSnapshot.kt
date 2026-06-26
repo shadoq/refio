@@ -53,6 +53,12 @@ data class SessionDebugSnapshot(
         val costUsd: Double,
         val apiCallCount: Int,
         val toolCallCount: Int,
+        /**
+         * True if any turn's prompt exceeded the model's context window (docs/0057 Tier 3).
+         * A `true` here means input was silently truncated (Ollama) or rejected — the e2e
+         * harness (docs/0061) treats it as a failed run, not a success. Additive field.
+         */
+        val contextOverflow: Boolean = false,
     )
 
     data class SubtaskInfo(

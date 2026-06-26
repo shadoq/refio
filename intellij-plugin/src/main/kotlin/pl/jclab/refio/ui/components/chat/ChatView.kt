@@ -292,6 +292,8 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     private val toolApprovalPanel: ToolApprovalPanel
     private val busyIndicatorPanel: JPanel
     private val busyIndicatorLabel: JLabel
+    private val toolCallProgressLabel: JLabel
+    private val toolCallProgressPanel: JPanel
     private val busyIndicatorFrames = arrayOf("|", " ")
     private var busyIndicatorFrame = 0
     private var busyIndicatorTimer: Timer? = null
@@ -360,10 +362,31 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
             add(busyIndicatorLabel)
         }
 
+        // Transient "model is building a native tool call" indicator. Visible only while
+        // sessionManager.toolCallProgress is non-null (i.e. during native tool-call arg streaming).
+        toolCallProgressLabel = JLabel("").apply {
+            font = LCATheme.smallFont.deriveFont(Font.ITALIC)
+            foreground = LCATheme.descriptionForeground
+        }
+        toolCallProgressPanel = JBPanel<JBPanel<*>>().apply {
+            layout = FlowLayout(FlowLayout.LEFT, 6, 0)
+            border = LCATheme.paddedBorder(2, 8)
+            isOpaque = false
+            isVisible = false
+            add(toolCallProgressLabel)
+        }
+
+        val busyAndToolCallPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            add(toolCallProgressPanel)
+            add(busyIndicatorPanel)
+        }
+
         val southPanel = JPanel(BorderLayout()).apply {
             isOpaque = false
             add(toolApprovalPanel, BorderLayout.NORTH)
-            add(busyIndicatorPanel, BorderLayout.SOUTH)
+            add(busyAndToolCallPanel, BorderLayout.SOUTH)
         }
         add(southPanel, BorderLayout.SOUTH)
 
@@ -413,6 +436,16 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
             }.collect { isRunning ->
                 SwingUtilities.invokeLater {
                     updateBusyIndicator(isRunning)
+                }
+            }
+        }
+
+        // Observe native tool-call streaming progress (docs/0064, Variant C).
+        // Non-null only while the model streams a tool call's arguments; reset to null when done.
+        cs.launch {
+            sessionManager.toolCallProgress.collect { progress ->
+                SwingUtilities.invokeLater {
+                    updateToolCallProgress(progress)
                 }
             }
         }
@@ -497,6 +530,23 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
 
         busyIndicatorPanel.revalidate()
         busyIndicatorPanel.repaint()
+    }
+
+    @Suppress("MagicNumber")
+    private fun updateToolCallProgress(progress: pl.jclab.refio.core.api.ToolCallProgress?) {
+        if (progress == null) {
+            toolCallProgressLabel.text = ""
+            toolCallProgressPanel.isVisible = false
+        } else {
+            val name = progress.name ?: "tool"
+            val args = progress.accumulatedArguments
+            val truncatedArgs = if (args.length > 80) args.take(80) + "…" else args
+            toolCallProgressLabel.text = "⚙ $name($truncatedArgs)"
+            toolCallProgressPanel.isVisible = true
+        }
+
+        toolCallProgressPanel.revalidate()
+        toolCallProgressPanel.repaint()
     }
 
     private fun calculateMessageHash(message: Message): Int {

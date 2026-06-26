@@ -73,8 +73,26 @@ class SessionStateManager {
     private val _totalEstimatedTokens = MutableStateFlow(0)
     val totalEstimatedTokens: StateFlow<Int> = _totalEstimatedTokens.asStateFlow()
 
+    // Transient snapshot of a native tool call being assembled during streaming (docs/0064).
+    // Non-null only while the model streams a tool call's arguments; cleared when that LLM
+    // turn's stream completes. UI renders a "⚙ building <tool>(<args>)" indicator.
+    private val _toolCallProgress = MutableStateFlow<pl.jclab.refio.core.api.ToolCallProgress?>(null)
+    val toolCallProgress: StateFlow<pl.jclab.refio.core.api.ToolCallProgress?> = _toolCallProgress.asStateFlow()
+
+    fun setToolCallProgress(progress: pl.jclab.refio.core.api.ToolCallProgress?) {
+        _toolCallProgress.value = progress
+    }
+
     fun setActiveSession(session: Session?) {
+        val previousId = _activeSession.value?.id
         _activeSession.value = session
+        // A switch to a different (or no) session leaves behind any transient tool-call
+        // progress from the previous turn — STOP/cancel never delivers the completion chunk
+        // that normally clears it. Reset on id change only, so same-session metric refreshes
+        // (auto-naming, token bumps) don't flicker the live "⚙ building" indicator off.
+        if (session?.id != previousId) {
+            _toolCallProgress.value = null
+        }
     }
 
     fun setSessions(sessions: List<Session>) {

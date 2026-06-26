@@ -973,7 +973,9 @@ class OpenAIAdapter(
 
                         @Suppress("UNCHECKED_CAST")
                         val delta = choice["delta"] as? Map<String, Any?>
-                        toolCallAccumulator.consumeDelta(delta)
+                        toolCallAccumulator.consumeDelta(delta).forEach { tcDelta ->
+                            onStreamChunk(StreamChunk(delta = "", toolCallDelta = tcDelta))
+                        }
                         val content = delta?.get("content") as? String
                         val finishReason = choice["finish_reason"] as? String
 

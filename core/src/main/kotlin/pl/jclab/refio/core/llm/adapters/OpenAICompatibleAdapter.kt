@@ -411,6 +411,9 @@ abstract class OpenAICompatibleAdapter(
                                 contentBuilder.append(delta)
                                 onStreamChunk(StreamChunk(delta = delta))
                             },
+                            onToolCallDelta = { tcDelta ->
+                                onStreamChunk(StreamChunk(delta = "", toolCallDelta = tcDelta))
+                            },
                             onRawChunk = { chunk ->
                                 @Suppress("UNCHECKED_CAST")
                                 (chunk["usage"] as? Map<String, Any?>)?.let { usageMap ->
@@ -455,7 +458,7 @@ abstract class OpenAICompatibleAdapter(
             // Prefer real usage from the stream's final chunk; fall back to estimation.
             val usage = streamUsage ?: run {
                 @Suppress("UNCHECKED_CAST")
-                val inputTokensEstimate = (requestBody["messages"] as? List<Map<String, Any?>>)?.sumOf {
+                val inputChars = (requestBody["messages"] as? List<Map<String, Any?>>)?.sumOf {
                     when (val content = it["content"]) {
                         is String -> content.length
                         is List<*> -> content.sumOf { part ->
@@ -466,10 +469,15 @@ abstract class OpenAICompatibleAdapter(
                         else -> 0
                     }
                 } ?: 0
+                // Provider omitted usage on the stream — estimate via the shared chars→tokens
+                // converter (docs/0057 §6) so input and output agree on one ratio instead of the
+                // old split (input = raw chars, output = chars/4).
+                val inputTokensEstimate = pl.jclab.refio.core.services.PromptTokenEstimator.estimateTokensForChars(inputChars)
+                val outputTokensEstimate = pl.jclab.refio.core.services.PromptTokenEstimator.estimateBase(contentBuilder.toString())
                 LLMUsage(
                     inputTokens = inputTokensEstimate,
-                    outputTokens = contentBuilder.length / 4,
-                    totalTokens = inputTokensEstimate + contentBuilder.length / 4,
+                    outputTokens = outputTokensEstimate,
+                    totalTokens = inputTokensEstimate + outputTokensEstimate,
                 )
             }
             onStreamChunk(StreamChunk(delta = "", finishReason = finalFinishReason, usage = usage))

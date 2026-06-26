@@ -1,0 +1,16 @@
+{
+  "id": "find-and-fix-null-check",
+  "mode": "AGENT",
+  "max_iterations": 20,
+  "fixture": "fixtures/null-bug",
+  "prompt_file": "prompts/null-bug.md",
+  "assert": {
+    "tool_order": ["grep_search", "read_file", "advance_code_editing"],
+    "needle_in_file": { "path": "src/Main.kt", "regex": "x[[:space:]]*[!=]=[[:space:]]*null" },
+    "build_cmd": "kotlinc src/Main.kt -include-runtime -d build/out.jar",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": ["Is the null check added around the failing dereference and nowhere else (minimal, correct fix)?"]
+  }
+}

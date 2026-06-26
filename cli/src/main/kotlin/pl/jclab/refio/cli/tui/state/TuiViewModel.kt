@@ -154,6 +154,8 @@ class TuiViewModel(
         _settingsEditingField.map { Unit },
         _settingsEditBuffer.map { Unit },
         _contextMaxTokens.map { Unit },
+        // Session execution flows
+        sessionStateManager.toolCallProgress.map { Unit },
         // Chat sub-VM flows
         chat._messages.map { Unit },
         chat._isStreaming.map { Unit },
@@ -244,6 +246,7 @@ class TuiViewModel(
         // Chat sub-VM
         messages = chat._messages.value,
         isStreaming = chat._isStreaming.value,
+        toolCallProgress = sessionStateManager.toolCallProgress.value,
         inputBuffer = chat._inputBuffer.value,
         cursorPosition = chat._cursorPosition.value,
         scrollOffset = chat._scrollOffset.value,

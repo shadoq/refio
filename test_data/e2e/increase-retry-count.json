@@ -1,0 +1,18 @@
+{
+  "id": "increase-retry-count",
+  "mode": "AGENT",
+  "max_iterations": 25,
+  "fixture": "fixtures/retry-config",
+  "prompt_file": "prompts/increase-retry-count.md",
+  "assert": {
+    "tool_order": ["grep_search", "read_file", "advance_code_editing"],
+    "needle_in_file": { "path": "src/Config.kt", "regex": "MAX_RETRIES[[:space:]]*=[[:space:]]*5([^0-9]|$)" },
+    "build_cmd": "kotlinc src -include-runtime -d build/out.jar",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "Only MAX_RETRIES changed to 5; the retry loop in HttpClient and the other constants are untouched."
+    ]
+  }
+}

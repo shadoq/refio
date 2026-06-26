@@ -45,6 +45,14 @@ object TuiChatView {
             allWrapped.add("") // blank line between messages
         }
 
+        // Transient native tool-call indicator: shown only while the model streams a tool call's
+        // arguments (toolCallProgress non-null), removed once the LLM stream completes.
+        state.toolCallProgress?.let { progress ->
+            val name = progress.name ?: "tool"
+            val args = progress.accumulatedArguments.let { if (it.length > 60) it.take(60) + "…" else it }
+            allWrapped.add(TuiColors.tool("⚙ $name($args)"))
+        }
+
         // Apply scroll offset: 0 = bottom (most recent), >0 = scrolled up
         val offset = state.scrollOffset.coerceIn(0, (allWrapped.size - height).coerceAtLeast(0))
         val endIdx = (allWrapped.size - offset).coerceAtLeast(0)

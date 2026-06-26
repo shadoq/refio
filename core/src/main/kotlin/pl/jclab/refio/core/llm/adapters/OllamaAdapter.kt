@@ -6,6 +6,7 @@ import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.llm.NativeToolCall
+import pl.jclab.refio.core.llm.NativeToolCallDelta
 import pl.jclab.refio.core.llm.StreamChunk
 import pl.jclab.refio.core.llm.toModelConfig
 import pl.jclab.refio.core.tools.base.ToolSchema
@@ -82,7 +83,7 @@ class OllamaAdapter(
      * per-message overhead for role tokens. Not exact — Ollama's actual tokenization differs
      * by model — but consistently sized so the warning fires before silent truncation.
      */
-    private fun estimateOllamaInputTokens(
+    internal fun estimateOllamaInputTokens(
         messages: List<Map<String, String>>,
         tools: List<ToolSchema>?,
     ): Int {
@@ -90,7 +91,9 @@ class OllamaAdapter(
         val toolChars = tools?.sumOf { schema ->
             schema.name.length + schema.description.length + schema.parametersJsonSchema.toString().length
         } ?: 0
-        return pl.jclab.refio.core.services.PromptTokenEstimator.estimateBase("x".repeat(messageChars + toolChars))
+        // Pass [model] so dense local tokenizers (qwen/llama ~3.2 chars/token) are not under-counted
+        // by the flat 3.5 default — otherwise the overflow guard misses real num_ctx overflows (docs/0057).
+        return pl.jclab.refio.core.services.PromptTokenEstimator.estimateBase("x".repeat(messageChars + toolChars), model)
     }
 
     // Get timeout from ConfigService (fallback to 120s for Ollama local models)
@@ -280,6 +283,10 @@ class OllamaAdapter(
                             "truncate from the head — expect empty or low-quality output. " +
                             "Increase providers.ollama.ollama_context_size or reduce the prompt."
                     }
+                    // Surface the silent truncation into run.json (docs/0057 Tier 3). Pre-send
+                    // estimate is the ONLY reliable signal for Ollama: its returned prompt_eval_count
+                    // is already post-truncation, so a returned-usage check would never fire.
+                    taskId?.let { pl.jclab.refio.core.debug.ContextOverflowTracker.markOverflow(it) }
                 }
 
                 val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)
@@ -612,6 +619,20 @@ class OllamaAdapter(
                             if (toolCalls.isNotEmpty()) {
                                 rawToolCalls.clear()
                                 rawToolCalls.addAll(toolCalls)
+                                // Ollama emits the whole tool call at once (no per-arg streaming),
+                                // so surface one progress snapshot per call (docs/0064).
+                                parseNativeOllamaToolCalls(toolCalls).forEachIndexed { idx, call ->
+                                    onStreamChunk(
+                                        StreamChunk(
+                                            delta = "",
+                                            toolCallDelta = NativeToolCallDelta(
+                                                index = idx,
+                                                nameDelta = call.name,
+                                                argumentsDelta = call.argumentsJson,
+                                            ),
+                                        )
+                                    )
+                                }
                             }
                         }
 

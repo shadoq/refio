@@ -17,6 +17,7 @@ import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
+import pl.jclab.refio.core.llm.NativeToolsFallbackTracker
 import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.tools.base.ToolResult
@@ -62,6 +63,10 @@ class AgentTurnLoopTest {
 
     @BeforeEach
     fun setup() {
+        // NativeToolsFallbackTracker is a process-global singleton; a test that marks a model as
+        // a fallback (native→JSON) would otherwise leak that state into later tests and flip their
+        // native-vs-JSON path. Reset it so each test starts from a known "no fallbacks" baseline.
+        NativeToolsFallbackTracker.clear()
         llmClient = mockk(relaxed = true)
         toolRegistry = mockk(relaxed = true)
         chatMessageRepository = mockk(relaxed = true)
@@ -766,11 +771,14 @@ class AgentTurnLoopTest {
             }
         }
 
-        // NOTE: the `plain text nudge` and `nudge replaced not appended` tests were removed
-        // together with the nudge-retry machinery. The turn loop no longer injects SYSTEM
-        // messages mid-flight to coax a misbehaving model back into format — an empty or
-        // malformed response simply ends the turn with a clear error. See the "should fail
-        // immediately on empty content in JSON mode" test above for the new behaviour.
+        // NOTE: the bounded nudge-retry machinery is intentionally still here. On an empty or
+        // malformed structured response the loop injects a SYSTEM message telling the model to
+        // regenerate the JSON envelope from scratch (the MessageRole.SYSTEM writes in
+        // AgentTurnLoop's empty-content and broken-format branches), bounded to 2 nudges before
+        // it fails loud. That path is covered by the sibling tests `should retry when content is
+        // empty in JSON mode and then succeed`, `should retry when fenced json envelope is
+        // incomplete and then succeed`, and `should fail when empty content persists after
+        // retries in AGENT mode` (below).
         @Test
         fun `should fail when empty content persists after retries in AGENT mode`() = runTest {
             coEvery {
@@ -884,6 +892,214 @@ class AgentTurnLoopTest {
                     subtaskId = any(), source = any(), kwargs = any()
                 )
             }
+        }
+
+        @Test
+        fun `guardian re-entry after a native no-call switches the retry to the JSON contract`() = runTest {
+            // Symptom 3 (session 6ef58656): a weak model with native tools attached intermittently
+            // narrates intent ("Let me explore the docs…") with ZERO native tool_calls. The turn treats
+            // that prose as a legitimate final answer, so the NextSpeakerJudge guardian is the only thing
+            // that re-enters — and re-entering on the SAME native channel that just failed tends to
+            // reproduce the stall. The fix: when a guardian re-enters after a native-no-call, drop native
+            // tools so the bounded re-entry retries on the JSON-in-text contract (which weak local models
+            // often follow better), giving it a real chance to emit a tool call instead of more prose.
+            every { toolRegistry.getToolSchemas(any(), any(), any()) } returns listOf(
+                pl.jclab.refio.core.tools.base.ToolSchema("read_file", "Read a file", mapOf("type" to "object"))
+            )
+
+            val reenterOnce = object : TurnCompletionGuardian {
+                override val name = "test_reenter_once"
+                private var calls = 0
+                override suspend fun check(context: GuardianContext): GuardianDecision {
+                    calls++
+                    return if (calls == 1) {
+                        GuardianDecision.Reenter(nudge = "Finish the work with a tool call.", reason = "test stall")
+                    } else {
+                        GuardianDecision.Pass
+                    }
+                }
+            }
+            val loop = buildAgentTurnLoop(
+                NoopTaskVerifier(),
+                GuardianRegistry(listOf(reenterOnce), maxReentries = 3)
+            )
+
+            val kwargsPerCall = mutableListOf<Map<String, Any>>()
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = capture(kwargsPerCall)
+                )
+            } returnsMany listOf(
+                // Call 1 — native channel active, but the model only narrates (no tool_calls).
+                LLMResponse(
+                    content = "Let me explore the docs directory.",
+                    usage = LLMUsage(inputTokens = 1200, outputTokens = 14, totalTokens = 1214),
+                    model = "gpt-5.5", provider = "openai", cost = 0.0, finishReason = "stop"
+                ),
+                // Call 2 — the re-entry; a clean JSON final envelope ends the turn.
+                createLLMResponse("""{"actions":[],"response":"Explored the docs.","intent":"analysis"}""")
+            )
+
+            val result = loop.runTurn(
+                taskId = testTaskId,
+                userInput = "Document the project",
+                mode = TaskMode.AGENT,
+                model = "gpt-5.5",
+                provider = "openai"
+            )
+
+            assertEquals(2, kwargsPerCall.size, "expected exactly the two turn calls (the guardian makes none)")
+            assertTrue(
+                kwargsPerCall[0].containsKey("native_tools"),
+                "first call must use the native channel"
+            )
+            assertTrue(
+                !kwargsPerCall[1].containsKey("native_tools"),
+                "the guardian re-entry must drop native tools and retry on the JSON contract"
+            )
+            assertTrue(result.success, "the JSON re-entry should let the turn finish cleanly: ${result.response}")
+        }
+
+        @Test
+        fun `a single JSON-envelope slip does not persistently demote a capable native model`() = runTest {
+            // docs/0068 / R1: a model with verified native function-calling (gpt-5.5) occasionally
+            // mirrors the {response,actions} envelope shown as a negative example in the prompt instead
+            // of emitting native tool_calls. A ONE-strike persistent demotion (the old behavior) kicked
+            // such a capable model off native for the rest of the session (and disk) on that single slip.
+            // One slip followed by a proper native turn must NOT mark the model as a fallback.
+            every { toolRegistry.hasTool("read_file") } returns true
+            every { toolRegistry.getToolSchemas(any(), any(), any()) } returns listOf(
+                pl.jclab.refio.core.tools.base.ToolSchema("read_file", "Read a file", mapOf("type" to "object")),
+            )
+            coEvery { toolExecutor.executeTool(any(), any()) } returns
+                ToolResult(success = true, output = "file contents")
+
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any(),
+                )
+            } returnsMany listOf(
+                // Iteration 1 — native active, but the model returns the JSON envelope in text (one slip).
+                createLLMResponse("""{"response":"reading","actions":[{"tool":"read_file","arguments":{"path":"a.kt"}}]}"""),
+                // Iteration 2 — the model uses the native channel properly and finishes. Streak resets.
+                LLMResponse(
+                    content = "Analysis complete.",
+                    usage = LLMUsage(10, 5, 15),
+                    model = "gpt-5.5", provider = "openai", cost = 0.0, finishReason = "stop",
+                    nativeToolCalls = emptyList(),
+                ),
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId, userInput = "Assess risk", mode = TaskMode.AGENT,
+                model = "gpt-5.5", provider = "openai",
+            )
+
+            assertTrue(result.success, "the native finish should complete the turn: ${result.response}")
+            assertFalse(
+                NativeToolsFallbackTracker.isFallback("gpt-5.5"),
+                "a single envelope slip must NOT persistently demote a capable native model (docs/0068 R1)",
+            )
+        }
+
+        @Test
+        fun `two consecutive envelope slips still demote the model off native`() = runTest {
+            // The demotion must not be disabled — it just needs more than one strike. Two consecutive
+            // native-ignored envelope responses are a real "this model won't use native here" signal, so
+            // the model is marked as a fallback (and native tools dropped for the rest of the turn).
+            every { toolRegistry.hasTool("read_file") } returns true
+            every { toolRegistry.getToolSchemas(any(), any(), any()) } returns listOf(
+                pl.jclab.refio.core.tools.base.ToolSchema("read_file", "Read a file", mapOf("type" to "object")),
+            )
+            coEvery { toolExecutor.executeTool(any(), any()) } returns
+                ToolResult(success = true, output = "file contents")
+
+            val kwargsPerCall = mutableListOf<Map<String, Any>>()
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = capture(kwargsPerCall),
+                )
+            } returnsMany listOf(
+                createLLMResponse("""{"response":"reading a","actions":[{"tool":"read_file","arguments":{"path":"a.kt"}}]}"""),
+                createLLMResponse("""{"response":"reading b","actions":[{"tool":"read_file","arguments":{"path":"b.kt"}}]}"""),
+                createLLMResponse("""{"actions":[],"response":"Done"}"""),
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId, userInput = "Assess risk", mode = TaskMode.AGENT,
+                model = "gpt-5.5", provider = "openai",
+            )
+
+            assertTrue(result.success, "the turn should still finish: ${result.response}")
+            assertTrue(
+                NativeToolsFallbackTracker.isFallback("gpt-5.5"),
+                "two consecutive envelope slips must demote the model (docs/0068 R1)",
+            )
+            // After demotion (end of iteration 2) native tools are no longer offered.
+            assertTrue(kwargsPerCall[0].containsKey("native_tools"), "iter 1 must still offer native")
+            assertTrue(kwargsPerCall[1].containsKey("native_tools"), "iter 2 must still offer native")
+            assertTrue(!kwargsPerCall[2].containsKey("native_tools"), "iter 3 must run on the demoted JSON path")
+        }
+
+        @Test
+        fun `envelope slips with EMPTY native list (real adapter shape) are executed and demote after two`() = runTest {
+            // Codex adversarial-review regression (docs/0068): the existing slip tests model the slip as
+            // nativeToolCalls = null, but real adapters return emptyList() when native tools were requested
+            // and the model produced 0 native calls. With the empty-list shape the envelope used to be
+            // dropped as authoritative "finished" — the tool never ran AND the demotion streak never
+            // advanced. Both must now work: each slip's read_file executes, and two consecutive slips demote.
+            every { toolRegistry.hasTool("read_file") } returns true
+            every { toolRegistry.getToolSchemas(any(), any(), any()) } returns listOf(
+                pl.jclab.refio.core.tools.base.ToolSchema("read_file", "Read a file", mapOf("type" to "object")),
+            )
+            coEvery { toolExecutor.executeTool(any(), any()) } returns
+                ToolResult(success = true, output = "file contents")
+
+            fun emptyNativeSlip(content: String) = LLMResponse(
+                content = content,
+                usage = LLMUsage(100, 50, 150),
+                model = "gpt-5.5", provider = "openai", cost = 0.0, finishReason = "stop",
+                nativeToolCalls = emptyList(),
+            )
+
+            val kwargsPerCall = mutableListOf<Map<String, Any>>()
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = capture(kwargsPerCall),
+                )
+            } returnsMany listOf(
+                emptyNativeSlip("""{"response":"reading a","actions":[{"tool":"read_file","arguments":{"path":"a.kt"}}]}"""),
+                emptyNativeSlip("""{"response":"reading b","actions":[{"tool":"read_file","arguments":{"path":"b.kt"}}]}"""),
+                createLLMResponse("""{"actions":[],"response":"Done"}"""),
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId, userInput = "Assess risk", mode = TaskMode.AGENT,
+                model = "gpt-5.5", provider = "openai",
+            )
+
+            assertTrue(result.success, "the turn should finish: ${result.response}")
+            // The KEY fix: the envelope was NOT dropped — read_file ran for both slips (old behavior ran 0).
+            coVerify(exactly = 2) { toolExecutor.executeTool(match { it.name == "read_file" }, any()) }
+            assertTrue(
+                NativeToolsFallbackTracker.isFallback("gpt-5.5"),
+                "two consecutive empty-native envelope slips must demote the model (docs/0068)",
+            )
+            assertTrue(kwargsPerCall[0].containsKey("native_tools"), "iter 1 must still offer native")
+            assertTrue(kwargsPerCall[1].containsKey("native_tools"), "iter 2 must still offer native")
+            assertTrue(!kwargsPerCall[2].containsKey("native_tools"), "iter 3 must run on the demoted JSON path")
         }
 
     }

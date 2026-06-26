@@ -11,6 +11,7 @@ import pl.jclab.refio.core.db.TaskMode
  * WEAK      - cheap auxiliary steps (summaries, reflections)
  * EMBEDDING - RAG embedding generation
  * STRONG    - powerful model for complex delegation (optional, no fallback)
+ * EDITOR    - file-editing sub-model of the architect/editor split (optional, inherits CODING)
  */
 enum class ModelOperation {
     DEFAULT,
@@ -18,7 +19,8 @@ enum class ModelOperation {
     CODING,
     WEAK,
     EMBEDDING,
-    STRONG;
+    STRONG,
+    EDITOR;
 
     companion object {
         fun fromTaskMode(mode: TaskMode): ModelOperation = when (mode) {
