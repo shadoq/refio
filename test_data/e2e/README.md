@@ -30,6 +30,18 @@ benchmark/scripts/e2e-run.sh --model ollama/qwen3.5:9b \
 benchmark/scripts/e2e-run.sh --model ollama/qwen3.5:9b --all # run every scenario
 ```
 
+To run the suite against a model on **another Ollama host** (or with a different context size) without
+editing config, use the sugar flags (they map to validated `--config providers.ollama.*` overrides):
+
+```bash
+benchmark/scripts/e2e-run.sh --model ollama/qwen3.5:9b \
+  --ollama-host 192.168.5.60 --ollama-ctx 32768 --all     # host → http://192.168.5.60:11434
+```
+
+PowerShell parity: `e2e-run.ps1 -Model ollama/qwen3.5:9b -OllamaHost 192.168.5.60 -OllamaCtx 32768 -All`.
+`--ollama-host` accepts a bare host, `host:port`, or a full `http://host:port` URL. An explicit
+`--config providers.ollama.ollama_endpoint=...` still wins over the sugar for the same key.
+
 Output is a markdown table: one row per scenario with the verdict + metrics. Exit code is non-zero
 if any HARD assertion failed.
 
@@ -58,8 +70,33 @@ the right change landed.
 | `haystack-https` | AGENT | find the needle among 8 files; flip http→https | needle + `absent` + overflow gate |
 | `rename-function` | AGENT | rename across 3 files, no old refs left | `absent` needles + compile |
 | `extract-validation` | AGENT | extract duplicated checks into one helper | `min_count`/`max_count` + compile |
-| `no-bug-here` | AGENT | code is already correct — make **no** change | `file_unchanged` (anti-overeagerness) |
+| `no-bug-here` | AGENT | code is already correct - make **no** change | `file_unchanged` (anti-overeagerness) |
 | `plan-validation` | PLAN | produce a plan, edit nothing | `needle_in_output` + `file_unchanged` |
+| `js-fix-off-by-one` | AGENT | cross-language (JavaScript) off-by-one | **run** (`node`), asserts kept |
+| `add-edge-case-test` | AGENT | add a missing test, leave the impl alone | needle in test + `file_unchanged` impl + **run** |
+| `add-build-script` | AGENT | edit `package.json`, keep it valid JSON | 2 needles + `text` (existing kept) + JSON parses |
+| `wire-format-helper` | AGENT | new file + wire it into a caller | 2 needles + build runs and prints `$10.00` |
+| `snake-game` | AGENT | **generate** a single-file game from scratch | needles on `snake.html` (canvas/keydown/score/game over) |
+| `stellar-sound-page` | AGENT | **generate** a single-file landing page | needles on `index.html` (brand/nav/form/table) |
+
+The two above are **from-scratch generation** scenarios (an empty fixture, the agent writes the
+whole file). They are heavier than the surgical edits above - expect a stronger model than
+`qwen3.5:9b` and watch `no_context_overflow`, which legitimately FAILs a weak model that truncates
+a large file. Their needles only check that a *real* artifact landed; the full feature list is left
+to the SOFT `judge`.
+
+### Multi-step scenarios
+
+These deliberately need **several tool calls in sequence** (discover across files → coordinate edits
+in more than one file → run). A partial change does not pass: the `build_cmd` runs a test that only
+goes green once every required edit is in place, so they exercise the agent's ability to follow a
+task through to the end rather than stop after the first edit.
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `add-param-update-callers` | AGENT | add a param, find & update **all** callers across 3 files | 3 needles + **run** (`node`) + `file_unchanged` test |
+| `implement-stubs` | AGENT | implement 3 stubbed functions to satisfy one suite | `absent` "not implemented" + **run** + `file_unchanged` test |
+| `fix-two-failures` | AGENT | two independent bugs, one per file, make the suite green | 2 needles + **run** (`python3`) + `file_unchanged` main |
 
 ## Scenario format (JSON)
 

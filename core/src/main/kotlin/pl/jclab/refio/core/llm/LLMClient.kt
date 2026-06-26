@@ -1,16 +1,20 @@
 package pl.jclab.refio.core.llm
 
+import io.ktor.client.HttpClient
 import pl.jclab.refio.core.api.StreamCallback
 import pl.jclab.refio.core.api.StreamChunk
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.llm.adapters.AnthropicAdapter
 import pl.jclab.refio.core.llm.adapters.GenericOpenAIAdapter
 import pl.jclab.refio.core.llm.adapters.GeminiAdapter
+import pl.jclab.refio.core.llm.adapters.LLMKtorClientFactory
 import pl.jclab.refio.core.llm.adapters.LMStudioAdapter
 import pl.jclab.refio.core.llm.adapters.OllamaAdapter
 import pl.jclab.refio.core.llm.adapters.OpenAIAdapter
 import pl.jclab.refio.core.llm.adapters.OpenRouterAdapter
 import pl.jclab.refio.core.llm.adapters.ZAIAdapter
+import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.llm.streaming.StreamAbortedException
 import pl.jclab.refio.core.llm.streaming.StreamGuardrail
 import pl.jclab.refio.core.llm.streaming.StreamGuardrails
@@ -56,19 +60,30 @@ class LLMClient(
     // taskId / subtaskId, complete() will increment the matching row after a
     // successful response. Optional so unit tests and standalone usage still work.
     private val taskRepository: pl.jclab.refio.core.db.repositories.TaskRepository? = null,
-    private val subtaskRepository: pl.jclab.refio.core.db.repositories.SubtaskRepository? = null
+    private val subtaskRepository: pl.jclab.refio.core.db.repositories.SubtaskRepository? = null,
+    // Test seam: when supplied, every adapter is built with this HttpClient instead of one from
+    // the pool. Mirrors the per-adapter `httpClientOverride` so LLMClient can be exercised against
+    // a Ktor MockEngine without real network I/O.
+    private val httpClientOverride: HttpClient? = null
 ) {
     // Bug #18: Load HTTP client configuration from database
     private val httpClientConfig: HttpClientConfig by lazy {
         HttpClientConfig.fromConfigService(configService)
     }
 
+    private val ktorLogger = dualLogger("LLMClient")
+
     /**
-     * Pool of reusable adapters keyed by provider name.
-     * Avoids creating a new HttpClient (with CIO engine thread pool) on every request.
-     * Adapters are created lazily on first use and reused for subsequent requests.
+     * Pool of reusable HttpClients keyed by `provider:model`.
+     *
+     * Only the (expensive, CIO-thread-pool-backed) HttpClient is pooled — NOT the adapter. The
+     * adapter is rebuilt per request so its `taskId`/`subtaskId`/`source` reflect the ACTUAL call.
+     * Pooling the adapter instead (the previous design) baked the first request's attribution into
+     * every later one: a PLAN turn or a title-generation call reusing the qwen `Chat` adapter logged
+     * `source="Chat"` and was attributed to an earlier session's task. Building a fresh, cheap adapter
+     * over the shared client keeps client reuse while making api-log attribution per-request.
      */
-    private val adapterPool = java.util.concurrent.ConcurrentHashMap<String, BaseLLMAdapter>()
+    private val httpClientPool = java.util.concurrent.ConcurrentHashMap<String, HttpClient>()
 
     data class PreparedRequestPayload(
         val systemMessages: List<String>,
@@ -77,6 +92,12 @@ class LLMClient(
     )
 
     companion object {
+        /** Providers with a registered adapter — checked before a client is pooled for the key. */
+        private val SUPPORTED_PROVIDERS = setOf(
+            "ollama", "openai", "anthropic", "gemini",
+            "lmstudio", "generic_openai", "zai", "openrouter"
+        )
+
         fun prepareRequestPayload(
             messages: List<LLMMessage>,
             systemPrompt: String? = null,
@@ -488,13 +509,13 @@ class LLMClient(
     }
 
     /**
-     * Get or create a pooled adapter for the given provider.
-     * The same adapter (and its HttpClient) is reused across requests.
-     */
-    /**
-     * Get or create a pooled adapter for the given provider+model combination.
-     * The same adapter (and its HttpClient) is reused across requests with the same provider+model.
-     * taskId/subtaskId/source are per-request metadata — NOT cached in the pool.
+     * Build an adapter for the given provider+model combination.
+     *
+     * The HttpClient (expensive — CIO engine thread pool) is pooled by `provider:model` and reused,
+     * but the ADAPTER is rebuilt on every call so its `taskId`/`subtaskId`/`source` reflect THIS
+     * request. Baking those into a pooled adapter (the previous design) leaked the first request's
+     * attribution onto every later api-log row. The adapter constructor is cheap (config lookups for
+     * base URL) once it is handed a ready HttpClient.
      */
     private fun getOrCreateAdapter(
         provider: String,
@@ -504,39 +525,49 @@ class LLMClient(
         source: String?
     ): BaseLLMAdapter {
         val providerKey = provider.lowercase()
-        // Pool by provider:model to avoid stale model in adapter (model is used in API request bodies)
+        // Unknown provider must fail BEFORE we create/pool a client for it.
+        if (providerKey !in SUPPORTED_PROVIDERS) {
+            logger.error { "[LLM_CLIENT] Unknown provider: $provider" }
+            throw RefioError.ProviderNotConfigured(provider, "provider")
+        }
+        // Pool by provider:model — the same socket-timeout bucket the adapters used when they each
+        // created their own client, so client reuse is unchanged; only attribution is now per-request.
         val poolKey = "$providerKey:$model"
-        return adapterPool.computeIfAbsent(poolKey) {
-            when (providerKey) {
-                "ollama" -> OllamaAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
-                "openai" -> OpenAIAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
-                "anthropic" -> AnthropicAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
-                "gemini" -> GeminiAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
-                "lmstudio" -> LMStudioAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
-                "generic_openai" -> GenericOpenAIAdapter(model = model, providerName = "generic_openai", configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
-                "zai" -> ZAIAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
-                "openrouter" -> OpenRouterAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source)
-                else -> {
-                    logger.error { "[LLM_CLIENT] Unknown provider: $provider" }
-                    throw RefioError.ProviderNotConfigured(provider, "provider")
-                }
+        val httpClient = httpClientOverride ?: httpClientPool.computeIfAbsent(poolKey) {
+            val socketTimeoutMs = configService?.getTyped(ConfigKeys.API_CALL_TIMEOUT, taskId)?.toLong()?.times(1000L)
+                ?: ConfigKeys.API_CALL_TIMEOUT.default.toLong() * 1000L
+            LLMKtorClientFactory.create(socketTimeoutMs, ktorLogger)
+        }
+        return when (providerKey) {
+            "ollama" -> OllamaAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source, httpClientOverride = httpClient)
+            "openai" -> OpenAIAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source, httpClientOverride = httpClient)
+            "anthropic" -> AnthropicAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source, httpClientOverride = httpClient)
+            "gemini" -> GeminiAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source, httpClientOverride = httpClient)
+            "lmstudio" -> LMStudioAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source, httpClientOverride = httpClient)
+            "generic_openai" -> GenericOpenAIAdapter(model = model, providerName = "generic_openai", configService = configService, taskId = taskId, subtaskId = subtaskId, source = source, httpClientOverride = httpClient)
+            "zai" -> ZAIAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source, httpClientOverride = httpClient)
+            "openrouter" -> OpenRouterAdapter(model = model, configService = configService, taskId = taskId, subtaskId = subtaskId, source = source, httpClientOverride = httpClient)
+            else -> {
+                logger.error { "[LLM_CLIENT] Unknown provider: $provider" }
+                throw RefioError.ProviderNotConfigured(provider, "provider")
             }
         }
     }
 
     /**
-     * Shutdown all pooled adapters and their HttpClients.
-     * Call this when the application is shutting down.
+     * Shutdown all pooled HttpClients. Call this when the application is shutting down.
+     * Adapters are transient (rebuilt per request over a pooled client) so there is nothing
+     * else to close — only the shared clients own resources.
      */
     suspend fun shutdown() {
-        adapterPool.values.forEach { adapter ->
+        httpClientPool.forEach { (poolKey, client) ->
             try {
-                adapter.close()
+                client.close()
             } catch (e: Exception) {
-                logger.error(e) { "[LLM_CLIENT] Error closing adapter: ${adapter.provider}" }
+                logger.error(e) { "[LLM_CLIENT] Error closing HttpClient: $poolKey" }
             }
         }
-        adapterPool.clear()
+        httpClientPool.clear()
     }
 
     private fun estimateCost(usage: LLMUsage, provider: String, model: String): Double {

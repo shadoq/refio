@@ -24,9 +24,15 @@ private val logger = KotlinLogging.logger {}
  * the renderer (output via JLine's writer) and the input handler (input via
  * JLine's reader). This ensures all I/O goes through one coordinated channel.
  */
-fun launchTuiApp(projectPath: Path, mode: TaskMode?, model: String?, noEgress: Boolean) {
+fun launchTuiApp(
+    projectPath: Path,
+    mode: TaskMode?,
+    model: String?,
+    noEgress: Boolean,
+    runConfigOverrides: Map<String, String> = emptyMap()
+) {
     val mordantTerminal = Terminal()
-    val viewModel = TuiViewModel(projectPath, mode, model, noEgress)
+    val viewModel = TuiViewModel(projectPath, mode, model, noEgress, runConfigOverrides)
     val inputHandler = TuiInputHandler(mordantTerminal)
 
     // --- Create JLine terminal for interactive mode ---

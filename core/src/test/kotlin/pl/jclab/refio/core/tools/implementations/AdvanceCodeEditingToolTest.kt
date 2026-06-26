@@ -187,12 +187,7 @@ class AdvanceCodeEditingToolTest {
         }
 
         @Test
-        fun `should resolve the editor model via the EDITOR operation slot`() = runBlocking {
-            // docs/0059 architect/editor split: full-file generation must resolve the EDITOR
-            // sub-model slot, not CODING, so the editor can run a different model than the
-            // turn/architect. EDITOR inherits CODING when default_model.editor is unset (proven
-            // at the ModelSelectionService level), so users who never configure an editor model
-            // see no behavioural change.
+        fun `should resolve the coding model via the CODING operation slot`() = runBlocking {
             Files.writeString(tempDir.resolve("test.kt"), "original content")
 
             coEvery {
@@ -223,9 +218,9 @@ class AdvanceCodeEditingToolTest {
                 "edit_description" to "Modify the content"
             ))
 
-            // Then — the edit succeeds and the model was resolved through the EDITOR slot
+            // Then — the edit succeeds and the model was resolved through the CODING slot
             assertTrue(result.success)
-            coVerify { mockConfigService.getModel(ModelOperation.EDITOR, any()) }
+            coVerify { mockConfigService.getModel(ModelOperation.CODING, any()) }
         }
 
         @Test

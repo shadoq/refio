@@ -420,15 +420,13 @@ RagSearchResult[]
 
 `SUBAGENT` is a run profile on top of PLAN/AGENT with additional tool filtering.
 
-### Architect / Editor Split
+### Code Editing
 
-`multi_line_editor` and `advance_code_editing` don't edit files with the turn model — they make a **separate LLM call to a dedicated editor model** to generate the new content, then Refio computes the diff and writes the file. This is the proven "strong model plans, cheap model edits" pattern (Aider's architect/editor mode) and the most effective layout for local models: a capable reasoner runs the turn (the *architect* — decides what to change and calls the edit tool), while a fast, cheap code model emits the file content (the *editor*).
+`multi_line_editor` and `advance_code_editing` don't edit files inline — they make a **separate LLM call to generate the new file content**, then Refio computes the diff and writes the file.
 
-- **Roles → model slots.** The turn/agent loop resolves its model from the `coding` slot (`ModelOperation.CODING`); the edit tools resolve theirs from the `editor` slot (`ModelOperation.EDITOR` → `default_model.editor`). `EDITOR` **inherits `CODING` when `default_model.editor` is unset**, so a single-model setup behaves exactly as before — the split is opt-in.
-- **Whole-file, not diff.** The editor model returns the *complete* file inside a fenced code block; Refio derives the unified diff from before/after purely for display. There is no diff to "apply", so there is no diff-application failure mode.
-- **Extraction-repair loop.** A weak editor model sometimes replies with prose or an unterminated block (no usable code block). Instead of failing the turn, `advance_code_editing` re-prompts the editor with a corrective hint, bounded to 2 attempts, then fails loud — never a silent or partial write (the file is written only after a clean extraction).
-
-Configure via `models.defaults.editor` (`default_model.editor`); see [config.md](config.md) → Model Configuration. Example: `plan`/`coding` → a reasoner, `editor` → a fast `qwen3.5-coder`.
+- **Model slot.** Both edit tools resolve their generation model from the `coding` slot (`ModelOperation.CODING` → `default_model.agent`) — the same slot the AGENT turn loop uses. When unset it inherits the default (`chat`) model.
+- **Whole-file, not diff.** The model returns the *complete* file inside a fenced code block; Refio derives the unified diff from before/after purely for display. There is no diff to "apply", so there is no diff-application failure mode.
+- **Extraction-repair loop.** A weak model sometimes replies with prose or an unterminated block (no usable code block). Instead of failing the turn, `advance_code_editing` re-prompts with a corrective hint, bounded to 2 attempts, then fails loud — never a silent or partial write (the file is written only after a clean extraction).
 
 ## Subagents
 

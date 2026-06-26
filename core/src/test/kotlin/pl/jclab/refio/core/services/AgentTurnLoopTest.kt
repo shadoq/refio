@@ -1323,7 +1323,8 @@ class AgentTurnLoopTest {
                     onChunk = any(),
                     taskId = any(),
                     subtaskId = any(),
-                    source = eq("AgentTurnLoop"),
+                    // Decision-turn source is now mode-suffixed ("AgentTurnLoop:PLAN"/":AGENT"); match the prefix.
+                    source = match { it?.startsWith("AgentTurnLoop") == true },
                     kwargs = any()
                 )
             } returnsMany listOf(

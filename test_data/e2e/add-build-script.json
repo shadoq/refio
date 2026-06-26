@@ -1,0 +1,18 @@
+{
+  "id": "add-build-script",
+  "mode": "AGENT",
+  "max_iterations": 20,
+  "fixture": "fixtures/npm-config",
+  "prompt_file": "prompts/add-build-script.md",
+  "assert": {
+    "tool_order": ["read_file", "advance_code_editing"],
+    "needles_in_file": [
+      { "path": "package.json", "regex": "\"build\"[[:space:]]*:" },
+      { "path": "package.json", "regex": "node build\\.js" },
+      { "path": "package.json", "text": "\"test\": \"node test.js\"" }
+    ],
+    "build_cmd": "node -e \"require('./package.json')\"",
+    "no_context_overflow": true
+  },
+  "judge": { "criteria": ["A build script running node build.js was added; the existing test script and other fields are intact; the file is still valid JSON."] }
+}

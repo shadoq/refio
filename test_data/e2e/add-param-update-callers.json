@@ -1,0 +1,19 @@
+{
+  "id": "add-param-update-callers",
+  "mode": "AGENT",
+  "max_iterations": 40,
+  "fixture": "fixtures/js-discount",
+  "prompt_file": "prompts/add-param-update-callers.md",
+  "assert": {
+    "tool_order": ["read_file", "grep_search", "advance_code_editing"],
+    "needles_in_file": [
+      { "path": "src/discount.js", "regex": "applyDiscount\\([^,)]*," },
+      { "path": "src/checkout.js", "regex": "applyDiscount\\([^,)]*," },
+      { "path": "src/report.js", "regex": "applyDiscount\\([^,)]*," }
+    ],
+    "file_unchanged": ["test.js"],
+    "build_cmd": "node test.js",
+    "no_context_overflow": true
+  },
+  "judge": { "criteria": ["applyDiscount gained a rate parameter and uses it; every caller across both files passes an explicit 0.1 to keep old behavior; the test prints OK without the asserts being changed."] }
+}

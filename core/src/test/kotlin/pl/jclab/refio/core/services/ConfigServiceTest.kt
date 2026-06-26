@@ -377,63 +377,6 @@ class ConfigServiceTest {
             // Then
             assertEquals(Pair("gpt-4.1", "openai"), result)
         }
-
-        @Test
-        fun `getDefaultModel for EDITOR should inherit CODING when editor unset`() {
-            // Architect/editor split (docs/0059): with default_model.editor unset the editor
-            // sub-model must resolve to the CODING/agent slot — identical to the pre-split
-            // behaviour, so the split forces no config change on existing users.
-            val codingJson = """{"modelId":"qwen-coder","provider":"ollama"}"""
-            every {
-                configRepository.getWithPrecedence(ConfigKeys.DEFAULT_MODEL_EDITOR.key, any(), any())
-            } returns null
-            every {
-                configRepository.getWithPrecedence(ConfigKeys.DEFAULT_MODEL_AGENT.key, any(), any())
-            } returns createConfig(ConfigKeys.DEFAULT_MODEL_AGENT.key, codingJson)
-
-            // When
-            val (model, provider) = configService.getDefaultModel(ModelOperation.EDITOR)
-
-            // Then — inherits CODING, not the generic fallback
-            assertEquals("qwen-coder", model)
-            assertEquals("ollama", provider)
-        }
-
-        @Test
-        fun `getDefaultModel for EDITOR should use editor model independent of CODING`() {
-            // Proves the split is explicit: a configured editor model wins over the CODING/agent
-            // model, so the turn (architect) and the file edit (editor) can run different models.
-            val editorJson = """{"modelId":"qwen-coder","provider":"ollama"}"""
-            val codingJson = """{"modelId":"gpt-5.5","provider":"openai"}"""
-            every {
-                configRepository.getWithPrecedence(ConfigKeys.DEFAULT_MODEL_EDITOR.key, any(), any())
-            } returns createConfig(ConfigKeys.DEFAULT_MODEL_EDITOR.key, editorJson)
-            every {
-                configRepository.getWithPrecedence(ConfigKeys.DEFAULT_MODEL_AGENT.key, any(), any())
-            } returns createConfig(ConfigKeys.DEFAULT_MODEL_AGENT.key, codingJson)
-
-            // When
-            val (model, provider) = configService.getDefaultModel(ModelOperation.EDITOR)
-
-            // Then — editor wins, CODING is ignored
-            assertEquals("qwen-coder", model)
-            assertEquals("ollama", provider)
-        }
-
-        @Test
-        fun `getDefaultModel for EDITOR should fall back to CODING fallback when nothing configured`() {
-            // Neither editor nor coding configured: EDITOR still inherits the CODING slot, which
-            // bottoms out at the generic model fallback — never STRONG's no-fallback throw.
-            every { configRepository.getWithPrecedence(any(), any(), any()) } returns null
-            every { configRepository.get(any(), any(), any(), any()) } returns null
-
-            // When
-            val (model, provider) = configService.getDefaultModel(ModelOperation.EDITOR)
-
-            // Then
-            assertEquals(ConfigService.FALLBACK_MODEL, model)
-            assertEquals(ConfigService.FALLBACK_PROVIDER, provider)
-        }
     }
 
     @Nested

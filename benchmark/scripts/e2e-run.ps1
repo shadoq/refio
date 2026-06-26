@@ -38,20 +38,33 @@
 .EXAMPLE
   ./e2e-run.ps1 -Model "ollama/qwen3.5:9b" -All
 #>
-[CmdletBinding()]
+# PositionalBinding=$false: scenario ids are passed as bare args (e.g. `-Model X increase-retry-count`)
+# and must land in $Scenarios via ValueFromRemainingArguments. Without this, a bare id binds
+# positionally to $Cli/$MaxCost instead (the second bare id then fails [double] conversion on MaxCost).
+[CmdletBinding(PositionalBinding=$false)]
 param(
     [string]$Cli,
     [double]$MaxCost = 0.50,
     [string]$Model,
+    [string]$OllamaHost,
+    [int]$OllamaCtx = 0,
     [switch]$Keep,
     [switch]$SelfTest,
     [switch]$List,
     [switch]$All,
+    [string[]]$Config,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Scenarios
 )
 
 $ErrorActionPreference = 'Stop'
+# The CLI and build_cmd are native commands that signal failure via exit code, which this script
+# inspects explicitly ($LASTEXITCODE). A non-zero native exit must FAIL only its own scenario - like
+# e2e-run.sh - never abort the whole run. Without this, PowerShell 7.4+ escalates a non-zero native
+# exit to a terminating error under -EAP Stop, so a missing build tool (e.g. kotlinc) would kill the
+# entire -All run instead of failing just that scenario. The variable is absent on Windows PowerShell
+# 5.1, where assigning it is a harmless no-op.
+$PSNativeCommandUseErrorActionPreference = $false
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot  = (Resolve-Path (Join-Path $ScriptDir '..\..')).Path
 # Top-level *.json here are scenarios; examples\ (samples) is a subdir and is excluded from discovery.
@@ -207,6 +220,21 @@ function Invoke-Scenario {
         '--max-cost', $MaxCost
     )
     if ($Model) { $cliArgs += @('--model', $Model) }
+    # -OllamaHost / -OllamaCtx are sugar over the validated config overrides so testing a model on a
+    # different Ollama box (or a different context size) needs no raw key. Host accepts "box",
+    # "box:11434", or "http://box:11434"; a bare host/port becomes http://host:11434.
+    if ($OllamaHost) {
+        $endpoint = switch -Regex ($OllamaHost) {
+            '^https?://' { $OllamaHost; break }
+            ':\d+$'      { "http://$OllamaHost"; break }
+            default      { "http://${OllamaHost}:11434" }
+        }
+        $cliArgs += @('--config', "providers.ollama.ollama_endpoint=$endpoint")
+    }
+    if ($OllamaCtx -gt 0) { $cliArgs += @('--config', "providers.ollama.ollama_context_size=$OllamaCtx") }
+    # Run-scope config overrides (-Config k=v ...). Applied last, so an explicit -Config wins over the
+    # -OllamaHost/-OllamaCtx sugar above for the same key.
+    foreach ($kv in $Config) { $cliArgs += @('--config', $kv) }
 
     Write-Host "> $($s.id) (mode=$mode, max_cost=$MaxCost) -> $work"
     & $Cli @cliArgs
@@ -227,8 +255,15 @@ function Invoke-Scenario {
     $buildExit = 0
     if ($s.assert.build_cmd) {
         Push-Location $work
+        # A native command writing to stderr (e.g. 'kotlinc' not on PATH) becomes a PowerShell error
+        # record that, under -EAP Stop, terminates the whole -All run. Drop to Continue around the call
+        # so a missing/failing build tool FAILs only its own scenario (its exit code is captured below),
+        # mirroring e2e-run.sh. The catch covers any residual terminating error.
+        $savedEAP = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
         try { cmd /c $s.assert.build_cmd 1>"$work\build.log" 2>&1; $buildExit = $LASTEXITCODE }
-        finally { Pop-Location }
+        catch { $buildExit = 1 }
+        finally { $ErrorActionPreference = $savedEAP; Pop-Location }
     }
 
     $verdict = Assert-Run -Scenario $Scenario -RunJsonPath $runJson -ProjectDir $work -BuildExit $buildExit
@@ -339,5 +374,14 @@ if ($All) {
 Write-Output "| scenario | verdict | metrics |"
 Write-Output "|---|---|---|"
 $overall = 0
-foreach ($s in $resolved) { if (-not (Invoke-Scenario $s)) { $overall = 1 } }
+foreach ($s in $resolved) {
+    # Invoke-Scenario streams its verdict row via Write-Output AND returns a boolean on the same
+    # success stream. Capturing it directly in `if (-not (Invoke-Scenario ...))` swallowed the row
+    # (the table stayed empty) and mis-read the boolean. Capture everything, print only the table
+    # row(s), and derive pass/fail from the row text so the verdict is always shown.
+    $captured = @(Invoke-Scenario $s)
+    $rows = @($captured | Where-Object { $_ -is [string] -and $_ -match '^\|' })
+    $rows | ForEach-Object { Write-Output $_ }
+    if (-not ($rows | Where-Object { $_ -match '\|\s*PASS' })) { $overall = 1 }
+}
 exit $overall

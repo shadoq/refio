@@ -81,9 +81,7 @@ data class ModelDefaultsConfig(
     val coding: String? = null,
     val weak: String? = null,
     val embedding: String? = null,
-    val strong: String? = null,
-    // Editor sub-model of the architect/editor split (docs/0059). Optional: inherits `coding`.
-    val editor: String? = null
+    val strong: String? = null
 )
 
 @Serializable

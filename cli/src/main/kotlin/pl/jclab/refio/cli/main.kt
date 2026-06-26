@@ -49,11 +49,11 @@ class RefioCommand : CliktCommand(name = "refio") {
     val noEgress by option("--no-egress", help = "Block cloud LLM providers").flag()
     val config by option(
         "--config",
-        help = "Run-scope config override key=value (repeatable, headless only). E.g. --config agent.max_iterations=80"
+        help = "Run-scope config override key=value (repeatable). Works in both headless and interactive TUI. E.g. --config agent.max_iterations=80 or --config providers.ollama.ollama_endpoint=http://127.0.0.1:11434"
     ).multiple()
     val configFile by option(
         "--config-file",
-        help = "File of key=value config overrides, one per line (# comments allowed; headless only)"
+        help = "File of key=value config overrides, one per line (# comments allowed). Works in both headless and interactive TUI."
     ).path(mustExist = true, canBeDir = false)
     val printConfig by option(
         "--print-config",
@@ -122,10 +122,10 @@ class RefioCommand : CliktCommand(name = "refio") {
         } else if (headless) {
             echo("Error: --headless requires --prompt, --prompt-file, or --multi-agent <file>", err = true)
         } else {
-            if (effectiveOverrides.isNotEmpty()) {
-                echo("Warning: --config/--config-file/--max-cost is ignored outside --headless mode", err = true)
-            }
-            launchTuiApp(project, mode, model, noEgress)
+            // Run-scope overrides apply to the interactive TUI too, so a user can point Ollama /
+            // LM Studio at a different endpoint (or tweak any config key) for one session without
+            // editing config.yaml or building a synthetic config. Same validated map as headless.
+            launchTuiApp(project, mode, model, noEgress, effectiveOverrides)
         }
     }
 
@@ -288,6 +288,16 @@ class RefioCommand : CliktCommand(name = "refio") {
                             streamCallback = tokenStream,
                             listener = turnListener
                         )
+                        // Headless calls runTurn directly, bypassing CoreSessionService, which is what
+                        // normally promotes the task off NEW. Mirror its mapping here so the exported
+                        // run.json reports the real outcome (SUCCESS / INCOMPLETE / FAILED) instead of a
+                        // permanent NEW that hides whether the agent actually delivered.
+                        val finalStatus = when {
+                            result.incomplete -> pl.jclab.refio.core.db.TaskStatus.INCOMPLETE
+                            result.success -> pl.jclab.refio.core.db.TaskStatus.SUCCESS
+                            else -> pl.jclab.refio.core.db.TaskStatus.FAILED
+                        }
+                        runCatching { router.taskRepository.update(id = task.id, status = finalStatus) }
                         result.response
                     }
                 }

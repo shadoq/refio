@@ -83,6 +83,28 @@ class PromptTokenEstimator {
         }
 
         /**
+         * Estimate the token cost of native tool schemas as they are serialized into the request
+         * body's `tools` array. These schemas are NOT part of the system-prompt text, so callers
+         * that size the context budget against the system prompt alone (TurnPromptBuilder) miss
+         * them — letting the dynamic sections over-allocate and push the real prompt past the
+         * model's context window, where Ollama silently truncates from the head (docs/0057).
+         *
+         * The per-schema char measure (name + description + parameters JSON) mirrors the adapters'
+         * own overflow guard (e.g. OllamaAdapter.estimateOllamaInputTokens) so the budget
+         * reservation tracks what is actually sent on the wire.
+         */
+        fun estimateNativeToolSchemaTokens(
+            schemas: List<pl.jclab.refio.core.tools.base.ToolSchema>?,
+            modelId: String? = null,
+        ): Int {
+            if (schemas.isNullOrEmpty()) return 0
+            val chars = schemas.sumOf { schema ->
+                schema.name.length + schema.description.length + schema.parametersJsonSchema.toString().length
+            }
+            return estimateTokensForChars(chars, modelId)
+        }
+
+        /**
          * Inverse of [estimateBase] — how many characters fit in the given token budget.
          * Used by truncation helpers.
          */

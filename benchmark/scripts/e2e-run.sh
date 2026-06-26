@@ -23,7 +23,14 @@
 #   e2e-run.sh --list                         # show selectable scenarios (id + mode + file), then exit
 #   e2e-run.sh [opts] --all                   # run every scenario under test_data/e2e/
 #   e2e-run.sh [opts] <id|scenario.json> ...  # run selected scenarios (by id OR by file path)
-#     opts: [--cli <path>] [--max-cost <usd>] [--model <provider/model>] [--keep]
+#     opts: [--cli <path>] [--max-cost <usd>] [--model <provider/model>] [--ollama-host <h>]
+#           [--ollama-ctx <n>] [--config k=v]... [--keep]
+#
+# --ollama-host points every scenario at a different Ollama endpoint for this run (sugar for
+#   --config providers.ollama.ollama_endpoint=...). Accepts a host ("box"), host:port
+#   ("box:11434"), or a full URL ("http://box:11434"); bare host/port becomes http://host:11434.
+# --ollama-ctx overrides the configured Ollama context size for this run (sugar for
+#   --config providers.ollama.ollama_context_size=<n>).
 #
 # Scenario selection: a positional arg is resolved as (1) an existing file path, else (2)
 # test_data/e2e/<arg>.json, else (3) any scenario whose `.id` equals <arg>. `--all` runs them all.
@@ -40,11 +47,14 @@ E2E_DIR="$REPO_ROOT/test_data/e2e"
 CLI="$CLI_DEFAULT"
 MAX_COST="0.50"
 MODEL=""
+OLLAMA_HOST=""
+OLLAMA_CTX=""
 KEEP=0
 SELF_TEST=0
 LIST=0
 ALL=0
 SCENARIOS=()
+CONFIG_OVERRIDES=()
 
 die() { echo "ERROR: $*" >&2; exit 2; }
 
@@ -86,6 +96,9 @@ while [[ $# -gt 0 ]]; do
         --cli)       CLI="$2"; shift 2 ;;
         --max-cost)  MAX_COST="$2"; shift 2 ;;
         --model)     MODEL="$2"; shift 2 ;;
+        --ollama-host) OLLAMA_HOST="$2"; shift 2 ;;
+        --ollama-ctx)  OLLAMA_CTX="$2"; shift 2 ;;
+        --config)    CONFIG_OVERRIDES+=("$2"); shift 2 ;;
         --keep)      KEEP=1; shift ;;
         --self-test) SELF_TEST=1; shift ;;
         --list)      LIST=1; shift ;;
@@ -95,6 +108,22 @@ while [[ $# -gt 0 ]]; do
         *)           SCENARIOS+=("$1"); shift ;;
     esac
 done
+
+# --ollama-host / --ollama-ctx are sugar over the validated config overrides. They are emitted BEFORE
+# any explicit --config (see cli_args below), so a raw --config providers.ollama.* stays the ultimate
+# escape hatch and wins for the same key.
+OLLAMA_SUGAR=()
+if [[ -n "$OLLAMA_HOST" ]]; then
+    case "$OLLAMA_HOST" in
+        http://*|https://*) endpoint="$OLLAMA_HOST" ;;
+        *:*)                endpoint="http://$OLLAMA_HOST" ;;        # host:port given
+        *)                  endpoint="http://$OLLAMA_HOST:11434" ;;  # bare host → default port
+    esac
+    OLLAMA_SUGAR+=("providers.ollama.ollama_endpoint=$endpoint")
+fi
+if [[ -n "$OLLAMA_CTX" ]]; then
+    OLLAMA_SUGAR+=("providers.ollama.ollama_context_size=$OLLAMA_CTX")
+fi
 
 require_cmd jq
 
@@ -258,6 +287,14 @@ run_scenario() {
         --max-cost "$MAX_COST"
     )
     [[ -n "$MODEL" ]] && cli_args+=(--model "$MODEL")
+    # --ollama-host/--ollama-ctx sugar first, then explicit --config (so a raw --config wins).
+    local c
+    if [[ ${#OLLAMA_SUGAR[@]} -gt 0 ]]; then
+        for c in "${OLLAMA_SUGAR[@]}"; do cli_args+=(--config "$c"); done
+    fi
+    if [[ ${#CONFIG_OVERRIDES[@]} -gt 0 ]]; then
+        for c in "${CONFIG_OVERRIDES[@]}"; do cli_args+=(--config "$c"); done
+    fi
 
     echo "▶ $id (mode=$mode, max_cost=$MAX_COST) → $work" >&2
     local cli_exit=0

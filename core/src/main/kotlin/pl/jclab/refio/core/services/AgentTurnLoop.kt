@@ -692,6 +692,7 @@ class AgentTurnLoop(
                             taskId, mode, iteration, maxIterations,
                             userContextRefs, runProfile, profileOverrides,
                             writeToolsExecutedInTurn, useNativeTools,
+                            nativeToolSchemas = iterationNativeToolSchemas,
                             agentName = agentName, sessionId = evSessionId, modelId = effectiveModel
                         )
                         val (fits, estimated) = tokenEstimator.checkFits(tempPrompt, maxTokens, provider = effectiveProvider)
@@ -710,6 +711,7 @@ class AgentTurnLoop(
                         taskId, mode, iteration, maxIterations,
                         userContextRefs, runProfile, profileOverrides,
                         writeToolsExecutedInTurn, useNativeTools,
+                        nativeToolSchemas = iterationNativeToolSchemas,
                         agentName = agentName, sessionId = evSessionId, modelId = effectiveModel
                     )
 
@@ -731,7 +733,9 @@ class AgentTurnLoop(
                             messages = currentPrompt.messages,
                             systemPrompt = currentPrompt.systemPrompt,
                             taskId = taskId,
-                            source = "AgentTurnLoop",
+                            // Retry path of the decision turn — keep parity with TurnLLMCaller's
+                            // non-retry path so PLAN/AGENT is distinguishable in the api-log Source.
+                            source = "AgentTurnLoop:${mode.name}",
                             maxRetries = config.maxRetries,
                             baseDelayMs = config.retryBackoffMs,
                             responseFormat = responseFormat,
@@ -2280,6 +2284,7 @@ class AgentTurnLoop(
         profileOverrides: TurnProfileOverrides? = null,
         writeToolsExecutedInTurn: Int = 0,
         useNativeTools: Boolean = false,
+        nativeToolSchemas: List<ToolSchema>? = null,
         agentName: String? = null,
         sessionId: String? = null,
         modelId: String? = null
@@ -2294,6 +2299,7 @@ class AgentTurnLoop(
             profileOverrides = profileOverrides,
             writeToolsExecutedInTurn = writeToolsExecutedInTurn,
             nativeToolsActive = useNativeTools,
+            nativeToolSchemas = nativeToolSchemas,
             agentName = agentName,
             sessionId = sessionId,
             modelId = modelId

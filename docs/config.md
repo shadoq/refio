@@ -154,8 +154,7 @@ models:
   defaults:
     chat: "ollama/qwen3.5:9b"           # Chat/conversation model
     plan: "ollama/qwen3.5:9b"           # Planning operations
-    coding: "ollama/qwen3.5:9b"   # Coding/agent tasks
-    editor: "ollama/qwen3.5-coder:7b"   # File-edit sub-model (architect/editor split); inherits `coding` when unset
+    coding: "ollama/qwen3.5:9b"   # Coding/agent tasks (agent turn + file edits)
     weak: "ollama/qwen3.5:4b"           # Auxiliary operations (summaries)
     embedding: "ollama/nomic-embed-text" # RAG embeddings
 
@@ -186,7 +185,7 @@ models:
       # planModel, codingModel, weakModel default to defaultModel when omitted
 ```
 
-**Architect / editor split.** `multi_line_editor` and `advance_code_editing` generate file content with a dedicated LLM call resolved from the `editor` slot (`default_model.editor`), independent of the turn model — the proven "strong model plans, cheap model edits" pattern for local models. Point `plan`/`coding` at a capable reasoner and `editor` at a fast code model. When `editor` is unset it inherits `coding`, so existing single-model setups are unaffected. See [ARCHITECTURE.md](ARCHITECTURE.md) → Architect / Editor Split.
+**Coding model.** In AGENT mode the turn loop and the file-editing tools (`advance_code_editing`, `multi_line_editor`) both resolve the `coding` slot (`default_model.agent`); PLAN mode uses `plan`, CHAT uses `chat`. When a slot is unset it inherits `chat` (the default model), so single-model setups need only set `chat`.
 
 ### System Limits
 
@@ -411,7 +410,6 @@ mcp:
 | `models.defaults.chat` | `default_model.chat` | `qwen3.5:9b` |
 | `models.defaults.plan` | `default_model.plan` | `qwen3.5:9b` |
 | `models.defaults.coding` | `default_model.agent` | `qwen3.5:9b` |
-| `models.defaults.editor` | `default_model.editor` | - (optional, inherits coding) |
 | `models.defaults.weak` | `default_model.weak` | `qwen3.5:9b` |
 | `models.defaults.embedding` | `models.embedding_model` | `nomic-embed-text` |
 | `models.defaults.strong` | `default_model.strong` | - (optional, no fallback) |

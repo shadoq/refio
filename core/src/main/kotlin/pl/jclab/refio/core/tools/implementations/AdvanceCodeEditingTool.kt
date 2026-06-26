@@ -274,14 +274,11 @@ class AdvanceCodeEditingTool(
                 add(LLMMessage(role = "user", content = userPrompt))
             }
 
-            // Resolve the editor sub-model of the architect/editor split (docs/0059). EDITOR
-            // inherits the CODING/agent slot when default_model.editor is unset, so this is a
-            // no-op for users who never configure a separate editor model.
             val (model, provider) = configService.getModel(
-                operation = ModelOperation.EDITOR,
+                operation = ModelOperation.CODING,
                 taskId = taskId
             )
-            logger.info { "Using editor model for edit (${originalContent.lines().size} lines): $model ($provider), stream=$stream, hasOnChunk=${onChunk != null}" }
+            logger.info { "Using coding model for edit (${originalContent.lines().size} lines): $model ($provider), stream=$stream, hasOnChunk=${onChunk != null}" }
 
             // RFC 0032: Use unified complete() with stream flag
             var didStream = false
@@ -346,8 +343,8 @@ class AdvanceCodeEditingTool(
                 // has been written to disk, so there is no partial state to clean up.
                 return@withLockedFile ToolResult.error(
                     "LLM did not return a usable code block after $MAX_EXTRACTION_ATTEMPTS attempt(s). " +
-                            "The editor model kept replying with prose or an unterminated block. " +
-                            "Try rephrasing the edit description, set a stronger editor model via default_model.editor, " +
+                            "The coding model kept replying with prose or an unterminated block. " +
+                            "Try rephrasing the edit description, set a stronger coding model via default_model.agent, " +
                             "or use code_editing / multi_line_editor with an exact string to match."
                 )
             }

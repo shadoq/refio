@@ -290,14 +290,6 @@ object ConfigKeys {
         default = null
     )
 
-    // Editor sub-model of the architect/editor split (docs/0059). Optional: when unset the
-    // editor inherits the CODING/agent slot, so behaviour is unchanged from before the split.
-    val DEFAULT_MODEL_EDITOR = ConfigKey<String?>(
-        key = "default_model.editor",
-        parser = { it.takeIf { s -> s.isNotBlank() } },
-        default = null
-    )
-
     val OLLAMA_MAX_CONCURRENT = ConfigKey(
         key = "providers.ollama_max_concurrent",
         parser = String::toIntOrNull,

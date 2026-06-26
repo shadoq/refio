@@ -77,32 +77,6 @@ internal class ModelSelectionService(private val configService: ConfigService) {
             return fallbackModelForOperation(operation)
         }
 
-        if (operation == ModelOperation.EDITOR) {
-            // Architect/editor split (docs/0059): the editor sub-model is optional. Resolve its
-            // own slot (DB then YAML, honouring the `inherit` sentinel); when unset, fall through
-            // to CODING so behaviour is identical to before the split existed. `config` above was
-            // already fetched for the DEFAULT_MODEL_EDITOR key.
-            if (config != null) {
-                val data = gson.fromJson(config.value, ModelConfigData::class.java)
-                if (isInheritedModelConfig(data)) {
-                    logger.debug { "Using inherited editor model -> coding model" }
-                    return getDefaultModel(ModelOperation.CODING, taskId, projectId)
-                }
-                if (data.modelId != null && data.provider != null) {
-                    logger.debug { "Using editor model from DB: ${data.modelId}" }
-                    return Pair(data.modelId, data.provider)
-                }
-            }
-            val yamlEditor = configService.yamlLoader.getDefaultEditorModel()
-            if (yamlEditor != null) {
-                val (provider, model) = parseModelString(yamlEditor)
-                logger.debug { "Using editor model from YAML: $model (provider=$provider)" }
-                return Pair(model, provider)
-            }
-            logger.debug { "No editor model configured -> inheriting coding model" }
-            return getDefaultModel(ModelOperation.CODING, taskId, projectId)
-        }
-
         if (config != null) {
             val data = gson.fromJson(config.value, ModelConfigData::class.java)
             if (operation != ModelOperation.DEFAULT && isInheritedModelConfig(data)) {
@@ -122,7 +96,6 @@ internal class ModelSelectionService(private val configService: ConfigService) {
             ModelOperation.WEAK -> configService.yamlLoader.getDefaultWeakModel()
             ModelOperation.STRONG -> configService.yamlLoader.getDefaultStrongModel()
             ModelOperation.EMBEDDING -> error("unreachable")
-            ModelOperation.EDITOR -> error("unreachable: EDITOR resolved before the YAML slot lookup")
         }
         if (yamlModel != null) {
             val (provider, model) = parseModelString(yamlModel)
@@ -319,7 +292,6 @@ internal class ModelSelectionService(private val configService: ConfigService) {
         ModelOperation.WEAK -> ConfigKeys.WEAK_MODEL.key
         ModelOperation.EMBEDDING -> ConfigKeys.EMBEDDING_MODEL.key
         ModelOperation.STRONG -> ConfigKeys.STRONG_MODEL.key
-        ModelOperation.EDITOR -> ConfigKeys.DEFAULT_MODEL_EDITOR.key
     }
 
     private fun isInheritedModelConfig(data: ModelConfigData): Boolean {
@@ -334,7 +306,6 @@ internal class ModelSelectionService(private val configService: ConfigService) {
         ModelOperation.WEAK -> Pair(FALLBACK_WEAK_MODEL, FALLBACK_WEAK_PROVIDER)
         ModelOperation.EMBEDDING -> Pair(FALLBACK_EMBEDDING_MODEL, FALLBACK_EMBEDDING_PROVIDER)
         ModelOperation.STRONG -> throw IllegalStateException("STRONG model has no fallback — must be explicitly configured")
-        ModelOperation.EDITOR -> error("unreachable: EDITOR inherits CODING and never reaches the slot fallback")
     }
 
     /** JSON storage format for model selection entries in DB. */

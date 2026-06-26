@@ -711,20 +711,39 @@ class OllamaAdapter(
             }
 
             if (!receivedDoneChunk && finalDoneReason != "cancelled") {
-                // Server closed the NDJSON channel without emitting a final chunk with done=true.
-                // Common causes: remote Ollama restart, idle proxy timeout, network drop, model crash.
-                // Marked retryable by LLMRetryHandler.shouldRetryByMessage via "stream ended before".
                 val durationMs = System.currentTimeMillis() - startTime
-                throw LLMErrorMapper.fromThrowable(
-                    provider,
-                    model,
-                    timeout,
-                    IllegalStateException(
-                        "Ollama stream ended before done=true final chunk " +
-                            "(contentBytes=${rawContentBuilder.length}, " +
-                            "thinkingBytes=${rawThinkingBuilder.length}, durationMs=$durationMs)"
+                // The channel closed without the trailing done=true sentinel. Only hard-fail when
+                // NOTHING usable arrived — if we already captured a tool call, content, or thinking,
+                // discarding it would turn a usable turn into a failure (and a retry would pay the
+                // full model latency again for the same likely-truncated stream). Ollama emits whole
+                // tool calls in a single chunk (not incrementally), so a captured call is complete.
+                val haveUsableOutput = rawToolCalls.isNotEmpty() ||
+                    rawContentBuilder.isNotEmpty() ||
+                    rawThinkingBuilder.isNotEmpty()
+                if (!haveUsableOutput) {
+                    // Server closed the NDJSON channel before emitting any content/tool call.
+                    // Common causes: remote Ollama restart, idle proxy timeout, network drop, model crash.
+                    // Marked retryable by LLMRetryHandler.shouldRetryByMessage via "stream ended before".
+                    throw LLMErrorMapper.fromThrowable(
+                        provider,
+                        model,
+                        timeout,
+                        IllegalStateException(
+                            "Ollama stream ended before done=true final chunk " +
+                                "(contentBytes=${rawContentBuilder.length}, " +
+                                "thinkingBytes=${rawThinkingBuilder.length}, durationMs=$durationMs)"
+                        )
                     )
-                )
+                }
+                // Finalize gracefully with what we captured. Usage stats stay 0 because the final
+                // chunk that carries prompt_eval_count/eval_count never arrived. finishReason is left
+                // null (not "stop"/"length") so downstream truncation handling is not falsely triggered.
+                logger.warn {
+                    "$logPrefix Stream ended before done=true but usable output was captured — " +
+                        "finalizing anyway (toolCalls=${rawToolCalls.size}, " +
+                        "contentBytes=${rawContentBuilder.length}, " +
+                        "thinkingBytes=${rawThinkingBuilder.length}, durationMs=$durationMs)"
+                }
             }
 
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
