@@ -87,15 +87,23 @@ class RunTerminalCommandTool(
             logger.info { "Executing command: '$command', workingDir='$workingDir', shell=${shellCommand[0]}" }
 
             // Execute command
-            val process = ProcessBuilder()
+            val processBuilder = ProcessBuilder()
                 .command(shellCommand)
                 .directory(workingDir.toFile())
                 .redirectErrorStream(true)
-                .start()
+            // Force UTF-8 stdio for child processes (e.g. `python -c`) so non-ASCII output
+            // is not mangled by the platform default code page before the JVM reads UTF-8.
+            processBuilder.environment().apply {
+                put("PYTHONUTF8", "1")
+                put("PYTHONIOENCODING", "utf-8")
+            }
+            val process = processBuilder.start()
 
             // Read process output concurrently to avoid stdout buffer deadlocks on large listings.
+            // Decode as UTF-8 explicitly: the Windows console emits OEM/ANSI bytes that the JVM
+            // (default UTF-8 since JEP 400) would otherwise turn into replacement characters.
             val outputDeferred = async(Dispatchers.IO) {
-                process.inputStream.bufferedReader().use { it.readText() }
+                process.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             }
 
             // Wait with timeout
@@ -185,7 +193,7 @@ class RunTerminalCommandTool(
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                command
+                WINDOWS_UTF8_PREFIX + command
             )
             else -> listOf("/bin/sh", "-c", command)
         }
@@ -211,5 +219,15 @@ class RunTerminalCommandTool(
     companion object {
         const val MIN_TIMEOUT_SECONDS = 30L
         const val MAX_TIMEOUT_SECONDS = 600L
+
+        /**
+         * Forces UTF-8 for PowerShell output so non-ASCII (e.g. Polish) characters are not
+         * mangled by the console's default OEM/ANSI code page before the JVM reads them as UTF-8.
+         * The [Console]::OutputEncoding assignment is wrapped in try/catch because it can throw
+         * when stdout is redirected; $OutputEncoding alone still covers the pipeline to native tools.
+         */
+        private const val WINDOWS_UTF8_PREFIX =
+            "\$OutputEncoding = [System.Text.Encoding]::UTF8; " +
+            "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}; "
     }
 }

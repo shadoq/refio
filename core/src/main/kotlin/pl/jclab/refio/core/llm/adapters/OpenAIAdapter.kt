@@ -769,7 +769,16 @@ class OpenAIAdapter(
 
             @Suppress("UNCHECKED_CAST")
             val message = choice["message"] as? Map<String, Any?> ?: emptyMap()
-            val content = message["content"] as? String ?: ""
+            val rawContent = message["content"] as? String ?: ""
+            // Recover answer from `reasoning_content` when a reasoning model leaves `content`
+            // empty and made no tool calls, to avoid feeding the turn an empty response.
+            val content = if (rawContent.isNotBlank() || message["tool_calls"] != null) {
+                rawContent
+            } else {
+                (message["reasoning_content"] as? String)?.takeIf { it.isNotBlank() }
+                    ?.also { logger.info { "$logPrefix [REASONING_FALLBACK] content empty, recovered ${it.length} chars from reasoning_content" } }
+                    ?: ""
+            }
             val finishReason = choice["finish_reason"] as? String
 
             val toolsWereRequested = requestBody.containsKey("tools")

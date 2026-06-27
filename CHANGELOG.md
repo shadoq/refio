@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Live tool-call indicator in chat and TUI - shows the tool name and arguments while a call is streaming, clears when done.
 - E2e regression harness (`benchmark/scripts/e2e-run.sh` + Windows parity) drives JSON scenarios headless and asserts on the result. Not part of `./gradlew test` (slow, requires a model). `--self-test` validates the assertion engine offline without an LLM call.
 - Compressed tool results now include a recovery pointer so the agent knows output was shortened and can retrieve the full content via the memory tool.
+- HTTP responses larger than 64 KB are auto-saved to a `.refio_http_*.txt` file with a `read_file` pointer instead of being truncated into the conversation, keeping multi-MB API payloads (e.g. a 6.8 MB CSV) out of the context window.
+- "Change approach" nudges when an agent thrashes one operation: 2+ failed edits of the same file, or 2+ back-to-back `run_code` / `run_terminal_command` failures, inject a SYSTEM hint to isolate the failing piece and work in smaller steps.
 
 ### Changed
 
@@ -32,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agentic search is now the default; vector RAG is opt-in (`rag.index_on_startup: false`). `grep_search` ranks declaration hits above plain usages so an agent sees definitions before call sites.
 - Subagent depth ceiling enforced before spawn - `invoke_subagent` refuses a call that would exceed depth 3 immediately, without allocating a child turn.
 - Native-tools demotion now requires two consecutive JSON-envelope-in-text slips instead of one; a single slip retries on the JSON path for that turn only, without permanent demotion.
+- RAG indexing and embedding moved off the shared `Dispatchers.IO` pool onto a dedicated bounded thread pool, isolating background indexing from turn execution.
+- `llm_call` tool description now states it is the way to run an LLM step (classification / tagging / extraction / vision) from a task, and to use it instead of calling OpenAI/Anthropic HTTP APIs from `run_code` (the sandbox has no API keys, so those calls fail with 401).
+- Guardian re-entry budget is now per stall-episode instead of per whole turn: after the agent makes sustained progress (3+ new tool calls) following a re-entry, the single bounded re-entry is replenished, so a budget spent early on a trivial pause still protects a genuine stall near the end of the turn.
 
 ### Fixed
 
@@ -43,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stray tool-call JSON residue no longer leaks into assistant chat bubbles when a model without native function-calling emits calls as text.
 - Stalled turns on weak native-tool models now retry on the JSON-in-text path instead of re-entering the same channel that just produced no tool calls.
 - Mid-turn message reload no longer drops in-memory bubbles not yet persisted to the database; the user's prompt and live streaming bubbles no longer blink out during an active turn.
+- Models that return their answer in `reasoning_content` with an empty `content` field (some GLM / Z.AI / DeepSeek responses) no longer produce a blank reply - the reasoning text is used as a fallback on both the streaming and non-streaming OpenAI-compatible paths.
+- `run_terminal_command` and `run_code` decode process output as UTF-8 and set `PYTHONUTF8` / `PYTHONIOENCODING` (plus a PowerShell UTF-8 prefix on Windows), so non-ASCII output (e.g. Polish text) is no longer garbled.
+- A plain-prose answer produced while in JSON-envelope mode is now surfaced and the turn marked INCOMPLETE, instead of being discarded as a hard FAILED with the answer lost.
+- `llm_call` returning an empty response is now reported as an error instead of silently saving an empty file.
+- OpenAI-compatible adapter cost is computed from the pricing table instead of being hardcoded to zero, so the API Logs cost column matches the trace cost.
+- Context section panels no longer freeze the IntelliJ UI on large tool results - the HTML is rendered lazily on expand and capped in size.
 
 ## [0.0.1.11] - 2026-05-31
 

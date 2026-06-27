@@ -293,7 +293,17 @@ abstract class OpenAICompatibleAdapter(
             val firstChoice = choices.firstOrNull() ?: emptyMap()
             @Suppress("UNCHECKED_CAST")
             val message = firstChoice["message"] as? Map<String, Any?> ?: emptyMap()
-            val content = message["content"] as? String ?: ""
+            val rawContent = message["content"] as? String ?: ""
+            // Some reasoning models (e.g. GLM via Z.AI, DeepSeek) put the whole answer in
+            // `reasoning_content` and leave `content` empty. Recover it as the response text
+            // when there is no content and no tool_calls, so the turn isn't fed a blank reply.
+            val content = if (rawContent.isNotBlank() || message["tool_calls"] != null) {
+                rawContent
+            } else {
+                (message["reasoning_content"] as? String)?.takeIf { it.isNotBlank() }
+                    ?.also { logger.info { "$logPrefix [REASONING_FALLBACK] content empty, recovered ${it.length} chars from reasoning_content" } }
+                    ?: ""
+            }
             val normalizedToolCallsJson = if (content.isBlank()) {
                 ToolCallContentNormalizer.fromOpenAiToolCalls(message["tool_calls"])
             } else {
@@ -626,7 +636,11 @@ abstract class OpenAICompatibleAdapter(
         }
     }
 
-    override fun estimateCost(usage: LLMUsage): Double = 0.0
+    // Cost from the central pricing table (provider/model based). Returning 0.0 here used to
+    // leave the API Logs rows at $0.00 for Z.AI/OpenRouter/etc even though the turn trace
+    // (computed separately in LLMClient) showed the real cost - the two sources disagreed.
+    override fun estimateCost(usage: LLMUsage): Double =
+        pl.jclab.refio.core.llm.calculateCost(provider, model, usage.inputTokens, usage.outputTokens)
 
     override suspend fun close() {
         client.close()

@@ -120,6 +120,11 @@ internal object OpenAICompatibleHelpers {
         onToolCallDelta: ((pl.jclab.refio.core.llm.NativeToolCallDelta) -> Unit)? = null,
     ): String? {
         var finishReason: String? = null
+        var anyContentEmitted = false
+        // Buffer reasoning_content deltas as a last-resort fallback: some reasoning models
+        // (e.g. GLM via Z.AI, DeepSeek) stream the whole answer in reasoning_content with an
+        // empty content channel. Only surfaced if no content delta ever arrives.
+        val reasoningFallback = StringBuilder()
         while (!channel.isClosedForRead) {
             if (checkCancelled()) {
                 finishReason = "cancelled"
@@ -139,7 +144,14 @@ internal object OpenAICompatibleHelpers {
                 @Suppress("UNCHECKED_CAST")
                 val delta = first["delta"] as? Map<String, Any?>
                 toolCallAccumulator.consumeDelta(delta).forEach { tcDelta -> onToolCallDelta?.invoke(tcDelta) }
-                (delta?.get("content") as? String)?.takeIf { it.isNotEmpty() }?.let(onContent)
+                (delta?.get("content") as? String)?.takeIf { it.isNotEmpty() }?.let {
+                    anyContentEmitted = true
+                    onContent(it)
+                }
+                if (!anyContentEmitted) {
+                    (delta?.get("reasoning_content") as? String)?.takeIf { it.isNotEmpty() }
+                        ?.let { reasoningFallback.append(it) }
+                }
                 (first["finish_reason"] as? String)?.let { finishReason = it }
             } catch (e: CancellationException) {
                 throw e
@@ -149,6 +161,9 @@ internal object OpenAICompatibleHelpers {
                 // that match historical behavior — those we silently skip.
                 if (e is IllegalStateException) throw e
             }
+        }
+        if (!anyContentEmitted && reasoningFallback.isNotEmpty()) {
+            onContent(reasoningFallback.toString())
         }
         return finishReason
     }

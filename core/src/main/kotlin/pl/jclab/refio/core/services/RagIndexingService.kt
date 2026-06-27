@@ -21,7 +21,6 @@ import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.utils.AiIgnoreMatcher
 import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -229,7 +228,7 @@ class RagIndexingService(
             )
             throw e
         }
-    }.flowOn(Dispatchers.IO)
+    }.flowOn(RagDispatchers.background)
 
     private fun resolveIgnoredDirectories(additionalIgnorePatterns: Set<String>): Set<String> {
         val configured = configService.getTyped<List<String>>(ConfigKeys.RAG_IGNORED_DIRECTORIES).toSet()

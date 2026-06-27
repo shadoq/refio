@@ -32,6 +32,7 @@ class CollapsibleContextSection(
 
     private var isExpanded = false
     private var rawContent: String = ""
+    private var pendingHtml: String? = null
     private var tokenInfo: ContextSectionTokenInfo? = null
 
     private val toggleLabel = JBLabel(">").apply {
@@ -110,6 +111,25 @@ class CollapsibleContextSection(
 
     fun setContent(raw: String, html: String) {
         rawContent = raw.trim()
+        // Defer the expensive HTML parse: JEditorPane.setText runs HTMLEditorKit synchronously
+        // on the EDT, which can freeze the UI for many seconds on multi-MB sections. Collapsed
+        // sections - the common case for large ones like recent work - never pay that cost.
+        pendingHtml = capHtmlForRendering(html)
+        copyButton.isEnabled = rawContent.isNotBlank()
+        refreshTokenLabel()
+        if (isExpanded) {
+            applyPendingHtml()
+        }
+    }
+
+    /**
+     * Apply the deferred HTML to the text pane. No-op when nothing is pending (e.g. the
+     * section is still collapsed). Runs the synchronous HTMLEditorKit parse on the EDT, so
+     * callers must keep [pendingHtml] within [MAX_RENDERED_HTML_CHARS] via [capHtmlForRendering].
+     */
+    private fun applyPendingHtml() {
+        val html = pendingHtml ?: return
+        pendingHtml = null
         try {
             // Reset document before setting new HTML to avoid EmptyStackException
             // in HTMLDocument's internal ElementBuffer (JDK bug with nested elements)
@@ -118,14 +138,39 @@ class CollapsibleContextSection(
         } catch (e: Exception) {
             logger.warn { "Failed to set HTML content for section '$title': ${e.message}" }
             contentLabel.document = contentLabel.editorKit.createDefaultDocument()
-            contentLabel.text = "<html><body>${raw.trim()}</body></html>"
+            contentLabel.text = capHtmlForRendering("<html><body>$rawContent</body></html>")
         }
-        copyButton.isEnabled = rawContent.isNotBlank()
-        refreshTokenLabel()
+    }
+
+    /**
+     * Bound the HTML handed to the text pane. Oversized content (e.g. a multi-MB tool result
+     * captured into recent work) is replaced with a truncated plain-text view so the EDT parse
+     * stays fast; the full content is still reachable via the Copy button (uncapped rawContent).
+     */
+    private fun capHtmlForRendering(html: String): String {
+        if (html.length <= MAX_RENDERED_HTML_CHARS) return html
+        val shown = rawContent.take(MAX_RENDERED_HTML_CHARS)
+        val omitted = (rawContent.length - shown.length).coerceAtLeast(0)
+        val escaped = shown
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", "<br>")
+        return buildString {
+            append("<html><body style='padding:5px; font-family:monospace;'>")
+            append("<div style='white-space:pre-wrap; word-wrap:break-word;'>")
+            append(escaped)
+            append("</div>")
+            append("<p style='color:#808080'><i>[truncated for display - ")
+            append(omitted)
+            append(" more characters not shown. Use Copy for the full content.]</i></p>")
+            append("</body></html>")
+        }
     }
 
     fun clearContent() {
         rawContent = ""
+        pendingHtml = null
         contentLabel.text = ""
         copyButton.isEnabled = false
         refreshTokenLabel()
@@ -178,6 +223,8 @@ class CollapsibleContextSection(
         isExpanded = true
         toggleLabel.text = "v"
         contentPanel.isVisible = true
+        // Parse any HTML that was deferred while collapsed, now that it will be visible.
+        applyPendingHtml()
         revalidate()
         repaint()
     }
@@ -227,5 +274,13 @@ class CollapsibleContextSection(
     override fun getMaximumSize(): Dimension {
         val preferred = preferredSize
         return Dimension(Int.MAX_VALUE, preferred.height)
+    }
+
+    companion object {
+        /**
+         * Above this length, JEditorPane's synchronous HTMLEditorKit parse on the EDT can freeze
+         * the UI for many seconds. Oversized sections fall back to a truncated plain-text view.
+         */
+        private const val MAX_RENDERED_HTML_CHARS = 200_000
     }
 }

@@ -732,6 +732,48 @@ class AgentTurnLoopTest {
         }
 
         @Test
+        fun `plain-text answer in JSON mode is surfaced as INCOMPLETE, not discarded as FAILED`() = runTest {
+            // A model that ignores the JSON-envelope contract and just answers in prose used to get
+            // its answer thrown away and replaced with a generic "wrong format" error (FAILED).
+            // The real deliverable must be surfaced; the turn is INCOMPLETE (delivered text, but
+            // not via the structured workflow), not FAILED.
+            // Distinct prose each iteration so the cross-iteration repetition guard doesn't fire
+            // first; this drives the bounded nudge counter to exhaustion (2 nudges) and into the
+            // format hard-fail branch, where the answer must now be preserved.
+            val finalProse = "Final answer: Anna, Bob, Cecylia and Dawid used transport."
+            fun prose(text: String) = LLMResponse(
+                content = text,
+                usage = LLMUsage(inputTokens = 100, outputTokens = 20, totalTokens = 120),
+                model = "qwen3.5:122b",
+                provider = "ollama",
+                cost = 0.0,
+                finishReason = "stop"
+            )
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                prose("Let me think about who used transport here."),
+                prose("Looking at the data, several people used transport."),
+                prose(finalProse)
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Who used transport?",
+                mode = TaskMode.AGENT
+            )
+
+            assertFalse(result.success, "format lapse is not a clean success")
+            assertTrue(result.incomplete, "prose answer in envelope mode should mark the turn INCOMPLETE")
+            assertEquals(finalProse, result.response, "the model's actual answer must be preserved, not discarded")
+        }
+
+        @Test
         fun `should fail instead of finalizing success when incomplete json persists`() = runTest {
             coEvery {
                 llmClient.complete(

@@ -277,34 +277,70 @@ class HttpRequestTool(
                                 )
                             )
                         } else {
-                            val truncatedBody = if (responseBody.length > maxResponseSize) {
-                                responseBody.take(maxResponseSize) +
-                                    "\n\n... (response truncated to $maxResponseSize characters)"
-                            } else {
-                                responseBody
-                            }
-                            val saveSkippedPrefix = if (saveToFile != null) {
-                                "NOTE: save_to_file was skipped because HTTP status $statusCode is not 2xx/3xx. Response body is returned inline for inspection.\n\n"
-                            } else ""
+                            // Large successful response with no explicit save target: persist the
+                            // full body to a workspace file and return only a summary + preview,
+                            // instead of dumping up to maxResponseSize (5MB) into the agent context
+                            // - which inflates token cost and bloats the recent-work UI. The model
+                            // can recover the full data via read_file on the returned path.
+                            val autoSaved: ToolResult? = if (
+                                sandbox != null && saveToFile == null &&
+                                statusCode in 200..399 && responseBody.length > HTTP_AUTOSAVE_THRESHOLD
+                            ) {
+                                val autoPath = ".refio_http_${System.currentTimeMillis()}.txt"
+                                runCatching { saveResponseToFile(autoPath, responseBody, url) }
+                                    .onFailure { logger.warn(it) { "Auto-save of large HTTP response failed: ${it.message}" } }
+                                    .getOrNull()?.let { savedOutput ->
+                                        ToolResult(
+                                            success = true,
+                                            output = headerSummary +
+                                                "NOTE: large response (${responseBody.length} chars) was auto-saved to keep " +
+                                                "the context small. Re-read with read_file(path=\"$autoPath\") for the full data.\n\n" +
+                                                savedOutput,
+                                            exitCode = statusCode,
+                                            durationMs = duration,
+                                            bytesRead = responseBody.toByteArray().size,
+                                            metadata = mapOf(
+                                                "url" to url,
+                                                "method" to method,
+                                                "status_code" to statusCode,
+                                                "response_length" to responseBody.length,
+                                                "auto_saved_to_file" to autoPath,
+                                                "response_headers" to responseHeaders
+                                            )
+                                        )
+                                    }
+                            } else null
 
-                            // Tool succeeds whenever we received an HTTP response. Status code is
-                            // returned in exitCode + output for the agent to react on. Only network
-                            // failures / timeouts / exceptions map to success=false.
-                            ToolResult(
-                                success = true,
-                                output = headerSummary + saveSkippedPrefix + truncatedBody,
-                                exitCode = statusCode,
-                                durationMs = duration,
-                                bytesRead = responseBody.toByteArray().size,
-                                metadata = mapOf(
-                                    "url" to url,
-                                    "method" to method,
-                                    "status_code" to statusCode,
-                                    "response_length" to responseBody.length,
-                                    "truncated" to (responseBody.length > maxResponseSize),
-                                    "response_headers" to responseHeaders
+                            autoSaved ?: run {
+                                val truncatedBody = if (responseBody.length > maxResponseSize) {
+                                    responseBody.take(maxResponseSize) +
+                                        "\n\n... (response truncated to $maxResponseSize characters)"
+                                } else {
+                                    responseBody
+                                }
+                                val saveSkippedPrefix = if (saveToFile != null) {
+                                    "NOTE: save_to_file was skipped because HTTP status $statusCode is not 2xx/3xx. Response body is returned inline for inspection.\n\n"
+                                } else ""
+
+                                // Tool succeeds whenever we received an HTTP response. Status code is
+                                // returned in exitCode + output for the agent to react on. Only network
+                                // failures / timeouts / exceptions map to success=false.
+                                ToolResult(
+                                    success = true,
+                                    output = headerSummary + saveSkippedPrefix + truncatedBody,
+                                    exitCode = statusCode,
+                                    durationMs = duration,
+                                    bytesRead = responseBody.toByteArray().size,
+                                    metadata = mapOf(
+                                        "url" to url,
+                                        "method" to method,
+                                        "status_code" to statusCode,
+                                        "response_length" to responseBody.length,
+                                        "truncated" to (responseBody.length > maxResponseSize),
+                                        "response_headers" to responseHeaders
+                                    )
                                 )
-                            )
+                            }
                         }
                     }
                 }
@@ -636,6 +672,10 @@ class HttpRequestTool(
     companion object {
         val ALLOWED_METHODS = listOf("GET", "POST", "PUT", "DELETE", "PATCH")
         const val MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB
+
+        /** Above this, a successful response with no explicit save_to_file is auto-persisted to a
+         *  workspace file and only summarized in context (kept out of tokens / recent-work UI). */
+        const val HTTP_AUTOSAVE_THRESHOLD = 64 * 1024 // 64KB
         const val TIMEOUT_MS = 60_000L // 60 seconds
         const val PREVIEW_CHARS = 500
         const val MAX_BINARY_INLINE_BYTES = 1 * 1024 * 1024 // 1MB base64 inline cap

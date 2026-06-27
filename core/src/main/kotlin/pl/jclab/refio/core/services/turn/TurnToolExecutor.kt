@@ -127,6 +127,78 @@ class TurnToolExecutor(
         }.trim()
     }
 
+    /**
+     * When an edit tool keeps FAILING on the same file, the model is usually thrashing - rewriting
+     * the whole file again and again with a slightly different approach instead of stepping back.
+     * That burns turns and inflates context with dead diffs. After [REPEATED_FAILED_EDIT_THRESHOLD]+
+     * prior failed edits of the same path, nudge it to change tactics. Counts FAILED subtasks only
+     * (success/noop are handled by other guards), so legitimate iterative editing is not flagged.
+     */
+    private fun buildRepeatedFileEditNudge(
+        taskId: String,
+        currentSubtaskId: String,
+        toolName: String,
+        argumentsJson: String
+    ): String? {
+        if (toolName !in codingToolNames) return null
+        val path = extractEditPath(argumentsJson) ?: return null
+
+        val priorFailedEdits = try {
+            transaction { subtaskRepository.findByTaskId(taskId) }
+                .asSequence()
+                .filter { it.id != currentSubtaskId }
+                .filter { it.status == TaskStatus.FAILED }
+                .filter { sub -> codingToolNames.any { it.equals(sub.kind.name, ignoreCase = true) } }
+                .filter { extractEditPath(it.paramsJson.orEmpty()) == path }
+                .take(5)
+                .count()
+        } catch (e: Exception) {
+            logger.debug { "[REPEATED_EDIT_NUDGE] query failed, skipping: ${e.message}" }
+            return null
+        }
+
+        val nudge = repeatedFailedEditNudgeText(path, priorFailedEdits) ?: return null
+        logger.info {
+            "[REPEATED_FAILED_EDIT] tool=$toolName path=$path taskId=$taskId priorFailures=$priorFailedEdits"
+        }
+        return nudge
+    }
+
+    /**
+     * When `run_code` / `run_terminal_command` keep failing back-to-back (syntax errors, non-zero
+     * exit), the model is usually re-running a slightly different version of the same broken script
+     * instead of shrinking the problem. After [REPEATED_EXEC_FAILURE_THRESHOLD]+ consecutive failed
+     * runs of execution tools, nudge it to isolate the failure and build up in small steps.
+     * Counts only the trailing run of FAILED execution subtasks - a success in between resets it.
+     */
+    private fun buildRepeatedExecFailureNudge(
+        taskId: String,
+        currentSubtaskId: String,
+        toolName: String
+    ): String? {
+        if (toolName !in EXECUTION_TOOL_NAMES) return null
+
+        val priorConsecutiveFailures = try {
+            transaction { subtaskRepository.findByTaskId(taskId) }
+                .asReversed()
+                .asSequence()
+                .filter { it.id != currentSubtaskId }
+                .filter { sub -> EXECUTION_TOOL_NAMES.any { it.equals(sub.kind.name, ignoreCase = true) } }
+                .take(6)
+                .takeWhile { it.status == TaskStatus.FAILED }
+                .count()
+        } catch (e: Exception) {
+            logger.debug { "[REPEATED_EXEC_NUDGE] query failed, skipping: ${e.message}" }
+            return null
+        }
+
+        val nudge = repeatedExecFailureNudgeText(toolName, priorConsecutiveFailures) ?: return null
+        logger.info {
+            "[REPEATED_EXEC_FAILURE] tool=$toolName taskId=$taskId priorConsecutiveFailures=$priorConsecutiveFailures"
+        }
+        return nudge
+    }
+
     companion object {
         /**
          * A single tool call is "information gathering" — a read/search of the codebase or web
@@ -162,6 +234,59 @@ class TurnToolExecutor(
                 (category == ToolCategory.SYSTEM && name != "think") ||
                 name == "delegate_to_strong_model" ||
                 name == "invoke_subagent"
+
+        /**
+         * Min number of PRIOR failed edits of the same file before the "change approach" nudge
+         * fires. 2 prior failures means the current (failing) call is the 3rd attempt.
+         */
+        const val REPEATED_FAILED_EDIT_THRESHOLD = 2
+
+        /** Target file path of an edit tool call (path / file_path / file), or null. Pure. */
+        internal fun extractEditPath(argumentsJson: String): String? {
+            if (argumentsJson.isBlank()) return null
+            return try {
+                val map = TurnJsonUtils.parseJsonToMap(argumentsJson)
+                (map["path"] ?: map["file_path"] ?: map["file"])
+                    ?.toString()?.trim()?.takeIf { it.isNotBlank() }
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        /**
+         * The "change approach" nudge text, or null when [priorFailedEdits] is below
+         * [REPEATED_FAILED_EDIT_THRESHOLD]. Pure (no DB) so the threshold + message are testable.
+         */
+        internal fun repeatedFailedEditNudgeText(path: String, priorFailedEdits: Int): String? {
+            if (priorFailedEdits < REPEATED_FAILED_EDIT_THRESHOLD) return null
+            return buildString {
+                appendLine("[⚠ change approach - repeated failed edits]")
+                appendLine("This is attempt ${priorFailedEdits + 1} to edit `$path`; the previous $priorFailedEdits attempt(s) failed.")
+                appendLine("Repeating the same rewrite will likely keep failing. Instead: (1) read_file the current content to re-check the exact text, (2) make a smaller, targeted edit, (3) use create_new_file to rewrite from scratch if the file is small, or (4) call delegate_to_strong_model with a concrete summary of what keeps failing.")
+            }.trim()
+        }
+
+        /** Execution tools whose repeated back-to-back failures trigger the change-approach nudge. */
+        val EXECUTION_TOOL_NAMES = setOf("run_code", "run_terminal_command")
+
+        /**
+         * Min number of PRIOR consecutive execution failures before the change-approach nudge fires.
+         * 2 prior failures means the current (failing) run is the 3rd in a row.
+         */
+        const val REPEATED_EXEC_FAILURE_THRESHOLD = 2
+
+        /**
+         * The "change approach" nudge for repeated `run_code` / `run_terminal_command` failures, or
+         * null below [REPEATED_EXEC_FAILURE_THRESHOLD]. Pure (no DB) so threshold + message are testable.
+         */
+        internal fun repeatedExecFailureNudgeText(toolName: String, priorConsecutiveFailures: Int): String? {
+            if (priorConsecutiveFailures < REPEATED_EXEC_FAILURE_THRESHOLD) return null
+            return buildString {
+                appendLine("[⚠ change approach - repeated execution failures]")
+                appendLine("The last $priorConsecutiveFailures `$toolName` runs failed back-to-back (this is attempt ${priorConsecutiveFailures + 1}).")
+                appendLine("Re-running a slightly different version keeps hitting the same wall. Instead: (1) write the SMALLEST snippet that isolates the failing piece (a few lines), (2) for syntax errors build the file incrementally and run after each small addition, (3) read the exact error line before retrying, or (4) call delegate_to_strong_model with the code and the exact error.")
+            }.trim()
+        }
 
         /** Max raw output size (chars) to preserve in-context for DATA_PRODUCING tools */
         const val DATA_PRODUCING_RAW_OUTPUT_BUFFER = 16_000
@@ -851,6 +976,12 @@ class TurnToolExecutor(
                     toolResult.nextActionHints?.takeIf { it.isNotEmpty() }?.let { hints ->
                         append("\nNext steps:")
                         hints.forEach { append("\n- ").append(it) }
+                    }
+                    buildRepeatedFileEditNudge(taskId, subtaskId, toolCall.name, toolCall.arguments)?.let {
+                        append("\n\n").append(it)
+                    }
+                    buildRepeatedExecFailureNudge(taskId, subtaskId, toolCall.name)?.let {
+                        append("\n\n").append(it)
                     }
                 }
                 listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)

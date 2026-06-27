@@ -6,7 +6,6 @@ import pl.jclab.refio.core.db.repositories.RagRepository
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.llm.TokenEstimator
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -274,7 +273,7 @@ class RagEmbeddingService(
         }
 
         emit(EmbeddingProgress(100, statusMessage, processedChunks, successCount))
-    }.flowOn(Dispatchers.IO)
+    }.flowOn(RagDispatchers.background)
 
     private fun parseModelString(model: String): Pair<String?, String> {
         if (model.contains("/")) {

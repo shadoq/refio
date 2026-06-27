@@ -3,6 +3,7 @@ package pl.jclab.refio.core.services.turn
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -131,6 +132,64 @@ class TurnToolExecutorClassificationTest {
                 "advance_code_editing", ToolMode.WRITE, ToolCategory.FILE_PRODUCING, isNoopWrite = false
             )
         )
+    }
+
+    // ---- repeated failed-edit nudge: change approach after thrashing one file ----
+
+    @Test
+    fun `edit path is extracted from path, file_path or file keys`() {
+        assertEquals("src/A.kt", TurnToolExecutor.extractEditPath("""{"path":"src/A.kt","content":"x"}"""))
+        assertEquals("src/B.kt", TurnToolExecutor.extractEditPath("""{"file_path":"src/B.kt"}"""))
+        assertEquals("src/C.kt", TurnToolExecutor.extractEditPath("""{"file":"src/C.kt"}"""))
+    }
+
+    @Test
+    fun `edit path extraction returns null for blank or pathless args`() {
+        assertEquals(null, TurnToolExecutor.extractEditPath(""))
+        assertEquals(null, TurnToolExecutor.extractEditPath("""{"content":"no path here"}"""))
+    }
+
+    @Test
+    fun `no nudge below the failed-edit threshold`() {
+        // One prior failure is normal iteration, not thrashing - stay silent.
+        assertEquals(null, TurnToolExecutor.repeatedFailedEditNudgeText("src/A.kt", priorFailedEdits = 0))
+        assertEquals(null, TurnToolExecutor.repeatedFailedEditNudgeText("src/A.kt", priorFailedEdits = 1))
+    }
+
+    @Test
+    fun `nudge fires at the threshold and names the file and attempt count`() {
+        // 2 prior failures => this is the 3rd attempt; the model should change tactics.
+        val nudge = TurnToolExecutor.repeatedFailedEditNudgeText("src/A.kt", priorFailedEdits = 2)
+        assertTrue(nudge != null && nudge.contains("change approach"))
+        assertTrue(nudge!!.contains("src/A.kt"))
+        assertTrue(nudge.contains("attempt 3"))
+    }
+
+    // ---- repeated execution-failure nudge: change approach after run_code/run_terminal thrashing ----
+
+    @Test
+    fun `no exec-failure nudge below the consecutive-failure threshold`() {
+        // One failed run is normal trial-and-error - stay silent.
+        assertEquals(null, TurnToolExecutor.repeatedExecFailureNudgeText("run_code", priorConsecutiveFailures = 0))
+        assertEquals(null, TurnToolExecutor.repeatedExecFailureNudgeText("run_code", priorConsecutiveFailures = 1))
+    }
+
+    @Test
+    fun `exec-failure nudge fires at the threshold and names the tool and attempt count`() {
+        // 2 prior consecutive failures => this is the 3rd run in a row; isolate the failure.
+        val nudge = TurnToolExecutor.repeatedExecFailureNudgeText("run_code", priorConsecutiveFailures = 2)
+        assertTrue(nudge != null && nudge.contains("change approach"))
+        assertTrue(nudge!!.contains("run_code"))
+        assertTrue(nudge.contains("attempt 3"))
+    }
+
+    @Test
+    fun `only run_code and run_terminal_command are execution tools`() {
+        // The DB-querying nudge only triggers for these; guard the set so reads/edits never qualify.
+        assertTrue("run_code" in TurnToolExecutor.EXECUTION_TOOL_NAMES)
+        assertTrue("run_terminal_command" in TurnToolExecutor.EXECUTION_TOOL_NAMES)
+        assertFalse("read_file" in TurnToolExecutor.EXECUTION_TOOL_NAMES)
+        assertFalse("advance_code_editing" in TurnToolExecutor.EXECUTION_TOOL_NAMES)
     }
 
     @Test

@@ -1859,20 +1859,23 @@ class AgentTurnLoop(
                             logger.error {
                                 "[FORMAT_UNRECOVERABLE] taskId=$taskId, iteration=$iteration: " +
                                     "model kept returning plain text after ${recoveryState.nudgeCount} nudge(s) " +
-                                    "(repeated=$isRepeatedPlainText, toolsUsedSoFar=${usedTools.size}). Failing turn."
+                                    "(repeated=$isRepeatedPlainText, toolsUsedSoFar=${usedTools.size}). " +
+                                    "Surfacing the prose answer and marking the turn INCOMPLETE."
                             }
+                            // The model produced a real prose answer but never wrapped it in the
+                            // required JSON envelope / tool call. Surface that answer instead of
+                            // discarding it behind a generic error (which used to lose a valid
+                            // deliverable). Mark INCOMPLETE rather than FAILED: text was delivered,
+                            // just not through the structured workflow the task may have needed.
                             val result = TurnResult(
                                 success = false,
-                                response = "The model kept replying with plain text instead of the required JSON " +
-                                    "envelope and never produced a tool call. Nudges were exhausted. " +
-                                    "This usually means the selected model cannot follow the structured format " +
-                                    "— try a model tuned for tool use (e.g. qwen3.5:9b, llama3.1) or enable native " +
-                                    "function-calling.",
+                                response = contentForExtraction,
                                 iterations = iteration,
                                 tokensIn = totalTokensIn,
                                 tokensOut = totalTokensOut,
                                 cost = totalCost,
-                                toolsUsed = usedTools.distinct()
+                                toolsUsed = usedTools.distinct(),
+                                incomplete = true
                             )
                             return turnFinalizer.completeTurn(
                                 taskId,
@@ -2009,6 +2012,21 @@ class AgentTurnLoop(
                         // the loop back into another iteration via a SYSTEM nudge. Bounded by
                         // GuardianRegistry.maxReentries to prevent infinite loops.
                         if (!completionGuardians.isEmpty) {
+                            // Replenish the bounded re-entry budget if the agent has made sustained
+                            // progress (>= N new tool calls) since the last re-entry. Without this the
+                            // single re-entry is spent for the whole turn, so a budget consumed early
+                            // on a trivial pause leaves a genuine near-completion stall many iterations
+                            // later with no safety net. See [TurnGuardianState.replenishIfSustainedProgress].
+                            if (guardianState.replenishIfSustainedProgress(
+                                    usedTools.size,
+                                    TurnGuardianState.DEFAULT_PROGRESS_RESET_THRESHOLD
+                                )
+                            ) {
+                                logger.info {
+                                    "[GUARDIAN] taskId=$taskId re-entry budget replenished after sustained " +
+                                        "progress (toolsUsed=${usedTools.size}) — next terminal stall gets a fresh re-entry"
+                                }
+                            }
                             val guardianTextResponse = toolCallParser.extractTextResponse(llmResponse.content)
                             val guardianContext = GuardianContext(
                                 taskId = taskId,
