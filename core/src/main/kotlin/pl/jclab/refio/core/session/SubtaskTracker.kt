@@ -6,23 +6,20 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
-import pl.jclab.refio.core.session.SessionStateManager
-import pl.jclab.refio.core.session.VfsRefresher
-import pl.jclab.refio.api.models.Message
 import pl.jclab.refio.core.api.SubtaskResponse
 import pl.jclab.refio.core.api.CoreApiRouter
-import pl.jclab.refio.core.api.ExecuteStepResponse
-import pl.jclab.refio.core.api.UpdateSubtaskRequest
 import pl.jclab.refio.core.logging.dualLogger
-import java.util.UUID
 
+/**
+ * Loads and displays the subtasks a turn produced (AgentTurnLoop persists plan subtasks).
+ *
+ * The legacy step-by-step manipulation (approve / skip / reorder / delete / execute / prepare)
+ * was removed with the old plan/step execution model; this now only mirrors DB subtask state
+ * into the UI.
+ */
 class SubtaskTracker(
     private val projectRouter: CoreApiRouter,
     private val stateManager: SessionStateManager,
-    private val vfsRefresher: VfsRefresher,
-    private val loadMessages: suspend () -> Unit,
-    private val executeCurrentStep: suspend (String) -> ExecuteStepResponse?,
-    private val showApprovalMessageForNextSubtask: suspend () -> Unit,
     scope: CoroutineScope,
 ) {
 
@@ -37,10 +34,10 @@ class SubtaskTracker(
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
 
-    // Direct callers (SessionLifecycle, ExecutionMonitor, CRUD ops) can fire loadSubtasks
-    // back-to-back from different code paths around the same lifecycle moment — observed
-    // 5 sequential calls in 80ms after a parallel tool batch completes. Coalesce calls
-    // that arrive within COALESCE_WINDOW_MS of a prior successful load. Set to 0 to disable.
+    // Direct callers (SessionLifecycle, CRUD ops) can fire loadSubtasks back-to-back from
+    // different code paths around the same lifecycle moment — observed 5 sequential calls in
+    // 80ms after a parallel tool batch completes. Coalesce calls that arrive within
+    // COALESCE_WINDOW_MS of a prior successful load. Set to 0 to disable.
     private val lastLoadedAtMs = java.util.concurrent.atomic.AtomicLong(0L)
 
     init {
@@ -65,9 +62,9 @@ class SubtaskTracker(
         val currentSession = stateManager.getActiveSession() ?: return
 
         // Coalesce calls that arrive within COALESCE_WINDOW_MS of the previous successful load.
-        // Different code paths (lifecycle listener, ExecutionMonitor end-of-step, MessageDispatcher
-        // PLAN_DEBUG resolver, session restore) hit this method around the same moment after a
-        // tool batch — without this guard we observed 5 sequential DB reads in 80ms.
+        // Different code paths (lifecycle listener, MessageDispatcher PLAN_DEBUG resolver, session
+        // restore) hit this method around the same moment after a tool batch — without this guard
+        // we observed 5 sequential DB reads in 80ms.
         val now = System.currentTimeMillis()
         val prev = lastLoadedAtMs.get()
         if (prev != 0L && now - prev < COALESCE_WINDOW_MS) {
@@ -93,280 +90,6 @@ class SubtaskTracker(
             logger.warn { "Failed to load subtasks for session ${currentSession.id}: ${e.message}" }
             stateManager.setSubtasks(emptyList())
         }
-    }
-
-    suspend fun approveSubtask(subtaskId: String) {
-        val currentSession = stateManager.getActiveSession() ?: return
-        try {
-            logger.info { "[INTERACTIVE] User approved subtask: $subtaskId" }
-            projectRouter.subtaskRouter.approveSubtask(
-                taskId = currentSession.id,
-                subtaskId = subtaskId
-            )
-            logger.info { "[INTERACTIVE] Subtask approved: $subtaskId" }
-            loadSubtasks()
-
-            if (currentSession.executionMode == pl.jclab.refio.api.models.ExecutionMode.INTERACTIVE) {
-                logger.info { "[INTERACTIVE] Executing approved subtask: $subtaskId" }
-                val executeResponse = executeCurrentStep(subtaskId)
-                if (executeResponse != null) {
-                    logger.info {
-                        "[INTERACTIVE] Subtask executed: status=${executeResponse.status}, " +
-                            "summary=${executeResponse.summary.take(100)}"
-                    }
-                } else {
-                    logger.error { "[INTERACTIVE] Failed to execute subtask: $subtaskId" }
-                }
-                showApprovalMessageForNextSubtask()
-            }
-        } catch (e: Exception) {
-            logger.error(e) { "[INTERACTIVE] Failed to approve subtask" }
-        }
-    }
-
-    suspend fun skipSubtask(subtaskId: String) {
-        val currentSession = stateManager.getActiveSession() ?: return
-        try {
-            logger.info { "Skipping subtask: $subtaskId" }
-            projectRouter.subtaskRouter.rejectSubtask(
-                taskId = currentSession.id,
-                subtaskId = subtaskId
-            )
-            logger.info { "Subtask skipped: $subtaskId" }
-            loadSubtasks()
-
-            if (currentSession.executionMode == pl.jclab.refio.api.models.ExecutionMode.INTERACTIVE) {
-                showApprovalMessageForNextSubtask()
-            }
-        } catch (e: Exception) {
-            logger.error(e) { "Failed to skip subtask" }
-        }
-    }
-
-    suspend fun moveStepUp(subtaskId: String) {
-        val currentSession = stateManager.getActiveSession() ?: return
-        try {
-            logger.info { "Moving subtask up: $subtaskId" }
-            val sortedSubtasks = stateManager.getSubtasks().sortedBy { it.orderIndex }
-            val currentIndex = sortedSubtasks.indexOfFirst { it.id == subtaskId }
-            if (currentIndex <= 0) {
-                logger.warn { "Cannot move first subtask up" }
-                return
-            }
-
-            val currentSubtask = sortedSubtasks[currentIndex]
-            val previousSubtask = sortedSubtasks[currentIndex - 1]
-
-            projectRouter.subtaskRouter.swapSubtaskOrder(
-                taskId = currentSession.id,
-                subtaskId1 = currentSubtask.id,
-                subtaskId2 = previousSubtask.id
-            )
-
-            logger.info { "Moved subtask up: $subtaskId" }
-            loadSubtasks()
-        } catch (e: Exception) {
-            logger.error(e) { "Failed to move subtask up" }
-        }
-    }
-
-    suspend fun moveStepDown(subtaskId: String) {
-        val currentSession = stateManager.getActiveSession() ?: return
-        try {
-            logger.info { "Moving subtask down: $subtaskId" }
-            val sortedSubtasks = stateManager.getSubtasks().sortedBy { it.orderIndex }
-            val currentIndex = sortedSubtasks.indexOfFirst { it.id == subtaskId }
-            if (currentIndex < 0 || currentIndex >= sortedSubtasks.size - 1) {
-                logger.warn { "Cannot move last subtask down" }
-                return
-            }
-
-            val currentSubtask = sortedSubtasks[currentIndex]
-            val nextSubtask = sortedSubtasks[currentIndex + 1]
-
-            projectRouter.subtaskRouter.swapSubtaskOrder(
-                taskId = currentSession.id,
-                subtaskId1 = currentSubtask.id,
-                subtaskId2 = nextSubtask.id
-            )
-
-            logger.info { "Moved subtask down: $subtaskId" }
-            loadSubtasks()
-        } catch (e: Exception) {
-            logger.error(e) { "Failed to move subtask down" }
-        }
-    }
-
-    suspend fun deleteStep(subtaskId: String) {
-        val currentSession = stateManager.getActiveSession() ?: return
-        try {
-            logger.info { "Deleting subtask: $subtaskId" }
-            val subtask = stateManager.getSubtasks().find { it.id == subtaskId }
-            if (subtask == null) {
-                logger.error { "Subtask not found: $subtaskId" }
-                return
-            }
-
-            if (subtask.status !in listOf("PENDING", "PLANNED", "NEW")) {
-                logger.warn { "Cannot delete subtask with status: ${subtask.status}" }
-                return
-            }
-
-            val result = projectRouter.subtaskRouter.deleteSubtask(currentSession.id, subtaskId)
-            if (!result.deleted) {
-                logger.error { "Failed to delete subtask: $subtaskId" }
-                return
-            }
-
-            logger.info { "Deleted subtask: $subtaskId" }
-            loadSubtasks()
-        } catch (e: Exception) {
-            logger.error(e) { "Failed to delete subtask" }
-        }
-    }
-
-    suspend fun executeSubtaskById(subtaskId: String) {
-        val currentSession = stateManager.getActiveSession() ?: run {
-            logger.warn { "No active session for executeSubtaskById" }
-            return
-        }
-
-        try {
-            logger.info { "[SUBTASK] executeSubtaskById start: taskId=${currentSession.id}, subtaskId=$subtaskId" }
-
-            val subtask = stateManager.getSubtasks().find { it.id == subtaskId }
-            if (subtask == null) {
-                logger.error { "Subtask not found: $subtaskId" }
-                return
-            }
-
-            if (subtask.status == "PENDING") {
-                logger.info { "[SUBTASK] Preparing PENDING subtask: taskId=${currentSession.id}, subtaskId=$subtaskId" }
-                projectRouter.agentRouter.planSubtaskStep(currentSession.id, subtaskId)
-                loadSubtasks()
-            }
-
-            val executeResponse = executeCurrentStep(subtaskId)
-
-            if (executeResponse != null) {
-                logger.info {
-                    "[SUBTASK] Subtask executed: taskId=${currentSession.id}, subtaskId=$subtaskId, " +
-                        "status=${executeResponse.status}, durationMs=${executeResponse.durationMs}ms"
-                }
-                vfsRefresher.refreshProjectRoot()
-            } else {
-                logger.error { "Failed to execute subtask: $subtaskId" }
-            }
-        } catch (e: Exception) {
-            logger.error(e) { "Failed to execute subtask by ID" }
-
-            val errorMessage = Message(
-                id = UUID.randomUUID().toString(),
-                taskId = currentSession.id,
-                role = "system",
-                content = "Error executing step: ${e.message}",
-                createdAt = System.currentTimeMillis()
-            )
-            stateManager.appendMessage(errorMessage)
-        }
-    }
-
-    suspend fun cancelAllPendingSteps() {
-        val currentSession = stateManager.getActiveSession() ?: run {
-            logger.warn { "No active session for cancelAllPendingSteps" }
-            return
-        }
-
-        logger.info { "[SUBTASK] cancelAllPendingSteps: taskId=${currentSession.id}" }
-
-        try {
-            val deleteResponse = projectRouter.subtaskRouter.deletePendingSubtasks(currentSession.id)
-            logger.info { "Deleted ${deleteResponse.deletedCount} pending subtasks" }
-
-            loadSubtasks()
-
-            val confirmMessage = Message(
-                id = UUID.randomUUID().toString(),
-                taskId = currentSession.id,
-                role = "system",
-                content = "Cancelled ${deleteResponse.deletedCount} pending steps.",
-                createdAt = System.currentTimeMillis()
-            )
-            stateManager.appendMessage(confirmMessage)
-        } catch (e: Exception) {
-            logger.error(e) { "Failed to cancel pending steps" }
-
-            val errorMessage = Message(
-                id = UUID.randomUUID().toString(),
-                taskId = currentSession.id,
-                role = "system",
-                content = "Error cancelling steps: ${e.message}",
-                createdAt = System.currentTimeMillis()
-            )
-            stateManager.appendMessage(errorMessage)
-        }
-    }
-
-    suspend fun prepareNextStep(): pl.jclab.refio.core.api.PlanStepResponse? {
-        val currentSession = stateManager.getActiveSession()
-            ?: throw IllegalStateException("No active session")
-
-        logger.info {
-            "[PREPARE] Looking for PENDING subtask: taskId=${currentSession.id}, " +
-                "total=${stateManager.getSubtasks().size}"
-        }
-        stateManager.getSubtasks().forEachIndexed { index, subtask ->
-            logger.info {
-                "[PREPARE] Subtask[$index]: id=${subtask.id}, status=${subtask.status}, " +
-                    "desc=${subtask.description?.take(50)}"
-            }
-        }
-
-        var pendingSubtask = stateManager.getSubtasks().find { it.status == "PENDING" }
-        if (pendingSubtask == null) {
-            logger.info {
-                "[PREPARE] No PENDING subtasks found. Available statuses: " +
-                    "${stateManager.getSubtasks().map { it.status }.distinct()}"
-            }
-
-            val firstNewSubtask = stateManager.getSubtasks().find { it.status == "NEW" }
-            if (firstNewSubtask != null) {
-                logger.info { "[PREPARE] Transitioning first NEW subtask to PENDING: ${firstNewSubtask.id}" }
-                try {
-                    val updateRequest = UpdateSubtaskRequest(
-                        status = pl.jclab.refio.core.db.TaskStatus.PENDING
-                    )
-                    projectRouter.subtaskRouter.updateSubtask(
-                        taskId = currentSession.id,
-                        subtaskId = firstNewSubtask.id,
-                        request = updateRequest
-                    )
-                    loadSubtasks()
-                    pendingSubtask = stateManager.getSubtasks().find { it.status == "PENDING" }
-                    if (pendingSubtask == null) {
-                        logger.error { "[PREPARE] Failed to transition subtask to PENDING" }
-                        return null
-                    }
-                } catch (e: Exception) {
-                    logger.error(e) { "[PREPARE] Failed to transition subtask" }
-                    return null
-                }
-            } else {
-                logger.warn { "[PREPARE] No NEW or PENDING subtasks found - execution completed or no subtasks" }
-                return null
-            }
-        }
-
-        logger.info { "[PREPARE] Found PENDING subtask: ${pendingSubtask.id} (${pendingSubtask.description})" }
-
-        val prepareResponse = projectRouter.agentRouter.planSubtaskStep(currentSession.id, pendingSubtask.id)
-        val tools = prepareResponse.tools.joinToString(", ") { it.name }
-        logger.info {
-            "[PREPARE] Prepared step: taskId=${currentSession.id}, subtaskId=${pendingSubtask.id}, tools=$tools"
-        }
-
-        loadSubtasks()
-        return prepareResponse
     }
 
     companion object {

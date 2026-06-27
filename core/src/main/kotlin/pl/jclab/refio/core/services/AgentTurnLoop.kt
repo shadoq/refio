@@ -24,6 +24,11 @@ import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 import pl.jclab.refio.core.services.AgentTurnLoop.UserMessageStrategy
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
+import pl.jclab.refio.core.services.turn.CostLimitGuard
+import pl.jclab.refio.core.services.turn.ExtractionResult
+import pl.jclab.refio.core.services.turn.ToolCallExtractor
+import pl.jclab.refio.core.services.turn.LLMResponseRecovery
+import pl.jclab.refio.core.services.turn.RecoveryState
 import pl.jclab.refio.core.services.turn.ToolCallParser
 import pl.jclab.refio.core.services.turn.TurnEventListener
 import pl.jclab.refio.core.services.turn.TurnPrompt
@@ -31,6 +36,7 @@ import pl.jclab.refio.core.services.turn.GuardianContext
 import pl.jclab.refio.core.services.turn.GuardianDecision
 import pl.jclab.refio.core.services.turn.GuardianRegistry
 import pl.jclab.refio.core.services.turn.TurnFinalizer
+import pl.jclab.refio.core.services.turn.TurnGuardianState
 import pl.jclab.refio.core.services.turn.TurnGuardrails
 import pl.jclab.refio.core.services.turn.TurnJsonUtils
 import pl.jclab.refio.core.services.turn.TurnLLMCaller
@@ -53,6 +59,7 @@ import pl.jclab.refio.core.llm.NativeToolCall
 import pl.jclab.refio.core.llm.NativeToolsFallbackTracker
 import pl.jclab.refio.core.llm.ToolsNotSupportedException
 import pl.jclab.refio.core.llm.parseNativeToolsMode
+import pl.jclab.refio.core.llm.nativeToolsDecisionReason
 import pl.jclab.refio.core.llm.shouldUseNativeTools
 import pl.jclab.refio.core.db.ToolCallData
 import pl.jclab.refio.core.errors.RefioError
@@ -126,6 +133,14 @@ class AgentTurnLoop(
     private val toolPermissionsService: ToolPermissionsService? = null
 ) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
+
+    /**
+     * Unified tool-call extraction (docs/0056). Wraps [toolCallParser] + native mapping + guarded
+     * Hermes / Qwen-Coder-XML recovery behind one [ToolCallExtractor.extract] call, so the turn loop
+     * no longer branches "native vs JSON" to figure out what the model invoked.
+     */
+    private val toolCallExtractor = ToolCallExtractor(toolCallParser, toolRegistry)
+    private val llmResponseRecovery = LLMResponseRecovery(toolCallParser)
 
     private val _turnState = MutableStateFlow(TurnStateSnapshot())
     val turnState: StateFlow<TurnStateSnapshot> = _turnState.asStateFlow()
@@ -437,27 +452,14 @@ class AgentTurnLoop(
         // Catches true retry loops while allowing the agent to explore with varied calls.
         var consecutiveIdenticalFailures = 0
         var lastFailureSignature: String? = null
-        // beforeFinish guardian re-entry counter (capped by GuardianRegistry.maxReentries).
-        var guardianReentryCount = 0
+        // Guardian re-entry state — re-entry counter, snapshot of usedTools.size at the last
+        // re-entry, and the first terminal answer a re-entry discarded (capture-once + restore).
+        // See [TurnGuardianState] for the full rationale behind the capture-once policy.
+        val guardianState = TurnGuardianState()
         // Set when a completion guardian marks the turn INCOMPLETE (request not delivered and no
         // further re-entry will help). Non-null → the final TurnResult carries incomplete=true so
         // CoreSessionService records the task as INCOMPLETE instead of silently SUCCESS.
         var turnIncompleteReason: String? = null
-        // Snapshot of usedTools.size at the moment of the most recent guardian re-entry.
-        // Lets NextSpeakerJudgeGuardian detect "previous nudge produced no new tool call"
-        // and short-circuit the loop instead of burning another judge call + LLM iteration
-        // on the same stuck pattern. See [NextSpeakerJudgeGuardian.check].
-        var usedToolsSizeAtLastReentry = 0
-        // The first terminal text response that a guardian re-entry discarded. The model had
-        // already streamed this answer to the user's bubble; re-entering the loop drops it
-        // (we `continue` before persisting). If the re-entry then produces NO new tool call
-        // (the judge's no-progress short-circuit to Pass), the follow-up response is usually a
-        // degraded re-phrasing — finalizing it would replace the good answer the user saw with
-        // a worse one and lose the original from history entirely (observed 2026-05, sessions
-        // 54cf9c8c / 070ab0e5). We keep the discarded answer here and restore it at finalize
-        // when the re-entry added no tool work. Captured once (first re-entry) so the earliest,
-        // most-complete terminal answer wins.
-        var candidateFinalResponse: pl.jclab.refio.core.llm.LLMResponse? = null
         // Plain-text guard (AGENT mode only): counts nudges sent when the model replies with
         // prose instead of the required JSON envelope. Bounded to 2 — if the model cannot
         // recover after two explicit reminders, further retries won't help and we fall
@@ -467,8 +469,9 @@ class AgentTurnLoop(
         // on the first plain-text response, silently abandoning mid-task work.
         // NOTE: Nudges are skipped when the model previously executed tool calls — plain text
         // after successful tool usage is treated as intentional completion, not format loss.
-        var plainTextNudgeCount = 0
-        var lastPlainTextContent: String? = null
+        // Shared nudge budget for both empty-content (delegated to [LLMResponseRecovery]) and
+        // broken-format sites below; one counter so the combined max-2-nudges policy holds.
+        val recoveryState = RecoveryState()
         var totalTokensIn = 0
         var totalTokensOut = 0
         var totalCost = 0.0
@@ -492,6 +495,20 @@ class AgentTurnLoop(
         // subscribes to these events to render a per-agent streaming bubble that updates live
         // while the subagent's LLM is still generating. Top-level turns skip the wrapper — their
         // deltas already feed the main streaming message directly via streamCallback.
+        // Forward native tool-call progress snapshots to the TurnEventListener (headless/lifecycle
+        // observability, docs/0064) while still chaining to the caller's UI streamCallback. The UI
+        // (WorkflowEventListener) gets the same snapshots via CoreSessionService's own streamCallback.
+        val baseStreamCallback: StreamCallback? = if (streamCallback != null || listener != null) {
+            { chunk ->
+                chunk.toolCallProgress?.let { p ->
+                    listener?.onLlmToolCallProgress(taskId, p.index, p.name, p.accumulatedArguments)
+                }
+                streamCallback?.invoke(chunk)
+            }
+        } else {
+            null
+        }
+
         val effectiveStreamCallback: StreamCallback? = if (persistAgentName != null && agentEventBus != null) {
             val bus = agentEventBus
             val wrappedName = persistAgentName
@@ -499,7 +516,7 @@ class AgentTurnLoop(
             val wrappedRunId = runId
             val wrappedSessionId = evSessionId
             val wrappedSourceAgentId = evSourceAgentId
-            val delegate = streamCallback
+            val delegate = baseStreamCallback
             { chunk ->
                 delegate?.invoke(chunk)
                 bus.tryEmit(
@@ -519,7 +536,7 @@ class AgentTurnLoop(
                 )
             }
         } else {
-            streamCallback
+            baseStreamCallback
         }
         val (effectiveModel, effectiveProvider) = turnLLMCaller.resolveModelSelection(
             mode = mode,
@@ -532,11 +549,22 @@ class AgentTurnLoop(
 
         // Resolve native tools mode once per turn (not per iteration — model/config don't change mid-turn)
         val initialNativeToolSchemas: List<ToolSchema>? = run {
-            val svc = toolPermissionsService ?: return@run null
+            val svc = toolPermissionsService
+            if (svc == null) {
+                logger.debug {
+                    "[NATIVE_TOOLS] Disabled for taskId=$taskId, mode=$mode → JSON-in-text path — " +
+                        "no ToolPermissionsService (tools are off for this run)"
+                }
+                return@run null
+            }
             val nativeModeRaw = configService.getTyped(ConfigKeys.NATIVE_TOOLS_MODE, taskId)
             val nativeToolsMode = parseNativeToolsMode(nativeModeRaw)
             val modelDef = ModelDefinitions.getDefinition(effectiveProvider, effectiveModel)
-            if (shouldUseNativeTools(nativeToolsMode, modelDef, effectiveModel, NativeToolsFallbackTracker.getFallbackSet())) {
+            val fallbackSet = NativeToolsFallbackTracker.getFallbackSet()
+            // One human-readable reason string, reused in both the enabled and disabled log lines,
+            // so the native-vs-JSON decision for a run is explainable from the log alone.
+            val nativeReason = nativeToolsDecisionReason(nativeToolsMode, modelDef, effectiveModel, fallbackSet)
+            if (shouldUseNativeTools(nativeToolsMode, modelDef, effectiveModel, fallbackSet)) {
                 val modeSchemas = toolRegistry.getToolSchemas(mode, svc, taskId)
                 // Subagent profiles must see ONLY their allowed/disallowed tools in the native
                 // `tools` array — otherwise the model calls tools the harness then rejects with
@@ -550,15 +578,27 @@ class AgentTurnLoop(
                             "${modeSchemas.size} → ${filtered.size}"
                     }
                 }
+                logger.info {
+                    "[NATIVE_TOOLS] Enabled for taskId=$taskId, mode=$mode, " +
+                        "model=$effectiveProvider/$effectiveModel, schemas=${filtered.size} — $nativeReason"
+                }
                 filtered
             } else {
+                logger.info {
+                    "[NATIVE_TOOLS] Disabled for taskId=$taskId, mode=$mode, " +
+                        "model=$effectiveProvider/$effectiveModel → JSON-in-text path — $nativeReason"
+                }
                 null
             }
         }
         var activeNativeToolSchemas = initialNativeToolSchemas
-        activeNativeToolSchemas?.let { schemas ->
-            logger.info { "[NATIVE_TOOLS] Enabled for taskId=$taskId, mode=$mode, schemas=${schemas.size}" }
-        }
+        // R1 (docs/0068): consecutive iterations where native tools were offered but the model
+        // ignored the native channel and emitted a {response,actions} JSON envelope in text instead.
+        // A capable native model occasionally mirrors the envelope shown as a negative example in the
+        // prompt; demoting it off native on the FIRST such slip (the old one-strike behavior) was too
+        // sticky and persisted to disk. Only a streak of NATIVE_TOOLS_DEMOTE_AFTER_IGNORES demotes;
+        // any iteration that uses the native channel resets it.
+        var nativeIgnoredStreak = 0
 
         // Wire turn state updater so TurnToolExecutor can set WAITING_FOR_PERMISSION
         turnToolExecutor.turnStateUpdater = { phase ->
@@ -570,6 +610,10 @@ class AgentTurnLoop(
         val toolStartNanos = java.util.concurrent.ConcurrentHashMap<String, Long>()
         val toolDurationsMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
+        // Per-session cost ceiling (--max-cost / agent.max_cost_usd). 0 = disabled. Config doesn't
+        // change mid-turn, so resolve once here and re-read only the live task cost per iteration.
+        val maxCostUsd = configService.getTyped(ConfigKeys.AGENT_MAX_COST_USD, taskId)
+
         try {
             while (iteration < maxIterations) {
                 if (GlobalMetrics.isCancelled()) {
@@ -578,6 +622,27 @@ class AgentTurnLoop(
                 iteration++
 
                 logger.info { "[TURN_ITERATION] taskId=$taskId, iteration=$iteration/$maxIterations" }
+
+                // Hard cost ceiling (docs/0063 §6.1): stop BEFORE paying for another LLM call once the
+                // session's live cost (auto-incremented in LLMClient.complete) reaches --max-cost.
+                if (maxCostUsd > 0.0) {
+                    val currentCostUsd = taskRepository.findById(taskId)?.costUsd ?: 0.0
+                    if (CostLimitGuard.isExceeded(currentCostUsd, maxCostUsd)) {
+                        logger.warn { "[COST_LIMIT_EXCEEDED] taskId=$taskId, cost=$currentCostUsd >= max=$maxCostUsd — aborting turn" }
+                        val result = TurnResult(
+                            success = false,
+                            response = "COST_LIMIT_EXCEEDED: session cost \$%.4f reached the --max-cost ceiling of \$%.4f. Stopping the turn."
+                                .format(currentCostUsd, maxCostUsd),
+                            iterations = iteration,
+                            tokensIn = totalTokensIn,
+                            tokensOut = totalTokensOut,
+                            cost = totalCost,
+                            toolsUsed = usedTools.distinct(),
+                            incomplete = true
+                        )
+                        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                    }
+                }
 
                 // Emit TurnStarted for Session Trace panel
                 val iterationStartMs = System.currentTimeMillis()
@@ -627,7 +692,8 @@ class AgentTurnLoop(
                             taskId, mode, iteration, maxIterations,
                             userContextRefs, runProfile, profileOverrides,
                             writeToolsExecutedInTurn, useNativeTools,
-                            agentName = agentName, sessionId = evSessionId
+                            nativeToolSchemas = iterationNativeToolSchemas,
+                            agentName = agentName, sessionId = evSessionId, modelId = effectiveModel
                         )
                         val (fits, estimated) = tokenEstimator.checkFits(tempPrompt, maxTokens, provider = effectiveProvider)
 
@@ -645,7 +711,8 @@ class AgentTurnLoop(
                         taskId, mode, iteration, maxIterations,
                         userContextRefs, runProfile, profileOverrides,
                         writeToolsExecutedInTurn, useNativeTools,
-                        agentName = agentName, sessionId = evSessionId
+                        nativeToolSchemas = iterationNativeToolSchemas,
+                        agentName = agentName, sessionId = evSessionId, modelId = effectiveModel
                     )
 
                     // Call LLM
@@ -666,7 +733,9 @@ class AgentTurnLoop(
                             messages = currentPrompt.messages,
                             systemPrompt = currentPrompt.systemPrompt,
                             taskId = taskId,
-                            source = "AgentTurnLoop",
+                            // Retry path of the decision turn — keep parity with TurnLLMCaller's
+                            // non-retry path so PLAN/AGENT is distinguishable in the api-log Source.
+                            source = "AgentTurnLoop:${mode.name}",
                             maxRetries = config.maxRetries,
                             baseDelayMs = config.retryBackoffMs,
                             responseFormat = responseFormat,
@@ -698,6 +767,38 @@ class AgentTurnLoop(
                             // sets it to null actually drops native tools on the retry — otherwise
                             // the rebuilt JSON-contract prompt would still ship native schemas.
                             llmResponse = callModelWithPrompt(prompt, activeNativeToolSchemas)
+                            // One-shot JSON fallback for an EMPTY native response (HTTP 200,
+                            // content="" + zero tool_calls — not an exception). For models whose
+                            // Ollama tool template is broken (the gemma family: supportsFunctionCalling
+                            // =false in ModelDefinitions) the AUTO guard already routes them to JSON,
+                            // but NATIVE_TOOLS_MODE=ALWAYS bypasses that guard and ships tool schemas
+                            // anyway — gemma then returns nothing and the turn used to die with
+                            // TURN_FAILED_NATIVE_EMPTY. Retry ONCE on the JSON-envelope path: the
+                            // non-exception twin of NATIVE_TOOLS_PARSE_FALLBACK below. No persistent
+                            // fallback — ALWAYS stays "force native" next turn; we only rescue this one.
+                            // `activeNativeToolSchemas != null` is the one-shot guard: the retry sets it
+                            // null, so a still-empty JSON response can't loop back here. Skip when this is
+                            // a guardian re-entry that produced empty — the stashed pre-re-entry answer
+                            // is the answer the user already saw, and the empty-native branch finalizes it
+                            // (same predicate as the recovery there).
+                            if (activeNativeToolSchemas != null
+                                && llmResponse.content.isBlank()
+                                && llmResponse.nativeToolCalls.isNullOrEmpty()
+                                && guardianState.restorableResponse(usedTools.size) == null
+                            ) {
+                                logger.warn {
+                                    "[NATIVE_TOOLS_EMPTY_FALLBACK] taskId=$taskId, model=${effectiveModel ?: "unknown"} — " +
+                                        "native response was empty (blank content, zero tool calls); one-shot JSON-path retry (no persistent fallback)"
+                                }
+                                activeNativeToolSchemas = null
+                                prompt = buildPrompt(
+                                    taskId, mode, iteration, maxIterations,
+                                    userContextRefs, runProfile, profileOverrides,
+                                    writeToolsExecutedInTurn, false,
+                                    agentName = agentName, sessionId = evSessionId, modelId = effectiveModel
+                                )
+                                continue
+                            }
                             break
                         } catch (e: ToolsNotSupportedException) {
                             val modelKey = effectiveModel ?: "unknown"
@@ -714,7 +815,7 @@ class AgentTurnLoop(
                                 taskId, mode, iteration, maxIterations,
                                 userContextRefs, runProfile, profileOverrides,
                                 writeToolsExecutedInTurn, false,
-                                agentName = agentName, sessionId = evSessionId
+                                agentName = agentName, sessionId = evSessionId, modelId = effectiveModel
                             )
                         } catch (e: RefioError.LLMError) {
                             // Ollama's qwen tool-call template can 500 server-side on malformed
@@ -738,11 +839,31 @@ class AgentTurnLoop(
                                 taskId, mode, iteration, maxIterations,
                                 userContextRefs, runProfile, profileOverrides,
                                 writeToolsExecutedInTurn, false,
-                                agentName = agentName, sessionId = evSessionId
+                                agentName = agentName, sessionId = evSessionId, modelId = effectiveModel
                             )
                         }
                     }
                     val llmDurationMs = (System.nanoTime() - llmCallStartNanos) / 1_000_000
+
+                    // Closed-loop chars/token calibration (docs/0057 Tier 2): feed the real
+                    // input-token count back so the next turn's budget math self-corrects per model.
+                    val promptChars = prompt.systemPrompt.length +
+                        prompt.messages.sumOf { it.content.length }
+                    TokenRatioCalibrator.observe(effectiveModel, promptChars, llmResponse.usage.inputTokens)
+
+                    // Generic context-overflow guard (docs/0057 §3.2) for providers that report the
+                    // TRUE pre-truncation input count (cloud: OpenAI/Anthropic/Gemini). Ollama is
+                    // covered separately by its pre-send estimate (its returned usage is already
+                    // post-truncation, so it can't trip this). Never let a too-large prompt pass as
+                    // a silent success — warn loudly and flag the run.
+                    val contextWindow = tokenEstimator.getSafeTokenLimit(effectiveProvider, effectiveModel)
+                    if (llmResponse.usage.inputTokens > contextWindow) {
+                        logger.warn {
+                            "[CTX] overflow: input=${llmResponse.usage.inputTokens} > window=$contextWindow " +
+                                "model=$effectiveProvider/$effectiveModel"
+                        }
+                        pl.jclab.refio.core.debug.ContextOverflowTracker.markOverflow(taskId)
+                    }
 
                     // Emit LLMCallCompleted for Session Trace panel / cost analytics
                     emitTurnEvent(taskId) {
@@ -805,16 +926,15 @@ class AgentTurnLoop(
                         && activeNativeToolSchemas != null) {
 
                         // Recovery before hard-fail: a guardian re-entry may have discarded a
-                        // COMPLETE prior answer (stashed in candidateFinalResponse) and the
+                        // COMPLETE prior answer (stashed in guardianState) and the
                         // re-entry then produced nothing new — empty content, no native tool
                         // calls, no new tool work. The answer the user already saw is the correct
                         // result; finalize it as success instead of failing the whole turn.
                         // Same restore condition as the terminal-text branch below
-                        // (guardianReentryCount > 0 && no new tool work since the re-entry). This
+                        // (re-entry happened, no new tool work since it — guardianState.restorableResponse). This
                         // is what saved the "run git 3× then summarize" task from being marked
                         // FAILED after the judge wrongly re-entered a completed turn.
-                        val recoverable = candidateFinalResponse
-                            ?.takeIf { guardianReentryCount > 0 && usedTools.size <= usedToolsSizeAtLastReentry }
+                        val recoverable = guardianState.restorableResponse(usedTools.size)
                         if (recoverable != null) {
                             logger.warn {
                                 "[TURN_NATIVE_EMPTY_RECOVERED] taskId=$taskId, iteration=$iteration — " +
@@ -877,49 +997,38 @@ class AgentTurnLoop(
                         && llmResponse.content.isBlank()
                         && llmResponse.nativeToolCalls.isNullOrEmpty()
                         && activeNativeToolSchemas == null) {
-                        // Fallback 1: recover JSON from the thinking field. Some Ollama setups
-                        // (qwen3 with think=true defaulted) emit the JSON envelope inside `thinking`
-                        // while `content` stays empty. We accept recovery if thinking *looks like*
-                        // a JSON envelope — either it parses to tool calls, OR its trimmed form
-                        // starts with `{` (a final-response envelope without `actions`). The
-                        // downstream pipeline handles both shapes.
-                        //
-                        // The explicit `activeNativeToolSchemas == null` check separates this from
-                        // the symmetric native-tools branch above — they need different handling
-                        // (this one can nudge the model toward the JSON envelope; the native branch
-                        // can't because the model wasn't asked to emit one).
-                        val thinking = llmResponse.thinking
-                        val thinkingTrimmed = thinking?.trim().orEmpty()
-                        val looksLikeEnvelope = thinkingTrimmed.startsWith("{")
-                        val recoveredFromThinking = if (!thinking.isNullOrBlank()) {
-                            runCatching { toolCallParser.extractToolCalls(thinking, mode, profileOverrides) }
-                                .getOrDefault(emptyList())
-                        } else {
-                            emptyList()
-                        }
+                        // Empty content in JSON-in-text mode — delegate the recover/nudge/give-up
+                        // decision to [LLMResponseRecovery] (testable in isolation) and execute the
+                        // chosen side effect here. Some Ollama setups (qwen3 with think=true) emit
+                        // the JSON envelope inside `thinking` while `content` stays empty; recovery
+                        // re-binds it, otherwise we nudge the model (bounded to 2) or fail loud.
+                        when (val decision = llmResponseRecovery.classifyEmptyContent(
+                            llmResponse,
+                            mode,
+                            jsonMode = true, // the enclosing `if` already requires activeNativeToolSchemas == null
 
-                        if (recoveredFromThinking.isNotEmpty() || looksLikeEnvelope) {
-                            logger.warn {
-                                "[TURN_EMPTY_CONTENT_RECOVERED] taskId=$taskId, iteration=$iteration, " +
-                                    "recovered=${recoveredFromThinking.size} tool calls, envelope=$looksLikeEnvelope, " +
-                                    "thinkingLength=${thinking?.length ?: 0}"
+                            iteration = iteration,
+                            maxIterations = maxIterations,
+                            state = recoveryState,
+                            profileOverrides = profileOverrides,
+                        )) {
+                            is LLMResponseRecovery.Decision.RecoverFromThinking -> {
+                                logger.warn {
+                                    "[TURN_EMPTY_CONTENT_RECOVERED] taskId=$taskId, iteration=$iteration, " +
+                                        "thinkingLength=${llmResponse.thinking?.length ?: 0}"
+                                }
+                                // Re-bind llmResponse so downstream code (extractToolCalls,
+                                // ChatMessage persistence, etc.) sees the recovered envelope as content.
+                                llmResponse = llmResponse.copy(content = decision.newContent, thinking = null)
+                                // Fall through to the regular tool-call extraction path.
                             }
-                            // Re-bind llmResponse so downstream code (extractToolCalls,
-                            // ChatMessage persistence, etc.) sees the recovered envelope as content.
-                            llmResponse = llmResponse.copy(content = thinking ?: "", thinking = null)
-                            // Fall through to the regular tool-call extraction path.
-                        } else {
-                            val canRetryEmptyContent =
-                                mode == TaskMode.AGENT &&
-                                    plainTextNudgeCount < 2 &&
-                                    iteration < maxIterations
 
-                            if (canRetryEmptyContent) {
-                                plainTextNudgeCount++
+                            LLMResponseRecovery.Decision.Nudge -> {
+                                recoveryState.nudgeCount++
                                 logger.warn {
                                     "[FORMAT_RETRY_NUDGE] taskId=$taskId, iteration=$iteration: " +
                                         "LLM returned empty content in JSON mode. " +
-                                        "Nudge=$plainTextNudgeCount/2, finishReason=${llmResponse.finishReason}"
+                                        "Nudge=${recoveryState.nudgeCount}/2, finishReason=${llmResponse.finishReason}"
                                 }
                                 val resolvedThinking = turnResponseProcessor.resolveAssistantThinking(llmResponse)
                                 if (!resolvedThinking.isNullOrBlank()) {
@@ -954,28 +1063,35 @@ class AgentTurnLoop(
                                 continue
                             }
 
-                            logger.error {
-                                "[TURN_FAILED] Empty content from model in JSON mode " +
-                                    "(mode=$mode, finishReason=${llmResponse.finishReason}, thinkingLength=${llmResponse.thinking?.length ?: 0})"
+                            is LLMResponseRecovery.Decision.GiveUp -> {
+                                logger.error {
+                                    "[TURN_FAILED] Empty content from model in JSON mode " +
+                                        "(mode=$mode, reason=${decision.reason}, finishReason=${llmResponse.finishReason}, thinkingLength=${llmResponse.thinking?.length ?: 0})"
+                                }
+                                val response = if (mode == TaskMode.AGENT) {
+                                    "The agent returned empty content in structured mode and could not recover after retrying. " +
+                                        "Please rerun with the same task or switch to a more reliable model."
+                                } else {
+                                    "Model returned empty content in structured mode. " +
+                                        "The selected model likely does not produce the required JSON envelope — " +
+                                        "try a different model (e.g. one tuned for tool use) or simplify the request."
+                                }
+                                val result = TurnResult(
+                                    success = false,
+                                    response = response,
+                                    iterations = iteration,
+                                    tokensIn = totalTokensIn,
+                                    tokensOut = totalTokensOut,
+                                    cost = totalCost,
+                                    toolsUsed = usedTools.distinct()
+                                )
+                                return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
                             }
-                            val response = if (mode == TaskMode.AGENT) {
-                                "The agent returned empty content in structured mode and could not recover after retrying. " +
-                                    "Please rerun with the same task or switch to a more reliable model."
-                            } else {
-                                "Model returned empty content in structured mode. " +
-                                    "The selected model likely does not produce the required JSON envelope — " +
-                                    "try a different model (e.g. one tuned for tool use) or simplify the request."
+
+                            LLMResponseRecovery.Decision.NotApplicable -> {
+                                // Unreachable: the enclosing `if` already matches classifyEmptyContent's
+                                // applicability predicate. Defensive no-op keeps the `when` exhaustive.
                             }
-                            val result = TurnResult(
-                                success = false,
-                                response = response,
-                                iterations = iteration,
-                                tokensIn = totalTokensIn,
-                                tokensOut = totalTokensOut,
-                                cost = totalCost,
-                                toolsUsed = usedTools.distinct()
-                            )
-                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
                         }
                     }
 
@@ -983,59 +1099,96 @@ class AgentTurnLoop(
                     // 1. Native path: llmResponse.nativeToolCalls != null (set by adapter when tools were requested)
                     // 2. JSON-in-text path: classic ToolCallParser extraction from content
                     val nativeCalls = llmResponse.nativeToolCalls
+                    // Two facts derived from the native channel drive every native-vs-text branch
+                    // below. Name them once (the two are NOT the same): `usedNativeChannel` is whether
+                    // the adapter returned a tool_calls list at all (it does so — possibly empty — only
+                    // when native tools were sent this turn, making the native path authoritative);
+                    // `nativeProducedNoCall` is whether no dispatchable native call came back (channel
+                    // inactive, OR active but empty), which is what the text-recovery / format guards key on.
+                    val usedNativeChannel = nativeCalls != null
+                    val nativeProducedNoCall = nativeCalls.isNullOrEmpty()
                     val contentForExtraction: String
                     val toolCalls: List<ToolCallData>
                     val looksLikeJsonResponse: Boolean
                     val jsonEnvelopeInspection: pl.jclab.refio.core.services.turn.ToolCallParser.JsonEnvelopeInspection
 
-                    if (nativeCalls != null) {
-                        // Native function-calling path — skip JSON-in-text parsing entirely.
-                        // nativeCalls.isEmpty() is a legitimate "model returned final prose, no
-                        // tool execution needed" — falls through to the no-tools terminal branch
-                        // below WITHOUT running the noisy JSON parser on the prose content.
-                        logger.info { "[NATIVE_TOOLS_PATH] taskId=$taskId, iteration=$iteration, calls=${nativeCalls.size}" }
-                        contentForExtraction = llmResponse.content
-                        toolCalls = nativeCalls.map { native ->
-                            ToolCallData(id = native.id, name = native.name, arguments = native.argumentsJson)
+                    // Native-requested-but-text-emitted bookkeeping (output-format selection, distinct
+                    // from extraction): if we asked this model for native tools, got none back, and it
+                    // instead emitted a JSON envelope in text, stop asking it for native tools so future
+                    // iterations go straight to the JSON-in-text contract.
+                    if (nativeProducedNoCall && activeNativeToolSchemas != null && isJsonEnvelopeFallback(llmResponse.content)) {
+                        nativeIgnoredStreak++
+                        if (nativeIgnoredStreak >= NATIVE_TOOLS_DEMOTE_AFTER_IGNORES) {
+                            val modelKey = effectiveModel ?: "unknown"
+                            NativeToolsFallbackTracker.markFallback(
+                                modelKey,
+                                "model ignored native tool_calls and emitted JSON envelope in text " +
+                                    "$nativeIgnoredStreak times in a row"
+                            )
+                            logger.warn {
+                                "[NATIVE_TOOLS_FALLBACK] taskId=$taskId, model=$modelKey — model ignored native " +
+                                    "tool_calls $nativeIgnoredStreak times in a row; future iterations will use " +
+                                    "JSON-in-text path"
+                            }
+                            activeNativeToolSchemas = null
+                        } else {
+                            logger.info {
+                                "[NATIVE_TOOLS_SOFT_IGNORE] taskId=$taskId, model=${effectiveModel ?: "?"} ignored " +
+                                    "native tool_calls and emitted a JSON envelope in text " +
+                                    "(streak=$nativeIgnoredStreak/$NATIVE_TOOLS_DEMOTE_AFTER_IGNORES) — keeping native " +
+                                    "offered; a capable model often self-corrects next iteration"
+                            }
                         }
-                        looksLikeJsonResponse = false
-                        jsonEnvelopeInspection = toolCallParser.inspectJsonEnvelope("")
-                    } else if (activeNativeToolSchemas != null && isJsonEnvelopeFallback(llmResponse.content)) {
-                        // Native tools were requested but the model emitted a JSON envelope in text
-                        // instead of native tool_calls. Treat this as a native-calling failure:
-                        // mark the model in the session fallback cache so subsequent iterations use
-                        // the JSON-in-text path, and parse the envelope we already have.
-                        val modelKey = effectiveModel ?: "unknown"
-                        NativeToolsFallbackTracker.markFallback(
-                            modelKey,
-                            "model ignored native tool_calls and emitted JSON envelope in text"
-                        )
-                        logger.warn {
-                            "[NATIVE_TOOLS_FALLBACK] taskId=$taskId, model=$modelKey — parsing envelope " +
-                                "from text content; future iterations will use JSON-in-text path"
-                        }
-                        activeNativeToolSchemas = null
-                        contentForExtraction = toolCallParser.preprocessContent(llmResponse.content, taskId)
-                        jsonEnvelopeInspection = toolCallParser.inspectJsonEnvelope(contentForExtraction)
-                        toolCalls = toolCallParser.extractToolCalls(contentForExtraction, mode, profileOverrides)
-                        looksLikeJsonResponse =
-                            jsonEnvelopeInspection.hasJsonEnvelope || contentForExtraction.trim().startsWith("[")
-                    } else {
-                        // Classic JSON-in-text path
-                        contentForExtraction = toolCallParser.preprocessContent(llmResponse.content, taskId)
-                        jsonEnvelopeInspection = toolCallParser.inspectJsonEnvelope(contentForExtraction)
-                        toolCalls = toolCallParser.extractToolCalls(contentForExtraction, mode, profileOverrides)
-                        looksLikeJsonResponse =
-                            jsonEnvelopeInspection.hasJsonEnvelope || contentForExtraction.trim().startsWith("[")
+                    } else if (activeNativeToolSchemas != null) {
+                        // Native still active and this iteration was NOT an envelope-ignore (the model used
+                        // the native channel, recovered via another text format, or finished cleanly) —
+                        // the streak must only count CONSECUTIVE ignores, so reset it.
+                        nativeIgnoredStreak = 0
                     }
 
-                    // Check for truncated response with incomplete JSON (JSON-in-text path only)
+                    // Unified extraction (docs/0056): one call regardless of how the model expressed the
+                    // tool call (native channel / JSON envelope / Hermes / Qwen-Coder XML). On the native
+                    // path the content is left raw and envelope inspection is skipped (it is authoritative);
+                    // otherwise content is preprocessed and inspected for the downstream truncation guards.
+                    contentForExtraction = if (usedNativeChannel) {
+                        llmResponse.content
+                    } else {
+                        toolCallParser.preprocessContent(llmResponse.content, taskId)
+                    }
+                    jsonEnvelopeInspection = if (usedNativeChannel) {
+                        toolCallParser.inspectJsonEnvelope("")
+                    } else {
+                        toolCallParser.inspectJsonEnvelope(contentForExtraction)
+                    }
+                    val extraction = toolCallExtractor.extract(llmResponse, contentForExtraction, mode, profileOverrides)
+                    toolCalls = when (extraction) {
+                        is ExtractionResult.Calls -> {
+                            logger.info {
+                                "[TOOLCALL] taskId=$taskId, iteration=$iteration, source=${extraction.source}, " +
+                                    "count=${extraction.calls.size}, nativeChannel=$usedNativeChannel, " +
+                                    "tools=${extraction.calls.joinToString(",") { it.name }}"
+                            }
+                            extraction.calls
+                        }
+                        is ExtractionResult.None -> {
+                            logger.debug {
+                                "[TOOLCALL] taskId=$taskId, iteration=$iteration, none reason=${extraction.reason}, " +
+                                    "nativeChannel=$usedNativeChannel, finishReason=${llmResponse.finishReason}"
+                            }
+                            emptyList()
+                        }
+                    }
+                    looksLikeJsonResponse = if (usedNativeChannel) {
+                        false
+                    } else {
+                        jsonEnvelopeInspection.hasJsonEnvelope || contentForExtraction.trim().startsWith("[")
+                    }
+
+                    // Truncated response with incomplete JSON. Detection now lives in ToolCallExtractor
+                    // (docs/0064) — it inspects the envelope and reports the distinct reason — so the
+                    // turn loop only reacts to that verdict instead of re-deriving the condition here.
                     val isTruncatedWithIncompleteJson =
-                        nativeCalls == null &&
-                        llmResponse.finishReason == "length" &&
-                        jsonEnvelopeInspection.hasJsonEnvelope &&
-                        !jsonEnvelopeInspection.isComplete &&
-                        toolCalls.isEmpty()
+                        extraction is ExtractionResult.None && extraction.reason == "incomplete-json-truncated"
 
                     if (isTruncatedWithIncompleteJson) {
                         logger.error {
@@ -1076,7 +1229,7 @@ class AgentTurnLoop(
                         // LLM history is correctly reconstructed independently of the content field.
                         // Fall back to a JSON envelope only when the model produced no text at all.
                         logger.info { "[TOOL_CALLS] taskId=$taskId, count=${toolCalls.size}" }
-                        val assistantContent = if (nativeCalls != null) {
+                        val assistantContent = if (usedNativeChannel) {
                             // Native path: tool calls live in `toolCalls` structurally; UI renders
                             // ToolCallBubble from toolCallInfo (not from content), and Plan bubble is
                             // explicitly skipped when toolCallInfo is present (AssistantBubbleRenderer
@@ -1565,7 +1718,7 @@ class AgentTurnLoop(
                         // produce a tool call (a chant inside a comment block of a tool call is
                         // typically still semantically useful — let the tool execute).
                         if (contentForExtraction.isNotBlank() &&
-                            nativeCalls.isNullOrEmpty() &&
+                            nativeProducedNoCall &&
                             toolCalls.isEmpty()
                         ) {
                             val chantingStatus = TurnGuardrails.ContentChantingDetector.inspect(contentForExtraction)
@@ -1596,7 +1749,7 @@ class AgentTurnLoop(
                         // previous such text, the loop is stuck repeating itself (typically after a
                         // guardian/format nudge re-entry) and no further progress is possible — abort.
                         if (contentForExtraction.isNotBlank() &&
-                            nativeCalls.isNullOrEmpty() &&
+                            nativeProducedNoCall &&
                             toolCalls.isEmpty()
                         ) {
                             val textRepeatStatus = textRepetitionTracker.record(contentForExtraction)
@@ -1630,7 +1783,7 @@ class AgentTurnLoop(
                             jsonEnvelopeInspection.hasJsonEnvelope &&
                                 jsonEnvelopeInspection.isComplete &&
                                 toolCalls.isEmpty() &&
-                                nativeCalls == null &&
+                                !usedNativeChannel &&
                                 isEmptyJsonEnvelope(contentForExtraction)
                         // Native-tools mode: model emitted a tool call in text instead of via the
                         // native tool_calls channel. Two observed patterns:
@@ -1654,13 +1807,13 @@ class AgentTurnLoop(
                         // into prose".
                         val nativeTextEmbeddedToolCall =
                             activeNativeToolSchemas != null &&
-                                nativeCalls.isNullOrEmpty() &&
+                                nativeProducedNoCall &&
                                 toolCalls.isEmpty() &&
                                 looksLikeTextEmbeddedToolCall(contentForExtraction)
                         val isRepeatedPlainText =
                             !looksLikeJsonResponse &&
                                 contentForExtraction.isNotBlank() &&
-                                lastPlainTextContent?.trim() == contentForExtraction.trim()
+                                recoveryState.lastPlainText?.trim() == contentForExtraction.trim()
                         // When native function-calling is active and the model returned prose
                         // without any tool_calls, that is a legitimate final answer — not a
                         // format lapse. The JSON-envelope contract only applies to the legacy
@@ -1676,9 +1829,9 @@ class AgentTurnLoop(
                         // PLAN never opted into the JSON envelope contract so it gets only the
                         // first two triggers via the native-channel path.
                         val requiresFormatRetry =
-                            nativeCalls.isNullOrEmpty() &&
+                            nativeProducedNoCall &&
                                 contentForExtraction.isNotBlank() &&
-                                plainTextNudgeCount < 2 &&
+                                recoveryState.nudgeCount < 2 &&
                                 iteration < maxIterations &&
                                 !isRepeatedPlainText &&
                                 (
@@ -1690,22 +1843,22 @@ class AgentTurnLoop(
 
                         // Hard-fail only after nudge bounds are exhausted on a tracked failure
                         // mode. Because requiresFormatRetry now fires only on objectively-broken
-                        // outputs, plainTextNudgeCount can only be >= 1 when one of those was
+                        // outputs, recoveryState.nudgeCount can only be >= 1 when one of those was
                         // detected — legitimate plain-text final answers in native mode never
                         // trigger a nudge and so can never trip this gate. `isRepeatedPlainText`
                         // gives an early-exit when the model returns byte-identical content after
                         // the first nudge (nothing further is going to change).
                         val shouldHardFailFormat =
-                            nativeCalls.isNullOrEmpty() &&
+                            nativeProducedNoCall &&
                                 contentForExtraction.isNotBlank() &&
                                 !looksLikeJsonResponse &&
                                 !hasIncompleteJsonEnvelope &&
-                                (plainTextNudgeCount >= 2 || isRepeatedPlainText)
+                                (recoveryState.nudgeCount >= 2 || isRepeatedPlainText)
 
                         if (shouldHardFailFormat) {
                             logger.error {
                                 "[FORMAT_UNRECOVERABLE] taskId=$taskId, iteration=$iteration: " +
-                                    "model kept returning plain text after $plainTextNudgeCount nudge(s) " +
+                                    "model kept returning plain text after ${recoveryState.nudgeCount} nudge(s) " +
                                     "(repeated=$isRepeatedPlainText, toolsUsedSoFar=${usedTools.size}). Failing turn."
                             }
                             val result = TurnResult(
@@ -1737,8 +1890,8 @@ class AgentTurnLoop(
                         }
 
                         if (requiresFormatRetry) {
-                            lastPlainTextContent = contentForExtraction
-                            plainTextNudgeCount++
+                            recoveryState.lastPlainText = contentForExtraction
+                            recoveryState.nudgeCount++
                             val retryReason = when {
                                 isEffectivelyEmptyEnvelope -> "LLM returned empty JSON envelope (no actions, no response)"
                                 nativeTextEmbeddedToolCall -> "LLM emitted tool call in text content instead of native tool_calls channel"
@@ -1748,7 +1901,7 @@ class AgentTurnLoop(
                             logger.warn {
                                 "[FORMAT_RETRY_NUDGE] taskId=$taskId, iteration=$iteration: " +
                                     "$retryReason. " +
-                                    "Nudge=$plainTextNudgeCount/2, content='${contentForExtraction.take(80)}'"
+                                    "Nudge=${recoveryState.nudgeCount}/2, content='${contentForExtraction.take(80)}'"
                             }
                             val resolvedThinking = turnResponseProcessor.resolveAssistantThinking(llmResponse)
                             if (!resolvedThinking.isNullOrBlank()) {
@@ -1797,7 +1950,7 @@ class AgentTurnLoop(
                             continue
                         }
 
-                        if (nativeCalls == null && mode == TaskMode.AGENT && hasIncompleteJsonEnvelope) {
+                        if (!usedNativeChannel && mode == TaskMode.AGENT && hasIncompleteJsonEnvelope) {
                             logger.error {
                                 "[MALFORMED_JSON_ENVELOPE] taskId=$taskId, iteration=$iteration: " +
                                     "assistant returned incomplete JSON after retries exhausted"
@@ -1872,8 +2025,8 @@ class AgentTurnLoop(
                                 toolsUsed = usedTools.toList(),
                                 writeToolsExecutedInTurn = writeToolsExecutedInTurn,
                                 verificationToolsExecutedAfterWrite = verificationToolsExecutedAfterWrite,
-                                priorReentries = guardianReentryCount,
-                                toolsUsedSizeAtPriorReentry = usedToolsSizeAtLastReentry,
+                                priorReentries = guardianState.reentryCount,
+                                toolsUsedSizeAtPriorReentry = guardianState.usedToolsAtLastReentry,
                                 completionCondition = taskRepository.getCompletionCondition(taskId)
                             )
                             when (val decision = completionGuardians.runChecks(guardianContext)) {
@@ -1881,13 +2034,29 @@ class AgentTurnLoop(
                                     // Preserve the answer the user already saw before we drop it
                                     // by re-entering. Keep only the FIRST one — later re-entries
                                     // tend to degrade. Restored at finalize if the re-entry adds
-                                    // no tool work (see [candidateFinalResponse]).
-                                    if (candidateFinalResponse == null &&
-                                        guardianTextResponse.ifEmpty { llmResponse.content }.isNotBlank()) {
-                                        candidateFinalResponse = llmResponse
+                                    // no tool work (see [TurnGuardianState]).
+                                    guardianState.captureIfFirst(
+                                        llmResponse,
+                                        hasVisibleText = guardianTextResponse.ifEmpty { llmResponse.content }.isNotBlank(),
+                                    )
+                                    guardianState.onReentry(usedTools.size)
+                                    // Soft fallback native→JSON on a stalled re-entry (docs/0065). The model
+                                    // reached this terminal point by emitting prose with no tool call. If it
+                                    // was on the native channel, re-entering on that SAME channel tends to
+                                    // reproduce the stall (observed: qwen3.5:9b narrating "Let me explore…"
+                                    // with zero tool_calls). Drop native tools so the single bounded re-entry
+                                    // retries on the JSON-in-text contract, which weak local models often
+                                    // follow better — the prompt rebuild at the top of the next iteration
+                                    // picks this up via `useNativeTools = activeNativeToolSchemas != null`.
+                                    // This is the prose twin of the JSON-envelope fallback above (~1101);
+                                    // no persistent NativeToolsFallbackTracker mark — only this turn switches.
+                                    if (activeNativeToolSchemas != null) {
+                                        logger.warn {
+                                            "[NATIVE_TOOLS_GUARDIAN_FALLBACK] taskId=$taskId — guardian re-entry " +
+                                                "after a native no-call; retrying on the JSON contract for this turn"
+                                        }
+                                        activeNativeToolSchemas = null
                                     }
-                                    guardianReentryCount++
-                                    usedToolsSizeAtLastReentry = usedTools.size
                                     chatMessageRepository.create(
                                         taskId = taskId,
                                         role = MessageRole.SYSTEM,
@@ -1910,7 +2079,7 @@ class AgentTurnLoop(
                                     // re-entry will help (single re-entry spent / prior nudge
                                     // produced no new tool call). Finalize the turn but flag it
                                     // INCOMPLETE so it is never recorded as SUCCESS. The
-                                    // candidateFinalResponse restore below still keeps the best
+                                    // guardianState restore below still keeps the best
                                     // text the user already saw.
                                     logger.info { "[TURN_INCOMPLETE] taskId=$taskId reason=${decision.reason}" }
                                     turnIncompleteReason = decision.reason
@@ -1932,9 +2101,7 @@ class AgentTurnLoop(
                         // degraded re-phrasing that followed the nudge. When the re-entry DID
                         // call a tool (usedTools grew), its later response incorporates that new
                         // work and is the right one to keep.
-                        val effectiveResponse = candidateFinalResponse
-                            ?.takeIf { guardianReentryCount > 0 && usedTools.size <= usedToolsSizeAtLastReentry }
-                            ?: llmResponse
+                        val effectiveResponse = guardianState.effectiveResponse(llmResponse, usedTools.size)
                         val textResponse = toolCallParser.extractTextResponse(effectiveResponse.content)
                         turnResponseProcessor.tryCreatePlanSubtasks(taskId, mode, executionMode, effectiveResponse, runProfile)
 
@@ -2117,8 +2284,10 @@ class AgentTurnLoop(
         profileOverrides: TurnProfileOverrides? = null,
         writeToolsExecutedInTurn: Int = 0,
         useNativeTools: Boolean = false,
+        nativeToolSchemas: List<ToolSchema>? = null,
         agentName: String? = null,
-        sessionId: String? = null
+        sessionId: String? = null,
+        modelId: String? = null
     ): TurnPrompt {
         val turnPrompt = turnPromptBuilder.buildPrompt(
             taskId = taskId,
@@ -2130,8 +2299,10 @@ class AgentTurnLoop(
             profileOverrides = profileOverrides,
             writeToolsExecutedInTurn = writeToolsExecutedInTurn,
             nativeToolsActive = useNativeTools,
+            nativeToolSchemas = nativeToolSchemas,
             agentName = agentName,
-            sessionId = sessionId
+            sessionId = sessionId,
+            modelId = modelId
         )
 
         // Build PromptSnapshot for UI inspection
@@ -2434,6 +2605,14 @@ class AgentTurnLoop(
 
         /** Bound on consolidation nudges per turn — a soft hint, not a hard stop; never spam it. */
         private const val MAX_CONSOLIDATION_NUDGES = 2
+
+        /**
+         * R1 (docs/0068): how many CONSECUTIVE native-ignored JSON-envelope-in-text responses demote a
+         * model off native tool-calling (a persisted `NativeToolsFallbackTracker` mark). A capable model
+         * occasionally mirrors the envelope shown as a negative example in the prompt; one slip must not
+         * permanently kick it off native, but a repeated streak is a genuine "won't use native here" signal.
+         */
+        private const val NATIVE_TOOLS_DEMOTE_AFTER_IGNORES = 2
     }
 }
 

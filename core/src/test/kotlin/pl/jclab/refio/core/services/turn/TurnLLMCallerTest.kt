@@ -91,6 +91,8 @@ class TurnLLMCallerTest {
                 messages = any(),
                 systemPrompt = "system",
                 maxTokens = null,
+                // Decision-turn temperature is read from ConfigKeys.AGENT_DECISION_TEMPERATURE;
+                // the mock returns each key's default, so this is the 0.7 default. See TurnLLMCaller.
                 temperature = 0.7,
                 responseFormat = mapOf("type" to "json_object"),
                 thinking = true,
@@ -99,10 +101,77 @@ class TurnLLMCallerTest {
                 onChunk = null,
                 taskId = "task-1",
                 subtaskId = null,
-                source = "AgentTurnLoop",
+                // Mode is suffixed so PLAN and AGENT turns are distinguishable; this test runs AGENT.
+                source = "AgentTurnLoop:AGENT",
                 contextContent = null,
                 systemMessages = emptyList(),
                 kwargs = emptyMap()
+            )
+        }
+    }
+
+    @Test
+    fun `turn source is suffixed with the mode so PLAN is distinguishable from AGENT`() {
+        every { configService.getModel(any(), any(), any()) } returns ("model-a" to "anthropic")
+        every { configService.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
+        coEvery {
+            llmClient.complete(
+                provider = any(),
+                model = any(),
+                messages = any(),
+                systemPrompt = any(),
+                maxTokens = any(),
+                temperature = any(),
+                responseFormat = any(),
+                thinking = any(),
+                noEgressEnabled = any(),
+                stream = any(),
+                onChunk = any(),
+                taskId = any(),
+                subtaskId = any(),
+                source = any(),
+                contextContent = any(),
+                systemMessages = any(),
+                kwargs = any()
+            )
+        } returns LLMResponse(
+            content = "{}",
+            usage = LLMUsage(1, 1, 2),
+            cost = 0.0,
+            model = "model-a",
+            provider = "anthropic"
+        )
+
+        kotlinx.coroutines.runBlocking {
+            caller.callLLM(
+                taskId = "task-1",
+                mode = TaskMode.PLAN,
+                prompt = TurnPrompt(
+                    systemPrompt = "system",
+                    messages = listOf(LLMMessage(role = "user", content = "hello"))
+                )
+            )
+        }
+
+        coVerify {
+            llmClient.complete(
+                provider = any(),
+                model = any(),
+                messages = any(),
+                systemPrompt = any(),
+                maxTokens = any(),
+                temperature = any(),
+                responseFormat = any(),
+                thinking = any(),
+                noEgressEnabled = any(),
+                stream = any(),
+                onChunk = any(),
+                taskId = any(),
+                subtaskId = any(),
+                source = "AgentTurnLoop:PLAN",
+                contextContent = any(),
+                systemMessages = any(),
+                kwargs = any()
             )
         }
     }

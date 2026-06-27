@@ -1,0 +1,15 @@
+{
+  "id": "make-test-pass",
+  "mode": "AGENT",
+  "max_iterations": 25,
+  "fixture": "fixtures/failing-test",
+  "prompt_file": "prompts/make-test-pass.md",
+  "assert": {
+    "tool_order": ["read_file", "advance_code_editing"],
+    "needle_in_file": { "path": "src/Calc.kt", "regex": "a[[:space:]]*\\+[[:space:]]*b" },
+    "file_unchanged": ["src/Main.kt"],
+    "build_cmd": "kotlinc src -include-runtime -d build/out.jar && java -jar build/out.jar",
+    "no_context_overflow": true
+  },
+  "judge": { "criteria": ["add is fixed to addition; Main.kt (the test) is untouched; program prints OK."] }
+}

@@ -9,13 +9,11 @@ import pl.jclab.refio.core.db.ApprovalStatus
 import pl.jclab.refio.core.db.DatabaseFactory
 import pl.jclab.refio.core.db.MessageRole
 import pl.jclab.refio.core.db.TaskStatus
-import pl.jclab.refio.core.db.MessageMetrics
 import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.db.repositories.SubtaskRepository
 import pl.jclab.refio.core.db.repositories.TaskRepository
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.api.ModelOperation
-import pl.jclab.refio.core.services.AgentExecutor
 import pl.jclab.refio.core.services.AgentTurnLoop
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.turn.TurnEventListener
@@ -24,7 +22,6 @@ import pl.jclab.refio.core.services.TurnResult
 import pl.jclab.refio.core.db.PromptType
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.services.ToolExecutionResult
-import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
 import pl.jclab.refio.core.services.ToolCallOutput
 import pl.jclab.refio.core.logging.dualLogger
 import java.nio.file.Path
@@ -36,11 +33,9 @@ private val logger = dualLogger("AgentRouter")
  * Handles agent execution and monitoring.
  *
  * This router is responsible for:
- * - Planning and executing individual subtask steps
- * - Auto mode execution (execute all pending steps)
- * - Streaming execution progress
+ * - Running PLAN/AGENT turns via AgentTurnLoop
+ * - Generating post-run execution summaries
  *
- * @property agentExecutor Agent execution service
  * @property taskRepository Task management repository
  * @property subtaskRepository Subtask storage repository
  * @property chatMessageRepository Chat message storage (for approval messages)
@@ -51,7 +46,6 @@ private val logger = dualLogger("AgentRouter")
  * @property projectRoot Project root path (for execution summaries)
  */
 class AgentRouter(
-    private val agentExecutor: AgentExecutor?,
     private val taskRepository: TaskRepository,
     private val subtaskRepository: SubtaskRepository,
     private val chatMessageRepository: ChatMessageRepository,
@@ -72,329 +66,6 @@ class AgentRouter(
 
     override suspend fun shutdown() {
         logger.info { "[AgentRouter] Shutting down" }
-    }
-
-    // ===== Agent Execution Operations =====
-
-    /**
-     * Plan subtask execution.
-     *
-     * Generates execution plan for a subtask using StepPlanner.
-     * Updates subtask status from PENDING → PLANNED.
-     * Saves approval message to chat_messages for UI display.
-     *
-     * @param taskId Parent task ID
-     * @param subtaskId Subtask ID to plan
-     * @return Plan with tools and estimated duration
-     * @throws IllegalStateException if agent executor not available
-     * @throws IllegalArgumentException if subtask not found
-     */
-    fun planSubtaskStep(taskId: String, subtaskId: String): PlanStepResponse {
-        logger.info { "[AgentRouter] Planning subtask step: taskId=$taskId, subtaskId=$subtaskId" }
-
-        if (agentExecutor == null) {
-            throw IllegalStateException("Agent execution not available - ToolRegistry not initialized")
-        }
-
-        return runBlocking {
-            val result = agentExecutor.planStep(taskId, subtaskId)
-
-            if (result.error != null) {
-                throw IllegalStateException("Planning failed: ${result.error}")
-            }
-
-            val plan = result.plan!!
-
-            // Get subtask for order index
-            val subtask = subtaskRepository.findById(subtaskId)
-                ?: throw IllegalArgumentException("Subtask not found: $subtaskId")
-
-            // Save message to chat ONLY if subtask requires approval (INTERACTIVE mode)
-            if (subtask.requiresApproval) {
-                // Format approval message with tools
-                val toolsList = plan.tools.joinToString("\n") { spec ->
-                    val argsPreview = spec.params.entries.take(3).joinToString(", ") { "${it.key}: ${it.value}" }
-                    val argsText = if (argsPreview.isEmpty()) "" else " ($argsPreview)"
-                    "  • ${spec.name}$argsText"
-                }
-
-                // Format decision info (suggested vs selected)
-                val decisionInfo = plan.planDecision?.let { decision ->
-                    buildString {
-                        append("\n**Plan Decision:**\n")
-                        append("- Intent: ${decision.intent}\n")
-                        append("- Suggested: `${decision.suggestedTool}`")
-                        if (decision.suggestedParams.isNotEmpty()) {
-                            append(" (${decision.suggestedParams.keys.joinToString(", ")})")
-                        }
-                        append("\n")
-                        append("- Selected: `${decision.selectedTool}`")
-                        if (decision.selectedParams.isNotEmpty()) {
-                            append(" (${decision.selectedParams.keys.joinToString(", ")})")
-                        }
-                        append("\n")
-                        if (decision.wasModified) {
-                            append("- ⚠️ Modified by LLM")
-                            decision.reasoning?.let { append(": $it") }
-                        } else {
-                            append("- ✓ Kept as suggested")
-                        }
-                    }
-                } ?: ""
-
-                val approvalMessage = """
-📋 **Step ${subtask.orderIndex}**: ${plan.description}
-
-**Tools:**
-$toolsList
-$decisionInfo
-
-Approve execution?
-
-**Subtask ID:** `$subtaskId`
-                """.trimIndent()
-
-                val metrics = plan.llmMetrics?.let { MessageMetrics.toJson(it) }
-
-                chatMessageRepository.create(
-                    taskId = taskId,
-                    role = MessageRole.ASSISTANT,
-                    content = approvalMessage,
-                    metadata = metrics,
-                    tokensIn = plan.llmMetrics?.inputTokens,
-                    tokensOut = plan.llmMetrics?.outputTokens,
-                    cost = plan.llmMetrics?.costUsd
-                )
-
-                logger.info { "[AgentRouter] Approval message saved for subtask $subtaskId (INTERACTIVE mode)" }
-            } else {
-                logger.info { "[AgentRouter] Skipping approval message for subtask $subtaskId (AUTO mode)" }
-            }
-
-            PlanStepResponse(
-                tools = plan.tools.map { spec ->
-                    ToolCallResponse(
-                        name = spec.name,
-                        params = spec.params,
-                        expectedOutput = spec.expectedOutput
-                    )
-                },
-                description = plan.description,
-                estimatedDurationMs = plan.estimatedDurationMs,
-                dependencies = plan.dependencies
-            )
-        }
-    }
-
-    /**
-     * Execute subtask step.
-     *
-     * Executes tools from subtask plan using AgentExecutor.
-     * Updates subtask status: PLANNED/PENDING → RUNNING → SUCCESS/FAILED.
-     * Saves execution summary to chat_messages for UI display.
-     *
-     * @param taskId Parent task ID
-     * @param subtaskId Subtask ID to execute
-     * @return Execution result with status and summary
-     * @throws IllegalStateException if agent executor not available
-     * @throws IllegalArgumentException if subtask not found
-     */
-    fun executeSubtaskStep(taskId: String, subtaskId: String): ExecuteStepResponse {
-        logger.info { "[AgentRouter] Executing subtask step: taskId=$taskId, subtaskId=$subtaskId" }
-
-        if (agentExecutor == null) {
-            throw IllegalStateException("Agent execution not available - ToolRegistry not initialized")
-        }
-
-        return runBlocking {
-            val result = agentExecutor.executeStep(taskId, subtaskId)
-
-            // Get subtask for order index
-            val subtask = subtaskRepository.findById(subtaskId)
-                ?: throw IllegalArgumentException("Subtask not found: $subtaskId")
-
-            // Format summary message
-            val statusEmoji = if (result.status == "success") "✅" else "❌"
-            val summaryMessage = """
-$statusEmoji **Step ${subtask.orderIndex}**: ${subtask.description}
-
-${result.summary}
-
-_Execution time: ${result.durationMs}ms_
-            """.trimIndent()
-
-            val metrics = result.llmMetrics?.let { MessageMetrics.toJson(it) }
-
-            chatMessageRepository.create(
-                taskId = taskId,
-                role = MessageRole.ASSISTANT,
-                content = summaryMessage,
-                metadata = metrics,
-                tokensIn = result.llmMetrics?.inputTokens,
-                tokensOut = result.llmMetrics?.outputTokens,
-                cost = result.llmMetrics?.costUsd
-            )
-
-            logger.info { "[AgentRouter] Execution summary saved for subtask $subtaskId: ${result.status}" }
-
-            ExecuteStepResponse(
-                status = result.status,
-                summary = result.summary,
-                durationMs = result.durationMs,
-                error = result.error
-            )
-        }
-    }
-
-    /**
-     * Execute subtask step with optional listener for streaming tool output.
-     *
-     * Skips re-planning and uses existing step plan (if present) to emit UI events.
-     *
-     * @param taskId Parent task ID
-     * @param subtaskId Subtask ID to execute
-     * @param externalListener Optional listener for streaming tool output
-     * @return Execution result with status and summary
-     * @throws IllegalStateException if agent executor not available
-     * @throws IllegalArgumentException if subtask not found
-     */
-    fun executeSubtaskStepWithListener(
-        taskId: String,
-        subtaskId: String,
-        externalListener: ExecutionEventListener? = null
-    ): ExecuteStepResponse {
-        logger.info {
-            "[AgentRouter] Executing subtask step with listener: taskId=$taskId, subtaskId=$subtaskId"
-        }
-
-        if (agentExecutor == null) {
-            throw IllegalStateException("Agent execution not available - ToolRegistry not initialized")
-        }
-
-        return runBlocking {
-            val subtaskForPlan = subtaskRepository.findById(subtaskId)
-                ?: throw IllegalArgumentException("Subtask not found: $subtaskId")
-
-            buildStepPlanFromJson(subtaskForPlan)?.let { plan ->
-                externalListener?.onStepExecuting(subtaskForPlan, plan)
-            }
-
-            val result = agentExecutor.executeStep(taskId, subtaskId, externalListener)
-
-            // Get subtask for order index
-            val subtask = subtaskRepository.findById(subtaskId)
-                ?: throw IllegalArgumentException("Subtask not found: $subtaskId")
-
-            // Format summary message
-            val statusEmoji = if (result.status == "success") "[OK]" else "[FAIL]"
-            val summaryMessage = """
-$statusEmoji **Step ${subtask.orderIndex}**: ${subtask.description}
-
-${result.summary}
-
-_Execution time: ${result.durationMs}ms_
-            """.trimIndent()
-
-            val metrics = result.llmMetrics?.let { MessageMetrics.toJson(it) }
-
-            chatMessageRepository.create(
-                taskId = taskId,
-                role = MessageRole.ASSISTANT,
-                content = summaryMessage,
-                metadata = metrics,
-                tokensIn = result.llmMetrics?.inputTokens,
-                tokensOut = result.llmMetrics?.outputTokens,
-                cost = result.llmMetrics?.costUsd
-            )
-
-            logger.info { "[AgentRouter] Execution summary saved for subtask $subtaskId: ${result.status}" }
-
-            ExecuteStepResponse(
-                status = result.status,
-                summary = result.summary,
-                durationMs = result.durationMs,
-                error = result.error
-            )
-        }
-    }
-
-    private fun buildStepPlanFromJson(
-        subtask: pl.jclab.refio.core.db.Subtask
-    ): pl.jclab.refio.core.services.execution.unified.StepPlan? {
-        val planJson = subtask.stepPlanJson ?: return null
-        return try {
-            @Suppress("UNCHECKED_CAST")
-            val planMap = gson.fromJson(planJson, Map::class.java) as Map<String, Any>
-
-            @Suppress("UNCHECKED_CAST")
-            val toolsArray = planMap["tools"] as? List<Map<String, Any>> ?: emptyList()
-
-            val tools = toolsArray.mapNotNull { toolData ->
-                val name = toolData["name"] as? String ?: return@mapNotNull null
-                @Suppress("UNCHECKED_CAST")
-                val params = toolData["params"] as? Map<String, Any> ?: emptyMap()
-                pl.jclab.refio.core.services.execution.unified.ToolPlan(
-                    name = name,
-                    params = params
-                )
-            }
-
-            val description = (planMap["description"] as? String)
-                ?: subtask.description
-
-            val planDecision = planMap["planDecision"]?.let { decision ->
-                gson.fromJson(gson.toJson(decision), pl.jclab.refio.core.api.PlanDecisionInfo::class.java)
-            }
-
-            pl.jclab.refio.core.services.execution.unified.StepPlan(
-                subtaskId = subtask.id,
-                description = description,
-                tools = tools,
-                planDecision = planDecision
-            )
-        } catch (e: Exception) {
-            logger.warn(e) { "[AgentRouter] Failed to parse stepPlanJson for subtask ${subtask.id}" }
-            null
-        }
-    }
-
-    /**
-     * Approve task plan for auto execution.
-     */
-    fun approvePlan(taskId: String) {
-        logger.info { "[AgentRouter] Approving plan: taskId=$taskId" }
-
-        if (agentExecutor == null) {
-            throw IllegalStateException("Agent execution not available - ToolRegistry not initialized")
-        }
-
-        runBlocking { agentExecutor.approvePlan(taskId) }
-    }
-
-    /**
-     * Reject task plan for auto execution.
-     */
-    fun rejectPlan(taskId: String, reason: String? = null) {
-        logger.info { "[AgentRouter] Rejecting plan: taskId=$taskId" }
-
-        if (agentExecutor == null) {
-            throw IllegalStateException("Agent execution not available - ToolRegistry not initialized")
-        }
-
-        runBlocking { agentExecutor.rejectPlan(taskId, reason) }
-    }
-
-    /**
-     * Get plan summary for approval UI.
-     */
-    fun getPlanSummary(taskId: String): PlanSummaryResponse {
-        logger.info { "[AgentRouter] Getting plan summary: taskId=$taskId" }
-
-        if (agentExecutor == null) {
-            throw IllegalStateException("Agent execution not available - ToolRegistry not initialized")
-        }
-
-        return runBlocking { agentExecutor.getPlanSummary(taskId) }
     }
 
     // ===== Execution Summary =====

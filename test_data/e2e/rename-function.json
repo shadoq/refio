@@ -1,0 +1,21 @@
+{
+  "id": "rename-function",
+  "mode": "AGENT",
+  "max_iterations": 30,
+  "fixture": "fixtures/rename",
+  "prompt_file": "prompts/rename-function.md",
+  "assert": {
+    "tool_order": ["grep_search", "read_file", "advance_code_editing"],
+    "needles_in_file": [
+      { "path": "src/Api.kt", "regex": "fun[[:space:]]+fetchRecord" },
+      { "path": "src/Api.kt", "regex": "legacyFetch", "absent": true },
+      { "path": "src/Client.kt", "regex": "fetchRecord" },
+      { "path": "src/Client.kt", "regex": "legacyFetch", "absent": true },
+      { "path": "src/Worker.kt", "regex": "fetchRecord" },
+      { "path": "src/Worker.kt", "regex": "legacyFetch", "absent": true }
+    ],
+    "build_cmd": "kotlinc src -include-runtime -d build/out.jar",
+    "no_context_overflow": true
+  },
+  "judge": { "criteria": ["legacyFetch renamed to fetchRecord at the definition and every call site; nothing else changed."] }
+}

@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.llm.adapters
 
 import pl.jclab.refio.core.llm.NativeToolCall
+import pl.jclab.refio.core.llm.NativeToolCallDelta
 import pl.jclab.refio.core.utils.GsonInstance.gson
 
 internal object ToolCallContentNormalizer {
@@ -18,15 +19,22 @@ internal object ToolCallContentNormalizer {
 
         private val callsByIndex = linkedMapOf<Int, CallBuffer>()
 
-        fun consumeDelta(delta: Map<String, Any?>?) {
-            if (delta == null) return
-            consumeToolCalls(delta["tool_calls"])
+        /**
+         * Consume one streaming `delta` and return the per-call increments observed in it
+         * (docs/0064), so the adapter can surface progressive tool-call building via
+         * [StreamChunk.toolCallDelta]. The accumulator remains the source of truth for the final
+         * [toNativeToolCalls]; the returned list is purely for live progress.
+         */
+        fun consumeDelta(delta: Map<String, Any?>?): List<NativeToolCallDelta> {
+            if (delta == null) return emptyList()
+            return consumeToolCalls(delta["tool_calls"])
         }
 
-        fun consumeToolCalls(rawToolCalls: Any?) {
+        fun consumeToolCalls(rawToolCalls: Any?): List<NativeToolCallDelta> {
             @Suppress("UNCHECKED_CAST")
-            val toolCalls = rawToolCalls as? List<Map<String, Any?>> ?: return
+            val toolCalls = rawToolCalls as? List<Map<String, Any?>> ?: return emptyList()
 
+            val deltas = mutableListOf<NativeToolCallDelta>()
             for ((fallbackIndex, toolCall) in toolCalls.withIndex()) {
                 val index = (toolCall["index"] as? Number)?.toInt() ?: fallbackIndex
                 val buffer = callsByIndex.getOrPut(index) { CallBuffer() }
@@ -36,21 +44,42 @@ internal object ToolCallContentNormalizer {
 
                 @Suppress("UNCHECKED_CAST")
                 val function = toolCall["function"] as? Map<String, Any?> ?: continue
-                val name = function["name"] as? String
-                if (!name.isNullOrBlank()) {
-                    buffer.name = normalizeToolName(name)
+                val rawName = function["name"] as? String
+                var nameDelta: String? = null
+                if (!rawName.isNullOrBlank()) {
+                    buffer.name = normalizeToolName(rawName)
+                    nameDelta = buffer.name
                 }
 
                 val args = function["arguments"]
+                var argumentsDelta: String? = null
                 when (args) {
-                    is String -> buffer.argumentsBuilder.append(args)
+                    is String -> {
+                        buffer.argumentsBuilder.append(args)
+                        argumentsDelta = args
+                    }
                     is Map<*, *> -> {
                         if (buffer.argumentsBuilder.isEmpty()) {
-                            buffer.argumentsBuilder.append(gson.toJson(args))
+                            val asJson = gson.toJson(args)
+                            buffer.argumentsBuilder.append(asJson)
+                            argumentsDelta = asJson
                         }
                     }
                 }
+
+                // Only surface a progress delta when something renderable arrived this chunk.
+                if (nameDelta != null || !argumentsDelta.isNullOrEmpty()) {
+                    deltas.add(
+                        NativeToolCallDelta(
+                            index = index,
+                            idDelta = id,
+                            nameDelta = nameDelta,
+                            argumentsDelta = argumentsDelta,
+                        )
+                    )
+                }
             }
+            return deltas
         }
 
         fun toNativeToolCalls(toolsWereRequested: Boolean): List<NativeToolCall>? {

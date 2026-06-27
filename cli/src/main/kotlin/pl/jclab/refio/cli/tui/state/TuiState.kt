@@ -14,6 +14,7 @@ data class TuiState(
     val activeTab: TuiTab = TuiTab.CHAT,
     val messages: List<TuiChatMessage> = emptyList(),
     val isStreaming: Boolean = false,
+    val toolCallProgress: pl.jclab.refio.core.api.ToolCallProgress? = null,
     val agents: List<TuiAgentState> = emptyList(),
     val subtasks: List<SubtaskResponse> = emptyList(),
     val activePlan: List<SubtaskResponse>? = null,

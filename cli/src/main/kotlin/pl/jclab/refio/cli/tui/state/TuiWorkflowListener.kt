@@ -5,9 +5,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import pl.jclab.refio.core.workflow.WorkflowEventListener
-import pl.jclab.refio.core.workflow.models.IntentResult
-import pl.jclab.refio.core.workflow.models.WorkflowIntent
-import pl.jclab.refio.core.models.api.ChatCosts
 import java.util.UUID
 
 /**
@@ -117,16 +114,6 @@ class TuiWorkflowListener(
         startStreaming("Planning...")
     }
 
-    override fun onDecisionPhase() {
-        viewModel?.updateExecutionStatus("Deciding next action...")
-        currentPhase = "decision"
-    }
-
-    override fun onReflectionPhase() {
-        viewModel?.updateExecutionStatus("Reflecting on results...")
-        currentPhase = "reflection"
-    }
-
     override fun onSubagentStarted(subagentName: String) {
         viewModel?.updateExecutionStatus("Subagent: $subagentName")
         startStreaming("[$subagentName] ...")
@@ -204,76 +191,6 @@ class TuiWorkflowListener(
 
     override fun onStepStarted(subtaskId: String) {
         viewModel?.updateSubtaskStatus(subtaskId, "RUNNING")
-    }
-
-    override fun onIntentCompleted(intent: WorkflowIntent, result: IntentResult) {
-        // In INTERACTIVE mode, auto-switch to Steps tab for next approval
-        val vm = viewModel ?: return
-        val state = vm.stateFlow.value
-        if (state.executionMode == "INTERACTIVE") {
-            val subtasks = state.subtasks
-            val nextPending = subtasks.indexOfFirst { it.status in listOf("NEW", "PENDING") }
-            if (nextPending >= 0) {
-                vm.setActiveTab(TuiTab.STEPS)
-                vm.selectStep(nextPending)
-                vm.addSystemMessage("Step completed. Next step awaiting approval: ${subtasks[nextPending].description}")
-            }
-        }
-    }
-
-    override fun onWorkflowComplete(result: IntentResult) {
-        viewModel?.updateExecutionStatus("Idle")
-        streamingState.value = false
-        // Extract per-message metrics from result and update last assistant message
-        val costs = extractCosts(result)
-        if (costs != null) {
-            messagesState.update { messages ->
-                val lastAssistant = messages.indexOfLast { it.role == "assistant" && !it.isStreaming }
-                if (lastAssistant >= 0) {
-                    messages.toMutableList().also {
-                        it[lastAssistant] = it[lastAssistant].copy(
-                            tokensIn = costs.tokensIn,
-                            tokensOut = costs.tokensOut,
-                            costUsd = costs.usdEst
-                        )
-                    }
-                } else messages
-            }
-        }
-
-        // Generate execution completion summary for PLAN/AGENT mode
-        val vm = viewModel ?: return
-        val subtasks = vm.stateFlow.value.subtasks
-        if (subtasks.isNotEmpty()) {
-            val completed = subtasks.count { it.status == "COMPLETED" }
-            val failed = subtasks.count { it.status == "FAILED" }
-            val skipped = subtasks.count { it.status == "SKIPPED" }
-            val total = subtasks.size
-            val totalCost = subtasks.sumOf { it.costUsd }
-            val totalTokens = subtasks.sumOf { it.tokensIn + it.tokensOut }
-            val summary = buildString {
-                append("Execution completed: $completed/$total successful")
-                if (failed > 0) append(", $failed failed")
-                if (skipped > 0) append(", $skipped skipped")
-                append(" | ${totalTokens} tokens | \$${String.format("%.4f", totalCost)}")
-            }
-            messagesState.update { messages ->
-                messages + TuiChatMessage(
-                    id = UUID.randomUUID().toString(),
-                    timestamp = System.currentTimeMillis(),
-                    role = "assistant",
-                    content = summary,
-                    messageType = TuiMessageType.EXECUTION_SUMMARY
-                )
-            }
-        }
-    }
-
-    private fun extractCosts(result: IntentResult): ChatCosts? {
-        return when (result) {
-            is IntentResult.ChatResult -> result.response.costs
-            else -> null
-        }
     }
 
     override fun onWorkflowError(error: Exception) {

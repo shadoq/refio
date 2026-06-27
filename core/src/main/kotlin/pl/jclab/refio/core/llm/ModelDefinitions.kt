@@ -106,6 +106,216 @@ object ModelDefinitions {
             active = true
         ),
         //
+        // GPT 5.5 Pro (models.dev)
+        //
+        "gpt-5.5-pro" to ModelDefinition(
+            id = "gpt-5.5-pro",
+            name = "GPT-5.5 Pro",
+            provider = "openai",
+            description = "Highest-compute GPT-5.5 tier for the hardest agentic, coding, and reasoning tasks",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 30.00,
+            costPer1MOutput = 180.00,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            paramMappings = mapOf(
+                "max_tokens" to "max_completion_tokens"
+            ),
+            removeParams = listOf(
+                "temperature"
+            ),
+            active = true
+        ),
+        //
+        // GPT 5.4 Pro (models.dev)
+        //
+        "gpt-5.4-pro" to ModelDefinition(
+            id = "gpt-5.4-pro",
+            name = "GPT-5.4 Pro",
+            provider = "openai",
+            description = "Highest-compute GPT-5.4 tier for the hardest agentic, coding, and reasoning tasks",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 30.00,
+            costPer1MOutput = 180.00,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            paramMappings = mapOf(
+                "max_tokens" to "max_completion_tokens"
+            ),
+            removeParams = listOf(
+                "temperature"
+            ),
+            active = true
+        ),
+        //
+        // GPT 5.3 Codex Spark (models.dev)
+        //
+        "gpt-5.3-codex-spark" to ModelDefinition(
+            id = "gpt-5.3-codex-spark",
+            name = "GPT-5.3 Codex Spark",
+            provider = "openai",
+            description = "Lightweight low-latency agentic coding model in the GPT-5.3 Codex family",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = 32_000,
+            costPer1MInput = 1.75,
+            costPer1MOutput = 14.00,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+        //
+        // GPT 5.2 Pro (models.dev)
+        //
+        "gpt-5.2-pro" to ModelDefinition(
+            id = "gpt-5.2-pro",
+            name = "GPT-5.2 Pro",
+            provider = "openai",
+            description = "Highest-compute GPT-5.2 tier for the hardest agentic, coding, and reasoning tasks",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 400_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 21.00,
+            costPer1MOutput = 168.00,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            paramMappings = mapOf(
+                "max_tokens" to "max_completion_tokens"
+            ),
+            removeParams = listOf(
+                "temperature"
+            ),
+            active = true
+        ),
+        //
+        // GPT 5 Pro (models.dev)
+        //
+        "gpt-5-pro" to ModelDefinition(
+            id = "gpt-5-pro",
+            name = "GPT-5 Pro",
+            provider = "openai",
+            description = "Highest-compute GPT-5 tier for the hardest agentic, coding, and reasoning tasks",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 400_000,
+            maxOutputTokens = 272_000,
+            costPer1MInput = 15.00,
+            costPer1MOutput = 120.00,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            paramMappings = mapOf(
+                "max_tokens" to "max_completion_tokens"
+            ),
+            removeParams = listOf(
+                "temperature"
+            ),
+            active = true
+        ),
+        //
+        // GPT 5 Codex (models.dev)
+        //
+        "gpt-5-codex" to ModelDefinition(
+            id = "gpt-5-codex",
+            name = "GPT-5 Codex",
+            provider = "openai",
+            description = "Agentic coding model in the GPT-5 family",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 400_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 1.25,
+            costPer1MOutput = 10.00,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+        //
         // GPT 5.4
         //
         "gpt-5.4" to ModelDefinition(
@@ -1294,6 +1504,29 @@ object ModelDefinitions {
             removeParams = listOf("temperature"),
             active = true
         ),
+        "claude-fable-5" to ModelDefinition(
+            id = "claude-fable-5",
+            name = "Claude Fable 5",
+            provider = "anthropic",
+            description = "Claude Fable 5 — 1M context model with reasoning and agentic coding",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 10.00,
+            costPer1MOutput = 50.00,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            removeParams = listOf("temperature"),
+            active = true
+        ),
         "claude-opus-4-7" to ModelDefinition(
             id = "claude-opus-4-7",
             name = "Claude Opus 4.7",
@@ -1661,6 +1894,94 @@ object ModelDefinitions {
             maxOutputTokens = 65_536,
             costPer1MInput = 2.0,
             costPer1MOutput = 12.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = false,
+            active = true
+        ),
+        "gemini-3.5-flash" to ModelDefinition(
+            id = "gemini-3.5-flash",
+            name = "Gemini 3.5 Flash",
+            provider = "gemini",
+            description = "Fast multimodal Gemini 3.5 Flash for high-throughput agentic workflows ($1.5 in / $9 out per 1M tokens).",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = GEMINI_MAX_CONTEXT,
+            maxOutputTokens = 65_536,
+            costPer1MInput = 1.5,
+            costPer1MOutput = 9.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = false,
+            active = true
+        ),
+        "gemini-3.1-pro-preview" to ModelDefinition(
+            id = "gemini-3.1-pro-preview",
+            name = "Gemini 3.1 Pro Preview",
+            provider = "gemini",
+            description = "Flagship multimodal Gemini 3.1 Pro preview for agentic workflows ($2 in / $12 out per 1M tokens).",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = GEMINI_MAX_CONTEXT,
+            maxOutputTokens = 65_536,
+            costPer1MInput = 2.0,
+            costPer1MOutput = 12.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = false,
+            active = true
+        ),
+        "gemini-3.1-flash-lite" to ModelDefinition(
+            id = "gemini-3.1-flash-lite",
+            name = "Gemini 3.1 Flash Lite",
+            provider = "gemini",
+            description = "Lightweight low-cost multimodal Gemini 3.1 Flash Lite ($0.25 in / $1.5 out per 1M tokens).",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = GEMINI_MAX_CONTEXT,
+            maxOutputTokens = 65_536,
+            costPer1MInput = 0.25,
+            costPer1MOutput = 1.5,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = false,
+            active = true
+        ),
+        "gemini-3-flash-preview" to ModelDefinition(
+            id = "gemini-3-flash-preview",
+            name = "Gemini 3 Flash Preview",
+            provider = "gemini",
+            description = "Fast multimodal Gemini 3 Flash preview for high-throughput agentic workflows ($0.5 in / $3 out per 1M tokens).",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = GEMINI_MAX_CONTEXT,
+            maxOutputTokens = 65_536,
+            costPer1MInput = 0.5,
+            costPer1MOutput = 3.0,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -2056,6 +2377,113 @@ object ModelDefinitions {
             costPer1MInput = 1.0,
             costPer1MOutput = 3.2,
             supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-5.2" to ModelDefinition(
+            id = "glm-5.2",
+            name = "GLM-5.2",
+            provider = "zai",
+            description = "Flagship GLM-5.2 foundation model for agentic engineering and long-horizon coding, 1M context.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_000_000,
+            maxOutputTokens = 131_072,
+            costPer1MInput = 1.4,
+            costPer1MOutput = 4.4,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-5v-turbo" to ModelDefinition(
+            id = "glm-5v-turbo",
+            name = "GLM-5V-Turbo",
+            provider = "zai",
+            description = "GLM-5V-Turbo multimodal (vision/video) model for agentic workflows.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 200_000,
+            maxOutputTokens = 131_072,
+            costPer1MInput = 1.2,
+            costPer1MOutput = 4.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-4.6v" to ModelDefinition(
+            id = "glm-4.6v",
+            name = "GLM-4.6V",
+            provider = "zai",
+            description = "GLM-4.6V multimodal (vision/video) model with reasoning and tool use.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 128_000,
+            maxOutputTokens = 32_768,
+            costPer1MInput = 0.3,
+            costPer1MOutput = 0.9,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-4.5v" to ModelDefinition(
+            id = "glm-4.5v",
+            name = "GLM-4.5V",
+            provider = "zai",
+            description = "GLM-4.5V multimodal (vision/video) model with reasoning and tool use.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 64_000,
+            maxOutputTokens = 16_384,
+            costPer1MInput = 0.6,
+            costPer1MOutput = 1.8,
+            supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
             supportsFunctionCalling = true,
@@ -3372,9 +3800,124 @@ object ModelDefinitions {
             active = true
         ),
 
+        "qwen2.5-coder:0.5b" to ModelDefinition(
+            id = "qwen2.5-coder:0.5b",
+            name = "Qwen 2.5 Coder 0.5B",
+            provider = "ollama",
+            description = "Code-specific with tool use, reasoning, and fixing",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 32_768,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "qwen2.5-coder:1.5b" to ModelDefinition(
+            id = "qwen2.5-coder:1.5b",
+            name = "Qwen 2.5 Coder 1.5B",
+            provider = "ollama",
+            description = "Code-specific with tool use, reasoning, and fixing",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 32_768,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "qwen2.5-coder:3b" to ModelDefinition(
+            id = "qwen2.5-coder:3b",
+            name = "Qwen 2.5 Coder 3B",
+            provider = "ollama",
+            description = "Code-specific with tool use, reasoning, and fixing",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 32_768,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
         "qwen2.5-coder:7b" to ModelDefinition(
             id = "qwen2.5-coder:7b",
             name = "Qwen 2.5 Coder 7B",
+            provider = "ollama",
+            description = "Code-specific with tool use, reasoning, and fixing",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "qwen2.5-coder:14b" to ModelDefinition(
+            id = "qwen2.5-coder:14b",
+            name = "Qwen 2.5 Coder 14B",
+            provider = "ollama",
+            description = "Code-specific with tool use, reasoning, and fixing",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "qwen2.5-coder:32b" to ModelDefinition(
+            id = "qwen2.5-coder:32b",
+            name = "Qwen 2.5 Coder 32B",
             provider = "ollama",
             description = "Code-specific with tool use, reasoning, and fixing",
             capabilities = listOf(

@@ -118,10 +118,19 @@ class TurnPromptBuilder(
         profileOverrides: TurnProfileOverrides?,
         writeToolsExecutedInTurn: Int = 0,
         nativeToolsActive: Boolean = false,
+        /**
+         * Native tool schemas sent in the request body's `tools` array (when [nativeToolsActive]).
+         * Their token cost is reserved in the context budget alongside the system-prompt text, so
+         * the dynamic sections shrink to fit instead of pushing the real prompt past the model's
+         * context window (docs/0057). Null/empty reserves nothing.
+         */
+        nativeToolSchemas: List<pl.jclab.refio.core.tools.base.ToolSchema>? = null,
         /** Stable A2A agent name (multi-agent). When set together with [sessionId], pending incoming requests are injected. */
         agentName: String? = null,
         /** Multi-agent session id. Used to look up the inbox in [AgentInboxRegistry]. */
         sessionId: String? = null,
+        /** Resolved model id for model-aware token estimation (docs/0057). Null = flat-base ratio. */
+        modelId: String? = null,
     ): TurnPrompt {
         // Build system prompt based on mode/profile
         val baseSystemPrompt = resolveSystemPrompt(
@@ -213,7 +222,16 @@ $stickyRequirements
         // remaining window after the prefix, not against the full window. Before this, the
         // budget pretended the system prompt didn't exist, so an 18k prefix + 13k of sections
         // happily blew past a 16k Ollama window (see [CONTEXT_OVERFLOW] in OllamaAdapter).
-        val staticPrefixTokens = pl.jclab.refio.core.services.PromptTokenEstimator.estimateBase(systemPrompt)
+        // Reserve the native `tools` payload too (sent in the request body, not the prompt text)
+        // so the dynamic section budget fits alongside it inside the context window — without this
+        // the sections over-allocate and the real prompt overflows num_ctx (docs/0057, Report 2).
+        val nativeToolTokens = if (nativeToolsActive) {
+            pl.jclab.refio.core.services.PromptTokenEstimator.estimateNativeToolSchemaTokens(nativeToolSchemas, modelId)
+        } else {
+            0
+        }
+        val staticPrefixTokens =
+            pl.jclab.refio.core.services.PromptTokenEstimator.estimateBase(systemPrompt) + nativeToolTokens
 
         // Use ContextService for messages and project context (for PLAN and AGENT modes)
         if ((mode == TaskMode.PLAN || mode == TaskMode.AGENT) && contextService != null && projectRoot != null) {
@@ -228,6 +246,7 @@ $stickyRequirements
                     userContextRefs = allContextRefs,
                     query = lastUserMessage,
                     staticPrefixTokens = staticPrefixTokens,
+                    modelId = modelId,
                 )
 
                 // Apply context profile filtering for subagents
@@ -290,8 +309,9 @@ $filteredContextPrompt
                         if (remainingBudget > 0) {
                             filteredMessages = truncateMessagesToTokenBudget(filteredMessages, remainingBudget)
                         } else {
-                            // Truncate system prompt to fit within budget
-                            val maxChars = (contextProfile.maxContextTokens * 3.5).toInt()
+                            // Truncate system prompt to fit within budget (docs/0057: model-aware,
+                            // was a hardcoded * 3.5 that duplicated CHARS_PER_TOKEN_BASE).
+                            val maxChars = PromptTokenEstimator.maxCharsForTokens(contextProfile.maxContextTokens, modelId)
                             systemPrompt = systemPrompt.take(maxChars)
                             filteredMessages = emptyList()
                         }

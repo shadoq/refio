@@ -22,7 +22,6 @@ object CoreSessionServiceFactory {
         projectPath: Path,
         scope: CoroutineScope,
         stateManager: SessionStateManager = SessionStateManager(),
-        vfsRefresher: VfsRefresher = VfsRefresher.NoOp,
         uiAdapter: UIAdapter = NoopUIAdapter,
         executionStateController: ExecutionStateController = NoopExecutionStateController,
     ): CoreSessionService {
@@ -34,30 +33,16 @@ object CoreSessionServiceFactory {
             scope = scope,
         )
 
-        lateinit var subtaskTrackerRef: SubtaskTracker
-        lateinit var executionMonitorRef: ExecutionMonitor
-
         val executionMonitor = ExecutionMonitor(
-            projectRouter = projectRouter,
             stateManager = stateManager,
             stepExecutionService = executionStateController,
-            scope = scope,
-            loadMessages = { messageDispatcher.loadMessages() },
-            loadSubtasks = { subtaskTrackerRef.loadSubtasks() },
-            prepareNextStep = { subtaskTrackerRef.prepareNextStep() },
         )
-        executionMonitorRef = executionMonitor
 
         val subtaskTracker = SubtaskTracker(
             projectRouter = projectRouter,
             stateManager = stateManager,
-            vfsRefresher = vfsRefresher,
-            loadMessages = { messageDispatcher.loadMessages() },
-            executeCurrentStep = { subtaskId -> executionMonitorRef.executeCurrentStep(subtaskId) },
-            showApprovalMessageForNextSubtask = { executionMonitorRef.showApprovalMessageForNextSubtask() },
             scope = scope,
         )
-        subtaskTrackerRef = subtaskTracker
 
         val lifecycleService = SessionLifecycleService(
             projectRouter = projectRouter,

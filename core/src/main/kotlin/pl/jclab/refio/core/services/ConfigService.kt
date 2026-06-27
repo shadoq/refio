@@ -26,7 +26,14 @@ import java.nio.file.Path
 class ConfigService(
     internal val configRepository: ConfigRepository,
     private val defaultProjectId: String? = null,
-    private val projectRoot: Path? = null
+    private val projectRoot: Path? = null,
+    /**
+     * Run-scope config overrides (docs/0063): highest-priority, read-only values injected at
+     * process start (e.g. CLI `--config` / `--config-file`). They win over DB/YAML/default but
+     * are NEVER written back to the shared database — enabling headless e2e/benchmark of different
+     * settings without polluting real sessions. Empty by default (plugin/normal callers unaffected).
+     */
+    private val runConfigOverrides: Map<String, String> = emptyMap()
 ) {
     private val logger = dualLogger("ConfigService")
     private val configCache = ConfigCache()
@@ -44,6 +51,7 @@ class ConfigService(
         yamlLoader = yamlLoader,
         cache = configCache,
         defaultProjectId = defaultProjectId,
+        runOverrides = runConfigOverrides,
     )
 
     private val modelSelectionService = ModelSelectionService(this)

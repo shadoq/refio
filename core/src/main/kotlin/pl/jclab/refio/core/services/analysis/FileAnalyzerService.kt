@@ -207,8 +207,12 @@ class FileAnalyzerService(
         }
 
         val embeddings = embeddingsService.generateBatch(chunks.map(CodeChunk::content))
-        val metadataJson = gson.toJson(analysis.codeElements)
 
+        // docs/0060 Faza 2: previously persisted gson.toJson(analysis.codeElements) into the
+        // IndexFiles.metadata column, but that blob was never deserialized by anyone — search
+        // ranking uses cosine + keyword only, and every codeElements consumer reads it in-memory
+        // from a fresh FileAnalysis, never from this column. Dropping it removes per-index CPU +
+        // I/O for zero behavioural change. The nullable column is kept to avoid a schema migration.
         val existing = ragRepository.getIndexedFileByPath(analysis.projectRoot, analysis.filePath)
         val fileId = if (existing != null) {
             ragRepository.updateIndexedFile(
@@ -216,7 +220,7 @@ class FileAnalyzerService(
                 fileHash = analysis.contentHash ?: sha256(content),
                 fileSize = analysis.fileSize,
                 lastModified = analysis.lastModified,
-                metadata = metadataJson
+                metadata = null
             )
             ragRepository.deleteChunksForFile(existing.id)
             existing.id
@@ -228,7 +232,7 @@ class FileAnalyzerService(
                 fileSize = analysis.fileSize,
                 mimeType = inferMimeType(analysis.filePath),
                 lastModified = analysis.lastModified,
-                metadata = metadataJson
+                metadata = null
             )
         }
 

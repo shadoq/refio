@@ -420,6 +420,14 @@ RagSearchResult[]
 
 `SUBAGENT` is a run profile on top of PLAN/AGENT with additional tool filtering.
 
+### Code Editing
+
+`multi_line_editor` and `advance_code_editing` don't edit files inline — they make a **separate LLM call to generate the new file content**, then Refio computes the diff and writes the file.
+
+- **Model slot.** Both edit tools resolve their generation model from the `coding` slot (`ModelOperation.CODING` → `default_model.agent`) — the same slot the AGENT turn loop uses. When unset it inherits the default (`chat`) model.
+- **Whole-file, not diff.** The model returns the *complete* file inside a fenced code block; Refio derives the unified diff from before/after purely for display. There is no diff to "apply", so there is no diff-application failure mode.
+- **Extraction-repair loop.** A weak model sometimes replies with prose or an unterminated block (no usable code block). Instead of failing the turn, `advance_code_editing` re-prompts with a corrective hint, bounded to 2 attempts, then fails loud — never a silent or partial write (the file is written only after a clean extraction).
+
 ## Subagents
 
 Specialized AI assistants invoked with `!agent-name` prefix and executed on the same `AgentTurnLoop` (`runProfile=SUBAGENT`).

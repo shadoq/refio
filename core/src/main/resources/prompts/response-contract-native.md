@@ -14,7 +14,6 @@ Invoke tools through the native `tool_calls` / `tool_use` channel. Text content 
 ```
 <create_new_file><path>foo.html</path><content>...</content></create_new_file>
 <read_file><path>src/foo.kt</path></read_file>
-{"response": "...", "actions": [{"tool": "...", "args": {...}}]}
 ```json
 {"tool_use": ...}
 ```

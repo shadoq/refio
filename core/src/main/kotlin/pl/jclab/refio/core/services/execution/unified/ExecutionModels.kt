@@ -2,7 +2,6 @@ package pl.jclab.refio.core.services.execution.unified
 
 import pl.jclab.refio.core.api.PlanDecisionInfo
 import pl.jclab.refio.core.db.Subtask
-import pl.jclab.refio.core.services.StepExecutionResult
 
 /**
  * Step plan returned by prepare phase.
@@ -28,8 +27,7 @@ data class StepResult(
     val status: String, // "success" or "failed"
     val summary: String,
     val durationMs: Int,
-    val error: String? = null,
-    val executionResult: StepExecutionResult? = null
+    val error: String? = null
 )
 
 /**

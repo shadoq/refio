@@ -18,6 +18,18 @@ object CommandRuleDefaults {
         CommandRule(""":\(\)\s*\{""", RuleAction.BLOCK, "Fork bomb"),
         CommandRule("^shred\\b", RuleAction.BLOCK, "Secure file deletion"),
 
+        // Destructive filesystem operations — Windows cmd.exe / PowerShell.
+        // The agent runs commands through powershell.exe on Windows, where del/erase/
+        // rm/rmdir/rd/ri are all aliases for Remove-Item — none of which the POSIX
+        // `rm` rules above catch. Mirror the rm -r / rm -f philosophy: block the
+        // recursive/force/quiet mass-delete variants; a plain single-file delete
+        // (no flags) stays ASK like plain `rm`.
+        CommandRule("^(del|erase)\\s+.*/[fsq]\\b", RuleAction.BLOCK, "del/erase force/recursive/quiet (Windows)"),
+        CommandRule("^(rmdir|rd)\\s+.*/s\\b", RuleAction.BLOCK, "Recursive directory delete (Windows)"),
+        CommandRule("^(remove-item|ri|del|erase|rmdir|rd|rm)\\s+.*\\s-rec", RuleAction.BLOCK, "Recursive delete (PowerShell)"),
+        CommandRule("^(remove-item|ri|del|erase|rmdir|rd|rm)\\s+.*\\s-for", RuleAction.BLOCK, "Force delete (PowerShell)"),
+        CommandRule("^(format-volume|clear-disk)\\b", RuleAction.BLOCK, "Disk/volume destruction (PowerShell)"),
+
         // Destructive git operations
         CommandRule("^git\\s+reset\\s+--hard", RuleAction.BLOCK, "Git hard reset"),
         CommandRule("^git\\s+clean\\s+-f", RuleAction.BLOCK, "Git force clean"),

@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Headless CLI scriptable flags for driving turns without the GUI: `--output json` + `--output-file` write a `run.json` with per-turn metrics (tokens/cost/iterations/status); `--debug-level minimal|standard|full|judge`; `--config k=v` / `--config-file` run-scope overrides; `--print-config` (dry-run, no LLM call); `--max-cost <usd>` hard per-session ceiling; `--auto-approve "<regex>"` approval gate; `--no-egress`. Turn/tool events streamed to stderr and `~/.refio/refio-cli.log`; `-v` additionally streams live LLM token deltas.
+- Unified tool-call extraction with an explicit reason logged on every failed attempt - closes a silent failure mode where a weak model returning prose caused an early turn finish without any indication why.
+- Native function calling extended to OpenAI-compatible adapters (OpenRouter, Z.AI, Generic OpenAI, LM Studio) and Gemini, joining the existing Ollama / OpenAI / Anthropic paths.
+- Native-tools fallback now persists across process restarts via `models.native_tools_fallbacks`; models that failed the native-tools probe are not re-probed on the next run.
+- Per-provider tool-schema normalization so the same registered tool schema is accepted by every LLM provider.
+- `tools.native_tools` config (`auto` | `always` | `never`) with a General-settings dropdown; debug log shows which path was chosen and why.
+- Live tool-call indicator in chat and TUI - shows the tool name and arguments while a call is streaming, clears when done.
+- E2e regression harness (`benchmark/scripts/e2e-run.sh` + Windows parity) drives JSON scenarios headless and asserts on the result. Not part of `./gradlew test` (slow, requires a model). `--self-test` validates the assertion engine offline without an LLM call.
+- Compressed tool results now include a recovery pointer so the agent knows output was shortened and can retrieve the full content via the memory tool.
+
+### Changed
+
+- Legacy plan/step execution path removed. PLAN/AGENT/headless all run through a single `AgentTurnLoop`. Headless runs previously only produced a plan and never executed tools or wrote files - this is fixed.
+- Headless turns now stream, fixing slow/cold local models that were killed at the socket-idle timeout while producing a large response body (`qwen3.5:4b/9b` previously timed out headless, now complete).
+- Stream idle timeout ceiling raised 300 s -> 600 s to accommodate large models with slow first-token latency.
+- Small qwen3.5 models (`0.8b`/`2b`/`4b`/`9b`) now use the native tool-calling path in `auto` mode; degrades to JSON automatically if the local runtime has no tool parser.
+- Truncated-response detection unified into the extraction layer; the turn loop reacts to the extraction result instead of re-deriving it.
+- High-frequency internal log lines demoted to trace so the in-app "Debug Logs" view stays readable.
+- Agentic search is now the default; vector RAG is opt-in (`rag.index_on_startup: false`). `grep_search` ranks declaration hits above plain usages so an agent sees definitions before call sites.
+- Subagent depth ceiling enforced before spawn - `invoke_subagent` refuses a call that would exceed depth 3 immediately, without allocating a child turn.
+- Native-tools demotion now requires two consecutive JSON-envelope-in-text slips instead of one; a single slip retries on the JSON path for that turn only, without permanent demotion.
+
+### Fixed
+
+- Ollama streaming turns no longer fail when the `done:true` sentinel is missing but a tool call was already captured - a valid call is no longer discarded on an incomplete stream.
+- Native tool schemas now counted in the context budget so AGENT prompts no longer silently overflow `num_ctx` on Ollama with many tools active.
+- API-log `source` / `taskId` now reflect the actual request instead of being frozen from the first request that created the adapter pool entry; PLAN and AGENT turns are now distinguishable in the Source column.
+- Bracket-labeled tool batches emitted as text (`[TOOL] read_file: path="..."`) are now recovered instead of being dropped as an unrecognized format.
+- Paraphrase-stall detection - a model re-wording the same intent sentence across iterations (word-level near-duplicate) now triggers the repetition abort the same way a byte-identical repeat does.
+- Stray tool-call JSON residue no longer leaks into assistant chat bubbles when a model without native function-calling emits calls as text.
+- Stalled turns on weak native-tool models now retry on the JSON-in-text path instead of re-entering the same channel that just produced no tool calls.
+- Mid-turn message reload no longer drops in-memory bubbles not yet persisted to the database; the user's prompt and live streaming bubbles no longer blink out during an active turn.
+
 ## [0.0.1.11] - 2026-05-31
 
 ### Added

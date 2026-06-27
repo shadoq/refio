@@ -32,6 +32,7 @@ internal object ProjectRouterFactory {
         configService: ConfigService,
         promptsService: PromptsService,
         taskRepository: TaskRepository,
+        runConfigOverrides: Map<String, String> = emptyMap(),
     ): CoreApiRouter {
         val toolRegistry = ToolRegistry()
 
@@ -54,6 +55,7 @@ internal object ProjectRouterFactory {
             projectRoot = projectRoot,
             platformProjectOverride = platformProject,
             projectHandle = projectHandle,
+            runConfigOverrides = runConfigOverrides,
         )
     }
 }

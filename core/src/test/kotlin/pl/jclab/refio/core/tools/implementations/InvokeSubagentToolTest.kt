@@ -116,6 +116,43 @@ class InvokeSubagentToolTest {
     }
 
     @Nested
+    inner class DepthLimitTests {
+
+        @Test
+        fun `should reject invocation that would exceed max depth WITHOUT spawning`() = runBlocking {
+            // Rule 9 (docs/0063 §5.1): the depth ceiling stops runaway subagent fan-out from
+            // exhausting resources. Enforcing it BEFORE spawn (not after, inside the child turn)
+            // is the point — a spawn-then-fail still pays the allocation. childDepth = parentDepth
+            // + 1, so _parent_depth=3 -> depth 4 > MAX(3) must be refused right here.
+            val result = tool.execute(mapOf(
+                "_task_id" to "task-1",
+                "subagent_name" to "test-agent",
+                "goal" to "do something",
+                "_parent_depth" to 3
+            ))
+
+            assertFalse(result.success, "depth-4 invocation must fail")
+            assertTrue(result.error!!.contains("depth", ignoreCase = true), "error should mention depth: ${result.error}")
+            assertEquals(0, runTurnCallCount, "must NOT spawn the child turn when the depth ceiling is exceeded")
+        }
+
+        @Test
+        fun `should allow invocation at the inclusive max depth boundary`() = runBlocking {
+            // _parent_depth=2 -> childDepth=3 == MAX, still allowed (matches
+            // TurnSubagentValidator's `require(depth <= maxSubagentDepth)`).
+            val result = tool.execute(mapOf(
+                "_task_id" to "task-1",
+                "subagent_name" to "test-agent",
+                "goal" to "do something",
+                "_parent_depth" to 2
+            ))
+
+            assertTrue(result.success, "depth-3 invocation should proceed: ${result.error}")
+            assertEquals(1, runTurnCallCount, "child turn should spawn at the boundary depth")
+        }
+    }
+
+    @Nested
     inner class ToolMetadataTests {
 
         @Test

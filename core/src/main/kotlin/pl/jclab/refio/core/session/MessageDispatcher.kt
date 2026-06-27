@@ -52,9 +52,6 @@ class MessageDispatcher(
         try {
             logger.info { "[MESSAGES] loadMessages start: taskId=${currentSession.id}" }
 
-            val existingSystemMessages = stateManager.messages.value.filter { msg ->
-                msg.role == "system" && msg.taskId == currentSession.id
-            }
             val response = projectRouter.chatRouter.getMessages(currentSession.id)
             logger.info { "[MESSAGES] loadMessages response: taskId=${currentSession.id}, count=${response.count}" }
             val toolResultPathByToolCallId = response.messages
@@ -301,25 +298,26 @@ class MessageDispatcher(
                 dbMessages
             }
 
-            val dbMessageIds = dbMessagesWithReattached.map { it.id }.toSet()
-            val inMemoryOnlySystemMessages = existingSystemMessages.filterNot { it.id in dbMessageIds }
-            // Merge in-memory system messages into the DB list by createdAt so they
-            // keep their chronological position instead of jumping to the end after reload.
-            val allMessages = if (inMemoryOnlySystemMessages.isEmpty()) {
-                dbMessagesWithReattached
-            } else {
-                (dbMessagesWithReattached + inMemoryOnlySystemMessages).sortedBy { it.createdAt }
+            // Reconcile against the LATEST in-memory snapshot under the messages lock, not a copy
+            // taken before the (suspending) DB read. Several writers — the streaming assistant, the
+            // per-subagent streams, the human's prompt — push transient bubbles concurrently; merging
+            // inside the lock keeps a chunk that lands mid-reload from being clobbered by a stale list.
+            var updated = false
+            stateManager.updateMessages { latest ->
+                val merged = reconcileMessages(latest, dbMessagesWithReattached, currentSession.id)
+                if (areMessagesEqual(latest, merged)) {
+                    latest
+                } else {
+                    updated = true
+                    merged
+                }
             }
-
-            val currentMessages = stateManager.messages.value
-            if (!areMessagesEqual(currentMessages, allMessages)) {
-                stateManager.updateMessages { allMessages }
+            if (updated) {
                 logger.info {
-                    "[MESSAGES] Loaded: db=${dbMessages.size}, inMemory=${inMemoryOnlySystemMessages.size}, " +
-                        "taskId=${currentSession.id}"
+                    "[MESSAGES] Loaded: db=${dbMessagesWithReattached.size}, taskId=${currentSession.id}"
                 }
             } else {
-                logger.debug { "[MESSAGES] Unchanged, skipping update (count=${allMessages.size})" }
+                logger.debug { "[MESSAGES] Unchanged, skipping update (db=${dbMessagesWithReattached.size})" }
             }
 
             refreshActiveSessionMetrics(currentSession.id)
@@ -603,6 +601,56 @@ class MessageDispatcher(
     companion object {
         private val PATH_KEYS = listOf("path", "file", "file_path", "filepath", "target_path", "target_file")
         private const val REFRESH_DEBOUNCE_MS = 300L
+
+        /**
+         * Merge the current in-memory message list with a fresh DB snapshot for [sessionId].
+         *
+         * The DB is authoritative for anything it has persisted, but a turn produces transient
+         * bubbles that exist only in memory until they are flushed. Those are kept ONLY while they
+         * have no DB counterpart, so the transcript neither blinks out mid-turn nor shows duplicates:
+         *
+         *  - `system` — purely in-memory notices (errors, agent-guidance); never persisted, always kept.
+         *  - `isStreaming` — a live LLM stream is not in the DB yet; kept so the bubble does not vanish
+         *    on a reload. When the stream ends it is marked non-streaming and the next reload lets the
+         *    DB-persisted copy (a different id) take over.
+         *  - top-level `user` (depth 0/null) — the human's own prompt. A subagent run persists it tagged
+         *    to the subagent (depth > 0) under a different id, so it is kept unless the DB already holds a
+         *    *top-level* user row with the same content (a plain turn — drop the in-memory copy, no dup).
+         *
+         * Anything else (e.g. a finished assistant transient) is dropped in favor of the DB copy.
+         * Preserved messages are merged back by `createdAt` so they keep their chronological position.
+         */
+        internal fun reconcileMessages(
+            currentInMemory: List<Message>,
+            dbMessages: List<Message>,
+            sessionId: String,
+        ): List<Message> {
+            val dbMessageIds = dbMessages.mapTo(HashSet()) { it.id }
+            val dbTopLevelUserContents = dbMessages
+                .filter { it.role == "user" && (it.agentDepth == null || it.agentDepth == 0) }
+                .mapTo(HashSet()) { it.content.trim() }
+
+            val preserved = currentInMemory
+                .asSequence()
+                .filter { it.taskId == sessionId }
+                .filterNot { it.id in dbMessageIds }
+                .filter { msg ->
+                    when {
+                        msg.role == "system" -> true
+                        msg.isStreaming -> true
+                        msg.role == "user" && (msg.agentDepth == null || msg.agentDepth == 0) ->
+                            msg.content.trim() !in dbTopLevelUserContents
+                        else -> false
+                    }
+                }
+                .toList()
+
+            return if (preserved.isEmpty()) {
+                dbMessages
+            } else {
+                (dbMessages + preserved).sortedBy { it.createdAt }
+            }
+        }
     }
 
     private fun createToolCallDisplayMessage(

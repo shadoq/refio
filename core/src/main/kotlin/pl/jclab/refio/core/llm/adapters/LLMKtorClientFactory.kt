@@ -40,12 +40,18 @@ internal object LLMKtorClientFactory {
      * silent the dead connection hung for the full timeout — observed: a `qwen3.5:122b` stream
      * fell silent after the first chunk and hung **53 minutes** until the OS reset the TCP
      * socket (`SocketException: Connection reset`, latency=3193838ms). A healthy stream emits
-     * tokens within seconds; even a cold 122B model's first-token gap was ~125s — so any gap
-     * beyond 5 minutes means the connection is dead, not slow. Decoupling idle-detection from
-     * the total timeout makes a dead stream fail fast (~5 min) instead of hanging for ~an hour.
-     * Bump this only if a genuinely larger model shows false aborts on a >5-min first-token gap.
+     * tokens within seconds. Decoupling idle-detection from the total timeout makes a dead stream
+     * fail fast instead of hanging for ~an hour.
+     *
+     * Why 10 min (was 5): a COLD large *dense* model with a big context window has a long FIRST-token
+     * gap — observed: `qwen3.5:27b` at `num_ctx=131072` loaded cold needs >5 min to evaluate the prompt
+     * before emitting its first chunk, so a 5-min ceiling false-aborted it (timeout at ~300s) even
+     * though the model was merely slow to start, not dead. 10 min tolerates that while still killing a
+     * genuinely dead stream far below the ~53-min hang above. Note the effective idle is
+     * `min(API_CALL_TIMEOUT, this)`, so for a first token beyond `API_CALL_TIMEOUT` the user must also
+     * raise that. Bump this only if a genuinely larger model shows false aborts on a >10-min first-token gap.
      */
-    const val STREAM_IDLE_CEILING_MS = 300_000L
+    const val STREAM_IDLE_CEILING_MS = 600_000L
 
     /**
      * Resolve the effective socket idle timeout: clamp the requested value to

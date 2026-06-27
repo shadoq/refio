@@ -37,3 +37,33 @@ fun shouldUseNativeTools(
         NativeToolsMode.AUTO -> definition?.supportsFunctionCalling == true
     }
 }
+
+/**
+ * Human-readable reason for the [shouldUseNativeTools] verdict, so a run's native-vs-JSON path is
+ * explainable from the log alone — no need to re-derive the model flag or config by hand. Mirrors
+ * the exact precedence of [shouldUseNativeTools]; the leading token is the resulting path
+ * (`NATIVE` / `JSON`).
+ */
+fun nativeToolsDecisionReason(
+    mode: NativeToolsMode,
+    definition: ModelDefinition?,
+    modelId: String,
+    fallbackFlags: Set<String> = emptySet(),
+): String {
+    if (modelId in fallbackFlags) {
+        return "JSON: '$modelId' is in the session native-tools fallback set (a prior native call failed)"
+    }
+    return when (mode) {
+        NativeToolsMode.NEVER -> "JSON: tools.native_tools=never"
+        NativeToolsMode.ALWAYS -> "NATIVE: tools.native_tools=always (forced regardless of model flag)"
+        NativeToolsMode.AUTO -> when {
+            definition == null ->
+                "JSON: tools.native_tools=auto and no ModelDefinition for '$modelId' " +
+                    "(unknown model defaults to no function-calling)"
+            definition.supportsFunctionCalling ->
+                "NATIVE: tools.native_tools=auto and ModelDefinition.supportsFunctionCalling=true"
+            else ->
+                "JSON: tools.native_tools=auto and ModelDefinition.supportsFunctionCalling=false for '$modelId'"
+        }
+    }
+}

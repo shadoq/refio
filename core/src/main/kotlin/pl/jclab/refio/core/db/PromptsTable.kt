@@ -13,12 +13,8 @@ enum class PromptType {
     SYSTEM_AGENT,           // Agent mode - autonomous execution with write access (LLM role: system)
 
     // ========== Workflow System Prompts (single prompt → LLM system role) ==========
-    SYSTEM_STEP_PLANNER,    // Step planner - dynamic tool parameter generation (LLM role: system)
-    SYSTEM_STEP_SUMMARIZER, // Step summarizer - execution result summarization (LLM role: system)
-    SYSTEM_ORCHESTRATOR,    // Orchestrator - reflection and plan adaptation (LLM role: system)
     SYSTEM_EXECUTION_SUMMARY, // Execution summary - final task summary generation (LLM role: system)
     SYSTEM_CONVERSATION_SUMMARY, // Conversation summary - history compaction (LLM role: system)
-    SYSTEM_INTENT_CLASSIFIER, // Intent classifier - decides action type for user input (LLM role: system)
     SYSTEM_TOOL_SUMMARY,      // Tool result summarizer - individual tool output summarization (LLM role: system)
 
     // ========== Tool Prompts (paired: system instructions + user data template) ==========
@@ -42,12 +38,8 @@ enum class PromptType {
             SYSTEM_CHAT,
             SYSTEM_PLAN,
             SYSTEM_AGENT,
-            SYSTEM_STEP_PLANNER,
-            SYSTEM_STEP_SUMMARIZER,
-            SYSTEM_ORCHESTRATOR,
             SYSTEM_EXECUTION_SUMMARY,
             SYSTEM_CONVERSATION_SUMMARY,
-            SYSTEM_INTENT_CLASSIFIER,
             SYSTEM_TOOL_SUMMARY,
             CODE_EDITING_SYSTEM,
             CODE_EDITING_USER,

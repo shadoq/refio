@@ -45,6 +45,9 @@ class AdvancedSettingsPanel(
     private lateinit var autoOptimizeSlider: JSlider
     private lateinit var autoOptimizeLabel: JLabel
 
+    // Agent - sampling
+    private lateinit var decisionTempField: JBTextField
+
     // Flag to prevent triggering onSettingChanged during programmatic updates
     private var isUpdatingProgrammatically = false
 
@@ -56,6 +59,8 @@ class AdvancedSettingsPanel(
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
 
             add(createSectionPanel("Security", createSecurityPanel()))
+            add(Box.createVerticalStrut(LCATheme.spacingLg))
+            add(createSectionPanel("Agent", createAgentPanel()))
             add(Box.createVerticalStrut(LCATheme.spacingLg))
             add(createSectionPanel("Limits", createLimitsPanel()))
 
@@ -97,6 +102,53 @@ class AdvancedSettingsPanel(
             add(JBLabel("Prevent all file write operations").apply {
                 foreground = LCATheme.descriptionForeground
                 border = LCATheme.paddedBorder(0, 24, 0, 0)
+            })
+        }
+    }
+
+    // ==================== AGENT ====================
+
+    private fun createAgentPanel(): JPanel {
+        decisionTempField = JBTextField("0.7", 8).apply {
+            addFocusListener(object : java.awt.event.FocusAdapter() {
+                override fun focusLost(e: java.awt.event.FocusEvent?) {
+                    if (isUpdatingProgrammatically) {
+                        return
+                    }
+                    val value = (text.toDoubleOrNull() ?: 0.7).coerceIn(0.0, 2.0)
+                    // Normalize the field to the accepted value (clamps/garbage → canonical text)
+                    isUpdatingProgrammatically = true
+                    text = formatTemp(value)
+                    isUpdatingProgrammatically = false
+                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
+                        pl.jclab.refio.core.config.ConfigKeys.AGENT_DECISION_TEMPERATURE.key
+                    )
+                    onSettingChanged(section, key, value)
+                }
+            })
+        }
+
+        return JBPanel<JBPanel<*>>().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            border = LCATheme.paddedBorder(LCATheme.padding)
+
+            add(JBLabel("Decision-turn temperature:").apply {
+                font = LCATheme.boldFont
+            })
+            add(Box.createVerticalStrut(4))
+
+            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
+                add(JBLabel("Temperature:"))
+                add(decisionTempField)
+                add(JBLabel("0.0 - 2.0"))
+            })
+
+            add(JBLabel(
+                "Sampling temperature for the PLAN/AGENT turn that picks tools. " +
+                    "Lower = stricter contract adherence (helps small/local models); " +
+                    "higher = more variety. Default 0.7."
+            ).apply {
+                foreground = LCATheme.descriptionForeground
             })
         }
     }
@@ -294,6 +346,11 @@ class AdvancedSettingsPanel(
         autoOptimizeSlider.value = percentage
     }
 
+    fun getDecisionTemperature(): Double = (decisionTempField.text.toDoubleOrNull() ?: 0.7).coerceIn(0.0, 2.0)
+    fun setDecisionTemperature(value: Double) {
+        decisionTempField.text = formatTemp(value.coerceIn(0.0, 2.0))
+    }
+
     // Limits API (from LimitsSettingsPanel)
     fun getToolExecutionTimeout(): Int = toolExecutionSlider.value
     fun setToolExecutionTimeout(seconds: Int) {
@@ -332,6 +389,7 @@ class AdvancedSettingsPanel(
             maxContextSizeField.text = "128000"
             maxOutputSizeField.text = "8192"
             autoOptimizeSlider.value = 85
+            decisionTempField.text = "0.7"
         } finally {
             isUpdatingProgrammatically = false
         }
@@ -358,9 +416,11 @@ class AdvancedSettingsPanel(
             logger.info { "Loading advanced configuration" }
             val advancedConfig = coreApiClient.configRouter.getConfig(section = "advanced", scope = "app")
             val limitsConfig = coreApiClient.configRouter.getConfig(section = "limits", scope = "app")
+            val agentConfig = coreApiClient.configRouter.getConfig(section = "agent", scope = "app")
 
             applyAdvancedConfig(advancedConfig.settings)
             applyLimitsConfig(limitsConfig.settings)
+            applyAgentConfig(agentConfig.settings)
         } catch (e: Exception) {
             logger.error(e) { "Failed to load advanced config" }
         }
@@ -401,6 +461,19 @@ class AdvancedSettingsPanel(
         }
     }
 
+    private fun applyAgentConfig(settings: Map<String, Any>) {
+        isUpdatingProgrammatically = true
+        try {
+            val temp = parseDouble(settings["decision_temperature"], 0.7).coerceIn(0.0, 2.0)
+            decisionTempField.text = formatTemp(temp)
+        } finally {
+            isUpdatingProgrammatically = false
+        }
+    }
+
+    /** Render a temperature as canonical config text ("0.7", "0.55") regardless of UI locale. */
+    private fun formatTemp(value: Double): String = value.toString()
+
     private fun parseBoolean(raw: Any?, defaultValue: Boolean): Boolean {
         return when (raw) {
             is Boolean -> raw
@@ -413,6 +486,14 @@ class AdvancedSettingsPanel(
         return when (raw) {
             is Number -> raw.toInt()
             is String -> raw.toIntOrNull() ?: defaultValue
+            else -> defaultValue
+        }
+    }
+
+    private fun parseDouble(raw: Any?, defaultValue: Double): Double {
+        return when (raw) {
+            is Number -> raw.toDouble()
+            is String -> raw.toDoubleOrNull() ?: defaultValue
             else -> defaultValue
         }
     }

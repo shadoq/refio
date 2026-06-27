@@ -648,6 +648,55 @@ class GrepSearchToolTest {
     }
 
     @Nested
+    inner class ResultRankingTests {
+
+        @Test
+        fun `declaration hits rank above usage hits`() = runBlocking {
+            // Rule 9 (docs/0060 Faza 2): when an agent greps for a symbol, the line that DECLARES
+            // it is the high-value hit. Surfacing the definition above call sites cuts the
+            // follow-up reads a model needs on cold-start navigation. A regression here (usages
+            // first) would silently send weak models down call chains before they ever see the
+            // definition — that is WHY ranking matters, not just THAT the order changed.
+            Files.writeString(tempDir.resolve("a.kt"), """
+                fun caller() {
+                    val x = Widget()
+                    doSomething(Widget())
+                }
+                class Widget {
+                }
+            """.trimIndent())
+
+            val result = tool.execute(mapOf("pattern" to "Widget", "file_pattern" to "*.kt"))
+
+            assertTrue(result.success)
+            val hitLines = result.output!!.lines().filter { it.contains("Widget") }
+            val declIdx = hitLines.indexOfFirst { it.contains("class Widget") }
+            val usageIdx = hitLines.indexOfFirst { it.contains("Widget()") }
+            assertTrue(declIdx >= 0, "declaration line missing: $hitLines")
+            assertTrue(usageIdx >= 0, "usage line missing: $hitLines")
+            assertTrue(declIdx < usageIdx, "Declaration 'class Widget' must rank before usage 'Widget()': $hitLines")
+        }
+
+        @Test
+        fun `preserves file order within the same rank group`() = runBlocking {
+            // Within one rank tier (two plain usages, no declaration keyword) the original
+            // file-walk order must survive — ranking is a stable reorder, not a shuffle.
+            Files.writeString(tempDir.resolve("b.kt"), """
+                val first = Gadget()
+                val second = Gadget()
+            """.trimIndent())
+
+            val result = tool.execute(mapOf("pattern" to "Gadget\\(\\)", "file_pattern" to "*.kt"))
+
+            assertTrue(result.success)
+            val hitLines = result.output!!.lines().filter { it.contains("Gadget()") }
+            val firstIdx = hitLines.indexOfFirst { it.contains("first") }
+            val secondIdx = hitLines.indexOfFirst { it.contains("second") }
+            assertTrue(firstIdx >= 0 && secondIdx > firstIdx, "file order must be preserved: $hitLines")
+        }
+    }
+
+    @Nested
     inner class ParameterSchemaTests {
 
         @Test

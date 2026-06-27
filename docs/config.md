@@ -154,7 +154,7 @@ models:
   defaults:
     chat: "ollama/qwen3.5:9b"           # Chat/conversation model
     plan: "ollama/qwen3.5:9b"           # Planning operations
-    coding: "ollama/qwen3.5:9b"   # Coding/agent tasks
+    coding: "ollama/qwen3.5:9b"   # Coding/agent tasks (agent turn + file edits)
     weak: "ollama/qwen3.5:4b"           # Auxiliary operations (summaries)
     embedding: "ollama/nomic-embed-text" # RAG embeddings
 
@@ -184,6 +184,8 @@ models:
       defaultModel: "ollama/qwen3:14b"
       # planModel, codingModel, weakModel default to defaultModel when omitted
 ```
+
+**Coding model.** In AGENT mode the turn loop and the file-editing tools (`advance_code_editing`, `multi_line_editor`) both resolve the `coding` slot (`default_model.agent`); PLAN mode uses `plan`, CHAT uses `chat`. When a slot is unset it inherits `chat` (the default model), so single-model setups need only set `chat`.
 
 ### System Limits
 
@@ -240,11 +242,16 @@ tools:
 
 Configure the Retrieval-Augmented Generation system.
 
+> **Navigation default (docs/0060):** agentic `grep_search` / `file_search` is the primary
+> code-navigation path; vector RAG is an **opt-in aid** (best for prose/docs). Auto-indexing is
+> therefore **OFF by default** — a cold start pays no CPU/embedding cost. The `rag_search` tool
+> stays available; set `indexOnStartup` / `autoIndexOnContextBuild` to `true` to index your project.
+
 ```yaml
 rag:
-  enabled: true                 # Enable RAG features
-  indexOnStartup: true          # Index project at IDE startup
-  autoIndexOnContextBuild: true # Auto-index when building context
+  enabled: true                  # Enable RAG features (rag_search tool stays available)
+  indexOnStartup: false          # OFF by default — opt in to index project at IDE startup
+  autoIndexOnContextBuild: false # OFF by default — opt in to auto-index when building context
   maxFileSizeMB: 2              # Max file size for indexing
   maxChunksPerFile: 100         # Max chunks per file
   indexBatchSize: 10            # Files per indexing batch
@@ -414,7 +421,8 @@ mcp:
 | `advanced.readOnlyMode` | `advanced.read_only_mode` | `false` |
 | `security.allowSymlinks` | `security.allow_symlinks` | `false` |
 | `rag.enabled` | `rag.enabled` | `true` |
-| `rag.indexOnStartup` | `rag.index_on_startup` | `true` |
+| `rag.indexOnStartup` | `rag.index_on_startup` | `false` |
+| `rag.autoIndexOnContextBuild` | `rag.auto_index_on_context_build` | `false` |
 | `rag.searchSimilarityThreshold` | `rag.search_similarity_threshold` | `0.5` |
 | `rag.searchTopK` | `rag.search_top_k` | `5` |
 | `rag.searchHybridEnabled` | `rag.search_hybrid_enabled` | `false` |

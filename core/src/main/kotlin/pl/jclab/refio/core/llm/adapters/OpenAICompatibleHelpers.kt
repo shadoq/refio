@@ -117,6 +117,7 @@ internal object OpenAICompatibleHelpers {
         onContent: (String) -> Unit,
         checkCancelled: () -> Boolean = { false },
         onRawChunk: ((Map<String, Any?>) -> Unit)? = null,
+        onToolCallDelta: ((pl.jclab.refio.core.llm.NativeToolCallDelta) -> Unit)? = null,
     ): String? {
         var finishReason: String? = null
         while (!channel.isClosedForRead) {
@@ -137,7 +138,7 @@ internal object OpenAICompatibleHelpers {
                 val first = choices.firstOrNull() ?: emptyMap()
                 @Suppress("UNCHECKED_CAST")
                 val delta = first["delta"] as? Map<String, Any?>
-                toolCallAccumulator.consumeDelta(delta)
+                toolCallAccumulator.consumeDelta(delta).forEach { tcDelta -> onToolCallDelta?.invoke(tcDelta) }
                 (delta?.get("content") as? String)?.takeIf { it.isNotEmpty() }?.let(onContent)
                 (first["finish_reason"] as? String)?.let { finishReason = it }
             } catch (e: CancellationException) {
