@@ -82,6 +82,7 @@ class SessionDebugExporter(
                 costUsd = session.costUsd,
                 apiCallCount = apiLogs.size,
                 toolCallCount = subtasks.size,
+                contextOverflow = ContextOverflowTracker.didOverflow(taskId),
             ),
             finalOutput = finalOutput,
             subtasks = if (options.includeSubtasks) {

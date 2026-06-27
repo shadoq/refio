@@ -88,6 +88,7 @@ class SessionManager(private val project: Project) {
 
     val isPaused: StateFlow<Boolean> = stateManager.isPaused
     val isGenerating: StateFlow<Boolean> = stateManager.isGenerating
+    val toolCallProgress: StateFlow<pl.jclab.refio.core.api.ToolCallProgress?> = stateManager.toolCallProgress
     val pendingContextRefs: StateFlow<List<ContextReference>> = stateManager.pendingContextRefs
     val pendingUserInput: StateFlow<String> = stateManager.pendingUserInput
     val contextSectionTokens: StateFlow<Map<String, pl.jclab.refio.core.api.ContextSectionTokenInfo>> =

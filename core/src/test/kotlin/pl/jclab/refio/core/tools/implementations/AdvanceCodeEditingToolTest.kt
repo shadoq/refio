@@ -187,6 +187,166 @@ class AdvanceCodeEditingToolTest {
         }
 
         @Test
+        fun `should resolve the coding model via the CODING operation slot`() = runBlocking {
+            Files.writeString(tempDir.resolve("test.kt"), "original content")
+
+            coEvery {
+                mockLLMClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    temperature = any(),
+                    maxTokens = any(),
+                    stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null,
+                    subtaskId = null,
+                    source = "AdvCodeEditor"
+                )
+            } returns LLMResponse(
+                content = "```kotlin\nmodified content\n```",
+                usage = LLMUsage(inputTokens = 100, outputTokens = 50, totalTokens = 150),
+                cost = 0.002,
+                model = "test-model",
+                provider = "test-provider"
+            )
+
+            // When
+            val result = tool.execute(mapOf(
+                "path" to "test.kt",
+                "edit_description" to "Modify the content"
+            ))
+
+            // Then — the edit succeeds and the model was resolved through the CODING slot
+            assertTrue(result.success)
+            coVerify { mockConfigService.getModel(ModelOperation.CODING, any()) }
+        }
+
+        @Test
+        fun `should re-prompt and recover when the first reply has no code block`() = runBlocking {
+            // docs/0059 Faza 2: a weak editor model that replies with prose instead of a fenced
+            // code block must NOT fail the edit outright. The tool re-prompts with a corrective
+            // hint and writes the retry's clean code block — the most common weak-model failure.
+            Files.writeString(tempDir.resolve("test.kt"), "original content")
+
+            coEvery {
+                mockLLMClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    temperature = any(),
+                    maxTokens = any(),
+                    stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null,
+                    subtaskId = null,
+                    source = "AdvCodeEditor"
+                )
+            } returnsMany listOf(
+                LLMResponse(
+                    content = "No code block this time, just talking.",
+                    usage = LLMUsage(inputTokens = 10, outputTokens = 5, totalTokens = 15),
+                    cost = 0.0,
+                    model = "test-model",
+                    provider = "test-provider"
+                ),
+                LLMResponse(
+                    content = "```kotlin\nrepaired content\n```",
+                    usage = LLMUsage(inputTokens = 10, outputTokens = 5, totalTokens = 15),
+                    cost = 0.0,
+                    model = "test-model",
+                    provider = "test-provider"
+                )
+            )
+
+            // When
+            val result = tool.execute(mapOf(
+                "path" to "test.kt",
+                "edit_description" to "Modify the content"
+            ))
+
+            // Then — recovered on the retry; the retry's content is what got written
+            assertTrue(result.success, "expected recovery on retry, got error=${result.error}")
+            assertEquals("repaired content", Files.readString(tempDir.resolve("test.kt")))
+            coVerify(exactly = 2) {
+                mockLLMClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    temperature = any(),
+                    maxTokens = any(),
+                    stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null,
+                    subtaskId = null,
+                    source = "AdvCodeEditor"
+                )
+            }
+        }
+
+        @Test
+        fun `should fail loud after exhausting extraction repair attempts`() = runBlocking {
+            // docs/0059 Faza 2 + Rule 12: when the editor never returns a usable code block, the
+            // tool fails with a clear diagnostic after the bounded retries — never a silent or
+            // partial write. The original file stays untouched (the write happens only on success).
+            Files.writeString(tempDir.resolve("test.kt"), "original content")
+
+            coEvery {
+                mockLLMClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    temperature = any(),
+                    maxTokens = any(),
+                    stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null,
+                    subtaskId = null,
+                    source = "AdvCodeEditor"
+                )
+            } returns LLMResponse(
+                content = "No code block this time, just talking.",
+                usage = LLMUsage(inputTokens = 10, outputTokens = 5, totalTokens = 15),
+                cost = 0.0,
+                model = "test-model",
+                provider = "test-provider"
+            )
+
+            // When
+            val result = tool.execute(mapOf(
+                "path" to "test.kt",
+                "edit_description" to "Modify the content"
+            ))
+
+            // Then — loud failure, original file untouched, bounded to the retry budget
+            assertFalse(result.success)
+            assertTrue(
+                (result.error ?: "").contains("did not return a usable code block", ignoreCase = true),
+                "expected a clear diagnostic, got error=${result.error}"
+            )
+            assertEquals("original content", Files.readString(tempDir.resolve("test.kt")))
+            coVerify(exactly = 2) {
+                mockLLMClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    temperature = any(),
+                    maxTokens = any(),
+                    stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null,
+                    subtaskId = null,
+                    source = "AdvCodeEditor"
+                )
+            }
+        }
+
+        @Test
         fun `should create new file with LLM assistance`() = runBlocking {
             // Given - file doesn't exist
             val llmResponse = """
@@ -427,9 +587,11 @@ class AdvanceCodeEditingToolTest {
                 "edit_description" to "Edit"
             ))
 
-            // Then
+            // Then — after docs/0059 Faza 2 the tool re-prompts before giving up; with no code
+            // block ever returned it fails loud (the bounded-retry depth is covered in detail by
+            // `should fail loud after exhausting extraction repair attempts`).
             assertFalse(result.success)
-            assertTrue(result.error!!.contains("valid code block", ignoreCase = true))
+            assertTrue(result.error!!.contains("usable code block", ignoreCase = true))
         }
 
         @Test

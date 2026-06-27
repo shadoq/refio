@@ -257,6 +257,18 @@ class ToolCallParser(
         )
     }
 
+    /**
+     * Apply profile (subagent allow/deny) filtering to tool calls that were extracted
+     * OUTSIDE this parser — e.g. recovered from Hermes / Qwen-Coder XML by
+     * [ToolCallExtractor]. Mirrors the filtering already applied inside
+     * [extractToolCalls] so every extraction source converges on identical allow/deny
+     * semantics (docs/0056 — one unified Tool-Call layer).
+     */
+    fun applyProfileFilter(
+        toolCalls: List<ToolCallData>,
+        profileOverrides: TurnProfileOverrides?
+    ): List<ToolCallData> = filterToolCallsByProfile(toolCalls, profileOverrides)
+
     // ===== Private methods =====
 
     private fun extractToolCallsFromJson(content: String, mode: TaskMode): List<ToolCallData> {

@@ -24,6 +24,10 @@ private val logger = dualLogger("HeadlessTurn")
  */
 class HeadlessTurnListener : TurnEventListener {
 
+    // Tool-call indices already announced to stderr this turn — so a model that streams a call's
+    // arguments across many deltas yields ONE "building" line, not one per fragment.
+    private val announcedToolCallProgress = mutableSetOf<Int>()
+
     private fun err(line: String) = System.err.println(line)
 
     private fun clip(s: String, max: Int): String {
@@ -34,6 +38,7 @@ class HeadlessTurnListener : TurnEventListener {
     override fun onTurnStarted(taskId: String, mode: TaskMode, runId: String, parentRunId: String?, depth: Int) {
         val tag = if (depth > 0) "subagent (depth=$depth)" else "turn"
         logger.info { "[HEADLESS] $tag started: mode=$mode runId=$runId parent=$parentRunId" }
+        announcedToolCallProgress.clear()
         err("▶ $tag started (mode=$mode)")
     }
 
@@ -58,6 +63,15 @@ class HeadlessTurnListener : TurnEventListener {
 
     override fun onStreamChunk(taskId: String, delta: String, accumulated: String) {
         logger.debug { "[HEADLESS] llm chunk: +${delta.length} chars (total=${accumulated.length})" }
+    }
+
+    override fun onLlmToolCallProgress(taskId: String, index: Int, toolName: String?, accumulatedArguments: String) {
+        logger.debug { "[HEADLESS] tool-call building: [$index] ${toolName ?: "?"} args=${clip(accumulatedArguments, 120)}" }
+        // Announce once per call (the first delta carrying a name) so streaming tool-call assembly is
+        // visible without the per-fragment spam; later argument deltas stay at debug in the log file.
+        if (toolName != null && announcedToolCallProgress.add(index)) {
+            err("  ⚙ building $toolName")
+        }
     }
 
     override fun onTurnCompleted(taskId: String, result: TurnResult, runId: String, parentRunId: String?, depth: Int) {

@@ -146,6 +146,10 @@ class CoreSessionService(
             throw e
         } finally {
             stateManager.setIsGenerating(false)
+            // The streaming path clears the transient native tool-call indicator on the stream's
+            // completion chunk, but a STOP/cancel or an error throws before that chunk arrives.
+            // Clear it here so a "⚙ building <tool>" never outlives the turn that produced it.
+            stateManager.setToolCallProgress(null)
         }
     }
 
@@ -189,6 +193,11 @@ class CoreSessionService(
 
                     streamStateMutex.withLock {
                         val now = System.currentTimeMillis()
+
+                        // Surface progressive native tool-call building to the UI (docs/0064). The
+                        // snapshot is transient: shown while arguments stream, cleared on completion.
+                        chunk.toolCallProgress?.let { stateManager.setToolCallProgress(it) }
+
                         val filteredContent = streamFilter.filter(
                             delta = chunk.delta,
                             accumulated = chunk.accumulated,
@@ -214,6 +223,9 @@ class CoreSessionService(
                         }
 
                         if (chunk.isComplete) {
+                            // The LLM stream ended — the tool call (if any) is now whole and about to
+                            // execute, so drop the transient "building…" indicator.
+                            stateManager.setToolCallProgress(null)
                             val completedId = streamingMessageId
                             val finalContent = pendingStreamContent.getAndSet(null)
                             if (completedId != null) {

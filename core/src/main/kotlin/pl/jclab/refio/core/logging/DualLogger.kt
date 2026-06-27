@@ -54,6 +54,18 @@ class DualLogger(
         get() = LogSinkRegistry.get()
 
     /**
+     * Log trace message to the kotlin-logging backend ONLY (logback, disabled by default).
+     *
+     * Unlike [debug], this deliberately does NOT forward to [logSink], so very high-frequency
+     * per-repaint / per-lookup breadcrumbs stay out of the in-app "Debug Logs" view and the
+     * Session Debug Report. They remain recoverable by enabling TRACE in logback when needed.
+     */
+    fun trace(msg: () -> Any?) {
+        val message = safeMessage(msg())
+        kotlinLogger.trace { message }
+    }
+
+    /**
      * Log debug message to both loggers.
      */
     fun debug(msg: () -> Any?) {

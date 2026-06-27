@@ -14,6 +14,7 @@ import pl.jclab.refio.core.agents.events.AgentEventBus
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.api.CreateTaskRequest
 import pl.jclab.refio.core.api.ModelOperation
+import pl.jclab.refio.core.api.SetDefaultModelRequest
 import pl.jclab.refio.core.api.UpdateTaskRequest
 import pl.jclab.refio.core.context.mcp.MCPAuthConfig
 import pl.jclab.refio.core.context.mcp.MCPAuthType
@@ -23,6 +24,7 @@ import pl.jclab.refio.core.context.mcp.MCPServerConfig
 import pl.jclab.refio.core.context.mcp.MCPServerType
 import pl.jclab.refio.core.db.TaskMode as CoreTaskMode
 import pl.jclab.refio.core.logging.LogSinkRegistry
+import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.utils.ProjectIdGenerator
 import pl.jclab.refio.cli.tui.screens.TuiSettingsScreen
 import java.io.File
@@ -43,7 +45,13 @@ class TuiViewModel(
     internal val projectPath: Path,
     private val initialMode: pl.jclab.refio.api.models.TaskMode?,
     private val initialModel: String?,
-    private val noEgress: Boolean
+    private val noEgress: Boolean,
+    /**
+     * Run-scope config overrides (`--config` / `--config-file`) forwarded to the bootstrap so an
+     * interactive session can retarget a provider endpoint (Ollama / LM Studio) or any config key
+     * without editing config.yaml. Highest priority, read-only, never persisted.
+     */
+    private val runConfigOverrides: Map<String, String> = emptyMap()
 ) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -154,6 +162,8 @@ class TuiViewModel(
         _settingsEditingField.map { Unit },
         _settingsEditBuffer.map { Unit },
         _contextMaxTokens.map { Unit },
+        // Session execution flows
+        sessionStateManager.toolCallProgress.map { Unit },
         // Chat sub-VM flows
         chat._messages.map { Unit },
         chat._isStreaming.map { Unit },
@@ -244,6 +254,7 @@ class TuiViewModel(
         // Chat sub-VM
         messages = chat._messages.value,
         isStreaming = chat._isStreaming.value,
+        toolCallProgress = sessionStateManager.toolCallProgress.value,
         inputBuffer = chat._inputBuffer.value,
         cursorPosition = chat._cursorPosition.value,
         scrollOffset = chat._scrollOffset.value,
@@ -324,7 +335,7 @@ class TuiViewModel(
         try {
             LogSinkRegistry.register(obs.tuiLogSink)
 
-            val boot = StandaloneCoreBootstrap(projectPath)
+            val boot = StandaloneCoreBootstrap(projectPath, runConfigOverrides)
             val r = boot.initialize()
             bootstrap = boot
             router = r
@@ -852,13 +863,64 @@ class TuiViewModel(
     fun settingsCommitEdit() {
         val field = _settingsEditingField.value ?: return
         val value = _settingsEditBuffer.value
-        val parts = field.split(".", limit = 2)
-        if (parts.size == 2) {
-            updateConfig(parts[0], parts[1], value)
+        val modelOperation = when (field) {
+            "default_model.chat" -> ModelOperation.DEFAULT
+            "default_model.plan" -> ModelOperation.PLAN
+            "default_model.agent" -> ModelOperation.CODING
+            "default_model.weak" -> ModelOperation.WEAK
+            "default_model.strong" -> ModelOperation.STRONG
+            else -> null
+        }
+        if (modelOperation != null) {
+            // Model slots persist as JSON {"modelId","provider"} via setDefaultModel — the shape
+            // ModelSelectionService reads back. The generic raw-string updateConfig path below
+            // would write an unparseable "provider/model" string (the bug this routing fixes).
+            commitModelSlot(modelOperation, value)
+        } else {
+            val parts = field.split(".", limit = 2)
+            if (parts.size == 2) {
+                updateConfig(parts[0], parts[1], value)
+            }
         }
         _settingsEditingField.value = null
         _settingsEditBuffer.value = ""
         TuiSettingsScreen.invalidateCache()
+    }
+
+    /**
+     * Persist a `default_model.*` slot through [setDefaultModel] (JSON shape). Accepts the friendly
+     * `provider/modelId` form, the already-stored JSON, or blank/`inherit` (clears to the parent slot).
+     */
+    private fun commitModelSlot(operation: ModelOperation, value: String) {
+        val r = router ?: return
+        val trimmed = value.trim()
+        val (provider, modelId) = when {
+            trimmed.isEmpty() || trimmed.equals(ConfigService.INHERIT_MODEL_VALUE, ignoreCase = true) ->
+                ConfigService.INHERIT_MODEL_VALUE to ConfigService.INHERIT_MODEL_VALUE
+            trimmed.startsWith("{") -> {
+                val id = Regex(""""modelId"\s*:\s*"([^"]*)"""").find(trimmed)?.groupValues?.get(1)
+                val prov = Regex(""""provider"\s*:\s*"([^"]*)"""").find(trimmed)?.groupValues?.get(1)
+                if (id == null || prov == null) {
+                    chat.addSystemMessage("Invalid model '$value' — expected provider/model (e.g. ollama/qwen3.5:9b).")
+                    return
+                }
+                prov to id
+            }
+            else -> {
+                // Split on the FIRST slash only — a modelId may itself contain slashes.
+                val slash = trimmed.indexOf('/')
+                if (slash <= 0 || slash == trimmed.length - 1) {
+                    chat.addSystemMessage("Invalid model '$value' — expected provider/model (e.g. ollama/qwen3.5:9b).")
+                    return
+                }
+                trimmed.substring(0, slash) to trimmed.substring(slash + 1)
+            }
+        }
+        try {
+            r.configRouter.setDefaultModel(SetDefaultModelRequest(operation, modelId, provider), taskId = null)
+        } catch (e: Exception) {
+            logger.warn(e) { "Failed to set model slot $operation = $provider/$modelId" }
+        }
     }
 
     fun settingsToggleBool(section: String, key: String, currentValue: Boolean) {

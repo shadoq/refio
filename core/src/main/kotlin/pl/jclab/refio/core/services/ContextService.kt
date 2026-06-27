@@ -429,7 +429,7 @@ class ContextService(
      * Build LLM context prompt (REFACTORED - ADR 0017).
      * Organized by TIER priority: Essential → Work → Supplementary → Reference
      */
-    fun buildLLMContextPrompt(context: ProjectContextDTO, staticPrefixTokens: Int = 0): String {
+    fun buildLLMContextPrompt(context: ProjectContextDTO, staticPrefixTokens: Int = 0, modelId: String? = null): String {
         val budget = pruner.resolveContextBudget(context, modelOperation = null, staticPrefixTokens = staticPrefixTokens)
         val parts = mutableListOf<String>()
         val usage = mutableListOf<String>()
@@ -457,7 +457,7 @@ class ContextService(
                 return
             }
 
-            val estimatedTokens = ContextTokenEstimator.estimateTokens(content)
+            val estimatedTokens = ContextTokenEstimator.estimateTokens(content, modelId)
             val allowedBase = minOf(maxTokens, remainingTokens).coerceAtLeast(0)
             val allowed = (allowedBase + overflowTokensRemaining).coerceAtLeast(0)
             if (allowed <= 0) {
@@ -481,8 +481,8 @@ class ContextService(
                 logger.debug {
                     "[CONTEXT_BUDGET] Section overflow ${section.name}: tokens=$tokens, allowed=$allowed"
                 }
-                sectionContent = pruner.truncateSectionToBudget(sectionContent, allowed)
-                tokens = ContextTokenEstimator.estimateTokens(sectionContent)
+                sectionContent = pruner.truncateSectionToBudget(sectionContent, allowed, modelId)
+                tokens = ContextTokenEstimator.estimateTokens(sectionContent, modelId)
                 truncated = true
             }
 
@@ -571,7 +571,7 @@ class ContextService(
             // Cache stable layer for reuse across turns
             if (taskId != null) {
                 val stableContent = "<STABLE_CONTEXT>\n${stableParts.joinToString("\n\n")}\n</STABLE_CONTEXT>"
-                val stableTokens = ContextTokenEstimator.estimateTokens(stableContent)
+                val stableTokens = ContextTokenEstimator.estimateTokens(stableContent, modelId)
                 contextLayerCache.putStableContext(taskId, stableContent, stableTokens)
             }
         }
@@ -722,6 +722,11 @@ class ContextService(
          * (TurnPromptBuilder) keeps the default `true` and is unaffected.
          */
         includeProjectContext: Boolean = true,
+        /**
+         * Resolved model id for model-aware token estimation of section budgets (docs/0057).
+         * Default null keeps the flat-base ratio for callers without model context.
+         */
+        modelId: String? = null,
     ): AgentTurnMessagesResult {
         logger.info {
             "[AGENT_TURN] Building messages for task=$taskId, contextRefs=${userContextRefs.size}, " +
@@ -780,7 +785,7 @@ class ContextService(
                 query = query,
                 userContextRefs = userContextRefs
             )
-            buildLLMContextPrompt(projectContext, staticPrefixTokens)
+            buildLLMContextPrompt(projectContext, staticPrefixTokens, modelId)
         } catch (e: Exception) {
             logger.warn(e) { "[AGENT_TURN] Failed to build project context: ${e.message}" }
             ""  // Continue without project context if it fails

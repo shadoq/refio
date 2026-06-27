@@ -158,11 +158,20 @@ class GrepSearchTool(
                 logger.warn { "Grep search hit limit: ${results.size} >= $maxResults" }
             }
 
+            // Rank declaration hits above plain usages (docs/0060 Faza 2). Stable sort, so within
+            // a tier the original file-walk order is preserved. Only collected results are ranked —
+            // a maxResults truncation during the walk can still drop a later declaration.
+            val ranked = if (results.size > 1) {
+                results.sortedByDescending { isDeclaration(it.line) }
+            } else {
+                results
+            }
+
             // Format output (verbosity controlled by `detail`)
             val output = when {
-                results.isEmpty() -> "No matches found for pattern: $pattern"
-                detail == "summary" -> formatResultsSummary(results)
-                else -> formatResults(results)
+                ranked.isEmpty() -> "No matches found for pattern: $pattern"
+                detail == "summary" -> formatResultsSummary(ranked)
+                else -> formatResults(ranked)
             }
 
             val duration = (System.currentTimeMillis() - startTime).toInt()
@@ -301,9 +310,21 @@ class GrepSearchTool(
         )
     }
 
+    private fun isDeclaration(line: String): Boolean = DECLARATION_REGEX.containsMatchIn(line)
+
     private data class GrepResult(
         val file: String,
         val lineNumber: Int,
         val line: String
     )
+
+    companion object {
+        // A line looks like a *declaration* (a type/function being defined) rather than a usage.
+        // Such lines rank above plain usages so an agent grepping for a symbol sees its definition
+        // first (docs/0060 Faza 2). `val`/`var` are deliberately EXCLUDED: they overwhelmingly mark
+        // local variable declarations — i.e. *usages* of the searched type (`val x = Foo()`) — and
+        // would pollute the ranking. Spans Kotlin/Java, Python (`def`), Go/Rust (`func`/`fn`), TS.
+        private val DECLARATION_REGEX =
+            Regex("\\b(class|interface|object|enum|fun|def|func|fn|type|struct|trait)\\b")
+    }
 }

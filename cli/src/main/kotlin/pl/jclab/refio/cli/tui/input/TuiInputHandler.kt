@@ -258,7 +258,17 @@ class TuiInputHandler(private val terminal: Terminal) {
                                     viewModel.settingsToggleBool(section, key, current)
                                 }
                                 TuiSettingsScreen.FieldType.TEXT -> {
-                                    viewModel.settingsStartEdit(field.sectionKey, config[key] ?: "")
+                                    val raw = config[key] ?: ""
+                                    // Model slots store JSON {"modelId","provider"}; prefill the
+                                    // friendly provider/model form so the user edits that, not raw JSON.
+                                    val prefill = if (section == "default_model" && raw.trimStart().startsWith("{")) {
+                                        val id = Regex(""""modelId"\s*:\s*"([^"]*)"""").find(raw)?.groupValues?.get(1)
+                                        val prov = Regex(""""provider"\s*:\s*"([^"]*)"""").find(raw)?.groupValues?.get(1)
+                                        if (id != null && prov != null) "$prov/$id" else raw
+                                    } else {
+                                        raw
+                                    }
+                                    viewModel.settingsStartEdit(field.sectionKey, prefill)
                                 }
                             }
                         }

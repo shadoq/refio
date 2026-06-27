@@ -17,6 +17,7 @@ import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.llm.NativeToolCall
+import pl.jclab.refio.core.llm.NativeToolCallDelta
 import pl.jclab.refio.core.llm.StreamChunk
 import pl.jclab.refio.core.llm.ToolSchemaSanitizer
 import pl.jclab.refio.core.llm.ToolsNotSupportedException
@@ -481,7 +482,25 @@ class GeminiAdapter(
                     }
                     val parts = extractParts(chunkMap)
                     if (parts.isNotEmpty()) {
-                        functionCallParts.addAll(parts.filter { it["functionCall"] != null })
+                        val fnParts = parts.filter { it["functionCall"] != null }
+                        val baseIndex = functionCallParts.size
+                        functionCallParts.addAll(fnParts)
+                        // Gemini delivers each functionCall whole in a part (no per-arg streaming),
+                        // so surface one progress snapshot per call (docs/0064).
+                        fnParts.forEachIndexed { idx, part ->
+                            @Suppress("UNCHECKED_CAST")
+                            val fc = part["functionCall"] as? Map<String, Any?> ?: return@forEachIndexed
+                            onStreamChunk(
+                                StreamChunk(
+                                    delta = "",
+                                    toolCallDelta = NativeToolCallDelta(
+                                        index = baseIndex + idx,
+                                        nameDelta = fc["name"] as? String,
+                                        argumentsDelta = fc["args"]?.let { gson.toJson(it) },
+                                    ),
+                                )
+                            )
+                        }
                     }
 
                     finalFinishReason = extractFinishReason(chunkMap) ?: finalFinishReason

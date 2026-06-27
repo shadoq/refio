@@ -22,7 +22,7 @@ object ToolResultCompression {
         val raw = rawOutput.ifBlank { "-" }
         val summaryOrRaw = if (!summary.isNullOrBlank()) summary else raw
 
-        return when (level) {
+        val body = when (level) {
             // Even at FULL we apply diff-body compression: a 700-line +diff carries
             // no information the agent doesn't already have (it just generated it),
             // so eliding the body is lossless from the agent's perspective. The full
@@ -33,6 +33,29 @@ object ToolResultCompression {
             CompressionLevel.DETAILED -> smartCompress(DiffCompressor.compress(raw, subtaskId), config.detailedMaxChars)
             CompressionLevel.SUMMARY -> headTailTruncate(summaryOrRaw, config.summaryMaxChars)
         }
+        return withRecoveryHint(body, raw, level, subtaskId)
+    }
+
+    /**
+     * docs/0063 Faza 2 — when the emitted [body] shows the agent LESS than the full [raw] tool
+     * output, append a one-line pointer to the full content so the model knows the result was
+     * shortened and can pull it back via `memory(get_subtask_output)` instead of hallucinating on a
+     * truncated view (the long-turn failure mode). No-ops when nothing was cut, when there is no
+     * [subtaskId] to reference, or when a pointer is already present (DiffCompressor adds its own for
+     * diff bodies — never double-mark).
+     */
+    private fun withRecoveryHint(
+        body: String,
+        raw: String,
+        level: CompressionLevel,
+        subtaskId: String?
+    ): String {
+        if (subtaskId.isNullOrBlank()) return body
+        if (body.length >= raw.length) return body
+        if (body.contains("get_subtask_output")) return body
+        return body +
+            "\n[result compressed ${raw.length}→${body.length} chars via $level — " +
+            "full output: memory(action=\"get_subtask_output\", subtask_id=\"$subtaskId\")]"
     }
 
     /**

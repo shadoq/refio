@@ -6,6 +6,7 @@ import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.llm.NativeToolCall
+import pl.jclab.refio.core.llm.NativeToolCallDelta
 import pl.jclab.refio.core.llm.StreamChunk
 import pl.jclab.refio.core.llm.toModelConfig
 import pl.jclab.refio.core.tools.base.ToolSchema
@@ -82,7 +83,7 @@ class OllamaAdapter(
      * per-message overhead for role tokens. Not exact — Ollama's actual tokenization differs
      * by model — but consistently sized so the warning fires before silent truncation.
      */
-    private fun estimateOllamaInputTokens(
+    internal fun estimateOllamaInputTokens(
         messages: List<Map<String, String>>,
         tools: List<ToolSchema>?,
     ): Int {
@@ -90,7 +91,9 @@ class OllamaAdapter(
         val toolChars = tools?.sumOf { schema ->
             schema.name.length + schema.description.length + schema.parametersJsonSchema.toString().length
         } ?: 0
-        return pl.jclab.refio.core.services.PromptTokenEstimator.estimateBase("x".repeat(messageChars + toolChars))
+        // Pass [model] so dense local tokenizers (qwen/llama ~3.2 chars/token) are not under-counted
+        // by the flat 3.5 default — otherwise the overflow guard misses real num_ctx overflows (docs/0057).
+        return pl.jclab.refio.core.services.PromptTokenEstimator.estimateBase("x".repeat(messageChars + toolChars), model)
     }
 
     // Get timeout from ConfigService (fallback to 120s for Ollama local models)
@@ -280,6 +283,10 @@ class OllamaAdapter(
                             "truncate from the head — expect empty or low-quality output. " +
                             "Increase providers.ollama.ollama_context_size or reduce the prompt."
                     }
+                    // Surface the silent truncation into run.json (docs/0057 Tier 3). Pre-send
+                    // estimate is the ONLY reliable signal for Ollama: its returned prompt_eval_count
+                    // is already post-truncation, so a returned-usage check would never fire.
+                    taskId?.let { pl.jclab.refio.core.debug.ContextOverflowTracker.markOverflow(it) }
                 }
 
                 val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)
@@ -612,6 +619,20 @@ class OllamaAdapter(
                             if (toolCalls.isNotEmpty()) {
                                 rawToolCalls.clear()
                                 rawToolCalls.addAll(toolCalls)
+                                // Ollama emits the whole tool call at once (no per-arg streaming),
+                                // so surface one progress snapshot per call (docs/0064).
+                                parseNativeOllamaToolCalls(toolCalls).forEachIndexed { idx, call ->
+                                    onStreamChunk(
+                                        StreamChunk(
+                                            delta = "",
+                                            toolCallDelta = NativeToolCallDelta(
+                                                index = idx,
+                                                nameDelta = call.name,
+                                                argumentsDelta = call.argumentsJson,
+                                            ),
+                                        )
+                                    )
+                                }
                             }
                         }
 
@@ -690,20 +711,39 @@ class OllamaAdapter(
             }
 
             if (!receivedDoneChunk && finalDoneReason != "cancelled") {
-                // Server closed the NDJSON channel without emitting a final chunk with done=true.
-                // Common causes: remote Ollama restart, idle proxy timeout, network drop, model crash.
-                // Marked retryable by LLMRetryHandler.shouldRetryByMessage via "stream ended before".
                 val durationMs = System.currentTimeMillis() - startTime
-                throw LLMErrorMapper.fromThrowable(
-                    provider,
-                    model,
-                    timeout,
-                    IllegalStateException(
-                        "Ollama stream ended before done=true final chunk " +
-                            "(contentBytes=${rawContentBuilder.length}, " +
-                            "thinkingBytes=${rawThinkingBuilder.length}, durationMs=$durationMs)"
+                // The channel closed without the trailing done=true sentinel. Only hard-fail when
+                // NOTHING usable arrived — if we already captured a tool call, content, or thinking,
+                // discarding it would turn a usable turn into a failure (and a retry would pay the
+                // full model latency again for the same likely-truncated stream). Ollama emits whole
+                // tool calls in a single chunk (not incrementally), so a captured call is complete.
+                val haveUsableOutput = rawToolCalls.isNotEmpty() ||
+                    rawContentBuilder.isNotEmpty() ||
+                    rawThinkingBuilder.isNotEmpty()
+                if (!haveUsableOutput) {
+                    // Server closed the NDJSON channel before emitting any content/tool call.
+                    // Common causes: remote Ollama restart, idle proxy timeout, network drop, model crash.
+                    // Marked retryable by LLMRetryHandler.shouldRetryByMessage via "stream ended before".
+                    throw LLMErrorMapper.fromThrowable(
+                        provider,
+                        model,
+                        timeout,
+                        IllegalStateException(
+                            "Ollama stream ended before done=true final chunk " +
+                                "(contentBytes=${rawContentBuilder.length}, " +
+                                "thinkingBytes=${rawThinkingBuilder.length}, durationMs=$durationMs)"
+                        )
                     )
-                )
+                }
+                // Finalize gracefully with what we captured. Usage stats stay 0 because the final
+                // chunk that carries prompt_eval_count/eval_count never arrived. finishReason is left
+                // null (not "stop"/"length") so downstream truncation handling is not falsely triggered.
+                logger.warn {
+                    "$logPrefix Stream ended before done=true but usable output was captured — " +
+                        "finalizing anyway (toolCalls=${rawToolCalls.size}, " +
+                        "contentBytes=${rawContentBuilder.length}, " +
+                        "thinkingBytes=${rawThinkingBuilder.length}, durationMs=$durationMs)"
+                }
             }
 
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()

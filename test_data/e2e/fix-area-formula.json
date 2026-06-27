@@ -1,0 +1,18 @@
+{
+  "id": "fix-area-formula",
+  "mode": "AGENT",
+  "max_iterations": 25,
+  "fixture": "fixtures/shape-area",
+  "prompt_file": "prompts/fix-area-formula.md",
+  "assert": {
+    "tool_order": ["read_file", "advance_code_editing"],
+    "needles_in_file": [
+      { "path": "src/Circle.kt", "regex": "radius[[:space:]]*\\*[[:space:]]*radius|radius\\.pow\\(2" },
+      { "path": "src/Circle.kt", "regex": "2[[:space:]]*\\*[[:space:]]*PI", "absent": true }
+    ],
+    "file_unchanged": ["src/Shape.kt"],
+    "build_cmd": "kotlinc src -include-runtime -d build/out.jar",
+    "no_context_overflow": true
+  },
+  "judge": { "criteria": ["Circle.area returns pi*r*r; only Circle.kt changed; Shape.kt untouched."] }
+}

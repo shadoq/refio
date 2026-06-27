@@ -18,16 +18,47 @@ object ToolCallContentSanitizer {
     )
 
     fun sanitize(content: String): String {
-        extractAssistantJsonTextPayload(content)?.let { return it }
-        if (isPlanJson(content)) return content
+        // Models without native function-calling sometimes wrap the real payload in an ad-hoc
+        // tool-call envelope: a leading "[" / "[TOOL]" marker before a {response,actions} object
+        // (the calls are already lifted into tool_calls_json upstream). Peel that off first so the
+        // {...} payload extraction below can reach the actual answer text.
+        val deprefixed = stripLeadingToolMarker(content)
 
-        var result = content
+        extractAssistantJsonTextPayload(deprefixed)?.let { return it }
+        if (isPlanJson(deprefixed)) return deprefixed
+
+        var result = deprefixed
         toolCallPatterns.forEach { pattern ->
             result = result.replace(pattern, "\n")
         }
-        return result
+        result = result
             .replace(Regex("""(?:\r?\n){2,}"""), "\n")
             .trim()
+
+        // A residue of nothing but JSON structural punctuation (e.g. a lone "[" left after the
+        // tool-call object was lifted into tool_calls_json) is not user-facing text — hide it so it
+        // does not render as a stray bubble.
+        return if (isStructuralResidueOnly(result)) "" else result
+    }
+
+    private val leadingToolMarker = Regex("""^\s*\[?\s*\[(?:TOOL|TOOL_CALL)\]\s*""", RegexOption.IGNORE_CASE)
+
+    private fun stripLeadingToolMarker(content: String): String {
+        val stripped = content.replaceFirst(leadingToolMarker, "")
+        if (stripped == content) {
+            return content
+        }
+        // Only treat it as a wrapper if a JSON object payload remains — don't eat real prose that
+        // merely happens to open with a "[TOOL]" token.
+        val candidate = stripped.trim().removeSuffix("]").trim()
+        return if (candidate.startsWith("{")) candidate else content
+    }
+
+    private fun isStructuralResidueOnly(text: String): Boolean {
+        if (text.isEmpty()) {
+            return false
+        }
+        return text.all { it == '[' || it == ']' || it == '{' || it == '}' || it == ',' || it.isWhitespace() }
     }
 
     fun isToolProtocolBoundary(candidate: String): Boolean {

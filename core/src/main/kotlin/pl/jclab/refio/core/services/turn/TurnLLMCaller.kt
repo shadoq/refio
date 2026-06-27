@@ -95,7 +95,9 @@ class TurnLLMCaller(
                 messages = prompt.messages,
                 systemPrompt = prompt.systemPrompt,
                 taskId = taskId,
-                source = "AgentTurnLoop",
+                // Keep the "AgentTurnLoop" prefix (the call IS the decision turn) but suffix the
+                // mode so PLAN and AGENT turns are distinguishable in the api-log Source column.
+                source = "AgentTurnLoop:${mode.name}",
                 // Decision-turn temperature (ConfigKeys.AGENT_DECISION_TEMPERATURE, default 0.7).
                 // The PLAN/AGENT turn picks the tool and emits the response-format envelope;
                 // higher temperatures make small/local models more likely to deviate from the

@@ -20,6 +20,11 @@ import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("InvokeSubagentTool")
 
+// Mirrors TurnSubagentValidator(maxSubagentDepth = 3): the turn loop enforces this ceiling when a
+// subagent turn starts; InvokeSubagentTool checks it first so an over-deep call fails BEFORE spawn
+// (docs/0063 §5.1 — defense in depth; a spawn-then-fail still pays the allocation).
+private const val MAX_SUBAGENT_DEPTH = 3
+
 class InvokeSubagentTool(
     private val subagentRouterProvider: () -> SubagentRouter?,
     private val runTurnCallback: suspend (TurnRequest, TurnEventListener?, StreamCallback?) -> TurnResult,
@@ -88,6 +93,15 @@ class InvokeSubagentTool(
         val (resolvedModel, resolvedProvider) = definition.resolveModel(configService)
         val contextRefs = parseContextRefs(params["context_refs"])
         val childDepth = parentDepth + 1
+
+        // docs/0063 §5.1 — refuse a spawn that would breach the nesting ceiling before allocating
+        // the child turn. Reported as a clean ToolResult.error, consistent with the recursion guard
+        // above (the turn-loop TurnSubagentValidator remains the backstop).
+        if (childDepth > MAX_SUBAGENT_DEPTH) {
+            return ToolResult.error(
+                "Max subagent depth exceeded: $childDepth/$MAX_SUBAGENT_DEPTH — refusing to spawn '$subagentName'"
+            )
+        }
 
         logger.info {
             "[INVOKE_SUBAGENT] name=$subagentName, taskId=$taskId, depth=$childDepth, parentRunId=${parentRunId ?: "-"}"

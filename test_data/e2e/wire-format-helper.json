@@ -1,0 +1,17 @@
+{
+  "id": "wire-format-helper",
+  "mode": "AGENT",
+  "max_iterations": 30,
+  "fixture": "fixtures/js-cart",
+  "prompt_file": "prompts/wire-format-helper.md",
+  "assert": {
+    "tool_order": ["read_file", "create_new_file", "advance_code_editing"],
+    "needles_in_file": [
+      { "path": "src/format.js", "regex": "formatMoney" },
+      { "path": "src/cart.js", "regex": "formatMoney" }
+    ],
+    "build_cmd": "node src/cart.js | grep -qF '$10.00'",
+    "no_context_overflow": true
+  },
+  "judge": { "criteria": ["A new src/format.js exports formatMoney(cents) returning a $X.XX string; cart.js imports and uses it so it prints Total: $10.00; the cart math is unchanged."] }
+}

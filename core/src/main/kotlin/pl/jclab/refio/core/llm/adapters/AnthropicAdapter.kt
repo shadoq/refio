@@ -9,6 +9,7 @@ import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.llm.NativeToolCall
+import pl.jclab.refio.core.llm.NativeToolCallDelta
 import pl.jclab.refio.core.llm.StreamChunk
 import pl.jclab.refio.core.llm.ToolSchemaSanitizer
 import pl.jclab.refio.core.llm.ToolsNotSupportedException
@@ -646,6 +647,16 @@ class AnthropicAdapter(
                                                     argsBuilder.append(gson.toJson(input))
                                                 }
                                                 activeToolUseByIndex[index] = Triple(id, name, argsBuilder)
+                                                // Surface the call name as soon as the block opens (docs/0064).
+                                                onStreamChunk(StreamChunk(
+                                                    delta = "",
+                                                    toolCallDelta = NativeToolCallDelta(
+                                                        index = index,
+                                                        idDelta = id,
+                                                        nameDelta = name,
+                                                        argumentsDelta = argsBuilder.toString().ifEmpty { null },
+                                                    ),
+                                                ))
                                             }
                                         }
                                     }
@@ -685,6 +696,15 @@ class AnthropicAdapter(
                                                 val partialJson = delta["partial_json"] as? String
                                                 if (!partialJson.isNullOrEmpty()) {
                                                     activeToolUseByIndex[index]?.third?.append(partialJson)
+                                                    // Stream the growing arguments JSON (docs/0064).
+                                                    onStreamChunk(StreamChunk(
+                                                        delta = "",
+                                                        toolCallDelta = NativeToolCallDelta(
+                                                            index = index,
+                                                            nameDelta = activeToolUseByIndex[index]?.second,
+                                                            argumentsDelta = partialJson,
+                                                        ),
+                                                    ))
                                                 }
                                             }
                                         }

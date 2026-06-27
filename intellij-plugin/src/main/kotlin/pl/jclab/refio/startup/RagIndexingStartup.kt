@@ -23,7 +23,12 @@ class RagIndexingStartup : ProjectActivity {
         val configService = coreManager.getApiRouter().configService
 
         if (!configService.getTyped<Boolean>(ConfigKeys.RAG_ENABLED) || !configService.getTyped<Boolean>(ConfigKeys.RAG_INDEX_ON_STARTUP)) {
-            logger.info { "Startup RAG indexing disabled via configuration" }
+            // docs/0060: startup auto-indexing is OFF by default (grep-first navigation). Make the
+            // re-enable path discoverable instead of silently doing nothing.
+            logger.info {
+                "Startup RAG indexing disabled (grep/file search is the default navigation path). " +
+                    "Enable with rag.index_on_startup=true (and rag.enabled=true) to restore auto-indexing."
+            }
             return
         }
 

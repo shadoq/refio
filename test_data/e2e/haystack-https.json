@@ -1,0 +1,17 @@
+{
+  "id": "haystack-https",
+  "mode": "AGENT",
+  "max_iterations": 30,
+  "fixture": "fixtures/haystack",
+  "prompt_file": "prompts/haystack-https.md",
+  "assert": {
+    "tool_order": ["grep_search", "read_file", "advance_code_editing"],
+    "needles_in_file": [
+      { "path": "src/Endpoints.kt", "regex": "https://" },
+      { "path": "src/Endpoints.kt", "text": "http://", "absent": true }
+    ],
+    "build_cmd": "kotlinc src -include-runtime -d build/out.jar",
+    "no_context_overflow": true
+  },
+  "judge": { "criteria": ["Only Endpoints.BASE_URL changed from http to https; no other file touched."] }
+}

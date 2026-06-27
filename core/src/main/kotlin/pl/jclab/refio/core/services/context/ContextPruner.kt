@@ -40,21 +40,21 @@ class ContextPruner(
      * If the content is wrapped in XML-like tags (e.g. `<SECTION>...</SECTION>`),
      * the wrapper is preserved and only the inner content is truncated.
      */
-    fun truncateSectionToBudget(content: String, maxTokens: Int): String {
+    fun truncateSectionToBudget(content: String, maxTokens: Int, modelId: String? = null): String {
         if (maxTokens <= 0 || content.isBlank()) return ""
 
         val wrappedSectionRegex = Regex("""^\s*<([A-Z_]+)>\s*([\s\S]*?)\s*</\1>\s*$""")
         val match = wrappedSectionRegex.matchEntire(content)
         if (match == null) {
-            return ContextTokenEstimator.truncateToTokens(content, maxTokens)
+            return ContextTokenEstimator.truncateToTokens(content, maxTokens, modelId)
         }
 
         val tag = match.groupValues[1]
         val innerContent = match.groupValues[2].trim()
         val wrapper = "<$tag>\n\n</$tag>"
-        val wrapperTokens = ContextTokenEstimator.estimateTokens(wrapper)
+        val wrapperTokens = ContextTokenEstimator.estimateTokens(wrapper, modelId)
         val innerBudget = (maxTokens - wrapperTokens).coerceAtLeast(1)
-        val truncatedInner = ContextTokenEstimator.truncateToTokens(innerContent, innerBudget).trim()
+        val truncatedInner = ContextTokenEstimator.truncateToTokens(innerContent, innerBudget, modelId).trim()
         return "<$tag>\n$truncatedInner\n</$tag>"
     }
 

@@ -10,6 +10,7 @@ import pl.jclab.refio.core.context.ContextProviderExtras
 import pl.jclab.refio.core.context.ContextProviderRegistry
 import pl.jclab.refio.core.db.MessageRole
 import pl.jclab.refio.core.db.repositories.ChatMessageRepository
+import pl.jclab.refio.core.services.PromptTokenEstimator
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.models.context.ResolvedContextDTO
 import pl.jclab.refio.core.services.ConfigService
@@ -124,7 +125,7 @@ class ContextReferenceResolver(
 
                     ContextType.SELECTION -> {
                         ref.copy(
-                            estimatedTokens = (ref.content?.length ?: 0) / 4
+                            estimatedTokens = PromptTokenEstimator.estimateBase(ref.content ?: "")
                         )
                     }
 
@@ -231,7 +232,7 @@ class ContextReferenceResolver(
         }.trim()
 
         val sizeBytes = enrichedContent.length.toLong()
-        val estimatedTokens = enrichedContent.length / 4
+        val estimatedTokens = PromptTokenEstimator.estimateBase(enrichedContent)
 
         logger.info { "[CONTEXT] Provider $providerId returned ${contextItems.size} item(s), ${enrichedContent.length} chars (analysis=${!fileAnalysisSummary.isNullOrBlank()})" }
 
@@ -284,7 +285,7 @@ class ContextReferenceResolver(
         return ref.copy(
             content = content,
             sizeBytes = content.length.toLong(),
-            estimatedTokens = content.length / 4
+            estimatedTokens = PromptTokenEstimator.estimateBase(content)
         )
     }
 
@@ -344,7 +345,7 @@ class ContextReferenceResolver(
         return ref.copy(
             content = content,
             sizeBytes = content.length.toLong(),
-            estimatedTokens = content.length / 4
+            estimatedTokens = PromptTokenEstimator.estimateBase(content)
         )
     }
 
@@ -390,7 +391,7 @@ class ContextReferenceResolver(
         return ref.copy(
             content = item.content,
             sizeBytes = item.content.length.toLong(),
-            estimatedTokens = item.content.length / 4
+            estimatedTokens = PromptTokenEstimator.estimateBase(item.content)
         )
     }
 
@@ -445,7 +446,7 @@ class ContextReferenceResolver(
         return ref.copy(
             content = content,
             sizeBytes = content.length.toLong(),
-            estimatedTokens = content.length / 4
+            estimatedTokens = PromptTokenEstimator.estimateBase(content)
         )
     }
 
@@ -513,7 +514,7 @@ class ContextReferenceResolver(
         return ref.copy(
             content = content,
             sizeBytes = content.length.toLong(),
-            estimatedTokens = content.length / 4
+            estimatedTokens = PromptTokenEstimator.estimateBase(content)
         )
     }
 

@@ -1,0 +1,17 @@
+{
+  "id": "js-fix-off-by-one",
+  "mode": "AGENT",
+  "max_iterations": 25,
+  "fixture": "fixtures/js-sum",
+  "prompt_file": "prompts/js-fix-off-by-one.md",
+  "assert": {
+    "tool_order": ["read_file", "advance_code_editing"],
+    "needles_in_file": [
+      { "path": "src/main.js", "regex": "<=[[:space:]]*n|n[[:space:]]*\\+[[:space:]]*1" },
+      { "path": "src/main.js", "regex": "total\\(5\\)", "min_count": 1 }
+    ],
+    "build_cmd": "node src/main.js",
+    "no_context_overflow": true
+  },
+  "judge": { "criteria": ["total sums 1..n inclusive; the asserts are unchanged; program prints OK."] }
+}
