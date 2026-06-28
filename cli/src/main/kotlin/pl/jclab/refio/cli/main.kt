@@ -2,6 +2,7 @@ package pl.jclab.refio.cli
 
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.main
+import com.github.ajalt.clikt.core.ProgramResult
 import com.github.ajalt.clikt.core.UsageError
 import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.flag
@@ -115,12 +116,16 @@ class RefioCommand : CliktCommand(name = "refio") {
 
         val effectivePrompt = prompt ?: promptFile?.readText()
 
+        // --no-egress is a hard switch. The interactive TUI applies it via its own runtime
+        // toggle (and must stay user-toggleable), so we only fold it into the overrides for the
+        // headless / multi-agent paths, where it must reach the egress gate via config.
         if (headless && multiAgent != null) {
-            runMultiAgent(effectiveOverrides)
+            runMultiAgent(withNoEgress(effectiveOverrides, noEgress))
         } else if (headless && effectivePrompt != null) {
-            runHeadless(effectiveOverrides, effectivePrompt, autoApproveRegex)
+            runHeadless(withNoEgress(effectiveOverrides, noEgress), effectivePrompt, autoApproveRegex)
         } else if (headless) {
             echo("Error: --headless requires --prompt, --prompt-file, or --multi-agent <file>", err = true)
+            throw ProgramResult(HeadlessExit.FAILURE)
         } else {
             // Run-scope overrides apply to the interactive TUI too, so a user can point Ollama /
             // LM Studio at a different endpoint (or tweak any config key) for one session without
@@ -130,6 +135,7 @@ class RefioCommand : CliktCommand(name = "refio") {
     }
 
     private fun runMultiAgent(runConfigOverrides: Map<String, String>) {
+        var exitCode = HeadlessExit.SUCCESS
         runBlocking {
             val bootstrap = StandaloneCoreBootstrap(project, runConfigOverrides)
             try {
@@ -164,12 +170,17 @@ class RefioCommand : CliktCommand(name = "refio") {
 
                 // Summary
                 echo("Total: tokens=${result.totalTokens}, cost=$${String.format("%.4f", result.totalCostUsd)}, duration=${result.durationMs}ms", err = true)
+
+                // Any agent that did not succeed makes the run a failure for exit-code purposes.
+                if (result.agents.any { it.success != true }) exitCode = HeadlessExit.FAILURE
             } catch (e: Exception) {
                 echo("Error: ${e.message}", err = true)
+                exitCode = HeadlessExit.FAILURE
             } finally {
                 bootstrap.shutdown()
             }
         }
+        if (exitCode != HeadlessExit.SUCCESS) throw ProgramResult(exitCode)
     }
 
     private fun runPrintConfig(runConfigOverrides: Map<String, String>) {
@@ -211,6 +222,7 @@ class RefioCommand : CliktCommand(name = "refio") {
     }
 
     private fun runHeadless(runConfigOverrides: Map<String, String>, promptText: String, autoApproveRegex: Regex?) {
+        var exitCode = HeadlessExit.SUCCESS
         runBlocking {
             val cliScope = this
             val bootstrap = StandaloneCoreBootstrap(project, runConfigOverrides)
@@ -298,6 +310,9 @@ class RefioCommand : CliktCommand(name = "refio") {
                             else -> pl.jclab.refio.core.db.TaskStatus.FAILED
                         }
                         runCatching { router.taskRepository.update(id = task.id, status = finalStatus) }
+                        // Exit code mirrors the turn outcome so a CI step gating on $? sees a
+                        // FAILED / INCOMPLETE run as a failure instead of a silent success.
+                        exitCode = HeadlessExit.forStatus(finalStatus)
                         result.response
                     }
                 }
@@ -319,11 +334,13 @@ class RefioCommand : CliktCommand(name = "refio") {
                 }
             } catch (e: Exception) {
                 echo("Error: ${e.message}", err = true)
+                exitCode = HeadlessExit.FAILURE
             } finally {
                 autoApproveListener?.job?.cancel()
                 bootstrap.shutdown()
             }
         }
+        if (exitCode != HeadlessExit.SUCCESS) throw ProgramResult(exitCode)
     }
 }
 
