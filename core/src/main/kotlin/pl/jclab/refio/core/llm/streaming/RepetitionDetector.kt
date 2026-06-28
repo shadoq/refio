@@ -83,11 +83,18 @@ class RepetitionDetector(
         // higher chance of being accidental (e.g. a list of similar items).
         for (k in minPeriod..effectiveMaxPeriod) {
             if (isPeriodicSuffix(tail, k, repeatThreshold)) {
-                // A periodic suffix made of ONE repeated character is an ASCII rule /
-                // separator / box-drawing line (────, ====, ....), not a model
-                // generation loop — and it's periodic at every k, so it would always
-                // trip here. Real loops are multi-char blocks (code, lists). Skip it.
-                if (isSingleCharRun(tail, k * repeatThreshold)) continue
+                // A periodic suffix dominated by whitespace + a single fill character is
+                // structural / diagrammatic data, not a model generation loop:
+                //   - ASCII rules / separators / box-drawing lines (────, ====, ....)
+                //   - tile-map / level-data arrays of mostly-empty rows
+                //     ("....................", "....................", …)
+                //   - heavily-indented nested structures
+                // These are legitimately repetitive and were tripping a threshold-4 abort
+                // (observed: qwen3.5:122b generating a C64 game's LEVELS array — guardrail
+                // killed a valid stream). A genuine degeneration loop repeats high-entropy
+                // content (code, prose) with no single dominant fill character, so it stays
+                // below [STRUCTURAL_FILL_FRACTION] and still aborts.
+                if (isLowInformationRun(tail, k * repeatThreshold)) continue
 
                 val preview = tail.substring(tail.length - k)
                     .replace("\n", "\\n")
@@ -124,22 +131,43 @@ class RepetitionDetector(
     }
 
     /**
-     * Returns true if the last [len] chars of [s] are all the same character —
-     * i.e. a horizontal rule / separator run rather than a repeated content block.
+     * Returns true if the last [len] chars of [s] are "low information" — i.e. dominated by
+     * whitespace plus a single repeated fill character. This covers horizontal rules /
+     * separators (100% one char, the original case), tile-map / level-data rows (mostly dots
+     * + indentation), and heavily-indented structures. Such content is legitimately repetitive
+     * and must NOT be mistaken for a generation loop.
+     *
+     * Genuine degeneration loops repeat high-entropy content (code, prose) where no single
+     * non-whitespace character dominates, so they stay below [STRUCTURAL_FILL_FRACTION] and
+     * still abort. Subsumes the previous strict single-character check (a 100% single-char run
+     * scores 1.0). The narrow multi-char-loop guard (e.g. "ababab…", ~0.5) still fires.
      */
-    private fun isSingleCharRun(s: String, len: Int): Boolean {
+    private fun isLowInformationRun(s: String, len: Int): Boolean {
         if (len <= 0 || len > s.length) return false
         val start = s.length - len
-        val first = s[start]
-        for (idx in start + 1 until s.length) {
-            if (s[idx] != first) return false
+        var whitespace = 0
+        val counts = HashMap<Char, Int>()
+        for (idx in start until s.length) {
+            val c = s[idx]
+            if (c.isWhitespace()) whitespace++ else counts[c] = (counts[c] ?: 0) + 1
         }
-        return true
+        val topNonWhitespace = counts.values.maxOrNull() ?: 0
+        return (whitespace + topNonWhitespace).toDouble() / len >= STRUCTURAL_FILL_FRACTION
     }
 
     /** Reset accumulated state. Used by tests; not normally needed in production. */
     fun reset() {
         deltaCount = 0
         lastCheckedLength = -1
+    }
+
+    companion object {
+        /**
+         * A repeated region whose (whitespace + single most-common non-whitespace char) share
+         * is at least this fraction is treated as structural/diagrammatic data and exempted
+         * from the abort. Tuned so tile-map level rows (~0.74-0.96 dots+indent) and ASCII rules
+         * (1.0) are exempt, while a tight multi-char loop like "ababab…" (~0.5) still aborts.
+         */
+        const val STRUCTURAL_FILL_FRACTION = 0.66
     }
 }

@@ -347,6 +347,45 @@ class CreateNewFileToolTest {
     }
 
     @Nested
+    inner class SmallFileGateTests {
+
+        @Test
+        fun `should reject content over the byte limit and steer to advance_code_editing`() = runBlocking {
+            // Regression (session 7e87c668): qwen3.5:122b wrote a 1182-line / ~46KB game via
+            // create_new_file (463s, 11.7k output tokens). The size gate now hard-rejects large
+            // content and points the model at advance_code_editing.
+            val big = "x".repeat(CreateNewFileTool.MAX_SMALL_FILE_BYTES + 1)
+            val result = tool.execute(mapOf("path" to "game.html", "content" to big))
+
+            assertFalse(result.success)
+            assertTrue(result.error!!.contains("SMALL files only", ignoreCase = true))
+            assertTrue(result.recovery!!.contains("advance_code_editing"))
+            assertFalse(Files.exists(tempDir.resolve("game.html")), "oversized file must NOT be written")
+        }
+
+        @Test
+        fun `should reject content over the line limit even when under the byte limit`() = runBlocking {
+            val many = "a\n".repeat(CreateNewFileTool.MAX_SMALL_FILE_LINES + 1)  // 52 short lines, ~104 bytes
+            assertTrue(many.toByteArray().size <= CreateNewFileTool.MAX_SMALL_FILE_BYTES)
+            val result = tool.execute(mapOf("path" to "many.txt", "content" to many))
+
+            assertFalse(result.success)
+            assertTrue(result.error!!.contains("SMALL files only", ignoreCase = true))
+            assertFalse(Files.exists(tempDir.resolve("many.txt")))
+        }
+
+        @Test
+        fun `should still create a file at the boundary (small stub passes)`() = runBlocking {
+            // Stub-then-fill stays viable: content at the byte/line bound is accepted.
+            val stub = "x".repeat(CreateNewFileTool.MAX_SMALL_FILE_BYTES)  // exactly the limit, 1 line
+            val result = tool.execute(mapOf("path" to "stub.html", "content" to stub))
+
+            assertTrue(result.success, "content at the limit must still be allowed")
+            assertTrue(Files.exists(tempDir.resolve("stub.html")))
+        }
+    }
+
+    @Nested
     inner class ErrorHandlingTests {
 
         @Test

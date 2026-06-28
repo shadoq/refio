@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Pixel Plumber C64</title>
+<style>
+  html,body{margin:0;background:#000;height:100%;display:flex;align-items:center;justify-content:center}
+  canvas{image-rendering:pixelated;background:#3a4cc0;border:2px solid #555}
+</style>
+</head>
+<body>
+<canvas id="game" width="320" height="192"></canvas>
+<script>
+"use strict";
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const W = 320, H = 192, GROUND = 168;
+let state = "playing"; // "playing" | "gameover"
+let score = 0;
+const keys = {};
+const pip = { x: 40, y: GROUND - 16, vx: 0, vy: 0, w: 12, h: 16, onGround: true };
+const coin = { x: 240, y: GROUND - 40, r: 6, taken: false };
+
+window.addEventListener("keydown", e => { keys[e.code] = true; if (state === "gameover" && e.code === "Enter") restart(); });
+window.addEventListener("keyup", e => { keys[e.code] = false; });
+
+function restart() { state = "playing"; score = 0; pip.x = 40; pip.y = GROUND - 16; pip.vx = 0; pip.vy = 0; coin.taken = false; }
+
+function update() {
+  if (state !== "playing") return;
+  if (keys["ArrowLeft"] || keys["KeyA"]) pip.vx = -2;
+  else if (keys["ArrowRight"] || keys["KeyD"]) pip.vx = 2;
+  else pip.vx = 0;
+  if ((keys["ArrowUp"] || keys["KeyW"] || keys["Space"]) && pip.onGround) { pip.vy = -6; pip.onGround = false; }
+  pip.vy += 0.4;
+  pip.x += pip.vx;
+  pip.y += pip.vy;
+  if (pip.y + pip.h >= GROUND) { pip.y = GROUND - pip.h; pip.vy = 0; pip.onGround = true; }
+  if (pip.x < 0) pip.x = 0;
+  if (pip.x + pip.w > W) pip.x = W - pip.w;
+  if (!coin.taken && Math.abs(pip.x - coin.x) < 12 && Math.abs(pip.y - coin.y) < 16) { coin.taken = true; score += 100; }
+  if (score >= 100) state = "gameover";
+}
+
+function draw() {
+  ctx.fillStyle = "#3a4cc0"; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#8a3f1f"; ctx.fillRect(0, GROUND, W, H - GROUND);
+  if (!coin.taken) { ctx.fillStyle = "#ffd020"; ctx.fillRect(coin.x - coin.r, coin.y - coin.r, coin.r * 2, coin.r * 2); }
+  ctx.fillStyle = "#d64b3b"; ctx.fillRect(pip.x, pip.y, pip.w, pip.h);
+  ctx.fillStyle = "#fff"; ctx.font = "8px monospace";
+  ctx.fillText("PIXEL PLUMBER  SCORE " + score, 6, 12);
+  if (state === "gameover") {
+    ctx.fillStyle = "rgba(0,0,0,0.7)"; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "#fff"; ctx.fillText("LEVEL CLEAR - PRESS ENTER", 90, H / 2);
+  }
+}
+
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

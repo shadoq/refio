@@ -403,6 +403,40 @@ class NextSpeakerJudgeGuardianTest {
     }
 
     @Test
+    fun `two concatenated JSON objects parse as the FIRST object, not UNCERTAIN`() = runBlocking {
+        // Regression (session a9cd298e, minimax-m3 as WEAK judge): the judge emitted two
+        // back-to-back objects {"speaker":"model",...}{"speaker":"model",...}. The old
+        // indexOf('{')..lastIndexOf('}') slice swallowed BOTH → invalid JSON → UNCERTAIN →
+        // Pass → the turn recorded SUCCESS even though no file was written and the judge
+        // had twice said "model". Brace-counting now isolates the first object → MODEL →
+        // single bounded re-entry at priorReentries=0.
+        stubJudgeEnabled()
+        stubModel()
+        stubLlmResponse(
+            """{"speaker": "model", "reason": "intent announced, no write tool called"}""" +
+                """{"speaker": "model", "reason": "duplicate object the model wrongly appended"}"""
+        )
+
+        val decision = guardian().check(
+            ctx(response = "Let me plan the implementation carefully and then generate it.")
+        )
+
+        assertTrue(decision is GuardianDecision.Reenter)
+    }
+
+    @Test
+    fun `brace inside a JSON string value does not truncate the object`() = runBlocking {
+        // Defense: the balanced scan must ignore braces that live inside string literals,
+        // otherwise a reason containing "{" would close the object early and mis-parse.
+        stubJudgeEnabled()
+        stubModel()
+        stubLlmResponse("""{"speaker": "user", "reason": "the diff added a `${'$'}{x}` template"}""")
+
+        val decision = guardian().check(ctx())
+        assertEquals(GuardianDecision.Pass, decision)
+    }
+
+    @Test
     fun `malformed JSON treated as UNCERTAIN and produces Pass`() = runBlocking {
         stubJudgeEnabled()
         stubModel()

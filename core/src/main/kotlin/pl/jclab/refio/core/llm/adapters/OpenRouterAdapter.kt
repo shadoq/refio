@@ -23,7 +23,7 @@ import pl.jclab.refio.core.utils.GsonInstance.gson
  *
  * API docs: https://openrouter.ai/docs
  */
-class OpenRouterAdapter(
+open class OpenRouterAdapter(
     model: String = "anthropic/claude-3.5-sonnet",
     configService: ConfigService? = null,
     taskId: String? = null,
@@ -71,10 +71,22 @@ class OpenRouterAdapter(
     ): Map<String, Any> = super.buildRequestBody(
         requestMessages, effectiveMaxTokens, temperature, streaming, kwargs, requestId,
     ).toMutableMap().apply {
-        val thinking = kwargs["thinking"] as? Boolean ?: false
-        if (thinking && model.contains("claude", ignoreCase = true)) {
+        // `thinking` arrives as Boolean true (toggle on) or a non-blank effort String
+        // ("low"/"medium"/"high"); absent/false/blank means the user turned thinking OFF.
+        val thinkingRaw = kwargs["thinking"]
+        val thinkingOn = thinkingRaw == true || (thinkingRaw is String && thinkingRaw.isNotBlank())
+        if (thinkingOn && model.contains("claude", ignoreCase = true)) {
             put("thinking", mapOf("type" to "enabled", "budget_tokens" to 10000))
             logger.info { "[${providerTag}] Enabled thinking mode for $model" }
+        } else if (!thinkingOn) {
+            // Honour "thinking OFF": suppress upstream reasoning. Without this the toggle was
+            // a silent no-op for OpenRouter — reasoning models (e.g. minimax-m3) defaulted to
+            // reasoning ON and burned thousands of hidden completion tokens (observed: 23.7k
+            // reasoning tokens, zero tool calls, turn ended on intent prose). OpenRouter's
+            // unified `reasoning.enabled=false` suppresses it where the model allows; always-on
+            // reasoning models ignore it harmlessly.
+            put("reasoning", mapOf("enabled" to false))
+            logger.info { "[${providerTag}] Suppressing reasoning for $model (thinking OFF)" }
         }
         (kwargs["provider"] as? Map<*, *>)?.let { put("provider", it) }
         (kwargs["route"] as? String)?.let { put("route", it) }

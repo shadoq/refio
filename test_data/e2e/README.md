@@ -78,12 +78,20 @@ the right change landed.
 | `wire-format-helper` | AGENT | new file + wire it into a caller | 2 needles + build runs and prints `$10.00` |
 | `snake-game` | AGENT | **generate** a single-file game from scratch | needles on `snake.html` (canvas/keydown/score/game over) |
 | `stellar-sound-page` | AGENT | **generate** a single-file landing page | needles on `index.html` (brand/nav/form/table) |
+| `pixel-plumber` | AGENT | **generate** a full single-file C64 platformer (the multi-model log workload) | needles on `plumber.html` (title/canvas/keydown/rAF/game over) + heavy SOFT judge |
+| `pixel-plumber-levels` | AGENT | **generate** four named tile-map level arrays + canvas — exercises legitimate repetitive data (mostly-empty rows) so the stream guardrail must NOT abort it | 4 level-name needles + `<canvas>`/keydown + a long `.` run landed |
+| `pixel-plumber-add-pause` | AGENT | **edit** an existing single-file game to add an Escape pause without breaking it | new pause/escape needle + existing canvas/rAF/title kept |
 
-The two above are **from-scratch generation** scenarios (an empty fixture, the agent writes the
-whole file). They are heavier than the surgical edits above - expect a stronger model than
-`qwen3.5:9b` and watch `no_context_overflow`, which legitimately FAILs a weak model that truncates
-a large file. Their needles only check that a *real* artifact landed; the full feature list is left
-to the SOFT `judge`.
+The **from-scratch generation** scenarios (`snake-game`, `stellar-sound-page`, `pixel-plumber`,
+`pixel-plumber-levels`) start from an empty fixture and the agent writes the whole file. They are
+heavier than the surgical edits above - expect a stronger model than `qwen3.5:9b` and watch
+`no_context_overflow`, which legitimately FAILs a weak model that truncates a large file. Their needles
+only check that a *real* artifact landed; the full feature list is left to the SOFT `judge`.
+(`pixel-plumber-add-pause` is an **edit** scenario, not generation: it ships a working game in its
+fixture and asks for one surgical addition.) The `pixel-plumber*` trio mirrors the multi-model
+game-generation logs that motivated the turn-loop hardening — a complete file must land (the harness
+already HARD-gates `session.status==SUCCESS`, so an intent-only stop fails), the repetitive level data
+must survive the stream guardrail, and an existing file must be edited, not nuked.
 
 ### Multi-step scenarios
 

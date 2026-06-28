@@ -261,8 +261,14 @@ class NextSpeakerJudgeGuardian(
     }
 
     /**
-     * Strip optional markdown fences and isolate the outermost JSON object. Weak models
-     * sometimes wrap the response in ```json ... ``` despite explicit instructions.
+     * Strip optional markdown fences and isolate the FIRST balanced JSON object. Weak models
+     * sometimes wrap the response in ```json ... ``` despite explicit instructions, and some
+     * (observed: minimax-m3 on OpenRouter as the WEAK judge model) emit two concatenated
+     * objects — `{"speaker":"model",...}{"speaker":"model",...}`. The previous
+     * `indexOf('{')`..`lastIndexOf('}')` slice swallowed BOTH objects, producing invalid JSON
+     * → parse failure → UNCERTAIN → the turn passed as SUCCESS even though the judge had
+     * twice said "model" (continue). We now brace-count from the first `{`, respecting string
+     * literals and escapes, and return the first complete object.
      */
     private fun extractJsonObject(raw: String): String {
         val stripped = raw
@@ -270,8 +276,33 @@ class NextSpeakerJudgeGuardian(
             .removeSuffix("```")
             .trim()
         val start = stripped.indexOf('{')
+        if (start < 0) return stripped
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in start until stripped.length) {
+            val c = stripped[i]
+            if (inString) {
+                when {
+                    escaped -> escaped = false
+                    c == '\\' -> escaped = true
+                    c == '"' -> inString = false
+                }
+                continue
+            }
+            when (c) {
+                '"' -> inString = true
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return stripped.substring(start, i + 1)
+                }
+            }
+        }
+        // Unbalanced (truncated stream) — fall back to the previous best-effort slice so a
+        // single object that merely lost its closing fence still has a chance to parse.
         val end = stripped.lastIndexOf('}')
-        return if (start >= 0 && end > start) stripped.substring(start, end + 1) else stripped
+        return if (end > start) stripped.substring(start, end + 1) else stripped
     }
 
     /**

@@ -71,6 +71,35 @@ class CreateNewFileTool(
                 )
             }
 
+            // Hard "small-file-only" gate. create_new_file is for stubs / short snippets the agent
+            // already holds; stuffing a large body into `content` blows the output-token budget and
+            // risks streaming truncation (observed: qwen3.5:122b wrote a 1182-line / ~46KB game via
+            // create_new_file — 463s, 11.7k output tokens, exactly the anti-pattern the selectionHint
+            // warns about but never enforced). Above either bound we hard-fail and steer to
+            // advance_code_editing, which generates via a dedicated editing-model call. A stub-then-fill
+            // flow (tiny placeholder here, then advance_code_editing to replace it) still works.
+            val byteCount = content.toByteArray().size
+            val lineCount = content.lines().size
+            if (byteCount > MAX_SMALL_FILE_BYTES || lineCount > MAX_SMALL_FILE_LINES) {
+                logger.info {
+                    "Rejecting oversized create_new_file: path='$pathStr', $lineCount lines / $byteCount bytes " +
+                        "(max $MAX_SMALL_FILE_LINES lines / $MAX_SMALL_FILE_BYTES bytes) — steering to advance_code_editing"
+                }
+                return ToolResult.error(
+                    message = "create_new_file is for SMALL files only (≤$MAX_SMALL_FILE_LINES lines / " +
+                        "≤$MAX_SMALL_FILE_BYTES bytes); got $lineCount lines / $byteCount bytes.",
+                    recovery = "Do NOT retry create_new_file with this content — the size gate will reject it again. " +
+                        "Use advance_code_editing(path=$pathStr, edit_description=...) to generate the file via a " +
+                        "dedicated editing-model call: it keeps your agent response small and avoids streaming " +
+                        "truncation. (Stub-then-fill is fine: create_new_file with a ≤$MAX_SMALL_FILE_LINES-line " +
+                        "placeholder, then advance_code_editing to replace it.)",
+                    nextActionHints = listOf(
+                        "advance_code_editing path=$pathStr — generate the full file (use for HTML pages, full " +
+                            "classes, scripts, games, or anything over $MAX_SMALL_FILE_LINES lines / $MAX_SMALL_FILE_BYTES bytes)"
+                    )
+                )
+            }
+
             val path = resolveSandboxPath(pathStr)
 
             logger.info { "Creating file: relative='$pathStr', absolute='${path.toAbsolutePath()}', contentSize=${content.length} chars, lineCount=${content.lines().size}" }
@@ -177,5 +206,14 @@ class CreateNewFileTool(
             ),
             "required" to listOf("path", "content")
         )
+    }
+
+    companion object {
+        /**
+         * create_new_file is for SMALL files only. Above EITHER bound the call is hard-rejected and
+         * steered to advance_code_editing. Matches the selectionHint contract (≤50 lines / ≤2 KB).
+         */
+        const val MAX_SMALL_FILE_LINES = 50
+        const val MAX_SMALL_FILE_BYTES = 2048
     }
 }

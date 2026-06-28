@@ -254,6 +254,59 @@ class TurnToolExecutor(
         }
 
         /**
+         * Path-writing tools whose SUCCESSFUL write makes a later same-path `read_file` redundant —
+         * the write result's changeSummary (diff + line counts) is already in history. multi_edit is
+         * intentionally absent: its path lives in `edits[].path`, not a top-level `path`, so
+         * [extractEditPath] can't match it and it would never short-circuit anyway.
+         */
+        internal val PATH_WRITE_TOOL_NAMES = setOf(
+            "create_new_file", "code_editing", "advance_code_editing", "multi_line_editor"
+        )
+
+        /**
+         * True when a `read_file` of [readPath] should be short-circuited instead of executed: a write
+         * tool already wrote that exact path successfully in this task AND nothing has FAILED since.
+         * Re-reading a file you just wrote returns nothing the diff didn't already give you and burns
+         * tokens — observed: qwen3.5:122b read its 1182-line file 5×, deepseek-v4-pro re-read repeatedly,
+         * filling RECENT_WORK and (on small-window models) the context budget.
+         *
+         * Safety: any FAILED subtask after the last successful write to [readPath] re-enables reads, so a
+         * failed edit ("string not found"), failed build, or failed test that legitimately needs a fresh
+         * read is never blocked — and the model can never get stuck (a failure always reopens reads).
+         * Pure (no DB) so it is unit-testable.
+         */
+        internal fun shouldSuppressReadAfterWrite(
+            readPath: String,
+            subtasks: List<Subtask>,
+            currentSubtaskId: String
+        ): Boolean {
+            val normalized = readPath.trim()
+            if (normalized.isEmpty()) return false
+            val others = subtasks.filter { it.id != currentSubtaskId }
+            val lastWriteOrder = others
+                .filter { it.status == TaskStatus.SUCCESS }
+                .filter { sub -> PATH_WRITE_TOOL_NAMES.any { it.equals(sub.kind.name, ignoreCase = true) } }
+                .filter { extractEditPath(it.paramsJson.orEmpty()) == normalized }
+                .maxOfOrNull { it.orderIndex }
+                ?: return false
+            val failedAfterWrite = others.any {
+                it.status == TaskStatus.FAILED && it.orderIndex > lastWriteOrder
+            }
+            return !failedAfterWrite
+        }
+
+        /** In-band notice returned in place of a re-read file's content. Pure so it is testable. */
+        internal fun readAfterWriteSkipNotice(path: String): String = buildString {
+            appendLine("[skipped re-read — you wrote this file in this turn]")
+            appendLine("`$path` was written by a write tool earlier in this task and nothing has failed since.")
+            appendLine("The write result's changeSummary (added/removed lines + unified diff) is already in your")
+            appendLine("history and IS the authoritative current content — re-reading returns nothing new and wastes")
+            appendLine("tokens. Move on to the next outstanding step of the request and deliver.")
+            append("Re-read only if a LATER build/test/lint/run reports a concrete error pointing at this file; ")
+            append("any such failure automatically re-enables reads of this path.")
+        }.trim()
+
+        /**
          * The "change approach" nudge text, or null when [priorFailedEdits] is below
          * [REPEATED_FAILED_EDIT_THRESHOLD]. Pure (no DB) so the threshold + message are testable.
          */
@@ -637,6 +690,48 @@ class TurnToolExecutor(
             }
         }
         // --- end ASK permission check ---
+
+        // --- Re-read-after-write suppression ---
+        // If this read_file targets a path a write tool already produced this turn (with no failure
+        // since), return a short in-band notice instead of the file content. The write's diff is
+        // authoritative; re-reading just burns tokens. A later failure auto-reopens reads (see
+        // [shouldSuppressReadAfterWrite]).
+        if (toolCall.name.equals("read_file", ignoreCase = true)) {
+            val readPath = extractEditPath(toolCall.arguments)
+            val suppress = readPath != null && try {
+                val subs = transaction { subtaskRepository.findByTaskId(taskId) }
+                shouldSuppressReadAfterWrite(readPath, subs, subtaskId)
+            } catch (e: Exception) {
+                logger.debug { "[READ_AFTER_WRITE] query failed, allowing read: ${e.message}" }
+                false
+            }
+            if (suppress) {
+                val notice = readAfterWriteSkipNotice(readPath!!)
+                logger.info {
+                    "[READ_AFTER_WRITE] short-circuit read_file path=$readPath taskId=$taskId — " +
+                        "written this turn, no failure since"
+                }
+                listener?.onToolExecutionStarted(taskId, toolCall)
+                listener?.onToolExecutionCompleted(taskId, toolCall, notice, true)
+                hookService?.trigger("after_tool", mapOf(
+                    "toolName" to toolCall.name,
+                    "taskId" to taskId,
+                    "success" to "true",
+                    "mode" to mode.name
+                ))
+                subtaskRepository.updateStatus(subtaskId, TaskStatus.SUCCESS)
+                subtaskRepository.updateResult(subtaskId, result = notice, summary = notice)
+                return ToolResultData(
+                    toolCallId = toolCall.id,
+                    subtaskId = subtaskId,
+                    content = notice,
+                    isSummarized = false,
+                    rawOutput = notice,
+                    metadata = null
+                )
+            }
+        }
+        // --- end re-read-after-write suppression ---
 
         val toolToken = GlobalMetrics.beginOperation(
             OperationInfo.TurnToolExecution(toolCall.name, iteration)

@@ -1,5 +1,9 @@
 package pl.jclab.refio.core.services.turn
 
+import pl.jclab.refio.core.db.ApprovalStatus
+import pl.jclab.refio.core.db.Subtask
+import pl.jclab.refio.core.db.SubtaskKind
+import pl.jclab.refio.core.db.TaskStatus
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import kotlin.test.Test
@@ -190,6 +194,91 @@ class TurnToolExecutorClassificationTest {
         assertTrue("run_terminal_command" in TurnToolExecutor.EXECUTION_TOOL_NAMES)
         assertFalse("read_file" in TurnToolExecutor.EXECUTION_TOOL_NAMES)
         assertFalse("advance_code_editing" in TurnToolExecutor.EXECUTION_TOOL_NAMES)
+    }
+
+    // ---- re-read-after-write suppression (A) ----
+
+    private fun sub(
+        id: String,
+        kind: SubtaskKind,
+        status: TaskStatus,
+        orderIndex: Int,
+        paramsJson: String? = null
+    ) = Subtask(
+        id = id, taskId = "t1", orderIndex = orderIndex, kind = kind, status = status,
+        description = "", paramsJson = paramsJson, stepPlanJson = null, summary = null,
+        requiresApproval = false, approvalStatus = ApprovalStatus.NOT_REQUIRED, approvedAt = null,
+        result = null, errorMessage = null, errorStacktrace = null, llmModel = null,
+        llmProvider = null, inputTokens = 0, outputTokens = 0, costUsd = 0.0, latencyMs = 0,
+        snapshotIdBeforeWrite = null, createdAt = 0, updatedAt = 0, startedAt = null, completedAt = null
+    )
+
+    @Test
+    fun `suppresses a re-read of a file written this turn with no failure since`() {
+        // The qwen3.5:122b pattern: create_new_file(success) then read_file the same path repeatedly.
+        val subs = listOf(
+            sub("w", SubtaskKind.CREATE_NEW_FILE, TaskStatus.SUCCESS, 1, """{"path":"game.html","content":"x"}"""),
+            sub("r", SubtaskKind.READ_FILE, TaskStatus.PENDING, 2, """{"path":"game.html"}""")
+        )
+        assertTrue(TurnToolExecutor.shouldSuppressReadAfterWrite("game.html", subs, currentSubtaskId = "r"))
+    }
+
+    @Test
+    fun `does NOT suppress when a tool FAILED after the last write (model may be debugging)`() {
+        // A failed run/edit after the write re-enables reads — the model legitimately needs fresh
+        // content (e.g. to fix a build error or match an exact string for code_editing). This also
+        // prevents a suppression loop: a failed code_editing → read → re-suppress → stuck.
+        val subs = listOf(
+            sub("w", SubtaskKind.ADVANCE_CODE_EDITING, TaskStatus.SUCCESS, 1, """{"path":"game.html"}"""),
+            sub("f", SubtaskKind.RUN_CODE, TaskStatus.FAILED, 2, """{"language":"javascript"}"""),
+            sub("r", SubtaskKind.READ_FILE, TaskStatus.PENDING, 3, """{"path":"game.html"}""")
+        )
+        assertFalse(TurnToolExecutor.shouldSuppressReadAfterWrite("game.html", subs, currentSubtaskId = "r"))
+    }
+
+    @Test
+    fun `does NOT suppress when the path was never written`() {
+        val subs = listOf(
+            sub("w", SubtaskKind.CREATE_NEW_FILE, TaskStatus.SUCCESS, 1, """{"path":"other.html"}"""),
+            sub("r", SubtaskKind.READ_FILE, TaskStatus.PENDING, 2, """{"path":"game.html"}""")
+        )
+        assertFalse(TurnToolExecutor.shouldSuppressReadAfterWrite("game.html", subs, currentSubtaskId = "r"))
+    }
+
+    @Test
+    fun `does NOT suppress when the write of that path FAILED`() {
+        // Only a SUCCESSFUL write makes the content authoritative; a failed write means nothing landed.
+        val subs = listOf(
+            sub("w", SubtaskKind.ADVANCE_CODE_EDITING, TaskStatus.FAILED, 1, """{"path":"game.html"}"""),
+            sub("r", SubtaskKind.READ_FILE, TaskStatus.PENDING, 2, """{"path":"game.html"}""")
+        )
+        assertFalse(TurnToolExecutor.shouldSuppressReadAfterWrite("game.html", subs, currentSubtaskId = "r"))
+    }
+
+    @Test
+    fun `a failure BEFORE the write does not block suppression`() {
+        // Only failures AFTER the last successful write matter — an earlier failed attempt that the
+        // write then resolved must not keep reads open forever.
+        val subs = listOf(
+            sub("f", SubtaskKind.RUN_CODE, TaskStatus.FAILED, 1, """{"language":"javascript"}"""),
+            sub("w", SubtaskKind.CREATE_NEW_FILE, TaskStatus.SUCCESS, 2, """{"path":"game.html"}"""),
+            sub("r", SubtaskKind.READ_FILE, TaskStatus.PENDING, 3, """{"path":"game.html"}""")
+        )
+        assertTrue(TurnToolExecutor.shouldSuppressReadAfterWrite("game.html", subs, currentSubtaskId = "r"))
+    }
+
+    @Test
+    fun `blank read path is never suppressed`() {
+        val subs = listOf(sub("w", SubtaskKind.CREATE_NEW_FILE, TaskStatus.SUCCESS, 1, """{"path":""}"""))
+        assertFalse(TurnToolExecutor.shouldSuppressReadAfterWrite("", subs, currentSubtaskId = "r"))
+    }
+
+    @Test
+    fun `skip notice names the path and points to the diff`() {
+        val notice = TurnToolExecutor.readAfterWriteSkipNotice("game.html")
+        assertTrue(notice.contains("game.html"))
+        assertTrue(notice.contains("changeSummary"))
+        assertTrue(notice.contains("re-enables reads"), "must tell the model how a re-read becomes allowed")
     }
 
     @Test

@@ -237,6 +237,26 @@ class RepetitionDetectorTest {
         }
 
         @Test
+        fun `does not fire on a tile-map level-data array of mostly-empty rows`() {
+            // Regression (session 7e87c668, 2026-06): qwen3.5:122b generating a C64 game's
+            // LEVELS array — back-to-back rows of dots ("....................", …) tripped a
+            // threshold-4 REPETITION_LOOP abort and killed a valid stream. Tile maps and
+            // ASCII level data are legitimately repetitive (mostly the fill char + indent).
+            val detector = RepetitionDetector(checkEveryNDeltas = 1)
+            val acc = StringBuilder()
+            // One JS source line of a level row: 16-space indent + a 58-dot string + ` +`.
+            val row = " ".repeat(16) + "\"" + ".".repeat(58) + "\" +\n"
+            var aborted = false
+            repeat(8) {
+                acc.append(row)
+                val tail = acc.toString()
+                val decision = detector.onDelta(row, acc.length, tail, 0L)
+                if (decision is StreamGuardrail.Decision.Abort) aborted = true
+            }
+            assertTrue(!aborted, "Tile-map level rows must not trip the loop detector")
+        }
+
+        @Test
         fun `does not fire on JSON list with similar shapes`() {
             val detector = RepetitionDetector(checkEveryNDeltas = 1)
             val acc = StringBuilder()
