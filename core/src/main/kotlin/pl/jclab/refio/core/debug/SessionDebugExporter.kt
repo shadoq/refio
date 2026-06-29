@@ -109,6 +109,9 @@ class SessionDebugExporter(
                         agentName = msg.agentName,
                         contentPreview = msg.content.preview(options.maxContentPreviewChars),
                         toolCalls = msg.toolCalls?.map { it.name } ?: emptyList(),
+                        toolCallDetails = msg.toolCalls?.map {
+                            SessionDebugSnapshot.ToolCallDetail(name = it.name, arguments = it.arguments)
+                        } ?: emptyList(),
                         tokensIn = msg.tokensIn,
                         tokensOut = msg.tokensOut,
                         createdAt = msg.createdAt,

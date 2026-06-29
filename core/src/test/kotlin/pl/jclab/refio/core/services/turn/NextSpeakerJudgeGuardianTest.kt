@@ -33,7 +33,8 @@ class NextSpeakerJudgeGuardianTest {
         toolsUsed: List<String> = listOf("read_file"),
         toolsUsedSizeAtPriorReentry: Int = 0,
         completionCondition: String? = null,
-        runProfile: TurnRunProfile = TurnRunProfile.DEFAULT
+        runProfile: TurnRunProfile = TurnRunProfile.DEFAULT,
+        writeToolsExecutedInTurn: Int = 0
     ) = GuardianContext(
         taskId = "task-1",
         mode = mode,
@@ -43,7 +44,7 @@ class NextSpeakerJudgeGuardianTest {
         userRequest = "Fix the bug in config parsing",
         finalResponse = response,
         toolsUsed = toolsUsed,
-        writeToolsExecutedInTurn = 0,
+        writeToolsExecutedInTurn = writeToolsExecutedInTurn,
         verificationToolsExecutedAfterWrite = 0,
         priorReentries = priorReentries,
         toolsUsedSizeAtPriorReentry = toolsUsedSizeAtPriorReentry,
@@ -198,6 +199,105 @@ class NextSpeakerJudgeGuardianTest {
         )
 
         assertTrue(decision is GuardianDecision.Incomplete)
+    }
+
+    @Test
+    fun `no-progress fallback finalizes SUCCESS when an edit already landed this turn`() = runBlocking {
+        // e2e regression (qwen3.5:4b/9b, find-and-fix-null-check): the agent read the file and
+        // applied a CORRECT minimal edit (writeToolsExecutedInTurn=1), then signed off with
+        // "The bug has been fixed. Now let me compile to verify:" — optional self-verification
+        // narration with no tool call. Re-entered once, stalled again (no new call). The turn
+        // must finalize SUCCESS: the deliverable (the fixed file) is on disk, so reporting it as
+        // a failed/INCOMPLETE turn (non-zero headless exit) on sign-off phrasing alone is wrong.
+        stubJudgeEnabled()
+        val decision = guardian().check(
+            ctx(
+                response = "The bug has been fixed. Now I need to verify it still compiles. " +
+                    "Let me read the updated file and compile it:",
+                priorReentries = 1,
+                toolsUsed = listOf("read_file", "code_editing"),
+                toolsUsedSizeAtPriorReentry = 2,
+                writeToolsExecutedInTurn = 1
+            )
+        )
+        assertEquals(GuardianDecision.Pass, decision)
+        // The deliverable check is local — no judge LLM call needed on the no-progress fallback.
+        coVerify(exactly = 0) {
+            llmClient.complete(provider = any(), model = any(), messages = any())
+        }
+    }
+
+    @Test
+    fun `no-progress fallback finalizes SUCCESS in PLAN when a substantial plan was produced`() = runBlocking {
+        // e2e regression (qwen3.5:4b/9b, plan-validation): in PLAN mode the model produced a FULL
+        // step-by-step plan (~2000 chars, the deliverable) but opened with "Let me analyze… and
+        // produce a plan:", so the judge said MODEL → re-entry → re-emitted the plan as text (no
+        // tool call, since PLAN cannot call write tools) → stall. The complete plan IS the answer;
+        // marking the turn INCOMPLETE discards a delivered plan.
+        stubJudgeEnabled()
+        val plan = buildString {
+            append("Here is the plan to add input validation to createUser:\n")
+            append("1. Reject a blank email: if (email.isBlank()) throw IllegalArgumentException(...).\n")
+            append("2. Reject a negative age: if (age < 0) throw IllegalArgumentException(...).\n")
+            append("3. Validate before constructing the User and adding it to the list.\n")
+            append("4. Keep clear error messages so callers can surface them to the user.\n")
+        }
+        check(plan.length >= TurnDeliverable.PLAN_DELIVERABLE_MIN_CHARS)
+        val decision = guardian().check(
+            ctx(
+                mode = TaskMode.PLAN,
+                response = plan,
+                priorReentries = 1,
+                toolsUsed = listOf("read_file"),
+                toolsUsedSizeAtPriorReentry = 1
+            )
+        )
+        assertEquals(GuardianDecision.Pass, decision)
+        coVerify(exactly = 0) {
+            llmClient.complete(provider = any(), model = any(), messages = any())
+        }
+    }
+
+    @Test
+    fun `budget-spent fallback finalizes SUCCESS when an edit already landed this turn`() = runBlocking {
+        // Same FM as above but reached via the OTHER fallback: the re-entry DID call a new tool
+        // (snapshot=2, current=3, so the no-progress short-circuit does not fire), the judge STILL
+        // says MODEL, and the single bounded re-entry is spent. Because a write executed this turn,
+        // the deliverable exists → finalize SUCCESS rather than INCOMPLETE.
+        stubJudgeEnabled()
+        stubModel()
+        stubLlmResponse("""{"speaker": "model", "reason": "still wants to run a verification build"}""")
+        val decision = guardian().check(
+            ctx(
+                response = "The fix is in place; now let me run the build to double-check it compiles.",
+                priorReentries = 1,
+                toolsUsed = listOf("read_file", "code_editing", "read_file"),
+                toolsUsedSizeAtPriorReentry = 2,
+                writeToolsExecutedInTurn = 1
+            )
+        )
+        assertEquals(GuardianDecision.Pass, decision)
+    }
+
+    @Test
+    fun `PLAN abandonment with only a bare intent stub still finalizes INCOMPLETE`() = runBlocking {
+        // Guards the PLAN threshold: a short intent stub with NO real plan and NO new tool call is
+        // genuine abandonment and must stay INCOMPLETE — the deliverable-produced relaxation must
+        // not turn every PLAN stall into a false SUCCESS.
+        stubJudgeEnabled()
+        val decision = guardian().check(
+            ctx(
+                mode = TaskMode.PLAN,
+                response = "Let me analyze the files and produce a concrete plan.",
+                priorReentries = 1,
+                toolsUsed = listOf("read_file"),
+                toolsUsedSizeAtPriorReentry = 1
+            )
+        )
+        assertTrue(decision is GuardianDecision.Incomplete)
+        coVerify(exactly = 0) {
+            llmClient.complete(provider = any(), model = any(), messages = any())
+        }
     }
 
     @Test
@@ -372,6 +472,26 @@ class NextSpeakerJudgeGuardianTest {
             nudge.contains("final text reply"),
             "subagent nudge should anchor on returning the complete result to the caller"
         )
+    }
+
+    @Test
+    fun `PLAN-mode re-entry nudge asks for the plan text, not a write tool`() = runBlocking {
+        // PLAN cannot write files; the DEFAULT "emit create_new_file/advance_code_editing" steer is
+        // wrong there (a contract PLAN can never satisfy). The PLAN nudge must steer to producing the
+        // plan as text instead.
+        stubJudgeEnabled()
+        stubModel()
+        stubLlmResponse("""{"speaker": "model", "reason": "announced the plan but did not produce it"}""")
+
+        val decision = guardian().check(
+            ctx(mode = TaskMode.PLAN, response = "Let me analyze the files and produce a concrete plan next.")
+        )
+
+        assertTrue(decision is GuardianDecision.Reenter)
+        val nudge = (decision as GuardianDecision.Reenter).nudge
+        assertTrue(nudge.contains("PLAN mode"), "PLAN nudge should name PLAN mode")
+        assertTrue(nudge.contains("plan as text"), "PLAN nudge should steer to producing the plan as text")
+        assertTrue(!nudge.contains("create_new_file"), "PLAN nudge must NOT demand a write tool")
     }
 
     @Test

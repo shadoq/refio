@@ -512,6 +512,18 @@ object ConfigKeys {
         default = false
     )
 
+    /**
+     * Opt-in to let outbound tools (http_request, fetch_webpage) reach loopback / private / local
+     * addresses. Default false: UrlPolicy blocks them as SSRF protection. Turned on only for trusted
+     * local setups - e.g. the e2e harness serving a deterministic fixture from 127.0.0.1. Governs
+     * every UrlPolicy-checked tool uniformly so the two web tools can never diverge.
+     */
+    val SECURITY_ALLOW_LOOPBACK = ConfigKey(
+        key = "security.allow_loopback",
+        parser = String::toBooleanStrictOrNull,
+        default = false
+    )
+
     // ==================== CONTEXT (ADR 0017) ====================
 
     val RECENT_WORK_FULL_DATA_LIMIT = ConfigKey(
@@ -819,6 +831,7 @@ object ConfigKeys {
             TOOL_SUMMARY_MIN_LENGTH,
             // Security
             SECURITY_ALLOW_SYMLINKS,
+            SECURITY_ALLOW_LOOPBACK,
             // Context
             RECENT_WORK_FULL_DATA_LIMIT,
             RECENT_WORK_SUMMARY_MAX_LENGTH,

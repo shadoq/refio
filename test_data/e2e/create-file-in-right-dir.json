@@ -1,0 +1,18 @@
+{
+  "id": "create-file-in-right-dir",
+  "mode": "AGENT",
+  "max_iterations": 20,
+  "fixture": "fixtures/create-file-dir",
+  "prompt_file": "prompts/create-file-dir.md",
+  "assert": {
+    "needles_in_file": [
+      { "path": "src/main/kotlin/com/acme/app/services/ProductService.kt", "regex": "class[[:space:]]+ProductService" },
+      { "path": "src/main/kotlin/com/acme/app/services/ProductService.kt", "regex": "package[[:space:]]+com\\.acme\\.app\\.services" }
+    ],
+    "file_unchanged": ["src/main/kotlin/com/acme/app/services/UserService.kt"],
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": ["Is the new ProductService created in the services package, matching the existing class convention, with the siblings untouched?"]
+  }
+}

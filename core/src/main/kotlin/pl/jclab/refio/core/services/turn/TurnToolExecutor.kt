@@ -1211,8 +1211,20 @@ class TurnToolExecutor(
     }
 
     fun countVerificationToolCalls(toolCalls: List<ToolCallData>): Int {
-        return toolCalls.count { it.name in setOf("run_terminal_command", "grep_search", "read_file", "view_diff") }
+        return toolCalls.count { isVerificationTool(it.name) }
     }
+
+    /** A read-only / self-verification tool (compile/run, search, read, diff) - never a deliverable itself. */
+    fun isVerificationTool(toolName: String): Boolean =
+        toolName in setOf("run_terminal_command", "grep_search", "read_file", "view_diff")
+
+    /**
+     * A WRITE tool that actually produces a FILE deliverable (edit/create). Excludes the execution
+     * tools (run_code / run_terminal_command) which are mode=WRITE for approval purposes but produce
+     * no file - so a loop of failing commands with no real edit is never mistaken for a delivered turn.
+     */
+    fun isFileWriteTool(toolName: String): Boolean =
+        isWriteTool(toolName) && toolName !in EXECUTION_TOOL_NAMES
 
     /**
      * Count information-gathering calls (reads/searches) in a batch. Feeds the consolidation

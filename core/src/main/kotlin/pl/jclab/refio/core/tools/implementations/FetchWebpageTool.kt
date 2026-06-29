@@ -14,6 +14,7 @@ import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.NoEgressViolationException
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.security.NetworkPolicy
+import pl.jclab.refio.core.security.UrlPolicy
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
@@ -26,7 +27,8 @@ private val logger = dualLogger("FetchWebpageTool")
 class FetchWebpageTool(
     private val llmClient: LLMClient,
     private val configService: ConfigService,
-    private val networkPolicy: NetworkPolicy = NetworkPolicy(configService)
+    private val networkPolicy: NetworkPolicy = NetworkPolicy(configService),
+    private val urlPolicy: UrlPolicy = UrlPolicy()
 ) : Tool {
     override val name = "fetch_webpage"
     override val description = "Fetch a URL, convert HTML to Markdown, then extract information with AI using your prompt. " +
@@ -60,6 +62,12 @@ class FetchWebpageTool(
             networkPolicy.assertEgressAllowed(name, url, taskId)
         } catch (e: NoEgressViolationException) {
             return@withContext ToolResult.error(e.message ?: "no-egress mode blocks this call")
+        }
+        // Same SSRF guard as http_request: reject loopback/private targets unless opted in.
+        try {
+            urlPolicy.validate(url)
+        } catch (e: SecurityException) {
+            return@withContext ToolResult.error(e.message ?: "blocked URL")
         }
 
         logger.info { "Fetching $url for AI processing" }

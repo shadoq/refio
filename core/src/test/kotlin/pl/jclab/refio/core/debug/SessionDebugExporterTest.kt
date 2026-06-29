@@ -137,6 +137,31 @@ class SessionDebugExporterTest {
     }
 
     @Test
+    fun `tool call arguments are exported so an e2e assertion can match which subagent ran`() {
+        val withCall = ChatMessage(
+            id = "m-call", taskId = "t1", role = MessageRole.ASSISTANT, content = "delegating",
+            metadata = null,
+            toolCalls = listOf(
+                pl.jclab.refio.core.db.ToolCallData(
+                    id = "tc1", name = "invoke_subagent",
+                    arguments = """{"subagent_name":"code-reviewer","goal":"find the bug"}""",
+                )
+            ),
+            toolCallId = null, tokensIn = null, tokensOut = null, cost = null, createdAt = 2_000,
+        )
+        stub(messages = listOf(withCall))
+        val snap = exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.STANDARD))
+        val detail = snap.conversation.single().toolCallDetails.single()
+        assertEquals("invoke_subagent", detail.name)
+        // The raw arguments JSON must survive so a needle like subagent_name=code-reviewer can match.
+        assertTrue(detail.arguments.contains("code-reviewer"), "arguments JSON must carry the subagent name")
+        assertTrue(
+            exporter.toJson(snap).contains("code-reviewer"),
+            "run.json must expose tool-call arguments for the e2e tool_invoked assertion"
+        )
+    }
+
+    @Test
     fun `finalOutput is the last assistant message`() {
         stub(messages = listOf(msg(MessageRole.USER, "make it"), msg(MessageRole.ASSISTANT, "created snake.html")))
         val snap = exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.MINIMAL))

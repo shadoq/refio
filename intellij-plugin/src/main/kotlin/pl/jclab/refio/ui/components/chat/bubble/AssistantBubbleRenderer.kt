@@ -300,13 +300,29 @@ internal class AssistantBubbleRenderer(
             addRow(factory.createToolParamsPanel(secondaryParams), topInset = context.bubbleCompactGap)
         }
 
+        // While a code-editing tool streams, keep the (growing) generated content collapsed and show
+        // only a live character counter next to "Generating..." - that is the signal that tokens are
+        // arriving. Once the tool finishes, fall back to the normal final preview.
+        val streaming = message.isToolStreaming && info.status == ToolCallStatus.EXECUTING
         message.content.takeIf { it.isNotBlank() }?.let {
-            addRow(factory.createLLMEditPreviewPanel(it, info.parameters), topInset = context.bubbleCompactGap)
+            val contentPanel = if (streaming) {
+                factory.createCollapsibleToolContentPanel(message.id, it, info.parameters)
+            } else {
+                factory.createLLMEditPreviewPanel(it, info.parameters)
+            }
+            addRow(contentPanel, topInset = context.bubbleCompactGap)
         }
         info.result?.summary?.let {
             addRow(factory.createToolResultPanel(it), topInset = context.bubbleCompactGap)
         }
-        addRow(factory.createToolStatusPanel(info.status), topInset = context.bubbleCompactGap)
+        addRow(
+            factory.createToolStatusPanel(
+                info.status,
+                charCount = if (streaming) message.content.length else null,
+                messageId = if (streaming) message.id else null
+            ),
+            topInset = context.bubbleCompactGap
+        )
         return addToOuter(outerPanel, messageBlock)
     }
 

@@ -1,0 +1,20 @@
+{
+  "id": "delegate-review-then-fix",
+  "mode": "AGENT",
+  "max_iterations": 25,
+  "fixture": "fixtures/delegate-review",
+  "prompt_file": "prompts/delegate-review.md",
+  "assert": {
+    "tool_invoked": [
+      { "name": "invoke_subagent", "args_regex": "code-reviewer" }
+    ],
+    "needle_in_file": {
+      "path": "src/Validator.kt",
+      "regex": "age[[:space:]]*>=[[:space:]]*18|age[[:space:]]*>[[:space:]]*17"
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": ["Was the code-reviewer subagent actually invoked, and does isAdult now accept exactly 18?"]
+  }
+}

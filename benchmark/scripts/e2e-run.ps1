@@ -101,7 +101,7 @@ function Resolve-Scenario {
 
 # Returns "PASS" or "FAIL (reasons)". Writes SOFT warnings to the host (stderr-like) only.
 function Assert-Run {
-    param($Scenario, $RunJsonPath, $ProjectDir, [int]$BuildExit)
+    param($Scenario, $RunJsonPath, $ProjectDir, [int]$BuildExit, [int]$SmokeExit = 0)
     $s   = Get-Content -Raw $Scenario | ConvertFrom-Json
     $run = Get-Content -Raw $RunJsonPath | ConvertFrom-Json
     $hardFail = $false; $reasons = @()
@@ -166,9 +166,59 @@ function Assert-Run {
         }
     }
 
+    # HARD 1d — tool_invoked: a named tool MUST (or, with absent:true, must NOT) have been called.
+    # {name, args_regex?, absent?}. Name presence reads the always-present conversation[].toolCalls[];
+    # args_regex matches the raw arguments JSON in conversation[].toolCallDetails[] (additive run.json
+    # field). Mirrors e2e-run.sh HARD 1d. [[:space:]] -> \s and -cmatch to track grep ERE semantics.
+    if ($s.assert.tool_invoked) {
+        foreach ($ti in @($s.assert.tool_invoked)) {
+            if (-not $ti.name) { continue }
+            if ($ti.args_regex) {
+                $trx = ($ti.args_regex -replace '\[\[:space:\]\]', '\s')
+                $tc = @($run.conversation | ForEach-Object { $_.toolCallDetails } |
+                        Where-Object { $_ -and $_.name -eq $ti.name -and $_.arguments -cmatch $trx }).Count
+            } else {
+                $tc = @($run.conversation | ForEach-Object { $_.toolCalls } |
+                        Where-Object { $_ -eq $ti.name }).Count
+            }
+            if ($ti.absent -eq $true) {
+                if ($tc -ne 0) { $hardFail = $true; $reasons += "tool $($ti.name) was called $tc x, want absent" }
+            } else {
+                if ($tc -lt 1) {
+                    $argNote = if ($ti.args_regex) { " with args /$($ti.args_regex)/" } else { "" }
+                    $hardFail = $true; $reasons += "tool $($ti.name) not invoked$argNote"
+                }
+            }
+        }
+    }
+
+    # HARD 1e — agent_order (multi-agent): the listed agent names must appear in this relative order in
+    # the real execution sequence (run.json .multiAgent.agents[], sorted by start time). Subsequence
+    # check that proves depends_on was respected. Mirrors e2e-run.sh HARD 1e.
+    if ($s.assert.agent_order) {
+        $aexp = @($s.assert.agent_order)
+        $aact = @($run.multiAgent.agents | ForEach-Object { $_.agentName } | Where-Object { $_ })
+        $ai = 0
+        foreach ($t in $aact) { if ($ai -lt $aexp.Count -and $t -eq $aexp[$ai]) { $ai++ } }
+        if ($ai -lt $aexp.Count) {
+            $hardFail = $true; $reasons += "agent_order not satisfied: expected subsequence [$($aexp -join ', ')], saw [$($aact -join ', ')]"
+        }
+    }
+
     # HARD 2 — build/compile succeeded (only when build_cmd is present).
     if ($s.assert.build_cmd) {
         if ($BuildExit -ne 0) { $hardFail = $true; $reasons += "build_cmd exit=$BuildExit" }
+    }
+
+    # HARD 2b — browser-smoke (docs/0071 §8.5 layer 2): when `smoke` is declared, the headless-Chromium
+    # check must pass (exit 0). exit 2 = could not run (no node/playwright/browser) — still a HARD fail
+    # with an install hint. Mirrors e2e-run.sh.
+    if ($s.PSObject.Properties.Name -contains 'smoke') {
+        if ($SmokeExit -eq 2) {
+            $hardFail = $true; $reasons += "browser-smoke unavailable (install: npm i -D playwright && npx playwright install chromium)"
+        } elseif ($SmokeExit -ne 0) {
+            $hardFail = $true; $reasons += "browser-smoke failed (see smoke.log)"
+        }
     }
 
     # HARD 3 — no silent context overflow (docs/0057).
@@ -199,26 +249,64 @@ function Invoke-Scenario {
     if (-not (Test-Path $Scenario)) { throw "scenario not found: $Scenario" }
     $sdir = Split-Path -Parent (Resolve-Path $Scenario)
     $s = Get-Content -Raw $Scenario | ConvertFrom-Json
-    $promptFile = Join-Path $sdir $s.prompt_file
-    $fixture    = Join-Path $sdir $s.fixture
-    if (-not (Test-Path $promptFile)) { throw "prompt_file not found: $promptFile" }
-    if (-not (Test-Path $fixture))    { throw "fixture dir not found: $fixture" }
+    $fixture = Join-Path $sdir $s.fixture
+    # A scenario drives the turn with either a prompt_file (single agent) or a multi_agent YAML.
+    $multiAgentFile = $null
+    if ($s.multi_agent) {
+        $multiAgentFile = Join-Path $sdir $s.multi_agent
+        if (-not (Test-Path $multiAgentFile)) { throw "multi_agent file not found: $multiAgentFile" }
+        $promptFile = $null
+    } else {
+        $promptFile = Join-Path $sdir $s.prompt_file
+        if (-not (Test-Path $promptFile)) { throw "prompt_file not found: $promptFile" }
+    }
+    if (-not (Test-Path $fixture)) { throw "fixture dir not found: $fixture" }
 
     $work = Join-Path ([System.IO.Path]::GetTempPath()) ("refio-e2e-{0}-{1}" -f $s.id, [guid]::NewGuid().ToString('N').Substring(0,8))
     New-Item -ItemType Directory -Path $work | Out-Null
     Copy-Item -Recurse -Force (Join-Path $fixture '*') $work
     $runJson = Join-Path $work 'run.json'
 
+    # Optional fixture server (mirrors e2e-run.sh): serve a directory from the temp project over
+    # loopback so the agent can drive http_request/fetch_webpage against a deterministic local endpoint.
+    # The prompt's {{FIXTURE_SERVER}} placeholder becomes the base URL; the loopback opt-in
+    # (security.allow_loopback) is enabled for this run only.
+    $server = $null
+    $effectivePrompt = $promptFile
+    if ($s.fixture_server -and $s.fixture_server.dir -and $s.fixture_server.port) {
+        $fsPort = [int]$s.fixture_server.port
+        $fsDir  = Join-Path $work $s.fixture_server.dir
+        $py = Get-Command python -ErrorAction SilentlyContinue
+        if (-not $py) { $py = Get-Command python3 -ErrorAction SilentlyContinue }
+        if (-not $py) { throw "fixture_server needs python/python3 on PATH" }
+        $server = Start-Process -FilePath $py.Source -PassThru -WindowStyle Hidden -ArgumentList @(
+            '-m', 'http.server', "$fsPort", '--bind', '127.0.0.1', '--directory', $fsDir)
+        $ready = $false
+        for ($i = 0; $i -lt 50; $i++) {
+            try { $c = New-Object System.Net.Sockets.TcpClient('127.0.0.1', $fsPort); $c.Close(); $ready = $true; break }
+            catch { Start-Sleep -Milliseconds 100 }
+        }
+        if (-not $ready) { Write-Host "  WARN fixture_server not ready on 127.0.0.1:$fsPort after 5s" }
+        $effectivePrompt = Join-Path $work '.e2e-prompt.md'
+        (Get-Content -Raw $promptFile) -replace '\{\{FIXTURE_SERVER\}\}', "http://127.0.0.1:$fsPort" |
+            Set-Content -NoNewline $effectivePrompt
+    }
+
     $maxIter = if ($s.max_iterations) { $s.max_iterations } else { 20 }
     $mode    = if ($s.mode) { $s.mode } else { 'AGENT' }
     $cliArgs = @(
         '--headless', '-p', $work, '--mode', $mode,
-        '--prompt-file', $promptFile,
         '--output', 'json', '--output-file', $runJson,
         '--debug-level', 'standard',
         '--config', "agent.max_iterations=$maxIter",
         '--max-cost', $MaxCost
     )
+    # Single-agent scenarios pass --prompt-file; multi-agent ones pass --multi-agent <yaml> instead.
+    if ($multiAgentFile) { $cliArgs += @('--multi-agent', $multiAgentFile) }
+    else                 { $cliArgs += @('--prompt-file', $effectivePrompt) }
+    if ($s.fixture_server -and $s.fixture_server.dir -and $s.fixture_server.port) {
+        $cliArgs += @('--config', 'security.allow_loopback=true')
+    }
     if ($Model) { $cliArgs += @('--model', $Model) }
     # -OllamaHost / -OllamaCtx are sugar over the validated config overrides so testing a model on a
     # different Ollama box (or a different context size) needs no raw key. Host accepts "box",
@@ -239,6 +327,9 @@ function Invoke-Scenario {
     Write-Host "> $($s.id) (mode=$mode, max_cost=$MaxCost) -> $work"
     & $Cli @cliArgs
     $cliExit = $LASTEXITCODE
+    # The server is only needed during the turn; stop it before build/assert (and before any early
+    # return below) so no python process is left running.
+    if ($server) { try { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue } catch {} }
     if (-not (Test-Path $runJson)) { Write-Output "| $($s.id) | FAIL (no run.json produced) | - |"; return $false }
 
     # A non-zero CLI exit is a HARD failure: the headless turn aborted (cost ceiling, crash). It must
@@ -266,7 +357,21 @@ function Invoke-Scenario {
         finally { $ErrorActionPreference = $savedEAP; Pop-Location }
     }
 
-    $verdict = Assert-Run -Scenario $Scenario -RunJsonPath $runJson -ProjectDir $work -BuildExit $buildExit
+    # Optional browser-smoke (docs/0071 §8.5): render the produced artifact in headless Chromium. Needs
+    # node + playwright; exit 2 (unavailable) is surfaced as a HARD fail by Assert-Run, not hidden.
+    $smokeExit = 0
+    if ($s.PSObject.Properties.Name -contains 'smoke') {
+        $node = Get-Command node -ErrorAction SilentlyContinue
+        if ($node) {
+            $smokeScript = Join-Path $ScriptDir 'browser-smoke.mjs'
+            & $node.Source $smokeScript $Scenario $work 1>"$work\smoke.log" 2>&1
+            $smokeExit = $LASTEXITCODE
+        } else {
+            'node not found on PATH' | Set-Content "$work\smoke.log"; $smokeExit = 2
+        }
+    }
+
+    $verdict = Assert-Run -Scenario $Scenario -RunJsonPath $runJson -ProjectDir $work -BuildExit $buildExit -SmokeExit $smokeExit
     $run = Get-Content -Raw $runJson | ConvertFrom-Json
     Write-Output "| $($s.id) | $verdict | status=$($run.session.status) build_exit=$buildExit cost=`$$($run.metrics.costUsd) |"
     if (-not $Keep) { Remove-Item -Recurse -Force $work }
@@ -349,6 +454,38 @@ function Invoke-SelfTest {
     $v = Assert-Run $uscen (Join-Path $sample 'sample-run.pass.json') $uproj 0; Write-Host "  unchanged-ok   -> $v"; if ($v -notlike 'PASS*') { $fails = 1 }
     'object Frozen { const val V = 2 }' | Set-Content (Join-Path $uproj 'src\Frozen.kt')
     $v = Assert-Run $uscen (Join-Path $sample 'sample-run.pass.json') $uproj 0; Write-Host "  unchanged-viol -> $v"; if ($v -notlike 'FAIL*') { $fails = 1 }
+
+    # Case 14: tool_invoked — by name / by args_regex / absent. Uses the subagent sample whose
+    # conversation carries toolCallDetails (name + raw arguments JSON).
+    $subrun = Join-Path $sample 'sample-run.subagent.json'
+    $tscen  = Join-Path $proj 'tool-invoked.scenario.json'
+    '{ "id":"tool-invoked","assert":{"tool_invoked":[{"name":"invoke_subagent"}]}}' | Set-Content $tscen
+    $v = Assert-Run $tscen $subrun $proj 0; Write-Host "  tool-by-name   -> $v"; if ($v -notlike 'PASS*') { $fails = 1 }
+    '{ "id":"tool-invoked","assert":{"tool_invoked":[{"name":"invoke_subagent","args_regex":"code-reviewer"}]}}' | Set-Content $tscen
+    $v = Assert-Run $tscen $subrun $proj 0; Write-Host "  tool-args-ok   -> $v"; if ($v -notlike 'PASS*') { $fails = 1 }
+    '{ "id":"tool-invoked","assert":{"tool_invoked":[{"name":"invoke_subagent","args_regex":"security-engineer"}]}}' | Set-Content $tscen
+    $v = Assert-Run $tscen $subrun $proj 0; Write-Host "  tool-args-miss -> $v"; if ($v -notlike 'FAIL*') { $fails = 1 }
+    '{ "id":"tool-invoked","assert":{"tool_invoked":[{"name":"delegate_to_strong_model"}]}}' | Set-Content $tscen
+    $v = Assert-Run $tscen $subrun $proj 0; Write-Host "  tool-missing   -> $v"; if ($v -notlike 'FAIL*') { $fails = 1 }
+    '{ "id":"tool-invoked","assert":{"tool_invoked":[{"name":"invoke_subagent","absent":true}]}}' | Set-Content $tscen
+    $v = Assert-Run $tscen $subrun $proj 0; Write-Host "  tool-absent-vio-> $v"; if ($v -notlike 'FAIL*') { $fails = 1 }
+
+    # Case 15: agent_order — listed agents must appear in execution order in .multiAgent.agents[].
+    $marun  = Join-Path $sample 'sample-run.multiagent.json'
+    $aoscen = Join-Path $proj 'agent-order.scenario.json'
+    '{ "id":"agent-order","assert":{"agent_order":["analyst","coder"]}}' | Set-Content $aoscen
+    $v = Assert-Run $aoscen $marun $proj 0; Write-Host "  agent-order-ok -> $v"; if ($v -notlike 'PASS*') { $fails = 1 }
+    '{ "id":"agent-order","assert":{"agent_order":["coder","analyst"]}}' | Set-Content $aoscen
+    $v = Assert-Run $aoscen $marun $proj 0; Write-Host "  agent-order-rev-> $v"; if ($v -notlike 'FAIL*') { $fails = 1 }
+    '{ "id":"agent-order","assert":{"agent_order":["analyst","tester"]}}' | Set-Content $aoscen
+    $v = Assert-Run $aoscen $marun $proj 0; Write-Host "  agent-order-miss-> $v"; if ($v -notlike 'FAIL*') { $fails = 1 }
+
+    # Case 16: browser-smoke HARD tier — gated on the runner's exit (5th arg). 0=pass, 1=fail, 2=unavailable.
+    $smscen = Join-Path $proj 'smoke.scenario.json'
+    '{ "id":"smoke","smoke":{"entry":"index.html","dom_present":["#x"]}}' | Set-Content $smscen
+    $v = Assert-Run $smscen (Join-Path $sample 'sample-run.pass.json') $proj 0 0; Write-Host "  smoke-ok       -> $v"; if ($v -notlike 'PASS*') { $fails = 1 }
+    $v = Assert-Run $smscen (Join-Path $sample 'sample-run.pass.json') $proj 0 1; Write-Host "  smoke-fail     -> $v"; if ($v -notlike 'FAIL*') { $fails = 1 }
+    $v = Assert-Run $smscen (Join-Path $sample 'sample-run.pass.json') $proj 0 2; Write-Host "  smoke-unavail  -> $v"; if ($v -notlike 'FAIL*') { $fails = 1 }
 
     Remove-Item -Recurse -Force $proj, $empty
     if ($fails -eq 0) { Write-Host 'self-test OK' } else { throw 'self-test FAILED' }

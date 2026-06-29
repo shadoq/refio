@@ -1,7 +1,9 @@
 package pl.jclab.refio.core.tools.base
 
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.security.NetworkPolicy
+import pl.jclab.refio.core.security.UrlPolicy
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.ProcessManager
 import pl.jclab.refio.core.services.PromptsService
@@ -43,6 +45,11 @@ class ToolFactory(
     private val registry = toolRegistry
     private val processManager = ProcessManager()
     private val networkPolicy = NetworkPolicy(configService)
+    // One SSRF guard shared by every outbound tool, so http_request and fetch_webpage can never
+    // diverge. The loopback opt-in is resolved per call to honour run-scope config overrides.
+    private val urlPolicy = UrlPolicy(
+        allowLoopback = { runCatching { configService.getTyped(ConfigKeys.SECURITY_ALLOW_LOOPBACK) }.getOrDefault(false) }
+    )
 
     /**
      * Create and register all available tools
@@ -97,7 +104,7 @@ class ToolFactory(
 
             // Web tools
             WebSearchTool(configService, networkPolicy),
-            FetchWebpageTool(llmClient, configService, networkPolicy),
+            FetchWebpageTool(llmClient, configService, networkPolicy, urlPolicy),
 
             // Code intelligence
             CodeIntelligenceTool(sandbox, fileLimits),
@@ -133,7 +140,7 @@ class ToolFactory(
             RunTerminalCommandTool(sandbox, commandLimits, CommandRuleDefaults.createDefaultMatcher()),
 
             // Network operations
-            HttpRequestTool(sandbox = sandbox, networkPolicy = networkPolicy),
+            HttpRequestTool(sandbox = sandbox, networkPolicy = networkPolicy, urlPolicy = urlPolicy),
 
             // Code execution
             RunCodeTool(sandbox),

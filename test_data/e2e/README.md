@@ -106,6 +106,68 @@ task through to the end rather than stop after the first edit.
 | `implement-stubs` | AGENT | implement 3 stubbed functions to satisfy one suite | `absent` "not implemented" + **run** + `file_unchanged` test |
 | `fix-two-failures` | AGENT | two independent bugs, one per file, make the suite green | 2 needles + **run** (`python3`) + `file_unchanged` main |
 
+### Navigation, delegation & read-only analysis scenarios (docs/0071)
+
+These stress finding the right place in a larger tree, delegating to a subagent, and analysing a
+module without editing it. The two PLAN scenarios gate on `needle_in_output` + `file_unchanged` (no
+edit at all); the delegation one gates on the hard `tool_invoked`.
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `needle-in-haystack-deep` | AGENT | a bug buried deep in a ~40-file tree — narrow with grep, don't read everything | needle on the deep fix + `file_unchanged` on 3 similarly-named decoys + overflow gate |
+| `find-by-symbol` | AGENT | one function defined once, called in 5 files — edit the **definition**, not the call sites | needle on the definition + `file_unchanged` on all 5 callers |
+| `create-file-in-right-dir` | AGENT | create a new file in the right package, matching the directory convention | 2 needles on the **new** path (class + package) + `file_unchanged` sibling |
+| `delegate-review-then-fix` | AGENT | use the `code-reviewer` subagent to find the bug, then fix it | **`tool_invoked` `invoke_subagent` with `args_regex` `code-reviewer`** + needle on the fix |
+| `subagent-depth-guard` | AGENT | tempt unbounded delegation — the max-depth-3 guard must finish, not hang | `needle_in_output` (a summary landed) + status SUCCESS |
+| `analyze-architecture` | PLAN | name the components and data-flow direction of a pipeline module, edit nothing | `needle_in_output` + `file_unchanged` on **all** files |
+| `locate-root-cause` | PLAN | a wrong timeout spans 3 files — point at the cause, don't fix | `needle_in_output` (root file/symbol) + `file_unchanged` on all 3 |
+
+The delegation/subagent scenarios need a model that actually drives `invoke_subagent`; like the
+generation scenarios they expect a capable model and may legitimately fail on a weak one.
+
+### Local network scenario (docs/0071)
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `fetch-local-json` | AGENT | fetch a JSON file from a **local fixture server** over HTTP and extract a field | `tool_invoked` `http_request` + needle on the saved `result.txt` + `file_unchanged` on the served file |
+
+`fetch-local-json` declares a **`fixture_server`** (see the format section): the harness serves a
+directory from the temp project on `127.0.0.1` for the duration of the turn, so the I/O loop is
+deterministic instead of hitting the public internet. It needs `python3`/`python` on PATH and runs the
+turn with `security.allow_loopback=true` (the loopback opt-in is **off** everywhere else).
+
+### Multi-agent scenarios (docs/0071)
+
+A scenario can drive the turn with a **`multi_agent`** YAML (CLI `--multi-agent`) instead of a
+`prompt_file`: the harness runs the whole agent graph and asserts on the produced `run.json`
+(which the multi-agent path now emits) — status, file effect, build, and **`agent_order`**.
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `pipeline-2-agents` | (per-agent) | `analyst` (PLAN) → `coder` (AGENT, `depends_on: analyst`) implement a stub | `agent_order [analyst, coder]` + needle on the impl + **compile & run** |
+| `dependency-ordering` | (per-agent) | 3-agent chain `analyze → implement → document` | `agent_order [analyze, implement, document]` + needle on the impl |
+
+Each agent's mode comes from the YAML (`mode: plan|agent`), so the scenario-level `mode` is ignored.
+Cycle detection (a `depends_on` loop) is rejected up front by `MultiAgentRunner.validateDependencies`
+(covered by its unit test), so it is not a separate e2e scenario. These need a model that drives the
+multi-agent loop and may legitimately fail on a weak one.
+
+### Browser-smoke scenarios (docs/0071)
+
+For generated browser artifacts, a structural needle proves `<canvas>`/`<button>` *exists* but not that
+it *runs*. A **`smoke`** block adds a deterministic HARD layer: the harness renders the artifact in
+headless Chromium (Playwright) and checks it mechanically - no JS errors, required DOM present, and a
+scripted interaction actually changes state.
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `build-counter-page` | AGENT | generate a one-file counter page that really increments | needles on `#count`/`#inc` + **browser-smoke**: loads clean, `#inc` click changes `#count` |
+
+**Requires a one-time install** of the browser: `npm i -D playwright && npx playwright install chromium`
+(run in `benchmark/`). Without it, a scenario that declares `smoke` HARD-fails with that hint - a
+verifier you cannot run must never pass silently. The same `smoke` block can be added to the existing
+generation scenarios (`snake-game`, `pixel-plumber`, …) to upgrade "a file landed" into "it runs".
+
 ## Scenario format (JSON)
 
 The doc's example used YAML; we use **JSON** so a single parser (`jq` in bash, native
@@ -160,12 +222,48 @@ scenarios that produce a plan or answer instead of editing a file. **`file_uncha
 asserts each listed file is **byte-identical to the original fixture** — proves the agent did *not*
 touch it (guards "no change needed" restraint and "don't edit the test" scenarios).
 
+**`tool_invoked`** (array of `{ name, args_regex?, absent? }`) asserts a named tool was (or, with
+`absent:true`, was **not**) called during the run. Name presence reads the always-present
+`run.json.conversation[].toolCalls[]`; `args_regex` additionally matches the **raw arguments JSON** in
+`run.json.conversation[].toolCallDetails[]` (e.g. `{ "name": "invoke_subagent", "args_regex":
+"code-reviewer" }` proves the *code-reviewer* subagent ran, not just *some* subagent). This is the
+**hard** counterpart to the soft `tool_order` hint — use it when a specific tool/delegation *must* happen.
+
 `build_cmd` is **optional and fixture-specific** — it runs inside the temp project and whatever
 toolchain it names must be on PATH (`kotlinc`/`java` for the Kotlin fixtures, `python3` for
 `py-sum-offbyone`; a missing tool yields a non-zero exit → HARD fail). Make it `… && java -jar …` /
 `python3 src/main.py` to **run** an executable test, not just compile. Omit it to keep a scenario
 toolchain-independent (the needle still gates). Swap it for `./gradlew compileKotlin`, `npm run build`,
 etc. for your own fixtures.
+
+**`fixture_server`** (`{ dir, port }`, optional) makes the harness serve `<temp-project>/<dir>` on
+`http://127.0.0.1:<port>` for the duration of the turn (via `python3 -m http.server --bind 127.0.0.1`),
+so a scenario can exercise `http_request` / `fetch_webpage` against a **deterministic local endpoint**
+instead of the public internet. The harness replaces a **`{{FIXTURE_SERVER}}`** placeholder in the
+prompt with the base URL, runs the turn with `--config security.allow_loopback=true` (the loopback SSRF
+opt-in — **off** by default for every other run), and stops the server afterwards. Needs
+`python3`/`python` on PATH. Keep the served files in the fixture so `file_unchanged` can assert the
+agent did not mutate the source.
+
+**`multi_agent`** (path to a YAML, optional) replaces `prompt_file`: the harness invokes the CLI with
+`--multi-agent <yaml>` instead, running the whole agent graph against the fixture. The YAML is the
+standard multi-agent definition (`name`, `agents[]` with `name`/`task`/`mode`/`depends_on`). The
+multi-agent run now emits a `run.json` carrying `session.status` (SUCCESS iff every agent succeeded)
+and `multiAgent.agents[]` in execution order, so the usual gates (status, needles, `build_cmd`) plus
+`agent_order` all apply. A scenario sets **either** `prompt_file` **or** `multi_agent`, not both.
+
+**`smoke`** (`{ entry, no_js_errors?, dom_present[], interactions[] }`, optional) runs a headless-Chromium
+runtime check on a generated browser artifact after the turn (HARD, exit-gated like `build_cmd`).
+`entry` is the HTML file (relative to the project); `no_js_errors` fails on any page/console error;
+`dom_present[]` are selectors that must exist; each `interactions[]` step is `{ press | click,
+expect_text_change? , expect_contains? }` - it performs the action then asserts a selector's text
+changed / contains text (proves the page is actually interactive, not dead markup). Implemented by
+`benchmark/scripts/browser-smoke.mjs`; needs `playwright` installed (see above).
+
+The SOFT **`judge.criteria`** stays advisory. A future **layer 3** (docs/0071 §8.5) would let an
+external strong-model oracle score the artifact against the criteria and write a structured
+`judge-<id>.json` (`{ "works": bool, "score": 0..1, "per_criterion": [{text, pass, why}] }`); that
+oracle integration is deliberately not wired yet (it stays SOFT/scored until promoted with a threshold).
 
 ## Assertion tiers (docs/0061 review note)
 
@@ -179,6 +277,8 @@ Weak/local models legitimately vary tool order and judge scores between runs. To
 | **HARD** | `file_unchanged[]` byte-identical to fixture | fail — proves a file the agent should *not* touch is intact |
 | **HARD** | `build_cmd` exit `== 0` (when present; may compile **and run** a test) | fail — proves the code actually works, not just "something was written" |
 | **HARD** | `no_context_overflow` (`run.json.metrics.contextOverflow == false`) | fail — silent truncation (docs/0057) is never a success |
+| **HARD** | `tool_invoked[]` (`{name, args_regex?, absent?}`) | fail — a named tool **had** to run (or, with `absent:true`, must **not** have). `args_regex` matches the raw arguments JSON in `run.json.conversation[].toolCallDetails[]`, so a scenario can assert the *right* subagent/tool ran, not just *a* tool |
+| **HARD** | `agent_order[]` (multi-agent only) | fail — the listed agent names must appear in this relative order in the real execution sequence (`run.json.multiAgent.agents[]`, sorted by start time) — proves `depends_on` was respected |
 | **SOFT** | `tool_order` is a **subsequence** of the real call order | warn only — order drifts on weak models |
 | **SOFT** | `judge.criteria` | advisory — run the `LlmTaskVerifier` judge separately; score drift can't gate regression |
 

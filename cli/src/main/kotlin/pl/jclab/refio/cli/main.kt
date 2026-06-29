@@ -21,7 +21,9 @@ import pl.jclab.refio.core.api.TurnRequest
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.config.ConfigPrintView
 import pl.jclab.refio.core.config.RunConfigOverrides
+import pl.jclab.refio.core.debug.SESSION_DEBUG_SCHEMA_VERSION
 import pl.jclab.refio.core.debug.SessionDebugOptions
+import pl.jclab.refio.core.debug.SessionDebugSnapshot
 import pl.jclab.refio.core.models.api.ChatRequest
 import pl.jclab.refio.core.models.api.LLMParams
 import java.nio.file.Path
@@ -146,11 +148,16 @@ class RefioCommand : CliktCommand(name = "refio") {
                 echo("Refio Multi-Agent — project: ${project.toAbsolutePath()}", err = true)
                 echo("Session: ${definition.name} (${definition.agents.size} agents)", err = true)
 
+                // Split the combined "provider/model" (e.g. "ollama/qwen3.5:9b") like the single-turn
+                // headless path does; passing it whole left the provider unset, so the turn resolved
+                // it as "openrouter/ollama/qwen3.5:9b" — an invalid model id that failed every agent.
+                val (maProvider, maModel) = splitProviderModel(model)
                 val result = router.multiAgentRouter.launchMultiAgentSession(
                     MultiAgentSessionRequest(
                         name = definition.name,
                         yamlDefinition = yamlContent,
-                        model = model
+                        model = maModel,
+                        provider = maProvider
                     )
                 )
 
@@ -170,6 +177,59 @@ class RefioCommand : CliktCommand(name = "refio") {
 
                 // Summary
                 echo("Total: tokens=${result.totalTokens}, cost=$${String.format("%.4f", result.totalCostUsd)}, duration=${result.durationMs}ms", err = true)
+
+                // Emit a run.json so the e2e harness can assert on a multi-agent run the same way it
+                // does a single turn (status gate, file needles, build) plus agent execution order.
+                // Unlike runHeadless there is no single task to export; the snapshot is synthesized
+                // from the per-agent session result, with agents sorted into real execution order.
+                if (outputFormat == "json") {
+                    val orderedAgents = result.agents.sortedBy { it.startedAt ?: Long.MAX_VALUE }
+                    val allOk = result.agents.all { it.success == true }
+                    val snapshot = SessionDebugSnapshot(
+                        schemaVersion = SESSION_DEBUG_SCHEMA_VERSION,
+                        run = SessionDebugSnapshot.RunInfo(
+                            debugLevel = debugLevel.uppercase(),
+                            durationMs = result.durationMs,
+                            startedAt = result.createdAt,
+                            endedAt = result.completedAt,
+                        ),
+                        session = SessionDebugSnapshot.SessionInfo(
+                            id = result.sessionId, name = result.name,
+                            mode = "MULTI_AGENT", executionMode = "AUTO",
+                            model = model, provider = null,
+                            status = if (allOk) "SUCCESS" else "FAILED",
+                            tokensIn = 0, tokensOut = 0, costUsd = result.totalCostUsd,
+                        ),
+                        metrics = SessionDebugSnapshot.Metrics(
+                            durationMs = result.durationMs, tokensIn = 0, tokensOut = 0,
+                            costUsd = result.totalCostUsd, apiCallCount = 0, toolCallCount = 0,
+                            contextOverflow = false,
+                        ),
+                        finalOutput = orderedAgents.joinToString("\n\n") {
+                            "--- ${it.agentName} ---\n${it.response ?: ""}"
+                        }.take(8000),
+                        subtasks = emptyList(), conversation = emptyList(), apiLogs = emptyList(),
+                        errors = orderedAgents.mapNotNull { a -> a.error?.let { "agent ${a.agentName}: $it" } },
+                        warnings = emptyList(),
+                        multiAgent = SessionDebugSnapshot.MultiAgentInfo(
+                            agents = orderedAgents.map {
+                                SessionDebugSnapshot.AgentRunInfo(
+                                    agentName = it.agentName, status = it.status,
+                                    success = it.success == true,
+                                    startedAt = it.startedAt, completedAt = it.completedAt,
+                                )
+                            }
+                        ),
+                    )
+                    val json = router.sessionDebugExporter.toJson(snapshot)
+                    val target = outputFile
+                    if (target != null) {
+                        target.toFile().writeText(json)
+                        echo("Wrote run.json -> ${target.toAbsolutePath()} (${json.length} bytes)", err = true)
+                    } else {
+                        println(json)
+                    }
+                }
 
                 // Any agent that did not succeed makes the run a failure for exit-code purposes.
                 if (result.agents.any { it.success != true }) exitCode = HeadlessExit.FAILURE

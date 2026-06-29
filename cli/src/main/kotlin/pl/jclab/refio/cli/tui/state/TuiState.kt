@@ -130,6 +130,7 @@ data class TuiChatMessage(
     val agentName: String? = null,
     val agentColorIndex: Int? = null,
     val isStreaming: Boolean = false,
+    val isToolStreaming: Boolean = false,
     val messageType: TuiMessageType = TuiMessageType.TEXT,
     val tokensIn: Int = 0,
     val tokensOut: Int = 0,

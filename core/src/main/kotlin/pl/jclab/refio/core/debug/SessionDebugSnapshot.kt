@@ -25,6 +25,12 @@ data class SessionDebugSnapshot(
     val apiLogs: List<ApiLogInfo>,
     val errors: List<String>,
     val warnings: List<String>,
+    /**
+     * Present only for a multi-agent run (CLI `--multi-agent`): the agents in execution order, so a
+     * consumer (e.g. the e2e harness) can assert dependency ordering was respected. Null for a normal
+     * single-task run. Additive; the schema version is unchanged.
+     */
+    val multiAgent: MultiAgentInfo? = null,
 ) {
     data class RunInfo(
         val debugLevel: String,
@@ -80,9 +86,35 @@ data class SessionDebugSnapshot(
         val agentName: String?,
         val contentPreview: String,
         val toolCalls: List<String>,
+        /**
+         * Per-call name + raw arguments JSON for the calls in [toolCalls], same order. Carries the
+         * detail the bare-name [toolCalls] list drops, so an e2e assertion can match not just "this
+         * tool ran" but "this tool ran with these arguments" (e.g. invoke_subagent with a specific
+         * subagent_name). Additive field; older readers ignore it, the schema version is unchanged.
+         */
+        val toolCallDetails: List<ToolCallDetail> = emptyList(),
         val tokensIn: Int?,
         val tokensOut: Int?,
         val createdAt: Long,
+    )
+
+    /** One tool invocation: its name and the raw arguments JSON the model passed. */
+    data class ToolCallDetail(
+        val name: String,
+        val arguments: String,
+    )
+
+    /** Multi-agent run summary: the agents in the order they actually executed. */
+    data class MultiAgentInfo(
+        val agents: List<AgentRunInfo>,
+    )
+
+    data class AgentRunInfo(
+        val agentName: String,
+        val status: String,
+        val success: Boolean,
+        val startedAt: Long?,
+        val completedAt: Long?,
     )
 
     data class ApiLogInfo(

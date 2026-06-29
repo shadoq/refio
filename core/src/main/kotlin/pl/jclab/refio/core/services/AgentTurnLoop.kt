@@ -34,6 +34,7 @@ import pl.jclab.refio.core.services.turn.TurnEventListener
 import pl.jclab.refio.core.services.turn.TurnPrompt
 import pl.jclab.refio.core.services.turn.GuardianContext
 import pl.jclab.refio.core.services.turn.GuardianDecision
+import pl.jclab.refio.core.services.turn.TurnDeliverable
 import pl.jclab.refio.core.services.turn.GuardianRegistry
 import pl.jclab.refio.core.services.turn.TurnFinalizer
 import pl.jclab.refio.core.services.turn.TurnGuardianState
@@ -1502,6 +1503,10 @@ class AgentTurnLoop(
                         // Definitive loop = the SAME tool with the SAME arguments failing repeatedly.
                         // Varying either resets the counter so the agent can still explore freely.
                         var repetitionAbort: TurnGuardrails.LoopStatus.ABORT? = null
+                        // Name of the tool that triggered the repetition abort (for deliverable-aware
+                        // handling: a loop on an optional VERIFICATION tool after the work is done is not
+                        // the same as a loop that never produced the deliverable). See docs/0070 FM-3.
+                        var repetitionAbortToolName: String? = null
                         // Ids of write calls whose generated content was identical to the file (no-op).
                         // A no-op write is NOT consolidation progress (P1) — it must not reset the
                         // read-only spree counter below, otherwise a futile edit masks a read-forever loop.
@@ -1539,7 +1544,10 @@ class AgentTurnLoop(
                                 val output = if (success) (result.loopSignature ?: result.content) else null
                                 when (val status = repetitionTracker.record(toolCall.name, parsedArgs, output, isNoopWrite = result.noop)) {
                                     is TurnGuardrails.LoopStatus.ABORT ->
-                                        if (repetitionAbort == null) repetitionAbort = status
+                                        if (repetitionAbort == null) {
+                                            repetitionAbort = status
+                                            repetitionAbortToolName = toolCall.name
+                                        }
                                     TurnGuardrails.LoopStatus.OK -> Unit
                                 }
                             }
@@ -1547,6 +1555,41 @@ class AgentTurnLoop(
 
                         if (repetitionAbort != null) {
                             logger.warn { "[REPETITION_ABORT] taskId=$taskId, incomplete=${repetitionAbort.incomplete}, reason=${repetitionAbort.reason}" }
+                            // Deliverable-aware (docs/0070 FM-3): a byte-identical-OUTPUT loop (NOT a
+                            // no-op-write streak) on an optional VERIFICATION tool (compile/run/search/read),
+                            // AFTER a deliverable already landed this turn, is the model flailing on
+                            // self-verification — the real work is done, so report SUCCESS instead of failing a
+                            // completed turn. A no-op-write streak (incomplete=true), a loop on a WRITE tool, or
+                            // a turn with no deliverable stays a failure: there the deliverable never landed.
+                            val abortToolName = repetitionAbortToolName
+                            val loopedOnVerification = abortToolName != null && turnToolExecutor.isVerificationTool(abortToolName)
+                            // Strict deliverable signal here (NOT writeToolsExecutedInTurn): a real FILE
+                            // edit must have landed. run_terminal_command/run_code are mode=WRITE for
+                            // approval but produce no file, so a loop of failing commands with no edit is
+                            // NOT a delivered turn and must keep failing.
+                            val realEditLanded = usedTools.any { turnToolExecutor.isFileWriteTool(it) }
+                            val deliverableDespiteLoop = !repetitionAbort.incomplete &&
+                                loopedOnVerification &&
+                                realEditLanded
+                            if (deliverableDespiteLoop) {
+                                logger.warn {
+                                    "[REPETITION_ABORT] taskId=$taskId — loop was on verification tool " +
+                                        "'$abortToolName' and a deliverable already landed " +
+                                        "(writeToolsExecutedInTurn=$writeToolsExecutedInTurn) — finalizing SUCCESS"
+                                }
+                                val okResult = TurnResult(
+                                    success = true,
+                                    response = "Changes applied. Stopped a repeated verification step " +
+                                        "($abortToolName) that produced no new information; the deliverable is in place.",
+                                    iterations = iteration,
+                                    tokensIn = totalTokensIn,
+                                    tokensOut = totalTokensOut,
+                                    cost = totalCost,
+                                    toolsUsed = usedTools.distinct(),
+                                    incomplete = false
+                                )
+                                return turnFinalizer.completeTurn(taskId, okResult, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                            }
                             val result = TurnResult(
                                 success = false,
                                 response = if (repetitionAbort.incomplete) repetitionAbort.reason
@@ -1856,26 +1899,40 @@ class AgentTurnLoop(
                                 (recoveryState.nudgeCount >= 2 || isRepeatedPlainText)
 
                         if (shouldHardFailFormat) {
+                            // Deliverable-aware finalization. If a write/edit already executed this
+                            // turn, the deliverable is on disk and this format breakdown is on a
+                            // trailing (often optional "let me double-check") step — reporting the
+                            // turn as a failure then punishes completed work. Observed cross-model
+                            // (qwen3-coder:30b on a constant-change task: the edit landed correctly,
+                            // then a malformed prose grep_search tripped this gate and the turn was
+                            // recorded INCOMPLETE). Finalize SUCCESS and surface the prose. A turn
+                            // that produced NO deliverable stays INCOMPLETE — a genuine format
+                            // breakdown with nothing delivered, the case this gate was built for.
+                            val deliverableProduced =
+                                TurnDeliverable.produced(writeToolsExecutedInTurn, mode, contentForExtraction)
                             logger.error {
                                 "[FORMAT_UNRECOVERABLE] taskId=$taskId, iteration=$iteration: " +
                                     "model kept returning plain text after ${recoveryState.nudgeCount} nudge(s) " +
-                                    "(repeated=$isRepeatedPlainText, toolsUsedSoFar=${usedTools.size}). " +
-                                    "Surfacing the prose answer and marking the turn INCOMPLETE."
+                                    "(repeated=$isRepeatedPlainText, toolsUsedSoFar=${usedTools.size}, " +
+                                    "writeToolsExecutedInTurn=$writeToolsExecutedInTurn). " +
+                                    if (deliverableProduced) {
+                                        "A deliverable already landed — surfacing the prose and finalizing SUCCESS."
+                                    } else {
+                                        "Surfacing the prose answer and marking the turn INCOMPLETE."
+                                    }
                             }
-                            // The model produced a real prose answer but never wrapped it in the
-                            // required JSON envelope / tool call. Surface that answer instead of
-                            // discarding it behind a generic error (which used to lose a valid
-                            // deliverable). Mark INCOMPLETE rather than FAILED: text was delivered,
-                            // just not through the structured workflow the task may have needed.
+                            // The model produced prose but never wrapped it in the required JSON
+                            // envelope / tool call. Surface that text instead of discarding it behind
+                            // a generic error (which used to lose a valid deliverable).
                             val result = TurnResult(
-                                success = false,
+                                success = deliverableProduced,
                                 response = contentForExtraction,
                                 iterations = iteration,
                                 tokensIn = totalTokensIn,
                                 tokensOut = totalTokensOut,
                                 cost = totalCost,
                                 toolsUsed = usedTools.distinct(),
-                                incomplete = true
+                                incomplete = !deliverableProduced
                             )
                             return turnFinalizer.completeTurn(
                                 taskId,
