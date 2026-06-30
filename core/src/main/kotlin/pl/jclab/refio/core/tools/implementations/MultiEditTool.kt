@@ -190,8 +190,14 @@ class MultiEditTool(
         // Read current content
         val content = Files.readString(path)
 
+        // Reconcile line endings: read_file feeds the model LF, but this file may be CRLF on disk
+        // (Windows checkout). Match/replace in the file's own EOL so the edit lands and the file
+        // keeps its line endings (no whole-file churn).
+        val oldMatch = pl.jclab.refio.core.tools.LineEndings.toFileEol(edit.oldString, content)
+        val newMatch = pl.jclab.refio.core.tools.LineEndings.toFileEol(edit.newString, content)
+
         // Check if old_string exists
-        if (!content.contains(edit.oldString)) {
+        if (!content.contains(oldMatch)) {
             throw EditException(
                 "Edit #${edit.index}: String not found in ${edit.path}: '${edit.oldString}'"
             )
@@ -200,13 +206,15 @@ class MultiEditTool(
         return PreparedEdit(
             edit = edit,
             path = path,
-            originalContent = content
+            originalContent = content,
+            oldMatch = oldMatch,
+            newMatch = newMatch
         )
     }
 
     private fun applyEdit(prep: PreparedEdit): EditResult {
         // Perform replacement (single occurrence)
-        val newContent = prep.originalContent.replaceFirst(prep.edit.oldString, prep.edit.newString)
+        val newContent = prep.originalContent.replaceFirst(prep.oldMatch, prep.newMatch)
 
         // Write updated content
         Files.writeString(prep.path, newContent)
@@ -278,7 +286,10 @@ class MultiEditTool(
     private data class PreparedEdit(
         val edit: ParsedEdit,
         val path: java.nio.file.Path,
-        val originalContent: String
+        val originalContent: String,
+        // edit.oldString / edit.newString re-expressed in the file's line-ending convention.
+        val oldMatch: String,
+        val newMatch: String
     )
 
     private data class EditResult(

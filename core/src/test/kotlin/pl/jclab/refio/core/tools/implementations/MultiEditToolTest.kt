@@ -524,4 +524,37 @@ class MultiEditToolTest {
             assertTrue(itemRequired.contains("new_string"))
         }
     }
+
+    /**
+     * Same CRLF-vs-LF contract as code_editing: a CRLF file edited with an LF old_string (the only
+     * thing the model can emit, since read_file normalizes to LF) must match and stay CRLF.
+     */
+    @org.junit.jupiter.api.Nested
+    inner class CrlfLineEndingTests {
+
+        @Test
+        fun `multi-line edit on a CRLF file matches an LF old_string and keeps CRLF`() = runBlocking {
+            java.nio.file.Files.writeString(
+                tempDir.resolve("Main.kt"),
+                "fun describe(x: String?): String {\r\n    return \"length=\" + x.length\r\n}\r\n"
+            )
+
+            val result = tool.execute(mapOf(
+                "edits" to listOf(
+                    mapOf(
+                        "path" to "Main.kt",
+                        "old_string" to "    return \"length=\" + x.length\n",
+                        "new_string" to "    return \"length=\" + (x?.length ?: 0)\n"
+                    )
+                )
+            ))
+
+            assertToolSuccess(result)
+            val content = readFileContent(tempDir, "Main.kt")
+            assertEquals(
+                "fun describe(x: String?): String {\r\n    return \"length=\" + (x?.length ?: 0)\r\n}\r\n",
+                content
+            )
+        }
+    }
 }

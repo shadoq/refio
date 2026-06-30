@@ -545,4 +545,56 @@ class CodeEditingToolTest {
             assertTrue(required.contains("new_string"))
         }
     }
+
+    /**
+     * On a Windows checkout (core.autocrlf) tracked files materialize as CRLF, but read_file always
+     * hands the model LF, so the model's old_string carries LF. The edit must still land - and the
+     * file must keep its CRLF - otherwise edits silently fail for any model on any CRLF file.
+     */
+    @Nested
+    inner class CrlfLineEndingTests {
+
+        @Test
+        fun `multi-line edit on a CRLF file matches an LF old_string and keeps CRLF`() = runBlocking {
+            // File on disk is CRLF (as a Windows working-tree checkout would be).
+            Files.writeString(
+                tempDir.resolve("Main.kt"),
+                "fun describe(x: String?): String {\r\n    return \"length=\" + x.length\r\n}\r\n"
+            )
+
+            // The model emits old_string/new_string with LF (read_file fed it LF), spanning a line break.
+            val result = tool.execute(mapOf(
+                "path" to "Main.kt",
+                "old_string" to "    return \"length=\" + x.length\n",
+                "new_string" to "    return \"length=\" + (x?.length ?: 0)\n"
+            ))
+
+            assertTrue(result.success, "edit should succeed despite the LF/CRLF mismatch")
+            val content = Files.readString(tempDir.resolve("Main.kt"))
+            assertTrue(content.contains("x?.length ?: 0"), "replacement should be applied")
+            assertTrue(content.contains("\r\n"), "file must keep CRLF line endings")
+            assertFalse(content.contains("\n\n"), "no stray LF-only lines introduced")
+            // Exactly the edited region changed; surrounding CRLF lines stay intact.
+            assertEquals(
+                "fun describe(x: String?): String {\r\n    return \"length=\" + (x?.length ?: 0)\r\n}\r\n",
+                content
+            )
+        }
+
+        @Test
+        fun `edit on an LF file with an LF old_string keeps LF`() = runBlocking {
+            Files.writeString(tempDir.resolve("Main.kt"), "line1\nline2\nline3\n")
+
+            val result = tool.execute(mapOf(
+                "path" to "Main.kt",
+                "old_string" to "line2\n",
+                "new_string" to "edited\n"
+            ))
+
+            assertTrue(result.success)
+            val content = Files.readString(tempDir.resolve("Main.kt"))
+            assertEquals("line1\nedited\nline3\n", content)
+            assertFalse(content.contains("\r\n"), "must not introduce CRLF on an LF file")
+        }
+    }
 }
