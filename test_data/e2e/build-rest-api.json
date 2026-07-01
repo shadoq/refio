@@ -1,0 +1,18 @@
+{
+  "id": "build-rest-api",
+  "mode": "AGENT",
+  "max_iterations": 40,
+  "fixture": "fixtures/build-rest-api",
+  "prompt_file": "prompts/build-rest-api.md",
+  "assert": {
+    "needles_in_file": [
+      { "path": "app.py", "regex": "/health" },
+      { "path": "app.py", "regex": "/todos" }
+    ],
+    "build_cmd": "python3 app.py >/dev/null 2>&1 & SV=$!; up=1; for i in $(seq 1 40); do curl -sf 127.0.0.1:8792/health >/dev/null 2>&1 && { up=0; break; }; sleep 0.25; done; [ $up -eq 0 ] || { kill $SV 2>/dev/null; exit 1; }; curl -sf -X POST -H 'Content-Type: application/json' -d '{\"title\":\"buy milk\"}' 127.0.0.1:8792/todos >/dev/null 2>&1 || { kill $SV 2>/dev/null; exit 1; }; curl -sf 127.0.0.1:8792/todos 2>/dev/null | grep -q 'buy milk' || { kill $SV 2>/dev/null; exit 1; }; kill $SV 2>/dev/null; exit 0",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": ["A working stdlib-only Python REST API in app.py on 127.0.0.1:8792: GET /health -> {status: ok}, GET /todos -> JSON array, POST /todos {title} -> 201 and the created item then appears in GET /todos."]
+  }
+}

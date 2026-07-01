@@ -21,11 +21,16 @@ import pl.jclab.refio.core.api.TurnRequest
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.config.ConfigPrintView
 import pl.jclab.refio.core.config.RunConfigOverrides
+import pl.jclab.refio.core.debug.SESSION_DEBUG_SCHEMA_VERSION
 import pl.jclab.refio.core.debug.SessionDebugOptions
+import pl.jclab.refio.core.debug.SessionDebugSnapshot
+import pl.jclab.refio.core.debug.StabilizationGate
 import pl.jclab.refio.core.models.api.ChatRequest
 import pl.jclab.refio.core.models.api.LLMParams
 import java.nio.file.Path
+import kotlin.io.path.exists
 import kotlin.io.path.readText
+import kotlin.io.path.writeText
 
 /**
  * Refio CLI entry point.
@@ -88,6 +93,42 @@ class RefioCommand : CliktCommand(name = "refio") {
         "--verbose", "-v",
         help = "Headless: stream live LLM tokens to stderr (on top of the always-on turn/tool progress). Helps tell whether a model is producing output or hanging."
     ).flag()
+    val gateDir by option(
+        "--gate",
+        help = "Aggregate an e2e gate out-dir (its results.jsonl) into a pass-rate verdict and exit 0 (green) / 1 (red). No LLM call, writes nothing."
+    ).path(mustExist = true, canBeFile = false)
+    val gateBaseline by option(
+        "--gate-baseline",
+        help = "Baseline pass-rate [0..1] the gate must not regress below (used with --gate)."
+    ).double()
+    val gateMinPassRate by option(
+        "--gate-min-pass-rate",
+        help = "Absolute pass-rate floor [0..1] every scenario must clear. Default 1.0 for the single-gate path; with --gate-baseline-file the floor is off (0.0) by default so the per-scenario baseline governs."
+    ).double()
+    val gateTolerance by option(
+        "--gate-tolerance",
+        help = "Allowed pass-rate drop vs --gate-baseline before the gate turns red (default 0.0)."
+    ).double().default(0.0)
+    val gateBaselineFile by option(
+        "--gate-baseline-file",
+        help = "Per-scenario baseline JSON ({\"scenario\": passRate}). When set, each scenario is checked against its own baseline instead of the single --gate-baseline."
+    ).path(mustExist = true, canBeDir = false)
+    val gateWriteBaseline by option(
+        "--gate-write-baseline",
+        help = "Write the current per-scenario pass-rates to this file as a baseline snapshot and exit (used with --gate). No red/green check."
+    ).path()
+    val gateHistory by option(
+        "--gate-history",
+        help = "Append this gate run's summary (per-scenario pass-rates) as one line to an e2e-history.jsonl, attributed to --gate-commit. Used with --gate."
+    ).path()
+    val gateCommit by option(
+        "--gate-commit",
+        help = "Commit SHA to attribute a --gate-history entry to (default: env GATE_COMMIT, else 'unknown')."
+    )
+    val gateTrend by option(
+        "--gate-trend",
+        help = "Read an e2e-history.jsonl and print a per-scenario pass-rate trend to stdout, then exit. No results dir or LLM needed."
+    ).path(mustExist = true, canBeDir = false)
 
     override fun run() {
         // Parse run-scope config overrides up front so a bad key/value fails loud (non-zero exit)
@@ -110,6 +151,16 @@ class RefioCommand : CliktCommand(name = "refio") {
             return
         }
 
+        gateTrend?.let { history ->
+            println(StabilizationGate.renderTrend(StabilizationGate.parseHistory(history.readText())))
+            return
+        }
+
+        gateDir?.let { dir ->
+            runGate(dir, gateBaseline, gateMinPassRate, gateTolerance, gateBaselineFile, gateWriteBaseline, gateHistory, gateCommit)
+            return
+        }
+
         val autoApproveRegex = autoApprove?.let {
             try { Regex(it) } catch (e: Exception) { throw UsageError("--auto-approve is not a valid regex: ${e.message}") }
         }
@@ -120,9 +171,9 @@ class RefioCommand : CliktCommand(name = "refio") {
         // toggle (and must stay user-toggleable), so we only fold it into the overrides for the
         // headless / multi-agent paths, where it must reach the egress gate via config.
         if (headless && multiAgent != null) {
-            runMultiAgent(withNoEgress(effectiveOverrides, noEgress))
+            runMultiAgent(withSelectedModel(withNoEgress(effectiveOverrides, noEgress), model))
         } else if (headless && effectivePrompt != null) {
-            runHeadless(withNoEgress(effectiveOverrides, noEgress), effectivePrompt, autoApproveRegex)
+            runHeadless(withSelectedModel(withNoEgress(effectiveOverrides, noEgress), model), effectivePrompt, autoApproveRegex)
         } else if (headless) {
             echo("Error: --headless requires --prompt, --prompt-file, or --multi-agent <file>", err = true)
             throw ProgramResult(HeadlessExit.FAILURE)
@@ -146,11 +197,16 @@ class RefioCommand : CliktCommand(name = "refio") {
                 echo("Refio Multi-Agent — project: ${project.toAbsolutePath()}", err = true)
                 echo("Session: ${definition.name} (${definition.agents.size} agents)", err = true)
 
+                // Split the combined "provider/model" (e.g. "ollama/qwen3.5:9b") like the single-turn
+                // headless path does; passing it whole left the provider unset, so the turn resolved
+                // it as "openrouter/ollama/qwen3.5:9b" — an invalid model id that failed every agent.
+                val (maProvider, maModel) = splitProviderModel(model)
                 val result = router.multiAgentRouter.launchMultiAgentSession(
                     MultiAgentSessionRequest(
                         name = definition.name,
                         yamlDefinition = yamlContent,
-                        model = model
+                        model = maModel,
+                        provider = maProvider
                     )
                 )
 
@@ -170,6 +226,59 @@ class RefioCommand : CliktCommand(name = "refio") {
 
                 // Summary
                 echo("Total: tokens=${result.totalTokens}, cost=$${String.format("%.4f", result.totalCostUsd)}, duration=${result.durationMs}ms", err = true)
+
+                // Emit a run.json so the e2e harness can assert on a multi-agent run the same way it
+                // does a single turn (status gate, file needles, build) plus agent execution order.
+                // Unlike runHeadless there is no single task to export; the snapshot is synthesized
+                // from the per-agent session result, with agents sorted into real execution order.
+                if (outputFormat == "json") {
+                    val orderedAgents = result.agents.sortedBy { it.startedAt ?: Long.MAX_VALUE }
+                    val allOk = result.agents.all { it.success == true }
+                    val snapshot = SessionDebugSnapshot(
+                        schemaVersion = SESSION_DEBUG_SCHEMA_VERSION,
+                        run = SessionDebugSnapshot.RunInfo(
+                            debugLevel = debugLevel.uppercase(),
+                            durationMs = result.durationMs,
+                            startedAt = result.createdAt,
+                            endedAt = result.completedAt,
+                        ),
+                        session = SessionDebugSnapshot.SessionInfo(
+                            id = result.sessionId, name = result.name,
+                            mode = "MULTI_AGENT", executionMode = "AUTO",
+                            model = model, provider = null,
+                            status = if (allOk) "SUCCESS" else "FAILED",
+                            tokensIn = 0, tokensOut = 0, costUsd = result.totalCostUsd,
+                        ),
+                        metrics = SessionDebugSnapshot.Metrics(
+                            durationMs = result.durationMs, tokensIn = 0, tokensOut = 0,
+                            costUsd = result.totalCostUsd, apiCallCount = 0, toolCallCount = 0,
+                            contextOverflow = false,
+                        ),
+                        finalOutput = orderedAgents.joinToString("\n\n") {
+                            "--- ${it.agentName} ---\n${it.response ?: ""}"
+                        }.take(8000),
+                        subtasks = emptyList(), conversation = emptyList(), apiLogs = emptyList(),
+                        errors = orderedAgents.mapNotNull { a -> a.error?.let { "agent ${a.agentName}: $it" } },
+                        warnings = emptyList(),
+                        multiAgent = SessionDebugSnapshot.MultiAgentInfo(
+                            agents = orderedAgents.map {
+                                SessionDebugSnapshot.AgentRunInfo(
+                                    agentName = it.agentName, status = it.status,
+                                    success = it.success == true,
+                                    startedAt = it.startedAt, completedAt = it.completedAt,
+                                )
+                            }
+                        ),
+                    )
+                    val json = router.sessionDebugExporter.toJson(snapshot)
+                    val target = outputFile
+                    if (target != null) {
+                        target.toFile().writeText(json)
+                        echo("Wrote run.json -> ${target.toAbsolutePath()} (${json.length} bytes)", err = true)
+                    } else {
+                        println(json)
+                    }
+                }
 
                 // Any agent that did not succeed makes the run a failure for exit-code purposes.
                 if (result.agents.any { it.success != true }) exitCode = HeadlessExit.FAILURE
@@ -203,6 +312,82 @@ class RefioCommand : CliktCommand(name = "refio") {
             } finally {
                 bootstrap.shutdown()
             }
+        }
+    }
+
+    /**
+     * Aggregate an e2e gate out-dir into a pass-rate verdict and exit. Reads the runner's
+     * results.jsonl (written when E2E_OUT_DIR is set), prints a human summary to stderr and the
+     * machine-readable report to stdout, and exits red (FAILURE) when the pass-rate misses the floor
+     * or regresses below the baseline. No LLM call.
+     */
+    private fun runGate(
+        dir: Path,
+        baseline: Double?,
+        minPassRate: Double?,
+        tolerance: Double,
+        baselineFile: Path?,
+        writeBaseline: Path?,
+        history: Path?,
+        commit: String?,
+    ) {
+        val resultsFile = dir.resolve("results.jsonl")
+        if (!resultsFile.exists()) {
+            echo("Error: $resultsFile not found (run e2e-run.sh with E2E_OUT_DIR=$dir first)", err = true)
+            throw ProgramResult(HeadlessExit.FAILURE)
+        }
+        val report = StabilizationGate.aggregate(StabilizationGate.parseResults(resultsFile.readText()))
+
+        // Snapshot the current per-scenario pass-rates as a baseline and exit (no verdict).
+        if (writeBaseline != null) {
+            writeBaseline.writeText(StabilizationGate.baselineJson(StabilizationGate.baselineFrom(report)))
+            echo("gate: wrote per-scenario baseline (${report.byScenario.size} scenarios) to $writeBaseline", err = true)
+            return
+        }
+
+        // Record this run in the commit-attributed history (every verdict run, green or red).
+        if (history != null) {
+            val attributedCommit = commit ?: System.getenv("GATE_COMMIT") ?: "unknown"
+            val entry = StabilizationGate.historyEntry(report, attributedCommit, System.currentTimeMillis())
+            history.toFile().appendText(StabilizationGate.historyEntryJson(entry) + "\n")
+            echo("gate: appended history entry for $attributedCommit to $history", err = true)
+        }
+
+        echo("gate: ${report.passed}/${report.total} passed (${"%.1f".format(report.passRate * 100)}%)", err = true)
+        if (report.byFailureMode.isNotEmpty()) {
+            echo("  failures by mode: ${report.byFailureMode}", err = true)
+        }
+
+        // Per-scenario baseline: hold each scenario to its own entry, red if any scenario regresses.
+        if (baselineFile != null) {
+            val baselines = StabilizationGate.parseBaseline(baselineFile.readText())
+            // Per-scenario mode: the baseline governs, so the absolute floor is off (0.0) unless set.
+            val decision = StabilizationGate.decidePerScenario(report, baselines, minPassRate ?: 0.0, tolerance)
+            decision.scenarios.forEach { s ->
+                val deltaStr = s.delta?.let { " (${"%+.1f".format(it * 100)} pts vs baseline)" } ?: ""
+                echo(
+                    "  ${if (s.green) "GREEN" else "RED"} ${s.scenario}: ${"%.1f".format(s.passRate * 100)}%$deltaStr - ${s.reason}",
+                    err = true
+                )
+            }
+            echo("  ${if (decision.green) "GREEN" else "RED"} overall", err = true)
+            println(StabilizationGate.reportJson(report, decision))
+            if (!decision.green) {
+                throw ProgramResult(HeadlessExit.FAILURE)
+            }
+            return
+        }
+
+        // Single global baseline (original behaviour): the floor defaults to 1.0.
+        val decision = StabilizationGate.decide(report, baseline, minPassRate ?: 1.0, tolerance)
+        if (report.byScenario.size > 1) {
+            report.byScenario.forEach { (s, rate) -> echo("  scenario $s: ${"%.1f".format(rate * 100)}%", err = true) }
+        }
+        decision.delta?.let { echo("  delta vs baseline: ${"%+.1f".format(it * 100)} pts", err = true) }
+        echo("  ${if (decision.green) "GREEN" else "RED"} - ${decision.reason}", err = true)
+        println(StabilizationGate.reportJson(report, decision))
+        if (!decision.green) {
+            throw ProgramResult(HeadlessExit.FAILURE)
         }
     }
 

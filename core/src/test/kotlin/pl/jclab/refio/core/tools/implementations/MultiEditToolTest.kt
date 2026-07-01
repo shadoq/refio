@@ -393,12 +393,13 @@ class MultiEditToolTest {
     inner class AtomicBehaviorTests {
 
         @Test
-        fun `should fail all edits when one edit fails`() = runBlocking {
+        fun `a failing edit leaves every file untouched`() = runBlocking {
             // Given
             Files.writeString(tempDir.resolve("file1.txt"), "old content 1")
             Files.writeString(tempDir.resolve("file2.txt"), "old content 2")
 
-            // When - first edit succeeds, second fails (file not found), third should not apply
+            // When - the first edit would succeed but the second targets a missing file, so the
+            // whole batch must fail without half-writing the first file.
             val result = tool.execute(mapOf(
                 "edits" to listOf(
                     mapOf("path" to "file1.txt", "old_string" to "old", "new_string" to "new"),
@@ -407,10 +408,10 @@ class MultiEditToolTest {
                 )
             ))
 
-            // Then
+            // Then - error AND no file partially written (atomic for logical failures).
             assertToolError(result)
-            // First file should still be edited (edits are applied in sequence)
-            // but the operation is marked as failed
+            assertEquals("old content 1", readFileContent(tempDir, "file1.txt"))
+            assertEquals("old content 2", readFileContent(tempDir, "file2.txt"))
         }
 
         @Test
@@ -522,6 +523,39 @@ class MultiEditToolTest {
             assertTrue(itemRequired.contains("path"))
             assertTrue(itemRequired.contains("old_string"))
             assertTrue(itemRequired.contains("new_string"))
+        }
+    }
+
+    /**
+     * Same CRLF-vs-LF contract as code_editing: a CRLF file edited with an LF old_string (the only
+     * thing the model can emit, since read_file normalizes to LF) must match and stay CRLF.
+     */
+    @org.junit.jupiter.api.Nested
+    inner class CrlfLineEndingTests {
+
+        @Test
+        fun `multi-line edit on a CRLF file matches an LF old_string and keeps CRLF`() = runBlocking {
+            java.nio.file.Files.writeString(
+                tempDir.resolve("Main.kt"),
+                "fun describe(x: String?): String {\r\n    return \"length=\" + x.length\r\n}\r\n"
+            )
+
+            val result = tool.execute(mapOf(
+                "edits" to listOf(
+                    mapOf(
+                        "path" to "Main.kt",
+                        "old_string" to "    return \"length=\" + x.length\n",
+                        "new_string" to "    return \"length=\" + (x?.length ?: 0)\n"
+                    )
+                )
+            ))
+
+            assertToolSuccess(result)
+            val content = readFileContent(tempDir, "Main.kt")
+            assertEquals(
+                "fun describe(x: String?): String {\r\n    return \"length=\" + (x?.length ?: 0)\r\n}\r\n",
+                content
+            )
         }
     }
 }

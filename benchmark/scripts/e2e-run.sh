@@ -24,7 +24,12 @@
 #   e2e-run.sh [opts] --all                   # run every scenario under test_data/e2e/
 #   e2e-run.sh [opts] <id|scenario.json> ...  # run selected scenarios (by id OR by file path)
 #     opts: [--cli <path>] [--max-cost <usd>] [--model <provider/model>] [--ollama-host <h>]
-#           [--ollama-ctx <n>] [--config k=v]... [--keep]
+#           [--ollama-ctx <n>] [--config k=v]... [--auto-approve <regex>] [--no-auto-approve] [--keep]
+#
+# --auto-approve <regex> overrides which headless command-tool calls are approved (default: common
+#   build/test/inspect commands); --no-auto-approve restores raw "reject every ASK command" (a model
+#   that tries to compile/test then fails the turn). The write/edit tools are not ASK in AGENT mode,
+#   so they are unaffected either way.
 #
 # --ollama-host points every scenario at a different Ollama endpoint for this run (sugar for
 #   --config providers.ollama.ollama_endpoint=...). Accepts a host ("box"), host:port
@@ -34,6 +39,13 @@
 #
 # Scenario selection: a positional arg is resolved as (1) an existing file path, else (2)
 # test_data/e2e/<arg>.json, else (3) any scenario whose `.id` equals <arg>. `--all` runs them all.
+#
+# Stabilization gate (docs/0069): set E2E_OUT_DIR=<dir> to persist each run as
+# <dir>/<id>__<model>__<run>.run.json and append a verdict record to <dir>/results.jsonl (fields:
+# scenario, model, run, verdict, reasons[], failure_mode, status, costUsd, tokensOut). The runner is
+# the only place that knows verdict+reasons+build_exit+status together (run.json has no verdict field).
+# E2E_RUN_INDEX=<n> tags the run number (default 1; an N-runs driver sets it per iteration).
+# With E2E_OUT_DIR unset (the default) nothing is persisted and behaviour is unchanged.
 #
 set -euo pipefail
 
@@ -55,6 +67,15 @@ LIST=0
 ALL=0
 SCENARIOS=()
 CONFIG_OVERRIDES=()
+# Headless auto-approval for verification commands. Without it, run_terminal_command (a
+# PermissionLevel.ASK tool) is rejected in headless (no human, no approver) → the turn ends FAILED
+# even though the edit already landed — a spurious failure for any model that tries to compile/test
+# its own work. This default approves common build/test/inspect commands (the cooperative-user
+# simulation a real IDE provides); it gates ONLY ASK command-tools (write/edit tools are not ASK in
+# AGENT mode, so they are unaffected), the project is a throwaway temp dir, and CommandDenylist still
+# guards destructive commands AFTER approval. Override with --auto-approve <regex> or disable with
+# --no-auto-approve.
+AUTO_APPROVE='\b(kotlinc|gradlew|gradle|javac|java|python3?|pip3?|node|npm|npx|pnpm|yarn|pytest|mvn|cargo|go|make|cmake|ls|cat|pwd|echo|head|tail|sed|awk|grep|rg|find|wc|diff|test|true|cd|sh|bash|env|export)\b'
 
 die() { echo "ERROR: $*" >&2; exit 2; }
 
@@ -99,6 +120,8 @@ while [[ $# -gt 0 ]]; do
         --ollama-host) OLLAMA_HOST="$2"; shift 2 ;;
         --ollama-ctx)  OLLAMA_CTX="$2"; shift 2 ;;
         --config)    CONFIG_OVERRIDES+=("$2"); shift 2 ;;
+        --auto-approve)    AUTO_APPROVE="$2"; shift 2 ;;
+        --no-auto-approve) AUTO_APPROVE=""; shift ;;
         --keep)      KEEP=1; shift ;;
         --self-test) SELF_TEST=1; shift ;;
         --list)      LIST=1; shift ;;
@@ -133,7 +156,7 @@ require_cmd jq
 # SOFT failures only print a WARN and never change the return code.
 # ---------------------------------------------------------------------------
 assert_run() {
-    local scenario="$1" run_json="$2" project_dir="$3" build_exit="$4"
+    local scenario="$1" run_json="$2" project_dir="$3" build_exit="$4" smoke_exit="${5:-0}"
     local hard_fail=0 reasons=()
 
     # HARD 0 — the agent run itself must have SUCCEEDED. The headless run.json carries the final
@@ -211,12 +234,73 @@ assert_run() {
         done
     fi
 
+    # HARD 1d — tool_invoked: a named tool MUST (or, with absent:true, must NOT) have been called.
+    # Each entry is {name, args_regex?, absent?}. Name presence is read from the always-present
+    # conversation[].toolCalls[] (bare names). With args_regex it matches the raw arguments JSON in
+    # conversation[].toolCallDetails[] (additive run.json field) — so a scenario can assert not just
+    # "a subagent was used" but "the code-reviewer subagent was used". This turns the soft, ordering
+    # tool_order hint into a hard "this tool had to run" gate (e.g. delegation scenarios).
+    local ti_json ti_count tname trx tabs tc
+    ti_json="$(jq -c '.assert.tool_invoked // []' "$scenario")"
+    ti_count="$(jq 'length' <<<"$ti_json")"
+    for (( n=0; n<ti_count; n++ )); do
+        tname="$(jq -r ".[$n].name // empty" <<<"$ti_json")"
+        trx="$(jq -r ".[$n].args_regex // empty" <<<"$ti_json")"
+        tabs="$(jq -r ".[$n].absent // false" <<<"$ti_json")"
+        [[ -n "$tname" ]] || continue
+        if [[ -n "$trx" ]]; then
+            tc="$(jq --arg n "$tname" --arg rx "$trx" \
+                '[.conversation[].toolCallDetails[]? | select(.name==$n and (.arguments|test($rx)))] | length' \
+                "$run_json" 2>/dev/null || echo 0)"
+        else
+            tc="$(jq --arg n "$tname" \
+                '[.conversation[].toolCalls[]? | select(.==$n)] | length' \
+                "$run_json" 2>/dev/null || echo 0)"
+        fi
+        if [[ "$tabs" == "true" ]]; then
+            (( tc == 0 )) || { hard_fail=1; reasons+=("tool ${tname} was called ${tc}×, want absent"); }
+        else
+            (( tc >= 1 )) || { hard_fail=1; reasons+=("tool ${tname} not invoked${trx:+ with args /${trx}/}"); }
+        fi
+    done
+
+    # HARD 1e — agent_order: for a multi-agent run, the listed agent names must appear in this relative
+    # order in the real execution sequence (run.json .multiAgent.agents[], already sorted by start
+    # time). A subsequence check (others may interleave) that proves depends_on was respected. HARD.
+    local ao_count
+    ao_count="$(jq '(.assert.agent_order // []) | length' "$scenario")"
+    if (( ao_count > 0 )); then
+        local -a aexp=() aact=()
+        while IFS= read -r line; do [[ -n "$line" ]] && aexp+=("$line"); done \
+            < <(jq -r '.assert.agent_order[]? // empty' "$scenario")
+        while IFS= read -r line; do [[ -n "$line" ]] && aact+=("$line"); done \
+            < <(jq -r '.multiAgent.agents[]?.agentName // empty' "$run_json" 2>/dev/null || true)
+        local ai=0 at
+        for at in "${aact[@]}"; do
+            [[ $ai -lt ${#aexp[@]} && "$at" == "${aexp[$ai]}" ]] && ai=$((ai+1))
+        done
+        if (( ai < ${#aexp[@]} )); then
+            hard_fail=1; reasons+=("agent_order not satisfied: expected subsequence [${aexp[*]}], saw [${aact[*]:-none}]")
+        fi
+    fi
+
     # HARD 2 — build/compile of the mutated project succeeded (proves it actually works).
     local want_build
     want_build="$(jq -r '.assert.build_cmd // empty' "$scenario")"
     if [[ -n "$want_build" ]]; then
         if [[ "$build_exit" != "0" ]]; then
             hard_fail=1; reasons+=("build_cmd exit=${build_exit}")
+        fi
+    fi
+
+    # HARD 2b — browser-smoke (docs/0071 §8.5 layer 2): when `smoke` is declared, the headless-Chromium
+    # check must pass (exit 0). exit 2 = could not run (no node/playwright/browser) — still a HARD fail
+    # with an install hint, never a silent pass (a verifier you cannot run cannot certify success).
+    if [[ "$(jq -r 'has("smoke")' "$scenario")" == "true" ]]; then
+        if [[ "$smoke_exit" == "2" ]]; then
+            hard_fail=1; reasons+=("browser-smoke unavailable (install: npm i -D playwright && npx playwright install chromium)")
+        elif [[ "$smoke_exit" != "0" ]]; then
+            hard_fail=1; reasons+=("browser-smoke failed (see smoke.log)")
         fi
     fi
 
@@ -259,18 +343,113 @@ assert_run() {
     return 1
 }
 
+# Map a run to one failure-mode bucket for the gate's classification (docs/0069). PASS -> none.
+# Priority: silent context overflow first (most actionable), then non-SUCCESS run status, then -
+# for a run that SUCCEEDED but missed its assertions - build vs output. Robust to a missing run.json.
+classify_failure_mode() {
+    local verdict="$1" run_json="$2"
+    if [[ "$verdict" == PASS* ]]; then echo "none"; return 0; fi
+    local overflow="false" status="UNKNOWN" marker=""
+    if [[ -f "$run_json" ]]; then
+        overflow="$(jq -r '.metrics.contextOverflow // false' "$run_json" 2>/dev/null || echo false)"
+        status="$(jq -r '.session.status // "UNKNOWN"' "$run_json" 2>/dev/null || echo UNKNOWN)"
+        marker="$(jq -r '.metrics.failureMarker // empty' "$run_json" 2>/dev/null || echo "")"
+    fi
+    if [[ "$overflow" == "true" ]]; then echo "overflow"; return 0; fi
+    # A precise guardrail marker (docs/0069 P2) beats the coarse status mapping below.
+    case "$marker" in
+        LOOP_ABORTED)     echo "loop-aborted";     return 0 ;;
+        NOOP_WRITE_STALL) echo "noop-write-stall"; return 0 ;;
+    esac
+    case "$status" in
+        CANCELED)   echo "abort";      return 0 ;;
+        INCOMPLETE) echo "loop";       return 0 ;;
+        FAILED)     echo "agent-fail"; return 0 ;;
+        UNKNOWN)    echo "crash";      return 0 ;;
+    esac
+    case "$verdict" in
+        *"build_cmd exit"*) echo "build-fail" ;;
+        *)                  echo "wrong-output" ;;
+    esac
+    return 0
+}
+
+# Persist this run for the stabilization gate (docs/0069). No-op unless E2E_OUT_DIR is set, so default
+# runs are completely unchanged. Writes <out>/<id>__<model>__<run>.run.json plus one results.jsonl
+# record. Never aborts the caller (all failure paths swallowed) - the gate is observ-only.
+emit_result_record() {
+    [[ -n "${E2E_OUT_DIR:-}" ]] || return 0
+    local id="$1" verdict="$2" run_json="$3"
+    local run_idx="${E2E_RUN_INDEX:-1}"
+    [[ "$run_idx" =~ ^[0-9]+$ ]] || run_idx=1
+    run_idx=$((10#$run_idx))
+    local model_label="${MODEL:-default}"
+    local status="UNKNOWN" cost="0" tokens="0" fmode reasons_str vlabel="FAIL"
+    # Per-run benchmark stats (how the model + tools behaved this run), all derived from run.json.
+    # Additive: the Kotlin gate parser (GateRunRecord via Gson) ignores unknown fields, so enriching
+    # the record never breaks `cli --gate`; the aggregator (e2e-stats.sh) reads these back.
+    local mode="" provider="" tokens_in="0" iters="0" apicalls="0" duration="0"
+    local tools_json="{}" apierr_json="{}"
+    if [[ -f "$run_json" ]]; then
+        status="$(jq -r '.session.status // "UNKNOWN"' "$run_json" 2>/dev/null || echo UNKNOWN)"
+        cost="$(jq -r '.metrics.costUsd // 0' "$run_json" 2>/dev/null || echo 0)"
+        tokens="$(jq -r '.metrics.tokensOut // 0' "$run_json" 2>/dev/null || echo 0)"
+        mode="$(jq -r '.session.mode // ""' "$run_json" 2>/dev/null || echo "")"
+        provider="$(jq -r '.session.provider // ""' "$run_json" 2>/dev/null || echo "")"
+        tokens_in="$(jq -r '.metrics.tokensIn // 0' "$run_json" 2>/dev/null || echo 0)"
+        iters="$(jq -r '.metrics.toolCallCount // 0' "$run_json" 2>/dev/null || echo 0)"
+        apicalls="$(jq -r '.metrics.apiCallCount // 0' "$run_json" 2>/dev/null || echo 0)"
+        duration="$(jq -r '.metrics.durationMs // (.run.durationMs // 0)' "$run_json" 2>/dev/null || echo 0)"
+        # Tool-use histogram (tool name -> call count) across every message in the run.
+        tools_json="$(jq -c '[.conversation[]?.toolCalls[]?] | reduce .[] as $t ({}; .[$t] = ((.[$t]//0)+1))' "$run_json" 2>/dev/null || echo '{}')"
+        [[ -n "$tools_json" && "$tools_json" != "null" ]] || tools_json="{}"
+        # API-error histogram (errorType -> count) for provider/tool reliability.
+        apierr_json="$(jq -c '[.apiLogs[]?.errorType | select(. != null and . != "")] | reduce .[] as $e ({}; .[$e] = ((.[$e]//0)+1))' "$run_json" 2>/dev/null || echo '{}')"
+        [[ -n "$apierr_json" && "$apierr_json" != "null" ]] || apierr_json="{}"
+    fi
+    fmode="$(classify_failure_mode "$verdict" "$run_json")"
+    reasons_str="$(sed -n 's/^FAIL (\(.*\))$/\1/p' <<<"$verdict")"
+    [[ "$verdict" == PASS* ]] && vlabel="PASS"
+    mkdir -p "$E2E_OUT_DIR"
+    if [[ -f "$run_json" ]]; then
+        cp "$run_json" "$E2E_OUT_DIR/${id}__${model_label//\//-}__${run_idx}.run.json" 2>/dev/null || true
+    fi
+    jq -cn \
+        --arg scenario "$id" --arg model "$model_label" --argjson run "$run_idx" \
+        --arg verdict "$vlabel" --arg fmode "$fmode" --arg status "$status" \
+        --argjson cost "$cost" --argjson tokens "$tokens" --arg reasons "$reasons_str" \
+        --arg mode "$mode" --arg provider "$provider" \
+        --argjson tokensIn "$tokens_in" --argjson iterations "$iters" \
+        --argjson apiCalls "$apicalls" --argjson durationMs "$duration" \
+        --argjson tools "$tools_json" --argjson apiErrors "$apierr_json" \
+        '{scenario:$scenario, model:$model, run:$run, verdict:$verdict, failure_mode:$fmode,
+          status:$status, costUsd:$cost, tokensOut:$tokens,
+          mode:$mode, provider:$provider, tokensIn:$tokensIn, iterations:$iterations,
+          apiCalls:$apiCalls, durationMs:$durationMs, tools:$tools, apiErrors:$apiErrors,
+          reasons: ($reasons | if . == "" then [] else split("; ") end)}' \
+        >>"$E2E_OUT_DIR/results.jsonl" 2>/dev/null || true
+}
+
 run_scenario() {
     local scenario="$1"
     [[ -f "$scenario" ]] || die "scenario not found: $scenario"
-    local sdir id mode prompt_file fixture build_cmd max_iter
+    local sdir id mode prompt_file fixture build_cmd max_iter multi_agent_rel multi_agent_file=""
     sdir="$(cd "$(dirname "$scenario")" && pwd)"
     id="$(jq -r '.id' "$scenario")"
     mode="$(jq -r '.mode // "AGENT"' "$scenario")"
     max_iter="$(jq -r '.max_iterations // 20' "$scenario")"
-    prompt_file="$sdir/$(jq -r '.prompt_file' "$scenario")"
     fixture="$sdir/$(jq -r '.fixture' "$scenario")"
     build_cmd="$(jq -r '.assert.build_cmd // empty' "$scenario")"
-    [[ -f "$prompt_file" ]] || die "prompt_file not found: $prompt_file"
+    # A scenario drives the turn with either a prompt_file (single agent) or a multi_agent YAML.
+    multi_agent_rel="$(jq -r '.multi_agent // empty' "$scenario")"
+    prompt_file="$(jq -r '.prompt_file // empty' "$scenario")"
+    [[ -n "$prompt_file" ]] && prompt_file="$sdir/$prompt_file"
+    if [[ -n "$multi_agent_rel" ]]; then
+        multi_agent_file="$sdir/$multi_agent_rel"
+        [[ -f "$multi_agent_file" ]] || die "multi_agent file not found: $multi_agent_file"
+    else
+        [[ -f "$prompt_file" ]] || die "prompt_file not found: $prompt_file"
+    fi
     [[ -d "$fixture" ]] || die "fixture dir not found: $fixture"
     [[ -x "$CLI" ]] || die "CLI not found/executable: $CLI (build it: ./gradlew :cli:installDist)"
 
@@ -278,15 +457,61 @@ run_scenario() {
     cp -R "$fixture/." "$work/"
     local run_json="$work/run.json"
 
+    # Optional fixture server: serve a directory from inside the temp project over loopback so the
+    # agent can drive http_request/fetch_webpage against a deterministic local endpoint instead of the
+    # flaky public internet. The prompt's {{FIXTURE_SERVER}} placeholder is replaced with the base URL,
+    # and the loopback opt-in (UrlPolicy / security.allow_loopback) is enabled for this run only.
+    local fs_dir fs_port fs_cmd server_pid="" effective_prompt="$prompt_file"
+    fs_dir="$(jq -r '.fixture_server.dir // empty' "$scenario")"
+    fs_port="$(jq -r '.fixture_server.port // empty' "$scenario")"
+    fs_cmd="$(jq -r '.fixture_server.cmd // empty' "$scenario")"
+    if [[ -n "$fs_dir" && -n "$fs_port" ]]; then
+        local py; py="$(command -v python3 || command -v python || true)"
+        [[ -n "$py" ]] || die "fixture_server needs python3/python on PATH"
+        if [[ -n "$fs_cmd" ]]; then
+            # Custom server command (e.g. an intentionally-vulnerable CTF fixture) instead of the
+            # stdlib static file server. {{PORT}} and {{DIR}} (the absolute served dir) are
+            # substituted; the command should `exec` its server so the backgrounded PID is the
+            # server itself and the kill below is reliable.
+            local rendered="${fs_cmd//\{\{PORT\}\}/$fs_port}"
+            rendered="${rendered//\{\{DIR\}\}/$work/$fs_dir}"
+            bash -c "$rendered" >"$work/server.log" 2>&1 &
+        else
+            # Run python directly (not in a subshell) so $! is the server's own PID and the kill below
+            # is reliable; --directory takes the absolute served path so no `cd` is needed.
+            "$py" -m http.server "$fs_port" --bind 127.0.0.1 --directory "$work/$fs_dir" \
+                >"$work/server.log" 2>&1 &
+        fi
+        server_pid=$!
+        local ready=0 i
+        for (( i=0; i<50; i++ )); do
+            (exec 3<>"/dev/tcp/127.0.0.1/$fs_port") 2>/dev/null && { exec 3>&- 3<&-; ready=1; break; }
+            sleep 0.1
+        done
+        [[ $ready -eq 1 ]] || echo "  WARN fixture_server not ready on 127.0.0.1:$fs_port after 5s" >&2
+        effective_prompt="$work/.e2e-prompt.md"
+        sed "s|{{FIXTURE_SERVER}}|http://127.0.0.1:$fs_port|g" "$prompt_file" > "$effective_prompt"
+    fi
+
     local -a cli_args=(
         --headless -p "$work" --mode "$mode"
-        --prompt-file "$prompt_file"
         --output json --output-file "$run_json"
         --debug-level standard            # docs/0061: tool names live in run.json.conversation[]
         --config "agent.max_iterations=$max_iter"
         --max-cost "$MAX_COST"
     )
+    # Single-agent scenarios pass --prompt-file; multi-agent ones pass --multi-agent <yaml> instead.
+    if [[ -n "$multi_agent_file" ]]; then
+        cli_args+=(--multi-agent "$multi_agent_file")
+    else
+        cli_args+=(--prompt-file "$effective_prompt")
+    fi
+    [[ -n "$fs_dir" && -n "$fs_port" ]] && cli_args+=(--config "security.allow_loopback=true")
     [[ -n "$MODEL" ]] && cli_args+=(--model "$MODEL")
+    # Approve verification commands so a model that compiles/tests its own edit is not failed by a
+    # headless rejection (see AUTO_APPROVE above). Empty (via --no-auto-approve) restores the raw
+    # "reject every ASK command" behaviour.
+    [[ -n "$AUTO_APPROVE" ]] && cli_args+=(--auto-approve "$AUTO_APPROVE")
     # --ollama-host/--ollama-ctx sugar first, then explicit --config (so a raw --config wins).
     local c
     if [[ ${#OLLAMA_SUGAR[@]} -gt 0 ]]; then
@@ -299,8 +524,15 @@ run_scenario() {
     echo "▶ $id (mode=$mode, max_cost=$MAX_COST) → $work" >&2
     local cli_exit=0
     "$CLI" "${cli_args[@]}" >&2 || cli_exit=$?
+    # The server is only needed during the turn; stop it before build/assert (and before any early
+    # return below) so no python process is left running.
+    [[ -n "$server_pid" ]] && { kill "$server_pid" 2>/dev/null || true; }
 
-    [[ -f "$run_json" ]] || { echo "| $id | FAIL (no run.json produced) | - |"; return 1; }
+    if [[ ! -f "$run_json" ]]; then
+        echo "| $id | FAIL (no run.json produced) | - |"
+        emit_result_record "$id" "FAIL (no run.json produced)" "$run_json"
+        return 1
+    fi
 
     # A non-zero CLI exit is a HARD failure: the headless turn aborted (e.g. cost ceiling, crash). It
     # must never be papered over by deterministic assertions that the starting fixture happens to
@@ -311,6 +543,7 @@ run_scenario() {
         st="$(jq -r '.session.status // "?"' "$run_json")"
         co="$(jq -r '.metrics.costUsd // 0' "$run_json")"
         echo "| $id | FAIL (headless CLI exit=$cli_exit) | status=$st cli_exit=$cli_exit cost=\$$co |"
+        emit_result_record "$id" "FAIL (headless CLI exit=$cli_exit)" "$run_json"
         [[ $KEEP -eq 1 ]] || rm -rf "$work"
         return 1
     fi
@@ -320,12 +553,25 @@ run_scenario() {
         ( cd "$work" && eval "$build_cmd" ) >"$work/build.log" 2>&1 && build_exit=0 || build_exit=$?
     fi
 
+    # Optional browser-smoke (docs/0071 §8.5): render the produced artifact in headless Chromium and
+    # check it actually runs. Needs node + playwright; exit 2 (unavailable) is surfaced as a HARD fail
+    # by assert_run, not papered over.
+    local smoke_exit=0
+    if [[ "$(jq -r 'has("smoke")' "$scenario")" == "true" ]]; then
+        if command -v node >/dev/null 2>&1; then
+            node "$SCRIPT_DIR/browser-smoke.mjs" "$scenario" "$work" >"$work/smoke.log" 2>&1 && smoke_exit=0 || smoke_exit=$?
+        else
+            echo "node not found on PATH" >"$work/smoke.log"; smoke_exit=2
+        fi
+    fi
+
     local verdict status tokens cost
-    verdict="$(assert_run "$scenario" "$run_json" "$work" "$build_exit" || true)"
+    verdict="$(assert_run "$scenario" "$run_json" "$work" "$build_exit" "$smoke_exit" || true)"
     status="$(jq -r '.session.status // "?"' "$run_json")"
     cost="$(jq -r '.metrics.costUsd // 0' "$run_json")"
     echo "| $id | $verdict | status=$status build_exit=$build_exit cost=\$$cost |"
 
+    emit_result_record "$id" "$verdict" "$run_json"
     [[ $KEEP -eq 1 ]] || rm -rf "$work"
     [[ "$verdict" == PASS* ]]
 }
@@ -486,6 +732,128 @@ JSON
     v="$(assert_run "$uscen" "$sample/sample-run.pass.json" "$uproj" 0 2>/dev/null || true)"
     echo "  case unchanged-viol -> $v" >&2
     [[ "$v" == FAIL* ]] || { echo "  !! file_unchanged must FAIL when modified" >&2; fails=1; }
+
+    # Case 14: tool_invoked — a named tool must (name) / must with given args (args_regex) / must not
+    # (absent) have been called. Uses the subagent sample whose conversation carries toolCallDetails.
+    local subrun="$sample/sample-run.subagent.json"
+    local tscen="$proj/tool-invoked.scenario.json"
+    cat > "$tscen" <<'JSON'
+{ "id":"tool-invoked", "assert": { "tool_invoked": [ { "name":"invoke_subagent" } ] } }
+JSON
+    v="$(assert_run "$tscen" "$subrun" "$proj" 0 2>/dev/null || true)"
+    echo "  case tool-by-name   -> $v" >&2
+    [[ "$v" == PASS* ]] || { echo "  !! tool_invoked by name must PASS when the tool ran" >&2; fails=1; }
+
+    cat > "$tscen" <<'JSON'
+{ "id":"tool-invoked", "assert": { "tool_invoked": [ { "name":"invoke_subagent", "args_regex":"code-reviewer" } ] } }
+JSON
+    v="$(assert_run "$tscen" "$subrun" "$proj" 0 2>/dev/null || true)"
+    echo "  case tool-args-ok   -> $v" >&2
+    [[ "$v" == PASS* ]] || { echo "  !! tool_invoked args_regex must PASS when the arguments match" >&2; fails=1; }
+
+    cat > "$tscen" <<'JSON'
+{ "id":"tool-invoked", "assert": { "tool_invoked": [ { "name":"invoke_subagent", "args_regex":"security-engineer" } ] } }
+JSON
+    v="$(assert_run "$tscen" "$subrun" "$proj" 0 2>/dev/null || true)"
+    echo "  case tool-args-miss -> $v" >&2
+    [[ "$v" == FAIL* ]] || { echo "  !! tool_invoked args_regex must FAIL when the wrong subagent ran" >&2; fails=1; }
+
+    cat > "$tscen" <<'JSON'
+{ "id":"tool-invoked", "assert": { "tool_invoked": [ { "name":"delegate_to_strong_model" } ] } }
+JSON
+    v="$(assert_run "$tscen" "$subrun" "$proj" 0 2>/dev/null || true)"
+    echo "  case tool-missing   -> $v" >&2
+    [[ "$v" == FAIL* ]] || { echo "  !! tool_invoked must FAIL when a required tool never ran" >&2; fails=1; }
+
+    cat > "$tscen" <<'JSON'
+{ "id":"tool-invoked", "assert": { "tool_invoked": [ { "name":"invoke_subagent", "absent":true } ] } }
+JSON
+    v="$(assert_run "$tscen" "$subrun" "$proj" 0 2>/dev/null || true)"
+    echo "  case tool-absent-vio-> $v" >&2
+    [[ "$v" == FAIL* ]] || { echo "  !! tool_invoked absent must FAIL when the tool was called" >&2; fails=1; }
+
+    # Case 15: agent_order — listed agents must appear in execution order in .multiAgent.agents[].
+    local marun="$sample/sample-run.multiagent.json"
+    local aoscen="$proj/agent-order.scenario.json"
+    cat > "$aoscen" <<'JSON'
+{ "id":"agent-order", "assert": { "agent_order": ["analyst","coder"] } }
+JSON
+    v="$(assert_run "$aoscen" "$marun" "$proj" 0 2>/dev/null || true)"
+    echo "  case agent-order-ok -> $v" >&2
+    [[ "$v" == PASS* ]] || { echo "  !! agent_order must PASS when the execution order matches" >&2; fails=1; }
+
+    cat > "$aoscen" <<'JSON'
+{ "id":"agent-order", "assert": { "agent_order": ["coder","analyst"] } }
+JSON
+    v="$(assert_run "$aoscen" "$marun" "$proj" 0 2>/dev/null || true)"
+    echo "  case agent-order-rev -> $v" >&2
+    [[ "$v" == FAIL* ]] || { echo "  !! agent_order must FAIL when the order is reversed" >&2; fails=1; }
+
+    cat > "$aoscen" <<'JSON'
+{ "id":"agent-order", "assert": { "agent_order": ["analyst","tester"] } }
+JSON
+    v="$(assert_run "$aoscen" "$marun" "$proj" 0 2>/dev/null || true)"
+    echo "  case agent-order-miss-> $v" >&2
+    [[ "$v" == FAIL* ]] || { echo "  !! agent_order must FAIL when a listed agent never ran" >&2; fails=1; }
+
+    # Case 16: browser-smoke HARD tier — gated on the runner's exit (5th arg), like build_cmd. 0=pass,
+    # 1=smoke failed, 2=runner unavailable (still a loud HARD fail).
+    local smscen="$proj/smoke.scenario.json"
+    cat > "$smscen" <<'JSON'
+{ "id":"smoke", "smoke": { "entry":"index.html", "dom_present":["#x"] } }
+JSON
+    v="$(assert_run "$smscen" "$sample/sample-run.pass.json" "$proj" 0 0 2>/dev/null || true)"
+    echo "  case smoke-ok       -> $v" >&2
+    [[ "$v" == PASS* ]] || { echo "  !! smoke must PASS when the runner exits 0" >&2; fails=1; }
+
+    v="$(assert_run "$smscen" "$sample/sample-run.pass.json" "$proj" 0 1 2>/dev/null || true)"
+    echo "  case smoke-fail     -> $v" >&2
+    [[ "$v" == FAIL* ]] || { echo "  !! smoke must FAIL when the runner exits 1" >&2; fails=1; }
+
+    v="$(assert_run "$smscen" "$sample/sample-run.pass.json" "$proj" 0 2 2>/dev/null || true)"
+    echo "  case smoke-unavail  -> $v" >&2
+    [[ "$v" == FAIL* ]] || { echo "  !! smoke must FAIL (loud) when the runner is unavailable (exit 2)" >&2; fails=1; }
+
+    # Case 17: stabilization-gate emission (docs/0069) — failure-mode classifier + results.jsonl
+    # record. Pure: no LLM, reuses the bundled sample run.json files. Pins the buckets a gate counts.
+    local cm
+    cm="$(classify_failure_mode "PASS" "$sample/sample-run.pass.json")"
+    echo "  case classify-pass  -> $cm" >&2
+    [[ "$cm" == "none" ]] || { echo "  !! PASS must classify as none" >&2; fails=1; }
+    cm="$(classify_failure_mode "FAIL (context overflow (silent truncation))" "$sample/sample-run.overflow.json")"
+    echo "  case classify-ovfl  -> $cm" >&2
+    [[ "$cm" == "overflow" ]] || { echo "  !! an overflow run must classify as overflow" >&2; fails=1; }
+    cm="$(classify_failure_mode "FAIL (session.status=FAILED (want SUCCESS))" "$sample/sample-run.failed.json")"
+    echo "  case classify-fail  -> $cm" >&2
+    [[ "$cm" == "agent-fail" ]] || { echo "  !! a FAILED-status run must classify as agent-fail" >&2; fails=1; }
+    cm="$(classify_failure_mode "FAIL (build_cmd exit=1)" "$sample/sample-run.pass.json")"
+    echo "  case classify-build -> $cm" >&2
+    [[ "$cm" == "build-fail" ]] || { echo "  !! a build_cmd exit must classify as build-fail" >&2; fails=1; }
+    cm="$(classify_failure_mode "FAIL (/x/ matched 0 line(s) in src/Main.kt, want [1..1000000])" "$sample/sample-run.pass.json")"
+    echo "  case classify-wrong -> $cm" >&2
+    [[ "$cm" == "wrong-output" ]] || { echo "  !! a needle miss on a SUCCESS run must classify as wrong-output" >&2; fails=1; }
+    cm="$(classify_failure_mode "FAIL (session.status=INCOMPLETE (want SUCCESS))" "$sample/sample-run.loop-aborted.json")"
+    echo "  case classify-loop  -> $cm" >&2
+    [[ "$cm" == "loop-aborted" ]] || { echo "  !! a LOOP_ABORTED marker must beat the INCOMPLETE->loop mapping" >&2; fails=1; }
+    cm="$(classify_failure_mode "FAIL (session.status=INCOMPLETE (want SUCCESS))" "$sample/sample-run.noop-stall.json")"
+    echo "  case classify-noop  -> $cm" >&2
+    [[ "$cm" == "noop-write-stall" ]] || { echo "  !! a NOOP_WRITE_STALL marker must classify as noop-write-stall" >&2; fails=1; }
+
+    # emit_result_record writes a named run.json copy + one valid JSONL verdict record into E2E_OUT_DIR.
+    local gate_out; gate_out="$(mktemp -d "${TMPDIR:-/tmp}/refio-e2e-gate-XXXXXX")"
+    ( E2E_OUT_DIR="$gate_out"; E2E_RUN_INDEX=3; MODEL="ollama/qwen3.5:4b"
+      emit_result_record "demo-scn" "PASS" "$sample/sample-run.pass.json" )
+    local rec; rec="$(tail -n1 "$gate_out/results.jsonl" 2>/dev/null || true)"
+    echo "  case gate-emit      -> $(jq -rc '{scenario,run,verdict,iterations,tools:(.tools|length)}' <<<"$rec" 2>/dev/null || echo PARSE_ERR)" >&2
+    [[ "$(jq -r '.verdict' <<<"$rec" 2>/dev/null)" == "PASS" ]] || { echo "  !! emitted record must have verdict PASS" >&2; fails=1; }
+    [[ "$(jq -r '.run' <<<"$rec" 2>/dev/null)" == "3" ]] || { echo "  !! emitted record must carry run index 3" >&2; fails=1; }
+    [[ "$(jq -r '.scenario' <<<"$rec" 2>/dev/null)" == "demo-scn" ]] || { echo "  !! emitted record must carry the scenario id" >&2; fails=1; }
+    [[ -f "$gate_out/demo-scn__ollama-qwen3.5:4b__3.run.json" ]] || { echo "  !! emitted run.json copy must exist" >&2; fails=1; }
+    # Benchmark stats enrichment: the record carries a per-tool histogram + iteration count from run.json.
+    [[ "$(jq -r '.tools["grep_search"] // 0' <<<"$rec" 2>/dev/null)" == "1" ]] || { echo "  !! emitted record must carry a per-tool histogram (grep_search=1)" >&2; fails=1; }
+    [[ "$(jq -r '.tools | length' <<<"$rec" 2>/dev/null)" == "3" ]] || { echo "  !! emitted record tools histogram must have 3 distinct tools" >&2; fails=1; }
+    [[ "$(jq -r '.iterations' <<<"$rec" 2>/dev/null)" == "3" ]] || { echo "  !! emitted record must carry iterations=3 (toolCallCount)" >&2; fails=1; }
+    rm -rf "$gate_out"
 
     rm -rf "$proj" "$empty"
     if [[ $fails -eq 0 ]]; then echo "self-test OK" >&2; else die "self-test FAILED"; fi

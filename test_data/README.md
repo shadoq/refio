@@ -1,6 +1,6 @@
-# test_data — fixtures for the manual tests
+# test_data - fixtures for the manual tests
 
-Committed fixtures backing **tests 46–58** in
+Committed fixtures backing **tests 46-58** in
 [`docs/manual-tests.md`](../docs/manual-tests.md). They exercise the
 documentation-indexing feature (`DocsSettingsPanel` → RAG) and MCP servers
 (`MCPSettingsPanel` → `MCPManager`).
@@ -22,7 +22,7 @@ test_data/
     make_pdf.py
   docsite/             ← static site for "Add Documentation URL" crawl test (T48)
     index.html  guide/page1.html  guide/page2.html  guide/deep.html  offsite.html
-  mcp/                 ← offline MCP stub server (T52–T58)
+  mcp/                 ← offline MCP stub server (T52-T58)
     stub_server.py  README.md  resources/project-notes.md
 ```
 
@@ -45,7 +45,7 @@ python -m http.server 8799 --directory test_data/docsite
 
 These fixtures are designed for **fully offline** testing (local files, a local
 HTTP server for the crawl, a stdio stub MCP server). The *online smoke* test
-(T57) is the only one that needs network/npx — it is explicitly optional.
+(T57) is the only one that needs network/npx - it is explicitly optional.
 
 ## Prerequisites
 

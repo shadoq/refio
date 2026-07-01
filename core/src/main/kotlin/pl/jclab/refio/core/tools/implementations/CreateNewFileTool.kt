@@ -25,7 +25,7 @@ private val logger = dualLogger("CreateNewFileTool")
  * Security:
  * - Path sandbox prevents directory traversal
  * - Creates parent directories if needed
- * - Returns warning (success=true) if file already exists (use code_editing instead)
+ * - Hard fails (success=false) if file already exists (use read_file + code_editing instead)
  */
 class CreateNewFileTool(
     sandbox: PathSandbox,
@@ -33,22 +33,22 @@ class CreateNewFileTool(
 ) : FileTool(sandbox) {
 
     override val name = "create_new_file"
-    override val description = "Create a NEW SMALL file (config, stub, short snippet) " +
-        "where the agent already has the full content ready. " +
-        "Strongly prefer `advance_code_editing` for code files > ~50 lines, HTML pages, full classes, " +
-        "or any content generated from scratch — that tool uses a dedicated LLM call so your agent " +
-        "response stays small and avoids streaming timeouts. Stuffing hundreds of lines into `content` " +
-        "here inflates the agent response, wastes tokens, and risks truncation. " +
+    override val description = "Create a NEW file when you already have the exact final content ready " +
+        "(configs, stubs, short snippets, or any file you can write verbatim). " +
+        "For large code files, HTML pages, full classes, or content generated from scratch, prefer " +
+        "`advance_code_editing`: it delegates generation to a dedicated LLM call, so your agent response " +
+        "stays small and avoids bloating the conversation or risking streaming truncation. " +
         "HARD FAILS if file already exists. Pre-check path in a PRIOR turn (file_search/read_directory). " +
         "On 'File already exists' error: switch to read_file + code_editing."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_MODIFYING
     override val selectionHint =
-        "ONLY for small new files (≤50 lines): configs, stubs, short snippets where you already have the exact final content. " +
-        "For HTML pages, full classes, scripts, games, or anything >50 lines: STOP — use `advance_code_editing` instead. " +
-        "Stuffing 200–900 lines into the `content` parameter blows your output-token budget (10K+ wasted tokens), " +
-        "risks streaming truncation, and bloats every subsequent turn's conversation history. " +
-        "`advance_code_editing` delegates generation to the editing model so your agent response stays small."
+        "Best for new files whose exact final content you already have: configs, stubs, short snippets. " +
+        "For HTML pages, full classes, scripts, games, or large files generated from scratch, prefer " +
+        "`advance_code_editing` instead — it delegates generation to the editing model, keeping your agent " +
+        "response small and avoiding wasted output tokens and streaming truncation. " +
+        "Putting hundreds of lines into the `content` parameter works but bloats every later turn, so save " +
+        "this tool for content that is short and already in hand."
 
     override fun validateParams(params: Map<String, Any>) {
         validatePathParam(params)
@@ -68,35 +68,6 @@ class CreateNewFileTool(
             if (content.length > limits.maxFileSize) {
                 return ToolResult.error(
                     "Content too large: ${content.length} bytes (max ${limits.maxFileSize} bytes)"
-                )
-            }
-
-            // Hard "small-file-only" gate. create_new_file is for stubs / short snippets the agent
-            // already holds; stuffing a large body into `content` blows the output-token budget and
-            // risks streaming truncation (observed: qwen3.5:122b wrote a 1182-line / ~46KB game via
-            // create_new_file — 463s, 11.7k output tokens, exactly the anti-pattern the selectionHint
-            // warns about but never enforced). Above either bound we hard-fail and steer to
-            // advance_code_editing, which generates via a dedicated editing-model call. A stub-then-fill
-            // flow (tiny placeholder here, then advance_code_editing to replace it) still works.
-            val byteCount = content.toByteArray().size
-            val lineCount = content.lines().size
-            if (byteCount > MAX_SMALL_FILE_BYTES || lineCount > MAX_SMALL_FILE_LINES) {
-                logger.info {
-                    "Rejecting oversized create_new_file: path='$pathStr', $lineCount lines / $byteCount bytes " +
-                        "(max $MAX_SMALL_FILE_LINES lines / $MAX_SMALL_FILE_BYTES bytes) — steering to advance_code_editing"
-                }
-                return ToolResult.error(
-                    message = "create_new_file is for SMALL files only (≤$MAX_SMALL_FILE_LINES lines / " +
-                        "≤$MAX_SMALL_FILE_BYTES bytes); got $lineCount lines / $byteCount bytes.",
-                    recovery = "Do NOT retry create_new_file with this content — the size gate will reject it again. " +
-                        "Use advance_code_editing(path=$pathStr, edit_description=...) to generate the file via a " +
-                        "dedicated editing-model call: it keeps your agent response small and avoids streaming " +
-                        "truncation. (Stub-then-fill is fine: create_new_file with a ≤$MAX_SMALL_FILE_LINES-line " +
-                        "placeholder, then advance_code_editing to replace it.)",
-                    nextActionHints = listOf(
-                        "advance_code_editing path=$pathStr — generate the full file (use for HTML pages, full " +
-                            "classes, scripts, games, or anything over $MAX_SMALL_FILE_LINES lines / $MAX_SMALL_FILE_BYTES bytes)"
-                    )
                 )
             }
 
@@ -206,14 +177,5 @@ class CreateNewFileTool(
             ),
             "required" to listOf("path", "content")
         )
-    }
-
-    companion object {
-        /**
-         * create_new_file is for SMALL files only. Above EITHER bound the call is hard-rejected and
-         * steered to advance_code_editing. Matches the selectionHint contract (≤50 lines / ≤2 KB).
-         */
-        const val MAX_SMALL_FILE_LINES = 50
-        const val MAX_SMALL_FILE_BYTES = 2048
     }
 }

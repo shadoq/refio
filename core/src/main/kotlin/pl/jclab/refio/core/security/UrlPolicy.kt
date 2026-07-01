@@ -5,7 +5,19 @@ import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.URI
 
-class UrlPolicy {
+/**
+ * SSRF guard for outbound tool URLs. By default rejects loopback, private, link-local and
+ * any-local addresses so a tool cannot be steered at internal services.
+ *
+ * [allowLoopback] is an opt-in escape hatch (resolved per call so a run-scope config override is
+ * honoured): when it returns true, the loopback/private/local families are permitted - used by the
+ * e2e harness to reach a deterministic fixture server on 127.0.0.1. Multicast is never permitted,
+ * even with the opt-in. Shared by every outbound tool (http_request, fetch_webpage) so they enforce
+ * one identical policy.
+ */
+class UrlPolicy(
+    private val allowLoopback: () -> Boolean = { false }
+) {
     fun validate(url: String) {
         val parsed = try {
             URI(url)
@@ -32,12 +44,16 @@ class UrlPolicy {
     }
 
     private fun isBlocked(address: InetAddress): Boolean {
+        // Multicast is never a legitimate tool target and stays blocked even under the opt-in.
+        if (address.isMulticastAddress) return true
+        // Opt-in: trust loopback/private/local addresses (e.g. a local fixture server).
+        if (allowLoopback()) return false
+
         if (
             address.isAnyLocalAddress ||
             address.isLoopbackAddress ||
             address.isLinkLocalAddress ||
-            address.isSiteLocalAddress ||
-            address.isMulticastAddress
+            address.isSiteLocalAddress
         ) {
             return true
         }

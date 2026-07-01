@@ -70,10 +70,18 @@ class CommandRuleMatcher(private val rules: List<CommandRule>) {
             }
         }
 
-        // 2. ALLOW rules
-        for (cr in compiled[RuleAction.ALLOW].orEmpty()) {
-            if (cr.regex.matches(rawCommand)) {
-                return MatchResult(RuleAction.ALLOW, cr.rule)
+        // 2. ALLOW rules — but never auto-approve a command that chains or substitutes.
+        // An ALLOW rule validates only the leading program (e.g. `^git(\s+.*)?$`), yet the
+        // whole string is executed: `git status; rm -rf /` matches the git rule and would
+        // silently run the appended command. A command carrying a shell chaining/
+        // substitution operator is therefore held back from ALLOW and falls through to ASK,
+        // where the user sees and approves the full line. (Plain redirection `>`/`<` is left
+        // out on purpose — it does not spawn a new command and is common in build/test runs.)
+        if (!hasShellControlOperators(rawCommand)) {
+            for (cr in compiled[RuleAction.ALLOW].orEmpty()) {
+                if (cr.regex.matches(rawCommand)) {
+                    return MatchResult(RuleAction.ALLOW, cr.rule)
+                }
             }
         }
 
@@ -86,5 +94,30 @@ class CommandRuleMatcher(private val rules: List<CommandRule>) {
 
         // 4. Default: ASK
         return MatchResult(RuleAction.ASK, null)
+    }
+
+    /**
+     * True when the command contains a shell operator that chains, pipes, or substitutes
+     * another command — the vectors that let a vetted leading program smuggle in a second,
+     * unvetted one. Detection is a plain substring scan, so an operator inside a quoted
+     * string is treated conservatively (downgraded to ASK rather than auto-approved); for a
+     * security gate, an extra approval prompt is the right side to err on. Bare `$VAR`
+     * expansion is intentionally not matched — only `$(` opens a subshell.
+     */
+    private fun hasShellControlOperators(command: String): Boolean {
+        return SHELL_CONTROL_OPERATORS.any { command.contains(it) }
+    }
+
+    companion object {
+        private val SHELL_CONTROL_OPERATORS: List<String> = listOf(
+            ";",    // command separator
+            "&",    // background / && and-chain
+            "|",    // pipe / || or-chain
+            "`",    // backtick command substitution
+            "$(",   // command substitution
+            "<(",   // process substitution
+            "\n",   // newline-injected second command
+            "\r"
+        )
     }
 }

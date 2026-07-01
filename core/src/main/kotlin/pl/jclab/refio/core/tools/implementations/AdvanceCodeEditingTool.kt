@@ -466,8 +466,14 @@ class AdvanceCodeEditingTool(
     }
 
     /**
-     * Extract code block from LLM response
-     * Supports markdown code fences: ```language\ncode\n```
+     * Extract the generated file content from an LLM reply.
+     *
+     * Only a fenced code block is accepted (with or without a language tag). An unfenced
+     * reply is deliberately rejected: a model that did not fence its output is as likely to
+     * be returning prose, an apology, or a refusal as raw code, and writing that verbatim
+     * would corrupt the file. Returning null routes the caller into its extraction-repair
+     * loop, which re-prompts for a proper fenced block and fails loud if none ever arrives —
+     * never a silent write of non-code.
      */
     private fun extractCodeBlock(response: String, expectedLanguage: String): String? {
         // Pattern 1: ```language\ncode\n```
@@ -482,12 +488,6 @@ class AdvanceCodeEditingTool(
         val match2 = pattern2.find(response)
         if (match2 != null) {
             return match2.groupValues[1].trim()
-        }
-
-        // Pattern 3: Entire response is code (no fences)
-        // Only if response doesn't contain explanatory text
-        if (!response.contains("Here") && !response.contains("I've") && response.lines().size > 3) {
-            return response.trim()
         }
 
         return null

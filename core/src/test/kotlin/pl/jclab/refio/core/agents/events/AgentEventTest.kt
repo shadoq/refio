@@ -97,44 +97,6 @@ class AgentEventTest {
     }
 
     @Nested
-    inner class CoordinationEvents {
-
-        @Test
-        fun `ArtifactProduced should contain artifact`() {
-            val artifact = Artifact("FILE_CREATED", "User.kt", path = "/src/User.kt")
-            val event = AgentEvent.ArtifactProduced(
-                id = "evt-1", sessionId = "s1", sourceAgentId = "a1",
-                timestamp = 1000L, correlationId = "c1",
-                artifact = artifact
-            )
-            assertEquals("User.kt", event.artifact.name)
-            assertEquals("/src/User.kt", event.artifact.path)
-        }
-
-        @Test
-        fun `SpawnAgentRequest should hold profile and task`() {
-            val event = AgentEvent.SpawnAgentRequest(
-                id = "evt-1", sessionId = "s1", sourceAgentId = "a1",
-                timestamp = 1000L, correlationId = "c1",
-                requestedProfile = "sre-engineer", task = "Write tests"
-            )
-            assertEquals("sre-engineer", event.requestedProfile)
-            assertEquals("Write tests", event.task)
-        }
-
-        @Test
-        fun `AgentSpawned should reference request`() {
-            val event = AgentEvent.AgentSpawned(
-                id = "evt-2", sessionId = "s1", sourceAgentId = "orchestrator",
-                timestamp = 1000L, correlationId = "c1",
-                spawnedAgentId = "a2", requestId = "evt-1"
-            )
-            assertEquals("a2", event.spawnedAgentId)
-            assertEquals("evt-1", event.requestId)
-        }
-    }
-
-    @Nested
     inner class ApprovalEvents {
 
         @Test
@@ -229,16 +191,13 @@ class AgentEventTest {
                 AgentEvent.AgentFailed("3", "s", "a", 0, "c", "err", false),
                 AgentEvent.DataRequest("4", "s", "a", 0, "c", null, "q"),
                 AgentEvent.DataResponse("5", "s", "a", 0, "c", "t", "r", "resp"),
-                AgentEvent.ArtifactProduced("6", "s", "a", 0, "c", Artifact("T", "n")),
-                AgentEvent.SpawnAgentRequest("7", "s", "a", 0, "c", "p", "t"),
-                AgentEvent.AgentSpawned("8", "s", "a", 0, "c", "spawned", "req"),
                 AgentEvent.ApprovalRequired("9", "s", "a", 0, "c", "act", "type", "risk", emptyMap()),
                 AgentEvent.ApprovalDecision("10", "s", "a", 0, "c", "aid", true, null),
                 AgentEvent.ProgressUpdate("11", "s", "a", 0, "c", "phase", "msg", null),
                 AgentEvent.StreamChunk("12", "s", "a", 0, "c", "d", "acc", false)
             )
 
-            assertEquals(12, events.size, "Should have all 12 event types")
+            assertEquals(9, events.size, "Should have all 9 event types")
             events.forEach { event ->
                 assertNotNull(event.id)
                 assertEquals("s", event.sessionId)

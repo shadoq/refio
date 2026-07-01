@@ -84,6 +84,15 @@ class NextSpeakerJudgeGuardian(
         // judge LLM call + a full prompt iteration per loop. Skipping here saves both.
         if (context.priorReentries > 0 &&
             context.toolsUsed.size <= context.toolsUsedSizeAtPriorReentry) {
+            if (deliverableLikelyProduced(context)) {
+                logger.info {
+                    "[JUDGE] taskId=${context.taskId} priorReentries=${context.priorReentries} " +
+                        "produced no new tool call, but a deliverable was already produced this turn " +
+                        "(writeTools=${context.writeToolsExecutedInTurn}, mode=${context.mode}, " +
+                        "respLen=${context.finalResponse.trim().length}) — finalizing SUCCESS, not INCOMPLETE"
+                }
+                return GuardianDecision.Pass
+            }
             logger.info {
                 "[JUDGE] taskId=${context.taskId} priorReentries=${context.priorReentries} " +
                     "produced no new tool call (toolsUsed=${context.toolsUsed.size}, " +
@@ -125,6 +134,14 @@ class NextSpeakerJudgeGuardian(
                     nudge = buildReentryNudge(context),
                     reason = "judge verdict=MODEL: request not yet delivered (1x re-entry)"
                 )
+            } else if (verdict == NextSpeakerVerdict.MODEL && deliverableLikelyProduced(context)) {
+                logger.info {
+                    "[JUDGE] taskId=${context.taskId} verdict=MODEL and re-entry budget spent, but a " +
+                        "deliverable was already produced this turn (writeTools=${context.writeToolsExecutedInTurn}, " +
+                        "mode=${context.mode}, respLen=${context.finalResponse.trim().length}) — " +
+                        "finalizing SUCCESS, not INCOMPLETE"
+                }
+                GuardianDecision.Pass
             } else if (verdict == NextSpeakerVerdict.MODEL) {
                 logger.info {
                     "[JUDGE] taskId=${context.taskId} verdict=MODEL but re-entry budget " +
@@ -141,6 +158,29 @@ class NextSpeakerJudgeGuardian(
             GuardianDecision.Pass
         }
     }
+
+    /**
+     * A terminal stall must be reported INCOMPLETE only when the agent ABANDONED the request
+     * before producing a deliverable — never when it produced one and merely signed off with
+     * forward-looking intent ("…fixed. Now let me compile to verify."), which weak local models do
+     * routinely. Without this discriminator a correct edit (or a complete PLAN answer) is reported
+     * as a failed turn (status INCOMPLETE, non-zero headless exit) purely because of the sign-off
+     * phrasing — the dominant local-model instability observed when running the e2e harness on
+     * qwen3.5:4b/9b: a fixed file or a full plan was already on hand, yet the turn returned failure.
+     *
+     *  - AGENT/SUBAGENT: a write/edit executed this turn → the file deliverable is on disk.
+     *  - PLAN: writes are structurally impossible; the deliverable IS the answer text, so a
+     *    substantial reply (a real step-by-step plan, not a bare "Let me produce a plan." stub) counts.
+     *
+     * Q&A AGENT turns that write nothing are still gated by the judge returning USER for a real
+     * answer; the guardian only reaches this fallback when the model stalled. There, a no-write turn
+     * with a short intent stub stays false → INCOMPLETE exactly as before. The deliberate trade-off:
+     * a genuine multi-step task that wrote step A, was nudged once, and still did not do step B is now
+     * reported SUCCESS — accepted, because the model failed despite the nudge (rare) and the common
+     * false-INCOMPLETE on completed single-deliverable turns is the far more damaging, frequent case.
+     */
+    private fun deliverableLikelyProduced(context: GuardianContext): Boolean =
+        TurnDeliverable.produced(context.writeToolsExecutedInTurn, context.mode, context.finalResponse)
 
     /**
      * Hard SYSTEM nudge injected on the single bounded re-entry. Names the failure mode
@@ -174,6 +214,15 @@ class NextSpeakerJudgeGuardian(
                 append("remaining work with the next concrete tool call (read / search / analyze), ")
                 append("then reply with the full result in plain prose — do not restate what you ")
                 append("are about to do.")
+            } else if (context.mode == TaskMode.PLAN) {
+                // PLAN cannot write files — the deliverable is the plan TEXT. The DEFAULT "emit a write
+                // tool" steer is nonsensical here and was observed to send PLAN turns into a wasteful
+                // re-entry on a contract they cannot satisfy.
+                append("You are in PLAN mode: you do NOT edit files — your deliverable is the COMPLETE, ")
+                append("concrete plan as text in this reply (what to change, where, and why). Finish any ")
+                append("remaining investigation with the next read/search tool call only if you still ")
+                append("need it, then write the full plan in plain prose — do not restate what you are ")
+                append("about to do. If the plan is already complete, reply with it only, no preamble.")
             } else {
                 append("Re-read the original request, identify the ONE deliverable still missing, ")
                 append("and emit the tool call that produces it in THIS response — do not restate ")
@@ -402,6 +451,13 @@ DECISION RULES (apply in order):
    the deliverable list from rule 1. Only count them if every deliverable is
    already present.
 
+6b. **Justified restraint IS completion.** If the request was to find/fix a bug
+   or make a change, and the agent — after actually reading the relevant code —
+   concludes WITH justification that no change is needed (the code is already
+   correct, no bug exists), that is a COMPLETE answer → "user". Do not demand an
+   edit the task does not require; "no change needed" backed by reasoning is the
+   deliverable for a restraint task, not a stall.
+
 7. **A clarifying question always wins.** If the reply ends with a genuine
    question to the user (not rhetorical), return "user" — the agent legitimately
    needs input.
@@ -445,6 +501,11 @@ USER REQUEST: "Which file owns ContextBudget?"
 TOOLS USED: grep_search
 AGENT REPLY: "ContextBudget is defined in core/services/context/ContextBudget.kt."
 → {"speaker": "user", "reason": "concrete file:answer to a single-fact question"}
+
+USER REQUEST: "Find and fix the bug in gcd()."
+TOOLS USED: read_file
+AGENT REPLY: "I reviewed gcd(). It implements Euclid's algorithm correctly — the loop terminates and edge cases hold. No bug, no change needed."
+→ {"speaker": "user", "reason": "justified restraint: 'no change needed' with reasoning is the complete answer"}
 """
 
         private const val GOAL_AWARE_JUDGE_PROMPT = """

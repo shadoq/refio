@@ -8,6 +8,7 @@ import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.logging.dualLogger
 import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 private val logger = dualLogger("LLMRetryHandler")
@@ -70,6 +71,18 @@ class LLMRetryHandler(
     ): LLMResponse {
         var lastException: Exception? = null
 
+        // Track whether any chunk has already been pushed to the live consumer. A streamed
+        // call that partially streamed before failing must NOT be retried: consumers append
+        // deltas with no reset semantics, so a second full stream would be concatenated onto
+        // the partial first one (duplicated/garbled output to the UI).
+        val streamedToUi = AtomicBoolean(false)
+        val guardedOnChunk: StreamCallback? = onChunk?.let { delegate ->
+            { chunk ->
+                streamedToUi.set(true)
+                delegate(chunk)
+            }
+        }
+
         repeat(maxRetries) { attempt ->
             try {
                 return llmClient.complete(
@@ -84,7 +97,7 @@ class LLMRetryHandler(
                     reasoningEffort = reasoningEffort,
                     noEgressEnabled = noEgressEnabled,
                     stream = stream,
-                    onChunk = onChunk,
+                    onChunk = guardedOnChunk,
                     kwargs = kwargs
                 )
             } catch (e: Exception) {
@@ -94,6 +107,15 @@ class LLMRetryHandler(
 
                 if (!shouldRetry) {
                     logger.error(e) { "[RETRY] Non-retryable error, giving up: ${e.message}" }
+                    totalFailures.incrementAndGet()
+                    throw e
+                }
+
+                if (stream && streamedToUi.get()) {
+                    logger.error(e) {
+                        "[RETRY] Streamed call already emitted chunks to the UI; not retrying " +
+                        "to avoid duplicated output: ${e.message}"
+                    }
                     totalFailures.incrementAndGet()
                     throw e
                 }

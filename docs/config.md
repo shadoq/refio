@@ -420,6 +420,7 @@ mcp:
 | `limits.maxFileSize` | `limits.max_file_size` | `10` |
 | `advanced.readOnlyMode` | `advanced.read_only_mode` | `false` |
 | `security.allowSymlinks` | `security.allow_symlinks` | `false` |
+| `security.allowLoopback` | `security.allow_loopback` | `false` |
 | `rag.enabled` | `rag.enabled` | `true` |
 | `rag.indexOnStartup` | `rag.index_on_startup` | `false` |
 | `rag.autoIndexOnContextBuild` | `rag.auto_index_on_context_build` | `false` |

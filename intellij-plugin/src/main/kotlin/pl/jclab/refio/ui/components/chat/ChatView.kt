@@ -5,8 +5,10 @@ import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBPanel
+import pl.jclab.refio.api.StreamProgressFormat
 import pl.jclab.refio.api.models.ExecutionMode
 import pl.jclab.refio.api.models.Message
+import pl.jclab.refio.api.models.ToolCallStatus
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 import pl.jclab.refio.services.execution.StepExecutionService
@@ -196,6 +198,26 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
                     thinkingExpandedByMessageId.remove(messageId)
                 }
             }
+
+            override fun isToolContentExpanded(messageId: String): Boolean {
+                return toolContentSnapshotByMessageId.containsKey(messageId)
+            }
+
+            override fun getToolContentSnapshot(messageId: String): String? {
+                return toolContentSnapshotByMessageId[messageId]
+            }
+
+            override fun setToolContentExpanded(messageId: String, snapshot: String?) {
+                if (snapshot != null) {
+                    toolContentSnapshotByMessageId[messageId] = snapshot
+                } else {
+                    toolContentSnapshotByMessageId.remove(messageId)
+                }
+            }
+
+            override fun registerToolStreamCounter(messageId: String, label: JLabel) {
+                streamingCounterLabels[messageId] = label
+            }
         },
         collapsibleCodePanelProvider = { content, language, filePath ->
             bubbleRenderSupport.createCollapsibleCodePanel(
@@ -299,10 +321,22 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     private var busyIndicatorTimer: Timer? = null
     private val thinkingExpandedByMessageId = mutableMapOf<String, Boolean>()
 
-    // Cache for rendered message panels to avoid recreating on every StateFlow update
+    // Per-message frozen snapshot of streamed tool content (presence == expanded). Captured at the
+    // moment the user expands so the preview does not refresh as later chunks grow message.content.
+    private val toolContentSnapshotByMessageId = mutableMapOf<String, String>()
+
+    // Live "N chars" labels of currently-streaming tool bubbles, keyed by message id. While a tool
+    // streams, only this label's text changes between chunks, so we patch it in place instead of
+    // rebuilding the whole bubble - which would flicker and jump the layout several times a second.
+    private val streamingCounterLabels = mutableMapOf<String, JLabel>()
+
+    // Cache for rendered message panels to avoid recreating on every StateFlow update.
+    // nonContentHash is the message hash excluding `content`, used to detect the streaming
+    // counter-only fast path (everything identical except the growing generated content).
     private data class CachedMessagePanel(
         val contentHash: Int,
-        val panel: JPanel
+        val panel: JPanel,
+        val nonContentHash: Int = 0
     )
 
     private val messagePanelCache = mutableMapOf<String, CachedMessagePanel>()
@@ -476,6 +510,9 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
         cs.launch {
             @OptIn(kotlinx.coroutines.FlowPreview::class)
             messageUpdateFlow
+                // debounce(): coalesce rapid update bursts (token streaming, footer token counts)
+                // into a single rebuild after the burst settles. This keeps the message list from
+                // rebuilding several times a second, which jumps the layout and scroll position.
                 .debounce(uiUpdateDebounceMs)
                 .collect { _ ->
                     // Always use latest received snapshot — rapid bursts get coalesced.
@@ -564,6 +601,23 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
         )
     }
 
+    // Same as [calculateMessageHash] but without `content`. When this is unchanged between two
+    // snapshots of a streaming tool message, the only difference is the growing generated content,
+    // so the bubble can be left intact and only its char counter patched in place.
+    private fun calculateNonContentMessageHash(message: Message): Int {
+        return Objects.hash(
+            message.id,
+            message.role,
+            message.thinking,
+            message.metadata,
+            message.toolCallInfo,
+            message.toolStreamContent,
+            message.isToolStreaming,
+            message.pendingApprovalSubtaskId,
+            message.metrics
+        )
+    }
+
     private fun updateMessages(messages: List<Message>) {
         SwingUtilities.invokeLater {
             if (refreshAvailableWidth()) {
@@ -586,6 +640,7 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
             if (uniqueMessages.isEmpty()) {
                 disposeMessagePanels(messagePanelCache.values.map { it.panel })
                 messagePanelCache.clear()
+                streamingCounterLabels.clear()
                 lastRenderedMessageIds = emptyList()
                 showEmptyState()
                 firePropertyChange("messagesUpdated", false, true)
@@ -607,6 +662,7 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
                 disposeMessagePanels(removedPanels)
             }
             messagePanelCache.keys.removeAll { it !in currentIds }
+            streamingCounterLabels.keys.removeAll { it !in currentIds }
             lastRenderedMessageIds = currentMessageIds
 
             messagesPanel.revalidate()
@@ -709,13 +765,36 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
                 return@forEachIndexed
             }
 
-            val newBubble = messageBubbleRouter.render(message)
-            messagePanelCache[message.id] = CachedMessagePanel(contentHash, newBubble)
+            if (tryPatchStreamingCounter(message, cached, contentHash)) {
+                return@forEachIndexed
+            }
+
+            val newBubble = renderAndCache(message)
             val componentIndex = index.coerceAtMost(messagesPanel.componentCount - 1)
             messagesPanel.remove(componentIndex)
             messagesPanel.add(newBubble, createMessageConstraints(index, messages.lastIndex), componentIndex)
             disposeMessagePanels(listOf(cached.panel))
         }
+    }
+
+    /**
+     * Streaming fast path: when a tool is still generating and the only thing that changed since the
+     * last render is its growing content, patch just the live char counter and keep the existing
+     * bubble. Avoids the full remove/add/render cycle that otherwise flickers and jumps the layout
+     * several times a second while a code-editing tool streams. Returns true when handled.
+     */
+    private fun tryPatchStreamingCounter(message: Message, cached: CachedMessagePanel, contentHash: Int): Boolean {
+        val counterLabel = streamingCounterLabels[message.id] ?: return false
+        val stillStreaming = message.isToolStreaming &&
+            message.toolCallInfo?.status == ToolCallStatus.EXECUTING
+        if (!stillStreaming) return false
+        if (cached.nonContentHash != calculateNonContentMessageHash(message)) return false
+
+        counterLabel.text = StreamProgressFormat.counterSuffix(message.content.length)
+        messagePanelCache[message.id] = cached.copy(contentHash = contentHash)
+        counterLabel.revalidate()
+        counterLabel.repaint()
+        return true
     }
 
     private fun resolveBubble(message: Message): JPanel {
@@ -724,10 +803,21 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
         if (cached != null && cached.contentHash == contentHash) {
             return cached.panel
         }
+        return renderAndCache(message)
+    }
 
-        val newPanel = messageBubbleRouter.render(message)
-        messagePanelCache[message.id] = CachedMessagePanel(contentHash, newPanel)
-        return newPanel
+    // Render a bubble and store it in the cache together with both hashes. Clears any stale
+    // streaming-counter label first; the render re-registers a fresh one only if the message is
+    // still streaming (via [BubbleComponentDependencies.registerToolStreamCounter]).
+    private fun renderAndCache(message: Message): JPanel {
+        streamingCounterLabels.remove(message.id)
+        val panel = messageBubbleRouter.render(message)
+        messagePanelCache[message.id] = CachedMessagePanel(
+            contentHash = calculateMessageHash(message),
+            panel = panel,
+            nonContentHash = calculateNonContentMessageHash(message)
+        )
+        return panel
     }
 
     private fun createMessageConstraints(index: Int, lastIndex: Int): GridBagConstraints {
@@ -794,6 +884,7 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
         lastReceivedMessages = emptyList()
         disposeMessagePanels(messagePanelCache.values.map { it.panel })
         messagePanelCache.clear()
+        streamingCounterLabels.clear()
         lastRenderedMessageIds = emptyList()
         showEmptyState()
         firePropertyChange("messagesUpdated", false, true)

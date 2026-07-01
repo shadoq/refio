@@ -160,6 +160,29 @@ class ToolPermissionsServiceTest {
             // Then
             assertEquals(PermissionLevel.OFF, permission)
         }
+
+        @Test
+        fun `run_process_background defaults to OFF in PLAN and ASK in AGENT`() {
+            // run_process_background spawns arbitrary shell commands via ProcessManager,
+            // exactly like run_terminal_command. As a plain WRITE tool its default would be
+            // ON in AGENT, auto-running unreviewed commands and bypassing the approval gate
+            // that the foreground terminal tool goes through. It must default to ASK.
+            val bgTool = mockk<Tool> {
+                every { name } returns "run_process_background"
+                every { mode } returns ToolMode.WRITE
+            }
+            val registry = mockk<ToolRegistry> {
+                every { getAllTools() } returns listOf(bgTool)
+                every { getTool(any()) } answers {
+                    if (firstArg<String>() == "run_process_background") bgTool else null
+                }
+            }
+            every { configRepository.getWithPrecedence(any(), any()) } returns null
+            val svc = ToolPermissionsService(configRepository, registry)
+
+            assertEquals(PermissionLevel.OFF, svc.getPermission("run_process_background", TaskMode.PLAN))
+            assertEquals(PermissionLevel.ASK, svc.getPermission("run_process_background", TaskMode.AGENT))
+        }
     }
 
     @Nested

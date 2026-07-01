@@ -1,0 +1,23 @@
+{
+  "id": "needle-in-haystack-deep",
+  "mode": "AGENT",
+  "max_iterations": 30,
+  "fixture": "fixtures/haystack-deep",
+  "prompt_file": "prompts/haystack-deep.md",
+  "assert": {
+    "tool_order": ["grep_search"],
+    "needle_in_file": {
+      "path": "src/com/acme/pricing/internal/calc/DiscountCalculator.kt",
+      "regex": "priceCents[[:space:]]*\\*[[:space:]]*pct|pct[[:space:]]*/[[:space:]]*100"
+    },
+    "file_unchanged": [
+      "src/com/acme/pricing/format/DiscountFormatter.kt",
+      "src/com/acme/pricing/check/DiscountValidator.kt",
+      "src/com/acme/catalog/calc/PriceCalculator.kt"
+    ],
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": ["Is the discount applied as a percentage of the price, with only the deep buggy file changed and the similarly-named decoys untouched?"]
+  }
+}

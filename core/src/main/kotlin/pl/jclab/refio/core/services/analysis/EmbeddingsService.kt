@@ -25,7 +25,6 @@ class EmbeddingsService(
 
     private val logger = dualLogger("EmbeddingsService")
     private val mutex = Mutex()
-    private val digest = MessageDigest.getInstance("SHA-256")
     private val cache: Cache<String, FloatArray> = Caffeine.newBuilder()
         .maximumSize(DEFAULT_CACHE_SIZE.toLong())
         .expireAfterAccess(Duration.ofMinutes(30))
@@ -115,9 +114,16 @@ class EmbeddingsService(
         }
     }
 
-    private fun cacheKey(provider: String, model: String, text: String): String {
+    /**
+     * Pure SHA-256 of (provider, model, text). A fresh [MessageDigest] per call - `MessageDigest`
+     * is stateful and not thread-safe, and `generate()` computes the key off the mutex, so a single
+     * shared instance let concurrent callers corrupt each other's hash (wrong cache key / cache
+     * poisoning). Allocating one per call is cheap next to the embedding round-trip and removes the
+     * shared mutable state entirely.
+     */
+    internal fun cacheKey(provider: String, model: String, text: String): String {
         val payload = "$provider|$model|$text"
-        val hash = digest.digest(payload.toByteArray(Charsets.UTF_8))
+        val hash = MessageDigest.getInstance("SHA-256").digest(payload.toByteArray(Charsets.UTF_8))
         return hash.joinToString("") { "%02x".format(it) }
     }
 }

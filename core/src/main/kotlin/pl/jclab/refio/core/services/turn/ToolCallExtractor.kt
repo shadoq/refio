@@ -74,6 +74,12 @@ class ToolCallExtractor(
     // Labeled-line recovery: `[TOOL] name: args` (marker optional after the first line). Anchored per
     // trimmed line so `name:` must lead the line — prose like "Let me examine X" never matches.
     private val labeledLineRegex = Regex("""^(?:\[TOOL]\s*)?([A-Za-z_]\w*)\s*:\s*(.+)$""")
+    // Space-form tool line: `name key="value" key2=value2` (NO colon), used by some weak local
+    // models (qwen3-coder) that emit a standalone `[TOOL]` marker line then a space-separated call.
+    // Armed ONLY when a bare `[TOOL]` marker line is present (see extractLabeledToolLines), so prose
+    // `result equals x = y` never false-positives without the explicit marker; the args group must
+    // still carry a `key=value` and the name must be a registered tool.
+    private val labeledSpaceLineRegex = Regex("""^([A-Za-z_]\w*)\s+(.+=.+)$""")
     // One `key=value` arg: quoted value taken verbatim (group 2, commas/pipes preserved) or a bare
     // value up to the next comma (group 3).
     private val labeledArgRegex = Regex("""([A-Za-z_]\w*)\s*=\s*(?:"([^"]*)"|([^,]+))""")
@@ -209,30 +215,44 @@ class ToolCallExtractor(
      */
     private fun extractLabeledToolLines(content: String): List<ToolCallData> {
         val lines = content.lineSequence().map { it.trim() }.toList()
-        // Arm only when the marker genuinely prefixes a tool-shaped line. A bare
-        // `content.contains("[TOOL]")` armed on any prose mention of the marker, after which every
-        // `registeredTool: key=value` prose line false-positived into a spurious call. The documented
-        // batch format carries the marker on the first tool line; subsequent lines stay bare.
-        val armed = lines.any { line ->
+        // Shape A (documented): the marker genuinely prefixes a colon-form tool line, `[TOOL] name: args`.
+        // A bare `content.contains("[TOOL]")` armed on any prose mention of the marker, after which every
+        // `registeredTool: key=value` prose line false-positived into a spurious call.
+        val armedColon = lines.any { line ->
             line.startsWith(LABELED_TOOL_MARKER, ignoreCase = true) && labeledLineRegex.matches(line)
         }
-        if (!armed) return emptyList()
+        // Shape B (qwen3-coder): a STANDALONE `[TOOL]` marker line, then space-form `name key="value"`
+        // tool lines (no colon). Armed only by the bare marker line so `result equals x = y` prose never
+        // false-positives; each candidate still needs a registered tool name and parseable key=value args.
+        val armedSpace = lines.any { it.equals(LABELED_TOOL_MARKER, ignoreCase = true) }
+        if (!armedColon && !armedSpace) return emptyList()
         val calls = mutableListOf<ToolCallData>()
+        val seen = HashSet<String>()
         for (line in lines) {
-            val match = labeledLineRegex.find(line) ?: continue
-            val name = match.groupValues[1]
-            if (!toolRegistry.hasTool(name)) continue
-            val argMatches = labeledArgRegex.findAll(match.groupValues[2]).toList()
-            if (argMatches.isEmpty()) continue
-            val argsObject = buildJsonObject {
-                for (arg in argMatches) {
-                    val value = arg.groups[2]?.value ?: arg.groupValues[3].trim()
-                    put(arg.groupValues[1], value)
-                }
+            // Shape A: colon form (marker optional after the first line).
+            labeledLineRegex.find(line)?.let { addLabeledCall(it.groupValues[1], it.groupValues[2], calls, seen) }
+            // Shape B: space form, but never the marker line itself, and only when the marker armed it.
+            if (armedSpace && !line.startsWith(LABELED_TOOL_MARKER, ignoreCase = true)) {
+                labeledSpaceLineRegex.find(line)?.let { addLabeledCall(it.groupValues[1], it.groupValues[2], calls, seen) }
             }
-            calls.add(ToolCallData(id = UUID.randomUUID().toString(), name = name, arguments = argsObject.toString()))
         }
         return calls
+    }
+
+    /** Add one recovered labeled-line call if [name] is a registered tool with parseable key=value args. */
+    private fun addLabeledCall(name: String, argStr: String, calls: MutableList<ToolCallData>, seen: MutableSet<String>) {
+        if (!toolRegistry.hasTool(name)) return
+        val argMatches = labeledArgRegex.findAll(argStr).toList()
+        if (argMatches.isEmpty()) return
+        val argsObject = buildJsonObject {
+            for (arg in argMatches) {
+                put(arg.groupValues[1], arg.groups[2]?.value ?: arg.groupValues[3].trim())
+            }
+        }
+        // Dedup so a line that matches both shapes (it cannot, but defensively) is not double-counted.
+        if (seen.add("$name:$argsObject")) {
+            calls.add(ToolCallData(id = UUID.randomUUID().toString(), name = name, arguments = argsObject.toString()))
+        }
     }
 
     /** Qwen3-Coder convention: `<function=NAME><parameter=KEY>VALUE</parameter>...</function>`, no JSON. */

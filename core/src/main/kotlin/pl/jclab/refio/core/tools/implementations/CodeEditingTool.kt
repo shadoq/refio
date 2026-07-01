@@ -157,8 +157,14 @@ class CodeEditingTool(
                 // Read current content
                 content = Files.readString(path)
 
+                // Reconcile line endings: read_file feeds the model LF, but this file may be CRLF
+                // on disk (Windows checkout). Match/replace in the file's own EOL so the edit lands
+                // and the file keeps its line endings (no whole-file churn).
+                val oldMatch = pl.jclab.refio.core.tools.LineEndings.toFileEol(oldString, content)
+                val newMatch = pl.jclab.refio.core.tools.LineEndings.toFileEol(newString, content)
+
                 // Check if old_string exists
-                if (!content.contains(oldString)) {
+                if (!content.contains(oldMatch)) {
                     return@withLockedFile ToolResult.error(
                         message = "String not found in file: '${oldString.take(80)}${if (oldString.length > 80) "…" else ""}' (${oldString.length} chars).",
                         recovery = "Read the file first to see the actual content, then retry with the exact substring (including whitespace).",
@@ -172,7 +178,7 @@ class CodeEditingTool(
 
                 // Check uniqueness if not replaceAll
                 if (!replaceAll) {
-                    val occurrences = countOccurrences(content, oldString)
+                    val occurrences = countOccurrences(content, oldMatch)
                     if (occurrences > 1) {
                         return@withLockedFile ToolResult.error(
                             message = "String appears $occurrences times in file.",
@@ -187,16 +193,16 @@ class CodeEditingTool(
 
                 // Perform replacement
                 val newContent = if (replaceAll) {
-                    content.replace(oldString, newString)
+                    content.replace(oldMatch, newMatch)
                 } else {
-                    content.replaceFirst(oldString, newString)
+                    content.replaceFirst(oldMatch, newMatch)
                 }
 
                 // Write updated content
                 Files.writeString(path, newContent)
                 val duration = (System.currentTimeMillis() - startTime).toInt()
 
-                val replacements = countOccurrences(content, oldString)
+                val replacements = countOccurrences(content, oldMatch)
                 val newFileSize = path.fileSize()
 
                 // Build proper unified diff (Myers, 3 lines context) via shared DiffUtils.

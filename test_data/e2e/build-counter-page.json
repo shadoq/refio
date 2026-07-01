@@ -1,0 +1,26 @@
+{
+  "id": "build-counter-page",
+  "mode": "AGENT",
+  "max_iterations": 25,
+  "fixture": "fixtures/build-counter-page",
+  "prompt_file": "prompts/build-counter-page.md",
+  "assert": {
+    "tool_order": ["create_new_file"],
+    "needles_in_file": [
+      { "path": "counter.html", "regex": "id[[:space:]]*=[[:space:]]*[\"']?count" },
+      { "path": "counter.html", "regex": "id[[:space:]]*=[[:space:]]*[\"']?inc" }
+    ],
+    "no_context_overflow": true
+  },
+  "smoke": {
+    "entry": "counter.html",
+    "no_js_errors": true,
+    "dom_present": ["#inc", "#count"],
+    "interactions": [
+      { "click": "#inc", "expect_text_change": "#count" }
+    ]
+  },
+  "judge": {
+    "criteria": ["counter.html is one self-contained file: a #count display starting at 0 and an #inc button that increments it, no JS errors."]
+  }
+}

@@ -76,37 +76,6 @@ sealed interface AgentEvent {
         val artifacts: List<Artifact> = emptyList()
     ) : AgentEvent
 
-    // ── COORDINATION ──
-
-    data class ArtifactProduced(
-        override val id: String,
-        override val sessionId: String,
-        override val sourceAgentId: String,
-        override val timestamp: Long,
-        override val correlationId: String,
-        val artifact: Artifact
-    ) : AgentEvent
-
-    data class SpawnAgentRequest(
-        override val id: String,
-        override val sessionId: String,
-        override val sourceAgentId: String,
-        override val timestamp: Long,
-        override val correlationId: String,
-        val requestedProfile: String,
-        val task: String
-    ) : AgentEvent
-
-    data class AgentSpawned(
-        override val id: String,
-        override val sessionId: String,
-        override val sourceAgentId: String,
-        override val timestamp: Long,
-        override val correlationId: String,
-        val spawnedAgentId: String,
-        val requestId: String
-    ) : AgentEvent
-
     // ── APPROVAL — user approval flow ──
 
     data class ApprovalRequired(

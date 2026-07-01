@@ -247,6 +247,37 @@ class ToolCallExtractorTest {
     }
 
     @Test
+    fun `space-form tool line after a standalone bracket marker is recovered (qwen3-coder shape)`() {
+        // Real failure (qwen3-coder:30b, increase-retry-count): after editing correctly the model
+        // emitted a verification grep as a standalone `[TOOL]` marker line followed by `name key="value"`
+        // (space-separated, NO colon) — the colon-only labeled recovery dropped it, tripping the format
+        // hard-fail. Recover the space form too, armed only by the bare marker line.
+        val content = """
+            Let me double-check the change.
+
+            [TOOL]
+            grep_search pattern="MAX_RETRIES"
+        """.trimIndent()
+        val result = extract(response(content = content))
+        assertIs<ExtractionResult.Calls>(result)
+        assertEquals(ToolCallSource.BRACKET_TOOL, result.source)
+        assertEquals(listOf("grep_search"), result.calls.map { it.name })
+        assertTrue(result.calls[0].arguments.contains("MAX_RETRIES"))
+    }
+
+    @Test
+    fun `standalone bracket marker does not turn arbitrary prose with an equals sign into a call`() {
+        // Narrowness for the space form (Rule 7): the bare `[TOOL]` marker arms recovery, but a
+        // following line must still name a REGISTERED tool with key=value args — `the result = 5` is not.
+        val content = """
+            [TOOL]
+            the result = 5 and everything = fine
+        """.trimIndent()
+        val result = extract(response(content = content))
+        assertIs<ExtractionResult.None>(result)
+    }
+
+    @Test
     fun `bracket-tool recovery refuses an unregistered tool name and surfaces the attempt`() {
         // Same anti-garbage guard as the XML strategies: a [TOOL] line naming a non-tool is not a call,
         // but the [TOOL] marker means it WAS an attempt — report it, never finish silently on it.

@@ -1,0 +1,18 @@
+{
+  "id": "large-file-edit",
+  "mode": "AGENT",
+  "max_iterations": 20,
+  "fixture": "fixtures/large-file",
+  "prompt_file": "prompts/large-file.md",
+  "assert": {
+    "tool_order": ["grep_search"],
+    "needle_in_file": {
+      "path": "src/Ledger.kt",
+      "regex": "fun totalBalance\\([^)]*\\): Int = credits[[:space:]]*\\+[[:space:]]*debits"
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": ["Was only totalBalance changed to add credits and debits, with the ~430-line file otherwise intact and the surrounding feeTier*/share* helpers untouched?"]
+  }
+}

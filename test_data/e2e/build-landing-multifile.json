@@ -1,0 +1,27 @@
+{
+  "id": "build-landing-multifile",
+  "mode": "AGENT",
+  "max_iterations": 30,
+  "fixture": "fixtures/build-landing-multifile",
+  "prompt_file": "prompts/build-landing-multifile.md",
+  "assert": {
+    "needles_in_file": [
+      { "path": "index.html", "regex": "<link[^>]*\\.css" },
+      { "path": "index.html", "regex": "<script[^>]*src[^>]*\\.js" },
+      { "path": "styles.css", "regex": "." },
+      { "path": "app.js", "regex": "." }
+    ],
+    "no_context_overflow": true
+  },
+  "smoke": {
+    "entry": "index.html",
+    "no_js_errors": true,
+    "dom_present": ["#email", "#submit", "#msg"],
+    "interactions": [
+      { "click": "#submit", "expect_text_change": "#msg" }
+    ]
+  },
+  "judge": {
+    "criteria": ["A multi-file landing page: index.html links an external styles.css and a classic app.js (no ES modules, no inline CSS/JS), has a signup form with #email, #submit and an empty #msg, and app.js writes a validation message into #msg on submit. Loads with no JS errors."]
+  }
+}

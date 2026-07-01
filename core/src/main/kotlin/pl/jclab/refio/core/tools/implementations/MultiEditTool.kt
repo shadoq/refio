@@ -28,7 +28,8 @@ private val logger = dualLogger("MultiEditTool")
  *
  * Security:
  * - Path sandbox prevents directory traversal
- * - All edits are atomic (all succeed or all fail)
+ * - All edits are validated up front; if any edit fails, no file is written (atomic for
+ *   logical failures - a JVM crash mid-write is still not transactional)
  * - File size limits enforced
  */
 class MultiEditTool(
@@ -70,12 +71,25 @@ class MultiEditTool(
                 parseEdit(edit, index)
             }
 
-            // Prepare and apply each edit under a per-file lock (revalidated inside lock).
-            val results = parsedEdits.map { edit ->
+            // Validate and compute every edit in memory before touching disk: if a later edit
+            // fails, no earlier file is left half-written (atomic for logical failures). Edits to
+            // the same file apply cumulatively - each sees the prior edit's pending content
+            // instead of stale disk state.
+            val pendingContent = LinkedHashMap<java.nio.file.Path, String>()
+            val prepared = parsedEdits.map { edit ->
                 val resolvedPath = resolveSandboxPath(edit.path)
                 withLockedFile(resolvedPath) {
-                    val prep = prepareEdit(edit)
-                    applyEdit(prep)
+                    val prep = prepareEdit(edit, pendingContent[resolvedPath])
+                    val newContent = prep.originalContent.replaceFirst(prep.oldMatch, prep.newMatch)
+                    pendingContent[resolvedPath] = newContent
+                    prep to newContent
+                }
+            }
+
+            // Every edit validated and computed - commit the writes.
+            val results = prepared.map { (prep, newContent) ->
+                withLockedFile(prep.path) {
+                    commitEdit(prep, newContent)
                 }
             }
 
@@ -158,40 +172,52 @@ class MultiEditTool(
         )
     }
 
-    private fun prepareEdit(edit: ParsedEdit): PreparedEdit {
+    private fun prepareEdit(edit: ParsedEdit, baseContent: String? = null): PreparedEdit {
         // Resolve and validate path
         val path = sandbox.resolve(edit.path)
 
         logger.debug { "Preparing edit #${edit.index}: relative='${edit.path}', absolute='${path.toAbsolutePath()}'" }
 
-        // Check if file exists
-        if (!path.exists()) {
-            logger.warn { "Edit #${edit.index}: File not found: ${edit.path} (resolved to ${path.toAbsolutePath()})" }
-            throw EditException("Edit #${edit.index}: File not found: ${edit.path}")
+        // Read current content. A non-null baseContent means a prior edit in this batch already
+        // produced content for this file (and validated its existence/size), so chain from that
+        // pending content instead of re-reading stale disk state.
+        val content: String = if (baseContent != null) {
+            baseContent
+        } else {
+            // Check if file exists
+            if (!path.exists()) {
+                logger.warn { "Edit #${edit.index}: File not found: ${edit.path} (resolved to ${path.toAbsolutePath()})" }
+                throw EditException("Edit #${edit.index}: File not found: ${edit.path}")
+            }
+
+            // Check if it's a regular file
+            if (!path.isRegularFile()) {
+                logger.warn { "Edit #${edit.index}: Not a regular file: ${edit.path} (is directory: ${path.isDirectory()})" }
+                throw EditException("Edit #${edit.index}: Not a regular file: ${edit.path}")
+            }
+
+            // Check file size
+            val fileSize = path.fileSize()
+            logger.debug { "Edit #${edit.index}: File size=$fileSize bytes, absolute='${path.toAbsolutePath()}'" }
+
+            if (fileSize > limits.maxFileSize) {
+                logger.warn { "Edit #${edit.index}: File too large: $fileSize bytes (max ${limits.maxFileSize})" }
+                throw EditException(
+                    "Edit #${edit.index}: File too large: $fileSize bytes (max ${limits.maxFileSize} bytes)"
+                )
+            }
+
+            Files.readString(path)
         }
 
-        // Check if it's a regular file
-        if (!path.isRegularFile()) {
-            logger.warn { "Edit #${edit.index}: Not a regular file: ${edit.path} (is directory: ${path.isDirectory()})" }
-            throw EditException("Edit #${edit.index}: Not a regular file: ${edit.path}")
-        }
-
-        // Check file size
-        val fileSize = path.fileSize()
-        logger.debug { "Edit #${edit.index}: File size=$fileSize bytes, absolute='${path.toAbsolutePath()}'" }
-
-        if (fileSize > limits.maxFileSize) {
-            logger.warn { "Edit #${edit.index}: File too large: $fileSize bytes (max ${limits.maxFileSize})" }
-            throw EditException(
-                "Edit #${edit.index}: File too large: $fileSize bytes (max ${limits.maxFileSize} bytes)"
-            )
-        }
-
-        // Read current content
-        val content = Files.readString(path)
+        // Reconcile line endings: read_file feeds the model LF, but this file may be CRLF on disk
+        // (Windows checkout). Match/replace in the file's own EOL so the edit lands and the file
+        // keeps its line endings (no whole-file churn).
+        val oldMatch = pl.jclab.refio.core.tools.LineEndings.toFileEol(edit.oldString, content)
+        val newMatch = pl.jclab.refio.core.tools.LineEndings.toFileEol(edit.newString, content)
 
         // Check if old_string exists
-        if (!content.contains(edit.oldString)) {
+        if (!content.contains(oldMatch)) {
             throw EditException(
                 "Edit #${edit.index}: String not found in ${edit.path}: '${edit.oldString}'"
             )
@@ -200,15 +226,14 @@ class MultiEditTool(
         return PreparedEdit(
             edit = edit,
             path = path,
-            originalContent = content
+            originalContent = content,
+            oldMatch = oldMatch,
+            newMatch = newMatch
         )
     }
 
-    private fun applyEdit(prep: PreparedEdit): EditResult {
-        // Perform replacement (single occurrence)
-        val newContent = prep.originalContent.replaceFirst(prep.edit.oldString, prep.edit.newString)
-
-        // Write updated content
+    private fun commitEdit(prep: PreparedEdit, newContent: String): EditResult {
+        // newContent was already computed during the validation pass; just persist it.
         Files.writeString(prep.path, newContent)
 
         val newFileSize = prep.path.fileSize()
@@ -278,7 +303,10 @@ class MultiEditTool(
     private data class PreparedEdit(
         val edit: ParsedEdit,
         val path: java.nio.file.Path,
-        val originalContent: String
+        val originalContent: String,
+        // edit.oldString / edit.newString re-expressed in the file's line-ending convention.
+        val oldMatch: String,
+        val newMatch: String
     )
 
     private data class EditResult(

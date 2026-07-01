@@ -180,16 +180,6 @@ class EventTimelinePanel : JPanel(BorderLayout()) {
                 "${event.sourceAgentId.take(8)} → ${event.targetAgentId.take(8)}: ${event.response.take(80)}",
                 "-", "-", "-", "-", "OK"
             )
-            is AgentEvent.ArtifactProduced -> arrayOf(
-                time, "ART", "-",
-                "${event.sourceAgentId.take(8)}: ${event.artifact.name}",
-                "-", "-", "-", "-", "OK"
-            )
-            is AgentEvent.SpawnAgentRequest -> arrayOf(
-                time, "SPAWN", "-",
-                "${event.requestedProfile} — ${event.task.take(80)}",
-                "-", "-", "-", "-", "…"
-            )
             else -> arrayOf(time, event::class.simpleName ?: "EVT", "-", "", "-", "-", "-", "-", "-")
         }
 

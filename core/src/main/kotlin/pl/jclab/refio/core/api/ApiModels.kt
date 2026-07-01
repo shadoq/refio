@@ -533,5 +533,8 @@ data class MultiAgentInstanceResponse(
     val tokensUsed: Long = 0,
     val costUsd: Double = 0.0,
     val durationMs: Long = 0,
-    val error: String? = null
+    val error: String? = null,
+    /** Absolute epoch-ms turn bounds, so consumers can order agents by real execution time. */
+    val startedAt: Long? = null,
+    val completedAt: Long? = null
 )

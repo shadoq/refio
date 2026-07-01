@@ -399,6 +399,45 @@ class AgentTurnLoopTest {
     }
 
     @Nested
+    inner class ContinueTurnRagPauseTests {
+
+        @Test
+        fun `continueTurn marks the agent turn active so RAG indexing yields during resume`() = runTest {
+            // A turn paused for tool approval resumes via continueTurn. runTurn wraps the loop in
+            // beginAgentTurn/endAgentTurn so background RAG indexing yields the SQLite WAL writer-lock
+            // for the turn's duration; continueTurn must do the same. Without it, an interactive
+            // resume-after-approval lets RAG grab the writer-lock and stall tool subtask-status writes.
+            var activeDuringLoop = false
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } answers {
+                activeDuringLoop = pl.jclab.refio.core.services.monitoring.GlobalMetrics.isAgentTurnActive()
+                LLMResponse(
+                    content = """{"response": "resumed"}""",
+                    usage = LLMUsage(inputTokens = 100, outputTokens = 50, totalTokens = 150),
+                    model = "gpt-4", provider = "openai", cost = 0.001
+                )
+            }
+
+            val activeBefore = pl.jclab.refio.core.services.monitoring.GlobalMetrics.isAgentTurnActive()
+            val result = agentTurnLoop.continueTurn(taskId = testTaskId, mode = TaskMode.AGENT)
+
+            assertFalse(activeBefore, "baseline: no agent turn should be active before continueTurn")
+            assertTrue(activeDuringLoop, "continueTurn must mark the agent turn active during the resumed loop")
+            assertFalse(
+                pl.jclab.refio.core.services.monitoring.GlobalMetrics.isAgentTurnActive(),
+                "the begin/end count must be balanced back to inactive after continueTurn"
+            )
+            assertTrue(result.success, "the resumed turn should complete: ${result.response}")
+        }
+    }
+
+    @Nested
     inner class ModeSpecificTests {
 
         @Test
@@ -771,6 +810,104 @@ class AgentTurnLoopTest {
             assertFalse(result.success, "format lapse is not a clean success")
             assertTrue(result.incomplete, "prose answer in envelope mode should mark the turn INCOMPLETE")
             assertEquals(finalProse, result.response, "the model's actual answer must be preserved, not discarded")
+        }
+
+        @Test
+        fun `format hard-fail after a write already landed finalizes SUCCESS, not INCOMPLETE`() = runTest {
+            // e2e regression (qwen3-coder:30b on a constant-change task): the model edited the file
+            // correctly (a WRITE tool ran), then emitted a malformed prose "double-check" grep that
+            // never parsed as a tool call. After two format nudges the hard-fail used to mark the turn
+            // INCOMPLETE — reporting a completed edit as a failure purely on the trailing format lapse.
+            // With a deliverable already on disk (writeToolsExecutedInTurn>0), the turn must finalize
+            // SUCCESS and surface the prose; only a turn that produced NO deliverable stays INCOMPLETE.
+            val advanceTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "advance_code_editing"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.WRITE
+            }
+            every { toolRegistry.getTool("advance_code_editing") } returns advanceTool
+            coEvery { toolExecutor.executeTool(any(), any()) } returns
+                ToolResult(success = true, output = "edited Config.kt")
+
+            fun prose(text: String) = LLMResponse(
+                content = text,
+                usage = LLMUsage(inputTokens = 100, outputTokens = 20, totalTokens = 120),
+                model = "qwen3-coder:30b", provider = "ollama", cost = 0.0, finishReason = "stop"
+            )
+            val finalProse = "I've confirmed MAX_RETRIES is now 5. The change is complete."
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                // iter 1: a real WRITE tool call — the deliverable lands (writeToolsExecutedInTurn>0).
+                createLLMResponse("""{"response":"editing the constant","actions":[{"tool":"advance_code_editing","arguments":{"path":"Config.kt","instructions":"set MAX_RETRIES to 5"}}]}"""),
+                // iters 2-4: malformed prose "double-check" that never parses as a tool call → two
+                // format nudges → hard-fail. Distinct each time so the repetition guard does not fire first.
+                prose("Let me double-check by searching for other occurrences. [TOOL] grep_search pattern=MAX_RETRIES"),
+                prose("Let me verify once more across the codebase. [TOOL] grep_search pattern=MAX_RETRIES path=."),
+                prose(finalProse)
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Set MAX_RETRIES to 5",
+                mode = TaskMode.AGENT
+            )
+
+            assertTrue(result.success, "a landed edit + trailing format lapse must finalize SUCCESS: ${result.response}")
+            assertFalse(result.incomplete, "the deliverable was produced; the turn must not be INCOMPLETE")
+        }
+
+        @Test
+        fun `a verification-tool loop after a real edit finalizes SUCCESS, not a loop failure`() = runTest {
+            // e2e regression (qwen3-coder:30b / make-test-pass): the model fixed the code (a real edit),
+            // then ran the SAME run_terminal_command verification 4x with byte-identical output → the
+            // repetition guard aborted the turn as a FAILED loop, reporting a completed edit as failure.
+            // A loop on an OPTIONAL verification tool after a real file edit landed must finalize SUCCESS.
+            val editTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "advance_code_editing"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.WRITE
+            }
+            // run_terminal_command is mode=WRITE in prod (for approval) but is an EXECUTION tool, so
+            // isFileWriteTool() must exclude it — only the advance_code_editing edit counts as the deliverable.
+            val cmdTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "run_terminal_command"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.WRITE
+            }
+            every { toolRegistry.getTool("advance_code_editing") } returns editTool
+            every { toolRegistry.getTool("run_terminal_command") } returns cmdTool
+            coEvery { toolExecutor.executeTool(match { it.name == "advance_code_editing" }, any()) } returns
+                ToolResult(success = true, output = "edited Calc.kt")
+            // Byte-identical command output every time → repetition guard ABORT at the 4th identical call.
+            coEvery { toolExecutor.executeTool(match { it.name == "run_terminal_command" }, any()) } returns
+                ToolResult(success = true, output = "Compilation OK")
+
+            val edit = createLLMResponse("""{"response":"fixing","actions":[{"tool":"advance_code_editing","arguments":{"path":"Calc.kt","instructions":"return a + b"}}]}""")
+            val verify = createLLMResponse("""{"response":"verifying","actions":[{"tool":"run_terminal_command","arguments":{"command":"kotlinc src/Calc.kt"}}]}""")
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(edit, verify, verify, verify, verify, verify)
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Fix add() and verify it compiles",
+                mode = TaskMode.AGENT
+            )
+
+            assertTrue(result.success, "edit landed + verification loop must finalize SUCCESS: ${result.response}")
+            assertFalse(result.incomplete, "the edit deliverable landed; not an INCOMPLETE abandonment")
+            assertTrue(
+                result.response.contains("verification", ignoreCase = true),
+                "should note the stopped verification step, got: ${result.response}",
+            )
         }
 
         @Test

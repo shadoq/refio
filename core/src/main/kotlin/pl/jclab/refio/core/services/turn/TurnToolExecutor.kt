@@ -456,6 +456,7 @@ class TurnToolExecutor(
                     subtaskId = subtaskId,
                     content = errorText,
                     isSummarized = false,
+                    success = false,
                     rawOutput = null,
                     metadata = null
                 )
@@ -530,21 +531,8 @@ class TurnToolExecutor(
                     }
                     val subtaskId = subtaskIds[toolCall.id]!!
 
-                    if (config.enableSnapshots && snapshotService != null) {
-                        try {
-                            val params = TurnJsonUtils.parseJsonToMap(toolCall.arguments)
-                            val path = params["path"]?.toString()
-                            if (path != null) {
-                                val snapshotId = snapshotService.createSnapshot(taskId, subtaskId, listOf(path))
-                                if (snapshotId != null) {
-                                    subtaskRepository.linkSnapshot(subtaskId, snapshotId)
-                                }
-                            }
-                        } catch (e: Exception) {
-                            logger.warn(e) { "[SNAPSHOT] Failed to create snapshot for ${toolCall.name}" }
-                        }
-                    }
-
+                    // Snapshot-before-write is centralized in executeSingleTool (covers the
+                    // non-streaming write path uniformly), so the parallel branch needs no extra block.
                     val result = executeSingleTool(
                         taskId = taskId,
                         toolCall = toolCall,
@@ -606,6 +594,36 @@ class TurnToolExecutor(
     }
 
     /**
+     * Snapshot a write tool's target file before execution so the edit can be rolled back.
+     * Covers the non-streaming execution path (toolExecutor.executeTool); streaming editors
+     * already snapshot inside ToolExecutor.executeToolsWithStreaming. No-op for reads, for
+     * disabled snapshots, or when no path / snapshot service is available.
+     */
+    private fun maybeSnapshotBeforeWrite(
+        taskId: String,
+        subtaskId: String,
+        toolCall: ToolCallData,
+        tool: Tool?,
+        config: TurnLoopConfig
+    ) {
+        if (!config.enableSnapshots || snapshotService == null) {
+            return
+        }
+        if (tool?.mode != ToolMode.WRITE) {
+            return
+        }
+        try {
+            val path = extractEditPath(toolCall.arguments) ?: return
+            val snapshotId = snapshotService.createSnapshot(taskId, subtaskId, listOf(path))
+            if (snapshotId != null) {
+                subtaskRepository.linkSnapshot(subtaskId, snapshotId)
+            }
+        } catch (e: Exception) {
+            logger.warn(e) { "[SNAPSHOT] Failed to create snapshot for ${toolCall.name}" }
+        }
+    }
+
+    /**
      * Execute a single tool call.
      */
     @Suppress("UNUSED_PARAMETER")
@@ -642,6 +660,7 @@ class TurnToolExecutor(
                 subtaskId = subtaskId,
                 content = errorText,
                 isSummarized = false,
+                success = false,
                 rawOutput = null,
                 metadata = null
             )
@@ -726,6 +745,7 @@ class TurnToolExecutor(
                     subtaskId = subtaskId,
                     content = notice,
                     isSummarized = false,
+                    success = true,
                     rawOutput = notice,
                     metadata = null
                 )
@@ -851,6 +871,7 @@ class TurnToolExecutor(
                     changeSummary = output.changeSummary
                 )
             } else {
+                maybeSnapshotBeforeWrite(taskId, subtaskId, toolCall, tool, _config)
                 toolExecutor.executeTool(toolCallRequest, taskId)
             }
 
@@ -1041,6 +1062,7 @@ class TurnToolExecutor(
                     subtaskId = subtaskId,
                     content = effectiveContent,
                     isSummarized = effectivelySummarized,
+                    success = true,
                     rawOutput = outputWithWarnings,
                     // `rawOutput` above (the tool's own output, before hints/repeatedCallNudge) — NOT
                     // outputWithWarnings, whose nudge embeds a per-call subtask UUID that would defeat
@@ -1098,6 +1120,7 @@ class TurnToolExecutor(
                     subtaskId = subtaskId,
                     content = errorText,
                     isSummarized = false,
+                    success = false,
                     rawOutput = null,
                     metadata = null
                 )
@@ -1127,6 +1150,7 @@ class TurnToolExecutor(
                 subtaskId = subtaskId,
                 content = errorText,
                 isSummarized = false,
+                success = false,
                 rawOutput = null,
                 metadata = null
             )
@@ -1211,8 +1235,20 @@ class TurnToolExecutor(
     }
 
     fun countVerificationToolCalls(toolCalls: List<ToolCallData>): Int {
-        return toolCalls.count { it.name in setOf("run_terminal_command", "grep_search", "read_file", "view_diff") }
+        return toolCalls.count { isVerificationTool(it.name) }
     }
+
+    /** A read-only / self-verification tool (compile/run, search, read, diff) - never a deliverable itself. */
+    fun isVerificationTool(toolName: String): Boolean =
+        toolName in setOf("run_terminal_command", "grep_search", "read_file", "view_diff")
+
+    /**
+     * A WRITE tool that actually produces a FILE deliverable (edit/create). Excludes the execution
+     * tools (run_code / run_terminal_command) which are mode=WRITE for approval purposes but produce
+     * no file - so a loop of failing commands with no real edit is never mistaken for a delivered turn.
+     */
+    fun isFileWriteTool(toolName: String): Boolean =
+        isWriteTool(toolName) && toolName !in EXECUTION_TOOL_NAMES
 
     /**
      * Count information-gathering calls (reads/searches) in a batch. Feeds the consolidation

@@ -72,9 +72,6 @@ class AgentEventSqlRepository : AgentEventRepository {
             "AgentFailed" to AgentEvent.AgentFailed::class.java,
             "DataRequest" to AgentEvent.DataRequest::class.java,
             "DataResponse" to AgentEvent.DataResponse::class.java,
-            "ArtifactProduced" to AgentEvent.ArtifactProduced::class.java,
-            "SpawnAgentRequest" to AgentEvent.SpawnAgentRequest::class.java,
-            "AgentSpawned" to AgentEvent.AgentSpawned::class.java,
             "ApprovalRequired" to AgentEvent.ApprovalRequired::class.java,
             "ApprovalDecision" to AgentEvent.ApprovalDecision::class.java,
             "ProgressUpdate" to AgentEvent.ProgressUpdate::class.java,
@@ -97,9 +94,6 @@ private fun AgentEvent.eventTypeName(): String = when (this) {
     is AgentEvent.AgentFailed -> "AgentFailed"
     is AgentEvent.DataRequest -> "DataRequest"
     is AgentEvent.DataResponse -> "DataResponse"
-    is AgentEvent.ArtifactProduced -> "ArtifactProduced"
-    is AgentEvent.SpawnAgentRequest -> "SpawnAgentRequest"
-    is AgentEvent.AgentSpawned -> "AgentSpawned"
     is AgentEvent.ApprovalRequired -> "ApprovalRequired"
     is AgentEvent.ApprovalDecision -> "ApprovalDecision"
     is AgentEvent.ProgressUpdate -> "ProgressUpdate"
