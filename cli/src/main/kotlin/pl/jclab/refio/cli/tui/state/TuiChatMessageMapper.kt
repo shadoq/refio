@@ -69,16 +69,6 @@ object TuiChatMessageMapper {
                 messageType = TuiMessageType.APPROVAL_REQUEST
             )
 
-            is AgentEvent.ArtifactProduced -> TuiChatMessage(
-                id = event.id,
-                timestamp = event.timestamp,
-                role = "agent_event",
-                content = "Artifact: ${event.artifact.name} (${event.artifact.type})",
-                agentId = event.sourceAgentId,
-                agentColorIndex = colorIdx,
-                messageType = TuiMessageType.ARTIFACT
-            )
-
             is AgentEvent.DataRequest -> TuiChatMessage(
                 id = event.id,
                 timestamp = event.timestamp,
@@ -108,7 +98,7 @@ object TuiChatMessageMapper {
                 agentColorIndex = colorIdx
             )
 
-            is AgentEvent.ApprovalDecision, is AgentEvent.SpawnAgentRequest, is AgentEvent.AgentSpawned -> null
+            is AgentEvent.ApprovalDecision -> null
 
             // Turn lifecycle events are consumed by GUI trace panel, not shown in TUI chat.
             is AgentEvent.TurnStarted,

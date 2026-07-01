@@ -65,6 +65,12 @@ data class SessionDebugSnapshot(
          * harness (docs/0061) treats it as a failed run, not a success. Additive field.
          */
         val contextOverflow: Boolean = false,
+        /**
+         * The guardrail that aborted the turn, if any (e.g. "LOOP_ABORTED", "NOOP_WRITE_STALL") -
+         * lets the e2e harness classify a failure by cause, not just by status. Null when the turn
+         * did not hit a marked abort. Additive field.
+         */
+        val failureMarker: String? = null,
     )
 
     data class SubtaskInfo(

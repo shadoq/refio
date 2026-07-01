@@ -1,11 +1,18 @@
 package pl.jclab.refio.core.tools.implementations
 
+import io.ktor.server.application.*
+import io.ktor.server.engine.*
+import io.ktor.server.netty.*
+import io.ktor.server.response.*
+import io.ktor.server.routing.*
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import pl.jclab.refio.core.security.UrlPolicy
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -170,6 +177,39 @@ class HttpRequestToolTest {
             ))
             // Will fail due to unreachable host, but method defaulting should work
             assertFalse(result.success)
+        }
+    }
+
+    @Nested
+    inner class RedirectSsrfTests {
+
+        // urlPolicy.validate() guards only the initial URL. If the tool auto-followed redirects,
+        // an allowed public host could 30x it to a loopback/internal address and exfiltrate the
+        // body. The guard must re-apply to every hop, so a redirect to a blocked address is not
+        // followed.
+        @Test
+        fun `does not follow a redirect to a blocked address`() = runBlocking {
+            val validateCalls = AtomicInteger(0)
+            // Allow the initial loopback fixture host, block every later hop - i.e. an allowed
+            // front door that redirects to an internal address.
+            val policy = UrlPolicy(allowLoopback = { validateCalls.getAndIncrement() == 0 })
+            val server = embeddedServer(Netty, port = 0) {
+                routing {
+                    get("/redirect") { call.respondRedirect("/secret", permanent = false) }
+                    get("/secret") { call.respondText("LEAKED-SECRET-BODY") }
+                }
+            }.start(wait = false)
+            try {
+                val port = server.resolvedConnectors().first().port
+                val tool = HttpRequestTool(urlPolicy = policy)
+                val result = tool.execute(mapOf("url" to "http://127.0.0.1:$port/redirect"))
+                assertFalse(
+                    result.output.orEmpty().contains("LEAKED-SECRET-BODY"),
+                    "a redirect to a blocked address must not be followed (SSRF)"
+                )
+            } finally {
+                server.stop(0, 0)
+            }
         }
     }
 

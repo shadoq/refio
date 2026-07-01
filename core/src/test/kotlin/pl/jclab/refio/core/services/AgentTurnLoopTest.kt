@@ -399,6 +399,45 @@ class AgentTurnLoopTest {
     }
 
     @Nested
+    inner class ContinueTurnRagPauseTests {
+
+        @Test
+        fun `continueTurn marks the agent turn active so RAG indexing yields during resume`() = runTest {
+            // A turn paused for tool approval resumes via continueTurn. runTurn wraps the loop in
+            // beginAgentTurn/endAgentTurn so background RAG indexing yields the SQLite WAL writer-lock
+            // for the turn's duration; continueTurn must do the same. Without it, an interactive
+            // resume-after-approval lets RAG grab the writer-lock and stall tool subtask-status writes.
+            var activeDuringLoop = false
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } answers {
+                activeDuringLoop = pl.jclab.refio.core.services.monitoring.GlobalMetrics.isAgentTurnActive()
+                LLMResponse(
+                    content = """{"response": "resumed"}""",
+                    usage = LLMUsage(inputTokens = 100, outputTokens = 50, totalTokens = 150),
+                    model = "gpt-4", provider = "openai", cost = 0.001
+                )
+            }
+
+            val activeBefore = pl.jclab.refio.core.services.monitoring.GlobalMetrics.isAgentTurnActive()
+            val result = agentTurnLoop.continueTurn(taskId = testTaskId, mode = TaskMode.AGENT)
+
+            assertFalse(activeBefore, "baseline: no agent turn should be active before continueTurn")
+            assertTrue(activeDuringLoop, "continueTurn must mark the agent turn active during the resumed loop")
+            assertFalse(
+                pl.jclab.refio.core.services.monitoring.GlobalMetrics.isAgentTurnActive(),
+                "the begin/end count must be balanced back to inactive after continueTurn"
+            )
+            assertTrue(result.success, "the resumed turn should complete: ${result.response}")
+        }
+    }
+
+    @Nested
     inner class ModeSpecificTests {
 
         @Test

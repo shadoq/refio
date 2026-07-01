@@ -1,0 +1,25 @@
+{
+  "id": "build-spa-2-routes",
+  "mode": "AGENT",
+  "max_iterations": 35,
+  "fixture": "fixtures/build-spa-2-routes",
+  "prompt_file": "prompts/build-spa-2-routes.md",
+  "assert": {
+    "needles_in_file": [
+      { "path": "index.html", "regex": "hashchange|location\\.hash|#/" }
+    ],
+    "no_context_overflow": true
+  },
+  "smoke": {
+    "entry": "index.html",
+    "no_js_errors": true,
+    "dom_present": ["#view", "a[href=\"#/home\"]", "a[href=\"#/about\"]"],
+    "interactions": [
+      { "click": "a[href=\"#/about\"]", "expect_text_change": "#view" },
+      { "click": "a[href=\"#/home\"]", "expect_text_change": "#view" }
+    ]
+  },
+  "judge": {
+    "criteria": ["A client-side SPA in index.html with two hash routes #/home and #/about and nav links, switching the #view container content without a full reload; the two views show clearly different text and there are no JS errors."]
+  }
+}

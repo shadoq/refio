@@ -68,7 +68,7 @@ Open acknowledgement of what's pragmatic-MVP today. No sugarcoating:
 
 - **Orchestration is a light router + executors**, not a deep agent engine. `IntentRouter` maps modes and dispatches to executors; `WorkflowOrchestrator` coordinates (~200 LOC).
 - **Multi-agent runtime - early seed only.** `MultiAgentRunner` with DFS cycle detection, `supervisorScope` parallel execution, `AgentEventBus`, and a YAML spec parser (`MultiAgentTaskParser`) exist in `core/agents/`, plus `MultiAgentRouter` persisting `agent_sessions` / `agent_instances`. Wired to runtime through **only one entry point**: CLI flag `--headless --multi-agent <file.yaml>`. No IntelliJ UI, no interactive TUI launcher, no decomposer/dispatcher (removed), no resume. Subagents invoked from a turn (`invoke_subagent` tool) are a **separate** nested-invocation path and do not use `MultiAgentRunner`.
-- **Agent-to-agent messaging - half-wired seed.** The `AgentEvent` vocabulary (`DataRequest`/`DataResponse`, `ArtifactProduced`, `SpawnAgentRequest`/`AgentSpawned`, `ApprovalRequired`/`ApprovalDecision`) is defined, `AgentEventBus` + `AgentEventHandler` are implemented with `CompletableDeferred` wait primitives, `agent_events` table persists every variant via `AgentEventSqlRepository`. The `send_message` tool emits `DataRequest` and `AgentTurnLoop` suspends on the matching `DataResponse` with a 5-min timeout. **But no responder exists in production code** - nothing emits `DataResponse`, `ArtifactProduced`, `SpawnAgentRequest` or `AgentSpawned` outside tests, so an agent that calls `send_message` of type `question`/`blocker` times out. The only A2A-ish loop that actually closes is `ApprovalRequired` ↔ `ApprovalDecision` (TUI consumes approval events).
+- **Agent-to-agent messaging - wired via per-agent inboxes, still maturing.** The live round-trip: `send_message` enqueues a `DataRequest` into the peer's `AgentMessageInbox` (`AgentInboxRegistry` keys inboxes by session + agent), `TurnPromptBuilder` injects pending requests into that peer's next prompt, and `answer_message` emits the matching `DataResponse` that un-suspends the waiting turn in `AgentTurnLoop`. Events persist via `AgentEventSqlRepository`. Integration-tested (`MultiAgentA2ATest`) but not production-hardened - typed routing and resume are still missing. A parallel never-wired event-handler plus the unused `ArtifactProduced`/`SpawnAgentRequest` event types were removed once confirmed dead.
 - **No git worktree isolation per task.** Agents edit files directly (with snapshot rollback), not in an isolated branch.
 - **Planning loop is basic.** A plan executor works, but there's no plan refinement iteration (plan -> execute -> evaluate -> refine -> continue).
 - **No agent dashboard / command center.** Tool calls are visible in the chat stream, but there's no dedicated visualization of agent state across a long task.
@@ -99,12 +99,23 @@ Done:
   project state (content needles, real `build_cmd` runs, `file_unchanged`), split into
   HARD/SOFT tiers, with an offline self-test.
 - Public benchmark across providers to compare model behaviour on the same tasks.
+- E2E stabilization gate: N-runs aggregated to a pass-rate with baseline + delta and
+  failure-mode classification, driven by one command (`gate.sh` loops the runner into a
+  `StabilizationGate` aggregator, surfaced via `cli --gate`). The harness now measures a
+  pass-rate, not a single run.
+- Stabilization gate extensions: per-scenario baselines (`--gate-baseline-file` /
+  `--gate-write-baseline`), guardrail failure markers surfaced in `run.json`
+  (`metrics.failureMarker`, classified into loop-aborted / noop-write-stall), a persistent
+  commit-attributed trend history (`--gate-history` / `--gate-trend`), and long-context
+  scenarios that stress the context budget (e.g. `large-file-edit`).
+- Benchmark statistics and broader scenarios: the persisted e2e run records aggregate into a
+  per-model / per-tool view (leaderboard, scenario-by-model matrix, tool-use histogram via
+  `e2e-stats.sh`); application-build and CTF scenario classes join the behavioural set; and a
+  headless `--model` now applies to every model slot (turn, editing, plan) so a single flag
+  benchmarks one model end-to-end.
 
 Remaining:
 
-- Graduate the e2e harness into a **stabilization gate**: N-runs to a pass-rate, baseline +
-  delta, failure-mode classification, trend history, long-context scenarios. Today the
-  harness measures a single run, not a pass-rate.
 - Optional self-improvement: a coding agent that runs the e2e gate, diagnoses regressions
   (LLM-as-judge) and proposes fixes in an isolated worktree - never auto-merged.
 
@@ -124,12 +135,13 @@ Done:
 
 Remaining:
 
-- Architect / Editor split as a first-class pillar. It exists *implicitly* today - the turn
-  model plans and the edit tool calls a separate coding model - but the editor still shares
-  the coding model slot rather than having its own configurable role. Making it explicit is
-  the open work.
+- Architect / Editor split as a first-class pillar - **non-goal (decision 2026-07-01).** The
+  editor deliberately stays on the coding slot (`default_model.agent`): the turn model plans
+  and the edit tool calls the same coding model. There is no separate `EDITOR` slot and none
+  is planned. The implicit split (plan in the turn, generate in the edit tool) stays as-is.
 - Capability routing (cheap model for read-only, strong coder for edits). A delegate-to-
-  strong-model tool exists; a full per-step routing / CLASSIFIER step is deferred.
+  strong-model tool exists; a full per-step routing / CLASSIFIER step is deferred. (The editor
+  still resolves the coding slot; routing would pick *which* coding model, not add an editor role.)
 
 ### Phase 3 - Planning system v2
 
@@ -226,7 +238,7 @@ especially welcome:
 
 - **E2E stabilization gate** (Phase 1) - N-runs, baseline/delta, failure-mode classification
 - **Turn-loop hardening** (Phase 1) - guardrails for local-model reliability
-- **Architect / Editor split** (Phase 2) - explicit editor role, capability routing
+- **Capability routing** (Phase 2) - cheap model for read-only, strong coder for edits (the editor stays on the coding slot; no separate editor role)
 - **Documentation** - onboarding guides, architecture deep-dives
 - **Test coverage** - extending the existing Jacoco gate on `:core`
 - **Provider adapters** - new LLM providers or improvements to existing ones

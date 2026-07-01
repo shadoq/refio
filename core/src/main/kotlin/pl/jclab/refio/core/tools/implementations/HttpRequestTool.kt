@@ -161,11 +161,16 @@ class HttpRequestTool(
                     requestTimeout = timeoutMs
                 }
                 expectSuccess = false
+                // SSRF guard: urlPolicy.validate() only checks the initial URL. Auto-following
+                // redirects would let an allowed public host 30x us to a loopback/link-local/
+                // internal address, bypassing that check. Redirects are followed manually below
+                // so the guard re-applies to every hop.
+                followRedirects = false
             }
 
             val result = withTimeoutOrNull(timeoutMs) {
                 client.use { httpClient ->
-                    val response = httpClient.request(url) {
+                    suspend fun issue(target: String) = httpClient.request(target) {
                         this.method = HttpMethod.parse(method)
                         headers.forEach { (key, value) -> header(key, value) }
                         if (method in listOf("POST", "PUT", "PATCH")) {
@@ -180,6 +185,26 @@ class HttpRequestTool(
                                 }
                             }
                         }
+                    }
+
+                    // Follow redirects manually, re-validating every hop against the SSRF guard
+                    // (auto-follow is off). A 30x to a loopback/link-local/internal address is
+                    // rejected instead of silently fetched.
+                    var response = issue(url)
+                    var currentUrl = url
+                    var redirectHops = 0
+                    while (response.status.value in 300..399 && redirectHops < MAX_REDIRECTS) {
+                        val location = response.headers[HttpHeaders.Location] ?: break
+                        val nextUrl = java.net.URI(currentUrl).resolve(location).toString()
+                        try {
+                            networkPolicy?.assertEgressAllowed(name, nextUrl, taskId)
+                            urlPolicy.validate(nextUrl)
+                        } catch (e: Exception) {
+                            return@use ToolResult.error("Blocked redirect to '$nextUrl': ${e.message}")
+                        }
+                        currentUrl = nextUrl
+                        response = issue(nextUrl)
+                        redirectHops++
                     }
 
                     val statusCode = response.status.value
@@ -677,6 +702,7 @@ class HttpRequestTool(
          *  workspace file and only summarized in context (kept out of tokens / recent-work UI). */
         const val HTTP_AUTOSAVE_THRESHOLD = 64 * 1024 // 64KB
         const val TIMEOUT_MS = 60_000L // 60 seconds
+        const val MAX_REDIRECTS = 5
         const val PREVIEW_CHARS = 500
         const val MAX_BINARY_INLINE_BYTES = 1 * 1024 * 1024 // 1MB base64 inline cap
 

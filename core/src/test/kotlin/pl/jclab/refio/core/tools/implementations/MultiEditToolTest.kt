@@ -393,12 +393,13 @@ class MultiEditToolTest {
     inner class AtomicBehaviorTests {
 
         @Test
-        fun `should fail all edits when one edit fails`() = runBlocking {
+        fun `a failing edit leaves every file untouched`() = runBlocking {
             // Given
             Files.writeString(tempDir.resolve("file1.txt"), "old content 1")
             Files.writeString(tempDir.resolve("file2.txt"), "old content 2")
 
-            // When - first edit succeeds, second fails (file not found), third should not apply
+            // When - the first edit would succeed but the second targets a missing file, so the
+            // whole batch must fail without half-writing the first file.
             val result = tool.execute(mapOf(
                 "edits" to listOf(
                     mapOf("path" to "file1.txt", "old_string" to "old", "new_string" to "new"),
@@ -407,10 +408,10 @@ class MultiEditToolTest {
                 )
             ))
 
-            // Then
+            // Then - error AND no file partially written (atomic for logical failures).
             assertToolError(result)
-            // First file should still be edited (edits are applied in sequence)
-            // but the operation is marked as failed
+            assertEquals("old content 1", readFileContent(tempDir, "file1.txt"))
+            assertEquals("old content 2", readFileContent(tempDir, "file2.txt"))
         }
 
         @Test

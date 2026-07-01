@@ -32,7 +32,9 @@ object CommandRuleDefaults {
 
         // Destructive git operations
         CommandRule("^git\\s+reset\\s+--hard", RuleAction.BLOCK, "Git hard reset"),
-        CommandRule("^git\\s+clean\\s+-f", RuleAction.BLOCK, "Git force clean"),
+        // Force-clean deletes untracked files. Block it in any flag order/grouping
+        // (-fdx, -xfd, -d -x -f, --force) while leaving non-destructive -n/--dry-run alone.
+        CommandRule("^git\\s+clean\\b(?=.*\\s-(?:-force\\b|[a-z]*f))", RuleAction.BLOCK, "Git force clean"),
         CommandRule("^git\\s+push\\s+.*--force", RuleAction.BLOCK, "Git force push"),
         CommandRule("^git\\s+push\\s+-f\\b", RuleAction.BLOCK, "Git force push (-f)"),
 

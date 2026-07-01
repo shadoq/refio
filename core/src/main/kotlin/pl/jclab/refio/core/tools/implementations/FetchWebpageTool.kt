@@ -24,6 +24,8 @@ import pl.jclab.refio.core.tools.base.ToolResult
 
 private val logger = dualLogger("FetchWebpageTool")
 
+private const val MAX_REDIRECTS = 5
+
 class FetchWebpageTool(
     private val llmClient: LLMClient,
     private val configService: ConfigService,
@@ -134,14 +136,26 @@ class FetchWebpageTool(
     private suspend fun fetchHtml(url: String): String {
         val client = HttpClient(CIO) {
             engine { requestTimeout = 20_000 }
-            followRedirects = true
+            // Follow redirects manually so the SSRF guard (urlPolicy) re-applies to every hop -
+            // a 30x to a loopback/internal address would otherwise bypass the initial-URL check.
+            followRedirects = false
         }
         try {
-            val response = client.get(url) {
-                header("User-Agent", "Mozilla/5.0 (compatible; Refio/1.0)")
-                header("Accept", "text/html,application/xhtml+xml,*/*")
+            var currentUrl = url
+            var hops = 0
+            while (true) {
+                val response = client.get(currentUrl) {
+                    header("User-Agent", "Mozilla/5.0 (compatible; Refio/1.0)")
+                    header("Accept", "text/html,application/xhtml+xml,*/*")
+                }
+                if (response.status.value !in 300..399 || hops >= MAX_REDIRECTS) {
+                    return response.bodyAsText()
+                }
+                val location = response.headers["Location"] ?: return response.bodyAsText()
+                currentUrl = java.net.URI(currentUrl).resolve(location).toString()
+                urlPolicy.validate(currentUrl)  // re-apply SSRF guard to each redirect hop
+                hops++
             }
-            return response.bodyAsText()
         } finally {
             client.close()
         }

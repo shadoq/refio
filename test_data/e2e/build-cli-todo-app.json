@@ -1,0 +1,19 @@
+{
+  "id": "build-cli-todo-app",
+  "mode": "AGENT",
+  "max_iterations": 40,
+  "fixture": "fixtures/build-cli-todo-app",
+  "prompt_file": "prompts/build-cli-todo-app.md",
+  "assert": {
+    "needles_in_file": [
+      { "path": "app.py", "regex": "__main__|def[[:space:]]+main" },
+      { "path": "store.py", "regex": "def[[:space:]]+(add|load|save)" },
+      { "path": "tests/test_todo.py", "regex": "def[[:space:]]+test_" }
+    ],
+    "build_cmd": "python3 app.py add \"buy milk\" && python3 app.py add \"walk dog\" && python3 app.py list | grep -q \"buy milk\" && python3 app.py list | grep -q \"walk dog\" && python3 -m unittest discover -s tests -p \"test_*.py\"",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": ["A multi-module Python CLI todo app split across at least app.py (entry) and store.py (storage): `add` appends a task and `list` prints all tasks, state persists across separate process runs in a file, and its own unittest suite in tests/ passes."]
+  }
+}

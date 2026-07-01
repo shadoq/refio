@@ -40,6 +40,13 @@
 # Scenario selection: a positional arg is resolved as (1) an existing file path, else (2)
 # test_data/e2e/<arg>.json, else (3) any scenario whose `.id` equals <arg>. `--all` runs them all.
 #
+# Stabilization gate (docs/0069): set E2E_OUT_DIR=<dir> to persist each run as
+# <dir>/<id>__<model>__<run>.run.json and append a verdict record to <dir>/results.jsonl (fields:
+# scenario, model, run, verdict, reasons[], failure_mode, status, costUsd, tokensOut). The runner is
+# the only place that knows verdict+reasons+build_exit+status together (run.json has no verdict field).
+# E2E_RUN_INDEX=<n> tags the run number (default 1; an N-runs driver sets it per iteration).
+# With E2E_OUT_DIR unset (the default) nothing is persisted and behaviour is unchanged.
+#
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -336,6 +343,93 @@ assert_run() {
     return 1
 }
 
+# Map a run to one failure-mode bucket for the gate's classification (docs/0069). PASS -> none.
+# Priority: silent context overflow first (most actionable), then non-SUCCESS run status, then -
+# for a run that SUCCEEDED but missed its assertions - build vs output. Robust to a missing run.json.
+classify_failure_mode() {
+    local verdict="$1" run_json="$2"
+    if [[ "$verdict" == PASS* ]]; then echo "none"; return 0; fi
+    local overflow="false" status="UNKNOWN" marker=""
+    if [[ -f "$run_json" ]]; then
+        overflow="$(jq -r '.metrics.contextOverflow // false' "$run_json" 2>/dev/null || echo false)"
+        status="$(jq -r '.session.status // "UNKNOWN"' "$run_json" 2>/dev/null || echo UNKNOWN)"
+        marker="$(jq -r '.metrics.failureMarker // empty' "$run_json" 2>/dev/null || echo "")"
+    fi
+    if [[ "$overflow" == "true" ]]; then echo "overflow"; return 0; fi
+    # A precise guardrail marker (docs/0069 P2) beats the coarse status mapping below.
+    case "$marker" in
+        LOOP_ABORTED)     echo "loop-aborted";     return 0 ;;
+        NOOP_WRITE_STALL) echo "noop-write-stall"; return 0 ;;
+    esac
+    case "$status" in
+        CANCELED)   echo "abort";      return 0 ;;
+        INCOMPLETE) echo "loop";       return 0 ;;
+        FAILED)     echo "agent-fail"; return 0 ;;
+        UNKNOWN)    echo "crash";      return 0 ;;
+    esac
+    case "$verdict" in
+        *"build_cmd exit"*) echo "build-fail" ;;
+        *)                  echo "wrong-output" ;;
+    esac
+    return 0
+}
+
+# Persist this run for the stabilization gate (docs/0069). No-op unless E2E_OUT_DIR is set, so default
+# runs are completely unchanged. Writes <out>/<id>__<model>__<run>.run.json plus one results.jsonl
+# record. Never aborts the caller (all failure paths swallowed) - the gate is observ-only.
+emit_result_record() {
+    [[ -n "${E2E_OUT_DIR:-}" ]] || return 0
+    local id="$1" verdict="$2" run_json="$3"
+    local run_idx="${E2E_RUN_INDEX:-1}"
+    [[ "$run_idx" =~ ^[0-9]+$ ]] || run_idx=1
+    run_idx=$((10#$run_idx))
+    local model_label="${MODEL:-default}"
+    local status="UNKNOWN" cost="0" tokens="0" fmode reasons_str vlabel="FAIL"
+    # Per-run benchmark stats (how the model + tools behaved this run), all derived from run.json.
+    # Additive: the Kotlin gate parser (GateRunRecord via Gson) ignores unknown fields, so enriching
+    # the record never breaks `cli --gate`; the aggregator (e2e-stats.sh) reads these back.
+    local mode="" provider="" tokens_in="0" iters="0" apicalls="0" duration="0"
+    local tools_json="{}" apierr_json="{}"
+    if [[ -f "$run_json" ]]; then
+        status="$(jq -r '.session.status // "UNKNOWN"' "$run_json" 2>/dev/null || echo UNKNOWN)"
+        cost="$(jq -r '.metrics.costUsd // 0' "$run_json" 2>/dev/null || echo 0)"
+        tokens="$(jq -r '.metrics.tokensOut // 0' "$run_json" 2>/dev/null || echo 0)"
+        mode="$(jq -r '.session.mode // ""' "$run_json" 2>/dev/null || echo "")"
+        provider="$(jq -r '.session.provider // ""' "$run_json" 2>/dev/null || echo "")"
+        tokens_in="$(jq -r '.metrics.tokensIn // 0' "$run_json" 2>/dev/null || echo 0)"
+        iters="$(jq -r '.metrics.toolCallCount // 0' "$run_json" 2>/dev/null || echo 0)"
+        apicalls="$(jq -r '.metrics.apiCallCount // 0' "$run_json" 2>/dev/null || echo 0)"
+        duration="$(jq -r '.metrics.durationMs // (.run.durationMs // 0)' "$run_json" 2>/dev/null || echo 0)"
+        # Tool-use histogram (tool name -> call count) across every message in the run.
+        tools_json="$(jq -c '[.conversation[]?.toolCalls[]?] | reduce .[] as $t ({}; .[$t] = ((.[$t]//0)+1))' "$run_json" 2>/dev/null || echo '{}')"
+        [[ -n "$tools_json" && "$tools_json" != "null" ]] || tools_json="{}"
+        # API-error histogram (errorType -> count) for provider/tool reliability.
+        apierr_json="$(jq -c '[.apiLogs[]?.errorType | select(. != null and . != "")] | reduce .[] as $e ({}; .[$e] = ((.[$e]//0)+1))' "$run_json" 2>/dev/null || echo '{}')"
+        [[ -n "$apierr_json" && "$apierr_json" != "null" ]] || apierr_json="{}"
+    fi
+    fmode="$(classify_failure_mode "$verdict" "$run_json")"
+    reasons_str="$(sed -n 's/^FAIL (\(.*\))$/\1/p' <<<"$verdict")"
+    [[ "$verdict" == PASS* ]] && vlabel="PASS"
+    mkdir -p "$E2E_OUT_DIR"
+    if [[ -f "$run_json" ]]; then
+        cp "$run_json" "$E2E_OUT_DIR/${id}__${model_label//\//-}__${run_idx}.run.json" 2>/dev/null || true
+    fi
+    jq -cn \
+        --arg scenario "$id" --arg model "$model_label" --argjson run "$run_idx" \
+        --arg verdict "$vlabel" --arg fmode "$fmode" --arg status "$status" \
+        --argjson cost "$cost" --argjson tokens "$tokens" --arg reasons "$reasons_str" \
+        --arg mode "$mode" --arg provider "$provider" \
+        --argjson tokensIn "$tokens_in" --argjson iterations "$iters" \
+        --argjson apiCalls "$apicalls" --argjson durationMs "$duration" \
+        --argjson tools "$tools_json" --argjson apiErrors "$apierr_json" \
+        '{scenario:$scenario, model:$model, run:$run, verdict:$verdict, failure_mode:$fmode,
+          status:$status, costUsd:$cost, tokensOut:$tokens,
+          mode:$mode, provider:$provider, tokensIn:$tokensIn, iterations:$iterations,
+          apiCalls:$apiCalls, durationMs:$durationMs, tools:$tools, apiErrors:$apiErrors,
+          reasons: ($reasons | if . == "" then [] else split("; ") end)}' \
+        >>"$E2E_OUT_DIR/results.jsonl" 2>/dev/null || true
+}
+
 run_scenario() {
     local scenario="$1"
     [[ -f "$scenario" ]] || die "scenario not found: $scenario"
@@ -367,16 +461,27 @@ run_scenario() {
     # agent can drive http_request/fetch_webpage against a deterministic local endpoint instead of the
     # flaky public internet. The prompt's {{FIXTURE_SERVER}} placeholder is replaced with the base URL,
     # and the loopback opt-in (UrlPolicy / security.allow_loopback) is enabled for this run only.
-    local fs_dir fs_port server_pid="" effective_prompt="$prompt_file"
+    local fs_dir fs_port fs_cmd server_pid="" effective_prompt="$prompt_file"
     fs_dir="$(jq -r '.fixture_server.dir // empty' "$scenario")"
     fs_port="$(jq -r '.fixture_server.port // empty' "$scenario")"
+    fs_cmd="$(jq -r '.fixture_server.cmd // empty' "$scenario")"
     if [[ -n "$fs_dir" && -n "$fs_port" ]]; then
         local py; py="$(command -v python3 || command -v python || true)"
         [[ -n "$py" ]] || die "fixture_server needs python3/python on PATH"
-        # Run python directly (not in a subshell) so $! is the server's own PID and the kill below is
-        # reliable; --directory takes the absolute served path so no `cd` is needed.
-        "$py" -m http.server "$fs_port" --bind 127.0.0.1 --directory "$work/$fs_dir" \
-            >"$work/server.log" 2>&1 &
+        if [[ -n "$fs_cmd" ]]; then
+            # Custom server command (e.g. an intentionally-vulnerable CTF fixture) instead of the
+            # stdlib static file server. {{PORT}} and {{DIR}} (the absolute served dir) are
+            # substituted; the command should `exec` its server so the backgrounded PID is the
+            # server itself and the kill below is reliable.
+            local rendered="${fs_cmd//\{\{PORT\}\}/$fs_port}"
+            rendered="${rendered//\{\{DIR\}\}/$work/$fs_dir}"
+            bash -c "$rendered" >"$work/server.log" 2>&1 &
+        else
+            # Run python directly (not in a subshell) so $! is the server's own PID and the kill below
+            # is reliable; --directory takes the absolute served path so no `cd` is needed.
+            "$py" -m http.server "$fs_port" --bind 127.0.0.1 --directory "$work/$fs_dir" \
+                >"$work/server.log" 2>&1 &
+        fi
         server_pid=$!
         local ready=0 i
         for (( i=0; i<50; i++ )); do
@@ -423,7 +528,11 @@ run_scenario() {
     # return below) so no python process is left running.
     [[ -n "$server_pid" ]] && { kill "$server_pid" 2>/dev/null || true; }
 
-    [[ -f "$run_json" ]] || { echo "| $id | FAIL (no run.json produced) | - |"; return 1; }
+    if [[ ! -f "$run_json" ]]; then
+        echo "| $id | FAIL (no run.json produced) | - |"
+        emit_result_record "$id" "FAIL (no run.json produced)" "$run_json"
+        return 1
+    fi
 
     # A non-zero CLI exit is a HARD failure: the headless turn aborted (e.g. cost ceiling, crash). It
     # must never be papered over by deterministic assertions that the starting fixture happens to
@@ -434,6 +543,7 @@ run_scenario() {
         st="$(jq -r '.session.status // "?"' "$run_json")"
         co="$(jq -r '.metrics.costUsd // 0' "$run_json")"
         echo "| $id | FAIL (headless CLI exit=$cli_exit) | status=$st cli_exit=$cli_exit cost=\$$co |"
+        emit_result_record "$id" "FAIL (headless CLI exit=$cli_exit)" "$run_json"
         [[ $KEEP -eq 1 ]] || rm -rf "$work"
         return 1
     fi
@@ -461,6 +571,7 @@ run_scenario() {
     cost="$(jq -r '.metrics.costUsd // 0' "$run_json")"
     echo "| $id | $verdict | status=$status build_exit=$build_exit cost=\$$cost |"
 
+    emit_result_record "$id" "$verdict" "$run_json"
     [[ $KEEP -eq 1 ]] || rm -rf "$work"
     [[ "$verdict" == PASS* ]]
 }
@@ -702,6 +813,47 @@ JSON
     v="$(assert_run "$smscen" "$sample/sample-run.pass.json" "$proj" 0 2 2>/dev/null || true)"
     echo "  case smoke-unavail  -> $v" >&2
     [[ "$v" == FAIL* ]] || { echo "  !! smoke must FAIL (loud) when the runner is unavailable (exit 2)" >&2; fails=1; }
+
+    # Case 17: stabilization-gate emission (docs/0069) — failure-mode classifier + results.jsonl
+    # record. Pure: no LLM, reuses the bundled sample run.json files. Pins the buckets a gate counts.
+    local cm
+    cm="$(classify_failure_mode "PASS" "$sample/sample-run.pass.json")"
+    echo "  case classify-pass  -> $cm" >&2
+    [[ "$cm" == "none" ]] || { echo "  !! PASS must classify as none" >&2; fails=1; }
+    cm="$(classify_failure_mode "FAIL (context overflow (silent truncation))" "$sample/sample-run.overflow.json")"
+    echo "  case classify-ovfl  -> $cm" >&2
+    [[ "$cm" == "overflow" ]] || { echo "  !! an overflow run must classify as overflow" >&2; fails=1; }
+    cm="$(classify_failure_mode "FAIL (session.status=FAILED (want SUCCESS))" "$sample/sample-run.failed.json")"
+    echo "  case classify-fail  -> $cm" >&2
+    [[ "$cm" == "agent-fail" ]] || { echo "  !! a FAILED-status run must classify as agent-fail" >&2; fails=1; }
+    cm="$(classify_failure_mode "FAIL (build_cmd exit=1)" "$sample/sample-run.pass.json")"
+    echo "  case classify-build -> $cm" >&2
+    [[ "$cm" == "build-fail" ]] || { echo "  !! a build_cmd exit must classify as build-fail" >&2; fails=1; }
+    cm="$(classify_failure_mode "FAIL (/x/ matched 0 line(s) in src/Main.kt, want [1..1000000])" "$sample/sample-run.pass.json")"
+    echo "  case classify-wrong -> $cm" >&2
+    [[ "$cm" == "wrong-output" ]] || { echo "  !! a needle miss on a SUCCESS run must classify as wrong-output" >&2; fails=1; }
+    cm="$(classify_failure_mode "FAIL (session.status=INCOMPLETE (want SUCCESS))" "$sample/sample-run.loop-aborted.json")"
+    echo "  case classify-loop  -> $cm" >&2
+    [[ "$cm" == "loop-aborted" ]] || { echo "  !! a LOOP_ABORTED marker must beat the INCOMPLETE->loop mapping" >&2; fails=1; }
+    cm="$(classify_failure_mode "FAIL (session.status=INCOMPLETE (want SUCCESS))" "$sample/sample-run.noop-stall.json")"
+    echo "  case classify-noop  -> $cm" >&2
+    [[ "$cm" == "noop-write-stall" ]] || { echo "  !! a NOOP_WRITE_STALL marker must classify as noop-write-stall" >&2; fails=1; }
+
+    # emit_result_record writes a named run.json copy + one valid JSONL verdict record into E2E_OUT_DIR.
+    local gate_out; gate_out="$(mktemp -d "${TMPDIR:-/tmp}/refio-e2e-gate-XXXXXX")"
+    ( E2E_OUT_DIR="$gate_out"; E2E_RUN_INDEX=3; MODEL="ollama/qwen3.5:4b"
+      emit_result_record "demo-scn" "PASS" "$sample/sample-run.pass.json" )
+    local rec; rec="$(tail -n1 "$gate_out/results.jsonl" 2>/dev/null || true)"
+    echo "  case gate-emit      -> $(jq -rc '{scenario,run,verdict,iterations,tools:(.tools|length)}' <<<"$rec" 2>/dev/null || echo PARSE_ERR)" >&2
+    [[ "$(jq -r '.verdict' <<<"$rec" 2>/dev/null)" == "PASS" ]] || { echo "  !! emitted record must have verdict PASS" >&2; fails=1; }
+    [[ "$(jq -r '.run' <<<"$rec" 2>/dev/null)" == "3" ]] || { echo "  !! emitted record must carry run index 3" >&2; fails=1; }
+    [[ "$(jq -r '.scenario' <<<"$rec" 2>/dev/null)" == "demo-scn" ]] || { echo "  !! emitted record must carry the scenario id" >&2; fails=1; }
+    [[ -f "$gate_out/demo-scn__ollama-qwen3.5:4b__3.run.json" ]] || { echo "  !! emitted run.json copy must exist" >&2; fails=1; }
+    # Benchmark stats enrichment: the record carries a per-tool histogram + iteration count from run.json.
+    [[ "$(jq -r '.tools["grep_search"] // 0' <<<"$rec" 2>/dev/null)" == "1" ]] || { echo "  !! emitted record must carry a per-tool histogram (grep_search=1)" >&2; fails=1; }
+    [[ "$(jq -r '.tools | length' <<<"$rec" 2>/dev/null)" == "3" ]] || { echo "  !! emitted record tools histogram must have 3 distinct tools" >&2; fails=1; }
+    [[ "$(jq -r '.iterations' <<<"$rec" 2>/dev/null)" == "3" ]] || { echo "  !! emitted record must carry iterations=3 (toolCallCount)" >&2; fails=1; }
+    rm -rf "$gate_out"
 
     rm -rf "$proj" "$empty"
     if [[ $fails -eq 0 ]]; then echo "self-test OK" >&2; else die "self-test FAILED"; fi

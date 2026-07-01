@@ -7,6 +7,8 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import pl.jclab.refio.core.api.StreamCallback
+import pl.jclab.refio.core.api.StreamChunk
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
@@ -214,6 +216,66 @@ class LLMRetryHandlerTest {
                 baseDelayMs = 1
             )
 
+            assertEquals(1, retryHandler.getStats().totalRetries)
+        }
+    }
+
+    @Nested
+    inner class StreamingRetryGuard {
+
+        @Test
+        fun `does not retry a streamed call once chunks were emitted to the UI`() = runTest {
+            // A partial first stream already pushed deltas to the consumer; retrying would replay
+            // the whole response and the UI would show duplicated/garbled output.
+            val received = StringBuilder()
+            coEvery {
+                llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
+            } answers {
+                val cb = args.firstOrNull { it is Function1<*, *> } as? StreamCallback
+                cb?.invoke(StreamChunk(delta = "partial ", accumulated = "partial ", isComplete = false))
+                throw RuntimeException("connection reset")
+            }
+
+            assertFailsWith<RuntimeException> {
+                retryHandler.callWithRetry(
+                    provider = "ollama",
+                    model = "test-model",
+                    messages = testMessages,
+                    taskId = "task-1",
+                    source = "test",
+                    baseDelayMs = 1,
+                    stream = true,
+                    onChunk = { chunk -> received.append(chunk.delta) }
+                )
+            }
+
+            // Streamed exactly once: no replay concatenated onto the partial output.
+            assertEquals("partial ", received.toString())
+            coVerify(exactly = 1) {
+                llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
+            }
+        }
+
+        @Test
+        fun `still retries a streamed call that failed before emitting any chunk`() = runTest {
+            // Nothing reached the UI yet (stream ended before the first token), so a clean retry
+            // from scratch is safe and must still happen.
+            coEvery {
+                llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
+            } throws RuntimeException("Ollama stream ended before done=true") andThen successResponse()
+
+            val response = retryHandler.callWithRetry(
+                provider = "ollama",
+                model = "test-model",
+                messages = testMessages,
+                taskId = "task-1",
+                source = "test",
+                baseDelayMs = 1,
+                stream = true,
+                onChunk = { }
+            )
+
+            assertEquals("response", response.content)
             assertEquals(1, retryHandler.getStats().totalRetries)
         }
     }

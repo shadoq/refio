@@ -1527,6 +1527,52 @@ object ModelDefinitions {
             removeParams = listOf("temperature"),
             active = true
         ),
+        "claude-sonnet-5" to ModelDefinition(
+            id = "claude-sonnet-5",
+            name = "Claude Sonnet 5",
+            provider = "anthropic",
+            description = "Best balance of speed and intelligence in the Sonnet tier, near-Opus coding and agentic quality, 1M context with adaptive thinking",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 3.00,
+            costPer1MOutput = 15.00,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            removeParams = listOf("temperature"),
+            active = true
+        ),
+        "claude-mythos-5" to ModelDefinition(
+            id = "claude-mythos-5",
+            name = "Claude Mythos 5",
+            provider = "anthropic",
+            description = "Same capabilities as Fable 5, available via Project Glasswing, 1M context with reasoning and agentic coding",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 10.00,
+            costPer1MOutput = 50.00,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            removeParams = listOf("temperature"),
+            active = true
+        ),
         "claude-opus-4-7" to ModelDefinition(
             id = "claude-opus-4-7",
             name = "Claude Opus 4.7",
@@ -5177,6 +5223,338 @@ object ModelDefinitions {
             active = true
         ),
 
+        "minimax-m3:cloud" to ModelDefinition(
+            id = "minimax-m3:cloud",
+            name = "MiniMax M3 (Cloud)",
+            provider = "ollama",
+            description = "MiniMax M3 model for coding and agentic workflows, 512K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 512_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        // ═══════════════════════════════════════════════════════════════════
+        // ORNITH FAMILY (DeepReinforce, open weights)
+        // ═══════════════════════════════════════════════════════════════════
+
+        // Ornith 1.0 - reasoning + tool use, 256K context
+        "ornith:9b" to ModelDefinition(
+            id = "ornith:9b",
+            name = "Ornith 1.0 9B",
+            provider = "ollama",
+            description = "Lightweight Ornith 1.0 open model with tools and thinking, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        "ornith:31b" to ModelDefinition(
+            id = "ornith:31b",
+            name = "Ornith 1.0 31B",
+            provider = "ollama",
+            description = "Mid-size Ornith 1.0 open model with tools and thinking, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        "ornith:35b" to ModelDefinition(
+            id = "ornith:35b",
+            name = "Ornith 1.0 35B",
+            provider = "ollama",
+            description = "Ornith 1.0 open model with tools and thinking, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        "ornith:397b" to ModelDefinition(
+            id = "ornith:397b",
+            name = "Ornith 1.0 397B",
+            provider = "ollama",
+            description = "Flagship Ornith 1.0 MoE open model with tools and thinking, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 2026 CLOUD/OPEN ADDITIONS (models.dev)
+        // ═══════════════════════════════════════════════════════════════════
+
+        // GLM-5.2 (Zhipu AI) - flagship agentic engineering with vision, 1M context
+        "glm-5.2:cloud" to ModelDefinition(
+            id = "glm-5.2:cloud",
+            name = "GLM-5.2 (Cloud)",
+            provider = "ollama",
+            description = "Flagship agentic engineering model with vision and strong coding, 1M context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        // Kimi K2.7 Code (Moonshot AI) - agentic coding with vision, 256K context
+        "kimi-k2.7-code:cloud" to ModelDefinition(
+            id = "kimi-k2.7-code:cloud",
+            name = "Kimi K2.7 Code (Cloud)",
+            provider = "ollama",
+            description = "Moonshot AI agentic coding model with vision, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        "kimi-k2.7-code-highspeed:cloud" to ModelDefinition(
+            id = "kimi-k2.7-code-highspeed:cloud",
+            name = "Kimi K2.7 Code Highspeed (Cloud)",
+            provider = "ollama",
+            description = "Latency-optimized Moonshot AI Kimi K2.7 Code variant with vision, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        // DeepSeek V4 (DeepSeek) - reasoning + vision, 1M context
+        "deepseek-v4-pro:cloud" to ModelDefinition(
+            id = "deepseek-v4-pro:cloud",
+            name = "DeepSeek V4 Pro (Cloud)",
+            provider = "ollama",
+            description = "DeepSeek V4 Pro reasoning model with vision, 1M context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        "deepseek-v4-flash:cloud" to ModelDefinition(
+            id = "deepseek-v4-flash:cloud",
+            name = "DeepSeek V4 Flash (Cloud)",
+            provider = "ollama",
+            description = "Fast DeepSeek V4 reasoning model with vision, 1M context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        // Step 3.7 Flash (StepFun) - reasoning, 256K context
+        "step-3.7-flash:cloud" to ModelDefinition(
+            id = "step-3.7-flash:cloud",
+            name = "Step 3.7 Flash (Cloud)",
+            provider = "ollama",
+            description = "StepFun Step 3.7 Flash reasoning model, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        // Nemotron 3 Ultra 550B A55B (NVIDIA) - reasoning, 1M context
+        "nemotron-3-ultra:550b" to ModelDefinition(
+            id = "nemotron-3-ultra:550b",
+            name = "Nemotron 3 Ultra 550B A55B",
+            provider = "ollama",
+            description = "NVIDIA Nemotron 3 Ultra MoE reasoning model, 1M context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_000_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        // Nemotron 3 Nano Omni 30B A3B Reasoning (NVIDIA) - reasoning, 256K context
+        "nemotron-3-nano-omni:30b" to ModelDefinition(
+            id = "nemotron-3-nano-omni:30b",
+            name = "Nemotron 3 Nano Omni 30B A3B",
+            provider = "ollama",
+            description = "NVIDIA Nemotron 3 Nano Omni reasoning model, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        // MiMo V2.5 Pro UltraSpeed (Xiaomi) - reasoning, 1M context
+        "mimo-v2.5-pro:cloud" to ModelDefinition(
+            id = "mimo-v2.5-pro:cloud",
+            name = "MiMo V2.5 Pro UltraSpeed (Cloud)",
+            provider = "ollama",
+            description = "Xiaomi MiMo V2.5 Pro low-latency reasoning model, 1M context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_048_576,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
         // ═══════════════════════════════════════════════════════════════════
         // LIQUID AI FAMILY
         // ═══════════════════════════════════════════════════════════════════
@@ -5557,7 +5935,10 @@ object ModelDefinitions {
         "meta-llama/" to openrouterDef("meta-llama/*", maxContext = 128_000, inPrice = 0.20, outPrice = 0.60),
         // Mistral — small $0.15/$0.60 baseline
         "mistralai/" to openrouterDef("mistralai/*", maxContext = 262_144, inPrice = 0.15, outPrice = 0.60),
-        // Qwen — 3.6-max $1.04/$6.24, 3.5-plus $0.40/$2.40, 3-* small models
+        // Qwen — 3.7-max/plus $1.05/$6.25, 3.6-max $1.04/$6.24, 3.6-flash $0.20/$0.60, 3.5-plus $0.40/$2.40, 3-* small models
+        "qwen/qwen3.7" to openrouterDef("qwen/qwen3.7-*", maxContext = 1_000_000, reasoning = true, inPrice = 1.05, outPrice = 6.25),
+        // 3.6-flash is a cheaper/faster tier — must precede "qwen/qwen3.6" to win the prefix match.
+        "qwen/qwen3.6-flash" to openrouterDef("qwen/qwen3.6-flash-*", maxContext = 1_000_000, vision = true, reasoning = true, inPrice = 0.20, outPrice = 0.60),
         "qwen/qwen3.6" to openrouterDef("qwen/qwen3.6-*", maxContext = 1_000_000, vision = true, inPrice = 1.05, outPrice = 6.25),
         "qwen/qwen3.5" to openrouterDef("qwen/qwen3.5-*", maxContext = 262_144, vision = true, inPrice = 0.40, outPrice = 2.40),
         // qwen3-coder-* variants emit XML pseudo-tags instead of native tool_calls
@@ -5570,7 +5951,9 @@ object ModelDefinitions {
         "deepseek/" to openrouterDef("deepseek/*", maxContext = 128_000, inPrice = 0.27, outPrice = 1.10),
         // xAI Grok — grok-4 $5/$15, grok-3 $5/$25, grok-fast variants cheaper
         "x-ai/grok-" to openrouterDef("x-ai/grok-*", maxContext = 2_000_000, vision = true, inPrice = 3.0, outPrice = 15.0),
-        // Cohere Command — command-r ~$0.50/$1.50
+        // Cohere — command-a-plus $2.50/$10, north-mini-code (open, coding), command-r ~$0.50/$1.50
+        "cohere/command-a" to openrouterDef("cohere/command-a-*", maxContext = 128_000, vision = true, reasoning = true, inPrice = 2.50, outPrice = 10.0),
+        "cohere/north" to openrouterDef("cohere/north-*", maxContext = 256_000, vision = true, reasoning = true),
         "cohere/command-" to openrouterDef("cohere/command-*", maxContext = 128_000, inPrice = 0.50, outPrice = 1.50),
         // Moonshot Kimi — k2 $0.74/$3.49
         "moonshotai/kimi" to openrouterDef("moonshotai/kimi-*", maxContext = 262_144, vision = true, inPrice = 0.74, outPrice = 3.49),
@@ -5618,6 +6001,9 @@ object ModelDefinitions {
         "aion-labs/" to openrouterDef("aion-labs/*", maxContext = 131_072, inPrice = 0.30, outPrice = 0.80),
         // Baidu Ernie
         "baidu/" to openrouterDef("baidu/*", maxContext = 65_536, vision = true, inPrice = 0.20, outPrice = 0.60),
+        // Sakana AI Fugu — ultra $5/$30; fugu-ultra must precede fugu to win the prefix match
+        "sakana/fugu-ultra" to openrouterDef("sakana/fugu-ultra*", maxContext = 1_000_000, vision = true, reasoning = true, inPrice = 5.0, outPrice = 30.0),
+        "sakana/fugu" to openrouterDef("sakana/fugu*", maxContext = 1_000_000, vision = true, reasoning = true),
         // OpenRouter meta-models (auto-router)
         "openrouter/" to openrouterDef("openrouter/*", maxContext = 200_000, vision = true, inPrice = 1.0, outPrice = 3.0)
     )

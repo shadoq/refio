@@ -60,8 +60,7 @@ class AgentEventBus {
             it.sessionId == sessionId && (
                 it is AgentEvent.AgentStarted ||
                 it is AgentEvent.AgentCompleted ||
-                it is AgentEvent.AgentFailed ||
-                it is AgentEvent.AgentSpawned
+                it is AgentEvent.AgentFailed
             )
         }
 
@@ -73,7 +72,6 @@ class AgentEventBus {
                 it is AgentEvent.AgentStarted ||
                 it is AgentEvent.AgentCompleted ||
                 it is AgentEvent.AgentFailed ||
-                it is AgentEvent.ArtifactProduced ||
                 it is AgentEvent.ApprovalRequired ||
                 it is AgentEvent.DataRequest ||
                 it is AgentEvent.DataResponse

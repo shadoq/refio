@@ -83,6 +83,7 @@ class SessionDebugExporter(
                 apiCallCount = apiLogs.size,
                 toolCallCount = subtasks.size,
                 contextOverflow = ContextOverflowTracker.didOverflow(taskId),
+                failureMarker = TurnFailureMarkerTracker.markerFor(taskId),
             ),
             finalOutput = finalOutput,
             subtasks = if (options.includeSubtasks) {

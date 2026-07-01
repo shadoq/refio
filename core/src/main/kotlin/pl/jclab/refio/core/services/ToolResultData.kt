@@ -27,6 +27,12 @@ data class ToolResultData(
     val subtaskId: String? = null,
     val content: String,          // Summary (or RAW if not summarized)
     val isSummarized: Boolean,    // Whether content is a summary
+    // Terminal state of the tool execution, taken from ToolResult.success at the point the result
+    // is built. The turn loop must read THIS, not infer success from the content text: a tool can
+    // succeed and still return output that begins with "Error:" (a log file, a grep hit on an
+    // "Error:" line, a command whose stdout starts that way), and the old content.startsWith("Error:")
+    // inference misclassified those as failures, polluting the error-rate / consecutive-failure guards.
+    val success: Boolean,
     val rawOutput: String? = null, // Full RAW output (optional, for UI)
     val loopSignature: String? = null, // Raw output sans hints/nudges, for loop-detection hashing only
     val metadata: String? = null, // JSON metadata from tool result (e.g., path, line_count)
