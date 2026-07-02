@@ -1,8 +1,11 @@
 package pl.jclab.refio.ui.components.rag
 
+import com.intellij.icons.AllIcons
 import com.intellij.openapi.project.Project
+import com.intellij.ui.ColorUtil
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
@@ -16,11 +19,17 @@ import pl.jclab.refio.services.session.SessionManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collectLatest
 import java.awt.BorderLayout
+import java.awt.Component
+import java.awt.Cursor
 import java.awt.Frame
 import java.awt.Color
+import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import javax.swing.*
+import javax.swing.table.DefaultTableCellRenderer
 import javax.swing.table.DefaultTableModel
 
 private val logger = dualLogger("RagViewPanel")
@@ -48,15 +57,25 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
     private val viewChunksButton = JButton("📄 View Chunks")
     private val statsLabel = JBLabel("Loading...")
     private val embeddingStatsLabel = JBLabel("")
+    private val generateEmbeddingsButton = JButton("Generate missing embeddings").apply {
+        toolTipText = "Generate embeddings for chunks that are missing them"
+        isVisible = false
+    }
     private val lastRefreshLabel = JBLabel("")
     private var isRefreshing = false
     private var refreshDebounceJob: Job? = null
     private val refreshDebounceMs = 1500L
 
     // RAG Search UI
+    private val fileNavigationService = pl.jclab.refio.ui.components.chat.FileNavigationService(project)
     private val searchQueryField = JBTextField()
     private val searchButton = JButton("🔍 Search")
-    private lateinit var searchResultsArea: JTextArea
+    private val searchResultsModel = DefaultListModel<RagSearchResultDto>()
+    private lateinit var searchResultsList: JBList<RagSearchResultDto>
+    private lateinit var searchStatusLabel: JBLabel
+    private lateinit var searchContentPanel: JPanel
+    private lateinit var searchToggleLabel: JBLabel
+    private var isSearchExpanded = false
 
     init {
         border = LCATheme.paddedBorder(16)
@@ -87,7 +106,12 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
                 layout = BoxLayout(this, BoxLayout.Y_AXIS)
                 add(statsLabel)
                 embeddingStatsLabel.font = embeddingStatsLabel.font.deriveFont(Font.PLAIN, 11f)
-                add(embeddingStatsLabel)
+                val embeddingRow = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+                    add(embeddingStatsLabel)
+                    generateEmbeddingsButton.addActionListener { generateMissingEmbeddings() }
+                    add(generateEmbeddingsButton)
+                }
+                add(embeddingRow)
             }
 
             val rightPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 0, 0)).apply {
@@ -152,6 +176,7 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
         filesTable.rowHeight = 28
 
         filesTable.columnModel.getColumn(0).preferredWidth = 400
+        filesTable.columnModel.getColumn(0).cellRenderer = MiddleEllipsisCellRenderer()
         filesTable.columnModel.getColumn(1).preferredWidth = 80
         filesTable.columnModel.getColumn(2).preferredWidth = 100
         filesTable.columnModel.getColumn(3).preferredWidth = 80
@@ -265,13 +290,14 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
             val missing = statistics.chunksCount - statistics.embeddingsCount
 
             val color = when {
-                percentage >= 100 -> "green"
-                percentage >= 50 -> "orange"
-                else -> "red"
+                percentage >= 100 -> "#" + ColorUtil.toHex(LCATheme.successColor)
+                percentage >= 50 -> "#" + ColorUtil.toHex(LCATheme.warningColor)
+                else -> "#" + ColorUtil.toHex(LCATheme.errorColor)
             }
+            val errorHex = "#" + ColorUtil.toHex(LCATheme.errorColor)
 
             "<html><font color='$color'>Embeddings: ${statistics.embeddingsCount}/${statistics.chunksCount} ($percentage%)</font>" +
-                if (missing > 0) " - <font color='red'>$missing chunks missing embeddings</font>" else ""
+                if (missing > 0) " - <font color='$errorHex'>$missing chunks missing embeddings</font>" else ""
         } else {
             ""
         }
@@ -285,7 +311,7 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
                 "${snap.providerKey} ${snap.state}" +
                     if (snap.state == "OPEN" && cooldownSec > 0) " (retry in ${cooldownSec}s)" else ""
             }
-            "<br><font color='red'>⚠ Embedding provider: $parts</font>"
+            "<br><font color='#${ColorUtil.toHex(LCATheme.errorColor)}'>⚠ Embedding provider: $parts</font>"
         } else ""
 
         val combined = if (embeddingStatsText.startsWith("<html>")) {
@@ -297,7 +323,51 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
         }
 
         embeddingStatsLabel.text = combined
+        generateEmbeddingsButton.isVisible =
+            statistics.chunksCount > 0 && statistics.embeddingsCount < statistics.chunksCount
         logger.debug { "Stats updated: $statsText | Embeddings: $combined" }
+    }
+
+    /**
+     * Generate embeddings for chunks that are missing them.
+     * Uses the same service path as the Generate Embeddings button in Context settings.
+     */
+    private fun generateMissingEmbeddings() {
+        val projectRoot = project.basePath ?: return
+
+        generateEmbeddingsButton.isEnabled = false
+        generateEmbeddingsButton.text = "Generating..."
+
+        cs.launch {
+            try {
+                val router = coreManager.getOrCreateProjectRouter(java.nio.file.Paths.get(projectRoot))
+
+                val embeddingModel = router.configService.get(
+                    "models.embedding_model",
+                    pl.jclab.refio.core.db.ConfigScope.APP,
+                    null
+                ) ?: "ollama/nomic-embed-text"
+
+                router.ragRouter.generateEmbeddings(model = embeddingModel)
+
+                SwingUtilities.invokeLater { refreshData() }
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to generate missing embeddings" }
+                SwingUtilities.invokeLater {
+                    JOptionPane.showMessageDialog(
+                        this@RagViewPanel,
+                        "Failed to generate embeddings: ${e.message}",
+                        "Error",
+                        JOptionPane.ERROR_MESSAGE
+                    )
+                }
+            } finally {
+                SwingUtilities.invokeLater {
+                    generateEmbeddingsButton.isEnabled = true
+                    generateEmbeddingsButton.text = "Generate missing embeddings"
+                }
+            }
+        }
     }
 
     private fun viewSelectedChunks() {
@@ -400,40 +470,125 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
             .format(date)
     }
 
+    /**
+     * Collapsible "RAG Search" section: a lightweight tool to test what the retriever returns
+     * for a query. Collapsed by default so it does not read as a debug console; results are shown
+     * as a list of clickable file paths (click opens the file) instead of monospaced text.
+     */
     private fun createSearchPanel(): JComponent {
+        searchToggleLabel = JBLabel(AllIcons.General.ArrowRight)
+        val titleLabel = JBLabel("RAG Search").apply {
+            font = font.deriveFont(Font.BOLD, 12f)
+        }
+        val headerRow = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 6, 4)).apply {
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            add(searchToggleLabel)
+            add(titleLabel)
+            addMouseListener(object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) = toggleSearchSection()
+            })
+        }
+
+        // Search input panel
+        val inputPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            border = LCATheme.paddedBorder(0, 0, 8, 0)
+
+            searchQueryField.emptyText.text = "Enter search query to test RAG..."
+            searchQueryField.addActionListener { performSearch() }
+            add(searchQueryField, BorderLayout.CENTER)
+
+            searchButton.addActionListener { performSearch() }
+            add(searchButton, BorderLayout.EAST)
+        }
+
+        searchStatusLabel = JBLabel("").apply {
+            font = font.deriveFont(Font.PLAIN, 11f)
+            foreground = JBColor.GRAY
+            isVisible = false
+        }
+
+        // Results as a list of clickable file paths - click opens the file in the editor.
+        searchResultsList = JBList(searchResultsModel).apply {
+            selectionMode = ListSelectionModel.SINGLE_SELECTION
+            cellRenderer = SearchResultCellRenderer()
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            addMouseListener(object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) {
+                    val index = locationToIndex(e.point)
+                    if (index < 0 || index >= searchResultsModel.size()) return
+                    val result = searchResultsModel.getElementAt(index)
+                    fileNavigationService.openFileReference(result.filePath)
+                }
+            })
+        }
+        val resultsScroll = JBScrollPane(searchResultsList).apply {
+            preferredSize = Dimension(800, 150)
+        }
+
+        val centerPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            add(searchStatusLabel, BorderLayout.NORTH)
+            add(resultsScroll, BorderLayout.CENTER)
+        }
+
+        searchContentPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            border = LCATheme.paddedBorder(4, 0, 0, 0)
+            add(inputPanel, BorderLayout.NORTH)
+            add(centerPanel, BorderLayout.CENTER)
+            isVisible = false
+        }
+
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
             border = BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder("RAG Search Test"),
-                LCATheme.paddedBorder(8)
+                BorderFactory.createMatteBorder(1, 0, 0, 0, LCATheme.borderColor),
+                LCATheme.paddedBorder(8, 0, 0, 0)
             )
-
-            // Search input panel
-            val inputPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-                border = LCATheme.paddedBorder(0, 0, 8, 0)
-
-                searchQueryField.emptyText.text = "Enter search query to test RAG..."
-                add(searchQueryField, BorderLayout.CENTER)
-
-                searchButton.addActionListener { performSearch() }
-                add(searchButton, BorderLayout.EAST)
-            }
-            add(inputPanel, BorderLayout.NORTH)
-
-            // Results area
-            searchResultsArea = JTextArea().apply {
-                isEditable = false
-                font = Font("Monospaced", Font.PLAIN, 11)
-                lineWrap = true
-                wrapStyleWord = true
-                text = "Search results will appear here..."
-            }
-
-            val scrollPane = JBScrollPane(searchResultsArea).apply {
-                preferredSize = java.awt.Dimension(800, 150)
-            }
-            add(scrollPane, BorderLayout.CENTER)
+            add(headerRow, BorderLayout.NORTH)
+            add(searchContentPanel, BorderLayout.CENTER)
         }
     }
+
+    private fun toggleSearchSection() {
+        isSearchExpanded = !isSearchExpanded
+        searchToggleLabel.icon = if (isSearchExpanded) AllIcons.General.ArrowDown else AllIcons.General.ArrowRight
+        searchContentPanel.isVisible = isSearchExpanded
+        searchContentPanel.revalidate()
+        searchContentPanel.repaint()
+    }
+
+    private fun setSearchStatus(text: String) {
+        searchStatusLabel.text = text
+        searchStatusLabel.isVisible = text.isNotBlank()
+    }
+
+    /**
+     * Renders a single search hit: file path (bold), optional line range, similarity, and a
+     * short single-line snippet. Full path is shown in the tooltip.
+     */
+    private inner class SearchResultCellRenderer : DefaultListCellRenderer() {
+        override fun getListCellRendererComponent(
+            list: JList<*>, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean
+        ): Component {
+            val component = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+            val result = value as? RagSearchResultDto ?: return component
+            val label = component as JLabel
+
+            val lineRange = if (result.startLine != null && result.endLine != null) {
+                " (lines ${result.startLine}-${result.endLine})"
+            } else ""
+            val snippet = result.content.take(160).replace("\n", " ").trim()
+            val snippetHex = "#" + ColorUtil.toHex(JBColor.GRAY)
+            val similarity = String.format("%.2f", result.similarity)
+
+            label.text = "<html><b>${escapeHtml(result.filePath)}</b>$lineRange" +
+                " - $similarity<br><font color='$snippetHex'>${escapeHtml(snippet)}</font></html>"
+            label.toolTipText = result.filePath
+            label.border = BorderFactory.createEmptyBorder(4, 6, 4, 6)
+            return label
+        }
+    }
+
+    private fun escapeHtml(text: String): String =
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     private fun performSearch() {
         val query = searchQueryField.text.trim()
@@ -463,7 +618,8 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
         SwingUtilities.invokeLater {
             searchButton.isEnabled = false
             searchButton.text = "⏳ Searching..."
-            searchResultsArea.text = "Searching..."
+            searchResultsModel.clear()
+            setSearchStatus("Searching...")
         }
 
         cs.launch {
@@ -485,26 +641,15 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
                 )
 
                 SwingUtilities.invokeLater {
+                    searchResultsModel.clear()
                     if (results.isEmpty()) {
-                        searchResultsArea.text = "No results found.\n\nPossible reasons:\n" +
-                            "- No embeddings generated yet (click 'Generate Embeddings')\n" +
-                            "- Query doesn't match indexed content\n" +
-                            "- Similarity threshold too high"
+                        setSearchStatus(
+                            "No results found. No embeddings generated yet, query does not match " +
+                                "indexed content, or the similarity threshold is too high."
+                        )
                     } else {
-                        val resultsText = buildString {
-                            append("Found ${results.size} result(s):\n\n")
-                            results.forEachIndexed { index, result ->
-                                append("${index + 1}. ")
-                                append("${result.filePath}")
-                                if (result.startLine != null && result.endLine != null) {
-                                    append(" (lines ${result.startLine}-${result.endLine})")
-                                }
-                                append(" - Similarity: ${String.format("%.2f", result.similarity)}\n")
-                                append("   ${result.content.take(200).replace("\n", " ")}...\n\n")
-                            }
-                        }
-                        searchResultsArea.text = resultsText
-                        searchResultsArea.caretPosition = 0
+                        setSearchStatus("Found ${results.size} result(s) - click a path to open the file.")
+                        results.forEach { searchResultsModel.addElement(it) }
                     }
 
                     searchButton.isEnabled = true
@@ -513,11 +658,11 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
             } catch (e: Exception) {
                 logger.error(e) { "RAG search failed" }
                 SwingUtilities.invokeLater {
-                    searchResultsArea.text = "Search failed:\n${e.message}\n\n" +
-                        "Possible reasons:\n" +
-                        "- No embeddings generated yet\n" +
-                        "- Embedding model not configured\n" +
-                        "- API key missing (if using OpenAI)"
+                    searchResultsModel.clear()
+                    setSearchStatus(
+                        "Search failed: ${e.message}. Check that embeddings are generated, the " +
+                            "embedding model is configured, and any required API key is set."
+                    )
                     searchButton.isEnabled = true
                     searchButton.text = "🔍 Search"
                 }
@@ -528,6 +673,38 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
     fun dispose() {
         cs.cancel()
     }
+
+    /**
+     * Renders long paths with a middle ellipsis (keeps head and tail) and shows
+     * the full path in the tooltip.
+     */
+    private class MiddleEllipsisCellRenderer : DefaultTableCellRenderer() {
+        override fun getTableCellRendererComponent(
+            table: JTable, value: Any?, isSelected: Boolean, hasFocus: Boolean, row: Int, column: Int
+        ): java.awt.Component {
+            val component = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column)
+            val fullText = value?.toString() ?: ""
+            toolTipText = fullText.ifEmpty { null }
+
+            val availableWidth = table.columnModel.getColumn(column).width - insets.left - insets.right
+            text = middleEllipsis(fullText, getFontMetrics(font), availableWidth)
+            return component
+        }
+
+        private fun middleEllipsis(text: String, fm: java.awt.FontMetrics, availableWidth: Int): String {
+            if (text.isEmpty() || availableWidth <= 0 || fm.stringWidth(text) <= availableWidth) return text
+
+            val ellipsis = "..."
+            var head = text.length / 2
+            var tail = text.length - head
+            while (head + tail > 0) {
+                val candidate = text.take(head) + ellipsis + text.takeLast(tail)
+                if (fm.stringWidth(candidate) <= availableWidth) return candidate
+                if (head >= tail) head-- else tail--
+            }
+            return ellipsis
+        }
+    }
 }
 
 // DTOs moved to pl.jclab.refio.core.api.RagModels for platform independence
@@ -535,3 +712,4 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
 typealias RagIndexedFileDto = pl.jclab.refio.core.api.RagIndexedFileDto
 typealias RagStatisticsDto = pl.jclab.refio.core.api.RagStatisticsDto
 typealias RagChunkDto = pl.jclab.refio.core.api.RagChunkDto
+typealias RagSearchResultDto = pl.jclab.refio.core.api.RagSearchResultDto

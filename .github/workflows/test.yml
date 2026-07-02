@@ -32,14 +32,19 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Run tests with coverage
-        run: ./gradlew test jacocoTestReport
+      # 'check' runs tests plus the enforced gates: Jacoco coverage verification on :core
+      # (35% instructions) and detectSensitiveLogging on :intellij-plugin. Running plain
+      # 'test' here made those gates decorative on PRs.
+      - name: Run checks (tests + coverage gate + sensitive-logging gate)
+        run: ./gradlew check
 
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: build/reports/jacoco/test/html/
+          path: |
+            core/build/reports/jacoco/test/html/
+            intellij-plugin/build/reports/jacoco/test/html/
           retention-days: 7
 
       - name: Upload test results
@@ -47,5 +52,42 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: build/reports/tests/test/
+          path: |
+            core/build/reports/tests/test/
+            intellij-plugin/build/reports/tests/test/
+            cli/build/reports/tests/test/
           retention-days: 7
+
+  plugin-verifier:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Cache Plugin Verifier IDEs
+        uses: actions/cache@v4
+        with:
+          path: ~/.pluginVerifier/ides
+          key: plugin-verifier-ides-${{ hashFiles('intellij-plugin/build.gradle.kts') }}
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Run IntelliJ Plugin Verifier
+        run: ./gradlew :intellij-plugin:verifyPlugin -Dplugin.verifier.home.dir=$HOME/.pluginVerifier

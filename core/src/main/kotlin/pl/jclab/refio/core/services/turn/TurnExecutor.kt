@@ -38,6 +38,7 @@ import pl.jclab.refio.core.services.PromptTokenEstimator
 import pl.jclab.refio.core.services.TaskVerifier
 import pl.jclab.refio.core.services.TokenRatioCalibrator
 import pl.jclab.refio.core.services.ToolPermissionsService
+import pl.jclab.refio.core.services.ToolResultData
 import pl.jclab.refio.core.services.TurnLoopConfigs
 import pl.jclab.refio.core.services.TurnResult
 import pl.jclab.refio.core.services.WorkingMemoryIntegration
@@ -129,6 +130,60 @@ internal class TurnExecutor(
 
     private fun updateTurnState(update: TurnStateSnapshot.() -> TurnStateSnapshot) {
         _turnState.value = _turnState.value.update()
+    }
+
+    /**
+     * Per-turn finalization + persistence binding. execute() has ~15 exit points that all
+     * called turnFinalizer.completeTurn with the same 9 threaded identifiers, and ~12
+     * chatMessageRepository.create calls repeating the same agent-attribution triple.
+     * Binding them once per turn removes that duplication without changing behavior.
+     */
+    private inner class TurnPersistence(
+        val taskId: String,
+        val listener: TurnEventListener?,
+        val runId: String,
+        val parentRunId: String?,
+        val depth: Int,
+        val subagentMetadata: String?,
+        val agentInstanceId: String?,
+        val agentName: String?,
+        val agentDepth: Int?,
+    ) {
+        fun finish(result: TurnResult, persistAssistantMessage: Boolean): TurnResult =
+            turnFinalizer.completeTurn(
+                taskId, result, listener, runId, parentRunId, depth,
+                persistAssistantMessage = persistAssistantMessage,
+                metadata = subagentMetadata,
+                agentInstanceId = agentInstanceId,
+                agentName = agentName,
+                agentDepth = agentDepth,
+            )
+
+        fun persist(
+            role: MessageRole,
+            content: String,
+            thinking: String? = null,
+            toolCalls: List<ToolCallData>? = null,
+            tokensIn: Int? = null,
+            tokensOut: Int? = null,
+            cost: Double? = null,
+            metadata: String? = null,
+        ) {
+            chatMessageRepository.create(
+                taskId = taskId,
+                role = role,
+                content = content,
+                thinking = thinking,
+                toolCalls = toolCalls,
+                tokensIn = tokensIn,
+                tokensOut = tokensOut,
+                cost = cost,
+                metadata = metadata,
+                agentInstanceId = agentInstanceId,
+                agentName = agentName,
+                agentDepth = agentDepth,
+            )
+        }
     }
 
     // Type aliases for guardrails classes - using turn/ package implementations
@@ -283,6 +338,11 @@ internal class TurnExecutor(
         val persistAgentName: String? = profileOverrides?.subagentName
         val persistAgentDepth: Int? = if (persistAgentName != null) (profileOverrides?.depth ?: 0) + 1 else null
 
+        val turnPersistence = TurnPersistence(
+            taskId, listener, runId, parentRunId, depth,
+            subagentMetadata, persistAgentInstanceId, persistAgentName, persistAgentDepth,
+        )
+
         // For subagent turns, wrap the caller's streamCallback so each token delta is ALSO
         // published as AgentEvent.StreamChunk with runId/depth/agentName. CoreSessionService
         // subscribes to these events to render a per-agent streaming bubble that updates live
@@ -341,49 +401,9 @@ internal class TurnExecutor(
         val responseFormat = turnLLMCaller.resolveResponseFormat(mode, effectiveProvider)
 
         // Resolve native tools mode once per turn (not per iteration — model/config don't change mid-turn)
-        val initialNativeToolSchemas: List<ToolSchema>? = run {
-            val svc = toolPermissionsService
-            if (svc == null) {
-                logger.debug {
-                    "[NATIVE_TOOLS] Disabled for taskId=$taskId, mode=$mode → JSON-in-text path — " +
-                        "no ToolPermissionsService (tools are off for this run)"
-                }
-                return@run null
-            }
-            val nativeModeRaw = configService.getTyped(ConfigKeys.NATIVE_TOOLS_MODE, taskId)
-            val nativeToolsMode = parseNativeToolsMode(nativeModeRaw)
-            val modelDef = ModelDefinitions.getDefinition(effectiveProvider, effectiveModel)
-            val fallbackSet = NativeToolsFallbackTracker.getFallbackSet()
-            // One human-readable reason string, reused in both the enabled and disabled log lines,
-            // so the native-vs-JSON decision for a run is explainable from the log alone.
-            val nativeReason = nativeToolsDecisionReason(nativeToolsMode, modelDef, effectiveModel, fallbackSet)
-            if (shouldUseNativeTools(nativeToolsMode, modelDef, effectiveModel, fallbackSet)) {
-                val modeSchemas = toolRegistry.getToolSchemas(mode, svc, taskId)
-                // Subagent profiles must see ONLY their allowed/disallowed tools in the native
-                // `tools` array — otherwise the model calls tools the harness then rejects with
-                // "Tool 'X' is not available to the subagent". The prompt's <available_tools>
-                // is already filtered via resolveToolDescriptionsForProfile; this aligns the
-                // native channel.
-                val filtered = turnPromptBuilder.filterNativeToolSchemasByProfile(modeSchemas, profileOverrides)
-                if (filtered.size != modeSchemas.size) {
-                    logger.info {
-                        "[NATIVE_TOOLS] Filtered schemas for profile '${profileOverrides?.subagentName ?: "?"}': " +
-                            "${modeSchemas.size} → ${filtered.size}"
-                    }
-                }
-                logger.info {
-                    "[NATIVE_TOOLS] Enabled for taskId=$taskId, mode=$mode, " +
-                        "model=$effectiveProvider/$effectiveModel, schemas=${filtered.size} — $nativeReason"
-                }
-                filtered
-            } else {
-                logger.info {
-                    "[NATIVE_TOOLS] Disabled for taskId=$taskId, mode=$mode, " +
-                        "model=$effectiveProvider/$effectiveModel → JSON-in-text path — $nativeReason"
-                }
-                null
-            }
-        }
+        val initialNativeToolSchemas = resolveInitialNativeToolSchemas(
+            taskId, mode, effectiveModel, effectiveProvider, profileOverrides
+        )
         var activeNativeToolSchemas = initialNativeToolSchemas
         // R1 (docs/0068): consecutive iterations where native tools were offered but the model
         // ignored the native channel and emitted a {response,actions} JSON envelope in text instead.
@@ -433,7 +453,7 @@ internal class TurnExecutor(
                             toolsUsed = usedTools.distinct(),
                             incomplete = true
                         )
-                        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                        return turnPersistence.finish(result, persistAssistantMessage = true)
                     }
                 }
 
@@ -735,8 +755,7 @@ internal class TurnExecutor(
                                     "finalizing the pre-re-entry answer the user already saw."
                             }
                             val recoveredText = toolCallParser.extractTextResponse(recoverable.content)
-                            chatMessageRepository.create(
-                                taskId = taskId,
+                            turnPersistence.persist(
                                 role = MessageRole.ASSISTANT,
                                 content = recoveredText.ifEmpty { recoverable.content },
                                 thinking = turnResponseProcessor.resolveAssistantThinking(recoverable),
@@ -744,9 +763,6 @@ internal class TurnExecutor(
                                 tokensIn = recoverable.usage.inputTokens,
                                 tokensOut = recoverable.usage.outputTokens,
                                 cost = recoverable.cost,
-                                agentInstanceId = persistAgentInstanceId,
-                                agentName = persistAgentName,
-                                agentDepth = persistAgentDepth,
                             )
                             val result = TurnResult(
                                 success = true,
@@ -757,7 +773,7 @@ internal class TurnExecutor(
                                 cost = totalCost,
                                 toolsUsed = usedTools.distinct()
                             )
-                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = false, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                            return turnPersistence.finish(result, persistAssistantMessage = false)
                         }
 
                         logger.error {
@@ -783,7 +799,7 @@ internal class TurnExecutor(
                             cost = totalCost,
                             toolsUsed = usedTools.distinct()
                         )
-                        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                        return turnPersistence.finish(result, persistAssistantMessage = true)
                     }
 
                     if (mode != TaskMode.CHAT
@@ -825,8 +841,7 @@ internal class TurnExecutor(
                                 }
                                 val resolvedThinking = turnResponseProcessor.resolveAssistantThinking(llmResponse)
                                 if (!resolvedThinking.isNullOrBlank()) {
-                                    chatMessageRepository.create(
-                                        taskId = taskId,
+                                    turnPersistence.persist(
                                         role = MessageRole.ASSISTANT,
                                         content = "",
                                         thinking = resolvedThinking,
@@ -834,13 +849,9 @@ internal class TurnExecutor(
                                         tokensIn = llmResponse.usage.inputTokens,
                                         tokensOut = llmResponse.usage.outputTokens,
                                         cost = llmResponse.cost,
-                                        agentInstanceId = persistAgentInstanceId,
-                                        agentName = persistAgentName,
-                                        agentDepth = persistAgentDepth,
                                     )
                                 }
-                                chatMessageRepository.create(
-                                    taskId = taskId,
+                                turnPersistence.persist(
                                     role = MessageRole.SYSTEM,
                                     content = "Your previous reply contained empty content in structured JSON mode. " +
                                         "Generate the full JSON envelope again from scratch. " +
@@ -849,9 +860,6 @@ internal class TurnExecutor(
                                         "\"response\":\"...\",\"intent\":\"implementation\"}. " +
                                         "No prose, no markdown fences.",
                                     toolCalls = null,
-                                    agentInstanceId = persistAgentInstanceId,
-                                    agentName = persistAgentName,
-                                    agentDepth = persistAgentDepth,
                                 )
                                 continue
                             }
@@ -878,7 +886,7 @@ internal class TurnExecutor(
                                     cost = totalCost,
                                     toolsUsed = usedTools.distinct()
                                 )
-                                return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                                return turnPersistence.finish(result, persistAssistantMessage = true)
                             }
 
                             LLMResponseRecovery.Decision.NotApplicable -> {
@@ -1001,7 +1009,7 @@ internal class TurnExecutor(
                             cost = totalCost,
                             toolsUsed = usedTools.distinct()
                         )
-                        return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                        return turnPersistence.finish(result, persistAssistantMessage = true)
                     }
 
                     if (toolCalls.isNotEmpty()) {
@@ -1048,8 +1056,7 @@ internal class TurnExecutor(
                         } else {
                             llmResponse.content
                         }
-                        chatMessageRepository.create(
-                            taskId = taskId,
+                        turnPersistence.persist(
                             role = MessageRole.ASSISTANT,
                             content = assistantContent,
                             thinking = turnResponseProcessor.resolveAssistantThinking(llmResponse),
@@ -1057,9 +1064,6 @@ internal class TurnExecutor(
                             tokensIn = llmResponse.usage.inputTokens,
                             tokensOut = llmResponse.usage.outputTokens,
                             cost = llmResponse.cost,
-                            agentInstanceId = persistAgentInstanceId,
-                            agentName = persistAgentName,
-                            agentDepth = persistAgentDepth,
                         )
 
                         // Track used tool names
@@ -1083,37 +1087,7 @@ internal class TurnExecutor(
                         // When no caller listener is present we fall back to batch-level timing.
                         toolStartNanos.clear()
                         toolDurationsMs.clear()
-                        val innerListener = listener
-                        val effectiveListener: pl.jclab.refio.core.services.turn.TurnEventListener? =
-                            if (innerListener != null) {
-                                object : pl.jclab.refio.core.services.turn.TurnEventListener {
-                                    override fun onTurnStarted(taskId: String, mode: TaskMode, runId: String, parentRunId: String?, depth: Int) {
-                                        innerListener.onTurnStarted(taskId, mode, runId, parentRunId, depth)
-                                    }
-                                    override fun onToolExecutionStarted(taskId: String, toolCall: pl.jclab.refio.core.db.ToolCallData) {
-                                        toolStartNanos[toolCall.id] = System.nanoTime()
-                                        innerListener.onToolExecutionStarted(taskId, toolCall)
-                                    }
-                                    override fun onToolStreamChunk(taskId: String, toolCallId: String, delta: String, accumulated: String) {
-                                        innerListener.onToolStreamChunk(taskId, toolCallId, delta, accumulated)
-                                    }
-                                    override fun onToolExecutionCompleted(taskId: String, toolCall: pl.jclab.refio.core.db.ToolCallData, result: String, success: Boolean) {
-                                        toolStartNanos[toolCall.id]?.let { start ->
-                                            toolDurationsMs[toolCall.id] = (System.nanoTime() - start) / 1_000_000
-                                        }
-                                        innerListener.onToolExecutionCompleted(taskId, toolCall, result, success)
-                                    }
-                                    override fun onStreamChunk(taskId: String, delta: String, accumulated: String) {
-                                        innerListener.onStreamChunk(taskId, delta, accumulated)
-                                    }
-                                    override fun onToolBatchCompleted(taskId: String, summary: ToolBatchSummary.BatchSummary) {
-                                        innerListener.onToolBatchCompleted(taskId, summary)
-                                    }
-                                    override fun onTurnCompleted(taskId: String, result: pl.jclab.refio.core.services.TurnResult, runId: String, parentRunId: String?, depth: Int) {
-                                        innerListener.onTurnCompleted(taskId, result, runId, parentRunId, depth)
-                                    }
-                                }
-                            } else null
+                        val effectiveListener = wrapListenerForToolTiming(listener, toolStartNanos, toolDurationsMs)
 
                         // Batch-level timing fallback (used when no caller listener is available).
                         val batchStartNanos = System.nanoTime()
@@ -1150,13 +1124,9 @@ internal class TurnExecutor(
                                 agentName = persistAgentName,
                                 agentDepth = persistAgentDepth,
                             )
-                            chatMessageRepository.create(
-                                taskId = taskId,
+                            turnPersistence.persist(
                                 role = MessageRole.SYSTEM,
                                 content = "User rejected tool '${e.toolName}'. Reason: ${e.reason ?: "not specified"}",
-                                agentInstanceId = persistAgentInstanceId,
-                                agentName = persistAgentName,
-                                agentDepth = persistAgentDepth,
                             )
                             updateTurnState { copy(phase = TurnPhase.IDLE) }
                             val result = TurnResult(
@@ -1171,11 +1141,7 @@ internal class TurnExecutor(
                                 rejectedToolName = e.toolName,
                                 rejectionReason = e.reason
                             )
-                            return turnFinalizer.completeTurn(
-                                taskId, result, listener, runId, parentRunId, depth,
-                                persistAssistantMessage = false, metadata = subagentMetadata,
-                                agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth,
-                            )
+                            return turnPersistence.finish(result, persistAssistantMessage = false)
                         }
 
                         // Save tool results. Forward the persisted Subtask id so the TOOL chat
@@ -1199,85 +1165,17 @@ internal class TurnExecutor(
                             )
                         }
 
-                        // Emit ToolCalled events for Session Trace / Tool analytics.
-                        // When per-tool timings aren't available (no caller listener) fall back to
-                        // a batch-average estimate so the Debug panel still gets meaningful data.
-                        val batchDurationMs = (System.nanoTime() - batchStartNanos) / 1_000_000
-                        val fallbackPerToolMs = if (toolResults.isNotEmpty()) batchDurationMs / toolResults.size else 0L
-                        for ((toolCall, resultData) in toolResults) {
-                            val success = resultData.success
-                            val durationMs = toolDurationsMs[toolCall.id] ?: fallbackPerToolMs
-                            // Feed global tool analytics (Debug panel)
-                            pl.jclab.refio.core.services.monitoring.ToolUsageStats.record(
-                                toolName = toolCall.name,
-                                durationMs = durationMs,
-                                success = success,
-                                errorMessage = if (success) null else resultData.content.take(200)
-                            )
-                            emitTurnEvent(taskId) {
-                                pl.jclab.refio.core.agents.events.AgentEvent.ToolCalled(
-                                    id = UUID.randomUUID().toString(),
-                                    sessionId = evSessionId,
-                                    sourceAgentId = evSourceAgentId,
-                                    timestamp = System.currentTimeMillis(),
-                                    correlationId = runId,
-                                    iteration = iteration,
-                                    toolName = toolCall.name,
-                                    argumentsPreview = toolCall.arguments.take(120),
-                                    durationMs = durationMs,
-                                    success = success,
-                                    errorMessage = if (success) null else resultData.content.take(200),
-                                    resultPreview = resultData.content.take(200),
-                                    runId = runId,
-                                    parentRunId = parentRunId,
-                                    depth = depth
-                                )
-                            }
-                        }
+                        emitToolCalledEvents(
+                            taskId, toolResults, toolDurationsMs, batchStartNanos,
+                            evSessionId, evSourceAgentId, runId, parentRunId, depth, iteration
+                        )
 
                         // Working memory is recorded inside TurnToolExecutor with originId=subtaskId
                         // so every context section (MESSAGES / RECENT_WORK / WORKING_MEMORY) keys off
                         // the same subtask id. Recording here would overwrite those entries with
                         // originId=toolCall.id and desynchronize the identifiers.
 
-                        // Handle AWAITING_RESPONSE from send_message tool
-                        for ((toolCall, resultData) in toolResults) {
-                            val metadata = resultData.metadata?.let { TurnJsonUtils.parseJsonToMap(it) }
-                            if (metadata?.get("type") == "AWAITING_RESPONSE" && agentEventBus != null) {
-                                val requestId = metadata["requestId"] as? String ?: continue
-                                val timeout = 300_000L // 5 minutes
-                                logger.info { "[AWAITING_RESPONSE] Tool ${toolCall.name} waiting for response to $requestId" }
-                                updateTurnState { copy(phase = TurnPhase.WAITING_FOR_PERMISSION) } // reuse state
-
-                                val response = try {
-                                    kotlinx.coroutines.withTimeout(timeout) {
-                                        agentEventBus.eventsOfType<pl.jclab.refio.core.agents.events.AgentEvent.DataResponse>()
-                                            .filter { it.requestId == requestId }
-                                            .first()
-                                    }
-                                } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
-                                    null
-                                }
-
-                                updateTurnState { copy(phase = TurnPhase.EXECUTING_TOOLS) }
-
-                                val responseContent = if (response != null) {
-                                    "Response received: ${response.response}"
-                                } else {
-                                    "No response received within timeout. Continue with available information."
-                                }
-
-                                chatMessageRepository.create(
-                                    taskId = taskId,
-                                    role = MessageRole.SYSTEM,
-                                    content = responseContent,
-                                    agentInstanceId = persistAgentInstanceId,
-                                    agentName = persistAgentName,
-                                    agentDepth = persistAgentDepth,
-                                )
-                                logger.info { "[AWAITING_RESPONSE] Got response for $requestId: ${responseContent.take(100)}" }
-                            }
-                        }
+                        handleAwaitingResponses(taskId, toolResults, turnPersistence)
 
                         // Generate batch summary for UI
                         val batchInput = toolResults.map { (call, resultData) ->
@@ -1291,59 +1189,15 @@ internal class TurnExecutor(
                         val batchSummary = ToolBatchSummary.summarize(batchInput)
                         listener?.onToolBatchCompleted(taskId, batchSummary)
 
-                        // Track error rate + definitive-loop detection + unified repetition tracker.
-                        // Definitive loop = the SAME tool with the SAME arguments failing repeatedly.
-                        // Varying either resets the counter so the agent can still explore freely.
-                        var repetitionAbort: TurnGuardrails.LoopStatus.ABORT? = null
-                        // Name of the tool that triggered the repetition abort (for deliverable-aware
-                        // handling: a loop on an optional VERIFICATION tool after the work is done is not
-                        // the same as a loop that never produced the deliverable). See docs/0070 FM-3.
-                        var repetitionAbortToolName: String? = null
-                        // Ids of write calls whose generated content was identical to the file (no-op).
-                        // A no-op write is NOT consolidation progress (P1) — it must not reset the
-                        // read-only spree counter below, otherwise a futile edit masks a read-forever loop.
-                        val noopCallIds = mutableSetOf<String>()
-                        for ((toolCall, result) in toolResults) {
-                            if (result.noop) noopCallIds.add(toolCall.id)
-                            val success = result.success
-                            errorTracker.recordResult(success)
-                            if (success) {
-                                consecutiveIdenticalFailures = 0
-                                lastFailureSignature = null
-                            } else {
-                                val signature = "${toolCall.name}:${toolCall.arguments.hashCode()}"
-                                if (signature == lastFailureSignature) {
-                                    consecutiveIdenticalFailures++
-                                } else {
-                                    consecutiveIdenticalFailures = 1
-                                    lastFailureSignature = signature
-                                }
-                            }
-
-                            // Parse args defensively: if the JSON is malformed we skip tracking
-                            // for this call rather than crashing the turn loop.
-                            val parsedArgs: Map<String, Any?>? = runCatching {
-                                TurnJsonUtils.parseJsonToMap(toolCall.arguments)
-                            }.getOrNull()
-                            if (parsedArgs != null) {
-                                // Output is only forwarded on success — a failing call's error
-                                // text belongs to the error tracker, not the output-hash signal.
-                                // Use loopSignature (raw output sans hints/nudge) so the progressive
-                                // "[⚠ possible loop]" nudge — whose tail embeds a per-call subtask UUID
-                                // — cannot make every repeated read look "different" and defeat the
-                                // byte-identical hard-abort. Falls back to content for paths that don't
-                                // set a signature (blocked/error/synthetic results carry no nudge anyway).
-                                val output = if (success) (result.loopSignature ?: result.content) else null
-                                when (val status = repetitionTracker.record(toolCall.name, parsedArgs, output, isNoopWrite = result.noop)) {
-                                    is TurnGuardrails.LoopStatus.ABORT ->
-                                        if (repetitionAbort == null) {
-                                            repetitionAbort = status
-                                            repetitionAbortToolName = toolCall.name
-                                        }
-                                    TurnGuardrails.LoopStatus.OK -> Unit
-                                }
-                            }
-                        }
+                        val tracking = trackToolBatch(
+                            toolResults, errorTracker, repetitionTracker,
+                            consecutiveIdenticalFailures, lastFailureSignature
+                        )
+                        consecutiveIdenticalFailures = tracking.consecutiveIdenticalFailures
+                        lastFailureSignature = tracking.lastFailureSignature
+                        val repetitionAbort = tracking.repetitionAbort
+                        val repetitionAbortToolName = tracking.repetitionAbortToolName
+                        val noopCallIds = tracking.noopCallIds
 
                         if (repetitionAbort != null) {
                             logger.warn { "[REPETITION_ABORT] taskId=$taskId, incomplete=${repetitionAbort.incomplete}, reason=${repetitionAbort.reason}" }
@@ -1380,7 +1234,7 @@ internal class TurnExecutor(
                                     toolsUsed = usedTools.distinct(),
                                     incomplete = false
                                 )
-                                return turnFinalizer.completeTurn(taskId, okResult, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                                return turnPersistence.finish(okResult, persistAssistantMessage = true)
                             }
                             // Record why the turn aborted so the e2e classifier can tell a no-op-write
                             // stall from a byte-identical output loop (docs/0069 P2).
@@ -1402,7 +1256,7 @@ internal class TurnExecutor(
                                 // deliverable was never produced, but it is abandonment, not a hard error.
                                 incomplete = repetitionAbort.incomplete
                             )
-                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                            return turnPersistence.finish(result, persistAssistantMessage = true)
                         }
 
                         val writeToolCalls = turnToolExecutor.countWriteToolCalls(toolCalls)
@@ -1431,8 +1285,7 @@ internal class TurnExecutor(
                                     "[CONSOLIDATION_NUDGE] taskId=$taskId, gatheringCalls=$consecutiveGatheringCalls, " +
                                         "nudge=${consolidationNudgeCount + 1}/$MAX_CONSOLIDATION_NUDGES"
                                 }
-                                chatMessageRepository.create(
-                                    taskId = taskId,
+                                turnPersistence.persist(
                                     role = MessageRole.SYSTEM,
                                     content = buildConsolidationNudge(consecutiveGatheringCalls),
                                     // Tagged as guardian_nudge so the UI renders it as a gentle
@@ -1440,9 +1293,6 @@ internal class TurnExecutor(
                                     // not a full alarming SYSTEM bubble. See MessageMetadataExtractor.
                                     metadata = """{"type":"guardian_nudge"}""",
                                     toolCalls = null,
-                                    agentInstanceId = persistAgentInstanceId,
-                                    agentName = persistAgentName,
-                                    agentDepth = persistAgentDepth,
                                 )
                                 consolidationNudgeCount++
                                 consecutiveGatheringCalls = 0
@@ -1464,7 +1314,7 @@ internal class TurnExecutor(
                                 cost = totalCost,
                                 toolsUsed = usedTools.distinct()
                             )
-                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                            return turnPersistence.finish(result, persistAssistantMessage = true)
                         }
 
                         if (errorTracker.shouldAbort(config.errorRateThreshold)) {
@@ -1477,20 +1327,16 @@ internal class TurnExecutor(
                                 cost = totalCost,
                                 toolsUsed = usedTools.distinct()
                             )
-                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                            return turnPersistence.finish(result, persistAssistantMessage = true)
                         }
 
                         // Check for mid-execution user messages after tool execution
                         if (pendingUserMessageQueue?.consumePending(taskId) == true) {
                             logger.info { "[MID_EXEC_INPUT] New user message detected after tool execution, nudging LLM (iteration=$iteration)" }
-                            chatMessageRepository.create(
-                                taskId = taskId,
+                            turnPersistence.persist(
                                 role = MessageRole.SYSTEM,
                                 content = "[New user message above — address it next]",
                                 toolCalls = null,
-                                agentInstanceId = persistAgentInstanceId,
-                                agentName = persistAgentName,
-                                agentDepth = persistAgentDepth,
                             )
                         }
 
@@ -1501,19 +1347,14 @@ internal class TurnExecutor(
                         // Before exiting, check if user sent new messages during execution
                         if (pendingUserMessageQueue?.consumePending(taskId) == true) {
                             logger.info { "[MID_EXEC_INPUT] New user message detected before turn completion, continuing loop (iteration=$iteration)" }
-                            chatMessageRepository.create(
-                                taskId = taskId,
+                            turnPersistence.persist(
                                 role = MessageRole.SYSTEM,
                                 content = "[New user message above — address it before finishing]",
                                 toolCalls = null,
-                                agentInstanceId = persistAgentInstanceId,
-                                agentName = persistAgentName,
-                                agentDepth = persistAgentDepth,
                             )
                             // Save the current assistant response before continuing
                             val textResponse = toolCallParser.extractTextResponse(llmResponse.content)
-                            chatMessageRepository.create(
-                                taskId = taskId,
+                            turnPersistence.persist(
                                 role = MessageRole.ASSISTANT,
                                 content = textResponse.ifEmpty { llmResponse.content },
                                 thinking = turnResponseProcessor.resolveAssistantThinking(llmResponse),
@@ -1521,9 +1362,6 @@ internal class TurnExecutor(
                                 tokensIn = llmResponse.usage.inputTokens,
                                 tokensOut = llmResponse.usage.outputTokens,
                                 cost = llmResponse.cost,
-                                agentInstanceId = persistAgentInstanceId,
-                                agentName = persistAgentName,
-                                agentDepth = persistAgentDepth,
                             )
                             continue
                         }
@@ -1575,14 +1413,7 @@ internal class TurnExecutor(
                                     cost = totalCost,
                                     toolsUsed = usedTools.distinct()
                                 )
-                                return turnFinalizer.completeTurn(
-                                    taskId, result, listener, runId, parentRunId, depth,
-                                    persistAssistantMessage = true,
-                                    metadata = subagentMetadata,
-                                    agentInstanceId = persistAgentInstanceId,
-                                    agentName = persistAgentName,
-                                    agentDepth = persistAgentDepth,
-                                )
+                                return turnPersistence.finish(result, persistAssistantMessage = true)
                             }
                         }
 
@@ -1606,14 +1437,7 @@ internal class TurnExecutor(
                                     cost = totalCost,
                                     toolsUsed = usedTools.distinct()
                                 )
-                                return turnFinalizer.completeTurn(
-                                    taskId, result, listener, runId, parentRunId, depth,
-                                    persistAssistantMessage = true,
-                                    metadata = subagentMetadata,
-                                    agentInstanceId = persistAgentInstanceId,
-                                    agentName = persistAgentName,
-                                    agentDepth = persistAgentDepth,
-                                )
+                                return turnPersistence.finish(result, persistAssistantMessage = true)
                             }
                         }
                         // Detect "effectively empty" JSON envelope: model returned a complete object
@@ -1733,19 +1557,7 @@ internal class TurnExecutor(
                                 toolsUsed = usedTools.distinct(),
                                 incomplete = !deliverableProduced
                             )
-                            return turnFinalizer.completeTurn(
-                                taskId,
-                                result,
-                                listener,
-                                runId,
-                                parentRunId,
-                                depth,
-                                persistAssistantMessage = true,
-                                metadata = subagentMetadata,
-                                agentInstanceId = persistAgentInstanceId,
-                                agentName = persistAgentName,
-                                agentDepth = persistAgentDepth,
-                            )
+                            return turnPersistence.finish(result, persistAssistantMessage = true)
                         }
 
                         if (requiresFormatRetry) {
@@ -1764,8 +1576,7 @@ internal class TurnExecutor(
                             }
                             val resolvedThinking = turnResponseProcessor.resolveAssistantThinking(llmResponse)
                             if (!resolvedThinking.isNullOrBlank()) {
-                                chatMessageRepository.create(
-                                    taskId = taskId,
+                                turnPersistence.persist(
                                     role = MessageRole.ASSISTANT,
                                     content = "",
                                     thinking = resolvedThinking,
@@ -1773,13 +1584,9 @@ internal class TurnExecutor(
                                     tokensIn = llmResponse.usage.inputTokens,
                                     tokensOut = llmResponse.usage.outputTokens,
                                     cost = llmResponse.cost,
-                                    agentInstanceId = persistAgentInstanceId,
-                                    agentName = persistAgentName,
-                                    agentDepth = persistAgentDepth,
                                 )
                             }
-                            chatMessageRepository.create(
-                                taskId = taskId,
+                            turnPersistence.persist(
                                 role = MessageRole.SYSTEM,
                                 content = when {
                                     nativeTextEmbeddedToolCall ->
@@ -1802,9 +1609,6 @@ internal class TurnExecutor(
                                             "No prose, no markdown fences."
                                 },
                                 toolCalls = null,
-                                agentInstanceId = persistAgentInstanceId,
-                                agentName = persistAgentName,
-                                agentDepth = persistAgentDepth,
                             )
                             continue
                         }
@@ -1824,19 +1628,7 @@ internal class TurnExecutor(
                                 cost = totalCost,
                                 toolsUsed = usedTools.distinct()
                             )
-                            return turnFinalizer.completeTurn(
-                                taskId,
-                                result,
-                                listener,
-                                runId,
-                                parentRunId,
-                                depth,
-                                persistAssistantMessage = true,
-                                metadata = subagentMetadata,
-                                agentInstanceId = persistAgentInstanceId,
-                                agentName = persistAgentName,
-                                agentDepth = persistAgentDepth,
-                            )
+                            return turnPersistence.finish(result, persistAssistantMessage = true)
                         }
 
                         // Check error rate abort (hard abort — same threshold as tool-calls branch).
@@ -1850,7 +1642,7 @@ internal class TurnExecutor(
                                 cost = totalCost,
                                 toolsUsed = usedTools.distinct()
                             )
-                            return turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                            return turnPersistence.finish(result, persistAssistantMessage = true)
                         }
 
                         val shouldRunTaskVerification =
@@ -1931,8 +1723,7 @@ internal class TurnExecutor(
                                         }
                                         activeNativeToolSchemas = null
                                     }
-                                    chatMessageRepository.create(
-                                        taskId = taskId,
+                                    turnPersistence.persist(
                                         role = MessageRole.SYSTEM,
                                         content = decision.nudge,
                                         // Flag as an internal guardian steering message so the UI
@@ -1942,9 +1733,6 @@ internal class TurnExecutor(
                                         // user). Full text stays in DB. See OtherBubbleRenderer.
                                         metadata = """{"type":"guardian_nudge"}""",
                                         toolCalls = null,
-                                        agentInstanceId = persistAgentInstanceId,
-                                        agentName = persistAgentName,
-                                        agentDepth = persistAgentDepth,
                                     )
                                     continue
                                 }
@@ -1979,8 +1767,7 @@ internal class TurnExecutor(
                         val textResponse = toolCallParser.extractTextResponse(effectiveResponse.content)
                         turnResponseProcessor.tryCreatePlanSubtasks(taskId, mode, executionMode, effectiveResponse, runProfile)
 
-                        chatMessageRepository.create(
-                            taskId = taskId,
+                        turnPersistence.persist(
                             role = MessageRole.ASSISTANT,
                             content = textResponse.ifEmpty { effectiveResponse.content },
                             thinking = turnResponseProcessor.resolveAssistantThinking(effectiveResponse),
@@ -1988,9 +1775,6 @@ internal class TurnExecutor(
                             tokensIn = effectiveResponse.usage.inputTokens,
                             tokensOut = effectiveResponse.usage.outputTokens,
                             cost = effectiveResponse.cost,
-                            agentInstanceId = persistAgentInstanceId,
-                            agentName = persistAgentName,
-                            agentDepth = persistAgentDepth,
                         )
 
                         val result = TurnResult(
@@ -2011,7 +1795,7 @@ internal class TurnExecutor(
                             "iterations" to iteration.toString(),
                             "agentName" to (profileOverrides?.subagentName ?: "default")
                         ))
-                        val finalResult = turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = false, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+                        val finalResult = turnPersistence.finish(result, persistAssistantMessage = false)
                         updateTurnState { TurnStateSnapshot() }
                         return finalResult
                     }
@@ -2085,7 +1869,7 @@ internal class TurnExecutor(
                 cost = totalCost,
                 toolsUsed = usedTools.distinct()
             )
-            val finalResult = turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+            val finalResult = turnPersistence.finish(result, persistAssistantMessage = true)
             updateTurnState { TurnStateSnapshot() }
             return finalResult
         } catch (e: CancellationException) {
@@ -2105,7 +1889,7 @@ internal class TurnExecutor(
                 cost = totalCost,
                 toolsUsed = usedTools.distinct()
             )
-            val finalResult = turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+            val finalResult = turnPersistence.finish(result, persistAssistantMessage = true)
             updateTurnState { TurnStateSnapshot() }
             return finalResult
         }
@@ -2128,9 +1912,269 @@ internal class TurnExecutor(
             cost = totalCost,
             toolsUsed = usedTools.distinct()
         )
-        val finalResult = turnFinalizer.completeTurn(taskId, result, listener, runId, parentRunId, depth, persistAssistantMessage = true, metadata = subagentMetadata, agentInstanceId = persistAgentInstanceId, agentName = persistAgentName, agentDepth = persistAgentDepth)
+        val finalResult = turnPersistence.finish(result, persistAssistantMessage = true)
         updateTurnState { TurnStateSnapshot() }
         return finalResult
+    }
+
+    private fun resolveInitialNativeToolSchemas(
+        taskId: String,
+        mode: TaskMode,
+        effectiveModel: String,
+        effectiveProvider: String,
+        profileOverrides: TurnProfileOverrides?
+    ): List<ToolSchema>? {
+        val svc = toolPermissionsService
+        if (svc == null) {
+            logger.debug {
+                "[NATIVE_TOOLS] Disabled for taskId=$taskId, mode=$mode → JSON-in-text path — " +
+                    "no ToolPermissionsService (tools are off for this run)"
+            }
+            return null
+        }
+        val nativeModeRaw = configService.getTyped(ConfigKeys.NATIVE_TOOLS_MODE, taskId)
+        val nativeToolsMode = parseNativeToolsMode(nativeModeRaw)
+        val modelDef = ModelDefinitions.getDefinition(effectiveProvider, effectiveModel)
+        val fallbackSet = NativeToolsFallbackTracker.getFallbackSet()
+        // One human-readable reason string, reused in both the enabled and disabled log lines,
+        // so the native-vs-JSON decision for a run is explainable from the log alone.
+        val nativeReason = nativeToolsDecisionReason(nativeToolsMode, modelDef, effectiveModel, fallbackSet)
+        return if (shouldUseNativeTools(nativeToolsMode, modelDef, effectiveModel, fallbackSet)) {
+            val modeSchemas = toolRegistry.getToolSchemas(mode, svc, taskId)
+            // Subagent profiles must see ONLY their allowed/disallowed tools in the native
+            // `tools` array — otherwise the model calls tools the harness then rejects with
+            // "Tool 'X' is not available to the subagent". The prompt's <available_tools>
+            // is already filtered via resolveToolDescriptionsForProfile; this aligns the
+            // native channel.
+            val filtered = turnPromptBuilder.filterNativeToolSchemasByProfile(modeSchemas, profileOverrides)
+            if (filtered.size != modeSchemas.size) {
+                logger.info {
+                    "[NATIVE_TOOLS] Filtered schemas for profile '${profileOverrides?.subagentName ?: "?"}': " +
+                        "${modeSchemas.size} → ${filtered.size}"
+                }
+            }
+            logger.info {
+                "[NATIVE_TOOLS] Enabled for taskId=$taskId, mode=$mode, " +
+                    "model=$effectiveProvider/$effectiveModel, schemas=${filtered.size} — $nativeReason"
+            }
+            filtered
+        } else {
+            logger.info {
+                "[NATIVE_TOOLS] Disabled for taskId=$taskId, mode=$mode, " +
+                    "model=$effectiveProvider/$effectiveModel → JSON-in-text path — $nativeReason"
+            }
+            null
+        }
+    }
+
+    // Wraps the caller's listener to capture per-tool start/duration into the given maps.
+    // Returns null when the caller passed no listener (see the IMPORTANT note at the call site).
+    private fun wrapListenerForToolTiming(
+        listener: TurnEventListener?,
+        toolStartNanos: java.util.concurrent.ConcurrentHashMap<String, Long>,
+        toolDurationsMs: java.util.concurrent.ConcurrentHashMap<String, Long>
+    ): TurnEventListener? {
+        val innerListener = listener
+        return if (innerListener != null) {
+            object : pl.jclab.refio.core.services.turn.TurnEventListener {
+                override fun onTurnStarted(taskId: String, mode: TaskMode, runId: String, parentRunId: String?, depth: Int) {
+                    innerListener.onTurnStarted(taskId, mode, runId, parentRunId, depth)
+                }
+                override fun onToolExecutionStarted(taskId: String, toolCall: pl.jclab.refio.core.db.ToolCallData) {
+                    toolStartNanos[toolCall.id] = System.nanoTime()
+                    innerListener.onToolExecutionStarted(taskId, toolCall)
+                }
+                override fun onToolStreamChunk(taskId: String, toolCallId: String, delta: String, accumulated: String) {
+                    innerListener.onToolStreamChunk(taskId, toolCallId, delta, accumulated)
+                }
+                override fun onToolExecutionCompleted(taskId: String, toolCall: pl.jclab.refio.core.db.ToolCallData, result: String, success: Boolean) {
+                    toolStartNanos[toolCall.id]?.let { start ->
+                        toolDurationsMs[toolCall.id] = (System.nanoTime() - start) / 1_000_000
+                    }
+                    innerListener.onToolExecutionCompleted(taskId, toolCall, result, success)
+                }
+                override fun onStreamChunk(taskId: String, delta: String, accumulated: String) {
+                    innerListener.onStreamChunk(taskId, delta, accumulated)
+                }
+                override fun onToolBatchCompleted(taskId: String, summary: ToolBatchSummary.BatchSummary) {
+                    innerListener.onToolBatchCompleted(taskId, summary)
+                }
+                override fun onTurnCompleted(taskId: String, result: pl.jclab.refio.core.services.TurnResult, runId: String, parentRunId: String?, depth: Int) {
+                    innerListener.onTurnCompleted(taskId, result, runId, parentRunId, depth)
+                }
+            }
+        } else null
+    }
+
+    // Emit ToolCalled events for Session Trace / Tool analytics.
+    // When per-tool timings aren't available (no caller listener) fall back to
+    // a batch-average estimate so the Debug panel still gets meaningful data.
+    private suspend fun emitToolCalledEvents(
+        taskId: String,
+        toolResults: List<Pair<ToolCallData, ToolResultData>>,
+        toolDurationsMs: Map<String, Long>,
+        batchStartNanos: Long,
+        evSessionId: String,
+        evSourceAgentId: String,
+        runId: String,
+        parentRunId: String?,
+        depth: Int,
+        iteration: Int
+    ) {
+        val batchDurationMs = (System.nanoTime() - batchStartNanos) / 1_000_000
+        val fallbackPerToolMs = if (toolResults.isNotEmpty()) batchDurationMs / toolResults.size else 0L
+        for ((toolCall, resultData) in toolResults) {
+            val success = resultData.success
+            val durationMs = toolDurationsMs[toolCall.id] ?: fallbackPerToolMs
+            // Feed global tool analytics (Debug panel)
+            pl.jclab.refio.core.services.monitoring.ToolUsageStats.record(
+                toolName = toolCall.name,
+                durationMs = durationMs,
+                success = success,
+                errorMessage = if (success) null else resultData.content.take(200)
+            )
+            emitTurnEvent(taskId) {
+                pl.jclab.refio.core.agents.events.AgentEvent.ToolCalled(
+                    id = UUID.randomUUID().toString(),
+                    sessionId = evSessionId,
+                    sourceAgentId = evSourceAgentId,
+                    timestamp = System.currentTimeMillis(),
+                    correlationId = runId,
+                    iteration = iteration,
+                    toolName = toolCall.name,
+                    argumentsPreview = toolCall.arguments.take(120),
+                    durationMs = durationMs,
+                    success = success,
+                    errorMessage = if (success) null else resultData.content.take(200),
+                    resultPreview = resultData.content.take(200),
+                    runId = runId,
+                    parentRunId = parentRunId,
+                    depth = depth
+                )
+            }
+        }
+    }
+
+    // Handle AWAITING_RESPONSE from send_message tool
+    private suspend fun handleAwaitingResponses(
+        @Suppress("UNUSED_PARAMETER") taskId: String,
+        toolResults: List<Pair<ToolCallData, ToolResultData>>,
+        turnPersistence: TurnPersistence
+    ) {
+        for ((toolCall, resultData) in toolResults) {
+            val metadata = resultData.metadata?.let { TurnJsonUtils.parseJsonToMap(it) }
+            if (metadata?.get("type") == "AWAITING_RESPONSE" && agentEventBus != null) {
+                val requestId = metadata["requestId"] as? String ?: continue
+                val timeout = 300_000L // 5 minutes
+                logger.info { "[AWAITING_RESPONSE] Tool ${toolCall.name} waiting for response to $requestId" }
+                updateTurnState { copy(phase = TurnPhase.WAITING_FOR_PERMISSION) } // reuse state
+
+                val response = try {
+                    kotlinx.coroutines.withTimeout(timeout) {
+                        agentEventBus.eventsOfType<pl.jclab.refio.core.agents.events.AgentEvent.DataResponse>()
+                            .filter { it.requestId == requestId }
+                            .first()
+                    }
+                } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
+                    null
+                }
+
+                updateTurnState { copy(phase = TurnPhase.EXECUTING_TOOLS) }
+
+                val responseContent = if (response != null) {
+                    "Response received: ${response.response}"
+                } else {
+                    "No response received within timeout. Continue with available information."
+                }
+
+                turnPersistence.persist(
+                    role = MessageRole.SYSTEM,
+                    content = responseContent,
+                )
+                logger.info { "[AWAITING_RESPONSE] Got response for $requestId: ${responseContent.take(100)}" }
+            }
+        }
+    }
+
+    private data class ToolBatchTracking(
+        val repetitionAbort: TurnGuardrails.LoopStatus.ABORT?,
+        val repetitionAbortToolName: String?,
+        val noopCallIds: Set<String>,
+        val consecutiveIdenticalFailures: Int,
+        val lastFailureSignature: String?,
+    )
+
+    // Track error rate + definitive-loop detection + unified repetition tracker.
+    // Definitive loop = the SAME tool with the SAME arguments failing repeatedly.
+    // Varying either resets the counter so the agent can still explore freely.
+    private fun trackToolBatch(
+        toolResults: List<Pair<ToolCallData, ToolResultData>>,
+        errorTracker: ToolErrorTracker,
+        repetitionTracker: TurnRepetitionTracker,
+        consecutiveIdenticalFailures: Int,
+        lastFailureSignature: String?,
+    ): ToolBatchTracking {
+        @Suppress("NAME_SHADOWING")
+        var consecutiveIdenticalFailures = consecutiveIdenticalFailures
+        @Suppress("NAME_SHADOWING")
+        var lastFailureSignature = lastFailureSignature
+        var repetitionAbort: TurnGuardrails.LoopStatus.ABORT? = null
+        // Name of the tool that triggered the repetition abort (for deliverable-aware
+        // handling: a loop on an optional VERIFICATION tool after the work is done is not
+        // the same as a loop that never produced the deliverable). See docs/0070 FM-3.
+        var repetitionAbortToolName: String? = null
+        // Ids of write calls whose generated content was identical to the file (no-op).
+        // A no-op write is NOT consolidation progress (P1) — it must not reset the
+        // read-only spree counter below, otherwise a futile edit masks a read-forever loop.
+        val noopCallIds = mutableSetOf<String>()
+        for ((toolCall, result) in toolResults) {
+            if (result.noop) noopCallIds.add(toolCall.id)
+            val success = result.success
+            errorTracker.recordResult(success)
+            if (success) {
+                consecutiveIdenticalFailures = 0
+                lastFailureSignature = null
+            } else {
+                val signature = "${toolCall.name}:${toolCall.arguments.hashCode()}"
+                if (signature == lastFailureSignature) {
+                    consecutiveIdenticalFailures++
+                } else {
+                    consecutiveIdenticalFailures = 1
+                    lastFailureSignature = signature
+                }
+            }
+
+            // Parse args defensively: if the JSON is malformed we skip tracking
+            // for this call rather than crashing the turn loop.
+            val parsedArgs: Map<String, Any?>? = runCatching {
+                TurnJsonUtils.parseJsonToMap(toolCall.arguments)
+            }.getOrNull()
+            if (parsedArgs != null) {
+                // Output is only forwarded on success — a failing call's error
+                // text belongs to the error tracker, not the output-hash signal.
+                // Use loopSignature (raw output sans hints/nudge) so the progressive
+                // "[⚠ possible loop]" nudge — whose tail embeds a per-call subtask UUID
+                // — cannot make every repeated read look "different" and defeat the
+                // byte-identical hard-abort. Falls back to content for paths that don't
+                // set a signature (blocked/error/synthetic results carry no nudge anyway).
+                val output = if (success) (result.loopSignature ?: result.content) else null
+                when (val status = repetitionTracker.record(toolCall.name, parsedArgs, output, isNoopWrite = result.noop)) {
+                    is TurnGuardrails.LoopStatus.ABORT ->
+                        if (repetitionAbort == null) {
+                            repetitionAbort = status
+                            repetitionAbortToolName = toolCall.name
+                        }
+                    TurnGuardrails.LoopStatus.OK -> Unit
+                }
+            }
+        }
+        return ToolBatchTracking(
+            repetitionAbort = repetitionAbort,
+            repetitionAbortToolName = repetitionAbortToolName,
+            noopCallIds = noopCallIds,
+            consecutiveIdenticalFailures = consecutiveIdenticalFailures,
+            lastFailureSignature = lastFailureSignature,
+        )
     }
 
     /**

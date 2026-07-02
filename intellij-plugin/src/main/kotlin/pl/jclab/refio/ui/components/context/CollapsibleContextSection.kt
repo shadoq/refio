@@ -1,6 +1,8 @@
 package pl.jclab.refio.ui.components.context
 
+import com.intellij.icons.AllIcons
 import com.intellij.openapi.ui.Messages
+import com.intellij.ui.ColorUtil
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
@@ -35,9 +37,7 @@ class CollapsibleContextSection(
     private var pendingHtml: String? = null
     private var tokenInfo: ContextSectionTokenInfo? = null
 
-    private val toggleLabel = JBLabel(">").apply {
-        font = font.deriveFont(12f)
-    }
+    private val toggleLabel = JBLabel(AllIcons.General.ArrowRight)
     private val titleLabel = JBLabel(title).apply {
         font = font.deriveFont(12f)
     }
@@ -161,7 +161,9 @@ class CollapsibleContextSection(
             append("<div style='white-space:pre-wrap; word-wrap:break-word;'>")
             append(escaped)
             append("</div>")
-            append("<p style='color:#808080'><i>[truncated for display - ")
+            append("<p style='color:#")
+            append(ColorUtil.toHex(LCATheme.labelDisabledForeground))
+            append("'><i>[truncated for display - ")
             append(omitted)
             append(" more characters not shown. Use Copy for the full content.]</i></p>")
             append("</body></html>")
@@ -221,7 +223,7 @@ class CollapsibleContextSection(
 
     fun expand() {
         isExpanded = true
-        toggleLabel.text = "v"
+        toggleLabel.icon = AllIcons.General.ArrowDown
         contentPanel.isVisible = true
         // Parse any HTML that was deferred while collapsed, now that it will be visible.
         applyPendingHtml()
@@ -231,7 +233,7 @@ class CollapsibleContextSection(
 
     fun collapse() {
         isExpanded = false
-        toggleLabel.text = ">"
+        toggleLabel.icon = AllIcons.General.ArrowRight
         contentPanel.isVisible = false
         revalidate()
         repaint()

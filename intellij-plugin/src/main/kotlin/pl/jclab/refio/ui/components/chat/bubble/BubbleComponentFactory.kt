@@ -981,7 +981,7 @@ internal class BubbleComponentFactory(
     }
 
     fun createClickablePathLabel(path: String): JLabel {
-        return JLabel("<html><u>${path}</u></html>").apply {
+        return JLabel("<html><u>${escapeHtml(path)}</u></html>").apply {
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             foreground = LCATheme.accentColor
             font = Font(LCATheme.monoFont.family, Font.PLAIN, LCATheme.bodyFont.size)
@@ -1034,7 +1034,7 @@ internal class BubbleComponentFactory(
 
     fun createClickableFileNameLabel(path: String): JLabel {
         val fileName = path.substringAfterLast('/').substringAfterLast('\\').ifBlank { path }
-        return JLabel("<html><u>$fileName</u></html>").apply {
+        return JLabel("<html><u>${escapeHtml(fileName)}</u></html>").apply {
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             foreground = LCATheme.accentColor
             font = Font(LCATheme.monoFont.family, Font.PLAIN, LCATheme.bodyFont.size)
@@ -1124,6 +1124,15 @@ internal class BubbleComponentFactory(
 
                 val valueComponent = if (isPathKey(key)) {
                     createFileReferencePanel(value)
+                } else if (isLargeParamKey(key) && value.length > LARGE_PARAM_PREVIEW_LIMIT) {
+                    // Large parameter values (file content, diffs, old/new strings) are otherwise
+                    // truncated to a flat, unreadable preview. Reuse the collapsible tool-content
+                    // panel so the user can expand the full value on demand.
+                    createCollapsibleToolContentPanel(
+                        messageId = "toolparam:$key:${value.hashCode()}",
+                        liveContent = value,
+                        parameters = params
+                    )
                 } else {
                     JBPanel<JBPanel<*>>(BorderLayout()).apply {
                         isOpaque = false
@@ -1235,6 +1244,13 @@ internal class BubbleComponentFactory(
             normalized.take(COLLAPSED_BUBBLE_PREVIEW_CHARS).trimEnd() + "\n\n[...]"
         }
     }
+
+    private fun escapeHtml(text: String): String = text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&#39;")
 
     private fun getContextIcon(ref: ContextReference): String = when (ref.type) {
         ContextType.FILE -> "\uD83D\uDCC4"

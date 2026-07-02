@@ -2,6 +2,7 @@ package pl.jclab.refio.ui.components.agents
 
 import java.awt.Dimension
 import javax.swing.BoxLayout
+import javax.swing.JComponent
 import javax.swing.JPanel
 
 /**
@@ -98,7 +99,15 @@ class AgentGraphPanel : JPanel() {
     }
 
     override fun getPreferredSize(): Dimension {
-        val h = (nodes.size * 54).coerceAtLeast(100)
-        return Dimension(250, h)
+        // Derive from actual children (border insets carry the depth indent)
+        var width = 0
+        var height = 0
+        for (component in components) {
+            val pref = component.preferredSize
+            val insets = (component as? JComponent)?.insets
+            height += pref.height + (insets?.let { it.top + it.bottom } ?: 0)
+            width = maxOf(width, pref.width + (insets?.let { it.left + it.right } ?: 0))
+        }
+        return Dimension(width.coerceAtLeast(250), height.coerceAtLeast(100))
     }
 }

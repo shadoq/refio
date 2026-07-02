@@ -499,12 +499,17 @@ class SettingsView(
         themePanel.reload()
     }
 
+    @Volatile
+    private var disposed = false
+
     /**
-     * Cleanup coroutines when component is removed
-     * IMPORTANT: Cancel pending saves immediately to avoid blocking EDT
+     * Cleanup coroutines and child panels. Idempotent. Must be called explicitly by the
+     * owner (RefioContentPanel) because this view lives in a CardLayout and is only
+     * hidden on "Back", so removeNotify() alone is not a reliable cleanup hook.
      */
-    override fun removeNotify() {
-        super.removeNotify()
+    fun dispose() {
+        if (disposed) return
+        disposed = true
 
         // Cancel any pending save job immediately (don't wait)
         // This prevents blocking EDT which causes UI freezes
@@ -520,5 +525,10 @@ class SettingsView(
         subagentPanel.dispose()
 
         logger.debug { "SettingsView cleanup completed" }
+    }
+
+    override fun removeNotify() {
+        super.removeNotify()
+        dispose()
     }
 }

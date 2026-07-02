@@ -105,11 +105,11 @@ class ProvidersSettingsPanel(
      * Provider status indicators
      */
     private enum class ProviderStatus(val displayText: String, val color: Color) {
-        DETECTED("✓ Detected locally", Color(0, 150, 0)),
-        CONFIGURED("✓ Configured", Color(0, 150, 0)),
-        NEEDS_CONFIG("⚠ Requires configuration", JBColor.ORANGE),
-        ERROR("✗ Connection error", JBColor.RED),
-        TESTING("⟳ Testing...", JBColor.BLUE)
+        DETECTED("OK Detected locally", LCATheme.successColor),
+        CONFIGURED("OK Configured", LCATheme.successColor),
+        NEEDS_CONFIG("WARN Requires configuration", JBColor.ORANGE),
+        ERROR("ERR Connection error", JBColor.RED),
+        TESTING("Testing...", JBColor.BLUE)
     }
 
     /**
@@ -294,7 +294,13 @@ class ProvidersSettingsPanel(
             if (description != null) {
                 gbc.gridy++
                 gbc.insets = LCATheme.insetsFormField
-                add(JLabel("<html><font color='gray'>$description</font></html>"), gbc)
+                val escapedDescription = description
+                    .replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                    .replace("\"", "&quot;")
+                    .replace("'", "&#39;")
+                add(JLabel("<html><font color='gray'>$escapedDescription</font></html>"), gbc)
             }
 
             // Fields

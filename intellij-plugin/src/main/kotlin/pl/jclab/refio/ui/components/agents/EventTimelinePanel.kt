@@ -1,5 +1,7 @@
 package pl.jclab.refio.ui.components.agents
 
+import com.intellij.ui.JBColor
+import com.intellij.util.ui.UIUtil
 import pl.jclab.refio.core.agents.events.AgentEvent
 import java.awt.BorderLayout
 import java.awt.Color
@@ -32,6 +34,7 @@ class EventTimelinePanel : JPanel(BorderLayout()) {
         override fun isCellEditable(row: Int, column: Int): Boolean = false
     }
     private val table = JTable(model)
+    private val scrollPane = JScrollPane(table)
 
     // Footer labels
     private val footerLabel = JLabel(" ").apply {
@@ -82,9 +85,9 @@ class EventTimelinePanel : JPanel(BorderLayout()) {
                 val str = value?.toString() ?: ""
                 if (!isSelected) {
                     foreground = when {
-                        str.startsWith("OK") || str == "DONE" -> Color(34, 139, 34)
-                        str == "FAIL" || str == "ERR" -> Color(200, 50, 50)
-                        else -> UIManager.getColor("Table.foreground") ?: Color.WHITE
+                        str.startsWith("OK") || str == "DONE" -> JBColor(Color(34, 139, 34), Color(90, 190, 100))
+                        str == "FAIL" || str == "ERR" -> JBColor(Color(200, 50, 50), Color(235, 105, 105))
+                        else -> UIUtil.getLabelForeground()
                     }
                 }
                 horizontalAlignment = SwingConstants.CENTER
@@ -92,7 +95,7 @@ class EventTimelinePanel : JPanel(BorderLayout()) {
             }
         }
 
-        add(JScrollPane(table), BorderLayout.CENTER)
+        add(scrollPane, BorderLayout.CENTER)
 
         val copyButton = JButton("Copy").apply {
             font = font.deriveFont(10f)
@@ -123,7 +126,7 @@ class EventTimelinePanel : JPanel(BorderLayout()) {
         val time = dateFormat.format(Date(event.timestamp))
         val row: Array<Any?> = when (event) {
             is AgentEvent.AgentStarted -> arrayOf(
-                time, "START", "-", "${event.agentName} — ${event.task.take(80)}",
+                time, "START", "-", "${event.agentName} - ${event.task.take(80)}",
                 event.model ?: "-", "-", "-", "-", "…"
             )
             is AgentEvent.AgentCompleted -> arrayOf(
@@ -164,7 +167,7 @@ class EventTimelinePanel : JPanel(BorderLayout()) {
                 val depthPrefix = if (event.depth > 0) "d${event.depth}:" else ""
                 arrayOf(
                     time, "TOOL", "$depthPrefix${event.iteration}",
-                    "${event.toolName} — ${event.argumentsPreview.take(70)}",
+                    "${event.toolName} - ${event.argumentsPreview.take(70)}",
                     "-", "-", "-",
                     formatDuration(event.durationMs),
                     if (event.success) "OK" else "ERR"
@@ -197,9 +200,15 @@ class EventTimelinePanel : JPanel(BorderLayout()) {
         }
 
         SwingUtilities.invokeLater {
+            // Auto-scroll only if the user is already at (or within one row of) the bottom,
+            // so scrolling back through history is not hijacked during a run
+            val bar = scrollPane.verticalScrollBar
+            val wasAtBottom = bar.value + bar.visibleAmount >= bar.maximum - table.rowHeight
             model.addRow(row)
-            val lastRow = model.rowCount - 1
-            table.scrollRectToVisible(table.getCellRect(lastRow, 0, true))
+            if (wasAtBottom) {
+                val lastRow = model.rowCount - 1
+                table.scrollRectToVisible(table.getCellRect(lastRow, 0, true))
+            }
             updateFooter()
         }
     }

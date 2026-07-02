@@ -6,6 +6,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.ColorUtil
 import com.intellij.ui.JBColor
 import com.intellij.ui.table.JBTable
 import com.intellij.openapi.ui.Messages
@@ -150,16 +151,13 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     private val workingMemorySection = createSection("Working Memory", "working_memory")
     private val agentPlansSection = createSection("Agent Plans", "agent_plans")
     private val agentMemorySection = createSection("Agent Memory", "agent_memory")
-    private val contextStabilitySection = createSection("Context Stability", "context_stability")
     private val domainAnalysisSection = createSection("Domain Analysis", "domain_analysis")
     // Runtime sections (from ProjectContextRouter.buildActiveSectionTokens)
     private val systemPromptSection = createSection("System Prompt", "system_prompt")
-    private val systemMessagesSection = createSection("System Messages", "system_messages")
     private val messagesAssistantSection = createSection("Assistant Messages", "messages_assistant")
     private val messagesUserSection = createSection("User Messages", "messages_user")
     private val messagesSystemSection = createSection("System Role Messages", "messages_system")
     private val messagesOtherSection = createSection("Other Role Messages", "messages_other")
-    private val contextOverheadSection = createSection("Context Injection Overhead", "context_injection_overhead")
     private val architectureSection = createSection("Architecture", "architecture")
     private val patternsSection = createSection("Patterns", "patterns")
     private val navigationMapSection = createSection("Navigation Map", "navigation_map")
@@ -209,6 +207,9 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     }
 
     private var isLoading = false
+    // Keys of sections currently added to contentPanel, in display order.
+    // Used to skip the expensive removeAll/re-add when the order did not change.
+    private var currentSectionOrder: List<String> = emptyList()
     private var currentLLMPrompt: String? = null
     private var currentRawContext: String? = null
     private var latestPromptSnapshot: PromptSnapshot? = null
@@ -270,10 +271,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
             updateSectionFromPromptTag(agentMemorySection, context.llmContextPrompt, "AGENT_MEMORY")
         },
         SectionEntry("working_memory", 19, workingMemorySection) { context, _ ->
-            updateWorkingMemorySection(context)
-        },
-        SectionEntry("context_stability", 18, contextStabilitySection) { context, _ ->
-            updateContextStabilitySection(context)
+            updateSectionFromPromptTag(workingMemorySection, context.llmContextPrompt, "WORKING_MEMORY")
         },
         SectionEntry("domain_analysis", 19, domainAnalysisSection) { context, _ ->
             updateDomainAnalysisSection(context)
@@ -282,7 +280,6 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         SectionEntry("system_prompt", 20, systemPromptSection) { context, _ ->
             updateSystemPromptSection(context)
         },
-        SectionEntry("system_messages", 21, systemMessagesSection) { _, _ -> },
         SectionEntry("messages_assistant", 22, messagesAssistantSection) { context, _ ->
             updateMessagesSection(messagesAssistantSection, context.conversationHistory, "assistant")
         },
@@ -295,7 +292,6 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         SectionEntry("messages_other", 25, messagesOtherSection) { context, _ ->
             updateMessagesSection(messagesOtherSection, context.conversationHistory, "tool")
         },
-        SectionEntry("context_injection_overhead", 26, contextOverheadSection) { _, _ -> },
         SectionEntry("architecture", 27, architectureSection) { context, _ ->
             updateSectionFromPromptTag(architectureSection, context.llmContextPrompt, "PROJECT_ARCHITECTURE")
         },
@@ -484,7 +480,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                 isLoading = true
                 SwingUtilities.invokeLater {
                     refreshButton.isEnabled = false
-                    refreshButton.text = "⏳ Loading..."
+                    refreshButton.text = "Loading..."
                 }
 
                 logger.info { "Refreshing context for task=${session.id}" }
@@ -553,7 +549,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                 isLoading = false
                 SwingUtilities.invokeLater {
                     refreshButton.isEnabled = true
-                    refreshButton.text = "🔄 Refresh"
+                    refreshButton.text = "Refresh"
                 }
             }
         }
@@ -603,11 +599,11 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
 
         val html = """
             <html><body style='padding: 5px; word-wrap: break-word;'>
-            <b>Project Path:</b> ${context.projectPath}<br>
-            <b>Type:</b> ${context.projectType}<br>
-            <b>Primary Language:</b> ${context.primaryLanguage}<br>
-            <b>Main Language:</b> ${context.mainLanguage}<br>
-            <b>Complexity:</b> ${context.complexity}<br>
+            <b>Project Path:</b> ${escapeHtml(context.projectPath)}<br>
+            <b>Type:</b> ${escapeHtml(context.projectType)}<br>
+            <b>Primary Language:</b> ${escapeHtml(context.primaryLanguage)}<br>
+            <b>Main Language:</b> ${escapeHtml(context.mainLanguage)}<br>
+            <b>Complexity:</b> ${escapeHtml(context.complexity)}<br>
             <b>Total Files:</b> ${context.totalFiles}<br>
             $infrastructureText<b>Analyzed:</b> ${formatTimestamp(context.analyzedAt)}<br>
             </body></html>
@@ -870,12 +866,12 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
 
         val html = """
             <html><body style='padding: 5px; word-wrap: break-word;'>
-            <b>Name:</b> ${task.name}<br>
-            <b>Status:</b> ${task.status}<br>
+            <b>Name:</b> ${escapeHtml(task.name)}<br>
+            <b>Status:</b> ${escapeHtml(task.status)}<br>
             $executionModeStr
             $priorityStr
             <b>Description:</b><br>
-            ${descriptionPreview}${if (task.description.length > 500) "..." else ""}<br>
+            ${escapeHtml(descriptionPreview)}${if (task.description.length > 500) "..." else ""}<br>
             </body></html>
         """.trimIndent()
 
@@ -908,10 +904,10 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
             rawBuilder.appendLine()
         } else {
             pendingRefs.forEach { ref ->
-                htmlBuilder.append("${pendingContextIcon(ref)} ${ref.displayName}<br>")
+                htmlBuilder.append("${pendingContextIcon(ref)} ${escapeHtml(ref.displayName)}<br>")
                 rawBuilder.appendLine("- ${ref.displayName}")
                 if (ref.path.isNotBlank()) {
-                    htmlBuilder.append("<font color='#666666'>${ref.path}</font><br>")
+                    htmlBuilder.append("<font color='$mutedHex'>${escapeHtml(ref.path)}</font><br>")
                     rawBuilder.appendLine("  Path: ${ref.path}")
                 }
                 if (!ref.content.isNullOrBlank()) {
@@ -931,18 +927,18 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         } else {
             context.userContextRefs.forEach { ref ->
                 val typeIcon = when (ref.type) {
-                    "FILE" -> "??"
-                    "FOLDER" -> "??"
-                    "SELECTION" -> "?"
-                    "PROVIDER" -> "??"
-                    else -> "??"
+                    "FILE" -> "[F]"
+                    "FOLDER" -> "[D]"
+                    "SELECTION" -> "[S]"
+                    "PROVIDER" -> "[P]"
+                    else -> "[?]"
                 }
 
-                val header = "$typeIcon <b>${ref.displayName}</b>"
-                val typeInfo = "<font color='#808080'>[${ref.type}${ref.providerId?.let { " - $it" } ?: ""}]</font>"
+                val header = "$typeIcon <b>${escapeHtml(ref.displayName)}</b>"
+                val typeInfo = "<font color='$mutedHex'>[${ref.type}${ref.providerId?.let { " - $it" } ?: ""}]</font>"
                 val sizeInfo = if (ref.sizeBytes > 0) {
                     val sizeKB = ref.sizeBytes / 1024.0
-                    " <font color='#808080'>(${String.format("%.1f", sizeKB)} KB, ~${ref.estimatedTokens} tokens)</font>"
+                    " <font color='$mutedHex'>(${String.format("%.1f", sizeKB)} KB, ~${ref.estimatedTokens} tokens)</font>"
                 } else ""
 
                 htmlBuilder.append("$header $typeInfo$sizeInfo<br>")
@@ -952,7 +948,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                     rawBuilder.appendLine("  Size: ${String.format("%.1f", sizeKB)} KB, ~${ref.estimatedTokens} tokens")
                 }
                 ref.path?.let { path ->
-                    htmlBuilder.append("<font color='#666666'>Path: $path</font><br>")
+                    htmlBuilder.append("<font color='$mutedHex'>Path: ${escapeHtml(path)}</font><br>")
                     rawBuilder.appendLine("  Path: $path")
                 }
 
@@ -969,7 +965,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                     escapedContent
                 }
 
-                htmlBuilder.append("<pre style='padding: 5px; border: 1px solid #ddd; white-space: pre-wrap; word-wrap: break-word; font-size: 10px;'>$preview</pre>")
+                htmlBuilder.append("<pre style='padding: 5px; border: 1px solid $borderHex; white-space: pre-wrap; word-wrap: break-word; font-size: 10px;'>$preview</pre>")
                 htmlBuilder.append("<br>")
 
                 rawBuilder.appendLine(ref.content)
@@ -994,9 +990,9 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         val rawBuilder = StringBuilder()
         htmlBuilder.append("<html>")
         context.mcpResources.take(10).forEach { res ->
-            htmlBuilder.append("<b>@${res.serverId}</b> ${res.name} (${res.uri})<br>")
+            htmlBuilder.append("<b>@${escapeHtml(res.serverId)}</b> ${escapeHtml(res.name)} (${escapeHtml(res.uri)})<br>")
             res.description?.let {
-                htmlBuilder.append(it.take(240)).append("<br>")
+                htmlBuilder.append(escapeHtml(it.take(240))).append("<br>")
             }
         }
         if (context.mcpResources.size > 10) {
@@ -1014,11 +1010,11 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
     }
 
     private fun pendingContextIcon(ref: ContextReference): String = when (ref.type.name) {
-        "FILE" -> "??"
-        "FOLDER" -> "??"
-        "SELECTION" -> "?"
-        "PROVIDER" -> "??"
-        else -> "??"
+        "FILE" -> "[F]"
+        "FOLDER" -> "[D]"
+        "SELECTION" -> "[S]"
+        "PROVIDER" -> "[P]"
+        else -> "[?]"
     }
 
     /**
@@ -1132,7 +1128,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         if (context.subtasks.isEmpty()) {
             val html = """
                 <html><body style='padding: 5px; word-wrap: break-word;'>
-                <font color='#808080'>No subtasks yet. Use PLAN or AGENT mode to create subtasks.</font>
+                <font color='$mutedHex'>No subtasks yet. Use PLAN or AGENT mode to create subtasks.</font>
                 </body></html>
             """.trimIndent()
             subtasksSection.setContent("No subtasks yet. Use PLAN or AGENT mode to create subtasks.", html)
@@ -1153,47 +1149,47 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         // Progress bar visualization
         val progressPercent = if (total > 0) (completedCount * 100 / total) else 0
         val progressColor = when {
-            failed.isNotEmpty() -> "#cc0000"
-            progressPercent == 100 -> "#00aa00"
-            else -> "#0066cc"
+            failed.isNotEmpty() -> "$errorHex"
+            progressPercent == 100 -> "$successHex"
+            else -> "$infoHex"
         }
         parts.add("<b style='color: $progressColor;'>Progress: $completedCount / $total completed ($progressPercent%)</b><br><br>")
 
         // Running first (most important)
         if (running.isNotEmpty()) {
-            parts.add("<b style='color: #ff9900;'>- Running (${running.size}):</b><br>")
+            parts.add("<b style='color: $warningHex;'>- Running (${running.size}):</b><br>")
             running.take(3).forEach { subtask ->
                 parts.add("&nbsp;&nbsp;- ${subtask.description.take(80)}${if (subtask.description.length > 80) "..." else ""}<br>")
             }
-            if (running.size > 3) parts.add("&nbsp;&nbsp;<font color='#808080'>... +${running.size - 3} more</font><br>")
+            if (running.size > 3) parts.add("&nbsp;&nbsp;<font color='$mutedHex'>... +${running.size - 3} more</font><br>")
             parts.add("<br>")
         }
 
         // Pending
         if (pending.isNotEmpty()) {
-            parts.add("<b style='color: #666666;'>- Pending (${pending.size}):</b><br>")
+            parts.add("<b style='color: $mutedHex;'>- Pending (${pending.size}):</b><br>")
             pending.take(5).forEach { subtask ->
                 parts.add("&nbsp;&nbsp;- ${subtask.description.take(80)}${if (subtask.description.length > 80) "..." else ""}<br>")
             }
-            if (pending.size > 5) parts.add("&nbsp;&nbsp;<font color='#808080'>... +${pending.size - 5} more</font><br>")
+            if (pending.size > 5) parts.add("&nbsp;&nbsp;<font color='$mutedHex'>... +${pending.size - 5} more</font><br>")
             parts.add("<br>")
         }
 
         // Completed (collapsed if many)
         if (completed.isNotEmpty()) {
-            parts.add("<b style='color: #00aa00;'>- Completed (${completed.size}):</b><br>")
+            parts.add("<b style='color: $successHex;'>- Completed (${completed.size}):</b><br>")
             completed.takeLast(3).forEach { subtask ->
-                parts.add("&nbsp;&nbsp;<font color='#666666'>- ${subtask.description.take(60)}${if (subtask.description.length > 60) "..." else ""}</font><br>")
+                parts.add("&nbsp;&nbsp;<font color='$mutedHex'>- ${subtask.description.take(60)}${if (subtask.description.length > 60) "..." else ""}</font><br>")
             }
-            if (completed.size > 3) parts.add("&nbsp;&nbsp;<font color='#808080'>... +${completed.size - 3} earlier</font><br>")
+            if (completed.size > 3) parts.add("&nbsp;&nbsp;<font color='$mutedHex'>... +${completed.size - 3} earlier</font><br>")
             parts.add("<br>")
         }
 
         // Failed (always show)
         if (failed.isNotEmpty()) {
-            parts.add("<b style='color: #cc0000;'>- Failed (${failed.size}):</b><br>")
+            parts.add("<b style='color: $errorHex;'>- Failed (${failed.size}):</b><br>")
             failed.forEach { subtask ->
-                parts.add("&nbsp;&nbsp;<font color='#cc0000'>- ${subtask.description.take(80)}${if (subtask.description.length > 80) "..." else ""}</font><br>")
+                parts.add("&nbsp;&nbsp;<font color='$errorHex'>- ${subtask.description.take(80)}${if (subtask.description.length > 80) "..." else ""}</font><br>")
             }
         }
 
@@ -1300,7 +1296,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                 rawParts.add("  - $file")
             }
             if (context.completedFiles.size > 15) {
-                htmlParts.add("&nbsp;&nbsp;<font color='#808080'>... +${context.completedFiles.size - 15} more</font><br>")
+                htmlParts.add("&nbsp;&nbsp;<font color='$mutedHex'>... +${context.completedFiles.size - 15} more</font><br>")
                 rawParts.add("  ... +${context.completedFiles.size - 15} more")
             }
             htmlParts.add("<br>")
@@ -1327,18 +1323,18 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                 // Show data preservation status badge
                 val dataPreserved = summarySize > 0 && resultSize <= 32_000 && resultSize > summarySize
                 val preservationBadge = if (dataPreserved) {
-                    " <font color='#4CAF50'>[FULL]</font>"
+                    " <font color='$successHex'>[FULL]</font>"
                 } else if (summarySize > 0 && resultSize > 32_000) {
-                    " <font color='#FF9800'>[SUMMARIZED]</font>"
+                    " <font color='$warningHex'>[SUMMARIZED]</font>"
                 } else {
                     ""
                 }
 
-                htmlParts.add("&nbsp;&nbsp;<b>${step.tool}</b> on <code>$fileLabel</code>$preservationBadge <font color='#808080'>(${String.format("%.1f", stepSize / 1024.0)} KB, ~$stepTokens tokens)</font><br>")
+                htmlParts.add("&nbsp;&nbsp;<b>${step.tool}</b> on <code>$fileLabel</code>$preservationBadge <font color='$mutedHex'>(${String.format("%.1f", stepSize / 1024.0)} KB, ~$stepTokens tokens)</font><br>")
 
                 // Show breakdown if step is large
                 if (stepSize > 1000) {
-                    htmlParts.add("&nbsp;&nbsp;&nbsp;&nbsp;<font color='#666666'>Breakdown: params=$paramsSize chars, result=$resultSize chars")
+                    htmlParts.add("&nbsp;&nbsp;&nbsp;&nbsp;<font color='$mutedHex'>Breakdown: params=$paramsSize chars, result=$resultSize chars")
                     if (summarySize > 0) htmlParts.add(", summary=$summarySize chars")
                     htmlParts.add("</font><br>")
                 }
@@ -1352,7 +1348,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                         .replace("\n", "<br>")
                         .take(200)
 
-                    htmlParts.add("&nbsp;&nbsp;&nbsp;&nbsp;<font color='#666666'><pre style='display: inline; margin: 0;'>$preview${if (step.result.length > 200) "..." else ""}</pre></font><br>")
+                    htmlParts.add("&nbsp;&nbsp;&nbsp;&nbsp;<font color='$mutedHex'><pre style='display: inline; margin: 0;'>$preview${if (step.result.length > 200) "..." else ""}</pre></font><br>")
                 }
 
                 val preservationLabel = if (dataPreserved) " [FULL]" else if (summarySize > 0 && resultSize > 32_000) " [SUMMARIZED]" else ""
@@ -1363,7 +1359,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
             }
 
             if (context.executedSteps.size > 8) {
-                htmlParts.add("&nbsp;&nbsp;<font color='#808080'>... +${context.executedSteps.size - 8} more steps</font><br>")
+                htmlParts.add("&nbsp;&nbsp;<font color='$mutedHex'>... +${context.executedSteps.size - 8} more steps</font><br>")
                 rawParts.add("  ... +${context.executedSteps.size - 8} more steps")
             }
         }
@@ -1387,72 +1383,6 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         savePromptButton.isEnabled = enabled
         viewPromptButton.isEnabled = enabled
         viewContextButton.isEnabled = !currentRawContext.isNullOrBlank()
-
-        if (!enabled) {
-            val html = """
-                <html><body style='padding: 5px; word-wrap: break-word;'>
-                No LLM prompt available.
-                </body></html>
-            """.trimIndent()
-            return
-        }
-        val promptText = prompt!!
-
-        val structureHtml = buildContextStructureOverview(context)
-        val escaped = promptText
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\n", "<br>")
-
-        val tokenSummary = "Runtime request: ~${context.activeEstimatedTokens} tokens"
-        val modeLabel = "Active request only"
-
-        val html = """
-            <html><body style='padding: 5px; font-family: monospace; word-wrap: break-word;'>
-            <div style='margin-bottom: 15px; padding: 10px; border-left: 4px solid #4A90D9;'>
-                <b>Context Structure (what LLM sees):</b><br><br>
-                $structureHtml
-                <br><font color='#666666'>View: $modeLabel | Size: ${String.format("%.1f", promptText.length / 1024.0)} KB | $tokenSummary</font>
-            </div>
-            <b>LLM Runtime Request:</b><br><br>
-            <div style='white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;'>$escaped</div>
-            </body></html>
-        """.trimIndent()
-    }
-    /**
-     * Build HTML overview of context structure with section sizes
-     */
-    private fun buildContextStructureOverview(context: pl.jclab.refio.core.api.ProjectContextResponse): String {
-        val sectionTokens = context.contextSectionTokens
-        if (sectionTokens.isEmpty()) {
-            return "<font color='#999999'>No section data available</font>"
-        }
-
-        // Sort by size (largest first) and take top 10
-        val sortedSections = sectionTokens.entries
-            .sortedByDescending { it.value.tokens }
-            .take(10)
-
-        val parts = mutableListOf<String>()
-        sortedSections.forEach { (key, info) ->
-            val color = ContextSectionColorPalette.colorFor(key)
-            val rgbColor = String.format("#%06X", 0xFFFFFF and color.rgb)
-            val percentage = String.format("%.1f", info.percentage)
-
-            parts.add(
-                """<font color='$rgbColor'>▸</font> <b>${info.name}</b>: """
-            )
-            parts.add("<font color='#666666'>")
-            parts.add("~${info.tokens} tokens ($percentage%)")
-            parts.add("</font><br>")
-        }
-
-        if (sectionTokens.size > 10) {
-            parts.add("<font color='#999999'>... +${sectionTokens.size - 10} more sections</font><br>")
-        }
-
-        return parts.joinToString("")
     }
 
     private fun openLLMPromptViewer() {
@@ -1494,12 +1424,19 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         val sorted = sectionEntries.sortedWith(
             compareByDescending<SectionEntry> { entry ->
                 context.contextSectionTokens[entry.key]?.tokens ?: 0
-            }.thenBy { it.order }
+            }.thenBy { it.order }.thenBy { it.key }
         )
         applySectionOrder(sorted)
     }
 
     private fun applySectionOrder(entries: List<SectionEntry>) {
+        val desiredOrder = entries.filter { it.section.hasData() }.map { it.key }
+        if (desiredOrder == currentSectionOrder) {
+            // Same visible sections in the same order - skip the removeAll/re-add churn.
+            return
+        }
+        currentSectionOrder = desiredOrder
+
         contentPanel.removeAll()
         promptTracePanel.alignmentX = LEFT_ALIGNMENT
         contentPanel.add(promptTracePanel)
@@ -1663,7 +1600,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
 
         context.conversationHistory.takeLast(10).forEach { msg ->
             val roleIcon = if (msg.role == "user") "U" else "A"
-            val roleColor = if (msg.role == "user") "#0066cc" else "#006600"
+            val roleColor = if (msg.role == "user") "$infoHex" else "$successHex"
             val previewRaw = msg.content.take(200)
             val preview = previewRaw
                 .replace("&", "&amp;")
@@ -1672,11 +1609,11 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
                 .replace("\n", "<br>")
 
             parts.add("<font color='$roleColor'>$roleIcon <b>${msg.role.uppercase()}</b></font><br>")
-            parts.add("<font color='#666666'>$preview${if (msg.content.length > 200) "..." else ""}</font><br><br>")
+            parts.add("<font color='$mutedHex'>$preview${if (msg.content.length > 200) "..." else ""}</font><br><br>")
         }
 
         if (context.conversationHistory.size > 10) {
-            parts.add("<font color='#808080'>... and ${context.conversationHistory.size - 10} more messages</font>")
+            parts.add("<font color='$mutedHex'>... and ${context.conversationHistory.size - 10} more messages</font>")
         }
 
         val html = """
@@ -1762,51 +1699,6 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         """.trimIndent()
 
         frameworkAnalysisSection.setContent(rawParts.joinToString("\n"), html)
-    }
-
-    @Suppress("UNUSED_PARAMETER")
-    private fun updateWorkingMemorySection(_context: pl.jclab.refio.core.api.ProjectContextResponse) {
-        // Display working memory entries if available in the context
-        val html = """
-            <html><body style='padding: 5px; word-wrap: break-word;'>
-            <b>Working Memory</b><br>
-            Working memory entries are accumulated during agent execution.<br>
-            Entries are displayed with importance indicators:<br>
-            <span style='color: #4CAF50;'>&#9679;</span> High importance<br>
-            <span style='color: #FFC107;'>&#9679;</span> Medium importance<br>
-            <span style='color: #9E9E9E;'>&#9679;</span> Low importance
-            </body></html>
-        """.trimIndent()
-        workingMemorySection.setContent("Working memory active", html)
-    }
-
-    private fun updateContextStabilitySection(context: pl.jclab.refio.core.api.ProjectContextResponse) {
-        // Context stability is estimated from section token info if available
-        val sectionTokens = context.contextSectionTokens
-        val hasStableContext = sectionTokens.isNotEmpty()
-        val stabilityPercent = if (hasStableContext) 85 else 0 // Stable context is cached when available
-
-        val barColor = when {
-            stabilityPercent >= 80 -> "#4CAF50"
-            stabilityPercent >= 50 -> "#FFC107"
-            else -> "#F44336"
-        }
-
-        val html = """
-            <html><body style='padding: 5px; word-wrap: break-word;'>
-            <b>Context Stability:</b> ~${stabilityPercent}% unchanged from previous turn<br>
-            <table cellpadding='0' cellspacing='0' style='margin-top: 4px;'><tr>
-                <td style='background: $barColor; width: ${stabilityPercent * 2}px; height: 12px;'></td>
-                <td style='background: #E0E0E0; width: ${(100 - stabilityPercent) * 2}px; height: 12px;'></td>
-            </tr></table>
-            <br>
-            <span style='color: #888;'>
-            Stable context (project info, conventions) is cached and reused across turns.
-            </span>
-            </body></html>
-        """.trimIndent()
-
-        contextStabilitySection.setContent("Stability: ~${stabilityPercent}%", html)
     }
 
     private fun getSelectedModelContextLimit(): Int =
@@ -1936,6 +1828,22 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
             currentTaskSection.setContent(message, html)
         }
     }
+
+    /** Escape user/model-controlled text before interpolating it into HTML strings. */
+    private fun escapeHtml(text: String): String = text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&#39;")
+
+    // Theme-derived hex colors for inline HTML styling (recomputed per use so they follow theme switches)
+    private val mutedHex: String get() = "#" + ColorUtil.toHex(LCATheme.labelDisabledForeground)
+    private val errorHex: String get() = "#" + ColorUtil.toHex(LCATheme.errorColor)
+    private val successHex: String get() = "#" + ColorUtil.toHex(LCATheme.successColor)
+    private val infoHex: String get() = "#" + ColorUtil.toHex(LCATheme.infoColor)
+    private val warningHex: String get() = "#" + ColorUtil.toHex(LCATheme.warningColor)
+    private val borderHex: String get() = "#" + ColorUtil.toHex(LCATheme.borderColor)
 
     private fun formatTimestamp(timestamp: Long): String {
         val date = java.util.Date(timestamp)
@@ -2128,8 +2036,7 @@ class TokenUsageVisualizationPanel : JBPanel<TokenUsageVisualizationPanel>(Borde
         val barWidth = width - 20
 
         // Draw background bar first
-        val isDark = LCATheme.isDark
-        g2.color = if (isDark) Color(0x3C3F41) else Color(0xE8E8E8)
+        g2.color = JBColor(Color(0xE8E8E8), Color(0x3C3F41))
         g2.fillRoundRect(startX, barY, barWidth, barHeight, 4, 4)
 
         // Draw section blocks - scale to usagePercentage of bar width

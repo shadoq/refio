@@ -14,9 +14,16 @@ import java.net.URI
  * e2e harness to reach a deterministic fixture server on 127.0.0.1. Multicast is never permitted,
  * even with the opt-in. Shared by every outbound tool (http_request, fetch_webpage) so they enforce
  * one identical policy.
+ *
+ * DNS-rebinding defense: EVERY resolved record is validated, not just the first - a hostile DNS
+ * server answering [public, 127.0.0.1] must not pass because the first record is clean, since the
+ * HTTP client may connect to any of them. The connect that follows validation happens immediately
+ * and reuses the JVM's positive DNS cache, which closes the fast record-flip window of
+ * resolve-once-connect-later. [resolveAll] is injectable for offline tests.
  */
 class UrlPolicy(
-    private val allowLoopback: () -> Boolean = { false }
+    private val allowLoopback: () -> Boolean = { false },
+    private val resolveAll: (String) -> Array<InetAddress> = InetAddress::getAllByName
 ) {
     fun validate(url: String) {
         val parsed = try {
@@ -32,13 +39,16 @@ class UrlPolicy(
         }
 
         val host = parsed.host ?: throw SecurityException("URL must include a host")
-        val address = try {
-            InetAddress.getByName(host)
+        val addresses = try {
+            resolveAll(host)
         } catch (e: Exception) {
             throw SecurityException("Failed to resolve host '$host': ${e.message}")
         }
+        if (addresses.isEmpty()) {
+            throw SecurityException("Failed to resolve host '$host': no address records")
+        }
 
-        if (isBlocked(address)) {
+        if (addresses.any { isBlocked(it) }) {
             throw SecurityException("Blocked private, loopback, or local address: $host")
         }
     }

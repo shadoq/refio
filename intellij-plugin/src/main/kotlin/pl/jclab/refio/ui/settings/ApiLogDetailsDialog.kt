@@ -4,6 +4,7 @@ import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.components.*
 import com.intellij.util.ui.JBUI
 import pl.jclab.refio.core.db.ApiLog
+import pl.jclab.refio.core.security.SecureLogger
 import pl.jclab.refio.ui.theme.LCATheme
 import java.awt.*
 import java.awt.datatransfer.StringSelection
@@ -134,19 +135,17 @@ class ApiLogDetailsDialog(
 
             // HTTP Status
             val httpStatus = log.httpStatus
-            val statusText = if (httpStatus != null) {
-                @Suppress("UNUSED_VARIABLE")
-                val _statusColor = when {
+            val statusColor = if (httpStatus != null) {
+                when {
                     httpStatus in 200..299 -> LCATheme.successColor
                     httpStatus in 400..499 -> LCATheme.warningColor
                     httpStatus >= 500 -> LCATheme.errorColor
                     else -> LCATheme.labelForeground
                 }
-                httpStatus.toString()
             } else {
-                "-"
+                null
             }
-            addField(this, gbc, "HTTP Status:", statusText)
+            addField(this, gbc, "HTTP Status:", httpStatus?.toString() ?: "-", statusColor)
         }
     }
 
@@ -212,7 +211,7 @@ class ApiLogDetailsDialog(
                 }, gbc)
                 gbc.gridy++
 
-                add(JBTextArea(log.errorMessage).apply {
+                add(JBTextArea(SecureLogger.redact(log.errorMessage ?: "")).apply {
                     isEditable = false
                     lineWrap = true
                     wrapStyleWord = true
@@ -229,7 +228,8 @@ class ApiLogDetailsDialog(
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
             border = LCATheme.createTitledBorder(title)
 
-            val textArea = JBTextArea(formatJson(payload)).apply {
+            // API keys / tokens must never be shown or exported from this dialog
+            val textArea = JBTextArea(formatJson(SecureLogger.redact(payload))).apply {
                 isEditable = false
                 lineWrap = false
                 font = LCATheme.monoFont
@@ -246,7 +246,7 @@ class ApiLogDetailsDialog(
         }
     }
 
-    private fun addField(panel: JPanel, gbc: GridBagConstraints, label: String, value: String) {
+    private fun addField(panel: JPanel, gbc: GridBagConstraints, label: String, value: String, valueColor: Color? = null) {
         // Label
         gbc.gridx = 0
         gbc.weightx = 0.3
@@ -259,6 +259,7 @@ class ApiLogDetailsDialog(
         gbc.weightx = 0.7
         panel.add(JBLabel(value).apply {
             font = LCATheme.monoFont
+            valueColor?.let { foreground = it }
         }, gbc)
     }
 
@@ -341,7 +342,7 @@ class ApiLogDetailsDialog(
     "costUsd": ${log.costUsd},
     "latencyMs": ${log.latencyMs},
     "errorType": ${if (log.errorType != null) "\"${log.errorType}\"" else "null"},
-    "errorMessage": ${log.errorMessage?.let { "\"${escapeJson(it)}\"" } ?: "null"},
+    "errorMessage": ${log.errorMessage?.let { "\"${escapeJson(SecureLogger.redact(it))}\"" } ?: "null"},
     "createdAt": ${log.createdAt},
     "requestPayload": ${formatPayloadForJson(log.requestPayload)},
     "responsePayload": ${log.responsePayload?.let { formatPayloadForJson(it) } ?: "null"}
@@ -350,8 +351,8 @@ class ApiLogDetailsDialog(
     }
 
     private fun formatPayloadForJson(payload: String): String {
-        // Escape and format payload for inclusion in JSON
-        return "\"${escapeJson(payload)}\""
+        // Redact secrets before escaping so exported JSON never carries keys/tokens
+        return "\"${escapeJson(SecureLogger.redact(payload))}\""
     }
 
     private fun escapeJson(str: String): String {

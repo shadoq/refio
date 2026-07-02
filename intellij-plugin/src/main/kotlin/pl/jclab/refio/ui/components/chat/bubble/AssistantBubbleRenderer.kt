@@ -28,6 +28,15 @@ internal class AssistantBubbleRenderer(
     private val context: Context
 ) : BaseBubbleRenderer() {
 
+    companion object {
+        private val TOOL_RESULT_MARKER_REGEX = Regex("\\[Tool result:[^\\]\\n]*\\]", RegexOption.IGNORE_CASE)
+        private val FILE_ECHO_LINE_REGEX = Regex(
+            "^file (created|written|updated|saved|modified) successfully\\b.*$",
+            RegexOption.IGNORE_CASE
+        )
+        private val BLANK_LINE_RUN_REGEX = Regex("\\n{3,}")
+    }
+
     internal interface Context {
         val bubbleCompactGap: Int
         val bubbleContentContext: BubbleContentContext
@@ -250,14 +259,34 @@ internal class AssistantBubbleRenderer(
 
     private fun buildAssistantContent(message: Message): String {
         val markdownService = context.bubbleContentContext.markdownService
+        val body = if (!message.thinking.isNullOrEmpty()) {
+            markdownService.stripThinkingTags(message.content)
+        } else {
+            message.content
+        }
+        val cleanedBody = stripToolResultEchoMarkers(body)
         return buildString {
             if (!message.thinking.isNullOrEmpty()) {
                 append("<thinking>${message.thinking}</thinking>\n\n")
-                append(markdownService.stripThinkingTags(message.content))
-            } else {
-                append(message.content)
             }
+            append(cleanedBody)
         }
+    }
+
+    /**
+     * Presentation-layer cleanup: models sometimes echo tool-result markers into their own prose
+     * (e.g. "[Tool result: ...]" or "File created successfully: <path>"). The user already sees
+     * these in the dedicated tool bubble, so drop the clearly-structured echoes to avoid duplication.
+     * Conservative on purpose - it only removes structured markers, never free-form prose.
+     */
+    private fun stripToolResultEchoMarkers(text: String): String {
+        if (text.isBlank()) return text
+        val withoutMarkers = text.replace(TOOL_RESULT_MARKER_REGEX, "")
+        val withoutEchoLines = withoutMarkers
+            .lines()
+            .filterNot { FILE_ECHO_LINE_REGEX.matches(it.trim()) }
+            .joinToString("\n")
+        return withoutEchoLines.replace(BLANK_LINE_RUN_REGEX, "\n\n").trim()
     }
 
     private fun createToolCallBubble(message: Message, info: pl.jclab.refio.api.models.ToolCallDisplayInfo): JPanel {

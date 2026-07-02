@@ -275,6 +275,27 @@ class CommandRuleMatcherTest {
             val matcher = CommandRuleDefaults.createDefaultMatcher()
             assertEquals(RuleAction.ALLOW, matcher.match("echo \$HOME").action)
         }
+
+        // Redirection lets a vetted read-only program WRITE: `cat notes.txt > build.gradle.kts`
+        // matches the cat ALLOW rule yet overwrites an arbitrary sandbox file. A redirect must
+        // therefore also hold the command back from auto-ALLOW (the user approves the full line).
+        @Test
+        fun `output redirection from allowed program is not auto-allowed`() {
+            val matcher = CommandRuleDefaults.createDefaultMatcher()
+            assertEquals(RuleAction.ASK, matcher.match("cat notes.txt > build.gradle.kts").action)
+        }
+
+        @Test
+        fun `append redirection from allowed program is not auto-allowed`() {
+            val matcher = CommandRuleDefaults.createDefaultMatcher()
+            assertEquals(RuleAction.ASK, matcher.match("echo malicious >> settings.gradle.kts").action)
+        }
+
+        @Test
+        fun `input redirection from allowed program is not auto-allowed`() {
+            val matcher = CommandRuleDefaults.createDefaultMatcher()
+            assertEquals(RuleAction.ASK, matcher.match("cat < .env").action)
+        }
     }
 
     @Nested

@@ -58,7 +58,8 @@ that's the bar it meets today.
 
 - `detectSensitiveLogging` Gradle task fails the build if an API key pattern appears in log statements
 - Jacoco coverage gate on `:core` (35% instructions)
-- Detekt + ktlint enforced
+- CI enforces the full Gradle `check` on every PR (module tests + coverage gate +
+  sensitive-logging scan), plus an IntelliJ Plugin Verifier job (no detekt/ktlint yet)
 - Embedding circuit breaker (CLOSED / OPEN / HALF_OPEN) for graceful RAG degradation
 - Parallel read-only tool execution
 
@@ -180,6 +181,9 @@ Goal: context that adapts to the task, not just the token budget.
 
 Goal: defense-in-depth, not just a sandbox.
 
+- Close the three concrete gaps found in the 2026-07 health review (fail-open
+  `NetworkPolicy`, DNS-rebinding window in `UrlPolicy`, shell redirection outside
+  `CommandRule` downgrade) - **done 2026-07**, see "Project health review" below
 - Multi-layer filesystem validation (current `PathSandbox` is a single layer)
 - Broader secret detection (multiple patterns, optional ML classifier)
 - Network policy sandbox - not just filesystem (per-tool egress rules)
@@ -206,6 +210,153 @@ Per-task worktree + branch + rollback is a sound enabler (and a prerequisite for
 self-improvement loop in Phase 1). But on local models `OllamaRequestGate` serializes
 calls regardless, so the value here is **isolation, not parallelism**. Build it once there
 is evidence the workflow needs it.
+
+## 2026 trend review - ten recommendations
+
+> Added 2026-07 after a project scan plus a review of agentic-coding trend reports
+> (Anthropic's 2026 Agentic Coding Trends report, JetBrains 2026.1 ACP support,
+> the local-LLM ecosystem). Where a recommendation matches an existing phase it
+> references it instead of duplicating it; genuinely new directions are marked
+> **(new)**. Ordering is deliberate: trust and first impression first, daily-use
+> satisfaction second, two-year positioning last.
+
+### Near term - the "wow" layer
+
+1. **Inline diff review in the IDE (new).** Show agent edits as highlighted diffs
+   in the editor with accept / reject per hunk, instead of tool output in the chat
+   stream. The single biggest UX gap versus Cursor / Junie; already flagged as
+   high-priority-unbuilt in the UI plan. Nothing else lands its full effect
+   without this.
+2. **Checkpoint timeline with one-click rollback (new).** `SnapshotService`
+   already captures every write; expose it as a visible session timeline where one
+   click restores the project state before any agent step. Trust in an agent grows
+   with how easy it is to undo its work.
+3. **Verification as a default agent step.** Close the plan -> execute ->
+   **verify** loop: after edits, the agent runs the affected build / tests and
+   repairs regressions before ending the turn. This is the refinement loop from
+   Phase 3, pulled forward - the industry consensus is that verification, not
+   generation, is the new bottleneck, and the e2e gate already measures the
+   payoff. Especially valuable for weaker local models.
+4. **Context Inspector as a flagship feature (new UX, planned groundwork).** A
+   panel showing exactly what entered the prompt and its token cost per section.
+   No competitor exposes this; for the target user ("control, not magic") it is
+   the clearest differentiator the project has.
+
+### Mid term - daily-use satisfaction
+
+5. **Persistent project memory across sessions (new).** The memory tool exists,
+   but nothing carries over between sessions. Keep the agreed simple-DB model
+   (fully inspectable): the agent persists durable facts after a turn ("build via
+   `gradlew.bat -p`") and gets them back as context in the next one, so the user
+   stops repeating the same instructions.
+6. **Security hardening as positioning, not just backlog.** Pull the known
+   sandbox / command-policy gaps to the front of Phase 6, then market the result:
+   no-egress mode, auditable sandbox, zero telemetry. Data privacy is the top
+   adoption barrier for LLM tooling; for a local-first project this is the
+   sales argument, provided the layers are actually tight first.
+7. **Capability routing between local models.** The Phase 2 remaining item, with
+   a concrete trigger: routine steps on a cheap local model, planning and
+   post-verification repair escalated to the strong slot
+   (`delegate_to_strong_model` already exists). The benchmark's per-model
+   pass-rate data becomes a product mechanism instead of just a report.
+
+### Two-year horizon - where the market is going
+
+8. **RefIo as an ACP agent (new).** IntelliJ 2026.1 natively hosts ACP-compatible
+   agents (this is how Codex and Cursor plug in). Exposing `:core` as an ACP
+   server puts RefIo in every JetBrains IDE without per-IDE UI work, and composes
+   naturally with the Phase 4 headless / `refio run` direction. The cheapest path
+   to distribution on a two-year horizon.
+9. **Background agents on isolated worktrees + command center.** The parked
+   multi-agent and dashboard items (see Later / uncertain) become the 2027-2028
+   bet: worktree isolation per agent, resumability, a live per-agent view. Local
+   MoE-class models make this feasible without the cloud - "an agent team that
+   never sends a byte outside" is a position no cloud vendor can copy. Conditions
+   for un-parking stay unchanged: single-agent loop stable and measured first.
+10. **Self-improvement loop on the e2e gate.** The Phase 1 remaining item, raised
+    in priority: an agent runs the e2e scenarios, an LLM judge classifies
+    failures, fixes are proposed in an isolated worktree and always wait for
+    human review - never auto-merged. A measurable self-improving product is an
+    advantage competitors cannot copy without an equivalent eval harness.
+
+## Project health review (2026-07)
+
+> Snapshot from a parallel scan of the codebase (backend, UI, quality/process)
+> plus repo statistics. Same spirit as "Known gaps": honest, concrete, with file
+> pointers. The overall finding: the foundations are above average for the
+> project's age; what lags is the *last mile* - change review UX, gate
+> enforcement in CI, and a few specific security holes. The last mile is cheaper
+> to fix than foundations would be.
+
+**Repo shape:** ~139k LOC main + ~42k LOC tests across the three modules.
+Test distribution is lopsided: `:core` is well covered (170 test files - turn
+loop, tools, adapters), `:cli` covers mostly the TUI, and `:intellij-plugin` -
+the flagship deliverable - has only 8 test files for 118 source files.
+
+### Engineering debt (priority order)
+
+1. **`TurnExecutor.kt` god method.** ~2,500 LOC class; `execute()` spans ~1,900
+   lines with deeply nested local suspend functions and a ~20-dependency
+   constructor. Its collaborators in `services/turn/` were decomposed cleanly;
+   the executor itself was not. Highest maintainability risk - all the
+   reliability work the e2e gate measures lives here.
+2. **`AgentTurnLoop.kt`** looks like a legacy loop coexisting with the newer
+   `turn/` package - verify and remove.
+3. **DB migrations** (`MigrationRunner.kt`) have no checksums and no rollback;
+   risky for the shared `~/.refio` database across plugin versions.
+4. **`SettingsView` scope leak** - its `coroutineScope` is never cancelled on
+   dispose.
+5. Secondary size hotspots: `ProjectAnalyzerService` (~2,000 LOC),
+   `ContextService` (~1,600), `TurnToolExecutor` (~1,400).
+
+What is *not* a problem (verified): no `GlobalScope` anywhere, retry/timeout
+centralized in `LLMRetryHandler` / `LLMKtorClientFactory`, `ChatView` has mature
+anti-flicker rendering, `ConfigService` is no longer a monolith (~300 LOC),
+TODO/FIXME density is near zero.
+
+### Security gaps (all three fixed 2026-07, with regression tests)
+
+1. **`NetworkPolicy` fails open - FIXED.** A config read error now falls back to
+   the last successfully read flag value, and with no prior successful read it
+   fails closed (egress blocked). The config default stays "no-egress disabled".
+2. **DNS-rebinding TOCTOU in `UrlPolicy` - FIXED.** Every resolved DNS record is
+   validated (not just the first), so a host answering [public, 127.0.0.1] is
+   blocked; the immediate connect reuses the JVM's positive DNS cache, closing
+   the fast record-flip window.
+3. **Shell redirection outside `CommandRule` - FIXED.** `>` / `<` now downgrade
+   ALLOW to ASK like the chaining operators, so an allowed `cat` can no longer
+   overwrite arbitrary files via redirect without review.
+
+### Process and quality gaps
+
+- **CI gates (fixed 2026-07):** CI now runs `check` on every PR (coverage gate +
+  sensitive-logging scan enforced), a Plugin Verifier job, a nightly full-check +
+  e2e assertion-engine self-test, and a tag-triggered release workflow
+  (GitHub release with the ZIP; Marketplace publish when secrets are configured).
+  Note: detekt/ktlint are NOT set up in this project (an earlier claim here was
+  wrong); adding them is a separate decision.
+- **The model-backed e2e gate stays manual** - GitHub-hosted runners cannot serve
+  a local model, so `gate.sh` (pass-rate over N runs) still needs a self-hosted
+  machine; only the offline self-test runs nightly.
+- **Stale planning docs** - `docs/planning/*` (prd, mvp, ui-plan) are frozen at
+  Dec 2025 and contradict this roadmap; mark them as historical or refresh them.
+  They actively mislead new contributors and AI agents.
+- **Advanced UI tabs (Context, Debug, RAG) hidden behind `advanced_view`** - the
+  transparency features that differentiate the project are invisible by default.
+
+### Near-term execution order (next quarter)
+
+1. Process quick wins: CI runs `check`, add plugin-verifier, nightly e2e gate
+   job, tag-triggered release workflow.
+2. Close the three security gaps above, with regression tests.
+3. Inline diff review + visible snapshot timeline (trend review items 1-2) -
+   the building blocks (`SnapshotService`, native diff viewer, approval panel)
+   already exist; what is missing is one coherent workflow.
+4. Refactor `TurnExecutor.execute()` before it grows further.
+5. Mark or refresh stale planning docs; surface Context/Debug panels as
+   features, not a hidden mode.
+6. Then continue per the phases and the trend review above (memory, routing,
+   ACP, self-improvement loop).
 
 ## Comparable projects (for honest reference)
 

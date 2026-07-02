@@ -105,6 +105,14 @@ intellijPlatform {
             untilBuild.set("261.*")
         }
     }
+
+    pluginVerification {
+        ides {
+            // Latest patch release of each IDE version in the since/until range.
+            // Downloads are cached (CI caches ~/.pluginVerifier/ides).
+            recommended()
+        }
+    }
 }
 
 tasks {

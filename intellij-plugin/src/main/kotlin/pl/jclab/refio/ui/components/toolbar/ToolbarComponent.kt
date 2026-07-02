@@ -5,7 +5,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBPanel
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
-import pl.jclab.refio.ui.theme.LCATheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -13,45 +12,7 @@ import kotlinx.coroutines.launch
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
-import java.awt.Graphics
-import java.awt.Graphics2D
-import java.awt.RenderingHints
-import java.awt.geom.RoundRectangle2D
 import javax.swing.*
-
-/**
- * Custom rounded button matching landing page .tool-button style
- */
-private class RoundedButton(text: String) : JButton(text) {
-    init {
-        isOpaque = false
-        isFocusPainted = false
-        isBorderPainted = false
-        isContentAreaFilled = false
-        background = LCATheme.newSessionButtonBackground
-        foreground = LCATheme.newSessionButtonForeground
-        border = BorderFactory.createEmptyBorder(6, 10, 6, 10)
-    }
-
-    override fun paintComponent(g: Graphics) {
-        val g2 = g.create() as Graphics2D
-        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-
-        // Background
-        val radius = LCATheme.buttonRadius.toDouble()
-        val shape = RoundRectangle2D.Double(0.0, 0.0, width.toDouble(), height.toDouble(), radius * 2, radius * 2)
-
-        g2.color = LCATheme.newSessionButtonBackground
-        g2.fill(shape)
-
-        // Border
-        g2.color = LCATheme.newSessionButtonBorder
-        g2.draw(shape)
-
-        g2.dispose()
-        super.paintComponent(g)
-    }
-}
 
 /**
  * Toolbar component with direct button access

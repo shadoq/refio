@@ -2,6 +2,7 @@ package pl.jclab.refio.core.security
 
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
+import java.net.InetAddress
 
 /**
  * UrlPolicy is the SSRF guard for outbound tools. The business rule under test: internal targets
@@ -41,6 +42,32 @@ class UrlPolicyTest {
     fun `multicast stays blocked even with the loopback opt-in`() {
         val policy = UrlPolicy(allowLoopback = { true })
         assertThrows(SecurityException::class.java) { policy.validate("http://224.0.0.1/") }
+    }
+
+    // DNS-rebinding defense: a hostile DNS server can answer with several records where only
+    // the first is clean ([public, 127.0.0.1]); the HTTP client may connect to ANY of them.
+    // Every resolved record must therefore pass the guard, not just the first. The resolver is
+    // injected so the test stays offline and deterministic (IP literals skip real DNS).
+    @Test
+    fun `a host resolving to a public and a private record is blocked`() {
+        val policy = UrlPolicy(resolveAll = {
+            arrayOf(InetAddress.getByName("93.184.216.34"), InetAddress.getByName("127.0.0.1"))
+        })
+        assertThrows(SecurityException::class.java) { policy.validate("http://rebinder.example/") }
+    }
+
+    @Test
+    fun `a host resolving to only public records is allowed`() {
+        val policy = UrlPolicy(resolveAll = {
+            arrayOf(InetAddress.getByName("93.184.216.34"), InetAddress.getByName("8.8.8.8"))
+        })
+        policy.validate("http://multi.example/")
+    }
+
+    @Test
+    fun `a host resolving to no records is rejected`() {
+        val policy = UrlPolicy(resolveAll = { emptyArray() })
+        assertThrows(SecurityException::class.java) { policy.validate("http://ghost.example/") }
     }
 
     @Test

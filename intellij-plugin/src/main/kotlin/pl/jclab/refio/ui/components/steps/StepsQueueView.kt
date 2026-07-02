@@ -2,6 +2,7 @@ package pl.jclab.refio.ui.components.steps
 
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
@@ -191,6 +192,9 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
                 }
             }
 
+            // Push cards to the top so a lone card does not stretch to viewport height
+            stepsPanel.add(Box.createVerticalGlue())
+
             stepsPanel.revalidate()
             stepsPanel.repaint()
             logger.debug { "UI updated successfully" }
@@ -198,11 +202,20 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
     }
 
     private fun createStepItem(subtask: SubtaskResponse, stepNumber: Int): JPanel {
-        return JPanel().apply {
+        val card = object : JPanel() {
+            override fun getMaximumSize(): Dimension {
+                val preferred = preferredSize
+                return Dimension(Int.MAX_VALUE, preferred.height)
+            }
+        }
+        return card.apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            background = getBackgroundColorForStatus(subtask.status)
+            background = LCATheme.backgroundColor
             border = BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(LCATheme.borderColor, 1),
+                BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(LCATheme.borderColor, 1),
+                    BorderFactory.createMatteBorder(0, 4, 0, 0, getStripeColorForStatus(subtask.status))
+                ),
                 LCATheme.emptyBorder()
             )
 
@@ -245,7 +258,6 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
             val descLabel = JBLabel(fullDesc).apply {
                 font = font.deriveFont(11f)
                 toolTipText = fullDesc
-                preferredSize = Dimension(10, 20)
             }
 
             val rightPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 0)).apply {
@@ -690,13 +702,13 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
         }
     }
 
-    private fun getBackgroundColorForStatus(status: String): Color {
+    private fun getStripeColorForStatus(status: String): Color {
         return when (status) {
-            "PENDING_APPROVAL", "PLANNED" -> LCATheme.stepPendingBackground
-            "RUNNING" -> LCATheme.stepRunningBackground
-            "SUCCESS" -> LCATheme.stepSuccessBackground
-            "FAILED" -> LCATheme.stepFailedBackground
-            else -> LCATheme.backgroundColor
+            "PENDING_APPROVAL", "PLANNED" -> JBColor(Color(0xE6, 0x8A, 0x00), Color(0xD0, 0x8B, 0x3A))
+            "RUNNING" -> JBColor(Color(0x38, 0x74, 0xCB), Color(0x54, 0x8A, 0xF7))
+            "SUCCESS" -> JBColor(Color(0x2E, 0x7D, 0x32), Color(0x4C, 0xAF, 0x50))
+            "FAILED" -> JBColor(Color(0xC6, 0x28, 0x28), Color(0xE5, 0x53, 0x53))
+            else -> LCATheme.borderColor
         }
     }
 
@@ -727,9 +739,10 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
      * Create execution toolbar with Resume/Re-plan/Cancel All buttons
      */
     private fun createExecutionToolbar(): JPanel {
-        val panel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 4)).apply {
+        val toolbar = JPanel(BorderLayout()).apply {
             border = BorderFactory.createMatteBorder(0, 0, 1, 0, LCATheme.borderColor)
         }
+        val panel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 4))
 
         // Refresh button — always active
         val refreshBtn = JButton("⟳ Refresh").apply {
@@ -806,9 +819,14 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
                 }
             }
         }
-        panel.add(cancelAllBtn)
+        // Destructive action goes to the right edge, away from Refresh/Re-plan
+        val rightPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 4))
+        rightPanel.add(cancelAllBtn)
 
-        return panel
+        toolbar.add(panel, BorderLayout.WEST)
+        toolbar.add(rightPanel, BorderLayout.EAST)
+
+        return toolbar
     }
 
     /**

@@ -53,9 +53,18 @@ param(
     [switch]$List,
     [switch]$All,
     [string[]]$Config,
+    # Headless auto-approval for verification commands. Without it, run_terminal_command (a
+    # PermissionLevel.ASK tool) is rejected in headless (no human, no approver) -> the turn ends
+    # FAILED even though the edit already landed - a spurious failure for any model that tries to
+    # compile/test its own work. Mirrors e2e-run.sh's AUTO_APPROVE default exactly (same tool-name
+    # regex, cross-platform: gradlew/python/node etc. are invoked by bare name on Windows too via
+    # PATHEXT). Override with -AutoApprove <regex> or disable with -NoAutoApprove.
+    [string]$AutoApprove = '\b(kotlinc|gradlew|gradle|javac|java|python3?|pip3?|node|npm|npx|pnpm|yarn|pytest|mvn|cargo|go|make|cmake|ls|cat|pwd|echo|head|tail|sed|awk|grep|rg|find|wc|diff|test|true|cd|sh|bash|env|export)\b',
+    [switch]$NoAutoApprove,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Scenarios
 )
+if ($NoAutoApprove) { $AutoApprove = '' }
 
 $ErrorActionPreference = 'Stop'
 # The CLI and build_cmd are native commands that signal failure via exit code, which this script
@@ -244,6 +253,95 @@ function Assert-Run {
     return "FAIL ($($reasons -join '; '))"
 }
 
+# Map a run to one failure-mode bucket for the gate's classification (docs/0069). PASS -> none.
+# Mirrors e2e-run.sh classify_failure_mode: overflow first, then a precise guardrail marker, then the
+# coarse status mapping, then a verdict-text fallback. Robust to a missing/unparsable run.json.
+function ConvertTo-FailureMode {
+    param([string]$Verdict, [string]$RunJsonPath)
+    if ($Verdict -like 'PASS*') { return 'none' }
+    $overflow = $false; $status = 'UNKNOWN'; $marker = ''
+    if (Test-Path $RunJsonPath) {
+        try {
+            $r = Get-Content -Raw $RunJsonPath | ConvertFrom-Json
+            if ($r.metrics.contextOverflow -eq $true) { $overflow = $true }
+            if ($r.session -and $r.session.status) { $status = [string]$r.session.status }
+            if ($r.metrics.failureMarker) { $marker = [string]$r.metrics.failureMarker }
+        } catch {}
+    }
+    if ($overflow) { return 'overflow' }
+    switch ($marker) {
+        'LOOP_ABORTED'     { return 'loop-aborted' }
+        'NOOP_WRITE_STALL' { return 'noop-write-stall' }
+    }
+    switch ($status) {
+        'CANCELED'   { return 'abort' }
+        'INCOMPLETE' { return 'loop' }
+        'FAILED'     { return 'agent-fail' }
+        'UNKNOWN'    { return 'crash' }
+    }
+    if ($Verdict -like '*build_cmd exit*') { return 'build-fail' }
+    return 'wrong-output'
+}
+
+# Persist this run for the stabilization gate (docs/0069). No-op unless E2E_OUT_DIR is set, so default
+# runs are completely unchanged. Writes <out>\<id>__<model>__<run>.run.json plus one results.jsonl
+# record. Never throws (all failure paths swallowed) - the gate is observe-only. Mirrors
+# e2e-run.sh emit_result_record; -ModelLabelOverride lets -SelfTest exercise this without touching the
+# script-scope $Model (a plain assignment inside a function would only shadow it locally).
+function Write-ResultRecord {
+    param([string]$Id, [string]$Verdict, [string]$RunJsonPath, [string]$ModelLabelOverride = $script:Model)
+    $outDir = $env:E2E_OUT_DIR
+    if (-not $outDir) { return }
+    $runIdx = $env:E2E_RUN_INDEX
+    if (-not $runIdx -or $runIdx -notmatch '^\d+$') { $runIdx = 1 } else { $runIdx = [int]$runIdx }
+    $modelLabel = if ($ModelLabelOverride) { $ModelLabelOverride } else { 'default' }
+    $status = 'UNKNOWN'; $cost = 0; $tokens = 0; $mode = ''; $provider = ''
+    $tokensIn = 0; $iters = 0; $apiCalls = 0; $duration = 0
+    $tools = [ordered]@{}; $apiErrors = [ordered]@{}
+    if (Test-Path $RunJsonPath) {
+        try {
+            $r = Get-Content -Raw $RunJsonPath | ConvertFrom-Json
+            if ($r.session -and $r.session.status) { $status = [string]$r.session.status }
+            if ($null -ne $r.metrics.costUsd) { $cost = $r.metrics.costUsd }
+            if ($null -ne $r.metrics.tokensOut) { $tokens = $r.metrics.tokensOut }
+            if ($r.session -and $r.session.mode) { $mode = [string]$r.session.mode }
+            if ($r.session -and $r.session.provider) { $provider = [string]$r.session.provider }
+            if ($null -ne $r.metrics.tokensIn) { $tokensIn = $r.metrics.tokensIn }
+            if ($null -ne $r.metrics.toolCallCount) { $iters = $r.metrics.toolCallCount }
+            if ($null -ne $r.metrics.apiCallCount) { $apiCalls = $r.metrics.apiCallCount }
+            if ($null -ne $r.metrics.durationMs) { $duration = $r.metrics.durationMs }
+            foreach ($t in @($r.conversation | ForEach-Object { $_.toolCalls } | Where-Object { $_ })) {
+                if ($tools.Contains($t)) { $tools[$t]++ } else { $tools[$t] = 1 }
+            }
+            foreach ($e in @($r.apiLogs | ForEach-Object { $_.errorType } | Where-Object { $_ })) {
+                if ($apiErrors.Contains($e)) { $apiErrors[$e]++ } else { $apiErrors[$e] = 1 }
+            }
+        } catch {}
+    }
+    $fmode = ConvertTo-FailureMode -Verdict $Verdict -RunJsonPath $RunJsonPath
+    $vlabel = if ($Verdict -like 'PASS*') { 'PASS' } else { 'FAIL' }
+    $reasons = @()
+    if ($Verdict -match '^FAIL \((.*)\)$' -and $Matches[1]) { $reasons = @($Matches[1] -split '; ') }
+    try {
+        New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+        # ":" is illegal in Windows filenames (model names carry it, e.g. "ollama/qwen3.5:9b") -
+        # e2e-run.sh only strips "/" since it targets Unix; strip both here.
+        $safeModel = $modelLabel -replace '[/:]', '-'
+        if (Test-Path $RunJsonPath) {
+            Copy-Item $RunJsonPath (Join-Path $outDir "${Id}__${safeModel}__${runIdx}.run.json") -Force -ErrorAction SilentlyContinue
+        }
+        $record = [ordered]@{
+            scenario = $Id; model = $modelLabel; run = $runIdx
+            verdict = $vlabel; failure_mode = $fmode; status = $status
+            costUsd = $cost; tokensOut = $tokens
+            mode = $mode; provider = $provider; tokensIn = $tokensIn
+            iterations = $iters; apiCalls = $apiCalls; durationMs = $duration
+            tools = $tools; apiErrors = $apiErrors; reasons = $reasons
+        }
+        ($record | ConvertTo-Json -Compress -Depth 6) | Add-Content -Path (Join-Path $outDir 'results.jsonl')
+    } catch {}
+}
+
 function Invoke-Scenario {
     param([string]$Scenario)
     if (-not (Test-Path $Scenario)) { throw "scenario not found: $Scenario" }
@@ -308,6 +406,10 @@ function Invoke-Scenario {
         $cliArgs += @('--config', 'security.allow_loopback=true')
     }
     if ($Model) { $cliArgs += @('--model', $Model) }
+    # Approve verification commands so a model that compiles/tests its own edit is not failed by a
+    # headless rejection (see -AutoApprove above). Empty (via -NoAutoApprove) restores the raw
+    # "reject every ASK command" behaviour.
+    if ($AutoApprove) { $cliArgs += @('--auto-approve', $AutoApprove) }
     # -OllamaHost / -OllamaCtx are sugar over the validated config overrides so testing a model on a
     # different Ollama box (or a different context size) needs no raw key. Host accepts "box",
     # "box:11434", or "http://box:11434"; a bare host/port becomes http://host:11434.
@@ -325,12 +427,15 @@ function Invoke-Scenario {
     foreach ($kv in $Config) { $cliArgs += @('--config', $kv) }
 
     Write-Host "> $($s.id) (mode=$mode, max_cost=$MaxCost) -> $work"
-    & $Cli @cliArgs
-    $cliExit = $LASTEXITCODE
+    $cliExit = Invoke-Cli -CliArgs $cliArgs
     # The server is only needed during the turn; stop it before build/assert (and before any early
     # return below) so no python process is left running.
     if ($server) { try { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue } catch {} }
-    if (-not (Test-Path $runJson)) { Write-Output "| $($s.id) | FAIL (no run.json produced) | - |"; return $false }
+    if (-not (Test-Path $runJson)) {
+        Write-Output "| $($s.id) | FAIL (no run.json produced) | - |"
+        Write-ResultRecord -Id $s.id -Verdict 'FAIL (no run.json produced)' -RunJsonPath $runJson
+        return $false
+    }
 
     # A non-zero CLI exit is a HARD failure: the headless turn aborted (cost ceiling, crash). It must
     # never be papered over by deterministic assertions the starting fixture happens to satisfy
@@ -338,7 +443,9 @@ function Invoke-Scenario {
     if ($cliExit -ne 0) {
         $run = Get-Content -Raw $runJson | ConvertFrom-Json
         $st = if ($run.session -and $run.session.status) { $run.session.status } else { '?' }
-        Write-Output "| $($s.id) | FAIL (headless CLI exit=$cliExit) | status=$st cli_exit=$cliExit cost=`$$($run.metrics.costUsd) |"
+        $verdictText = "FAIL (headless CLI exit=$cliExit)"
+        Write-Output "| $($s.id) | $verdictText | status=$st cli_exit=$cliExit cost=`$$($run.metrics.costUsd) |"
+        Write-ResultRecord -Id $s.id -Verdict $verdictText -RunJsonPath $runJson
         if (-not $Keep) { Remove-Item -Recurse -Force $work }
         return $false
     }
@@ -359,13 +466,22 @@ function Invoke-Scenario {
 
     # Optional browser-smoke (docs/0071 §8.5): render the produced artifact in headless Chromium. Needs
     # node + playwright; exit 2 (unavailable) is surfaced as a HARD fail by Assert-Run, not hidden.
+    # Same EAP-Continue guard as build_cmd above: a native command whose stderr is merged via 2>&1
+    # into a redirected file still gets each stderr line wrapped as a PowerShell ErrorRecord, which a
+    # missing playwright install (node writes to stderr) turns into a terminating error under this
+    # script's global $ErrorActionPreference='Stop' - killing the entire -All run after this one
+    # scenario instead of failing just it (observed 2026-07-01: every model's -All run died at the
+    # first smoke-asserting scenario, silently dropping the remaining ~35 scenarios).
     $smokeExit = 0
     if ($s.PSObject.Properties.Name -contains 'smoke') {
         $node = Get-Command node -ErrorAction SilentlyContinue
         if ($node) {
             $smokeScript = Join-Path $ScriptDir 'browser-smoke.mjs'
-            & $node.Source $smokeScript $Scenario $work 1>"$work\smoke.log" 2>&1
-            $smokeExit = $LASTEXITCODE
+            $savedEAP = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try { & $node.Source $smokeScript $Scenario $work 1>"$work\smoke.log" 2>&1; $smokeExit = $LASTEXITCODE }
+            catch { $smokeExit = 1 }
+            finally { $ErrorActionPreference = $savedEAP }
         } else {
             'node not found on PATH' | Set-Content "$work\smoke.log"; $smokeExit = 2
         }
@@ -374,6 +490,7 @@ function Invoke-Scenario {
     $verdict = Assert-Run -Scenario $Scenario -RunJsonPath $runJson -ProjectDir $work -BuildExit $buildExit -SmokeExit $smokeExit
     $run = Get-Content -Raw $runJson | ConvertFrom-Json
     Write-Output "| $($s.id) | $verdict | status=$($run.session.status) build_exit=$buildExit cost=`$$($run.metrics.costUsd) |"
+    Write-ResultRecord -Id $s.id -Verdict $verdict -RunJsonPath $runJson
     if (-not $Keep) { Remove-Item -Recurse -Force $work }
     return ($verdict -like 'PASS*')
 }
@@ -487,6 +604,44 @@ function Invoke-SelfTest {
     $v = Assert-Run $smscen (Join-Path $sample 'sample-run.pass.json') $proj 0 1; Write-Host "  smoke-fail     -> $v"; if ($v -notlike 'FAIL*') { $fails = 1 }
     $v = Assert-Run $smscen (Join-Path $sample 'sample-run.pass.json') $proj 0 2; Write-Host "  smoke-unavail  -> $v"; if ($v -notlike 'FAIL*') { $fails = 1 }
 
+    # Case 17: stabilization-gate emission (docs/0069) - failure-mode classifier + results.jsonl
+    # record. Pure: no LLM, reuses the bundled sample run.json files. Pins the buckets a gate counts.
+    $cm = ConvertTo-FailureMode 'PASS' (Join-Path $sample 'sample-run.pass.json')
+    Write-Host "  classify-pass  -> $cm"; if ($cm -ne 'none') { $fails = 1 }
+    $cm = ConvertTo-FailureMode 'FAIL (context overflow (silent truncation))' (Join-Path $sample 'sample-run.overflow.json')
+    Write-Host "  classify-ovfl  -> $cm"; if ($cm -ne 'overflow') { $fails = 1 }
+    $cm = ConvertTo-FailureMode 'FAIL (session.status=FAILED (want SUCCESS))' (Join-Path $sample 'sample-run.failed.json')
+    Write-Host "  classify-fail  -> $cm"; if ($cm -ne 'agent-fail') { $fails = 1 }
+    $cm = ConvertTo-FailureMode 'FAIL (build_cmd exit=1)' (Join-Path $sample 'sample-run.pass.json')
+    Write-Host "  classify-build -> $cm"; if ($cm -ne 'build-fail') { $fails = 1 }
+    $cm = ConvertTo-FailureMode 'FAIL (/x/ matched 0 line(s) in src/Main.kt, want [1..1000000])' (Join-Path $sample 'sample-run.pass.json')
+    Write-Host "  classify-wrong -> $cm"; if ($cm -ne 'wrong-output') { $fails = 1 }
+    $cm = ConvertTo-FailureMode 'FAIL (session.status=INCOMPLETE (want SUCCESS))' (Join-Path $sample 'sample-run.loop-aborted.json')
+    Write-Host "  classify-loop  -> $cm"; if ($cm -ne 'loop-aborted') { $fails = 1 }
+    $cm = ConvertTo-FailureMode 'FAIL (session.status=INCOMPLETE (want SUCCESS))' (Join-Path $sample 'sample-run.noop-stall.json')
+    Write-Host "  classify-noop  -> $cm"; if ($cm -ne 'noop-write-stall') { $fails = 1 }
+
+    # Write-ResultRecord writes a named run.json copy + one valid JSONL verdict record into
+    # $env:E2E_OUT_DIR. -ModelLabelOverride avoids touching the script-scope $Model.
+    $gateOut = Join-Path ([System.IO.Path]::GetTempPath()) ("refio-e2e-gate-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+    $prevOutDir = $env:E2E_OUT_DIR; $prevRunIdx = $env:E2E_RUN_INDEX
+    $env:E2E_OUT_DIR = $gateOut; $env:E2E_RUN_INDEX = '3'
+    try {
+        Write-ResultRecord -Id 'demo-scn' -Verdict 'PASS' -RunJsonPath (Join-Path $sample 'sample-run.pass.json') -ModelLabelOverride 'ollama/qwen3.5:4b'
+    } finally {
+        $env:E2E_OUT_DIR = $prevOutDir; $env:E2E_RUN_INDEX = $prevRunIdx
+    }
+    $rec = Get-Content (Join-Path $gateOut 'results.jsonl') -Tail 1 | ConvertFrom-Json
+    Write-Host "  gate-emit      -> scenario=$($rec.scenario) run=$($rec.run) verdict=$($rec.verdict) tools=$(@($rec.tools.PSObject.Properties).Count)"
+    if ($rec.verdict -ne 'PASS') { Write-Host "  !! emitted record must have verdict PASS"; $fails = 1 }
+    if ($rec.run -ne 3) { Write-Host "  !! emitted record must carry run index 3"; $fails = 1 }
+    if ($rec.scenario -ne 'demo-scn') { Write-Host "  !! emitted record must carry the scenario id"; $fails = 1 }
+    if (-not (Test-Path (Join-Path $gateOut 'demo-scn__ollama-qwen3.5-4b__3.run.json'))) { Write-Host "  !! emitted run.json copy must exist"; $fails = 1 }
+    if ($rec.tools.grep_search -ne 1) { Write-Host "  !! emitted record must carry a per-tool histogram (grep_search=1)"; $fails = 1 }
+    if (@($rec.tools.PSObject.Properties).Count -ne 3) { Write-Host "  !! emitted record tools histogram must have 3 distinct tools"; $fails = 1 }
+    if ($rec.iterations -ne 3) { Write-Host "  !! emitted record must carry iterations=3 (toolCallCount)"; $fails = 1 }
+    Remove-Item -Recurse -Force $gateOut
+
     Remove-Item -Recurse -Force $proj, $empty
     if ($fails -eq 0) { Write-Host 'self-test OK' } else { throw 'self-test FAILED' }
 }
@@ -494,8 +649,68 @@ function Invoke-SelfTest {
 if ($SelfTest) { Invoke-SelfTest; exit 0 }
 if ($List) { Show-Scenarios; exit 0 }
 
+# Fail fast (mirrors e2e-run.sh's `die` before it wastes an -All run on 41 back-to-back "CLI not
+# found" scenario failures).
 if (-not (Get-Command $Cli -ErrorAction SilentlyContinue) -and -not (Test-Path $Cli)) {
-    Write-Warning "CLI not found at $Cli (build it: ./gradlew :cli:installDist)"
+    throw "CLI not found/executable: $Cli (build it: ./gradlew :cli:installDist)"
+}
+
+# cli.bat is a legacy Windows batch launcher: PowerShell's `&` operator has to shell out through
+# cmd.exe to run a .bat, and cmd.exe RE-PARSES shell metacharacters (| & ( )) in any argument - even
+# a PowerShell-quoted one - as pipes/grouping. A value like -AutoApprove's default regex
+# ('\b(kotlinc|gradlew|...)\b') gets torn apart into separate "commands" (kotlinc, gradlew, ...) and
+# cli.bat never actually runs: no logback output, no run.json, every single scenario reads as a bare
+# "no run.json produced" FAIL in well under a second (this broke every run 2026-07-01 across all 6
+# models before being caught). java.exe is a native PE executable, so PowerShell hands it each array
+# element as a literal argv entry with no shell re-parsing - invoke java directly, bypassing cli.bat.
+$JavaExe = $null
+$CliClasspath = $null
+if ($Cli -match '\.(bat|cmd)$') {
+    if ($env:JAVA_HOME) {
+        $candidate = Join-Path $env:JAVA_HOME 'bin\java.exe'
+        if (Test-Path $candidate) { $JavaExe = $candidate }
+    }
+    if (-not $JavaExe) {
+        $found = Get-Command java.exe -ErrorAction SilentlyContinue
+        if ($found) { $JavaExe = $found.Source }
+    }
+    $libDir = Join-Path (Split-Path -Parent $Cli) '..\lib'
+    if (Test-Path $libDir) {
+        $CliClasspath = (Get-ChildItem -Path $libDir -Filter *.jar | ForEach-Object { $_.FullName }) -join ';'
+    }
+    if (-not $JavaExe -or -not $CliClasspath) {
+        throw "could not resolve java.exe/classpath for $Cli (set JAVA_HOME, or check cli/build/install/cli/lib exists - build it: ./gradlew :cli:installDist)"
+    }
+}
+
+# Runs the CLI (bypassing cli.bat via java.exe when $Cli is a .bat, see above) and returns its exit
+# code. Centralizing this also means a future argument containing shell metacharacters never has to
+# be reasoned about at each call site.
+# `| Out-Host` is required, not cosmetic: a bare native-command call inside a function sends its
+# stdout/stderr lines onto the function's own OUTPUT stream, so `$cliExit = Invoke-Cli ...` at the
+# call site would capture the CLI's entire console output (logback banner included) instead of the
+# exit code - Out-Host drains that stream to the console immediately, leaving only the trailing
+# `return $LASTEXITCODE` on the function's output.
+# `2>&1` + EAP=Continue: the CLI writes its startup banner and HeadlessTurnListener progress to
+# stderr. Piping a native command merges its stderr into the pipeline as ErrorRecords, which under
+# this script's global $ErrorActionPreference='Stop' turns the very first stderr line into a
+# terminating error - killing the whole run at the first scenario before any run.json is produced.
+# Merging stderr into the success stream (2>&1) keeps the progress visible as plain output without
+# raising errors; the local EAP=Continue is belt-and-suspenders, mirroring the build_cmd/smoke guards.
+function Invoke-Cli {
+    param([string[]]$CliArgs)
+    $savedEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        if ($JavaExe -and $CliClasspath) {
+            & $JavaExe '-cp' $CliClasspath 'pl.jclab.refio.cli.MainKt' @CliArgs 2>&1 | Out-Host
+        } else {
+            & $Cli @CliArgs 2>&1 | Out-Host
+        }
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedEAP
+    }
 }
 
 # Build the run list: -All discovers every scenario; otherwise resolve each positional by id or path.
