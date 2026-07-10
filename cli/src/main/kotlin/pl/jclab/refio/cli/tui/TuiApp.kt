@@ -94,12 +94,35 @@ fun launchTuiApp(
                 renderer.forceRender(viewModel.stateFlow.value)
             }
 
-            // Render loop: re-render on state change
+            // Render loop: re-render on state change. A failed frame is logged
+            // and skipped; it must never kill the loop (a dead render loop
+            // looks like a silent app crash to the user).
             val renderJob = if (renderer != null) launch {
                 viewModel.stateFlow.collect { state ->
-                    renderer.render(state)
+                    try {
+                        renderer.render(state)
+                    } catch (e: Exception) {
+                        logger.error(e) { "Render failed; frame skipped" }
+                    }
                 }
             } else null
+
+            // Immediate resize reaction: SIGWINCH forces a full re-render with
+            // a clean comparison buffer. Not supported on all platforms; the
+            // polling watcher below stays as fallback.
+            if (renderer != null && jt != null) {
+                try {
+                    jt.handle(org.jline.terminal.Terminal.Signal.WINCH) {
+                        try {
+                            renderer.forceRender(viewModel.stateFlow.value)
+                        } catch (e: Exception) {
+                            logger.error(e) { "Render after resize failed; frame skipped" }
+                        }
+                    }
+                } catch (e: Exception) {
+                    logger.debug(e) { "WINCH signal handler not available on this platform" }
+                }
+            }
 
             // Resize watcher: poll terminal size and force re-render on change
             val resizeJob = if (renderer != null && jt != null) launch {
@@ -112,7 +135,11 @@ fun launchTuiApp(
                     if (w != prevW || h != prevH) {
                         prevW = w
                         prevH = h
-                        renderer.forceRender(viewModel.stateFlow.value)
+                        try {
+                            renderer.forceRender(viewModel.stateFlow.value)
+                        } catch (e: Exception) {
+                            logger.error(e) { "Render after resize failed; frame skipped" }
+                        }
                     }
                 }
             } else null

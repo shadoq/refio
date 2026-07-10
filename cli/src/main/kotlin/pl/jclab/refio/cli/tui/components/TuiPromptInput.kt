@@ -67,7 +67,7 @@ object TuiPromptInput {
         val ctxBar = renderContextBar(state)
         val tokIn = formatTokensShort(state.sessionTokensIn)
         val tokOut = formatTokensShort(state.sessionTokensOut)
-        val cost = String.format("%.4f", state.totalCostUsd)
+        val cost = String.format(java.util.Locale.US, "%.4f", state.totalCostUsd)
         val reqCount = state.apiLogs.size
         val metrics = " $ctxBar ${TuiColors.muted("⬇${tokIn} ⬆${tokOut} ${reqCount}req \$${cost}")}"
 
@@ -211,7 +211,7 @@ object TuiPromptInput {
     }
 
     private fun formatTokens(tokens: Int): String = when {
-        tokens > 1000 -> "${String.format("%.1f", tokens / 1000.0)}K"
+        tokens > 1000 -> "${String.format(java.util.Locale.US, "%.1f", tokens / 1000.0)}K"
         else -> "${tokens}"
     }
 
@@ -235,8 +235,8 @@ object TuiPromptInput {
     }
 
     private fun formatTokensShort(tokens: Long): String = when {
-        tokens >= 1_000_000 -> String.format("%.1fM", tokens / 1_000_000.0)
-        tokens >= 1_000 -> String.format("%.1fK", tokens / 1_000.0)
+        tokens >= 1_000_000 -> String.format(java.util.Locale.US, "%.1fM", tokens / 1_000_000.0)
+        tokens >= 1_000 -> String.format(java.util.Locale.US, "%.1fK", tokens / 1_000.0)
         else -> tokens.toString()
     }
 }

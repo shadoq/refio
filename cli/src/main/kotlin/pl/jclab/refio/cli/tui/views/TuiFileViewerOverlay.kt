@@ -78,7 +78,9 @@ object TuiFileViewerOverlay {
         val scrollInfo = "Line ${scrollOffset + 1}-${(scrollOffset + visibleLines.size).coerceAtMost(totalLines)}/$totalLines"
         buf.addLine(TuiColors.border("─".repeat((width - 2).coerceAtLeast(10))))
         val addHint = if (allowAdd) "  [a] Add as context" else ""
-        buf.addLine(TuiColors.muted("  [Esc] Close  [↑↓] Scroll  [PgUp/PgDn] Fast scroll$addHint  [c] Copy  $scrollInfo"))
+        val escHint = if (state.fileViewerHintVisible) "  Press Esc to close viewer" else "  [Esc] Close"
+        buf.addLine(TuiColors.accent(escHint) +
+            TuiColors.muted("  [↑↓] Scroll  [PgUp/PgDn] Fast scroll$addHint  [c] Copy  $scrollInfo"))
 
         return buf
     }

@@ -155,14 +155,17 @@ class TaskRepository {
         costUsd: Double
     ): Task? {
         return transaction {
-            val existing = findById(id) ?: return@transaction null
-
-            TasksTable.update({ TasksTable.id eq id }) {
-                it[TasksTable.tokensIn] = existing.tokensIn + tokensIn
-                it[TasksTable.tokensOut] = existing.tokensOut + tokensOut
-                it[TasksTable.costUsd] = existing.costUsd + costUsd
+            // Atomic in-database increment - avoids the read-modify-write race
+            // when multiple LLM calls finish concurrently.
+            val updated = TasksTable.update({ TasksTable.id eq id }) {
+                with(SqlExpressionBuilder) {
+                    it[TasksTable.tokensIn] = TasksTable.tokensIn + tokensIn
+                    it[TasksTable.tokensOut] = TasksTable.tokensOut + tokensOut
+                    it[TasksTable.costUsd] = TasksTable.costUsd + costUsd
+                }
                 it[updatedAt] = System.currentTimeMillis()
             }
+            if (updated == 0) return@transaction null
 
             logger.info { "Incremented task metrics: id=$id, +$tokensIn/$tokensOut tokens, +\$${"%.6f".format(costUsd)}" }
 
@@ -258,42 +261,15 @@ class TaskRepository {
                 .limit(limit)
                 .map { rowToTask(it) }
 
+            val statsByTask = aggregateMessageStats(tasks.map { it.id })
+
             tasks.map { task ->
-                // Aggregate stats from chat_messages
-                val messages = ChatMessagesTable.selectAll()
-                    .where { ChatMessagesTable.taskId eq task.id }
-                    .toList()
-
-                var totalTokensIn = 0
-                var totalTokensOut = 0
-                var totalCost = 0.0
-
-                messages.forEach { msgRow ->
-                    val metadata = msgRow[ChatMessagesTable.metadata]
-                    if (metadata != null) {
-                        try {
-                            // Parse JSON metadata: {"model": "...", "tokens_in": 123, ...}
-                            val metadataMap = pl.jclab.refio.core.utils.GsonInstance.gson.fromJson(
-                                metadata,
-                                Map::class.java
-                            )
-
-                            metadataMap?.let { map ->
-                                (map["tokens_in"] as? Number)?.let { totalTokensIn += it.toInt() }
-                                (map["tokens_out"] as? Number)?.let { totalTokensOut += it.toInt() }
-                                (map["cost_usd"] as? Number)?.let { totalCost += it.toDouble() }
-                            }
-                        } catch (e: Exception) {
-                            logger.warn { "Failed to parse metadata for message ${msgRow[ChatMessagesTable.id]}: ${e.message}" }
-                        }
-                    }
-                }
-
+                val stats = statsByTask[task.id] ?: MessageStats()
                 TaskWithStats(
                     task = task,
-                    tokensIn = totalTokensIn,
-                    tokensOut = totalTokensOut,
-                    costUsd = totalCost
+                    tokensIn = stats.tokensIn,
+                    tokensOut = stats.tokensOut,
+                    costUsd = stats.costUsd
                 )
             }
         }
@@ -306,41 +282,79 @@ class TaskRepository {
         val task = findById(id) ?: return null
 
         return transaction {
-            val messages = ChatMessagesTable.selectAll()
-                .where { ChatMessagesTable.taskId eq id }
-                .toList()
+            val stats = aggregateMessageStats(listOf(id))[id] ?: MessageStats()
+            TaskWithStats(
+                task = task,
+                tokensIn = stats.tokensIn,
+                tokensOut = stats.tokensOut,
+                costUsd = stats.costUsd
+            )
+        }
+    }
 
-            var totalTokensIn = 0
-            var totalTokensOut = 0
-            var totalCost = 0.0
+    private data class MessageStats(
+        var tokensIn: Int = 0,
+        var tokensOut: Int = 0,
+        var costUsd: Double = 0.0
+    )
 
-            messages.forEach { msgRow ->
-                val metadata = msgRow[ChatMessagesTable.metadata]
-                if (metadata != null) {
-                    try {
-                        val metadataMap = pl.jclab.refio.core.utils.GsonInstance.gson.fromJson(
-                            metadata,
-                            Map::class.java
-                        )
+    /**
+     * Aggregate per-task token/cost stats from chat_messages without loading full rows.
+     *
+     * Primary source: a single SQL SUM over the dedicated numeric columns grouped by task.
+     * Fallback: rows written before the numeric columns existed (all three columns null)
+     * carry their metrics as JSON in metadata - those are fetched with a narrow projection
+     * (task id, message id, metadata) and parsed per row. Metrics JSON uses the
+     * MessageMetrics field names (camelCase), with legacy snake_case keys accepted.
+     */
+    private fun aggregateMessageStats(taskIds: List<String>): Map<String, MessageStats> {
+        if (taskIds.isEmpty()) return emptyMap()
 
-                        metadataMap?.let { map ->
-                            (map["tokens_in"] as? Number)?.let { totalTokensIn += it.toInt() }
-                            (map["tokens_out"] as? Number)?.let { totalTokensOut += it.toInt() }
-                            (map["cost_usd"] as? Number)?.let { totalCost += it.toDouble() }
-                        }
-                    } catch (e: Exception) {
-                        logger.warn { "Failed to parse metadata: ${e.message}" }
+        val result = mutableMapOf<String, MessageStats>()
+
+        val tokensInSum = ChatMessagesTable.tokensIn.sum()
+        val tokensOutSum = ChatMessagesTable.tokensOut.sum()
+        val costSum = ChatMessagesTable.cost.sum()
+
+        ChatMessagesTable
+            .select(ChatMessagesTable.taskId, tokensInSum, tokensOutSum, costSum)
+            .where { ChatMessagesTable.taskId inList taskIds }
+            .groupBy(ChatMessagesTable.taskId)
+            .forEach { row ->
+                val stats = result.getOrPut(row[ChatMessagesTable.taskId]) { MessageStats() }
+                stats.tokensIn += row[tokensInSum] ?: 0
+                stats.tokensOut += row[tokensOutSum] ?: 0
+                stats.costUsd += row[costSum] ?: 0.0
+            }
+
+        ChatMessagesTable
+            .select(ChatMessagesTable.taskId, ChatMessagesTable.id, ChatMessagesTable.metadata)
+            .where {
+                (ChatMessagesTable.taskId inList taskIds) and
+                        ChatMessagesTable.tokensIn.isNull() and
+                        ChatMessagesTable.tokensOut.isNull() and
+                        ChatMessagesTable.cost.isNull() and
+                        ChatMessagesTable.metadata.isNotNull()
+            }
+            .forEach { row ->
+                val metadata = row[ChatMessagesTable.metadata] ?: return@forEach
+                val stats = result.getOrPut(row[ChatMessagesTable.taskId]) { MessageStats() }
+                try {
+                    val metadataMap = pl.jclab.refio.core.utils.GsonInstance.gson.fromJson(
+                        metadata,
+                        Map::class.java
+                    )
+                    metadataMap?.let { map ->
+                        ((map["inputTokens"] ?: map["tokens_in"]) as? Number)?.let { stats.tokensIn += it.toInt() }
+                        ((map["outputTokens"] ?: map["tokens_out"]) as? Number)?.let { stats.tokensOut += it.toInt() }
+                        ((map["costUsd"] ?: map["cost_usd"]) as? Number)?.let { stats.costUsd += it.toDouble() }
                     }
+                } catch (e: Exception) {
+                    logger.warn { "Failed to parse metadata for message ${row[ChatMessagesTable.id]}: ${e.message}" }
                 }
             }
 
-            TaskWithStats(
-                task = task,
-                tokensIn = totalTokensIn,
-                tokensOut = totalTokensOut,
-                costUsd = totalCost
-            )
-        }
+        return result
     }
 
     fun getForProject(projectId: String, limit: Int = 200): List<Task> = transaction {

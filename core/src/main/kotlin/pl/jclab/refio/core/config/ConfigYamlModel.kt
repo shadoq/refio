@@ -107,6 +107,18 @@ data class LimitsConfig(
     val maxFileSize: Int? = null
 )
 
+/**
+ * Deterministic post-turn verification (project build/test run by the agent loop after a
+ * file-writing AGENT turn completes). Typically set in the project config
+ * (`<project>/.refio/config.yaml`) since the command is project-specific.
+ */
+@Serializable
+data class VerifyConfig(
+    val enabled: Boolean? = null,
+    val command: String? = null,
+    val maxRepairRounds: Int? = null
+)
+
 @Serializable
 data class AdvancedConfig(
     val readOnlyMode: Boolean? = null,

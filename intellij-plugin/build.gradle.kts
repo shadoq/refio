@@ -101,7 +101,8 @@ intellijPlatform {
 
     pluginConfiguration {
         ideaVersion {
-            sinceBuild.set("241")
+            // 242 (2024.2) is the first IDE line shipping JBR 21; this module emits Java 21 bytecode.
+            sinceBuild.set("242")
             untilBuild.set("261.*")
         }
     }
@@ -123,7 +124,7 @@ tasks {
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_21)
-            // Pin to Kotlin bundled with oldest supported IDE (2025.1 → Kotlin 2.1).
+            // Pin to a Kotlin language/API level available in the runtime of the oldest supported IDE (2024.2).
             // Prevents emitting references to stdlib APIs (e.g. SpillingKt from Kotlin 2.2)
             // that don't exist in the Kotlin runtime shipped by older IntelliJ builds.
             apiVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_1_9)

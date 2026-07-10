@@ -362,6 +362,8 @@ fields (`scenario`, `model`, `run`, `verdict`, `failure_mode`, `status`, `costUs
 These fields are **additive**: the Kotlin gate (`cli --gate`, `GateRunRecord` via Gson) ignores unknown
 fields, so enrichment never breaks it. `benchmark/scripts/e2e-stats.sh <results-dir | results.jsonl> …`
 aggregates one or more result sets into a Markdown report - a per-model leaderboard (pass-rate, avg
-iterations/tokens/cost/duration, failure modes), a scenario x model pass-rate matrix, a tool-use
+iterations/tokens/**tokens per second**/cost/duration, failure modes), a scenario x model pass-rate
+matrix, a scenario x model **avg-seconds-per-run** matrix (processing time per case), a tool-use
 histogram, and API-error counts. It is read-only (no LLM); `e2e-stats.sh --self-test` checks the
-aggregation offline.
+aggregation offline. The rendered report for the tracked model runs is committed to
+[`RESULTS.md`](RESULTS.md).

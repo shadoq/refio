@@ -1,0 +1,17 @@
+{
+  "id": "add-endpoint-status",
+  "mode": "AGENT",
+  "description": "Add a /status endpoint returning ok to the toy router, registered like the existing routes, so the test suite passes.",
+  "category": "other",
+  "max_iterations": 25,
+  "fixture": "fixtures/py-router",
+  "prompt_file": "prompts/add-endpoint-status.md",
+  "assert": {
+    "tool_order": ["read_file", "advance_code_editing"],
+    "needle_in_file": { "path": "src/router.py", "regex": "\"/status\"|'/status'" },
+    "file_unchanged": ["test_router.py"],
+    "build_cmd": "python3 -m unittest test_router -v",
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["A /status handler returning \"ok\" was added following the existing decorator registration pattern; the tests were not modified."]
+}

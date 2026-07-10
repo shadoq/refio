@@ -1,0 +1,24 @@
+{
+  "id": "monorepo-deps",
+  "category": "analysis",
+  "mode": "PLAN",
+  "description": "PLAN-mode: map the cross-package dependency graph and name which packages break if the bottom package's public API changes.",
+  "max_iterations": 25,
+  "fixture": "fixtures/monorepo",
+  "prompt_file": "prompts/monorepo-deps.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_output": { "regex": "@app/core" },
+    "file_unchanged": [
+      "package.json",
+      "packages/core/package.json",
+      "packages/core/index.js",
+      "packages/api/package.json",
+      "packages/api/index.js",
+      "packages/web/package.json",
+      "packages/web/index.js"
+    ],
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["The analysis states @app/api depends on @app/core and @app/web depends on both, and concludes that a change to @app/core would affect @app/api and @app/web, without editing any file."]
+}

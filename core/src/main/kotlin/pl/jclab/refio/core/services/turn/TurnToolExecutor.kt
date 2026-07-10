@@ -53,7 +53,8 @@ class TurnToolExecutor(
     private val chatMessageRepository: ChatMessageRepository? = null,
     private val approvalService: ToolApprovalService? = null,
     private val permissionsService: ToolPermissionsService? = null,
-    private val hookService: pl.jclab.refio.core.services.hooks.HookService? = null
+    private val hookService: pl.jclab.refio.core.services.hooks.HookService? = null,
+    private val proposedChangeBuilder: ProposedChangeBuilder? = null
 ) {
     /** Callback to update turn phase (set by AgentTurnLoop before each turn) */
     var turnStateUpdater: ((TurnPhase) -> Unit)? = null
@@ -678,7 +679,8 @@ class TurnToolExecutor(
                     taskId = taskId,
                     toolName = toolCall.name,
                     arguments = argumentsMap,
-                    description = buildToolDescription(toolCall)
+                    description = buildToolDescription(toolCall),
+                    proposedChange = proposedChangeBuilder?.build(toolCall.name, argumentsMap)
                 )
 
                 val decision = approvalService.requestApproval(request)

@@ -300,21 +300,34 @@ class RagRepository {
      * Get chunks without embeddings for specific model
      */
     fun getChunksWithoutEmbeddings(projectRoot: String, model: String): List<IndexChunk> = transaction {
-        // Get all chunk IDs that already have embeddings for this model
-        val chunksWithEmbeddings = EmbeddingsTable
-            .selectAll()
-            .where { EmbeddingsTable.model eq model }
-            .map { it[EmbeddingsTable.chunkId] }
-            .toSet()
-
-        // Get chunks for project that don't have embeddings yet
+        // SQL anti-join: LEFT JOIN embeddings (per model) and keep rows without a match.
+        // Avoids materializing every embedded chunk id in memory and shipping a giant
+        // NOT IN list back to SQLite.
         IndexChunksTable
             .innerJoin(IndexFilesTable, { fileId }, { IndexFilesTable.id })
-            .selectAll().where {
-                (IndexFilesTable.projectRoot eq projectRoot) and
-                        (IndexChunksTable.id notInList chunksWithEmbeddings)
+            .join(
+                EmbeddingsTable,
+                JoinType.LEFT,
+                additionalConstraint = {
+                    (EmbeddingsTable.chunkId eq IndexChunksTable.id) and (EmbeddingsTable.model eq model)
+                }
+            )
+            .select(IndexChunksTable.columns)
+            .where {
+                (IndexFilesTable.projectRoot eq projectRoot) and EmbeddingsTable.id.isNull()
             }
             .map { mapIndexChunk(it) }
+    }
+
+    /**
+     * Lightweight chunkIndex -> chunk id lookup for one file (no content column loaded).
+     * Used to attach batch-inserted embeddings to their freshly batch-inserted chunks.
+     */
+    fun getChunkIdsByIndexForFile(fileId: Int): Map<Int, Int> = transaction {
+        IndexChunksTable
+            .select(IndexChunksTable.id, IndexChunksTable.chunkIndex)
+            .where { IndexChunksTable.fileId eq fileId }
+            .associate { it[IndexChunksTable.chunkIndex] to it[IndexChunksTable.id].value }
     }
 
     /**
@@ -434,13 +447,19 @@ class RagRepository {
         projectRoot: String,
         model: String,
         contentType: RagContentType? = null,
-        offset: Long,
+        afterId: Int = 0,
         limit: Int
     ): List<Embedding> = transaction {
+        // Keyset pagination (id > afterId) instead of OFFSET so paging over a large
+        // embedding table stays O(page) per query rather than scanning skipped rows.
         val query = EmbeddingsTable
             .innerJoin(IndexChunksTable, { chunkId }, { IndexChunksTable.id })
             .innerJoin(IndexFilesTable, { IndexChunksTable.fileId }, { IndexFilesTable.id })
-            .selectAll().where { (IndexFilesTable.projectRoot eq projectRoot) and (EmbeddingsTable.model eq model) }
+            .selectAll().where {
+                (IndexFilesTable.projectRoot eq projectRoot) and
+                    (EmbeddingsTable.model eq model) and
+                    (EmbeddingsTable.id greater afterId)
+            }
 
         val filtered = if (contentType != null) {
             query.andWhere { IndexFilesTable.contentType eq contentType }
@@ -450,7 +469,7 @@ class RagRepository {
 
         filtered
             .orderBy(EmbeddingsTable.id to SortOrder.ASC)
-            .limit(limit, offset)
+            .limit(limit)
             .map(::mapEmbedding)
     }
 

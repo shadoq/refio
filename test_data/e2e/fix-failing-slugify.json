@@ -1,0 +1,17 @@
+{
+  "id": "fix-failing-slugify",
+  "mode": "AGENT",
+  "description": "Fix slugify so its output is lowercase with no leading or trailing dash, matching its docstring and tests.",
+  "category": "bugfix",
+  "max_iterations": 25,
+  "fixture": "fixtures/py-slugify",
+  "prompt_file": "prompts/fix-failing-slugify.md",
+  "assert": {
+    "tool_order": ["read_file", "advance_code_editing"],
+    "needle_in_file": { "path": "src/slugify.py", "regex": "lower\\(\\)|casefold\\(\\)" },
+    "file_unchanged": ["test_slugify.py"],
+    "build_cmd": "python3 -m unittest test_slugify -v",
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["slugify now lowercases and trims leading/trailing dashes; the fix stays inside src/slugify.py and the tests are untouched."]
+}

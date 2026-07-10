@@ -66,18 +66,20 @@ render_report() {
         "",
         "## Per-model",
         "",
-        "| model | runs | pass | pass-rate | avg iters | avg tokOut | total cost | avg ms | failure modes |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| model | runs | pass | pass-rate | avg iters | avg tokOut | tok/s | total cost | avg ms | failure modes |",
+        "|---|---|---|---|---|---|---|---|---|---|",
         ( $data
           | group_by(.model)[]
           | (map(select(.verdict=="PASS"))|length) as $p
           | length as $n
+          | ((map(.durationMs//0)|add)/1000) as $secs
           | ( [ .[] | select(.verdict!="PASS") | .failure_mode ]
               | reduce .[] as $m ({}; .[$m] = ((.[$m]//0)+1))
               | to_entries | map("\(.key):\(.value)") | join(" ") ) as $fmodes
           | "| \(.[0].model) | \($n) | \($p) | \(pctf($p/$n)) | " +
             "\(((map(.iterations//0)|add)/$n)|floor) | " +
             "\(((map(.tokensOut//0)|add)/$n)|floor) | " +
+            "\(if $secs>0 then (((map(.tokensOut//0)|add)/$secs)*10|floor)/10 else 0 end) | " +
             "\(((map(.costUsd//0)|add)*100000|floor)/100000) | " +
             "\(((map(.durationMs//0)|add)/$n)|floor) | \(if $fmodes=="" then "-" else $fmodes end) |"
         ),
@@ -93,6 +95,22 @@ render_report() {
                   | [ $data[] | select(.scenario==$s and .model==$m) ] as $cell
                   | if ($cell|length)==0 then "-"
                     else "\((([$cell[]|select(.verdict=="PASS")]|length)/($cell|length)*100)|floor)% (\([$cell[]|select(.verdict=="PASS")]|length)/\($cell|length))"
+                    end
+                ) | join(" | ") ) + " |"
+            )
+        ),
+        "",
+        "## Scenario x model (avg seconds per run)",
+        "",
+        ( ($data|map(.model)|unique) as $models
+          | ($data|map(.scenario)|unique) as $scen
+          | ( "| scenario \\ model | " + ($models|join(" | ")) + " |" ),
+            ( "|" + ((["---"] + ($models|map("---")))|join("|")) + "|" ),
+            ( $scen[] as $s
+              | "| \($s) | " + ( $models | map( . as $m
+                  | [ $data[] | select(.scenario==$s and .model==$m) ] as $cell
+                  | if ($cell|length)==0 then "-"
+                    else "\((([$cell[]|.durationMs//0]|add)/($cell|length)/100|floor)/10)"
                     end
                 ) | join(" | ") ) + " |"
             )

@@ -246,12 +246,15 @@ class ApiLogRepository {
     }
 
     /**
-     * Get all API logs (for export)
+     * Get API logs for export, newest first. Bounded by [limit] because log rows
+     * carry large request/response payload text columns - an unbounded select can
+     * pull the whole table into memory.
      */
-    fun getAllLogs(): List<ApiLog> {
+    fun getAllLogs(limit: Int = 500): List<ApiLog> {
         return transaction {
             ApiLogsTable.selectAll()
                 .orderBy(ApiLogsTable.createdAt to SortOrder.DESC)
+                .limit(limit)
                 .map { rowToApiLog(it) }
         }
     }

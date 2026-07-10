@@ -125,7 +125,7 @@ class OllamaAdapter(
             // so the caller can see StreamAbortedException instead of RefioError.LLMError.
             throw e
         } catch (e: Exception) {
-            throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
+            throw LLMErrorMapper.fromThrowable(provider, model, timeout, e, baseUrl)
         }
     }
 
@@ -501,7 +501,7 @@ class OllamaAdapter(
                 source = source
             )
 
-            throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
+            throw LLMErrorMapper.fromThrowable(provider, model, timeout, e, baseUrl)
         }
     }
 
@@ -872,7 +872,7 @@ class OllamaAdapter(
                 subtaskId = subtaskId,
                 source = source
             )
-            throw LLMErrorMapper.fromThrowable(provider, model, timeout, e)
+            throw LLMErrorMapper.fromThrowable(provider, model, timeout, e, baseUrl)
         }
     }
 

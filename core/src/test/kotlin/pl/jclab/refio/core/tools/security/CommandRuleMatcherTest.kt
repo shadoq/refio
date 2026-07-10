@@ -151,9 +151,9 @@ class CommandRuleMatcherTest {
         }
 
         @Test
-        fun `should allow npm test`() {
+        fun `should ask before running npm scripts`() {
             val matcher = CommandRuleDefaults.createDefaultMatcher()
-            assertEquals(RuleAction.ALLOW, matcher.match("npm test").action)
+            assertEquals(RuleAction.ASK, matcher.match("npm test").action)
         }
 
         @Test
@@ -163,9 +163,9 @@ class CommandRuleMatcherTest {
         }
 
         @Test
-        fun `should allow gradlew`() {
+        fun `should ask before running build tools`() {
             val matcher = CommandRuleDefaults.createDefaultMatcher()
-            assertEquals(RuleAction.ALLOW, matcher.match("gradlew build").action)
+            assertEquals(RuleAction.ASK, matcher.match("gradlew build").action)
         }
 
         @Test
@@ -177,6 +177,13 @@ class CommandRuleMatcherTest {
 
     @Nested
     inner class AskTests {
+        @Test
+        fun `should ask before running interpreter code`() {
+            val matcher = CommandRuleDefaults.createDefaultMatcher()
+            assertEquals(RuleAction.ASK, matcher.match("python script.py").action)
+            assertEquals(RuleAction.ASK, matcher.match("node script.js").action)
+        }
+
         @Test
         fun `should ask for docker commands`() {
             val matcher = CommandRuleDefaults.createDefaultMatcher()

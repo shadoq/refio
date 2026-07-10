@@ -3,9 +3,13 @@ package pl.jclab.refio.core.agents.events
 import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -278,6 +282,23 @@ class AgentEventBusTest {
     inner class PersistenceResilience {
 
         @Test
+        fun `slow persistence does not delay live emission`() = runBlocking {
+            val releaseSave = CompletableDeferred<Unit>()
+            val mockRepo = mockk<AgentEventRepository> {
+                coEvery { save(any()) } coAnswers { releaseSave.await() }
+            }
+            val bus = AgentEventBus()
+            bus.setRepository(mockRepo)
+
+            withTimeout(1_000) { bus.emit(makeStarted()) }
+
+            assertIs<AgentEvent.AgentStarted>(withTimeout(1_000) { bus.events.first() })
+            releaseSave.complete(Unit)
+            bus.flushPersistence()
+            bus.close()
+        }
+
+        @Test
         fun `persistence failure should not block emission`() = runTest {
             val mockRepo = mockk<AgentEventRepository> {
                 coEvery { save(any()) } throws RuntimeException("DB is down")
@@ -373,6 +394,7 @@ class AgentEventBusTest {
                 )
 
                 originalEvents.forEach { bus1.emit(it) }
+                bus1.flushPersistence()
 
                 // Create fresh EventBus with same repo, load persisted events
                 val bus2 = AgentEventBus()

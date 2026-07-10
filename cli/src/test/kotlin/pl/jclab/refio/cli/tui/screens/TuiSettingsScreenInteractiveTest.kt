@@ -36,10 +36,40 @@ class TuiSettingsScreenInteractiveTest {
     }
 
     @Test
-    fun `R key should reset all settings`() {
+    fun `first R only arms the reset so a stray keypress cannot wipe all settings`() {
+        every { viewModel.isSettingsResetArmed() } returns false
+        handler.dispatchAction(TuiAction.TypeChar('R'), viewModel)
+        verify { viewModel.armSettingsReset() }
+        verify(exactly = 0) { viewModel.resetAllSettings() }
+    }
+
+    @Test
+    fun `second R confirms and performs the reset`() {
+        every { viewModel.isSettingsResetArmed() } returns true
         handler.dispatchAction(TuiAction.TypeChar('R'), viewModel)
         verify { viewModel.resetAllSettings() }
         verify { viewModel.addSystemMessage(match { it.contains("reset") }) }
+    }
+
+    @Test
+    fun `lowercase r works the same as uppercase because the footer advertises lowercase`() {
+        every { viewModel.isSettingsResetArmed() } returns false
+        handler.dispatchAction(TuiAction.TypeChar('r'), viewModel)
+        verify { viewModel.armSettingsReset() }
+    }
+
+    @Test
+    fun `escape cancels an armed reset instead of leaving the screen`() {
+        every { viewModel.isSettingsResetArmed() } returns true
+        handler.dispatchAction(TuiAction.BackToMain, viewModel)
+        verify { viewModel.disarmSettingsReset() }
+        verify(exactly = 0) { viewModel.setScreen(TuiScreen.MAIN) }
+    }
+
+    @Test
+    fun `unhandled characters are ignored and never leak into the chat input buffer`() {
+        handler.dispatchAction(TuiAction.TypeChar('x'), viewModel)
+        verify(exactly = 0) { viewModel.insertAtCursor(any()) }
     }
 
     @Test
@@ -66,7 +96,7 @@ class TuiSettingsScreenInteractiveTest {
         every { viewModel.getConfigSection(any()) } returns emptyMap()
         val lines = TuiSettingsScreen.renderToLines(state, 100, 20)
         val output = lines.joinToString("\n")
-        assertTrue(output.contains("Reset") || output.contains("reset") || output.contains("[R]"),
+        assertTrue(output.contains("[r]eset") || output.contains("Reset"),
             "Should show Reset hint, got: ${output.takeLast(200)}")
     }
 }

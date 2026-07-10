@@ -71,6 +71,19 @@ data class SessionDebugSnapshot(
          * did not hit a marked abort. Additive field.
          */
         val failureMarker: String? = null,
+        /**
+         * Outcome of the deterministic post-turn verification step (build/test run by the loop
+         * code after a file-writing AGENT turn). `ran=false, attempts=0, result=null` when
+         * verification never executed. Additive field.
+         */
+        val verification: VerificationInfo = VerificationInfo(),
+    )
+
+    /** Deterministic verification outcome: whether it ran, how many attempts, PASSED/FAILED. */
+    data class VerificationInfo(
+        val ran: Boolean = false,
+        val attempts: Int = 0,
+        val result: String? = null,
     )
 
     data class SubtaskInfo(

@@ -1,0 +1,17 @@
+{
+  "id": "dep-bump-fix-callers",
+  "mode": "AGENT",
+  "description": "Update app.py callers to a vendored library's new keyword-only argument after a v2 bump, without editing the library.",
+  "category": "refactor",
+  "max_iterations": 25,
+  "fixture": "fixtures/py-depbump",
+  "prompt_file": "prompts/dep-bump-fix-callers.md",
+  "assert": {
+    "tool_order": ["read_file", "advance_code_editing"],
+    "needle_in_file": { "path": "app.py", "regex": "currency[[:space:]]*=" },
+    "file_unchanged": ["lib/formatting.py"],
+    "build_cmd": "python3 app.py",
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["The caller in app.py was adapted to the keyword-only v2 signature; the vendored library file and the assertions are untouched."]
+}

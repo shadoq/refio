@@ -32,7 +32,9 @@ class ToolApprovalService(
         val taskId: String,
         val toolName: String,
         val arguments: Map<String, Any>,
-        val description: String
+        val description: String,
+        /** Concrete file change for editing tools, so the UI can show a diff before the write. */
+        val proposedChange: ProposedChange? = null
     )
 
     sealed class ApprovalDecision {

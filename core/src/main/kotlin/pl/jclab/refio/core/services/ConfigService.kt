@@ -76,9 +76,9 @@ class ConfigService(
         const val KEY_CONTEXT_BUDGET_SECTION_PREFIX = "context.budget.section."
 
         // Hard fallbacks used when neither DB nor YAML provide a value (last resort).
-        const val FALLBACK_MODEL = "qwen2.5:7b"
+        const val FALLBACK_MODEL = "qwen3.5:9b"
         const val FALLBACK_PROVIDER = "ollama"
-        const val FALLBACK_WEAK_MODEL = "qwen2.5:7b"
+        const val FALLBACK_WEAK_MODEL = "qwen3.5:9b"
         const val FALLBACK_WEAK_PROVIDER = "ollama"
         const val FALLBACK_EMBEDDING_MODEL = "nomic-embed-text"
         const val FALLBACK_EMBEDDING_PROVIDER = "ollama"

@@ -184,6 +184,22 @@ object ConfigKeys {
         default = true
     )
 
+    /**
+     * When the next-speaker judge decides a turn stalled mid-task, allow more than the single
+     * bounded re-entry while the turn is still early and NOTHING has been delivered yet. Weak
+     * local models (qwen3.5) frequently abandon a task on iteration 1-3 of 20 by announcing
+     * intent without a tool call; a single nudge is often not enough, and the second re-entry
+     * escalates to a nudge that re-includes the JSON envelope schema. Bounded by
+     * [pl.jclab.refio.core.services.turn.NextSpeakerJudgeGuardian.MAX_EARLY_JUDGE_REENTRIES] and
+     * the early-iteration window, so a turn that has burned its iteration budget still stops.
+     * Default `true`; disable to restore the strict one-shot re-entry.
+     */
+    val GENERAL_JUDGE_EXTENDED_REENTRY_ENABLED = ConfigKey(
+        key = "general.judge_extended_reentry_enabled",
+        parser = String::toBooleanStrictOrNull,
+        default = true
+    )
+
     val UI_INTENT_CLASSIFICATION_ENABLED = ConfigKey(
         key = "ui.intent_classification_enabled",
         parser = String::toBooleanStrictOrNull,
@@ -263,25 +279,25 @@ object ConfigKeys {
     val DEFAULT_MODEL_CHAT = ConfigKey(
         key = "default_model.chat",
         parser = { it.takeIf { s -> s.isNotBlank() } },
-        default = "qwen2.5:7b"
+        default = "qwen3.5:9b"
     )
 
     val DEFAULT_MODEL_PLAN = ConfigKey(
         key = "default_model.plan",
         parser = { it.takeIf { s -> s.isNotBlank() } },
-        default = "qwen2.5:7b"
+        default = "qwen3.5:9b"
     )
 
     val DEFAULT_MODEL_AGENT = ConfigKey(
         key = "default_model.agent",
         parser = { it.takeIf { s -> s.isNotBlank() } },
-        default = "qwen2.5:7b"
+        default = "qwen3.5:9b"
     )
 
     val WEAK_MODEL = ConfigKey(
         key = "default_model.weak",
         parser = { it.takeIf { s -> s.isNotBlank() } },
-        default = "qwen2.5:7b"
+        default = "qwen3.5:9b"
     )
 
     val STRONG_MODEL = ConfigKey<String?>(
@@ -743,6 +759,45 @@ object ConfigKeys {
         validator = { it in 0.0..2.0 }
     )
 
+    // ==================== VERIFY ====================
+
+    /**
+     * Master switch for the deterministic post-turn verification step: after an AGENT turn that
+     * wrote files completes, the loop code runs the project's build/test command and feeds
+     * failures back to the model as a concrete error list.
+     */
+    val VERIFY_ENABLED = ConfigKey(
+        key = "verify.enabled",
+        parser = String::toBooleanStrictOrNull,
+        default = true,
+        yamlAccessor = { it.getVerifyEnabled() }
+    )
+
+    /**
+     * The verification command (run through the shell in the project root). Empty (default)
+     * means autodetect from project marker files: build.gradle* -> "./gradlew build -q",
+     * package.json -> "npm test --silent", Cargo.toml -> "cargo build -q"; when no marker is
+     * found verification is skipped.
+     */
+    val VERIFY_COMMAND = ConfigKey(
+        key = "verify.command",
+        parser = { it },
+        default = "",
+        yamlAccessor = { it.getVerifyCommand() }
+    )
+
+    /**
+     * Maximum repair rounds after a failed verification (fail -> error list to the model ->
+     * re-verify). After exhaustion the turn ends as VERIFICATION_FAILED instead of faking success.
+     */
+    val VERIFY_MAX_REPAIR_ROUNDS = ConfigKey(
+        key = "verify.max_repair_rounds",
+        parser = String::toIntOrNull,
+        default = 2,
+        yamlAccessor = { it.getVerifyMaxRepairRounds() },
+        validator = { it >= 0 }
+    )
+
     val JSON_THINKING_XML_TAGS = ConfigKey(
         key = "agent.json_thinking_xml_tags",
         parser = { raw ->
@@ -863,7 +918,11 @@ object ConfigKeys {
             MAX_ITERATIONS,
             AGENT_MAX_COST_USD,
             AGENT_DECISION_TEMPERATURE,
-            JSON_THINKING_XML_TAGS
+            JSON_THINKING_XML_TAGS,
+            // Verify
+            VERIFY_ENABLED,
+            VERIFY_COMMAND,
+            VERIFY_MAX_REPAIR_ROUNDS
         ).associateBy { it.key }
     }
 }

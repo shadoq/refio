@@ -99,6 +99,14 @@ class HierarchicalConfigLoader private constructor(
     fun getNativeToolsMode(): String? = getConfig().general?.nativeToolsMode
 
     // ═══════════════════════════════════════════════════════════════════════════════
+    // Verification Settings
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    fun getVerifyEnabled(): Boolean? = getConfig().verify?.enabled
+    fun getVerifyCommand(): String? = getConfig().verify?.command
+    fun getVerifyMaxRepairRounds(): Int? = getConfig().verify?.maxRepairRounds
+
+    // ═══════════════════════════════════════════════════════════════════════════════
     // Provider Settings
     // ═══════════════════════════════════════════════════════════════════════════════
 

@@ -75,7 +75,7 @@ object TuiAgentFlowView {
             buf.addLine(TuiColors.border("  │") + statusLine + TuiColors.border("│"))
 
             if (agent.costUsd > 0 || agent.tokensUsed > 0) {
-                val metrics = " \$${String.format("%.4f", agent.costUsd)} ${formatTokens(agent.tokensUsed)}"
+                val metrics = " \$${String.format(java.util.Locale.US, "%.4f", agent.costUsd)} ${formatTokens(agent.tokensUsed)}"
                 val metricsPadded = metrics.take(boxWidth - 4).padEnd(boxWidth - 4)
                 buf.addLine(TuiColors.border("  │") + TuiColors.muted(" $metricsPadded ") + TuiColors.border("│"))
             }
@@ -114,6 +114,6 @@ object TuiAgentFlowView {
     }
 
     private fun formatTokens(tokens: Long): String {
-        return if (tokens > 1000) "${String.format("%.1f", tokens / 1000.0)}K tok" else "$tokens tok"
+        return if (tokens > 1000) "${String.format(java.util.Locale.US, "%.1f", tokens / 1000.0)}K tok" else "$tokens tok"
     }
 }

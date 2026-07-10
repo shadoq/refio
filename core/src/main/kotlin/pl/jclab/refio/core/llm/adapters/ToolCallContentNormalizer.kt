@@ -30,6 +30,21 @@ internal object ToolCallContentNormalizer {
             return consumeToolCalls(delta["tool_calls"])
         }
 
+        /**
+         * JsonObject variant of [consumeDelta] used by the SSE loop, which parses each
+         * stream line into a Gson tree instead of nested Maps. Only the `tool_calls`
+         * subtree (rare in a content stream) is converted to the Map shape the
+         * accumulator understands.
+         */
+        fun consumeDelta(delta: com.google.gson.JsonObject?): List<NativeToolCallDelta> {
+            val toolCalls = delta?.get("tool_calls") ?: return emptyList()
+            if (toolCalls.isJsonNull) return emptyList()
+            @Suppress("UNCHECKED_CAST")
+            val asMaps = gson.fromJson(toolCalls, List::class.java) as? List<Map<String, Any?>>
+                ?: return emptyList()
+            return consumeToolCalls(asMaps)
+        }
+
         fun consumeToolCalls(rawToolCalls: Any?): List<NativeToolCallDelta> {
             @Suppress("UNCHECKED_CAST")
             val toolCalls = rawToolCalls as? List<Map<String, Any?>> ?: return emptyList()

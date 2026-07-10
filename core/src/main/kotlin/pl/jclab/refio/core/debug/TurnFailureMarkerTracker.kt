@@ -25,6 +25,12 @@ object TurnFailureMarkerTracker {
     /** A streak of writes that changed nothing (no-op writes) stalled the turn with no deliverable. */
     const val NOOP_WRITE_STALL = "NOOP_WRITE_STALL"
 
+    /**
+     * The deterministic post-turn verification (project build/test) kept failing after all repair
+     * rounds were exhausted; the turn ended without a verified deliverable.
+     */
+    const val VERIFICATION_FAILED = "VERIFICATION_FAILED"
+
     private val markers = ConcurrentHashMap<String, String>()
 
     /** Record the guardrail [marker] that aborted [taskId]'s turn. First marker for a task wins. */

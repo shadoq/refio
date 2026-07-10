@@ -91,7 +91,7 @@ object TuiMessageBubble {
         if (!msg.isStreaming && (msg.tokensIn > 0 || msg.tokensOut > 0)) {
             val tokIn = msg.tokensIn
             val tokOut = msg.tokensOut
-            val cost = String.format("%.4f", msg.costUsd)
+            val cost = String.format(java.util.Locale.US, "%.4f", msg.costUsd)
             result.add(TuiColors.muted("  [$tokIn in / $tokOut out, \$$cost]"))
         }
 
@@ -301,7 +301,7 @@ object TuiMessageBubble {
             result.add("    $line")
         }
         if (msg.tokensIn > 0 || msg.tokensOut > 0) {
-            val cost = String.format("%.4f", msg.costUsd)
+            val cost = String.format(java.util.Locale.US, "%.4f", msg.costUsd)
             result.add(TuiColors.muted("    [${msg.tokensIn} in / ${msg.tokensOut} out, \$$cost]"))
         }
         return result

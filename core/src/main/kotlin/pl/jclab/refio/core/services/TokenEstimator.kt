@@ -132,6 +132,10 @@ class PromptTokenEstimator {
             "generic_openai" to 1.0,
             "zai" to 1.0
         )
+
+        // Compiled once - estimateString runs on the prompt hot path.
+        private val CODE_FENCE_REGEX = Regex("```")
+        private val JSON_OBJECT_REGEX = Regex("\\{[^}]+\\}")
     }
 
     /**
@@ -161,8 +165,8 @@ class PromptTokenEstimator {
         if (text.isBlank()) return 0
 
         // Count special patterns that typically use more tokens
-        val codeBlockCount = Regex("```").findAll(text).count()
-        val jsonObjectCount = Regex("\\{[^}]+\\}").findAll(text).count()
+        val codeBlockCount = CODE_FENCE_REGEX.findAll(text).count()
+        val jsonObjectCount = JSON_OBJECT_REGEX.findAll(text).count()
 
         val baseEstimate = estimateBase(text)
         val overhead = codeBlockCount * 3 + jsonObjectCount * 2

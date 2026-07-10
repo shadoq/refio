@@ -17,6 +17,12 @@ private val logger = dualLogger("JsonExtractor")
  */
 object JsonExtractor {
 
+    // Markdown code-block extractors compiled once (used on every extraction attempt).
+    private val JSON_MARKDOWN_BLOCK_REGEX =
+        Regex("""```json\s*\n?(.*?)\n?```""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+    private val ANY_MARKDOWN_BLOCK_REGEX =
+        Regex("""```\s*\n?(.*?)\n?```""", RegexOption.DOT_MATCHES_ALL)
+
     /**
      * Extract and parse JSON from LLM response content.
      *
@@ -436,13 +442,17 @@ object JsonExtractor {
      */
     private fun tryExtractFromMarkdownBlock(content: String, language: String?): String? {
         return try {
+            // Only two variants are ever used ("json" and any-language) - both precompiled.
             val pattern = if (language != null) {
-                // Match: ```json ... ```
-                // Allow optional whitespace after opening and before closing
-                Regex("""```$language\s*\n?(.*?)\n?```""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+                if (language.equals("json", ignoreCase = true)) {
+                    JSON_MARKDOWN_BLOCK_REGEX
+                } else {
+                    // Match: ```<language> ... ```
+                    // Allow optional whitespace after opening and before closing
+                    Regex("""```$language\s*\n?(.*?)\n?```""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+                }
             } else {
-                // Match: ``` ... ```
-                Regex("""```\s*\n?(.*?)\n?```""", RegexOption.DOT_MATCHES_ALL)
+                ANY_MARKDOWN_BLOCK_REGEX
             }
 
             pattern.find(content)?.groupValues?.get(1)?.trim()

@@ -561,4 +561,62 @@ class TaskRepositoryTest {
             }
         }
     }
+
+    @Nested
+    inner class StatsTests {
+
+        private val messages = ChatMessageRepository()
+
+        @Test
+        fun `stats sum numeric columns and fall back to metadata JSON for legacy rows`() {
+            transaction {
+                val task = repository.create(name = "Stats Task", mode = TaskMode.AGENT, projectId = "p1", projectPath = "/p1")
+
+                // Modern rows: metrics in the dedicated numeric columns
+                messages.create(taskId = task.id, role = MessageRole.ASSISTANT, content = "a", tokensIn = 100, tokensOut = 40, cost = 0.01)
+                messages.create(taskId = task.id, role = MessageRole.ASSISTANT, content = "b", tokensIn = 50, tokensOut = 10, cost = 0.005)
+                // Legacy row: all columns null, camelCase metrics JSON in metadata
+                messages.create(
+                    taskId = task.id, role = MessageRole.ASSISTANT, content = "c",
+                    metadata = """{"inputTokens":10,"outputTokens":5,"costUsd":0.002}"""
+                )
+                // Legacy row: snake_case keys
+                messages.create(
+                    taskId = task.id, role = MessageRole.ASSISTANT, content = "d",
+                    metadata = """{"tokens_in":1,"tokens_out":2,"cost_usd":0.0005}"""
+                )
+                // Row without any metrics contributes nothing
+                messages.create(taskId = task.id, role = MessageRole.USER, content = "question")
+
+                val expectedIn = 161
+                val expectedOut = 57
+                val expectedCost = 0.0175
+
+                val listed = repository.listTasksWithStats().first { it.task.id == task.id }
+                assertEquals(expectedIn, listed.tokensIn)
+                assertEquals(expectedOut, listed.tokensOut)
+                assertEquals(expectedCost, listed.costUsd, 0.000001)
+
+                // Single-task variant must report the same numbers as the list variant
+                val single = repository.getTaskWithStats(task.id)
+                assertNotNull(single)
+                assertEquals(expectedIn, single.tokensIn)
+                assertEquals(expectedOut, single.tokensOut)
+                assertEquals(expectedCost, single.costUsd, 0.000001)
+            }
+        }
+
+        @Test
+        fun `stats are zero for a task without messages`() {
+            transaction {
+                val task = repository.create(name = "Empty Task", mode = TaskMode.AGENT, projectId = "p1", projectPath = "/p1")
+
+                val single = repository.getTaskWithStats(task.id)
+                assertNotNull(single)
+                assertEquals(0, single.tokensIn)
+                assertEquals(0, single.tokensOut)
+                assertEquals(0.0, single.costUsd, 0.000001)
+            }
+        }
+    }
 }

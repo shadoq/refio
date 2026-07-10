@@ -213,7 +213,7 @@ class RefioCommand : CliktCommand(name = "refio") {
                 // Print results per agent
                 for (agent in result.agents) {
                     val status = if (agent.success == true) "OK" else "FAIL"
-                    echo("[$status] ${agent.agentName}: tokens=${agent.tokensUsed}, cost=$${String.format("%.4f", agent.costUsd)}", err = true)
+                    echo("[$status] ${agent.agentName}: tokens=${agent.tokensUsed}, cost=$${String.format(java.util.Locale.US, "%.4f", agent.costUsd)}", err = true)
                     if (agent.response != null) {
                         println("--- ${agent.agentName} ---")
                         println(agent.response)
@@ -225,7 +225,7 @@ class RefioCommand : CliktCommand(name = "refio") {
                 }
 
                 // Summary
-                echo("Total: tokens=${result.totalTokens}, cost=$${String.format("%.4f", result.totalCostUsd)}, duration=${result.durationMs}ms", err = true)
+                echo("Total: tokens=${result.totalTokens}, cost=$${String.format(java.util.Locale.US, "%.4f", result.totalCostUsd)}, duration=${result.durationMs}ms", err = true)
 
                 // Emit a run.json so the e2e harness can assert on a multi-agent run the same way it
                 // does a single turn (status gate, file needles, build) plus agent execution order.
@@ -316,6 +316,47 @@ class RefioCommand : CliktCommand(name = "refio") {
     }
 
     /**
+     * Write a run.json even when the headless turn threw before the normal export path ran (e.g.
+     * the LLM stream aborting on the first call). Reuses the DB-backed exporter - the task row
+     * already exists - so the document carries whatever was persisted, then appends the fatal error
+     * and forces the FAILED status. Falls back to a minimal hand-built document only when there is
+     * no task to export (createTask itself failed). Must never throw: it runs on the error path.
+     */
+    private fun writeEmergencyRunJson(
+        router: pl.jclab.refio.core.api.CoreApiRouter?,
+        taskId: String?,
+        target: Path?,
+        debugLevel: String,
+        error: Throwable,
+    ) {
+        val fatal = "fatal: ${error::class.simpleName}: ${error.message}"
+        val json: String = if (router != null && taskId != null) {
+            // Force the outcome to FAILED so session.status reflects the crash, then export.
+            runCatching {
+                router.taskRepository.update(id = taskId, status = pl.jclab.refio.core.db.TaskStatus.FAILED)
+            }
+            val level = SessionDebugOptions.levelFromString(debugLevel)
+            val snapshot = router.sessionDebugExporter.export(taskId, SessionDebugOptions.forLevel(level))
+            val withError = snapshot.copy(
+                errors = snapshot.errors + fatal,
+                finalOutput = snapshot.finalOutput ?: fatal,
+            )
+            router.sessionDebugExporter.toJson(withError)
+        } else {
+            // No task to export - emit the smallest valid document the harness can still parse.
+            val escaped = fatal.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", " ").replace("\r", " ")
+            """{"schemaVersion":$SESSION_DEBUG_SCHEMA_VERSION,"session":{"status":"FAILED"},"errors":["$escaped"]}"""
+        }
+        if (target != null) {
+            target.toFile().writeText(json)
+            echo("Wrote emergency run.json -> ${target.toAbsolutePath()} (${json.length} bytes)", err = true)
+        } else {
+            println(json)
+        }
+    }
+
+    /**
      * Aggregate an e2e gate out-dir into a pass-rate verdict and exit. Reads the runner's
      * results.jsonl (written when E2E_OUT_DIR is set), prints a human summary to stderr and the
      * machine-readable report to stdout, and exits red (FAILURE) when the pass-rate misses the floor
@@ -353,7 +394,7 @@ class RefioCommand : CliktCommand(name = "refio") {
             echo("gate: appended history entry for $attributedCommit to $history", err = true)
         }
 
-        echo("gate: ${report.passed}/${report.total} passed (${"%.1f".format(report.passRate * 100)}%)", err = true)
+        echo("gate: ${report.passed}/${report.total} passed (${"%.1f".format(java.util.Locale.US, report.passRate * 100)}%)", err = true)
         if (report.byFailureMode.isNotEmpty()) {
             echo("  failures by mode: ${report.byFailureMode}", err = true)
         }
@@ -364,9 +405,9 @@ class RefioCommand : CliktCommand(name = "refio") {
             // Per-scenario mode: the baseline governs, so the absolute floor is off (0.0) unless set.
             val decision = StabilizationGate.decidePerScenario(report, baselines, minPassRate ?: 0.0, tolerance)
             decision.scenarios.forEach { s ->
-                val deltaStr = s.delta?.let { " (${"%+.1f".format(it * 100)} pts vs baseline)" } ?: ""
+                val deltaStr = s.delta?.let { " (${"%+.1f".format(java.util.Locale.US, it * 100)} pts vs baseline)" } ?: ""
                 echo(
-                    "  ${if (s.green) "GREEN" else "RED"} ${s.scenario}: ${"%.1f".format(s.passRate * 100)}%$deltaStr - ${s.reason}",
+                    "  ${if (s.green) "GREEN" else "RED"} ${s.scenario}: ${"%.1f".format(java.util.Locale.US, s.passRate * 100)}%$deltaStr - ${s.reason}",
                     err = true
                 )
             }
@@ -381,9 +422,9 @@ class RefioCommand : CliktCommand(name = "refio") {
         // Single global baseline (original behaviour): the floor defaults to 1.0.
         val decision = StabilizationGate.decide(report, baseline, minPassRate ?: 1.0, tolerance)
         if (report.byScenario.size > 1) {
-            report.byScenario.forEach { (s, rate) -> echo("  scenario $s: ${"%.1f".format(rate * 100)}%", err = true) }
+            report.byScenario.forEach { (s, rate) -> echo("  scenario $s: ${"%.1f".format(java.util.Locale.US, rate * 100)}%", err = true) }
         }
-        decision.delta?.let { echo("  delta vs baseline: ${"%+.1f".format(it * 100)} pts", err = true) }
+        decision.delta?.let { echo("  delta vs baseline: ${"%+.1f".format(java.util.Locale.US, it * 100)} pts", err = true) }
         echo("  ${if (decision.green) "GREEN" else "RED"} - ${decision.reason}", err = true)
         println(StabilizationGate.reportJson(report, decision))
         if (!decision.green) {
@@ -412,8 +453,13 @@ class RefioCommand : CliktCommand(name = "refio") {
             val cliScope = this
             val bootstrap = StandaloneCoreBootstrap(project, runConfigOverrides)
             var autoApproveListener: AutoApproveListener? = null
+            // Hoisted so the catch block can still emit an emergency run.json when the turn throws
+            // (e.g. the LLM stream aborts on the first call) instead of leaving --output json empty.
+            var routerRef: pl.jclab.refio.core.api.CoreApiRouter? = null
+            var headlessTaskId: String? = null
             try {
                 val router = bootstrap.initialize()
+                routerRef = router
                 if (autoApproveRegex != null) {
                     // Headless auto-approval so terminal-ASK tools don't hang on the timeout (docs/0063 §6.2).
                     autoApproveListener = AutoApproveListener(router.toolApprovalService, autoApproveRegex, cliScope)
@@ -431,6 +477,7 @@ class RefioCommand : CliktCommand(name = "refio") {
                     name = "headless-${System.currentTimeMillis()}",
                     mode = coreMode
                 ))
+                headlessTaskId = task.id
 
                 // Route exactly like the interactive TUI / IntelliJ plugin: PLAN/AGENT go through
                 // the AgentTurnLoop (agentRouter.runTurn) — the full agentic loop that actually
@@ -520,6 +567,16 @@ class RefioCommand : CliktCommand(name = "refio") {
             } catch (e: Exception) {
                 echo("Error: ${e.message}", err = true)
                 exitCode = HeadlessExit.FAILURE
+                // Emergency run.json. A fatal error (e.g. the LLM stream aborting on the first call)
+                // used to leave --output json with NO file at all, so the harness recorded
+                // "no run.json produced" and lost every diagnostic. Persist the FAILED outcome and
+                // export a snapshot so each headless run always yields a machine-readable record.
+                // Best-effort and self-contained: a failure here must not mask the original error.
+                if (outputFormat == "json") {
+                    runCatching {
+                        writeEmergencyRunJson(routerRef, headlessTaskId, outputFile, debugLevel, e)
+                    }.onFailure { echo("Failed to write emergency run.json: ${it.message}", err = true) }
+                }
             } finally {
                 autoApproveListener?.job?.cancel()
                 bootstrap.shutdown()

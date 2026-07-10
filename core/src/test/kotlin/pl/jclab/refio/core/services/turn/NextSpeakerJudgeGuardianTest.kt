@@ -51,10 +51,15 @@ class NextSpeakerJudgeGuardianTest {
         completionCondition = completionCondition
     )
 
-    private fun stubJudgeEnabled(enabled: Boolean = true) {
+    private fun stubJudgeEnabled(enabled: Boolean = true, extendedReentry: Boolean = false) {
         every {
             configService.getTyped(ConfigKeys.GENERAL_NEXT_SPEAKER_JUDGE_ENABLED, "task-1")
         } returns enabled
+        // Default false keeps the strict one-shot re-entry so the pre-existing assertions below
+        // hold verbatim; the extended-budget tests opt in with extendedReentry = true.
+        every {
+            configService.getTyped(ConfigKeys.GENERAL_JUDGE_EXTENDED_REENTRY_ENABLED, "task-1")
+        } returns extendedReentry
     }
 
     private fun stubModel() {
@@ -198,6 +203,58 @@ class NextSpeakerJudgeGuardianTest {
             )
         )
 
+        assertTrue(decision is GuardianDecision.Incomplete)
+    }
+
+    @Test
+    fun `extended budget escalates once more when the turn is early and nothing was delivered`() = runBlocking {
+        // e2e regression (qwen3.5 on the 1260-run gate): 85 loop failures, 0 with any write,
+        // most dead by iteration 3 of 20 - a single nudge was not enough. With the extended budget
+        // on, an early undelivered stall gets one more re-entry whose nudge re-states the JSON
+        // envelope schema, instead of finalizing INCOMPLETE with iterations to spare.
+        stubJudgeEnabled(extendedReentry = true)
+        val decision = guardian().check(
+            ctx(
+                response = "Now let me find the exact line numbers.",
+                priorReentries = 1,
+                toolsUsed = listOf("read_file", "grep_search"),
+                toolsUsedSizeAtPriorReentry = 2 // no new tool call since the first nudge
+            )
+        )
+        assertTrue(decision is GuardianDecision.Reenter, "early + undelivered must escalate, not stop")
+        val nudge = (decision as GuardianDecision.Reenter).nudge
+        assertTrue(nudge.contains("\"actions\""), "the escalated nudge must re-state the JSON envelope schema")
+    }
+
+    @Test
+    fun `extended budget still stops INCOMPLETE once the extra re-entry is spent`() = runBlocking {
+        // Second escalation is the cap: at priorReentries=2 the budget is exhausted, so an
+        // undelivered turn must finalize INCOMPLETE and never spin forever.
+        stubJudgeEnabled(extendedReentry = true)
+        val decision = guardian().check(
+            ctx(
+                response = "Still looking for the right file.",
+                priorReentries = 2,
+                toolsUsed = listOf("read_file", "grep_search"),
+                toolsUsedSizeAtPriorReentry = 2
+            )
+        )
+        assertTrue(decision is GuardianDecision.Incomplete)
+    }
+
+    @Test
+    fun `extended budget does NOT escalate once the turn is past its early window`() = runBlocking {
+        // A turn that has already burned most of its iterations without delivering is stuck, not
+        // slow to start: the budget collapses to the strict one-shot, so this stalls to INCOMPLETE.
+        stubJudgeEnabled(extendedReentry = true)
+        val decision = guardian().check(
+            ctx(
+                response = "Now let me find the exact line numbers.",
+                priorReentries = 1,
+                toolsUsed = listOf("read_file", "grep_search"),
+                toolsUsedSizeAtPriorReentry = 2
+            ).copy(iteration = 40, maxIterations = 50) // 40 > 50*0.30 = 15 → past the early window
+        )
         assertTrue(decision is GuardianDecision.Incomplete)
     }
 

@@ -247,6 +247,17 @@ class CoreConnectionManager {
         val maxFileSizeBytes = configService.getTyped(ConfigKeys.MAX_FILE_SIZE).toLong() * 1024 * 1024
         val fileLimits = FileLimits(maxFileSize = maxFileSizeBytes)
 
+        // IDE-backed structural refactoring (PSI rename / find usages) when a Project is
+        // available; the text fallback engine handles files the IDE cannot resolve.
+        val structuralRefactorer = ideProject?.let { project ->
+            val sandbox = pl.jclab.refio.core.tools.PathSandbox.withConfig(projectRoot, configService)
+            PsiStructuralRefactorer(
+                project = project,
+                projectRoot = projectRoot.toAbsolutePath().normalize(),
+                fallback = pl.jclab.refio.core.tools.refactor.TextStructuralRefactorer(sandbox, fileLimits)
+            )
+        }
+
         val toolFactory = ToolFactory(
             projectRoot = projectRoot,
             toolRegistry = toolRegistry,
@@ -254,7 +265,8 @@ class CoreConnectionManager {
             configService = configService,
             promptsService = promptsService,
             taskRepository = taskRepository,
-            fileLimits = fileLimits
+            fileLimits = fileLimits,
+            structuralRefactorer = structuralRefactorer
         )
         val tools = toolFactory.createAllTools()
 

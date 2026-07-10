@@ -1,0 +1,18 @@
+{
+  "id": "sql-schema-index",
+  "category": "analysis",
+  "mode": "PLAN",
+  "description": "PLAN-mode: analyze a SQL schema's entities and relationships and name the foreign-key column that lacks a backing index.",
+  "max_iterations": 20,
+  "fixture": "fixtures/sql-schema",
+  "prompt_file": "prompts/sql-schema-index.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_output": { "regex": "customer_id" },
+    "file_unchanged": [
+      "db-schema.sql"
+    ],
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["The analysis describes the customers/orders/order_items relationships and identifies orders.customer_id as the foreign key lacking an index (join/N+1 risk), without editing the schema."]
+}

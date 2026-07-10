@@ -195,6 +195,19 @@ class SubagentRouterTest {
     inner class CrudOperationsTests {
 
         @Test
+        fun `create rejects names that escape the registry directory`() {
+            assertThrows<IllegalArgumentException> {
+                router.createSubagent(
+                    name = "../../outside",
+                    description = "Test",
+                    systemPrompt = "Test",
+                    scope = SubagentScope.PROJECT
+                )
+            }
+            assertTrue(Files.notExists(tempDir.resolve("outside.md")))
+        }
+
+        @Test
         fun `should create and find subagent`() {
             // When
             val created = router.createSubagent(

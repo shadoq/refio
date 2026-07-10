@@ -84,6 +84,13 @@ class SessionDebugExporter(
                 toolCallCount = subtasks.size,
                 contextOverflow = ContextOverflowTracker.didOverflow(taskId),
                 failureMarker = TurnFailureMarkerTracker.markerFor(taskId),
+                verification = TurnVerificationTracker.summaryFor(taskId).let {
+                    SessionDebugSnapshot.VerificationInfo(
+                        ran = it.ran,
+                        attempts = it.attempts,
+                        result = it.result,
+                    )
+                },
             ),
             finalOutput = finalOutput,
             subtasks = if (options.includeSubtasks) {

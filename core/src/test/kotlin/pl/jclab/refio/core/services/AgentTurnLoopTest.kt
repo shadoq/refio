@@ -36,6 +36,7 @@ import pl.jclab.refio.core.services.turn.TurnToolExecutor
 import pl.jclab.refio.core.config.ConfigKey
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertFalse
 
@@ -67,6 +68,10 @@ class AgentTurnLoopTest {
         // a fallback (native→JSON) would otherwise leak that state into later tests and flip their
         // native-vs-JSON path. Reset it so each test starts from a known "no fallbacks" baseline.
         NativeToolsFallbackTracker.clear()
+        // Verification trackers are process-global singletons keyed by taskId; reset so a
+        // verification test cannot leak its recorded summary/marker into later tests.
+        pl.jclab.refio.core.debug.TurnVerificationTracker.reset()
+        pl.jclab.refio.core.debug.TurnFailureMarkerTracker.reset()
         llmClient = mockk(relaxed = true)
         toolRegistry = mockk(relaxed = true)
         chatMessageRepository = mockk(relaxed = true)
@@ -127,7 +132,8 @@ class AgentTurnLoopTest {
 
     private fun buildAgentTurnLoop(
         taskVerifier: TaskVerifier,
-        completionGuardians: GuardianRegistry = GuardianRegistry()
+        completionGuardians: GuardianRegistry = GuardianRegistry(),
+        turnVerifier: pl.jclab.refio.core.services.turn.TurnVerifier? = null
     ): AgentTurnLoop {
         val tokenEstimator = pl.jclab.refio.core.services.PromptTokenEstimator()
 
@@ -197,7 +203,8 @@ class AgentTurnLoopTest {
             conversationCompactor = null,
             llmRetryHandler = null,
             workingMemoryIntegration = null,
-            completionGuardians = completionGuardians
+            completionGuardians = completionGuardians,
+            turnVerifier = turnVerifier
         )
     }
 
@@ -1012,6 +1019,54 @@ class AgentTurnLoopTest {
                     subtaskId = any(), source = any(), kwargs = any()
                 )
             }
+        }
+
+        @Test
+        fun `empty content give-up after a write already landed finalizes SUCCESS, not failure`() = runTest {
+            // e2e regression (qwen3.5 on the 1260-run gate): a WRITE tool ran on iter 1 (the file
+            // deliverable landed), then the model emitted empty JSON envelopes it could not recover
+            // from. The empty-content GiveUp path used to report FAILURE unconditionally, so a
+            // completed edit was recorded as a failed turn purely on the trailing sign-off lapse.
+            // With a deliverable on disk the turn must finalize SUCCESS.
+            val advanceTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "advance_code_editing"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.WRITE
+            }
+            every { toolRegistry.getTool("advance_code_editing") } returns advanceTool
+            coEvery { toolExecutor.executeTool(any(), any()) } returns
+                ToolResult(success = true, output = "edited Config.kt")
+
+            fun empty() = LLMResponse(
+                content = "",
+                usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
+                model = "qwen3.5:35b", provider = "ollama", cost = 0.0, finishReason = "stop"
+            )
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                // iter 1: a real WRITE tool call - the deliverable lands (writeToolsExecutedInTurn>0).
+                createLLMResponse("""{"response":"editing the constant","actions":[{"tool":"advance_code_editing","arguments":{"path":"Config.kt","instructions":"set MAX_RETRIES to 5"}}]}"""),
+                // iters 2-4: empty content -> nudge, nudge, then GiveUp (nudgeCount>=2).
+                empty(), empty(), empty()
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Set MAX_RETRIES to 5",
+                mode = TaskMode.AGENT
+            )
+
+            assertTrue(result.success, "a landed edit + empty-envelope give-up must finalize SUCCESS: ${result.response}")
+            assertFalse(result.incomplete, "the deliverable was produced; the turn must not be a failure")
+            assertFalse(
+                result.response.contains("could not recover", ignoreCase = true),
+                "must not surface the give-up error text when a deliverable landed, got: ${result.response}",
+            )
         }
 
         @Test
@@ -1859,6 +1914,180 @@ class AgentTurnLoopTest {
         @Test
         fun `does not match a transient timeout`() {
             assertFalse(agentTurnLoop.isNativeToolTemplateParseError(RuntimeException("request timed out")))
+        }
+    }
+
+    @Nested
+    inner class DeterministicVerificationTests {
+
+        /** Fake runner: records invocations, replays queued results (last one repeats). */
+        inner class RecordingRunner(
+            vararg executions: pl.jclab.refio.core.services.turn.VerificationExecution
+        ) : pl.jclab.refio.core.services.turn.VerificationCommandRunner {
+            val invocations = mutableListOf<String>()
+            private val queue = executions.toMutableList()
+
+            override fun run(
+                command: String,
+                workingDir: java.io.File,
+                timeoutSeconds: Int
+            ): pl.jclab.refio.core.services.turn.VerificationExecution {
+                invocations.add(command)
+                return if (queue.size > 1) queue.removeAt(0) else queue.first()
+            }
+        }
+
+        private fun verifierWith(runner: RecordingRunner): pl.jclab.refio.core.services.turn.TurnVerifier {
+            // Explicit verify.command so no marker files are needed; defaults from setup() give
+            // verify.enabled=true and verify.max_repair_rounds=2.
+            every { configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.VERIFY_COMMAND, any()) } returns "fake-verify"
+            return pl.jclab.refio.core.services.turn.TurnVerifier(
+                configService = configService,
+                projectRoot = java.nio.file.Paths.get("/test/project"),
+                runner = runner
+            )
+        }
+
+        private fun stubWriteTool() {
+            val editTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "advance_code_editing"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.WRITE
+            }
+            every { toolRegistry.getTool("advance_code_editing") } returns editTool
+            coEvery { toolExecutor.executeTool(any(), any()) } returns
+                ToolResult(success = true, output = "edited Config.kt")
+        }
+
+        private fun stubLlmResponses(vararg responses: LLMResponse) {
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany responses.toList()
+        }
+
+        private val editCall = """{"response":"editing","actions":[{"tool":"advance_code_editing","arguments":{"path":"Config.kt","instructions":"set MAX_RETRIES to 5"}}]}"""
+
+        @Test
+        fun `a turn without file writes is never verified`() = runTest {
+            // Guard against the known regression: post-deliverable self-verification must never
+            // fire for a purely conversational turn - the build command must not even start.
+            val runner = RecordingRunner(
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 1, output = "e: broken")
+            )
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), turnVerifier = verifierWith(runner))
+            stubLlmResponses(createLLMResponse("""{"actions":[],"response":"Here is the explanation you asked for."}"""))
+
+            val result = loop.runTurn(taskId = testTaskId, userInput = "Explain the config", mode = TaskMode.AGENT)
+
+            assertTrue(result.success)
+            assertTrue(runner.invocations.isEmpty(), "no file writes -> verification must not run")
+            assertNull(result.verification)
+            assertFalse(pl.jclab.refio.core.debug.TurnVerificationTracker.summaryFor(testTaskId).ran)
+        }
+
+        @Test
+        fun `passing verification finalizes success with a recorded attempt`() = runTest {
+            stubWriteTool()
+            val runner = RecordingRunner(
+                // 1st run: the pre-write baseline (green project). 2nd: the finalization verify.
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 0, output = "BUILD SUCCESSFUL"),
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 0, output = "BUILD SUCCESSFUL")
+            )
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), turnVerifier = verifierWith(runner))
+            stubLlmResponses(
+                createLLMResponse(editCall),
+                createLLMResponse("""{"actions":[],"response":"Change applied."}""")
+            )
+
+            val result = loop.runTurn(taskId = testTaskId, userInput = "Set MAX_RETRIES to 5", mode = TaskMode.AGENT)
+
+            assertTrue(result.success, "verified deliverable must finalize SUCCESS: ${result.response}")
+            assertEquals(2, runner.invocations.size, "pre-write baseline + finalization verify = two runs")
+            assertNotNull(result.verification)
+            assertTrue(result.verification!!.ran)
+            assertEquals(1, result.verification!!.attempts, "the baseline run must not count as a verification attempt")
+            assertEquals("PASSED", result.verification!!.result)
+        }
+
+        @Test
+        fun `failed verification triggers a repair round that can then pass`() = runTest {
+            stubWriteTool()
+            val runner = RecordingRunner(
+                // 1st run: the pre-write baseline (green project), so the finalization failure is
+                // attributed to the agent's change and a repair round is triggered.
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 0, output = "BUILD SUCCESSFUL"),
+                pl.jclab.refio.core.services.turn.VerificationExecution(
+                    exitCode = 1,
+                    output = "e: Config.kt:12:5 Unresolved reference: MAX_RETRY\nBUILD FAILED"
+                ),
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 0, output = "BUILD SUCCESSFUL")
+            )
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), turnVerifier = verifierWith(runner))
+            stubLlmResponses(
+                createLLMResponse(editCall),
+                createLLMResponse("""{"actions":[],"response":"Change applied."}"""),
+                createLLMResponse(editCall),
+                createLLMResponse("""{"actions":[],"response":"Fixed the typo, change applied."}""")
+            )
+
+            val result = loop.runTurn(taskId = testTaskId, userInput = "Set MAX_RETRIES to 5", mode = TaskMode.AGENT)
+
+            assertTrue(result.success, "repaired + re-verified turn must finalize SUCCESS: ${result.response}")
+            assertEquals(3, runner.invocations.size, "baseline + failing verify + re-verify after repair = three runs")
+            assertEquals(2, result.verification!!.attempts)
+            assertEquals("PASSED", result.verification!!.result)
+            // The repair message must carry only the extracted error lines, not the full build log.
+            verify {
+                chatMessageRepository.create(
+                    testTaskId, MessageRole.SYSTEM,
+                    match {
+                        it.startsWith("Verification failed (exit 1)") &&
+                            it.contains("Unresolved reference: MAX_RETRY") &&
+                            it.contains("Fix them.")
+                    },
+                    any(), any(), any(), any(), any(), any()
+                )
+            }
+        }
+
+        @Test
+        fun `exhausted repair rounds end the turn as verification failure, never faked success`() = runTest {
+            stubWriteTool()
+            val runner = RecordingRunner(
+                // 1st run: the pre-write baseline (green project), so the finalization failures are
+                // attributed to the agent. The repeated failure below then drives the repair loop.
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 0, output = "BUILD SUCCESSFUL"),
+                pl.jclab.refio.core.services.turn.VerificationExecution(
+                    exitCode = 1,
+                    output = "irrelevant build chatter\ne: Config.kt:12:5 Unresolved reference: MAX_RETRY"
+                )
+            )
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), turnVerifier = verifierWith(runner))
+            stubLlmResponses(
+                createLLMResponse(editCall),
+                createLLMResponse("""{"actions":[],"response":"Change applied."}"""),
+                createLLMResponse("""{"actions":[],"response":"Tried a fix, change applied."}"""),
+                createLLMResponse("""{"actions":[],"response":"Tried another fix, change applied."}""")
+            )
+
+            val result = loop.runTurn(taskId = testTaskId, userInput = "Set MAX_RETRIES to 5", mode = TaskMode.AGENT)
+
+            assertFalse(result.success, "an unverifiable deliverable must never be reported as success")
+            // baseline + (initial attempt + 2 repair rounds = 3 executions), then stop.
+            assertEquals(4, runner.invocations.size, "baseline + round-capped repair loop = four runs")
+            assertEquals(3, result.verification!!.attempts)
+            assertEquals("FAILED", result.verification!!.result)
+            assertTrue(result.response.contains("Verification failed"))
+            assertTrue(result.response.contains("Unresolved reference: MAX_RETRY"))
+            assertFalse(result.response.contains("irrelevant build chatter"), "full build output must never surface")
+            assertEquals(
+                pl.jclab.refio.core.debug.TurnFailureMarkerTracker.VERIFICATION_FAILED,
+                pl.jclab.refio.core.debug.TurnFailureMarkerTracker.markerFor(testTaskId)
+            )
         }
     }
 }

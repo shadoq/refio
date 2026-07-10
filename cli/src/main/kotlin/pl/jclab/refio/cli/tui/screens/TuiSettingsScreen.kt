@@ -2,6 +2,7 @@ package pl.jclab.refio.cli.tui.screens
 
 import com.github.ajalt.mordant.rendering.TextStyles.*
 import com.github.ajalt.mordant.terminal.Terminal
+import java.util.Locale
 import pl.jclab.refio.cli.tui.rendering.TuiColors
 import pl.jclab.refio.cli.tui.rendering.TuiRenderBuffer
 import pl.jclab.refio.cli.tui.state.TuiState
@@ -19,6 +20,11 @@ import pl.jclab.refio.cli.tui.state.TuiViewModel
  * [1] General    [2] Providers  [3] Models    [4] Prompts
  * [5] Context    [6] MCP        [7] Docs      [8] Tools
  * [9] Subagents  [10] Advanced  [11] Theme
+ *
+ * The field list for each tab is built by [buildSpec], a pure function of the
+ * current config. Both the renderer and the input handler derive fields from it
+ * ([fieldsFor]), so navigation and rendering can never disagree about which
+ * field is at which index.
  */
 object TuiSettingsScreen {
 
@@ -27,29 +33,68 @@ object TuiSettingsScreen {
         "MCP", "Docs", "Tools", "Subagents", "Advanced", "Theme"
     )
 
-    /** Cached config sections - refreshed on tab switch. */
-    private var cachedSection: String = ""
-    private var cachedConfig: Map<String, String> = emptyMap()
     private var viewModel: TuiViewModel? = null
 
-    /** Fields in current tab for navigation. Each entry = (section.key, label, type). */
-    private var currentFields: List<SettingsField> = emptyList()
+    /** Prefix marking fields persisted through the tool-permissions API, not raw config. */
+    const val TOOL_PERMISSION_PREFIX = "toolperm."
 
     data class SettingsField(
-        val sectionKey: String, // e.g. "general.streaming_enabled"
+        val sectionKey: String, // e.g. "general.streaming_enabled" or "toolperm.read_file.plan"
         val label: String,
-        val type: FieldType
+        val type: FieldType,
+        /** Effective default shown when the config has no explicit value. */
+        val default: String = "",
+        /** Allowed values for CYCLE fields; Enter advances to the next one. */
+        val options: List<String> = emptyList(),
+        /** True for fields that make a provider "configured" (API key / explicit endpoint). */
+        val credential: Boolean = false
     )
 
-    enum class FieldType { BOOL, TEXT }
+    enum class FieldType { BOOL, TEXT, CYCLE }
 
     fun setViewModel(vm: TuiViewModel) {
         viewModel = vm
     }
 
+    // ── Spec model ───────────────────────────────────────────────────────
+    // One item per rendered line (except ToolRowItem which holds two fields on
+    // one line). Values are resolved at build time from a single config snapshot.
+
+    private sealed interface Item
+    private data class HeaderItem(val text: String) : Item
+    private object BlankItem : Item
+    private data class TextItem(val text: String) : Item
+    private data class FieldItem(val field: SettingsField, val display: String, val checked: Boolean? = null) : Item
+    private data class ProviderItem(val name: String, val configured: Boolean) : Item
+    private data class ToolRowItem(
+        val tool: String,
+        val plan: SettingsField,
+        val agent: SettingsField,
+        val planValue: String,
+        val agentValue: String
+    ) : Item
+
+    private fun Item.fields(): List<SettingsField> = when (this) {
+        is FieldItem -> listOf(field)
+        is ToolRowItem -> listOf(plan, agent)
+        else -> emptyList()
+    }
+
+    /** Navigable fields of a tab, in render order. Safe to call from the input thread. */
+    fun fieldsFor(tabIndex: Int): List<SettingsField> = buildSpec(tabIndex).flatMap { it.fields() }
+
+    /** Field at [index] on the given tab, or null when out of range. */
+    fun getSelectedField(tabIndex: Int, index: Int): SettingsField? = fieldsFor(tabIndex).getOrNull(index)
+
+    /** Number of navigable fields on the given tab. */
+    fun fieldCount(tabIndex: Int): Int = fieldsFor(tabIndex).size
+
+    // ── Rendering ────────────────────────────────────────────────────────
+
     /**
      * Render settings screen into a list of exactly [contentHeight] lines,
-     * each padded to [width] visible characters.
+     * each padded to [width] visible characters. Content longer than the
+     * screen scrolls so the selected field stays visible.
      */
     fun renderToLines(state: TuiState, width: Int, contentHeight: Int): List<String> {
         val buf = TuiRenderBuffer(width, contentHeight)
@@ -57,7 +102,6 @@ object TuiSettingsScreen {
         buf.addLine(bold("Settings"))
         buf.addLine(TuiColors.border("─".repeat((width - 2).coerceAtLeast(10))))
 
-        // Settings tab bar
         val tabBar = settingsTabs.mapIndexed { i, name ->
             val label = " ${i + 1}:$name "
             if (i == state.settingsTab) TuiColors.tabActive(label) else TuiColors.tabInactive(label)
@@ -65,39 +109,100 @@ object TuiSettingsScreen {
         buf.addLine(tabBar)
         buf.addLine()
 
-        // Load config for active tab
-        val activeTab = settingsTabs.getOrElse(state.settingsTab) { "General" }
-        val section = tabToSection(activeTab)
-        if (section != cachedSection) {
-            cachedSection = section
-            cachedConfig = viewModel?.getConfigSection(section) ?: emptyMap()
+        val footer = footerLines(state)
+        val headerLines = 4
+        val window = (contentHeight - headerLines - footer.size).coerceAtLeast(1)
+
+        val spec = buildSpec(state.settingsTab)
+        val content = mutableListOf<String>()
+        var cursorLine = -1
+        var fieldIdx = 0
+        for (item in spec) {
+            when (item) {
+                is HeaderItem -> content.add("  ${TuiColors.highlight(item.text)}")
+                is BlankItem -> content.add("")
+                is TextItem -> content.add(item.text)
+                is ProviderItem -> {
+                    val status = if (item.configured) TuiColors.statusSuccess("●") else TuiColors.muted("○")
+                    content.add("  $status ${TuiColors.highlight(item.name)}")
+                }
+                is FieldItem -> {
+                    if (fieldIdx == state.settingsSelectedField) cursorLine = content.size
+                    content.add(renderFieldLine(item, fieldIdx == state.settingsSelectedField))
+                    fieldIdx++
+                }
+                is ToolRowItem -> {
+                    val planSelected = fieldIdx == state.settingsSelectedField
+                    val agentSelected = fieldIdx + 1 == state.settingsSelectedField
+                    if (planSelected || agentSelected) cursorLine = content.size
+                    val cursorPlan = if (planSelected) ">" else " "
+                    val cursorAgent = if (agentSelected) ">" else " "
+                    content.add("  $cursorPlan ${item.tool.padEnd(26)} ${permissionIcon(item.planValue)}${cursorAgent.padStart(5)} ${permissionIcon(item.agentValue)}")
+                    fieldIdx += 2
+                }
+            }
         }
 
-        // Build and render settings content with field tracking
-        currentFields = emptyList()
-        renderSettingsContent(buf, activeTab, cachedConfig, state)
-
-        buf.addLine()
-        if (state.settingsEditingField != null) {
-            buf.addLine(TuiColors.accent("Editing: ") + state.settingsEditBuffer + TuiColors.muted("_"))
-            buf.addLine(TuiColors.muted("[Enter] Save  [Esc] Cancel"))
-        } else {
-            buf.addLine(TuiColors.muted("Nav: [←→] tab  [↑↓] field  [Enter] toggle/edit  [R]eset [E]xport [L]oad  Esc=back"))
+        // Scroll the content window so the cursor line is always visible.
+        val offset = when {
+            cursorLine < 0 -> 0
+            cursorLine < window -> 0
+            else -> (cursorLine - window + 1).coerceAtMost((content.size - window).coerceAtLeast(0))
         }
+        val visible = content.drop(offset).take(window).toMutableList()
+        if (offset > 0 && visible.isNotEmpty()) {
+            visible[0] = TuiColors.muted("  ↑ $offset more")
+        }
+        val below = content.size - offset - window
+        if (below > 0 && visible.isNotEmpty()) {
+            visible[visible.size - 1] = TuiColors.muted("  ↓ $below more")
+        }
+        visible.forEach { buf.addLine(it) }
+
+        // Pin the footer to the bottom of the screen.
+        repeat((window - visible.size).coerceAtLeast(0)) { buf.addLine() }
+        footer.forEach { buf.addLine(it) }
 
         return buf.getLines()
     }
 
-    fun render(terminal: Terminal, state: TuiState, contentHeight: Int) {
-        for (line in renderToLines(state, 200, contentHeight)) {
-            terminal.println(line)
+    private fun footerLines(state: TuiState): List<String> = when {
+        state.settingsEditingField != null -> listOf(
+            TuiColors.accent("Editing: ") + state.settingsEditBuffer + TuiColors.muted("_"),
+            TuiColors.muted("[Enter] Save  [Esc] Cancel")
+        )
+        state.settingsResetArmed -> listOf(
+            "",
+            TuiColors.statusFailed("Press R again to reset ALL settings, Esc to cancel")
+        )
+        else -> listOf(
+            "",
+            TuiColors.muted("Nav: [←→] tab  [↑↓] field  [Enter] toggle/edit  [r]eset [e]xport [l]oad  Esc=back")
+        )
+    }
+
+    private fun renderFieldLine(item: FieldItem, selected: Boolean): String {
+        val cursor = if (selected) "> " else "  "
+        return when (item.field.type) {
+            FieldType.BOOL -> {
+                val icon = if (item.checked == true) TuiColors.statusSuccess("[x]") else TuiColors.muted("[ ]")
+                "  ${cursor}$icon ${item.field.label}"
+            }
+            else -> "  ${cursor}${item.field.label.padEnd(30)} ${TuiColors.accent(item.display)}"
         }
     }
 
-    /** Force config reload on next render. */
-    fun invalidateCache() {
-        cachedSection = ""
-        cachedConfig = emptyMap()
+    private fun permissionIcon(value: String): String = when (value.uppercase()) {
+        "ON", "TRUE" -> TuiColors.statusSuccess("ON ")
+        "ASK" -> TuiColors.statusPending("ASK")
+        else -> TuiColors.statusFailed("OFF")
+    }
+
+    fun render(terminal: Terminal, state: TuiState, contentHeight: Int) {
+        val width = terminal.size.width.takeIf { it > 0 } ?: 120
+        for (line in renderToLines(state, width, contentHeight)) {
+            terminal.println(line)
+        }
     }
 
     /**
@@ -119,99 +224,124 @@ object TuiSettingsScreen {
         else -> "general"
     }
 
-    private fun renderSettingsContent(buf: TuiRenderBuffer, tab: String, config: Map<String, String>, state: TuiState) {
-        when (tab) {
-            "General" -> renderGeneral(buf, config)
-            "Providers" -> renderProviders(buf, config)
-            "Models" -> renderModels(buf, config)
-            "Prompts" -> renderPrompts(buf, config)
-            "Context" -> renderContext(buf, config)
-            "MCP" -> renderMcp(buf, config)
-            "Docs" -> renderDocs(buf, config)
-            "Tools" -> renderTools(buf, config)
-            "Subagents" -> renderSubagents(buf, config)
-            "Advanced" -> renderAdvanced(buf, config)
-            "Theme" -> renderTheme(buf)
+    // ── Spec builders ────────────────────────────────────────────────────
+
+    private fun buildSpec(tabIndex: Int): List<Item> {
+        val tab = settingsTabs.getOrElse(tabIndex) { "General" }
+        val section = tabToSection(tab)
+        val config = viewModel?.getConfigSection(section) ?: emptyMap()
+        return when (tab) {
+            "General" -> generalSpec(section, config)
+            "Providers" -> providersSpec(section, config)
+            "Models" -> modelsSpec(section, config)
+            "Prompts" -> promptsSpec(config)
+            "Context" -> contextSpec(section, config)
+            "MCP" -> mcpSpec(config)
+            "Docs" -> docsSpec(config)
+            "Tools" -> toolsSpec()
+            "Subagents" -> subagentsSpec(section, config)
+            "Advanced" -> advancedSpec(section, config)
+            "Theme" -> themeSpec()
+            else -> emptyList()
         }
     }
 
-    /** Get the field at the currently selected index. */
-    fun getSelectedField(index: Int): SettingsField? = currentFields.getOrNull(index)
+    private fun boolItem(section: String, key: String, label: String, config: Map<String, String>): FieldItem {
+        val checked = config[key]?.lowercase() in listOf("true", "1", "yes")
+        return FieldItem(SettingsField("$section.$key", label, FieldType.BOOL), display = "", checked = checked)
+    }
 
-    /** Number of navigable fields in current tab. */
-    fun fieldCount(): Int = currentFields.size
+    private fun valueItem(
+        section: String,
+        key: String,
+        label: String,
+        config: Map<String, String>,
+        default: String,
+        credential: Boolean = false
+    ): FieldItem {
+        val raw = config[key]?.ifBlank { null }?.takeIf { it != "null" }
+        // Mask only values that actually come from the config; defaults and
+        // placeholders like "(not set)" are never masked.
+        val display = when {
+            raw != null && key.contains("api_key") -> maskSecret(raw)
+            raw != null -> raw
+            default.isNotBlank() -> TuiColors.muted("$default (default)")
+            else -> TuiColors.muted("(not set)")
+        }
+        return FieldItem(
+            SettingsField("$section.$key", label, FieldType.TEXT, default = default, credential = credential),
+            display = display
+        )
+    }
+
+    private fun maskSecret(value: String): String =
+        if (value.length > 8) value.take(4) + "****" + value.takeLast(4) else "****"
 
     // ── General ──────────────────────────────────────────────────────────
-    // Keys from ConfigService: general.format_markdown, general.streaming_enabled, general.advanced_view
-    // After getConfig("general") → short keys: format_markdown, streaming_enabled, advanced_view
 
-    private fun renderGeneral(buf: TuiRenderBuffer, config: Map<String, String>) {
-        buf.addLine("  ${TuiColors.highlight("Display")}")
-        renderBool(buf, "format_markdown", "Markdown rendering", config)
-        renderBool(buf, "streaming_enabled", "Stream responses", config)
-        renderBool(buf, "advanced_view", "Advanced view (show all tabs)", config)
-        buf.addLine()
-        buf.addLine("  ${TuiColors.highlight("Execution")}")
-        renderBool(buf, "thinking_enabled", "Thinking mode", config)
-        renderBool(buf, "no_egress_enabled", "No-egress (block network)", config)
-        renderValue(buf, "execution_mode", "Execution mode (AUTO/INTERACTIVE)", config, "AUTO")
-    }
+    private fun generalSpec(section: String, config: Map<String, String>): List<Item> = listOf(
+        HeaderItem("Display"),
+        boolItem(section, "format_markdown", "Markdown rendering", config),
+        boolItem(section, "streaming_enabled", "Stream responses", config),
+        boolItem(section, "advanced_view", "Advanced view (show all tabs)", config),
+        BlankItem,
+        HeaderItem("Execution"),
+        boolItem(section, "thinking_enabled", "Thinking mode", config),
+        boolItem(section, "no_egress_enabled", "No-egress (block network)", config),
+        valueItem(section, "execution_mode", "Execution mode (AUTO/INTERACTIVE)", config, "AUTO")
+    )
 
     // ── Providers ────────────────────────────────────────────────────────
-    // Keys from ConfigService: providers.ollama.ollama_endpoint, providers.anthropic.anthropic_api_key, etc.
-    // After getConfig("providers") → short keys: ollama.ollama_endpoint, anthropic.anthropic_api_key, etc.
 
-    private fun renderProviders(buf: TuiRenderBuffer, config: Map<String, String>) {
-        val providers = listOf(
-            "Ollama" to listOf(
-                "ollama.ollama_endpoint" to "Endpoint",
-                "ollama.ollama_context_size" to "Context size",
-                "ollama.ollama_keep_alive" to "Keep alive (s)"
-            ),
-            "Anthropic" to listOf("anthropic.anthropic_api_key" to "API Key"),
-            "OpenAI" to listOf("openai.openai_api_key" to "API Key"),
-            "OpenRouter" to listOf("openrouter.openrouter_api_key" to "API Key"),
-            "Gemini" to listOf("gemini.gemini_api_key" to "API Key"),
-            "LM Studio" to listOf(
-                "lmstudio.lmstudio_base_url" to "Base URL",
-                "lmstudio.lmstudio_api_key" to "API Key",
-                "lmstudio.lmstudio_context_size" to "Context size"
-            ),
-            "Custom OpenAI" to listOf(
-                "generic_openai.generic_openai_base_url" to "Base URL",
-                "generic_openai.generic_openai_api_key" to "API Key",
-                "generic_openai.generic_openai_model" to "Model"
-            ),
-            "Z.AI" to listOf(
-                "zai.zai_base_url" to "Base URL",
-                "zai.zai_api_key" to "API Key"
-            )
+    private data class ProviderFieldDef(val key: String, val label: String, val credential: Boolean = false, val default: String = "")
+
+    private val providerDefs: List<Pair<String, List<ProviderFieldDef>>> = listOf(
+        "Ollama" to listOf(
+            ProviderFieldDef("ollama.ollama_endpoint", "Endpoint", credential = true, default = "http://localhost:11434"),
+            ProviderFieldDef("ollama.ollama_context_size", "Context size"),
+            ProviderFieldDef("ollama.ollama_keep_alive", "Keep alive (s)")
+        ),
+        "Anthropic" to listOf(ProviderFieldDef("anthropic.anthropic_api_key", "API Key", credential = true)),
+        "OpenAI" to listOf(ProviderFieldDef("openai.openai_api_key", "API Key", credential = true)),
+        "OpenRouter" to listOf(ProviderFieldDef("openrouter.openrouter_api_key", "API Key", credential = true)),
+        "Gemini" to listOf(ProviderFieldDef("gemini.gemini_api_key", "API Key", credential = true)),
+        "LM Studio" to listOf(
+            ProviderFieldDef("lmstudio.lmstudio_base_url", "Base URL", credential = true),
+            ProviderFieldDef("lmstudio.lmstudio_api_key", "API Key"),
+            ProviderFieldDef("lmstudio.lmstudio_context_size", "Context size")
+        ),
+        "Custom OpenAI" to listOf(
+            ProviderFieldDef("generic_openai.generic_openai_base_url", "Base URL", credential = true),
+            ProviderFieldDef("generic_openai.generic_openai_api_key", "API Key"),
+            ProviderFieldDef("generic_openai.generic_openai_model", "Model")
+        ),
+        "Z.AI" to listOf(
+            ProviderFieldDef("zai.zai_base_url", "Base URL"),
+            ProviderFieldDef("zai.zai_api_key", "API Key", credential = true)
         )
-        for ((name, fields) in providers) {
-            val hasKey = fields.any { (key, _) ->
-                val v = config[key] ?: ""
-                v.isNotBlank() && v != "null"
+    )
+
+    private fun providersSpec(section: String, config: Map<String, String>): List<Item> {
+        val items = mutableListOf<Item>()
+        for ((name, fields) in providerDefs) {
+            // A provider counts as configured only when a credential field
+            // (API key, or explicit endpoint for local providers) is set.
+            val configured = fields.any { def ->
+                def.credential && (config[def.key]?.takeIf { it.isNotBlank() && it != "null" } != null)
             }
-            val status = if (hasKey) TuiColors.statusSuccess("●") else TuiColors.muted("○")
-            buf.addLine("  $status ${TuiColors.highlight(name)}")
-            for ((key, label) in fields) {
-                val value = config[key] ?: ""
-                val display = if (key.contains("api_key") && value.length > 8) {
-                    value.take(4) + "****" + value.takeLast(4)
-                } else value.ifBlank { TuiColors.muted("(not set)") }
-                renderValue(buf, key, label, config, "(not set)")
+            items.add(ProviderItem(name, configured))
+            for (def in fields) {
+                items.add(valueItem(section, def.key, def.label, config, def.default, def.credential))
             }
         }
+        return items
     }
 
     // ── Models ───────────────────────────────────────────────────────────
-    // Keys from ConfigService:
-    //   default_model.chat, default_model.plan, default_model.agent, default_model.weak
-    //   models.embedding_model, models.visibility
-    // After getConfig("default_model") → short keys: chat, plan, agent, weak
 
-    private fun renderModels(buf: TuiRenderBuffer, config: Map<String, String>) {
-        buf.addLine("  ${TuiColors.highlight("Model Assignments (Enter to edit)")}")
+    private fun modelsSpec(section: String, config: Map<String, String>): List<Item> {
+        val items = mutableListOf<Item>()
+        items.add(HeaderItem("Model Assignments (Enter to edit)"))
         val assignments = listOf(
             "chat" to "Default (chat)",
             "plan" to "Planning",
@@ -219,78 +349,57 @@ object TuiSettingsScreen {
             "weak" to "Auxiliary (summaries)"
         )
         for ((key, label) in assignments) {
-            renderModelAssignment(buf, key, label, config)
+            val raw = config[key]?.ifBlank { null }
+            val display = if (raw != null) formatModelValue(raw) else TuiColors.muted("(auto)")
+            items.add(FieldItem(SettingsField("$section.$key", label, FieldType.TEXT), display = display))
         }
-        buf.addLine()
+        items.add(BlankItem)
 
-        // Embedding model is in "models" section
         val modelsConfig = viewModel?.getConfigSection("models") ?: emptyMap()
-        buf.addLine("  ${TuiColors.highlight("Embedding")}")
-        renderValueFrom(buf, "models", "embedding_model", "Embedding model", modelsConfig, "(auto)")
+        items.add(HeaderItem("Embedding"))
+        items.add(valueItem("models", "embedding_model", "Embedding model", modelsConfig, "(auto)"))
+        items.add(BlankItem)
 
-        buf.addLine()
-
-        // Available models table
-        buf.addLine("  ${TuiColors.highlight("Available Models")}  ${TuiColors.muted("[F] Refresh from providers")}")
+        items.add(TextItem("  ${TuiColors.highlight("Available Models")}  ${TuiColors.muted("[F] Refresh from providers")}"))
         val models = cachedModels
         if (models == null) {
-            buf.addLine("    ${TuiColors.muted("Press [F] to load models from providers")}")
+            items.add(TextItem("    ${TuiColors.muted("Press [F] to load models from providers")}"))
         } else if (models.isEmpty()) {
-            buf.addLine("    ${TuiColors.muted("No models found. Check provider configuration.")}")
+            items.add(TextItem("    ${TuiColors.muted("No models found. Check provider configuration.")}"))
         } else {
-            // Table header
             val provCol = 12
             val nameCol = 30
             val ctxCol = 10
             val priceCol = 14
             val visCol = 7
             val header = "    ${"Provider".padEnd(provCol)} ${"Model".padEnd(nameCol)} ${"Context".padEnd(ctxCol)} ${"Price IN".padEnd(priceCol)} ${"Price OUT".padEnd(priceCol)} ${"Vis".padEnd(visCol)}"
-            buf.addLine(TuiColors.muted(header))
-            buf.addLine(TuiColors.muted("    ${"─".repeat(provCol + nameCol + ctxCol + priceCol * 2 + visCol + 5)}"))
-
+            items.add(TextItem(TuiColors.muted(header)))
+            items.add(TextItem(TuiColors.muted("    ${"─".repeat(provCol + nameCol + ctxCol + priceCol * 2 + visCol + 5)}")))
             for (model in models.take(30)) {
                 val vis = if (model.showInDropdown) TuiColors.statusSuccess("✓") else TuiColors.muted("·")
                 val ctx = formatContextSize(model.contextSize)
-                val priceIn = model.pricing?.let { formatPrice(it.inputPer1M) } ?: TuiColors.muted("—")
-                val priceOut = model.pricing?.let { formatPrice(it.outputPer1M) } ?: TuiColors.muted("—")
+                val priceIn = model.pricing?.let { formatPrice(it.inputPer1M) } ?: TuiColors.muted("-")
+                val priceOut = model.pricing?.let { formatPrice(it.outputPer1M) } ?: TuiColors.muted("-")
                 val provDisplay = model.provider.take(provCol).padEnd(provCol)
                 val nameDisplay = model.id.take(nameCol).padEnd(nameCol)
-                buf.addLine("    $provDisplay ${TuiColors.accent(nameDisplay)} ${ctx.padEnd(ctxCol)} ${priceIn.padEnd(priceCol)} ${priceOut.padEnd(priceCol)} $vis")
+                items.add(TextItem("    $provDisplay ${TuiColors.accent(nameDisplay)} ${ctx.padEnd(ctxCol)} ${priceIn.padEnd(priceCol)} ${priceOut.padEnd(priceCol)} $vis"))
             }
             if (models.size > 30) {
-                buf.addLine("    ${TuiColors.muted("... and ${models.size - 30} more (${models.size} total)")}")
+                items.add(TextItem("    ${TuiColors.muted("... and ${models.size - 30} more (${models.size} total)")}"))
             }
         }
+        items.add(BlankItem)
 
-        buf.addLine()
-
-        // Model visibility overrides
-        buf.addLine("  ${TuiColors.highlight("Model Visibility (Enter to toggle)")}")
+        items.add(HeaderItem("Model Visibility (Enter to toggle)"))
         val visibilityKeys = modelsConfig.keys.filter { it.startsWith("visibility_") }.sorted()
         if (visibilityKeys.isEmpty()) {
-            buf.addLine("    ${TuiColors.muted("All models visible (no overrides)")}")
+            items.add(TextItem("    ${TuiColors.muted("All models visible (no overrides)")}"))
         } else {
             for (key in visibilityKeys.take(20)) {
-                val modelName = key.removePrefix("visibility_")
-                renderBoolFrom(buf, "models", key, modelName, modelsConfig)
+                items.add(boolItem("models", key, key.removePrefix("visibility_"), modelsConfig))
             }
         }
-    }
-
-    /**
-     * Render model assignment value, parsing JSON format to human-readable provider/model.
-     */
-    private fun renderModelAssignment(buf: TuiRenderBuffer, key: String, label: String, config: Map<String, String>) {
-        val fieldIdx = currentFields.size
-        currentFields = currentFields + SettingsField("$cachedSection.$key", label, FieldType.TEXT)
-        val rawValue = config[key]?.ifBlank { null }
-        val display = if (rawValue != null) {
-            formatModelValue(rawValue)
-        } else {
-            "(auto)"
-        }
-        val cursor = if (fieldIdx == viewModel?.stateFlow?.value?.settingsSelectedField) "> " else "  "
-        buf.addLine("  ${cursor}${label.padEnd(30)} ${TuiColors.accent(display)}")
+        return items
     }
 
     /**
@@ -302,7 +411,6 @@ object TuiSettingsScreen {
     private fun formatModelValue(value: String): String {
         val trimmed = value.trim()
         if (trimmed.startsWith("{")) {
-            // Parse JSON manually (avoid Gson dependency in render)
             val modelId = extractJsonField(trimmed, "modelId")
             val provider = extractJsonField(trimmed, "provider")
             return if (provider != null && modelId != null) {
@@ -320,7 +428,7 @@ object TuiSettingsScreen {
     }
 
     private fun formatContextSize(size: Int): String = when {
-        size <= 0 -> "—"
+        size <= 0 -> "-"
         size >= 1_000_000 -> "${size / 1_000_000}M"
         size >= 1_000 -> "${size / 1_000}K"
         else -> size.toString()
@@ -328,9 +436,9 @@ object TuiSettingsScreen {
 
     private fun formatPrice(price: Double): String = when {
         price <= 0.0 -> TuiColors.muted("free")
-        price < 0.01 -> "$${String.format("%.4f", price)}"
-        price < 1.0 -> "$${String.format("%.3f", price)}"
-        else -> "$${String.format("%.2f", price)}"
+        price < 0.01 -> "$${String.format(Locale.US, "%.4f", price)}"
+        price < 1.0 -> "$${String.format(Locale.US, "%.3f", price)}"
+        else -> "$${String.format(Locale.US, "%.2f", price)}"
     }
 
     /** Cached model list (loaded on demand via [F] key). */
@@ -350,7 +458,6 @@ object TuiSettingsScreen {
     /** Refresh models from providers. Called from TuiViewModel on [F] key press or on startup. */
     fun refreshModels(models: List<CachedModelEntry>) {
         cachedModels = models.sortedWith(compareBy({ it.provider }, { it.id }))
-        invalidateCache()
     }
 
     /** Get count of cached models (for logging). */
@@ -358,57 +465,58 @@ object TuiSettingsScreen {
 
     // ── Prompts ──────────────────────────────────────────────────────────
 
-    private fun renderPrompts(buf: TuiRenderBuffer, config: Map<String, String>) {
-        buf.addLine("  ${TuiColors.highlight("System Prompts")}")
-        buf.addLine()
+    private fun promptsSpec(config: Map<String, String>): List<Item> {
+        val items = mutableListOf<Item>()
+        items.add(HeaderItem("System Prompts"))
+        items.add(BlankItem)
         if (config.isEmpty()) {
-            buf.addLine("    ${TuiColors.muted("Prompts are managed via /explain, /refactor, etc.")}")
-            buf.addLine("    ${TuiColors.muted("Type / in chat to see all available prompt commands.")}")
+            items.add(TextItem("    ${TuiColors.muted("Prompts are managed via /explain, /refactor, etc.")}"))
+            items.add(TextItem("    ${TuiColors.muted("Type / in chat to see all available prompt commands.")}"))
         } else {
             for ((key, value) in config.entries.take(15)) {
                 val preview = value.take(60) + if (value.length > 60) "..." else ""
-                buf.addLine("    ${TuiColors.accent(key)}: $preview")
+                items.add(TextItem("    ${TuiColors.accent(key)}: $preview"))
             }
         }
-        buf.addLine()
-        buf.addLine("  ${TuiColors.muted("Use slash commands in chat: /explain, /refactor, /test, ...")}")
+        items.add(BlankItem)
+        items.add(TextItem("  ${TuiColors.muted("Use slash commands in chat: /explain, /refactor, /test, ...")}"))
+        return items
     }
 
     // ── Context (RAG) ────────────────────────────────────────────────────
-    // Keys from ConfigService: rag.search_similarity_threshold, rag.search_top_k, etc.
-    // After getConfig("rag") → short keys: search_similarity_threshold, search_top_k, etc.
 
-    private fun renderContext(buf: TuiRenderBuffer, config: Map<String, String>) {
-        buf.addLine("  ${TuiColors.highlight("RAG Settings")}")
-        renderBool(buf, "enabled", "RAG enabled", config)
-        renderBool(buf, "index_on_startup", "Index on startup", config)
-        renderBool(buf, "auto_index_on_context_build", "Auto-index on context build", config)
-        buf.addLine()
-        buf.addLine("  ${TuiColors.highlight("RAG Search")}")
-        renderValue(buf, "search_similarity_threshold", "Similarity threshold", config, "0.5")
-        renderValue(buf, "search_top_k", "Top K results", config, "5")
-        renderValue(buf, "search_semantic_weight", "Semantic weight", config, "0.7")
-        renderBool(buf, "search_hybrid_enabled", "Hybrid search (BM25+semantic)", config)
-        renderBool(buf, "search_include_context_chunks", "Include context chunks", config)
-        buf.addLine()
-        buf.addLine("  ${TuiColors.highlight("Indexing")}")
-        renderValue(buf, "max_file_size_mb", "Max file size (MB)", config, "2")
-        renderValue(buf, "max_chunks_per_file", "Max chunks per file", config, "100")
-        renderValue(buf, "chunking_mode", "Chunking mode", config, "semantic")
-        renderValue(buf, "max_concurrent_jobs", "Max concurrent jobs", config, "4")
-    }
+    private fun contextSpec(section: String, config: Map<String, String>): List<Item> = listOf(
+        HeaderItem("RAG Settings"),
+        boolItem(section, "enabled", "RAG enabled", config),
+        boolItem(section, "index_on_startup", "Index on startup", config),
+        boolItem(section, "auto_index_on_context_build", "Auto-index on context build", config),
+        BlankItem,
+        HeaderItem("RAG Search"),
+        valueItem(section, "search_similarity_threshold", "Similarity threshold", config, "0.5"),
+        valueItem(section, "search_top_k", "Top K results", config, "5"),
+        valueItem(section, "search_semantic_weight", "Semantic weight", config, "0.7"),
+        boolItem(section, "search_hybrid_enabled", "Hybrid search (BM25+semantic)", config),
+        boolItem(section, "search_include_context_chunks", "Include context chunks", config),
+        BlankItem,
+        HeaderItem("Indexing"),
+        valueItem(section, "max_file_size_mb", "Max file size (MB)", config, "2"),
+        valueItem(section, "max_chunks_per_file", "Max chunks per file", config, "100"),
+        valueItem(section, "chunking_mode", "Chunking mode", config, "semantic"),
+        valueItem(section, "max_concurrent_jobs", "Max concurrent jobs", config, "4")
+    )
 
     // ── MCP ──────────────────────────────────────────────────────────────
 
-    private fun renderMcp(buf: TuiRenderBuffer, config: Map<String, String>) {
-        buf.addLine("  ${TuiColors.highlight("MCP Servers")}")
+    private fun mcpSpec(config: Map<String, String>): List<Item> {
+        val items = mutableListOf<Item>()
+        items.add(HeaderItem("MCP Servers"))
         if (config.isEmpty()) {
-            buf.addLine("    ${TuiColors.muted("No MCP servers configured.")}")
-            buf.addLine()
-            buf.addLine("  ${TuiColors.muted("Use /mcp-add to add servers:")}")
-            buf.addLine("    ${TuiColors.muted("/mcp-add stdio <name> <command> [args...]")}")
-            buf.addLine("    ${TuiColors.muted("/mcp-add http <name> <url>")}")
-            buf.addLine("    ${TuiColors.muted("/mcp-list  /mcp-edit <id> <field> <value>  /mcp-remove <id>")}")
+            items.add(TextItem("    ${TuiColors.muted("No MCP servers configured.")}"))
+            items.add(BlankItem)
+            items.add(TextItem("  ${TuiColors.muted("Use /mcp-add to add servers:")}"))
+            items.add(TextItem("    ${TuiColors.muted("/mcp-add stdio <name> <command> [args...]")}"))
+            items.add(TextItem("    ${TuiColors.muted("/mcp-add http <name> <url>")}"))
+            items.add(TextItem("    ${TuiColors.muted("/mcp-list  /mcp-edit <id> <field> <value>  /mcp-remove <id>")}"))
         } else {
             val serverIds = config.keys.mapNotNull { key ->
                 val parts = key.split(".")
@@ -419,174 +527,128 @@ object TuiSettingsScreen {
                 val type = config["$id.type"] ?: "?"
                 val enabled = config["$id.enabled"]
                 val status = if (enabled == "true") TuiColors.statusSuccess("●") else TuiColors.muted("○")
-                buf.addLine("    $status $name (${type.uppercase()}) ${TuiColors.muted(id.take(8))}")
+                items.add(TextItem("    $status $name (${type.uppercase()}) ${TuiColors.muted(id.take(8))}"))
             }
         }
+        return items
     }
 
     // ── Docs ─────────────────────────────────────────────────────────────
 
-    private fun renderDocs(buf: TuiRenderBuffer, config: Map<String, String>) {
-        buf.addLine("  ${TuiColors.highlight("Documentation Sources")}")
-        buf.addLine()
+    private fun docsSpec(config: Map<String, String>): List<Item> {
+        val items = mutableListOf<Item>()
+        items.add(HeaderItem("Documentation Sources"))
+        items.add(BlankItem)
         if (config.isEmpty()) {
-            buf.addLine("    ${TuiColors.muted("No documentation sources configured.")}")
+            items.add(TextItem("    ${TuiColors.muted("No documentation sources configured.")}"))
         } else {
             for ((key, value) in config.entries.take(15)) {
-                buf.addLine("    ${TuiColors.accent(key)}: $value")
+                items.add(TextItem("    ${TuiColors.accent(key)}: $value"))
             }
         }
-        buf.addLine()
-        buf.addLine("  ${TuiColors.muted("Commands: /docs-add <url> [depth]  /docs-delete <id>  /docs-reindex <id>")}")
+        items.add(BlankItem)
+        items.add(TextItem("  ${TuiColors.muted("Commands: /docs-add <url> [depth]  /docs-delete <id>  /docs-reindex <id>")}"))
+        return items
     }
 
     // ── Tools ────────────────────────────────────────────────────────────
 
-    private fun renderTools(buf: TuiRenderBuffer, config: Map<String, String>) {
-        buf.addLine("  ${TuiColors.highlight("Tool Permissions (Enter to cycle: ON → ASK → OFF)")}")
-        val tools = listOf(
-            "read_file", "read_directory", "file_search", "grep_search", "view_diff",
-            "create_new_file", "code_editing", "advance_code_editing",
-            "multi_line_editor", "multi_edit", "run_terminal_command",
-            "http_request", "run_code", "invoke_subagent"
-        )
-        buf.addLine("    ${"Tool".padEnd(26)} ${"Plan".padEnd(8)} Agent")
-        buf.addLine("    ${"─".repeat(26)} ${"─".repeat(8)} ${"─".repeat(8)}")
-        for (tool in tools) {
-            val planKey = "permission_${tool}_plan_mode"
-            val agentKey = "permission_${tool}_agent_mode"
-            val planValue = config[planKey]?.uppercase() ?: "ON"
-            val agentValue = config[agentKey]?.uppercase() ?: "ON"
-            val fieldIdx = currentFields.size
-            currentFields = currentFields + SettingsField("tools.$planKey", "$tool (plan)", FieldType.BOOL)
-            currentFields = currentFields + SettingsField("tools.$agentKey", "$tool (agent)", FieldType.BOOL)
-            val planIcon = when (planValue) {
-                "ON", "TRUE" -> TuiColors.statusSuccess("ON ")
-                "ASK" -> TuiColors.statusPending("ASK")
-                else -> TuiColors.statusFailed("OFF")
-            }
-            val agentIcon = when (agentValue) {
-                "ON", "TRUE" -> TuiColors.statusSuccess("ON ")
-                "ASK" -> TuiColors.statusPending("ASK")
-                else -> TuiColors.statusFailed("OFF")
-            }
-            val selected = viewModel?.stateFlow?.value?.settingsSelectedField
-            val cursorPlan = if (selected == fieldIdx) ">" else " "
-            val cursorAgent = if (selected == fieldIdx + 1) ">" else " "
-            buf.addLine("  ${cursorPlan} ${tool.padEnd(26)} $planIcon${cursorAgent.padStart(5)} $agentIcon")
+    private val PERMISSION_OPTIONS = listOf("ON", "ASK", "OFF")
+
+    private fun toolsSpec(): List<Item> {
+        val items = mutableListOf<Item>()
+        items.add(HeaderItem("Tool Permissions (Enter to cycle: ON / ASK / OFF)"))
+        val permissions = viewModel?.getToolPermissions() ?: emptyList()
+        if (permissions.isEmpty()) {
+            items.add(TextItem("    ${TuiColors.muted("Tool registry not available.")}"))
+            return items
         }
+        items.add(TextItem("    ${"Tool".padEnd(26)} ${"Plan".padEnd(8)} Agent"))
+        items.add(TextItem("    ${"─".repeat(26)} ${"─".repeat(8)} ${"─".repeat(8)}"))
+        for (perm in permissions.sortedBy { it.toolName }) {
+            items.add(
+                ToolRowItem(
+                    tool = perm.toolName,
+                    plan = SettingsField(
+                        "$TOOL_PERMISSION_PREFIX${perm.toolName}.plan", "${perm.toolName} (plan)",
+                        FieldType.CYCLE, options = PERMISSION_OPTIONS
+                    ),
+                    agent = SettingsField(
+                        "$TOOL_PERMISSION_PREFIX${perm.toolName}.agent", "${perm.toolName} (agent)",
+                        FieldType.CYCLE, options = PERMISSION_OPTIONS
+                    ),
+                    planValue = perm.planMode,
+                    agentValue = perm.agentMode
+                )
+            )
+        }
+        return items
     }
 
     // ── Subagents ────────────────────────────────────────────────────────
 
-    private fun renderSubagents(buf: TuiRenderBuffer, config: Map<String, String>) {
-        buf.addLine("  ${TuiColors.highlight("Subagents")}")
-        renderBool(buf, "builtin_enabled", "Built-in subagents enabled", config)
-        buf.addLine()
+    private fun subagentsSpec(section: String, config: Map<String, String>): List<Item> {
+        val items = mutableListOf<Item>()
+        items.add(HeaderItem("Subagents"))
+        items.add(boolItem(section, "builtin_enabled", "Built-in subagents enabled", config))
+        items.add(BlankItem)
 
         val agents = config.keys.filter { it.contains("enabled") && it != "builtin_enabled" }.map {
             it.removeSuffix(".enabled").removeSuffix("_enabled").removePrefix("enabled_")
         }.filter { it.isNotBlank() }.distinct()
 
         if (agents.isEmpty()) {
-            buf.addLine("    ${TuiColors.muted("Using default subagent profiles (21 built-in).")}")
-            buf.addLine("    Built-in: api-designer, architect-reviewer, code-reviewer,")
-            buf.addLine("    documentation-engineer, frontend-developer, fullstack-developer,")
-            buf.addLine("    refactoring-specialist, security-engineer, sre-engineer, ...")
+            items.add(TextItem("    ${TuiColors.muted("Using default subagent profiles (21 built-in).")}"))
+            items.add(TextItem("    Built-in: api-designer, architect-reviewer, code-reviewer,"))
+            items.add(TextItem("    documentation-engineer, frontend-developer, fullstack-developer,"))
+            items.add(TextItem("    refactoring-specialist, security-engineer, sre-engineer, ..."))
         } else {
             for (name in agents.take(15)) {
-                val key = "enabled_$name"
-                renderBool(buf, key, name, config)
+                items.add(boolItem(section, "enabled_$name", name, config))
             }
         }
+        return items
     }
 
     // ── Advanced ─────────────────────────────────────────────────────────
-    // Keys: advanced.no_egress_default, advanced.read_only_mode, advanced.auto_optimize_percentage
-    // Limits: limits.tool_execution_timeout, limits.api_call_timeout, limits.max_*
 
-    private fun renderAdvanced(buf: TuiRenderBuffer, config: Map<String, String>) {
+    private fun advancedSpec(section: String, config: Map<String, String>): List<Item> {
         val limitsConfig = viewModel?.getConfigSection("limits") ?: emptyMap()
-
-        buf.addLine("  ${TuiColors.highlight("Security")}")
-        renderBool(buf, "read_only_mode", "Read-only mode (no file writes)", config)
-        buf.addLine()
-        buf.addLine("  ${TuiColors.highlight("Timeouts")}")
-        renderValueFrom(buf, "limits", "tool_execution_timeout", "Tool execution (s)", limitsConfig, "360")
-        renderValueFrom(buf, "limits", "api_call_timeout", "API call (s)", limitsConfig, "360")
-        buf.addLine()
-        buf.addLine("  ${TuiColors.highlight("Limits")}")
-        renderValueFrom(buf, "limits", "max_file_size", "Max file size (MB)", limitsConfig, "10")
-        renderValueFrom(buf, "limits", "max_context_size", "Max context (tokens)", limitsConfig, "128000")
-        renderValueFrom(buf, "limits", "max_output_size", "Max output (tokens)", limitsConfig, "8192")
-        buf.addLine()
-        buf.addLine("  ${TuiColors.highlight("Performance")}")
-        renderValue(buf, "auto_optimize_percentage", "Auto-optimize threshold (%)", config, "85")
+        return listOf(
+            HeaderItem("Security"),
+            boolItem(section, "read_only_mode", "Read-only mode (no file writes)", config),
+            BlankItem,
+            HeaderItem("Timeouts"),
+            valueItem("limits", "tool_execution_timeout", "Tool execution (s)", limitsConfig, "360"),
+            valueItem("limits", "api_call_timeout", "API call (s)", limitsConfig, "360"),
+            BlankItem,
+            HeaderItem("Limits"),
+            valueItem("limits", "max_file_size", "Max file size (MB)", limitsConfig, "10"),
+            valueItem("limits", "max_context_size", "Max context (tokens)", limitsConfig, "128000"),
+            valueItem("limits", "max_output_size", "Max output (tokens)", limitsConfig, "8192"),
+            BlankItem,
+            HeaderItem("Performance"),
+            valueItem(section, "auto_optimize_percentage", "Auto-optimize threshold (%)", config, "85")
+        )
     }
 
     // ── Theme ────────────────────────────────────────────────────────────
 
-    private fun renderTheme(buf: TuiRenderBuffer) {
-        buf.addLine("  ${TuiColors.highlight("ANSI Color Preview")}")
-        buf.addLine("    ${TuiColors.user("User message")}")
-        buf.addLine("    ${TuiColors.assistant("Assistant message")}")
-        buf.addLine("    ${TuiColors.tool("Tool output")}")
-        buf.addLine("    ${TuiColors.system("System/Error")}")
-        buf.addLine()
-        buf.addLine("    ${TuiColors.statusRunning("Running")} ${TuiColors.statusSuccess("Success")} ${TuiColors.statusFailed("Failed")} ${TuiColors.statusPending("Pending")}")
-        buf.addLine("    ${TuiColors.logDebug("DEBUG")} ${TuiColors.logInfo("INFO")} ${TuiColors.logWarn("WARN")} ${TuiColors.logError("ERROR")}")
-        buf.addLine()
-        buf.addLine("    Agent colors:")
-        val sb = StringBuilder("    ")
-        TuiColors.agentColors.forEachIndexed { i, c -> sb.append("${c("Agent $i")}  ") }
-        buf.addLine(sb.toString())
-    }
-
-    // ── Helper renderers ─────────────────────────────────────────────────
-
-    /**
-     * Render a boolean toggle using the current cached section.
-     * @param key short key after section prefix removal (e.g. "format_markdown")
-     */
-    private fun renderBool(buf: TuiRenderBuffer, key: String, label: String, config: Map<String, String>) {
-        renderBoolFrom(buf, cachedSection, key, label, config)
-    }
-
-    /**
-     * Render a boolean toggle for an explicit section (for multi-section tabs).
-     */
-    private fun renderBoolFrom(buf: TuiRenderBuffer, section: String, key: String, label: String, config: Map<String, String>) {
-        val fieldIdx = currentFields.size
-        currentFields = currentFields + SettingsField("$section.$key", label, FieldType.BOOL)
-        val value = config[key]?.lowercase()
-        val checked = value == "true" || value == "1" || value == "yes"
-        val icon = if (checked) TuiColors.statusSuccess("[x]") else TuiColors.muted("[ ]")
-        val cursor = if (fieldIdx == viewModel?.stateFlow?.value?.settingsSelectedField) "> " else "  "
-        buf.addLine("  ${cursor}$icon $label")
-    }
-
-    /**
-     * Render a text value using the current cached section.
-     * @param key short key after section prefix removal
-     */
-    private fun renderValue(buf: TuiRenderBuffer, key: String, label: String, config: Map<String, String>, default: String) {
-        renderValueFrom(buf, cachedSection, key, label, config, default)
-    }
-
-    /**
-     * Render a text value for an explicit section.
-     */
-    private fun renderValueFrom(buf: TuiRenderBuffer, section: String, key: String, label: String, config: Map<String, String>, default: String) {
-        val fieldIdx = currentFields.size
-        currentFields = currentFields + SettingsField("$section.$key", label, FieldType.TEXT)
-        val value = config[key]?.ifBlank { null } ?: default
-        // Mask API keys
-        val display = if (key.contains("api_key") && value.length > 8) {
-            value.take(4) + "****" + value.takeLast(4)
-        } else {
-            value
-        }
-        val cursor = if (fieldIdx == viewModel?.stateFlow?.value?.settingsSelectedField) "> " else "  "
-        buf.addLine("  ${cursor}${label.padEnd(30)} ${TuiColors.accent(display)}")
+    private fun themeSpec(): List<Item> {
+        val agentColorsLine = StringBuilder("    ")
+        TuiColors.agentColors.forEachIndexed { i, c -> agentColorsLine.append("${c("Agent $i")}  ") }
+        return listOf(
+            HeaderItem("ANSI Color Preview"),
+            TextItem("    ${TuiColors.user("User message")}"),
+            TextItem("    ${TuiColors.assistant("Assistant message")}"),
+            TextItem("    ${TuiColors.tool("Tool output")}"),
+            TextItem("    ${TuiColors.system("System/Error")}"),
+            BlankItem,
+            TextItem("    ${TuiColors.statusRunning("Running")} ${TuiColors.statusSuccess("Success")} ${TuiColors.statusFailed("Failed")} ${TuiColors.statusPending("Pending")}"),
+            TextItem("    ${TuiColors.logDebug("DEBUG")} ${TuiColors.logInfo("INFO")} ${TuiColors.logWarn("WARN")} ${TuiColors.logError("ERROR")}"),
+            BlankItem,
+            TextItem("    Agent colors:"),
+            TextItem(agentColorsLine.toString())
+        )
     }
 }

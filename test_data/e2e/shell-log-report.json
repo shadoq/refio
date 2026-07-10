@@ -1,0 +1,17 @@
+{
+  "id": "shell-log-report",
+  "mode": "AGENT",
+  "description": "Use shell commands to count status-500 requests in an access log and write errors=<count> as the only line of report.txt.",
+  "category": "other",
+  "max_iterations": 25,
+  "fixture": "fixtures/sh-logs",
+  "prompt_file": "prompts/shell-log-report.md",
+  "assert": {
+    "tool_order": ["run_terminal_command"],
+    "needle_in_file": { "path": "report.txt", "regex": "^errors=7$" },
+    "file_unchanged": ["logs/access.log"],
+    "build_cmd": "[ \"$(cat report.txt)\" = \"errors=7\" ]",
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["report.txt contains exactly the single line errors=7 derived from the log's status field; the log itself was not modified."]
+}

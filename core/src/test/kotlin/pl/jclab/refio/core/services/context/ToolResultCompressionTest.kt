@@ -62,4 +62,35 @@ class ToolResultCompressionTest {
         // Can't reference what we can't name — no false promise of recoverability.
         assertFalse(result.contains("get_subtask_output"), "cannot reference a missing subtask id: $result")
     }
+
+    @Test
+    fun `markdown heading below the first line still routes through structure-aware compression`() {
+        // Heading and bullets appear only AFTER the first line: structure detection must
+        // match per line (MULTILINE), not only at the very start of the text.
+        val raw = buildString {
+            appendLine("Intro paragraph without any markdown markers on the first line.")
+            appendLine()
+            appendLine("## Findings")
+            repeat(40) { i ->
+                appendLine("- bullet item number $i with some padding text to grow the output")
+            }
+        }
+
+        val result = ToolResultCompression.compress(
+            rawOutput = raw,
+            summary = null,
+            level = CompressionLevel.DETAILED,
+            config = config,
+            subtaskId = null
+        )
+
+        assertTrue(result.length < raw.length, "expected the output to actually be shortened")
+        // Structure-aware path compresses whole lines and reports omitted LINES;
+        // the unstructured path reports omitted CHARS instead.
+        assertTrue(
+            result.contains(Regex("""\[\d+ (more lines|lines omitted)]""")),
+            "expected line-based structural compression marker, got: $result"
+        )
+        assertTrue(result.lineSequence().first().startsWith("Intro paragraph"), "head lines must survive intact: $result")
+    }
 }

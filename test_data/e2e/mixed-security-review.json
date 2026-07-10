@@ -1,0 +1,21 @@
+{
+  "id": "mixed-security-review",
+  "category": "analysis",
+  "mode": "PLAN",
+  "description": "PLAN-mode: review a mixed Python, JS, and config repo and name the one serious vulnerability, its file, function, and attack path.",
+  "max_iterations": 25,
+  "fixture": "fixtures/mixed-repo",
+  "prompt_file": "prompts/mixed-security-review.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_output": { "regex": "download_file" },
+    "file_unchanged": [
+      "backend/serve.py",
+      "backend/auth.py",
+      "frontend/app.js",
+      "config/settings.yaml"
+    ],
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["The review names download_file in backend/serve.py as a path-traversal vulnerability (user filename joined onto BASE_DIR with no containment check, e.g. ../../etc/passwd) and does not edit any file."]
+}

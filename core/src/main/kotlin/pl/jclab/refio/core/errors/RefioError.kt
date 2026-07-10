@@ -27,6 +27,40 @@ sealed class RefioError(
         originalCause
     )
 
+    data class LLMConnectionFailed(
+        val provider: String,
+        val endpoint: String? = null,
+        val originalCause: Throwable? = null
+    ) : RefioError(
+        "LLM server is not responding${endpoint?.let { " at $it" } ?: ""} ($provider). " +
+            if (provider == "ollama") {
+                "Is Ollama running? Start it with: ollama serve"
+            } else {
+                "Check that the server is running and the endpoint is correct."
+            },
+        originalCause
+    )
+
+    data class LLMModelNotFound(
+        val provider: String,
+        val model: String,
+        val originalCause: Throwable? = null
+    ) : RefioError(
+        "Model '$model' was not found on $provider." +
+            if (provider == "ollama") " Pull it with: ollama pull $model" else "",
+        originalCause
+    )
+
+    data class LLMContextOverflow(
+        val provider: String,
+        val model: String,
+        val originalCause: Throwable? = null
+    ) : RefioError(
+        "Context is too large for $provider/$model. " +
+            "Reduce the context (fewer files, shorter history) or increase the model's context window.",
+        originalCause
+    )
+
     data class LLMError(
         val provider: String,
         val model: String,

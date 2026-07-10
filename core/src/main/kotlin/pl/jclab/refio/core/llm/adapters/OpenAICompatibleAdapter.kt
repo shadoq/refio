@@ -96,7 +96,7 @@ abstract class OpenAICompatibleAdapter(
      * [IllegalStateException] from here propagates up as a stream error
      * (used by OpenRouter to surface mid-stream provider errors).
      */
-    protected open fun onStreamRawChunk(chunk: Map<String, Any?>) = Unit
+    protected open fun onStreamRawChunk(chunk: com.google.gson.JsonObject) = Unit
 
     /** Rate-limit retry hook (Z.AI). Default: no retry. */
     protected open suspend fun <T> executeWithRateLimitRetry(endpoint: String, block: suspend () -> T): T = block()
@@ -425,19 +425,18 @@ abstract class OpenAICompatibleAdapter(
                                 onStreamChunk(StreamChunk(delta = "", toolCallDelta = tcDelta))
                             },
                             onRawChunk = { chunk ->
-                                @Suppress("UNCHECKED_CAST")
-                                (chunk["usage"] as? Map<String, Any?>)?.let { usageMap ->
-                                    val promptTokens = (usageMap["prompt_tokens"] as? Number)?.toInt() ?: 0
-                                    val completionTokens = (usageMap["completion_tokens"] as? Number)?.toInt() ?: 0
-                                    val totalTokens = (usageMap["total_tokens"] as? Number)?.toInt()
+                                (chunk.get("usage") as? com.google.gson.JsonObject)?.let { usageObj ->
+                                    val promptTokens = usageObj.intField("prompt_tokens") ?: 0
+                                    val completionTokens = usageObj.intField("completion_tokens") ?: 0
+                                    val totalTokens = usageObj.intField("total_tokens")
                                         ?: (promptTokens + completionTokens)
                                     streamUsage = LLMUsage(
                                         inputTokens = promptTokens,
                                         outputTokens = completionTokens,
                                         totalTokens = totalTokens,
                                     )
-                                    val details = usageMap["completion_tokens_details"] as? Map<*, *>
-                                    val reasoning = (details?.get("reasoning_tokens") as? Number)?.toInt()
+                                    val details = usageObj.get("completion_tokens_details") as? com.google.gson.JsonObject
+                                    val reasoning = details.intField("reasoning_tokens")
                                     logger.info {
                                         "$logPrefix [STREAM_USAGE] prompt=$promptTokens, completion=$completionTokens" +
                                             (reasoning?.let { ", reasoning=$it (incl. in completion)" } ?: "")

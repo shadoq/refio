@@ -72,6 +72,145 @@ object ModelDefinitions {
     val OPENAI_MODELS = mapOf(
 
         //
+        // GPT 5.6 (models.dev)
+        //
+        "gpt-5.6" to ModelDefinition(
+            id = "gpt-5.6",
+            name = "GPT-5.6",
+            provider = "openai",
+            description = "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 5.00,
+            costPer1MOutput = 30.00,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+        "gpt-5.6-sol" to ModelDefinition(
+            id = "gpt-5.6-sol",
+            name = "GPT-5.6 Sol",
+            provider = "openai",
+            description = "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 5.00,
+            costPer1MOutput = 30.00,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+        "gpt-5.6-terra" to ModelDefinition(
+            id = "gpt-5.6-terra",
+            name = "GPT-5.6 Terra",
+            provider = "openai",
+            description = "Balanced GPT-5.6 model for capable, cost-efficient everyday work",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 2.50,
+            costPer1MOutput = 15.00,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+        "gpt-5.6-luna" to ModelDefinition(
+            id = "gpt-5.6-luna",
+            name = "GPT-5.6 Luna",
+            provider = "openai",
+            description = "Cost-efficient GPT-5.6 model for fast, high-volume workloads",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 1.00,
+            costPer1MOutput = 6.00,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+        //
         // GPT 5.5
         //
         "gpt-5.5" to ModelDefinition(
@@ -5246,6 +5385,52 @@ object ModelDefinitions {
             active = true
         ),
 
+        "minimax-m2.5:cloud" to ModelDefinition(
+            id = "minimax-m2.5:cloud",
+            name = "MiniMax M2.5 (Cloud)",
+            provider = "ollama",
+            description = "MiniMax M2-series model for chat, coding, office work, and agentic tasks, 200K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 204_800,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "minimax-m2.1:cloud" to ModelDefinition(
+            id = "minimax-m2.1:cloud",
+            name = "MiniMax M2.1 (Cloud)",
+            provider = "ollama",
+            description = "MiniMax M2-series model for chat, coding, office work, and agentic tasks, 200K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 204_800,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
         // ═══════════════════════════════════════════════════════════════════
         // ORNITH FAMILY (DeepReinforce, open weights)
         // ═══════════════════════════════════════════════════════════════════
@@ -5410,6 +5595,77 @@ object ModelDefinitions {
             costPer1MOutput = 0.0,
             supportsVision = true,
             supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        // Kimi K2.6 (Moonshot AI) - multimodal agent for visual understanding, coding, planning
+        "kimi-k2.6:cloud" to ModelDefinition(
+            id = "kimi-k2.6:cloud",
+            name = "Kimi K2.6 (Cloud)",
+            provider = "ollama",
+            description = "Moonshot AI multimodal agent model for visual understanding, coding, and planning, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        "kimi-k2.5:cloud" to ModelDefinition(
+            id = "kimi-k2.5:cloud",
+            name = "Kimi K2.5 (Cloud)",
+            provider = "ollama",
+            description = "Moonshot AI multimodal agent model for visual understanding, coding, and planning, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        // Mistral Large 3 (Mistral AI) - flagship for advanced reasoning, coding, multilingual work
+        "mistral-large-3:cloud" to ModelDefinition(
+            id = "mistral-large-3:cloud",
+            name = "Mistral Large 3 (Cloud)",
+            provider = "ollama",
+            description = "Flagship Mistral model for advanced reasoning, coding, and multilingual work with vision, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = false,
             supportsStreaming = true,
             supportsFunctionCalling = true,
             defaultParams = mapOf("temperature" to 0.7),

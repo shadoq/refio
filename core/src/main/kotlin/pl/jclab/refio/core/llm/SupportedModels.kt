@@ -29,6 +29,10 @@ object SupportedModels {
      * - O1 series (reasoning models)
      */
     private val OPENAI_SUPPORTED = setOf(
+        // GPT-5.6
+        "gpt-5.6-sol",
+        "gpt-5.6-luna",
+        "gpt-5.6-terra",
         // GPT-5.5
         "gpt-5.5",
         "gpt-5.5-mini",
@@ -89,6 +93,7 @@ object SupportedModels {
      */
     private val ANTHROPIC_SUPPORTED = setOf(
         // Opus models
+        "claude-opus-4-8",
         "claude-opus-4-7",
         "anthropic.claude-opus-4-7",
         "claude-opus-4-6",
@@ -100,6 +105,9 @@ object SupportedModels {
         "claude-opus-4-0",
         "claude-opus-4-20250514",
         // Sonnet models
+        "claude-sonnet-5",
+        "claude-sonnet-4-8",
+        "claude-sonnet-4-7",
         "claude-sonnet-4-6",
         "claude-sonnet-4-5-20250929",
         "claude-sonnet-4-5",
@@ -144,6 +152,13 @@ object SupportedModels {
         Regex("^.*minimax.*"),
         Regex("^.*deepseek.*"),
         Regex("^.*gemini.*"),
+        Regex("^.*tencent.*"),
+        Regex("^.*poolside.*"),
+        Regex("^.*nex-agi.*"),
+        Regex("^.*sakana.*"),
+        Regex("^.*sakana.*"),
+        Regex("^.*openrouter.*"),
+        Regex("^.*moonshotai.*"),
         Regex("^.*x-ai.*"),
         Regex("^.*z-ai.*")
     )

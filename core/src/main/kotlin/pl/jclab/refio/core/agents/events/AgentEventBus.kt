@@ -1,7 +1,13 @@
 package pl.jclab.refio.core.agents.events
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
 import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("AgentEventBus")
@@ -12,7 +18,7 @@ private val logger = dualLogger("AgentEventBus")
  * SharedFlow-based with replay for late GUI subscribers.
  * Optionally persists events via AgentEventRepository.
  */
-class AgentEventBus {
+class AgentEventBus : AutoCloseable {
     private val _events = MutableSharedFlow<AgentEvent>(
         replay = 200,
         extraBufferCapacity = 500,
@@ -20,7 +26,21 @@ class AgentEventBus {
     )
     val events: SharedFlow<AgentEvent> = _events.asSharedFlow()
 
+    @Volatile
     private var eventRepository: AgentEventRepository? = null
+    private val persistenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val persistenceQueue = Channel<PersistenceItem>(PERSISTENCE_QUEUE_CAPACITY)
+
+    init {
+        persistenceScope.launch {
+            for (item in persistenceQueue) {
+                when (item) {
+                    is PersistenceItem.Event -> persist(item.value)
+                    is PersistenceItem.Flush -> item.done.complete(Unit)
+                }
+            }
+        }
+    }
 
     fun setRepository(repo: AgentEventRepository) {
         eventRepository = repo
@@ -36,12 +56,28 @@ class AgentEventBus {
      * unavailable. Persistence is now best-effort and logged on failure.
      */
     suspend fun emit(event: AgentEvent) {
+        _events.emit(event)
+        if (eventRepository != null && persistenceQueue.trySend(PersistenceItem.Event(event)).isFailure) {
+            logger.warn { "Agent event persistence queue is full; dropping persistence for ${event::class.simpleName}" }
+        }
+    }
+
+    private suspend fun persist(event: AgentEvent) {
         try {
             eventRepository?.save(event)
         } catch (e: Exception) {
             logger.warn { "Failed to persist agent event (${event::class.simpleName}): ${e.message}" }
         }
-        _events.emit(event)
+    }
+
+    internal suspend fun flushPersistence() {
+        val done = CompletableDeferred<Unit>()
+        persistenceQueue.send(PersistenceItem.Flush(done))
+        done.await()
+    }
+
+    override fun close() {
+        persistenceQueue.close()
     }
 
     // ── Filtered subscriptions ──
@@ -114,13 +150,36 @@ class AgentEventBus {
     /** Events of a specific type */
     inline fun <reified T : AgentEvent> eventsOfType(): Flow<T> =
         events.filterIsInstance<T>()
+
+    private sealed interface PersistenceItem {
+        data class Event(val value: AgentEvent) : PersistenceItem
+        data class Flush(val done: CompletableDeferred<Unit>) : PersistenceItem
+    }
+
+    companion object {
+        private const val PERSISTENCE_QUEUE_CAPACITY = 1000
+    }
 }
 
 /**
  * Repository interface for event persistence.
  */
 interface AgentEventRepository {
+
+    companion object {
+        /**
+         * Default cap for event history queries. Sessions can accumulate an unbounded
+         * number of events (StreamChunk especially); replay loads the newest
+         * [DEFAULT_EVENT_LIMIT] rows in ascending order instead of the whole table.
+         */
+        const val DEFAULT_EVENT_LIMIT: Int = 5000
+    }
+
     suspend fun save(event: AgentEvent)
-    suspend fun findBySessionId(sessionId: String): List<AgentEvent>
-    suspend fun findByAgentId(agentId: String): List<AgentEvent>
+
+    /** Returns up to [limit] NEWEST events for the session, sorted ascending for replay. */
+    suspend fun findBySessionId(sessionId: String, limit: Int = DEFAULT_EVENT_LIMIT): List<AgentEvent>
+
+    /** Returns up to [limit] NEWEST events for the agent, sorted ascending. */
+    suspend fun findByAgentId(agentId: String, limit: Int = DEFAULT_EVENT_LIMIT): List<AgentEvent>
 }

@@ -24,6 +24,8 @@ import pl.jclab.refio.core.context.mcp.MCPServerConfig
 import pl.jclab.refio.core.context.mcp.MCPServerType
 import pl.jclab.refio.core.db.TaskMode as CoreTaskMode
 import pl.jclab.refio.core.logging.LogSinkRegistry
+import pl.jclab.refio.core.models.api.SetToolPermissionRequest
+import pl.jclab.refio.core.models.api.ToolPermissionDto
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.utils.ProjectIdGenerator
 import pl.jclab.refio.cli.tui.screens.TuiSettingsScreen
@@ -64,9 +66,19 @@ class TuiViewModel(
     private val _settingsSelectedField = MutableStateFlow(0)
     private val _settingsEditingField = MutableStateFlow<String?>(null)
     private val _settingsEditBuffer = MutableStateFlow("")
+    private val _settingsResetArmed = MutableStateFlow(false)
     private val _isInitialized = MutableStateFlow(false)
     private val _error = MutableStateFlow<String?>(null)
     private val _contextMaxTokens = MutableStateFlow(128_000)
+
+    // Settings render/input threads read only this cached snapshot; router/DB
+    // reads run on Dispatchers.IO. The cache is refreshed on Settings screen
+    // entry, on tab switch, and after every write, which keeps the documented
+    // "fresh values when Settings is shown" behavior without blocking a frame.
+    private val configSectionCache = java.util.concurrent.ConcurrentHashMap<String, Map<String, String>>()
+    @Volatile
+    private var toolPermissionsCache: List<ToolPermissionDto> = emptyList()
+    internal val _settingsCacheVersion = MutableStateFlow(0)
 
     val isInitialized: StateFlow<Boolean> = _isInitialized.asStateFlow()
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -161,6 +173,8 @@ class TuiViewModel(
         _settingsSelectedField.map { Unit },
         _settingsEditingField.map { Unit },
         _settingsEditBuffer.map { Unit },
+        _settingsResetArmed.map { Unit },
+        _settingsCacheVersion.map { Unit },
         _contextMaxTokens.map { Unit },
         // Session execution flows
         sessionStateManager.toolCallProgress.map { Unit },
@@ -234,10 +248,25 @@ class TuiViewModel(
         obs._fileViewerScrollOffset.map { Unit },
         obs._fileViewerShowLineNumbers.map { Unit },
         obs._fileViewerAllowAddContext.map { Unit },
+        obs._fileViewerHintVisible.map { Unit },
         obs._helpScrollOffset.map { Unit },
     ).debounce(16)
     .map { buildCurrentState() }
     .stateIn(scope, SharingStarted.Eagerly, TuiState(mode = _mode.value, model = initialModel))
+
+    // Token sums are cached per messages-list instance: the list is immutable
+    // and replaced wholesale on every change, so reference identity is a valid
+    // cache key and the O(n) sum runs once per list change, not once per frame.
+    private var tokenSumsFor: List<TuiChatMessage>? = null
+    private var tokenSums: Pair<Long, Long> = 0L to 0L
+
+    private fun sessionTokenSums(messages: List<TuiChatMessage>): Pair<Long, Long> {
+        if (messages !== tokenSumsFor) {
+            tokenSums = messages.sumOf { it.tokensIn.toLong() } to messages.sumOf { it.tokensOut.toLong() }
+            tokenSumsFor = messages
+        }
+        return tokenSums
+    }
 
     private fun buildCurrentState() = TuiState(
         // Coordinator
@@ -249,6 +278,8 @@ class TuiViewModel(
         settingsSelectedField = _settingsSelectedField.value,
         settingsEditingField = _settingsEditingField.value,
         settingsEditBuffer = _settingsEditBuffer.value,
+        settingsResetArmed = _settingsResetArmed.value,
+        settingsCacheVersion = _settingsCacheVersion.value,
         contextMaxTokens = _contextMaxTokens.value,
         activeSessionId = taskId,
         // Chat sub-VM
@@ -270,8 +301,8 @@ class TuiViewModel(
         autocompleteVisible = chat._autocompleteVisible.value,
         autocompleteCandidates = chat._autocompleteCandidates.value,
         autocompleteSelectedIndex = chat._autocompleteSelectedIndex.value,
-        sessionTokensIn = chat._messages.value.sumOf { it.tokensIn.toLong() },
-        sessionTokensOut = chat._messages.value.sumOf { it.tokensOut.toLong() },
+        sessionTokensIn = sessionTokenSums(chat._messages.value).first,
+        sessionTokensOut = sessionTokenSums(chat._messages.value).second,
         // Session sub-VM
         subtasks = session.subtasks.value,
         activePlan = session.activePlan.value,
@@ -324,6 +355,7 @@ class TuiViewModel(
         fileViewerScrollOffset = obs._fileViewerScrollOffset.value,
         fileViewerShowLineNumbers = obs._fileViewerShowLineNumbers.value,
         fileViewerAllowAddContext = obs._fileViewerAllowAddContext.value,
+        fileViewerHintVisible = obs._fileViewerHintVisible.value,
         helpScrollOffset = obs._helpScrollOffset.value,
     )
 
@@ -441,11 +473,19 @@ class TuiViewModel(
             subscribeToAgentEvents()
             subscribeToUserInteraction(r)
             subscribeToToolApprovals(r)
-            obs.startAutoRefresh(r)
+            obs.startAutoRefresh(r) {
+                // Refresh only when the data is visible or changing: a turn in
+                // progress, an observability tab open, or a non-main screen.
+                chat._isStreaming.value ||
+                    _screen.value != TuiScreen.MAIN ||
+                    _activeTab.value != TuiTab.CHAT
+            }
             obs.refreshRagStats(r)
 
             loadModelsInBackground(r)
             obs.initFileBrowser()
+            // Pre-warm the settings snapshot so the Settings screen has data on first entry.
+            refreshSettingsCache()
         } catch (e: Exception) {
             logger.error(e) { "Failed to initialize core" }
             _error.value = "Initialization failed: ${e.message}"
@@ -510,10 +550,17 @@ class TuiViewModel(
 
     fun setScreen(screen: TuiScreen) {
         _screen.value = if (_screen.value == screen && screen != TuiScreen.MAIN) TuiScreen.MAIN else screen
+        if (_screen.value == TuiScreen.SETTINGS) {
+            refreshSettingsCache()
+        }
     }
 
     fun setSettingsTab(index: Int) {
         _settingsTab.value = index.coerceIn(0, 10)
+        refreshSettingsCache()
+        // Field indices are per-tab; keep the cursor on the first field of the new tab.
+        _settingsSelectedField.value = 0
+        _settingsResetArmed.value = false
     }
 
     // ========================================================================
@@ -646,7 +693,8 @@ class TuiViewModel(
                         requestId = first.requestId,
                         toolName = first.toolName,
                         description = first.description,
-                        arguments = first.arguments
+                        arguments = first.arguments,
+                        proposedChange = first.proposedChange
                     )
                 } else null
             }
@@ -795,32 +843,63 @@ class TuiViewModel(
     // Settings methods (coordinator-owned)
     // ========================================================================
 
-    fun getConfigSection(section: String): Map<String, String> {
-        val r = router ?: return emptyMap()
-        return try {
-            r.configRouter.getConfig(section, "app").settings.mapValues { it.value.toString() }
-        } catch (e: Exception) {
-            logger.warn(e) { "Failed to get config section: $section" }
-            emptyMap()
+    private val settingsSections = listOf(
+        "general", "providers", "default_model", "models", "prompts", "rag",
+        "mcp", "docs", "tools", "subagents", "advanced", "theme", "limits"
+    )
+
+    /** Cached config section snapshot. Safe to call from render/input threads. */
+    fun getConfigSection(section: String): Map<String, String> =
+        configSectionCache[section] ?: emptyMap()
+
+    /** Reload the settings snapshot (config sections + tool permissions) off the render thread. */
+    fun refreshSettingsCache() {
+        val r = router ?: return
+        scope.launch(Dispatchers.IO) {
+            refreshSettingsCacheBlocking(r)
         }
+    }
+
+    private fun refreshSettingsCacheBlocking(r: CoreApiRouter) {
+        for (section in settingsSections) {
+            configSectionCache[section] = try {
+                r.configRouter.getConfig(section, "app").settings.mapValues { it.value.toString() }
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to get config section: $section" }
+                emptyMap()
+            }
+        }
+        toolPermissionsCache = try {
+            r.toolRouter.getToolPermissions().tools
+        } catch (e: Exception) {
+            logger.warn(e) { "Failed to load tool permissions" }
+            emptyList()
+        }
+        // Bump the version so the merged state flow re-renders with the new snapshot.
+        _settingsCacheVersion.update { it + 1 }
     }
 
     fun updateConfig(section: String, key: String, value: String) {
         val r = router ?: return
-        try {
-            r.configRouter.updateConfig(section, "app", null, mapOf(key to value))
-        } catch (e: Exception) {
-            logger.warn(e) { "Failed to update config: $section.$key" }
+        scope.launch(Dispatchers.IO) {
+            try {
+                r.configRouter.updateConfig(section, "app", null, mapOf(key to value))
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to update config: $section.$key" }
+            }
+            refreshSettingsCacheBlocking(r)
         }
     }
 
     fun resetAllSettings() {
         val r = router ?: return
-        try {
-            r.configRouter.resetAllSettingsToDefaults()
-            TuiSettingsScreen.invalidateCache()
-        } catch (e: Exception) {
-            logger.warn(e) { "Failed to reset settings" }
+        scope.launch(Dispatchers.IO) {
+            try {
+                r.configRouter.resetAllSettingsToDefaults()
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to reset settings" }
+            }
+            refreshSettingsCacheBlocking(r)
         }
     }
 
@@ -843,7 +922,52 @@ class TuiViewModel(
     }
 
     fun settingsFieldDown() {
-        _settingsSelectedField.update { it + 1 }
+        val lastIndex = (TuiSettingsScreen.fieldCount(_settingsTab.value) - 1).coerceAtLeast(0)
+        _settingsSelectedField.update { (it + 1).coerceAtMost(lastIndex) }
+    }
+
+    /**
+     * Two-step reset guard: first R arms, second R within the armed state resets.
+     * Any other settings action disarms via [disarmSettingsReset].
+     */
+    fun armSettingsReset() {
+        _settingsResetArmed.value = true
+    }
+
+    fun disarmSettingsReset() {
+        if (_settingsResetArmed.value) {
+            _settingsResetArmed.value = false
+        }
+    }
+
+    fun isSettingsResetArmed(): Boolean = _settingsResetArmed.value
+
+    /** Cached tool permissions snapshot (refreshed by [refreshSettingsCache]). */
+    fun getToolPermissions(): List<ToolPermissionDto> = toolPermissionsCache
+
+    /** Cycle ON -> ASK -> OFF for one tool/mode; persists through the tool-permissions API. */
+    fun cycleToolPermission(toolName: String, agentMode: Boolean) {
+        val r = router ?: return
+        scope.launch(Dispatchers.IO) {
+            try {
+                val current = r.toolRouter.getToolPermissions().tools.firstOrNull { it.toolName == toolName }
+                    ?: return@launch
+                val cycle = listOf("ON", "ASK", "OFF")
+                fun next(value: String): String {
+                    val idx = cycle.indexOf(value.uppercase())
+                    return cycle[(idx + 1).mod(cycle.size)]
+                }
+                val request = if (agentMode) {
+                    SetToolPermissionRequest(planMode = current.planMode, agentMode = next(current.agentMode))
+                } else {
+                    SetToolPermissionRequest(planMode = next(current.planMode), agentMode = current.agentMode)
+                }
+                r.toolRouter.setToolPermission(toolName, request)
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to cycle permission for $toolName" }
+            }
+            refreshSettingsCacheBlocking(r)
+        }
     }
 
     fun settingsStartEdit(fieldKey: String, currentValue: String) {
@@ -884,7 +1008,6 @@ class TuiViewModel(
         }
         _settingsEditingField.value = null
         _settingsEditBuffer.value = ""
-        TuiSettingsScreen.invalidateCache()
     }
 
     /**
@@ -916,16 +1039,18 @@ class TuiViewModel(
                 trimmed.substring(0, slash) to trimmed.substring(slash + 1)
             }
         }
-        try {
-            r.configRouter.setDefaultModel(SetDefaultModelRequest(operation, modelId, provider), taskId = null)
-        } catch (e: Exception) {
-            logger.warn(e) { "Failed to set model slot $operation = $provider/$modelId" }
+        scope.launch(Dispatchers.IO) {
+            try {
+                r.configRouter.setDefaultModel(SetDefaultModelRequest(operation, modelId, provider), taskId = null)
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to set model slot $operation = $provider/$modelId" }
+            }
+            refreshSettingsCacheBlocking(r)
         }
     }
 
     fun settingsToggleBool(section: String, key: String, currentValue: Boolean) {
         updateConfig(section, key, (!currentValue).toString())
-        TuiSettingsScreen.invalidateCache()
     }
 
     fun exportUserConfig() {
@@ -986,8 +1111,8 @@ class TuiViewModel(
     }
 
     fun reloadConfig() {
-        TuiSettingsScreen.invalidateCache()
-        chat.addSystemMessage("Settings cache cleared. Config will be re-read on next access.")
+        refreshSettingsCache()
+        chat.addSystemMessage("Config reloaded from the config store.")
     }
 
     fun testProviderConnection(provider: String) {
@@ -1164,6 +1289,7 @@ class TuiViewModel(
     fun openContentViewer(title: String, content: String, showLineNumbers: Boolean = false, allowAddContext: Boolean = false) =
         obs.openContentViewer(title, content, showLineNumbers, allowAddContext)
     fun closeFileViewer() = obs.closeFileViewer()
+    fun showFileViewerHint() = obs.showFileViewerHint()
     fun fileViewerScrollUp() = obs.fileViewerScrollUp()
     fun fileViewerScrollDown() = obs.fileViewerScrollDown()
     fun fileViewerPageUp() = obs.fileViewerPageUp()

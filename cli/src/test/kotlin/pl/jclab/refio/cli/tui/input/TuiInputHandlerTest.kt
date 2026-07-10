@@ -100,4 +100,78 @@ class TuiInputHandlerTest {
         handler.dispatchAction(TuiAction.ScrollUp, viewModel)
         verify { viewModel.chatScrollUp() }
     }
+
+    // With a side panel open but focus on the input, Enter must send the chat
+    // message; the panel only owns Enter/arrows after Tab moves focus to it.
+
+    private fun stateWith(tab: TuiTab, panelFocused: Boolean, input: String = "hello") {
+        every { viewModel.stateFlow } returns mockk {
+            every { value } returns TuiState(
+                activeTab = tab, screen = TuiScreen.MAIN,
+                panelFocused = panelFocused, inputBuffer = input
+            )
+        }
+    }
+
+    @Test
+    fun `Enter with Files panel open but input focused sends the chat message`() {
+        stateWith(TuiTab.FILES, panelFocused = false)
+        handler.dispatchAction(TuiAction.SendMessage, viewModel)
+        verify { viewModel.sendMessage("hello") }
+        verify(exactly = 0) { viewModel.fileBrowserEnter() }
+    }
+
+    @Test
+    fun `Enter with Files panel focused opens the selected entry instead of sending`() {
+        stateWith(TuiTab.FILES, panelFocused = true)
+        handler.dispatchAction(TuiAction.SendMessage, viewModel)
+        verify { viewModel.fileBrowserEnter() }
+        verify(exactly = 0) { viewModel.sendMessage(any()) }
+    }
+
+    @Test
+    fun `Enter with RAG panel open but input focused sends the chat message`() {
+        stateWith(TuiTab.RAG, panelFocused = false)
+        handler.dispatchAction(TuiAction.SendMessage, viewModel)
+        verify { viewModel.sendMessage("hello") }
+        verify(exactly = 0) { viewModel.ragOpenSelectedFile() }
+    }
+
+    @Test
+    fun `Enter with Logs panel open but input focused sends the chat message`() {
+        stateWith(TuiTab.LOGS, panelFocused = false)
+        handler.dispatchAction(TuiAction.SendMessage, viewModel)
+        verify { viewModel.sendMessage("hello") }
+        verify(exactly = 0) { viewModel.openLogDetailViewer() }
+    }
+
+    @Test
+    fun `Enter with Context panel open but input focused sends the chat message`() {
+        stateWith(TuiTab.CONTEXT, panelFocused = false)
+        handler.dispatchAction(TuiAction.SendMessage, viewModel)
+        verify { viewModel.sendMessage("hello") }
+        verify(exactly = 0) { viewModel.toggleContextDetail() }
+    }
+
+    @Test
+    fun `Enter with API logs panel open but input focused sends the chat message`() {
+        stateWith(TuiTab.API_LOGS, panelFocused = false)
+        handler.dispatchAction(TuiAction.SendMessage, viewModel)
+        verify { viewModel.sendMessage("hello") }
+        verify(exactly = 0) { viewModel.openApiLogDetailViewer() }
+    }
+
+    @Test
+    fun `arrows with Files panel focused navigate the panel not the chat`() {
+        stateWith(TuiTab.FILES, panelFocused = true)
+        handler.dispatchAction(TuiAction.ScrollDown, viewModel)
+        verify { viewModel.fileBrowserDown() }
+    }
+
+    @Test
+    fun `arrows with Files panel open but input focused do not move the file cursor`() {
+        stateWith(TuiTab.FILES, panelFocused = false)
+        handler.dispatchAction(TuiAction.ScrollDown, viewModel)
+        verify(exactly = 0) { viewModel.fileBrowserDown() }
+    }
 }

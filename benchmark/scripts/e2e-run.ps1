@@ -29,6 +29,16 @@
   headless rule, a human approves the concrete command before it runs. -SelfTest exercises only the
   assertion logic against bundled sample run.json files and makes no LLM call.
 
+  LLM judge (SOFT tier, mirrors e2e-run.sh): set JUDGE_MODEL=<provider/model> to run an external judge
+  after each scenario. The judge is the headless CLI itself in CHAT mode; it gets the task text, the
+  diff of the fixture project after the run, the build/test output, and the scenario's optional
+  `judge_criteria` (string or array; falls back to legacy `judge.criteria`). It must answer with JSON
+  {verdict: PASS|FAIL, confidence: 0-1, reasons: [...]}; an unparseable answer becomes verdict FAIL
+  with reason "judge output unparseable". The verdict is appended to the run's results.jsonl record
+  (E2E_OUT_DIR mechanism) as `judge:{...}` and printed as a WARN/NOTE - it never changes the run's
+  HARD verdict. Sanity: JUDGE_MODEL must differ from the tested -Model, otherwise judging is skipped
+  with a warning; multi-agent scenarios (no prompt file) are skipped with a note.
+
 .EXAMPLE
   ./e2e-run.ps1 -SelfTest
 .EXAMPLE
@@ -283,13 +293,200 @@ function ConvertTo-FailureMode {
     return 'wrong-output'
 }
 
+# ---------------------------------------------------------------------------
+# L3 judge (SOFT tier) - an external LLM reviews WHAT the agent changed, not just
+# whether the deterministic assertions held. Catches "build passes but the change
+# is off-topic" that HARD needles cannot see. Mirrors e2e-run.sh run_judge.
+# ---------------------------------------------------------------------------
+
+# Fallback object for any judge answer that cannot be normalized.
+function Get-JudgeUnparseable {
+    [pscustomobject]@{ verdict = 'FAIL'; confidence = 0; reasons = @('judge output unparseable') }
+}
+
+# Normalize an arbitrary LLM answer into a compact {verdict, confidence, reasons} object.
+# Defensive: whole-string JSON, then a fenced ``` block, then the first {...} span. Anything that
+# does not yield verdict PASS|FAIL collapses to the unparseable fallback. Mirrors parse_judge_output.
+function ConvertFrom-JudgeOutput {
+    param([string]$Raw)
+    if (-not $Raw) { return (Get-JudgeUnparseable) }
+    $cand = $null
+    try { $cand = $Raw | ConvertFrom-Json } catch {}
+    if (-not $cand) {
+        # Fenced block, if any, else the widest {...} span on the flattened text.
+        $body = $null
+        $fence = [regex]::Match($Raw, '(?s)```[a-zA-Z]*\s*(.*?)```')
+        if ($fence.Success) { $body = $fence.Groups[1].Value }
+        if (-not $body) {
+            $flat = $Raw -replace "`r?`n", ' '
+            $span = [regex]::Match($flat, '\{.*\}')
+            if ($span.Success) { $body = $span.Value }
+        }
+        if ($body) { try { $cand = $body | ConvertFrom-Json } catch {} }
+    }
+    if (-not $cand -or $cand -isnot [System.Management.Automation.PSCustomObject]) { return (Get-JudgeUnparseable) }
+    $v = if ($cand.verdict) { [string]$cand.verdict } else { '' }
+    if ($v -ne 'PASS' -and $v -ne 'FAIL') { return (Get-JudgeUnparseable) }
+    $conf = 0
+    if ($null -ne $cand.confidence) { try { $conf = [double]$cand.confidence } catch { $conf = 0 } }
+    $reasons = @()
+    if ($null -ne $cand.reasons) { $reasons = @($cand.reasons | ForEach-Object { [string]$_ }) }
+    return [pscustomobject]@{ verdict = $v; confidence = $conf; reasons = $reasons }
+}
+
+# Harness artifacts written into the work dir are excluded from the judge diff so the judge sees only
+# the agent's changes. Matches the .sh diff -x list: run.json build.log server.log smoke.log
+# .e2e-prompt.md .judge* build .refio (each matched as a path SEGMENT, at any depth, like diff -x).
+function Test-JudgeDiffExcluded {
+    param([string]$RelPath)
+    foreach ($seg in ($RelPath -split '[\\/]')) {
+        if ($seg -in @('run.json', 'build.log', 'server.log', 'smoke.log', '.e2e-prompt.md', 'build', '.refio')) { return $true }
+        if ($seg -like '.judge*') { return $true }
+    }
+    return $false
+}
+
+# Recursive diff of fixture vs post-run project, harness artifacts excluded. Uses `git diff
+# --no-index` per differing file when git is on PATH (real unified diffs); otherwise a
+# PowerShell-native +/- line comparison. Returns one text blob (uncapped; caller truncates).
+function Get-JudgeDiff {
+    param([string]$Fixture, [string]$Work)
+    $rel = { param($Root, $Full) $Full.Substring($Root.Length).TrimStart('\', '/') -replace '\\', '/' }
+    $files = @{}
+    foreach ($f in @(Get-ChildItem -Recurse -File -Path $Fixture -ErrorAction SilentlyContinue)) {
+        $r = & $rel $Fixture $f.FullName
+        if (-not (Test-JudgeDiffExcluded $r)) { $files[$r] = $true }
+    }
+    foreach ($f in @(Get-ChildItem -Recurse -File -Path $Work -ErrorAction SilentlyContinue)) {
+        $r = & $rel $Work $f.FullName
+        if (-not (Test-JudgeDiffExcluded $r)) { $files[$r] = $true }
+    }
+    $git = Get-Command git -ErrorAction SilentlyContinue
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($r in ($files.Keys | Sort-Object)) {
+        $a = Join-Path $Fixture $r
+        $b = Join-Path $Work $r
+        $aEx = Test-Path $a -PathType Leaf
+        $bEx = Test-Path $b -PathType Leaf
+        if ($aEx -and $bEx -and ((Get-FileHash $a).Hash -eq (Get-FileHash $b).Hash)) { continue }
+        if ($git) {
+            # git diff --no-index exits 1 on differences - expected, not an error.
+            $savedEAP = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $aArg = if ($aEx) { $a } else { 'NUL' }
+                $bArg = if ($bEx) { $b } else { 'NUL' }
+                $out = & $git.Source diff --no-index --no-color -- $aArg $bArg 2>$null
+                if ($out) { [void]$sb.AppendLine(($out -join "`n")) }
+            } catch {} finally { $ErrorActionPreference = $savedEAP }
+        } else {
+            # Native fallback: header + -/+ lines via Compare-Object (unordered but judge-readable).
+            [void]$sb.AppendLine("--- a/$r"); [void]$sb.AppendLine("+++ b/$r")
+            $aLines = if ($aEx) { @(Get-Content $a) } else { @() }
+            $bLines = if ($bEx) { @(Get-Content $b) } else { @() }
+            foreach ($d in @(Compare-Object $aLines $bLines)) {
+                $mark = if ($d.SideIndicator -eq '<=') { '-' } else { '+' }
+                [void]$sb.AppendLine("$mark$($d.InputObject)")
+            }
+        }
+    }
+    return $sb.ToString()
+}
+
+# Run the judge for one scenario. Returns a {verdict, confidence, reasons} object, or $null when
+# judging is not applicable (no JUDGE_MODEL, judge==tested model, multi-agent scenario without a
+# prompt). Never throws to the caller: error paths degrade to the unparseable FAIL verdict or $null.
+function Invoke-Judge {
+    param([string]$Scenario, [string]$Work, [string]$Fixture, [string]$PromptFile)
+    $judgeModel = $env:JUDGE_MODEL
+    if (-not $judgeModel) { return $null }
+    if ($Model -and $judgeModel -eq $Model) {
+        Write-Host "  WARN judge skipped: JUDGE_MODEL equals the tested model ($Model) - a model must not grade itself"
+        return $null
+    }
+    if (-not $PromptFile -or -not (Test-Path $PromptFile)) {
+        Write-Host "  NOTE judge skipped: no prompt file for this scenario (multi-agent runs are not judged yet)"
+        return $null
+    }
+    try {
+        $s = Get-Content -Raw $Scenario | ConvertFrom-Json
+        # judge_criteria (string or array), legacy fallback judge.criteria.
+        $criteria = @()
+        $rawCrit = $null
+        if ($null -ne $s.judge_criteria) { $rawCrit = $s.judge_criteria }
+        elseif ($s.judge -and $null -ne $s.judge.criteria) { $rawCrit = $s.judge.criteria }
+        if ($null -ne $rawCrit) { $criteria = @($rawCrit | ForEach-Object { [string]$_ } | Where-Object { $_ }) }
+
+        $diffText = Get-JudgeDiff -Fixture $Fixture -Work $Work
+        if ($diffText.Length -gt 24000) { $diffText = $diffText.Substring(0, 24000) }
+        $buildOut = ''
+        $buildLog = Join-Path $Work 'build.log'
+        if (Test-Path $buildLog) {
+            $buildOut = Get-Content -Raw $buildLog
+            if ($buildOut.Length -gt 8000) { $buildOut = $buildOut.Substring(0, 8000) }
+        }
+
+        $nl = "`n"
+        $p = New-Object System.Text.StringBuilder
+        [void]$p.Append("You are an impartial code-review judge for an automated coding-agent benchmark.$nl")
+        [void]$p.Append("A coding agent was given the TASK below and produced the DIFF against the original project.$nl")
+        [void]$p.Append("Decide whether the change actually accomplishes the task (not just compiles).$nl$nl")
+        [void]$p.Append("Respond with ONLY a JSON object, no prose, no markdown fence:$nl")
+        [void]$p.Append('{"verdict": "PASS" or "FAIL", "confidence": <number 0-1>, "reasons": ["short reason", ...]}')
+        [void]$p.Append("$nl$nl## TASK$nl")
+        [void]$p.Append((Get-Content -Raw $PromptFile))
+        [void]$p.Append($nl)
+        if ($criteria.Count -gt 0) {
+            [void]$p.Append("$nl## EVALUATION CRITERIA$nl")
+            foreach ($c in $criteria) { [void]$p.Append("- $c$nl") }
+        }
+        [void]$p.Append("$nl## DIFF (original project vs after the agent's run)$nl")
+        [void]$p.Append('```diff'); [void]$p.Append($nl)
+        if ($diffText.Trim()) { [void]$p.Append($diffText.TrimEnd()); [void]$p.Append($nl) } else { [void]$p.Append("(no file changes)$nl") }
+        [void]$p.Append('```'); [void]$p.Append($nl)
+        if ($buildOut) {
+            [void]$p.Append("$nl## BUILD/TEST OUTPUT$nl")
+            [void]$p.Append('```'); [void]$p.Append($nl)
+            [void]$p.Append($buildOut.TrimEnd()); [void]$p.Append($nl)
+            [void]$p.Append('```'); [void]$p.Append($nl)
+        }
+        $judgePrompt = Join-Path $Work '.judge-prompt.md'
+        Set-Content -Path $judgePrompt -Value $p.ToString() -NoNewline -Encoding UTF8
+
+        # The judge gets its own empty throwaway project: CHAT mode makes no tool calls, and the
+        # sandbox must not point at the mutated project under evaluation.
+        $jproj = Join-Path ([System.IO.Path]::GetTempPath()) ("refio-e2e-judge-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $jproj | Out-Null
+        $jrun = Join-Path $jproj 'judge-run.json'
+        try {
+            Invoke-Cli -CliArgs @(
+                '--headless', '-p', $jproj, '--mode', 'CHAT', '--model', $judgeModel,
+                '--prompt-file', $judgePrompt, '--output', 'json', '--output-file', $jrun,
+                '--max-cost', $MaxCost) | Out-Null
+            $raw = ''
+            if (Test-Path $jrun) {
+                try {
+                    $jr = Get-Content -Raw $jrun | ConvertFrom-Json
+                    if ($null -ne $jr.finalOutput) { $raw = [string]$jr.finalOutput }
+                } catch {}
+            }
+            return (ConvertFrom-JudgeOutput -Raw $raw)
+        } finally {
+            Remove-Item -Recurse -Force $jproj -ErrorAction SilentlyContinue
+        }
+    } catch {
+        return (Get-JudgeUnparseable)
+    }
+}
+
 # Persist this run for the stabilization gate (docs/0069). No-op unless E2E_OUT_DIR is set, so default
 # runs are completely unchanged. Writes <out>\<id>__<model>__<run>.run.json plus one results.jsonl
 # record. Never throws (all failure paths swallowed) - the gate is observe-only. Mirrors
 # e2e-run.sh emit_result_record; -ModelLabelOverride lets -SelfTest exercise this without touching the
 # script-scope $Model (a plain assignment inside a function would only shadow it locally).
 function Write-ResultRecord {
-    param([string]$Id, [string]$Verdict, [string]$RunJsonPath, [string]$ModelLabelOverride = $script:Model)
+    param([string]$Id, [string]$Verdict, [string]$RunJsonPath, [string]$ModelLabelOverride = $script:Model,
+          $Judge = $null)
     $outDir = $env:E2E_OUT_DIR
     if (-not $outDir) { return }
     $runIdx = $env:E2E_RUN_INDEX
@@ -336,7 +533,10 @@ function Write-ResultRecord {
             costUsd = $cost; tokensOut = $tokens
             mode = $mode; provider = $provider; tokensIn = $tokensIn
             iterations = $iters; apiCalls = $apiCalls; durationMs = $duration
-            tools = $tools; apiErrors = $apiErrors; reasons = $reasons
+            tools = $tools; apiErrors = $apiErrors
+            # SOFT judge verdict object, or null when the run was not judged (mirrors e2e-run.sh).
+            judge = $Judge
+            reasons = $reasons
         }
         ($record | ConvertTo-Json -Compress -Depth 6) | Add-Content -Path (Join-Path $outDir 'results.jsonl')
     } catch {}
@@ -377,8 +577,30 @@ function Invoke-Scenario {
         $py = Get-Command python -ErrorAction SilentlyContinue
         if (-not $py) { $py = Get-Command python3 -ErrorAction SilentlyContinue }
         if (-not $py) { throw "fixture_server needs python/python3 on PATH" }
-        $server = Start-Process -FilePath $py.Source -PassThru -WindowStyle Hidden -ArgumentList @(
-            '-m', 'http.server', "$fsPort", '--bind', '127.0.0.1', '--directory', $fsDir)
+        if ($s.fixture_server.cmd) {
+            # Custom server command (e.g. an intentionally-vulnerable CTF fixture) instead of the
+            # stdlib static file server. {{PORT}} and {{DIR}} (the absolute served dir) are
+            # substituted. Scenario cmds are authored bash-style ("exec python3 ..."); strip the
+            # leading `exec` (a bash builtin) and map python3 to the resolved interpreter so the
+            # same scenario runs on Windows. Mirrors e2e-run.sh fixture_server.cmd.
+            $rendered = ($s.fixture_server.cmd -replace '\{\{PORT\}\}', "$fsPort") -replace '\{\{DIR\}\}', $fsDir
+            $parts = @(($rendered -replace '^\s*exec\s+', '') -split '\s+' | Where-Object { $_ })
+            $exeName = $parts[0]
+            $exe = Get-Command $exeName -ErrorAction SilentlyContinue
+            if (-not $exe -and $exeName -match '^python3?$') { $exe = $py }
+            if (-not $exe) { throw "fixture_server cmd executable not found: $exeName" }
+            $spArgs = @{
+                FilePath = $exe.Source; PassThru = $true; WindowStyle = 'Hidden'
+                RedirectStandardOutput = (Join-Path $work 'server.log')
+                RedirectStandardError  = (Join-Path $work 'server.err.log')
+            }
+            $exeArgs = @($parts | Select-Object -Skip 1)
+            if ($exeArgs.Count -gt 0) { $spArgs['ArgumentList'] = $exeArgs }
+            $server = Start-Process @spArgs
+        } else {
+            $server = Start-Process -FilePath $py.Source -PassThru -WindowStyle Hidden -ArgumentList @(
+                '-m', 'http.server', "$fsPort", '--bind', '127.0.0.1', '--directory', $fsDir)
+        }
         $ready = $false
         for ($i = 0; $i -lt 50; $i++) {
             try { $c = New-Object System.Net.Sockets.TcpClient('127.0.0.1', $fsPort); $c.Close(); $ready = $true; break }
@@ -490,7 +712,19 @@ function Invoke-Scenario {
     $verdict = Assert-Run -Scenario $Scenario -RunJsonPath $runJson -ProjectDir $work -BuildExit $buildExit -SmokeExit $smokeExit
     $run = Get-Content -Raw $runJson | ConvertFrom-Json
     Write-Output "| $($s.id) | $verdict | status=$($run.session.status) build_exit=$buildExit cost=`$$($run.metrics.costUsd) |"
-    Write-ResultRecord -Id $s.id -Verdict $verdict -RunJsonPath $runJson
+
+    # SOFT judge tier: runs only when JUDGE_MODEL is set; never changes the HARD verdict.
+    $judge = Invoke-Judge -Scenario $Scenario -Work $work -Fixture $fixture -PromptFile $effectivePrompt
+    if ($judge) {
+        $jReasons = ($judge.reasons -join '; ')
+        if ($judge.verdict -eq 'PASS') {
+            Write-Host "  NOTE [soft] judge PASS: confidence=$($judge.confidence) reasons=[$jReasons]"
+        } else {
+            Write-Host "  WARN [soft] judge $($judge.verdict): confidence=$($judge.confidence) reasons=[$jReasons] (advisory only, does not fail the run)"
+        }
+    }
+
+    Write-ResultRecord -Id $s.id -Verdict $verdict -RunJsonPath $runJson -Judge $judge
     if (-not $Keep) { Remove-Item -Recurse -Force $work }
     return ($verdict -like 'PASS*')
 }

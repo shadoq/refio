@@ -47,6 +47,16 @@
 # E2E_RUN_INDEX=<n> tags the run number (default 1; an N-runs driver sets it per iteration).
 # With E2E_OUT_DIR unset (the default) nothing is persisted and behaviour is unchanged.
 #
+# LLM judge (SOFT tier): set JUDGE_MODEL=<provider/model> to run an external judge after each
+# scenario. The judge is the headless CLI itself in CHAT mode; it gets the task text, the diff of
+# the fixture project after the run, the build/test output, and the scenario's optional
+# `judge_criteria` (string or array; falls back to legacy `judge.criteria`). It must answer with
+# JSON {verdict: PASS|FAIL, confidence: 0-1, reasons: [...]}; an unparseable answer becomes
+# verdict FAIL with reason "judge output unparseable". The verdict is appended to the run's
+# results.jsonl record (E2E_OUT_DIR mechanism) as `judge:{...}` and printed as a WARN/NOTE - it
+# never changes the run's HARD verdict. Sanity: JUDGE_MODEL must differ from the tested --model,
+# otherwise judging is skipped with a warning.
+#
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -374,12 +384,117 @@ classify_failure_mode() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# L3 judge (SOFT tier) - an external LLM reviews WHAT the agent changed, not just
+# whether the deterministic assertions held. Catches "build passes but the change
+# is off-topic" that HARD needles cannot see.
+# ---------------------------------------------------------------------------
+
+# Normalize an arbitrary LLM answer into a compact {verdict, confidence, reasons} object.
+# Defensive: whole-string JSON, then a fenced ```json block, then the first {...} span.
+# Anything that does not yield verdict PASS|FAIL collapses to the unparseable fallback.
+JUDGE_UNPARSEABLE='{"verdict":"FAIL","confidence":0,"reasons":["judge output unparseable"]}'
+parse_judge_output() {
+    local raw="$1" cand=""
+    cand="$(jq -c 'select(type=="object")' <<<"$raw" 2>/dev/null || true)"
+    if [[ -z "$cand" ]]; then
+        # Fenced block, if any, else the widest {...} span on a single flattened line.
+        local body
+        body="$(sed -n '/^```/,/^```/p' <<<"$raw" | sed '/^```/d')"
+        [[ -n "$body" ]] || body="$(tr '\n' ' ' <<<"$raw" | grep -oE '\{.*\}' | head -n1 || true)"
+        cand="$(jq -c 'select(type=="object")' <<<"$body" 2>/dev/null || true)"
+    fi
+    local v
+    v="$(jq -r '.verdict // empty' <<<"$cand" 2>/dev/null || true)"
+    if [[ "$v" != "PASS" && "$v" != "FAIL" ]]; then
+        echo "$JUDGE_UNPARSEABLE"
+        return 0
+    fi
+    jq -c '{verdict:.verdict, confidence:((.confidence // 0)|tonumber? // 0), reasons:((.reasons // [])|if type=="array" then map(tostring) else [tostring] end)}' \
+        <<<"$cand" 2>/dev/null || echo "$JUDGE_UNPARSEABLE"
+}
+
+# Run the judge for one scenario. Echoes a compact judge JSON object, or nothing when judging
+# is not applicable (no JUDGE_MODEL, judge==tested model, multi-agent scenario without a prompt).
+# Never fails the caller: every error path degrades to the unparseable FAIL verdict or to silence.
+run_judge() {
+    local scenario="$1" work="$2" fixture="$3" prompt_file="$4"
+    [[ -n "${JUDGE_MODEL:-}" ]] || return 0
+    if [[ -n "$MODEL" && "$JUDGE_MODEL" == "$MODEL" ]]; then
+        echo "  WARN judge skipped: JUDGE_MODEL equals the tested model ($MODEL) - a model must not grade itself" >&2
+        return 0
+    fi
+    if [[ -z "$prompt_file" || ! -f "$prompt_file" ]]; then
+        echo "  NOTE judge skipped: no prompt file for this scenario (multi-agent runs are not judged yet)" >&2
+        return 0
+    fi
+
+    local criteria
+    criteria="$(jq -r '(.judge_criteria // .judge.criteria // []) | if type=="array" then .[] else . end' "$scenario" 2>/dev/null || true)"
+
+    # Diff of the fixture project after the run (git-style, no repo needed). Harness artifacts
+    # written into the work dir are excluded so the judge sees only the agent's changes.
+    local diff_text
+    diff_text="$(diff -ruN \
+        -x 'run.json' -x 'build.log' -x 'server.log' -x 'smoke.log' \
+        -x '.e2e-prompt.md' -x '.judge*' -x 'build' -x '.refio' \
+        "$fixture" "$work" 2>/dev/null | head -c 24000 || true)"
+
+    local build_out=""
+    [[ -f "$work/build.log" ]] && build_out="$(head -c 8000 "$work/build.log")"
+
+    local judge_prompt="$work/.judge-prompt.md"
+    {
+        echo "You are an impartial code-review judge for an automated coding-agent benchmark."
+        echo "A coding agent was given the TASK below and produced the DIFF against the original project."
+        echo "Decide whether the change actually accomplishes the task (not just compiles)."
+        echo
+        echo "Respond with ONLY a JSON object, no prose, no markdown fence:"
+        echo '{"verdict": "PASS" or "FAIL", "confidence": <number 0-1>, "reasons": ["short reason", ...]}'
+        echo
+        echo "## TASK"
+        cat "$prompt_file"
+        echo
+        if [[ -n "$criteria" ]]; then
+            echo "## EVALUATION CRITERIA"
+            while IFS= read -r c; do [[ -n "$c" ]] && echo "- $c"; done <<<"$criteria"
+            echo
+        fi
+        echo "## DIFF (original project vs after the agent's run)"
+        echo '```diff'
+        if [[ -n "$diff_text" ]]; then echo "$diff_text"; else echo "(no file changes)"; fi
+        echo '```'
+        echo
+        if [[ -n "$build_out" ]]; then
+            echo "## BUILD/TEST OUTPUT"
+            echo '```'
+            echo "$build_out"
+            echo '```'
+        fi
+    } > "$judge_prompt"
+
+    # The judge gets its own empty throwaway project: CHAT mode makes no tool calls, and the
+    # sandbox must not point at the mutated project under evaluation.
+    local jproj jrun raw
+    jproj="$(mktemp -d "${TMPDIR:-/tmp}/refio-e2e-judge-XXXXXX")"
+    jrun="$jproj/judge-run.json"
+    "$CLI" --headless -p "$jproj" --mode CHAT --model "$JUDGE_MODEL" \
+        --prompt-file "$judge_prompt" --output json --output-file "$jrun" \
+        --max-cost "$MAX_COST" >&2 || true
+    raw="$(jq -r '.finalOutput // ""' "$jrun" 2>/dev/null || true)"
+    rm -rf "$jproj"
+    parse_judge_output "$raw"
+}
+
 # Persist this run for the stabilization gate (docs/0069). No-op unless E2E_OUT_DIR is set, so default
 # runs are completely unchanged. Writes <out>/<id>__<model>__<run>.run.json plus one results.jsonl
 # record. Never aborts the caller (all failure paths swallowed) - the gate is observ-only.
 emit_result_record() {
     [[ -n "${E2E_OUT_DIR:-}" ]] || return 0
-    local id="$1" verdict="$2" run_json="$3"
+    local id="$1" verdict="$2" run_json="$3" judge="${4:-}"
+    # Judge object is optional and SOFT; a missing/invalid value serializes as null.
+    jq -e . >/dev/null 2>&1 <<<"$judge" || judge="null"
+    [[ -n "$judge" ]] || judge="null"
     local run_idx="${E2E_RUN_INDEX:-1}"
     [[ "$run_idx" =~ ^[0-9]+$ ]] || run_idx=1
     run_idx=$((10#$run_idx))
@@ -422,10 +537,12 @@ emit_result_record() {
         --argjson tokensIn "$tokens_in" --argjson iterations "$iters" \
         --argjson apiCalls "$apicalls" --argjson durationMs "$duration" \
         --argjson tools "$tools_json" --argjson apiErrors "$apierr_json" \
+        --argjson judge "$judge" \
         '{scenario:$scenario, model:$model, run:$run, verdict:$verdict, failure_mode:$fmode,
           status:$status, costUsd:$cost, tokensOut:$tokens,
           mode:$mode, provider:$provider, tokensIn:$tokensIn, iterations:$iterations,
           apiCalls:$apiCalls, durationMs:$durationMs, tools:$tools, apiErrors:$apiErrors,
+          judge:$judge,
           reasons: ($reasons | if . == "" then [] else split("; ") end)}' \
         >>"$E2E_OUT_DIR/results.jsonl" 2>/dev/null || true
 }
@@ -571,7 +688,20 @@ run_scenario() {
     cost="$(jq -r '.metrics.costUsd // 0' "$run_json")"
     echo "| $id | $verdict | status=$status build_exit=$build_exit cost=\$$cost |"
 
-    emit_result_record "$id" "$verdict" "$run_json"
+    # SOFT judge tier: runs only when JUDGE_MODEL is set; never changes the HARD verdict.
+    local judge_json=""
+    judge_json="$(run_judge "$scenario" "$work" "$fixture" "${effective_prompt:-}" || true)"
+    if [[ -n "$judge_json" ]]; then
+        local jv
+        jv="$(jq -r '.verdict' <<<"$judge_json" 2>/dev/null || echo "?")"
+        if [[ "$jv" == "PASS" ]]; then
+            echo "  NOTE [soft] judge PASS: $(jq -c '{confidence,reasons}' <<<"$judge_json")" >&2
+        else
+            echo "  WARN [soft] judge $jv: $(jq -c '{confidence,reasons}' <<<"$judge_json") (advisory only, does not fail the run)" >&2
+        fi
+    fi
+
+    emit_result_record "$id" "$verdict" "$run_json" "$judge_json"
     [[ $KEEP -eq 1 ]] || rm -rf "$work"
     [[ "$verdict" == PASS* ]]
 }

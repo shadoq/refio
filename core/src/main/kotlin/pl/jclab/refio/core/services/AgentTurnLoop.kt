@@ -89,7 +89,12 @@ class AgentTurnLoop(
     private val pendingUserMessageQueue: PendingUserMessageQueue? = null,
     private val agentEventBus: pl.jclab.refio.core.agents.events.AgentEventBus? = null,
     private val hookService: pl.jclab.refio.core.services.hooks.HookService? = null,
-    private val toolPermissionsService: ToolPermissionsService? = null
+    private val toolPermissionsService: ToolPermissionsService? = null,
+    /**
+     * Deterministic post-turn verification (project build/test) with a bounded repair loop.
+     * Null disables the step. See [pl.jclab.refio.core.services.turn.TurnVerifier].
+     */
+    private val turnVerifier: pl.jclab.refio.core.services.turn.TurnVerifier? = null
 ) {
     /**
      * The turn loop itself. This class is a thin facade over it: it owns the same dependency set
@@ -118,7 +123,8 @@ class AgentTurnLoop(
         pendingUserMessageQueue = pendingUserMessageQueue,
         agentEventBus = agentEventBus,
         hookService = hookService,
-        toolPermissionsService = toolPermissionsService
+        toolPermissionsService = toolPermissionsService,
+        turnVerifier = turnVerifier
     )
 
     /** Live turn state for UI observation; owned by [TurnExecutor]. */
@@ -350,5 +356,13 @@ data class TurnResult(
      * re-entry would help. Maps to [pl.jclab.refio.core.db.TaskStatus.INCOMPLETE], a distinct
      * state from FAILED (an error) and SUCCESS (delivered).
      */
-    val incomplete: Boolean = false
+    val incomplete: Boolean = false,
+    /**
+     * Outcome of the deterministic post-turn verification step (project build/test run by the
+     * loop code after a file-writing AGENT turn). Null when verification was not applicable to
+     * this exit path; [pl.jclab.refio.core.debug.VerificationSummary.NOT_RUN] when it was
+     * considered but never executed. `result == "FAILED"` means the repair rounds were exhausted
+     * and the turn ended as a verification failure - never faked as success.
+     */
+    val verification: pl.jclab.refio.core.debug.VerificationSummary? = null
 )

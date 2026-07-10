@@ -236,6 +236,47 @@ class RunTerminalCommandToolTest {
     }
 
     @Nested
+    inner class OrphanProcessTests {
+
+        /**
+         * A backgrounded child that keeps stdout open must not hang the tool.
+         *
+         * Under a non-interactive `sh -c` there is no job control, so `kill %1` is a no-op: the
+         * backgrounded `sleep` survives the shell and keeps the inherited stdout pipe open. The tool
+         * must still return promptly (reaping the orphan) instead of blocking on the never-ending
+         * read for the full child lifetime.
+         */
+        @Test
+        fun `should not hang when a backgrounded child keeps stdout open`() = runBlocking {
+            val os = System.getProperty("os.name").lowercase()
+            org.junit.jupiter.api.Assumptions.assumeFalse(os.contains("windows"), "POSIX job-control scenario")
+
+            val childSleepSeconds = 60
+            val timeoutSeconds = 2L
+            val strictTool = RunTerminalCommandTool(
+                sandbox,
+                CommandLimits(timeoutSeconds = timeoutSeconds),
+                allowAllMatcher()
+            )
+
+            // The child sleeps far longer than the shell lives; `kill %1` cannot stop it (no job
+            // control), so it survives holding stdout open unless the tool reaps the tree.
+            val command = "sleep $childSleepSeconds & sleep 0.2; kill %1"
+
+            val elapsed = kotlin.system.measureTimeMillis {
+                val result = strictTool.execute(mapOf("command" to command))
+                assertNotNull(result)
+            }
+
+            // Must return well before the child's full sleep - proving the orphan did not block us.
+            assertTrue(
+                elapsed < childSleepSeconds * 1000L / 2,
+                "Tool should return promptly, but took ${elapsed}ms"
+            )
+        }
+    }
+
+    @Nested
     inner class OutputLimitTests {
 
         @Test

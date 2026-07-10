@@ -93,6 +93,23 @@ class NextSpeakerJudgeGuardian(
                 }
                 return GuardianDecision.Pass
             }
+            // One more nudge, once, while the turn is still early and nothing is delivered: the
+            // second reminder escalates to re-include the JSON envelope schema. A single nudge
+            // often does not unstick a weak local model that abandoned the task on iteration 1-3
+            // with an intent announcement and a malformed/absent tool call; the schema reminder
+            // targets exactly that. Bounded by [reentryBudget] so a turn past its early window,
+            // or one that already burned the extra re-entry, still stops INCOMPLETE here.
+            if (context.priorReentries < reentryBudget(context)) {
+                logger.info {
+                    "[JUDGE] taskId=${context.taskId} priorReentries=${context.priorReentries} " +
+                        "produced no new tool call but turn is early (iteration=${context.iteration}/" +
+                        "${context.maxIterations}) and nothing delivered - escalated re-entry with schema nudge"
+                }
+                return GuardianDecision.Reenter(
+                    nudge = buildReentryNudge(context, escalated = true),
+                    reason = "escalated re-entry: still no tool call, turn early, nothing delivered"
+                )
+            }
             logger.info {
                 "[JUDGE] taskId=${context.taskId} priorReentries=${context.priorReentries} " +
                     "produced no new tool call (toolsUsed=${context.toolsUsed.size}, " +
@@ -113,26 +130,27 @@ class NextSpeakerJudgeGuardian(
 
         return try {
             val verdict = callJudge(context, response)
-            // Single bounded re-entry on a MODEL verdict (request not yet delivered).
-            // Restored 2026-05 after manual-tests showed T4 models (qwen3.5:9b) silently
-            // abandon multi-step tasks: they end turns on a bare intent announcement
-            // ("Now let me run git branch…", "I'll now produce the analysis…") with no
-            // tool call. `<focus_discipline>` in the system prompt did not change that
-            // behaviour, so the judge is the only terminal-point safety net.
+            // Bounded re-entry on a MODEL verdict (request not yet delivered). Restored 2026-05
+            // after manual-tests showed T4 models (qwen3.5:9b) silently abandon multi-step tasks:
+            // they end turns on a bare intent announcement ("Now let me run git branch…", "I'll now
+            // produce the analysis…") with no tool call. `<focus_discipline>` in the system prompt
+            // did not change that behaviour, so the judge is the only terminal-point safety net.
             //
-            // No extra LLM call beyond the judge we already ran — the nudge is a constant.
-            // The one-shot cap is the `priorReentries == 0` gate: a second consecutive MODEL
-            // verdict falls through to the else-branch and is reported INCOMPLETE (the request
-            // was never delivered); the no-progress short-circuit above likewise marks INCOMPLETE
-            // when a re-entry produced no new tool call. A USER/UNCERTAIN verdict still Passes.
-            if (verdict == NextSpeakerVerdict.MODEL && context.priorReentries == 0) {
+            // No extra LLM call beyond the judge we already ran - the nudge is a constant. The cap
+            // is [reentryBudget]: one re-entry by default, or up to
+            // [MAX_EARLY_JUDGE_REENTRIES] while the turn is still early and NOTHING has been
+            // delivered (weak models often need a second, schema-carrying nudge). Once the budget
+            // is spent a MODEL verdict falls through to INCOMPLETE (request never delivered); the
+            // no-progress short-circuit above enforces the same cap. A USER/UNCERTAIN verdict Passes.
+            if (verdict == NextSpeakerVerdict.MODEL && context.priorReentries < reentryBudget(context)) {
+                val escalated = context.priorReentries > 0
                 logger.info {
                     "[JUDGE] taskId=${context.taskId} verdict=MODEL (mid-task pause) — " +
-                        "single bounded re-entry with focus nudge"
+                        "re-entry ${context.priorReentries + 1} (escalated=$escalated) with focus nudge"
                 }
                 GuardianDecision.Reenter(
-                    nudge = buildReentryNudge(context),
-                    reason = "judge verdict=MODEL: request not yet delivered (1x re-entry)"
+                    nudge = buildReentryNudge(context, escalated = escalated),
+                    reason = "judge verdict=MODEL: request not yet delivered (re-entry ${context.priorReentries + 1})"
                 )
             } else if (verdict == NextSpeakerVerdict.MODEL && deliverableLikelyProduced(context)) {
                 logger.info {
@@ -183,6 +201,26 @@ class NextSpeakerJudgeGuardian(
         TurnDeliverable.produced(context.writeToolsExecutedInTurn, context.mode, context.finalResponse)
 
     /**
+     * How many judge-driven re-entries this turn may spend. One (the strict one-shot) by default;
+     * up to [MAX_EARLY_JUDGE_REENTRIES] only while the turn is still early AND nothing has been
+     * delivered yet - the exact window where an extra nudge can still recover a stalled weak model
+     * without wasting an already-productive or already-late turn. Config-gated so the strict
+     * one-shot can be restored. The early window shrinks as iterations are consumed, so a turn that
+     * burns its budget naturally drops back to a single re-entry and then stops INCOMPLETE.
+     */
+    private fun reentryBudget(context: GuardianContext): Int {
+        val extended = configService.getTyped<Boolean>(
+            ConfigKeys.GENERAL_JUDGE_EXTENDED_REENTRY_ENABLED,
+            context.taskId
+        )
+        if (!extended || deliverableLikelyProduced(context)) {
+            return 1
+        }
+        val earlyLimit = (context.maxIterations * EARLY_REENTRY_ITERATION_FRACTION).toInt()
+        return if (context.iteration <= earlyLimit) MAX_EARLY_JUDGE_REENTRIES else 1
+    }
+
+    /**
      * Hard SYSTEM nudge injected on the single bounded re-entry. Names the failure mode
      * (intent announced, no tool call) and demands the next concrete tool call. In goal mode
      * it re-injects the completion condition so the model re-anchors on the contract.
@@ -195,7 +233,7 @@ class NextSpeakerJudgeGuardian(
      * re-reading DatabaseFactory.kt until aborted). The text is a constant (modulo the goal
      * clause) — building it costs no LLM call.
      */
-    private fun buildReentryNudge(context: GuardianContext): String {
+    private fun buildReentryNudge(context: GuardianContext, escalated: Boolean = false): String {
         val goal = context.completionCondition?.takeIf { it.isNotBlank() }?.take(2000)
         val isSubagent = context.runProfile == TurnRunProfile.SUBAGENT
         return buildString {
@@ -233,8 +271,19 @@ class NextSpeakerJudgeGuardian(
                 append("deliverable is genuinely already present, reply with the final result only, ")
                 append("no preamble.")
             }
-            append("\n\n")
-            append("This is your only automatic reminder; if you stop again the turn ends.")
+            if (escalated && !isSubagent && context.mode != TaskMode.PLAN) {
+                // Second reminder for a model that ignored the first: re-state the exact structured
+                // reply contract. The observed stall is an intent sentence with a malformed or
+                // absent tool call, so showing the envelope shape is the concrete correction.
+                append("\n\nYou already ignored one reminder. If your replies use the JSON envelope, ")
+                append("it MUST be exactly this shape with a real tool in `actions`:\n")
+                append("{\"actions\":[{\"tool\":\"TOOL_NAME\",\"args\":{...}}],\"response\":\"...\",\"intent\":\"implementation\"}\n")
+                append("An empty `actions` array, prose without a tool call, or another intent ")
+                append("announcement ends the turn now.")
+            } else {
+                append("\n\n")
+                append("This is your only automatic reminder; if you stop again the turn ends.")
+            }
         }
     }
 
@@ -389,6 +438,20 @@ class NextSpeakerJudgeGuardian(
     companion object {
         /** Max judge-driven re-entries per turn (cap on consecutive "continue" verdicts). */
         const val MAX_JUDGE_REENTRIES = 3
+
+        /**
+         * Max re-entries the extended budget grants while a turn is early and undelivered. Two
+         * (the strict one-shot plus one schema-carrying escalation) - kept below
+         * [MAX_JUDGE_REENTRIES] so the registry cap stays a backstop, never the primary limit.
+         */
+        const val MAX_EARLY_JUDGE_REENTRIES = 2
+
+        /**
+         * The "still early" window as a fraction of the turn's iteration budget. Beyond it the
+         * extended budget collapses to a single re-entry: a turn that has already spent most of
+         * its iterations without delivering is stuck, not merely slow to start.
+         */
+        const val EARLY_REENTRY_ITERATION_FRACTION = 0.30
 
         private val EXPLICIT_DONE_MARKERS = listOf(
             "task complete",

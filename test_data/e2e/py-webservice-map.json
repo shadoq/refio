@@ -1,0 +1,22 @@
+{
+  "id": "py-webservice-map",
+  "category": "analysis",
+  "mode": "PLAN",
+  "description": "PLAN-mode: map the layered Python web service, name the classes a create-user request traverses, and say which layer validates input.",
+  "max_iterations": 25,
+  "fixture": "fixtures/py-webservice",
+  "prompt_file": "prompts/py-webservice-map.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_output": { "regex": "UserService" },
+    "file_unchanged": [
+      "app/main.py",
+      "app/routers/users.py",
+      "app/services/user_service.py",
+      "app/repositories/user_repository.py",
+      "app/models/user.py"
+    ],
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["The analysis names the router, UserService, and UserRepository layers and the router -> service -> repository data-flow direction, and states that UserService owns validation, without editing any file."]
+}

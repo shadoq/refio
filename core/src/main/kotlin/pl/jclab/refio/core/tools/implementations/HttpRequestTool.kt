@@ -49,8 +49,11 @@ private val logger = dualLogger("HttpRequestTool")
  *   Use this for large responses (CSV, JSON datasets) that should be
  *   processed by run_code instead of being loaded into LLM context.
  *
- * Limits:
- * - Response body max 5MB
+ * Large payloads:
+ * - Responses may be larger than 5MB. Inline output is capped, while successful large text
+ *   responses are saved in the workspace and summarized for the agent.
+ * - Use save_to_file for large CSV, JSON, archives, and other payloads that should remain on disk.
+ * - body_file is loaded as request data without putting its contents into the LLM context.
  * - Timeout 60 seconds
  *
  * Sessions / cookies:

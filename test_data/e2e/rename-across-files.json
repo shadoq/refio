@@ -1,0 +1,23 @@
+{
+  "id": "rename-across-files",
+  "mode": "AGENT",
+  "description": "Rename calc_total to compute_total across its definition, references, and imports so no occurrence of the old name remains.",
+  "category": "refactor",
+  "max_iterations": 30,
+  "fixture": "fixtures/py-rename-multi",
+  "prompt_file": "prompts/rename-across-files.md",
+  "assert": {
+    "tool_order": ["grep_search", "advance_code_editing"],
+    "needles_in_file": [
+      { "path": "src/calc.py", "regex": "def[[:space:]]+compute_total" },
+      { "path": "src/calc.py", "regex": "calc_total", "absent": true },
+      { "path": "src/report.py", "regex": "compute_total" },
+      { "path": "src/report.py", "regex": "calc_total", "absent": true },
+      { "path": "main.py", "regex": "compute_total" },
+      { "path": "main.py", "regex": "calc_total", "absent": true }
+    ],
+    "build_cmd": "python3 main.py",
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["calc_total renamed to compute_total at the definition and every call site including imports; behaviour unchanged and the program still prints OK."]
+}

@@ -112,14 +112,12 @@ open class OpenRouterAdapter(
      * Detect OpenRouter's mid-stream `{"error":{...}}` envelope — throwing from here
      * aborts the SSE loop (see `consumeChatCompletionsSSE`).
      */
-    override fun onStreamRawChunk(chunk: Map<String, Any?>) {
-        @Suppress("UNCHECKED_CAST")
-        val error = chunk["error"] as? Map<String, Any?> ?: return
-        val message = error["message"] as? String ?: "Unknown error"
-        val code = (error["code"] as? Number)?.toInt() ?: 500
-        @Suppress("UNCHECKED_CAST")
-        val metadata = error["metadata"] as? Map<String, Any?>
-        val providerFromMeta = metadata?.get("provider_name") as? String ?: "OpenRouter"
+    override fun onStreamRawChunk(chunk: com.google.gson.JsonObject) {
+        val error = chunk.get("error") as? com.google.gson.JsonObject ?: return
+        val message = error.stringField("message") ?: "Unknown error"
+        val code = error.intField("code") ?: 500
+        val metadata = error.get("metadata") as? com.google.gson.JsonObject
+        val providerFromMeta = metadata.stringField("provider_name") ?: "OpenRouter"
         throw IllegalStateException("$providerFromMeta error (HTTP $code): $message")
     }
 

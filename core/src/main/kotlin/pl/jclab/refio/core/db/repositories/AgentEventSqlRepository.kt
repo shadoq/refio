@@ -22,7 +22,7 @@ class AgentEventSqlRepository : AgentEventRepository {
         .create()
 
     override suspend fun save(event: AgentEvent) {
-        DatabaseFactory.dbQuery {
+        DatabaseFactory.suspendDbQuery {
             AgentEventsTable.insert {
                 it[id] = event.id
                 it[sessionId] = event.sessionId
@@ -35,21 +35,26 @@ class AgentEventSqlRepository : AgentEventRepository {
         }
     }
 
-    override suspend fun findBySessionId(sessionId: String): List<AgentEvent> {
-        return DatabaseFactory.dbQuery {
+    override suspend fun findBySessionId(sessionId: String, limit: Int): List<AgentEvent> {
+        // Fetch the NEWEST `limit` rows, then restore ascending order for replay.
+        return DatabaseFactory.suspendDbQuery {
             AgentEventsTable.selectAll()
                 .where { AgentEventsTable.sessionId eq sessionId }
-                .orderBy(AgentEventsTable.timestamp, SortOrder.ASC)
+                .orderBy(AgentEventsTable.timestamp, SortOrder.DESC)
+                .limit(limit)
                 .mapNotNull { row -> deserializeEvent(row) }
+                .asReversed()
         }
     }
 
-    override suspend fun findByAgentId(agentId: String): List<AgentEvent> {
-        return DatabaseFactory.dbQuery {
+    override suspend fun findByAgentId(agentId: String, limit: Int): List<AgentEvent> {
+        return DatabaseFactory.suspendDbQuery {
             AgentEventsTable.selectAll()
                 .where { AgentEventsTable.sourceAgentId eq agentId }
-                .orderBy(AgentEventsTable.timestamp, SortOrder.ASC)
+                .orderBy(AgentEventsTable.timestamp, SortOrder.DESC)
+                .limit(limit)
                 .mapNotNull { row -> deserializeEvent(row) }
+                .asReversed()
         }
     }
 

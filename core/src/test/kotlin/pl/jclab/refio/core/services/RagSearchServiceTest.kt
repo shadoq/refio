@@ -157,7 +157,7 @@ class RagSearchServiceTest {
                 createEmbeddingRecord(2, 2, unitVector(1, dims))   // similarity = 0.0
             )
             every {
-                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0L, 500)
+                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0, 500)
             } returns embeddings
 
             every { ragRepository.getChunksBatch(any()) } returns listOf(
@@ -194,7 +194,7 @@ class RagSearchServiceTest {
                 createEmbeddingRecord(1, 1, unitVector(1, dims))  // similarity = 0.0
             )
             every {
-                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0L, 500)
+                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0, 500)
             } returns embeddings
 
             // When
@@ -229,7 +229,7 @@ class RagSearchServiceTest {
                 createEmbeddingRecord(3, 3, floatArrayOf(1f, 1f, 0f))    // higher similarity
             )
             every {
-                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0L, 500)
+                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0, 500)
             } returns embeddings
 
             every { ragRepository.getChunksBatch(any()) } returns listOf(
@@ -269,7 +269,7 @@ class RagSearchServiceTest {
                 createEmbeddingRecord(2, 2, floatArrayOf(1f, 1f, 0f, 0f))   // highest similarity (1.0)
             )
             every {
-                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0L, 500)
+                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0, 500)
             } returns embeddings
 
             every { ragRepository.getChunksBatch(any()) } returns listOf(
@@ -311,7 +311,7 @@ class RagSearchServiceTest {
                 createEmbeddingRecord(1, 1, unitVector(0, dims))
             )
             every {
-                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0L, 500)
+                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0, 500)
             } returns embeddings
 
             every { ragRepository.getChunksBatch(any()) } returns listOf(
@@ -349,7 +349,7 @@ class RagSearchServiceTest {
             every { ragRepository.countEmbeddings(projectRoot, model, null) } returns 2
 
             every {
-                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0L, 500)
+                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0, 500)
             } returns listOf(
                 createEmbeddingRecord(1, 1, unitVector(0, dims)),  // similarity = 1.0
                 createEmbeddingRecord(2, 2, unitVector(0, dims))   // similarity = 1.0 (identical)
@@ -384,7 +384,7 @@ class RagSearchServiceTest {
             every { ragRepository.countEmbeddings(projectRoot, model, null) } returns 2
 
             every {
-                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0L, 500)
+                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0, 500)
             } returns listOf(
                 createEmbeddingRecord(1, 1, floatArrayOf(1f, 1f, 0f)),  // similarity 1.0 (outer)
                 createEmbeddingRecord(2, 2, floatArrayOf(1f, 0f, 0f))   // similarity ~0.707 (inner)
@@ -419,7 +419,7 @@ class RagSearchServiceTest {
             every { ragRepository.countEmbeddings(projectRoot, model, null) } returns 2
 
             every {
-                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0L, 500)
+                ragRepository.getEmbeddingsBatch(projectRoot, model, null, 0, 500)
             } returns listOf(
                 createEmbeddingRecord(1, 1, floatArrayOf(1f, 1f, 0f)),
                 createEmbeddingRecord(2, 2, floatArrayOf(1f, 0f, 0f))

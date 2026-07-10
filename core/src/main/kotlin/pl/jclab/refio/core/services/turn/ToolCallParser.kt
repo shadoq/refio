@@ -36,6 +36,25 @@ class ToolCallParser(
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
     private val toolArgumentKeys = listOf("arguments", "args", "tool_args", "toolArgs", "parameters", "params")
 
+    companion object {
+        // Constant regexes hoisted so they are compiled once, not per call.
+        private val FENCE_START_REGEX = Regex("""^```(?:json)?\s*""", RegexOption.IGNORE_CASE)
+        private val CODE_BLOCK_START_REGEX = Regex("""```(?:json)?\s*\n""", RegexOption.IGNORE_CASE)
+        private val LEGACY_TOOL_CALL_REGEX = Regex(
+            """TOOL_CALL:\s*(\w+)\s*\nARGUMENTS:\s*(\{[\s\S]*?\})(?=\n(?:TOOL_CALL:|$)|$)""",
+            RegexOption.MULTILINE
+        )
+
+        // Per-tag thinking-section regexes are built from config values; cache them by tag.
+        private val thinkingTagRegexCache = java.util.concurrent.ConcurrentHashMap<String, Regex>()
+
+        private fun thinkingTagRegex(tag: String): Regex =
+            thinkingTagRegexCache.computeIfAbsent(tag) {
+                val escapedTag = Regex.escape(it)
+                Regex("(?is)<$escapedTag\\b[^>]*>.*?</$escapedTag>")
+            }
+    }
+
     data class JsonEnvelopeInspection(
         val hasJsonEnvelope: Boolean,
         val isComplete: Boolean,
@@ -97,9 +116,7 @@ class ToolCallParser(
         var removedAny = false
 
         for (tag in tags) {
-            val escapedTag = Regex.escape(tag)
-            val regex = Regex("(?is)<$escapedTag\\b[^>]*>.*?</$escapedTag>")
-            val updated = regex.replace(sanitized, "")
+            val updated = thinkingTagRegex(tag).replace(sanitized, "")
             if (updated != sanitized) {
                 removedAny = true
                 sanitized = updated
@@ -224,7 +241,7 @@ class ToolCallParser(
             )
         }
 
-        val isFenced = Regex("""^```(?:json)?\s*""", RegexOption.IGNORE_CASE).containsMatchIn(trimmed)
+        val isFenced = FENCE_START_REGEX.containsMatchIn(trimmed)
         val firstBraceIndex = trimmed.indexOf('{')
         if (firstBraceIndex == -1) {
             return JsonEnvelopeInspection(
@@ -543,8 +560,7 @@ class ToolCallParser(
         }
 
         // Strategy 3: JSON in code block ```json ... ```
-        val codeBlockStartPattern = Regex("""```(?:json)?\s*\n""", RegexOption.IGNORE_CASE)
-        val codeBlockMatch = codeBlockStartPattern.find(trimmed)
+        val codeBlockMatch = CODE_BLOCK_START_REGEX.find(trimmed)
         if (codeBlockMatch != null) {
             val afterFence = codeBlockMatch.range.last + 1
             val jsonStartInBlock = trimmed.indexOf('{', afterFence)
@@ -585,16 +601,20 @@ class ToolCallParser(
             logger.debug { "[EXTRACT_JSON] Strategy 4 (Gson) failed: ${e.message}" }
 
             if (firstBraceIndex != -1) {
-                for (endIndex in (firstBraceIndex + 100)..trimmed.length step 100) {
-                    if (endIndex > trimmed.length) break
-                    val candidate = trimmed.substring(firstBraceIndex, endIndex.coerceAtMost(trimmed.length))
-                    try {
-                        com.google.gson.JsonParser.parseString(candidate)
-                        logger.info { "[EXTRACT_JSON] Strategy 4b: Gson found valid JSON at length ${candidate.length}" }
-                        return candidate
-                    } catch (e: Exception) {
-                        // Continue trying
-                    }
+                // Single-pass brace matching to find the balanced envelope, then one
+                // lenient Gson parse attempt (instead of re-parsing growing prefixes).
+                val braceEnd = findMatchingBrace(trimmed, firstBraceIndex)
+                val candidate = if (braceEnd != -1) {
+                    trimmed.substring(firstBraceIndex, braceEnd + 1)
+                } else {
+                    trimmed.substring(firstBraceIndex)
+                }
+                try {
+                    com.google.gson.JsonParser.parseString(candidate)
+                    logger.info { "[EXTRACT_JSON] Strategy 4b: Gson found valid JSON at length ${candidate.length}" }
+                    return candidate
+                } catch (e2: Exception) {
+                    logger.debug { "[EXTRACT_JSON] Strategy 4b (Gson brace-matched) failed: ${e2.message}" }
                 }
             }
         }
@@ -617,7 +637,7 @@ class ToolCallParser(
     }
 
     private fun extractClosedFencedJsonBody(content: String): String? {
-        val startMatch = Regex("""^```(?:json)?\s*""", RegexOption.IGNORE_CASE).find(content) ?: return null
+        val startMatch = FENCE_START_REGEX.find(content) ?: return null
         val bodyStart = startMatch.range.last + 1
         val lastFenceIndex = content.lastIndexOf("```")
         if (lastFenceIndex <= bodyStart) {
@@ -688,12 +708,7 @@ class ToolCallParser(
     private fun extractToolCallsLegacy(content: String): List<ToolCallData> {
         val toolCalls = mutableListOf<ToolCallData>()
 
-        val toolCallPattern = Regex(
-            """TOOL_CALL:\s*(\w+)\s*\nARGUMENTS:\s*(\{[\s\S]*?\})(?=\n(?:TOOL_CALL:|$)|$)""",
-            RegexOption.MULTILINE
-        )
-
-        val matches = toolCallPattern.findAll(content)
+        val matches = LEGACY_TOOL_CALL_REGEX.findAll(content)
         for (match in matches) {
             val toolName = match.groupValues[1].trim()
             val arguments = match.groupValues[2].trim()

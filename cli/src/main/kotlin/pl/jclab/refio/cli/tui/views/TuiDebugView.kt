@@ -57,7 +57,7 @@ object TuiDebugView {
         lines.add("  Created At: ${if (debug.sessionCreatedAt > 0) formatTimestamp(debug.sessionCreatedAt) else "N/A"}")
         lines.add("  Tokens In:  ${formatNumber(debug.tokensIn)}")
         lines.add("  Tokens Out: ${formatNumber(debug.tokensOut)}")
-        lines.add("  Cost (USD): \$${String.format("%.6f", debug.costUsd)}")
+        lines.add("  Cost (USD): \$${String.format(java.util.Locale.US, "%.6f", debug.costUsd)}")
         lines.add("")
 
         // === Conversation State ===
@@ -88,10 +88,10 @@ object TuiDebugView {
             lines.add("  Total API Calls: ${debug.totalApiCalls}")
             lines.add("  Total Tokens In: ${formatNumber(debug.globalTokensIn)}")
             lines.add("  Total Tokens Out:${formatNumber(debug.globalTokensOut)}")
-            lines.add("  Total Cost:      \$${String.format("%.6f", debug.globalCost)}")
+            lines.add("  Total Cost:      \$${String.format(java.util.Locale.US, "%.6f", debug.globalCost)}")
             lines.add("  Avg Latency:     ${debug.avgLatencyMs}ms")
             val errColor = if (debug.errorCount > 0) TuiColors.statusFailed else TuiColors.statusSuccess
-            val errPct = if (debug.totalApiCalls > 0) String.format("%.1f", debug.errorCount * 100.0 / debug.totalApiCalls) else "0.0"
+            val errPct = if (debug.totalApiCalls > 0) String.format(java.util.Locale.US, "%.1f", debug.errorCount * 100.0 / debug.totalApiCalls) else "0.0"
             lines.add("  Error Count:     ${errColor("${debug.errorCount}")} ($errPct%)")
         } else {
             lines.add("  ${TuiColors.muted("No API calls yet")}")
@@ -106,7 +106,7 @@ object TuiDebugView {
             for ((prov, logs) in byProvider) {
                 val provCost = logs.sumOf { it.costUsd }
                 val provTok = logs.sumOf { it.tokensIn + it.tokensOut }
-                lines.add("  ${TuiColors.accent(prov)}: ${logs.size} calls, \$${String.format("%.4f", provCost)}, ${provTok} tok")
+                lines.add("  ${TuiColors.accent(prov)}: ${logs.size} calls, \$${String.format(java.util.Locale.US, "%.4f", provCost)}, ${provTok} tok")
             }
             lines.add("")
 
@@ -156,7 +156,7 @@ object TuiDebugView {
             if (state.contextSections.isNotEmpty()) {
                 lines.add("  Sections: ${state.contextSections.size}")
                 for (section in state.contextSections.take(8)) {
-                    val secPct = if (section.percentage > 0) " (${String.format("%.1f", section.percentage)}%)" else ""
+                    val secPct = if (section.percentage > 0) " (${String.format(java.util.Locale.US, "%.1f", section.percentage)}%)" else ""
                     lines.add("    ${section.name.padEnd(25)} ${section.tokensUsed} tok$secPct")
                 }
             }
@@ -190,14 +190,14 @@ object TuiDebugView {
     }
 
     private fun formatNumber(num: Long): String = when {
-        num >= 1_000_000 -> String.format("%.2fM", num / 1_000_000.0)
-        num >= 1_000 -> String.format("%.2fK", num / 1_000.0)
+        num >= 1_000_000 -> String.format(java.util.Locale.US, "%.2fM", num / 1_000_000.0)
+        num >= 1_000 -> String.format(java.util.Locale.US, "%.2fK", num / 1_000.0)
         else -> num.toString()
     }
 
     private fun formatTokensShort(tokens: Int): String = when {
-        tokens >= 1_000_000 -> String.format("%.1fM", tokens / 1_000_000.0)
-        tokens >= 1_000 -> String.format("%.1fK", tokens / 1_000.0)
+        tokens >= 1_000_000 -> String.format(java.util.Locale.US, "%.1fM", tokens / 1_000_000.0)
+        tokens >= 1_000 -> String.format(java.util.Locale.US, "%.1fK", tokens / 1_000.0)
         else -> tokens.toString()
     }
 

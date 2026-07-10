@@ -12,6 +12,7 @@ import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.ModelDefinitions
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
+import pl.jclab.refio.core.services.LLMRetryHandler
 import pl.jclab.refio.core.services.TurnLoopConfig
 import pl.jclab.refio.core.tools.base.ToolSchema
 import pl.jclab.refio.core.logging.dualLogger
@@ -28,7 +29,8 @@ private val logger = dualLogger("TurnLLMCaller")
  */
 class TurnLLMCaller(
     private val llmClient: LLMClient,
-    private val configService: ConfigService
+    private val configService: ConfigService,
+    private val retryHandler: LLMRetryHandler = LLMRetryHandler(llmClient),
 ) {
     /**
      * Call LLM with prompt.
@@ -89,7 +91,13 @@ class TurnLLMCaller(
         }
 
         return withContext(Dispatchers.IO) {
-            llmClient.complete(
+            // Route through the retry handler so a transient failure on the decision call - most
+            // importantly an Ollama stream that aborts before the first token (contentBytes=0) on a
+            // cold/slow model - is retried instead of killing the whole turn. The handler only
+            // retries when NO chunk reached the UI yet (no duplicated output), which is exactly the
+            // zero-byte-abort case observed on the e2e gate; a partially-streamed failure still
+            // surfaces. No tool side effects have run at this point, so a clean re-call is safe.
+            retryHandler.callWithRetry(
                 provider = providerName,
                 model = modelId,
                 messages = prompt.messages,

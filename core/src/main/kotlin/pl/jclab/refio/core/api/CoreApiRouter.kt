@@ -306,6 +306,7 @@ class CoreApiRouter(
     fun close() {
         subagentRouter?.clearTemporary()
         agentPlanService.clear()
+        agentEventBus.close()
         routerScope.cancel("CoreApiRouter closing")
     }
 }

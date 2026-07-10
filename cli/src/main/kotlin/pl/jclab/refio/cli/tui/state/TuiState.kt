@@ -41,6 +41,12 @@ data class TuiState(
     val totalTokens: Long = 0,
     val scrollOffset: Int = 0,
     val settingsTab: Int = 0,
+    /**
+     * Bumped whenever the cached settings snapshot (config sections, tool
+     * permissions) is refreshed; the snapshot itself lives outside TuiState,
+     * so this bump is what makes the renderer's dirty-check see a change.
+     */
+    val settingsCacheVersion: Int = 0,
     val autocompleteVisible: Boolean = false,
     val autocompleteCandidates: List<String> = emptyList(),
     val autocompleteSelectedIndex: Int = 0,
@@ -62,6 +68,7 @@ data class TuiState(
     val settingsSelectedField: Int = 0,
     val settingsEditingField: String? = null,
     val settingsEditBuffer: String = "",
+    val settingsResetArmed: Boolean = false,
     val ragIndexedFiles: List<TuiRagFile> = emptyList(),
     val apiLogsFilter: String? = null, // null = show all, or provider name
     val selectedApiLogIndex: Int = 0,
@@ -97,6 +104,7 @@ data class TuiState(
     val fileViewerScrollOffset: Int = 0,
     val fileViewerShowLineNumbers: Boolean = true,  // false for log/debug/API detail views
     val fileViewerAllowAddContext: Boolean = true,   // false for non-file content
+    val fileViewerHintVisible: Boolean = false,      // one-shot "press Esc" hint after an unhandled key
     // Debug panel scroll
     val debugScrollOffset: Int = 0
 )
@@ -242,7 +250,9 @@ data class TuiToolApprovalRequest(
     val requestId: String,
     val toolName: String,
     val description: String,
-    val arguments: Map<String, Any>
+    val arguments: Map<String, Any>,
+    /** Proposed file change (editing tools): rendered as a colored diff in the approval box. */
+    val proposedChange: pl.jclab.refio.core.services.turn.ProposedChange? = null
 )
 
 data class TuiPlanApproval(

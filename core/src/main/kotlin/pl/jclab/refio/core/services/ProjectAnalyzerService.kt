@@ -33,6 +33,10 @@ class ProjectAnalyzerService(
     private val analysisMutexes = ConcurrentHashMap<String, Mutex>()
     private val cacheTTL = 600_000L // 10 minutes (reduced from 1 hour for fresher data)
 
+    // Cached ignore matcher per project root, invalidated when .aiignore changes.
+    // Avoids re-reading .aiignore from disk on every analyzeProject call.
+    private val ignoreMatcherCache = ConcurrentHashMap<String, Pair<Long, AiIgnoreMatcher>>()
+
     /**
      * Analyze project and return comprehensive analysis
      */
@@ -163,6 +167,7 @@ class ProjectAnalyzerService(
     fun invalidateCache(projectRoot: Path) {
         val normalizedRoot = projectRoot.normalize().toString()
         cache.keys.removeIf { it.startsWith("$normalizedRoot|") }
+        ignoreMatcherCache.remove(normalizedRoot)
         logger.info { "Invalidated cache for $normalizedRoot" }
     }
 
@@ -615,12 +620,33 @@ class ProjectAnalyzerService(
     }
 
     private fun resolveIgnoreMatcher(projectRoot: Path): AiIgnoreMatcher {
+        val cacheKey = projectRoot.normalize().toString()
+        val aiIgnoreLastModified = aiIgnoreLastModified(projectRoot)
+
+        ignoreMatcherCache[cacheKey]?.let { (cachedLastModified, matcher) ->
+            if (cachedLastModified == aiIgnoreLastModified) {
+                return matcher
+            }
+        }
+
         val patterns = configService.getTyped<List<String>>(ConfigKeys.RAG_IGNORED_DIRECTORIES).toSet()
-        return try {
+        val matcher = try {
             AiIgnoreMatcher.load(projectRoot) ?: AiIgnoreMatcher.fromPatterns(patterns)
         } catch (e: Exception) {
             logger.warn(e) { "Failed to read ${AiIgnoreMatcher.FILE_NAME}; using default ignore patterns" }
             AiIgnoreMatcher.fromPatterns(patterns)
+        }
+        ignoreMatcherCache[cacheKey] = aiIgnoreLastModified to matcher
+        return matcher
+    }
+
+    /** Last-modified stamp of .aiignore, or -1 when absent/unreadable (still cacheable). */
+    private fun aiIgnoreLastModified(projectRoot: Path): Long {
+        return try {
+            val file = projectRoot.resolve(AiIgnoreMatcher.FILE_NAME)
+            if (Files.exists(file)) Files.getLastModifiedTime(file).toMillis() else -1L
+        } catch (_: Exception) {
+            -1L
         }
     }
 

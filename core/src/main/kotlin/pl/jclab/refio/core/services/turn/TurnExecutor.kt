@@ -110,7 +110,12 @@ internal class TurnExecutor(
     private val pendingUserMessageQueue: PendingUserMessageQueue? = null,
     private val agentEventBus: pl.jclab.refio.core.agents.events.AgentEventBus? = null,
     private val hookService: pl.jclab.refio.core.services.hooks.HookService? = null,
-    private val toolPermissionsService: ToolPermissionsService? = null
+    private val toolPermissionsService: ToolPermissionsService? = null,
+    /**
+     * Deterministic post-turn verification (project build/test run by the loop code, not the
+     * model) with a bounded repair loop. Null disables the step entirely. See [TurnVerifier].
+     */
+    private val turnVerifier: TurnVerifier? = null
 ) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
 
@@ -308,6 +313,11 @@ internal class TurnExecutor(
         // further re-entry will help). Non-null → the final TurnResult carries incomplete=true so
         // CoreSessionService records the task as INCOMPLETE instead of silently SUCCESS.
         var turnIncompleteReason: String? = null
+        // Deterministic post-turn verification state: number of verification command executions
+        // so far (initial run + re-runs after repair rounds) and the summary of the latest
+        // verification outcome, carried into the final TurnResult. See [TurnVerifier].
+        var verificationAttempts = 0
+        var verificationSummary: pl.jclab.refio.core.debug.VerificationSummary? = null
         // Plain-text guard (AGENT mode only): counts nudges sent when the model replies with
         // prose instead of the required JSON envelope. Bounded to 2 — if the model cannot
         // recover after two explicit reminders, further retries won't help and we fall
@@ -865,6 +875,33 @@ internal class TurnExecutor(
                             }
 
                             is LLMResponseRecovery.Decision.GiveUp -> {
+                                // Deliverable-aware finalization. A write/edit already executed
+                                // this turn means the file deliverable is on disk and the empty
+                                // JSON envelope is only a failed sign-off - reporting FAILURE then
+                                // discards completed work. Observed dominant on local models: the
+                                // edit landed, the model then emitted an empty structured reply and
+                                // could not recover, so a correct task returned failure. Same
+                                // predicate the format hard-fail and the guardian already use.
+                                val deliverableProduced =
+                                    TurnDeliverable.produced(writeToolsExecutedInTurn, mode, "")
+                                if (deliverableProduced) {
+                                    logger.warn {
+                                        "[TURN_EMPTY_CONTENT_DELIVERABLE] taskId=$taskId, iteration=$iteration: " +
+                                            "empty JSON envelope after retries, but a deliverable already landed " +
+                                            "(writeToolsExecutedInTurn=$writeToolsExecutedInTurn, mode=$mode) - finalizing SUCCESS"
+                                    }
+                                    val result = TurnResult(
+                                        success = true,
+                                        response = "Changes applied. The model did not produce a final summary, " +
+                                            "but the edits from this turn are on disk.",
+                                        iterations = iteration,
+                                        tokensIn = totalTokensIn,
+                                        tokensOut = totalTokensOut,
+                                        cost = totalCost,
+                                        toolsUsed = usedTools.distinct()
+                                    )
+                                    return turnPersistence.finish(result, persistAssistantMessage = true)
+                                }
                                 logger.error {
                                     "[TURN_FAILED] Empty content from model in JSON mode " +
                                         "(mode=$mode, reason=${decision.reason}, finishReason=${llmResponse.finishReason}, thinkingLength=${llmResponse.thinking?.length ?: 0})"
@@ -1091,6 +1128,19 @@ internal class TurnExecutor(
 
                         // Batch-level timing fallback (used when no caller listener is available).
                         val batchStartNanos = System.nanoTime()
+
+                        // Before the first file write of a verifiable turn, record whether the
+                        // project's verification command passes on the UNMODIFIED tree. The
+                        // finalization verify uses that baseline to avoid blaming the agent (and
+                        // starting a repair loop) for a build/test command that was already red.
+                        // Same gating as the finalization verify: top-level AGENT turns only.
+                        if (turnVerifier != null &&
+                            mode == TaskMode.AGENT &&
+                            depth == 0 &&
+                            toolCalls.any { turnToolExecutor.isFileWriteTool(it.name) }
+                        ) {
+                            turnVerifier.captureBaseline(taskId)
+                        }
 
                         val toolResults = try {
                             turnToolExecutor.executeToolCalls(
@@ -1753,6 +1803,92 @@ internal class TurnExecutor(
                             }
                         }
 
+                        // Deterministic verification (loop code, not the model): the turn is about
+                        // to finalize as complete with a deliverable, so run the project's
+                        // build/test command and, on failure, feed a concrete error list back to
+                        // the model for a bounded repair loop. Necessary condition: a real FILE
+                        // edit landed this turn - turns without file writes are NEVER verified,
+                        // which protects against the known regression of optional post-deliverable
+                        // self-verification loops (and naturally excludes PLAN, which cannot
+                        // write). Top-level turns only: a subagent's writes are re-verified by the
+                        // parent turn's own finalization, and running a full build per subagent
+                        // would multiply cost for no extra signal.
+                        if (turnVerifier != null &&
+                            turnIncompleteReason == null &&
+                            mode == TaskMode.AGENT &&
+                            depth == 0 &&
+                            usedTools.any { turnToolExecutor.isFileWriteTool(it) }
+                        ) {
+                            updateTurnState { copy(phase = TurnPhase.FINALIZING) }
+                            when (val outcome = turnVerifier.verify(taskId)) {
+                                is TurnVerifier.Outcome.Skipped -> {
+                                    logger.info { "[VERIFY] taskId=$taskId skipped: ${outcome.reason}" }
+                                }
+                                TurnVerifier.Outcome.Passed -> {
+                                    verificationAttempts++
+                                    verificationSummary = pl.jclab.refio.core.debug.VerificationSummary(
+                                        ran = true,
+                                        attempts = verificationAttempts,
+                                        result = pl.jclab.refio.core.debug.VerificationSummary.RESULT_PASSED
+                                    )
+                                    pl.jclab.refio.core.debug.TurnVerificationTracker.record(taskId, verificationSummary!!)
+                                }
+                                is TurnVerifier.Outcome.Failed -> {
+                                    verificationAttempts++
+                                    val maxRepairRounds = turnVerifier.maxRepairRounds(taskId)
+                                    val errorList = outcome.errors.joinToString("\n") { "- $it" }
+                                    if (verificationAttempts <= maxRepairRounds && iteration < maxIterations) {
+                                        logger.warn {
+                                            "[VERIFY] taskId=$taskId failed (exit=${outcome.exitCode}) - " +
+                                                "repair round $verificationAttempts/$maxRepairRounds"
+                                        }
+                                        // Keep the model's completion text in history, then send
+                                        // the error list as the single repair message and re-enter
+                                        // the loop; the next terminal point re-verifies.
+                                        val verifyTextResponse = toolCallParser.extractTextResponse(llmResponse.content)
+                                        turnPersistence.persist(
+                                            role = MessageRole.ASSISTANT,
+                                            content = verifyTextResponse.ifEmpty { llmResponse.content },
+                                            thinking = turnResponseProcessor.resolveAssistantThinking(llmResponse),
+                                            toolCalls = null,
+                                            tokensIn = llmResponse.usage.inputTokens,
+                                            tokensOut = llmResponse.usage.outputTokens,
+                                            cost = llmResponse.cost,
+                                        )
+                                        turnPersistence.persist(
+                                            role = MessageRole.SYSTEM,
+                                            content = "Verification failed (exit ${outcome.exitCode}). Errors:\n$errorList\nFix them.",
+                                            toolCalls = null,
+                                        )
+                                        continue
+                                    }
+                                    logger.error {
+                                        "[VERIFY] taskId=$taskId still failing after $verificationAttempts " +
+                                            "attempt(s) (maxRepairRounds=$maxRepairRounds) - finalizing VERIFICATION_FAILED"
+                                    }
+                                    verificationSummary = pl.jclab.refio.core.debug.VerificationSummary(
+                                        ran = true,
+                                        attempts = verificationAttempts,
+                                        result = pl.jclab.refio.core.debug.VerificationSummary.RESULT_FAILED
+                                    )
+                                    pl.jclab.refio.core.debug.TurnVerificationTracker.record(taskId, verificationSummary!!)
+                                    TurnFailureMarkerTracker.record(taskId, TurnFailureMarkerTracker.VERIFICATION_FAILED)
+                                    val result = TurnResult(
+                                        success = false,
+                                        response = "Verification failed (exit ${outcome.exitCode}) after " +
+                                            "$verificationAttempts attempt(s). Errors:\n$errorList",
+                                        iterations = iteration,
+                                        tokensIn = totalTokensIn,
+                                        tokensOut = totalTokensOut,
+                                        cost = totalCost,
+                                        toolsUsed = usedTools.distinct(),
+                                        verification = verificationSummary
+                                    )
+                                    return turnPersistence.finish(result, persistAssistantMessage = true)
+                                }
+                            }
+                        }
+
                         // Model responded with text - save and complete turn
                         updateTurnState { copy(phase = TurnPhase.FINALIZING) }
                         logger.info { "[TURN_COMPLETE] taskId=$taskId, iterations=$iteration" }
@@ -1785,7 +1921,8 @@ internal class TurnExecutor(
                             tokensOut = totalTokensOut,
                             cost = totalCost,
                             toolsUsed = usedTools.distinct(),
-                            incomplete = turnIncompleteReason != null
+                            incomplete = turnIncompleteReason != null,
+                            verification = verificationSummary
                         )
 
                         updateTurnState { copy(phase = TurnPhase.COMPLETED, tokensUsed = totalTokensIn + totalTokensOut) }

@@ -347,6 +347,21 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     @Suppress("MagicNumber")
     private val uiUpdateDebounceMs = 300L
 
+    // Debounces componentResized: during a drag-resize the event fires many times
+    // per second, and each width change used to invalidate the whole bubble cache
+    // and rebuild every bubble on the EDT. This timer waits until the resize
+    // settles and then invalidates + rebuilds once. Fires on the EDT.
+    @Suppress("MagicNumber")
+    private val resizeDebounceTimer = Timer(300) {
+        if (refreshAvailableWidth()) {
+            invalidateMessageCacheForWidthChange()
+            val messages = sessionManager.messages.value
+            if (messages.isNotEmpty()) {
+                updateMessages(messages)
+            }
+        }
+    }.apply { isRepeats = false }
+
     private fun resolveAvailableWidth(): Int {
         val viewportWidth = (SwingUtilities.getAncestorOfClass(JViewport::class.java, this) as? JViewport)?.width ?: 0
         val baseWidth = when {
@@ -382,7 +397,7 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
 
         add(messagesPanel, BorderLayout.CENTER)
 
-        toolApprovalPanel = ToolApprovalPanel(sessionManager.toolApprovalService)
+        toolApprovalPanel = ToolApprovalPanel(sessionManager.toolApprovalService, project)
 
         busyIndicatorLabel = JLabel("Working ${busyIndicatorFrames[0]}").apply {
             font = LCATheme.smallFont.deriveFont(Font.ITALIC)
@@ -489,15 +504,9 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
 
         addComponentListener(object : ComponentAdapter() {
             override fun componentResized(e: ComponentEvent) {
-                if (refreshAvailableWidth()) {
-                    invalidateMessageCacheForWidthChange()
-                    val messages = sessionManager.messages.value
-                    if (messages.isNotEmpty()) {
-                        SwingUtilities.invokeLater {
-                            updateMessages(messages)
-                        }
-                    }
-                }
+                // Restart the debounce timer; the actual cache invalidation and
+                // rebuild happen once, after the resize settles.
+                resizeDebounceTimer.restart()
             }
         })
 
@@ -871,6 +880,7 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     }
 
     fun dispose() {
+        resizeDebounceTimer.stop()
         disposeMessagePanels(messagePanelCache.values.map { it.panel })
         messagePanelCache.clear()
         cs.cancel()

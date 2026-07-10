@@ -124,7 +124,7 @@ class AdvanceCodeEditingTool(
 
         // Create callback that forwards to listener
         val onChunk: StreamCallback? = if (listener != null && subtask != null) { chunk ->
-            logger.debug { "[ACE_STREAM] onChunk invoked: accumulated=${chunk.accumulated.length} chars, isComplete=${chunk.isComplete}" }
+            logger.trace { "[ACE_STREAM] onChunk invoked: accumulated=${chunk.accumulated.length} chars, isComplete=${chunk.isComplete}" }
             listener.onToolCodeGenerationStream(
                 step = subtask,
                 toolName = name,

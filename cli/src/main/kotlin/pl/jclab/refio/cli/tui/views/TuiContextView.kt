@@ -94,29 +94,40 @@ object TuiContextView {
 
         buf.addLine()
 
-        // === Legend (all non-zero sections with color indicators, two-column) ===
+        // === Legend (all non-zero sections with color indicators) ===
+        // Two columns only when both fit inside the real panel width; otherwise
+        // one entry per line, truncated with an ellipsis instead of mid-word cuts.
         val legendSections = state.contextSections.filter { it.tokensUsed > 0 }
-        val colWidth = ((width - 4) / 2).coerceAtLeast(30)
-        val pairs = legendSections.chunked(2)
-        for (pair in pairs) {
-            if (buf.lineCount >= height - 2) break
-            val sb = StringBuilder()
-            for ((i, section) in pair.withIndex()) {
-                val color = sectionColors[section.colorIndex % sectionColors.size]
-                val percent = if (section.percentage > 0) String.format("(%.1f%%)", section.percentage) else ""
-                val tokens = formatTokens(section.tokensUsed)
-                val entry = "${color("██")} ${section.name}: $tokens $percent"
-                // Pad first column
-                if (i == 0 && pair.size > 1) {
-                    // Approximate visible length (without ANSI) for padding
-                    val visibleLen = 4 + section.name.length + tokens.length + percent.length + 3
-                    val pad = (colWidth - visibleLen).coerceAtLeast(1)
-                    sb.append("  $entry${" ".repeat(pad)}")
-                } else {
-                    sb.append("  $entry")
+        val legendEntries = legendSections.map { section ->
+            val color = sectionColors[section.colorIndex % sectionColors.size]
+            val percent = if (section.percentage > 0) String.format(java.util.Locale.US, "(%.1f%%)", section.percentage) else ""
+            val tokens = formatTokens(section.tokensUsed)
+            val entry = "${color("██")} ${section.name}: $tokens $percent"
+            entry to TuiRenderBuffer.visibleLength(entry)
+        }
+        val maxEntryLen = legendEntries.maxOfOrNull { it.second } ?: 0
+        val twoColumns = legendEntries.size > 1 && width - 4 >= 2 * (maxEntryLen + 2)
+        if (twoColumns) {
+            val colWidth = (width - 4) / 2
+            for (pair in legendEntries.chunked(2)) {
+                if (buf.lineCount >= height - 2) break
+                val sb = StringBuilder()
+                for ((i, entryPair) in pair.withIndex()) {
+                    val (entry, visibleLen) = entryPair
+                    if (i == 0 && pair.size > 1) {
+                        val pad = (colWidth - visibleLen).coerceAtLeast(1)
+                        sb.append("  $entry${" ".repeat(pad)}")
+                    } else {
+                        sb.append("  $entry")
+                    }
                 }
+                buf.addLine(sb.toString())
             }
-            buf.addLine(sb.toString())
+        } else {
+            for ((entry, _) in legendEntries) {
+                if (buf.lineCount >= height - 2) break
+                buf.addLine("  ${TuiRenderBuffer.fitToWidth(entry, (width - 4).coerceAtLeast(10))}")
+            }
         }
         val zeroSections = state.contextSections.count { it.tokensUsed == 0 }
         if (zeroSections > 0) {
@@ -142,7 +153,7 @@ object TuiContextView {
 
             val marker = if (idx == selectedCtxIdx) ">" else " "
             val tokens = formatTokens(section.tokensUsed)
-            val percent = if (section.percentage > 0) " (${String.format("%.1f", section.percentage)}%)" else ""
+            val percent = if (section.percentage > 0) " (${String.format(java.util.Locale.US, "%.1f", section.percentage)}%)" else ""
             buf.addLine("$marker${color("●")} ${categoryColor(section.name)} ${TuiColors.muted("$tokens$percent")}")
 
             // Show content preview for selected section
@@ -185,7 +196,7 @@ object TuiContextView {
         buf.addLine(TuiColors.border("\u2500".repeat((width - 2).coerceAtLeast(10))))
         buf.addLine("  ${color("\u25cf")} ${categoryColor(section.name)}")
         val tokens = formatTokens(section.tokensUsed)
-        val percent = if (section.percentage > 0) String.format("%.1f%%", section.percentage) else "0.0%"
+        val percent = if (section.percentage > 0) String.format(java.util.Locale.US, "%.1f%%", section.percentage) else "0.0%"
         buf.addLine("  ${TuiColors.muted("Category:")} ${section.category}  ${TuiColors.muted("Tokens:")} $tokens  ${TuiColors.muted("Share:")} $percent")
         buf.addLine()
 
@@ -225,8 +236,8 @@ object TuiContextView {
     }
 
     private fun formatTokens(tokens: Int): String = when {
-        tokens >= 1_000_000 -> String.format("%.1fM", tokens / 1_000_000.0)
-        tokens >= 1_000 -> String.format("%.1fK", tokens / 1_000.0)
+        tokens >= 1_000_000 -> String.format(java.util.Locale.US, "%.1fM", tokens / 1_000_000.0)
+        tokens >= 1_000 -> String.format(java.util.Locale.US, "%.1fK", tokens / 1_000.0)
         else -> tokens.toString()
     }
 }

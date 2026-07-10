@@ -1,6 +1,8 @@
 package pl.jclab.refio.core.db
 
+import kotlinx.coroutines.Dispatchers
 import org.jetbrains.exposed.sql.*
+import org.jetbrains.exposed.sql.transactions.experimental.newSuspendedTransaction
 import org.jetbrains.exposed.sql.transactions.transaction
 import pl.jclab.refio.core.db.migrations.MigrationRunner
 import pl.jclab.refio.core.db.MCPServersTable
@@ -111,4 +113,14 @@ object DatabaseFactory {
     fun <T> dbQuery(block: () -> T): T = transaction {
         block()
     }
+
+    /**
+     * Coroutine-friendly variant for suspend callers (e.g. AgentEventBus.emit).
+     * Runs the transaction on Dispatchers.IO so JDBC blocking never stalls the
+     * caller's dispatcher (event emission happens on hot paths like StreamChunk).
+     */
+    suspend fun <T> suspendDbQuery(block: () -> T): T =
+        newSuspendedTransaction(Dispatchers.IO) {
+            block()
+        }
 }
