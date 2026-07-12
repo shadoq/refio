@@ -255,6 +255,21 @@ class TurnToolExecutor(
         }
 
         /**
+         * True when a `read_file` call requests a specific line range (offset and/or limit). Such a
+         * read after a write is a targeted debugging move ("show me lines 180-220 around this error"),
+         * not a wasteful whole-file re-read, so it must not be suppressed. Pure.
+         */
+        internal fun readHasRange(argumentsJson: String): Boolean {
+            if (argumentsJson.isBlank()) return false
+            return try {
+                val map = TurnJsonUtils.parseJsonToMap(argumentsJson)
+                (map["offset"] ?: map["limit"]) != null
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        /**
          * Path-writing tools whose SUCCESSFUL write makes a later same-path `read_file` redundant —
          * the write result's changeSummary (diff + line counts) is already in history. multi_edit is
          * intentionally absent: its path lives in `edits[].path`, not a top-level `path`, so
@@ -271,29 +286,40 @@ class TurnToolExecutor(
          * tokens — observed: qwen3.5:122b read its 1182-line file 5×, deepseek-v4-pro re-read repeatedly,
          * filling RECENT_WORK and (on small-window models) the context budget.
          *
-         * Safety: any FAILED subtask after the last successful write to [readPath] re-enables reads, so a
-         * failed edit ("string not found"), failed build, or failed test that legitimately needs a fresh
-         * read is never blocked — and the model can never get stuck (a failure always reopens reads).
+         * Safety: reads are re-enabled (never suppressed) by ANY of these signals, so the model can
+         * never get stuck unable to inspect its own file:
+         *  - a FAILED subtask after the last successful write (failed edit "string not found", failed
+         *    build/test that legitimately needs a fresh read);
+         *  - a targeted line-range read ([hasReadRange]) — a debugging move, not a wasteful re-read;
+         *  - a USER message created after the write ([lastUserMessageAt]) — the human/browser equivalent
+         *    of a failed check. A user reporting "SyntaxError at line 192" is a concrete failure the
+         *    write diff cannot show, but it arrives as a chat turn, not a FAILED subtask; without this
+         *    the fix path stays blocked forever.
          * Pure (no DB) so it is unit-testable.
          */
         internal fun shouldSuppressReadAfterWrite(
             readPath: String,
             subtasks: List<Subtask>,
-            currentSubtaskId: String
+            currentSubtaskId: String,
+            hasReadRange: Boolean = false,
+            lastUserMessageAt: Long? = null
         ): Boolean {
             val normalized = readPath.trim()
             if (normalized.isEmpty()) return false
+            if (hasReadRange) return false
             val others = subtasks.filter { it.id != currentSubtaskId }
-            val lastWriteOrder = others
+            val lastWrite = others
                 .filter { it.status == TaskStatus.SUCCESS }
                 .filter { sub -> PATH_WRITE_TOOL_NAMES.any { it.equals(sub.kind.name, ignoreCase = true) } }
                 .filter { extractEditPath(it.paramsJson.orEmpty()) == normalized }
-                .maxOfOrNull { it.orderIndex }
+                .maxByOrNull { it.orderIndex }
                 ?: return false
             val failedAfterWrite = others.any {
-                it.status == TaskStatus.FAILED && it.orderIndex > lastWriteOrder
+                it.status == TaskStatus.FAILED && it.orderIndex > lastWrite.orderIndex
             }
-            return !failedAfterWrite
+            if (failedAfterWrite) return false
+            if (lastUserMessageAt != null && lastUserMessageAt > lastWrite.createdAt) return false
+            return true
         }
 
         /** In-band notice returned in place of a re-read file's content. Pure so it is testable. */
@@ -719,9 +745,15 @@ class TurnToolExecutor(
         // [shouldSuppressReadAfterWrite]).
         if (toolCall.name.equals("read_file", ignoreCase = true)) {
             val readPath = extractEditPath(toolCall.arguments)
+            val hasReadRange = readHasRange(toolCall.arguments)
             val suppress = readPath != null && try {
                 val subs = transaction { subtaskRepository.findByTaskId(taskId) }
-                shouldSuppressReadAfterWrite(readPath, subs, subtaskId)
+                val lastUserMessageAt = chatMessageRepository?.let { repo ->
+                    transaction { repo.findByTaskId(taskId) }
+                        .filter { it.role == MessageRole.USER }
+                        .maxOfOrNull { it.createdAt }
+                }
+                shouldSuppressReadAfterWrite(readPath, subs, subtaskId, hasReadRange, lastUserMessageAt)
             } catch (e: Exception) {
                 logger.debug { "[READ_AFTER_WRITE] query failed, allowing read: ${e.message}" }
                 false

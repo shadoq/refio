@@ -203,14 +203,15 @@ class TurnToolExecutorClassificationTest {
         kind: SubtaskKind,
         status: TaskStatus,
         orderIndex: Int,
-        paramsJson: String? = null
+        paramsJson: String? = null,
+        createdAt: Long = 0
     ) = Subtask(
         id = id, taskId = "t1", orderIndex = orderIndex, kind = kind, status = status,
         description = "", paramsJson = paramsJson, stepPlanJson = null, summary = null,
         requiresApproval = false, approvalStatus = ApprovalStatus.NOT_REQUIRED, approvedAt = null,
         result = null, errorMessage = null, errorStacktrace = null, llmModel = null,
         llmProvider = null, inputTokens = 0, outputTokens = 0, costUsd = 0.0, latencyMs = 0,
-        snapshotIdBeforeWrite = null, createdAt = 0, updatedAt = 0, startedAt = null, completedAt = null
+        snapshotIdBeforeWrite = null, createdAt = createdAt, updatedAt = 0, startedAt = null, completedAt = null
     )
 
     @Test
@@ -279,6 +280,61 @@ class TurnToolExecutorClassificationTest {
         assertTrue(notice.contains("game.html"))
         assertTrue(notice.contains("changeSummary"))
         assertTrue(notice.contains("re-enables reads"), "must tell the model how a re-read becomes allowed")
+    }
+
+    @Test
+    fun `does NOT suppress a targeted line-range read after a write`() {
+        // The Particle Forge case: user reports "SyntaxError at line 192", the model reads offset/limit
+        // around that line to fix it. A ranged read is a debugging move, not a wasteful whole-file re-read.
+        val subs = listOf(
+            sub("w", SubtaskKind.ADVANCE_CODE_EDITING, TaskStatus.SUCCESS, 1, """{"path":"game.html"}"""),
+            sub("r", SubtaskKind.READ_FILE, TaskStatus.PENDING, 2, """{"path":"game.html","offset":180,"limit":40}""")
+        )
+        assertFalse(
+            TurnToolExecutor.shouldSuppressReadAfterWrite(
+                "game.html", subs, currentSubtaskId = "r", hasReadRange = true
+            )
+        )
+    }
+
+    @Test
+    fun `does NOT suppress after a user turn following the write`() {
+        // A user message after the write (e.g. "it doesn't render, SyntaxError line 192") is the
+        // human/browser equivalent of a failed check. It arrives as a chat turn, not a FAILED subtask,
+        // so without this the model can never re-read to fix its own broken deliverable.
+        val subs = listOf(
+            sub("w", SubtaskKind.ADVANCE_CODE_EDITING, TaskStatus.SUCCESS, 1, """{"path":"game.html"}""", createdAt = 100),
+            sub("r", SubtaskKind.READ_FILE, TaskStatus.PENDING, 2, """{"path":"game.html"}""", createdAt = 300)
+        )
+        assertFalse(
+            TurnToolExecutor.shouldSuppressReadAfterWrite(
+                "game.html", subs, currentSubtaskId = "r", lastUserMessageAt = 200
+            )
+        )
+    }
+
+    @Test
+    fun `still suppresses when the only user turn predates the write`() {
+        // The original request is a user turn too; only a user turn AFTER the write reopens reads.
+        // Otherwise the very first read-after-write in a normal turn would never be suppressed.
+        val subs = listOf(
+            sub("w", SubtaskKind.CREATE_NEW_FILE, TaskStatus.SUCCESS, 1, """{"path":"game.html"}""", createdAt = 200),
+            sub("r", SubtaskKind.READ_FILE, TaskStatus.PENDING, 2, """{"path":"game.html"}""", createdAt = 300)
+        )
+        assertTrue(
+            TurnToolExecutor.shouldSuppressReadAfterWrite(
+                "game.html", subs, currentSubtaskId = "r", lastUserMessageAt = 50
+            )
+        )
+    }
+
+    @Test
+    fun `readHasRange detects offset or limit and ignores plain reads`() {
+        assertTrue(TurnToolExecutor.readHasRange("""{"path":"a.html","offset":180}"""))
+        assertTrue(TurnToolExecutor.readHasRange("""{"path":"a.html","limit":40}"""))
+        assertTrue(TurnToolExecutor.readHasRange("""{"path":"a.html","offset":0,"limit":40}"""))
+        assertFalse(TurnToolExecutor.readHasRange("""{"path":"a.html"}"""))
+        assertFalse(TurnToolExecutor.readHasRange(""))
     }
 
     @Test
