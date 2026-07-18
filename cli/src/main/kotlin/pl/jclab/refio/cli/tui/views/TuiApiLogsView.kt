@@ -50,7 +50,7 @@ object TuiApiLogsView {
         val avgLatency = if (logs.isNotEmpty()) logs.map { it.latencyMs }.average().toInt() else 0
         val errors = logs.count { it.errorType != null }
         val filterLabel = if (state.apiLogsFilter != null) " (${state.apiLogsFilter})" else ""
-        buf.addLine("Calls: $totalCalls$filterLabel  Cost: \$${String.format("%.4f", totalCost)}  Tokens: $totalTokens  Avg: ${avgLatency}ms  Errors: $errors")
+        buf.addLine("Calls: $totalCalls$filterLabel  Cost: \$${String.format(java.util.Locale.US, "%.4f", totalCost)}  Tokens: $totalTokens  Avg: ${avgLatency}ms  Errors: $errors")
 
         // Provider stats
         val byProvider = state.apiLogs.groupBy { it.provider }
@@ -102,7 +102,7 @@ object TuiApiLogsView {
             val lat = "${log.latencyMs}".take(latW)
             val model = log.model.take(modelW)
             val tok = "${log.tokensIn}/${log.tokensOut}"
-            val cost = "\$${String.format("%.4f", log.costUsd)}"
+            val cost = "\$${String.format(java.util.Locale.US, "%.4f", log.costUsd)}"
             val line = "$cursor${time.padEnd(timeW)} ${prov.padEnd(provW)} ${stColor(st.padEnd(statusW))} ${lat.padEnd(latW)} ${model.padEnd(modelW)} ${tok.padEnd(tokW)} ${cost.padEnd(costW)}"
             if (globalIdx == selectedIdx) {
                 buf.addLine(TuiColors.accent(line))
@@ -137,7 +137,7 @@ object TuiApiLogsView {
         // Metrics
         detailLines.add("  ${TuiColors.highlight("Metrics")}")
         detailLines.add("  ${TuiColors.muted("Tokens:")}     ${log.tokensIn} in / ${log.tokensOut} out (${log.tokensIn + log.tokensOut} total)")
-        detailLines.add("  ${TuiColors.muted("Cost:")}       \$${String.format("%.6f", log.costUsd)}")
+        detailLines.add("  ${TuiColors.muted("Cost:")}       \$${String.format(java.util.Locale.US, "%.6f", log.costUsd)}")
         detailLines.add("  ${TuiColors.muted("Latency:")}    ${log.latencyMs}ms")
         if (log.taskId != null) detailLines.add("  ${TuiColors.muted("Task:")}       ${log.taskId}")
         if (log.subtaskId != null) detailLines.add("  ${TuiColors.muted("Subtask:")}    ${log.subtaskId}")

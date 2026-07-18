@@ -69,6 +69,10 @@ class ToolPermissionsService(
          */
         private val DEFAULT_OVERRIDES: Map<String, ToolPermissionConfig> = mapOf(
             "run_terminal_command" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ASK),
+            // Spawns arbitrary shell commands via ProcessManager, same as the foreground
+            // terminal tool. As a plain WRITE tool it would default to ON in AGENT and run
+            // unreviewed; route it through the approval gate instead.
+            "run_process_background" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.ASK),
             "run_code" to ToolPermissionConfig(PermissionLevel.OFF, PermissionLevel.OFF)
         )
     }

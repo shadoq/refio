@@ -6,6 +6,11 @@ data class ToolResultCompressionConfig(
 )
 
 object ToolResultCompression {
+    // Structure detectors compiled once. MULTILINE so headings/bullets are detected
+    // on any line of the multi-line text, not only at the very start of the string.
+    private val MARKDOWN_HEADING_REGEX = Regex("^#{1,6}\\s", RegexOption.MULTILINE)
+    private val MARKDOWN_BULLET_REGEX = Regex("^\\s*[-*+]\\s", RegexOption.MULTILINE)
+
     /**
      * @param subtaskId optional id of the subtask that produced [rawOutput] —
      *   forwarded to [DiffCompressor] so the elision marker can embed the
@@ -37,7 +42,7 @@ object ToolResultCompression {
     }
 
     /**
-     * docs/0063 Faza 2 — when the emitted [body] shows the agent LESS than the full [raw] tool
+     * When the emitted [body] shows the agent LESS than the full [raw] tool
      * output, append a one-line pointer to the full content so the model knows the result was
      * shortened and can pull it back via `memory(get_subtask_output)` instead of hallucinating on a
      * truncated view (the long-turn failure mode). No-ops when nothing was cut, when there is no
@@ -77,8 +82,8 @@ object ToolResultCompression {
         val hasStructure = text.contains("```") ||
                 text.contains("<!DOCTYPE") ||
                 text.contains("<html") ||
-                Regex("^#{1,6}\\s").containsMatchIn(text) ||
-                Regex("^\\s*[-*+]\\s").containsMatchIn(text)
+                MARKDOWN_HEADING_REGEX.containsMatchIn(text) ||
+                MARKDOWN_BULLET_REGEX.containsMatchIn(text)
 
         return if (hasStructure) {
             compressWithStructure(text, maxChars)

@@ -1,0 +1,20 @@
+{
+  "id": "kotlin-scope-trace",
+  "category": "analysis",
+  "mode": "PLAN",
+  "description": "PLAN-mode: trace how a request's tenant scope flows from its HTTP header through the controller, service, and dao layers.",
+  "max_iterations": 25,
+  "fixture": "fixtures/kotlin-scope",
+  "prompt_file": "prompts/kotlin-scope-trace.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_output": { "regex": "X-Scope-OrgID" },
+    "file_unchanged": [
+      "src/controller/IncidentController.kt",
+      "src/service/IncidentService.kt",
+      "src/dao/IncidentDao.kt"
+    ],
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["The analysis states the tenant scope arrives in the X-Scope-OrgID header at IncidentController and is passed as the scope argument through IncidentService into IncidentDao.selectOpenByScope for tenant filtering, without editing any file."]
+}

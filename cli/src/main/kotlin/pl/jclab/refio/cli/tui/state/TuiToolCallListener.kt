@@ -54,7 +54,7 @@ class TuiToolCallListener(
         messagesState.update { messages ->
             messages.map { msg ->
                 if (msg.id == messageId) {
-                    msg.copy(content = accumulated, isStreaming = true)
+                    msg.copy(content = accumulated, isStreaming = true, isToolStreaming = true)
                 } else msg
             }
         }
@@ -77,6 +77,7 @@ class TuiToolCallListener(
                     msg.copy(
                         content = resultSummary,
                         isStreaming = false,
+                        isToolStreaming = false,
                         metadata = msg.metadata + ("success" to success),
                     )
                 } else msg

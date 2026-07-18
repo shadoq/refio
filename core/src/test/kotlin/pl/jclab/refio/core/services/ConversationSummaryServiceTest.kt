@@ -134,7 +134,8 @@ class ConversationSummaryServiceTest {
                 toolCallId = any()
             )
         } returns MockFactory.createChatMessage(role = MessageRole.SYSTEM, content = "summary")
-        every { chatMessageRepository.findByTaskId("task-1") } returns messages
+        // After creating the summary the service reloads the same thread it summarized.
+        every { chatMessageRepository.findHistoryForInvocation("task-1", null) } returns messages
 
         val result = service.ensureSummaryIfNeeded(
             taskId = "task-1",

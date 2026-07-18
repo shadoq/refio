@@ -356,28 +356,43 @@ class CodeIntelligenceTool(
         }
     }
 
-    private fun runCommand(cmd: List<String>, workDir: java.io.File): String {
-        val process = ProcessBuilder(cmd)
-            .directory(workDir)
-            .redirectErrorStream(true)
-            .start()
-        val output = process.inputStream.bufferedReader().readText()
-        process.waitFor(30, TimeUnit.SECONDS)
-        return output
-    }
+    private fun runCommand(cmd: List<String>, workDir: java.io.File): String =
+        runProcess(cmd, workDir, timeoutSeconds = 30, throwOnTimeout = false)
 
-    private fun runCommandWithTimeout(cmd: List<String>, workDir: java.io.File, timeoutSeconds: Long): String {
+    private fun runCommandWithTimeout(cmd: List<String>, workDir: java.io.File, timeoutSeconds: Long): String =
+        runProcess(cmd, workDir, timeoutSeconds, throwOnTimeout = true)
+
+    private fun runProcess(
+        cmd: List<String>,
+        workDir: java.io.File,
+        timeoutSeconds: Long,
+        throwOnTimeout: Boolean
+    ): String {
         val process = ProcessBuilder(cmd)
             .directory(workDir)
             .redirectErrorStream(true)
             .start()
-        val output = process.inputStream.bufferedReader().readText()
+        // Drain output on a daemon thread so a hung or chatty child cannot block this
+        // thread past the timeout or deadlock on a full pipe buffer.
+        val output = StringBuilder()
+        val reader = Thread {
+            process.inputStream.bufferedReader().forEachLine { line ->
+                synchronized(output) { output.appendLine(line) }
+            }
+        }
+        reader.isDaemon = true
+        reader.start()
         val finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
         if (!finished) {
             process.destroyForcibly()
-            throw RuntimeException("Command timed out after ${timeoutSeconds}s")
+            reader.join(2000)
+            if (throwOnTimeout) {
+                throw RuntimeException("Command timed out after ${timeoutSeconds}s")
+            }
+            return synchronized(output) { output.toString() }
         }
-        return output
+        reader.join(2000)
+        return synchronized(output) { output.toString() }
     }
 
     private fun elapsed(start: Long) = (System.currentTimeMillis() - start).toInt()

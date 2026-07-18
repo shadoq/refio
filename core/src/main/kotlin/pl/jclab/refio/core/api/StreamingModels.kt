@@ -3,17 +3,13 @@ package pl.jclab.refio.core.api
 import pl.jclab.refio.core.llm.LLMUsage
 
 /**
- * Streaming API models for chat streaming (US-027)
+ * Streaming API models for chat streaming.
  *
- * Based on specification in docs/0027-stream-chat.md
- *
- * Note: StreamChunk is now defined in StreamTypes.kt (RFC 0032)
+ * Note: StreamChunk is now defined in StreamTypes.kt.
  */
 
 /**
- * Streaming API models for Plan/Agent mode streaming (ADR-0031)
- *
- * Based on specification in docs/0031-stream-agent.md
+ * Streaming API models for Plan/Agent mode streaming.
  */
 
 /**

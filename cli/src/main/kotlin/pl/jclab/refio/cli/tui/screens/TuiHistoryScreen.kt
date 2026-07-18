@@ -46,7 +46,7 @@ object TuiHistoryScreen {
             // Header
             val idW = 8
             val modeW = 6
-            val statusW = 9
+            val statusW = 10 // fits the longest status "INCOMPLETE"
             val dateW = 16
             val tokW = 12
             val costW = 10
@@ -80,7 +80,7 @@ object TuiHistoryScreen {
                 val status = statusColor(session.status.take(statusW).padEnd(statusW))
                 val date = dateFormat.format(Date(session.updatedAt))
                 val tokens = "${(session.tokensIn + session.tokensOut)}".padEnd(tokW)
-                val cost = "\$${String.format("%.4f", session.costUsd)}".padEnd(costW)
+                val cost = "\$${String.format(java.util.Locale.US, "%.4f", session.costUsd)}".padEnd(costW)
                 val pin = if (session.pinned) "📌" else "  "
                 val activeMarker = if (isActive) TuiColors.statusRunning("●") else " "
                 val name = session.name.take(nameW)

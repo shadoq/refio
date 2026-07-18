@@ -25,7 +25,7 @@ interface TurnEventListener : TurnCompletionListener {
 
     /**
      * The model is streaming a NATIVE tool call's arguments, BEFORE the call is dispatched for
-     * execution (docs/0064). Distinct from [onToolStreamChunk], which streams a tool's *result*
+     * execution. Distinct from [onToolStreamChunk], which streams a tool's *result*
      * during execution. [accumulatedArguments] is the raw arguments JSON received so far.
      */
     fun onLlmToolCallProgress(taskId: String, index: Int, toolName: String?, accumulatedArguments: String) {}

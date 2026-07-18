@@ -29,6 +29,10 @@ object SupportedModels {
      * - O1 series (reasoning models)
      */
     private val OPENAI_SUPPORTED = setOf(
+        // GPT-5.6
+        "gpt-5.6-sol",
+        "gpt-5.6-luna",
+        "gpt-5.6-terra",
         // GPT-5.5
         "gpt-5.5",
         "gpt-5.5-mini",
@@ -89,6 +93,7 @@ object SupportedModels {
      */
     private val ANTHROPIC_SUPPORTED = setOf(
         // Opus models
+        "claude-opus-4-8",
         "claude-opus-4-7",
         "anthropic.claude-opus-4-7",
         "claude-opus-4-6",
@@ -100,6 +105,9 @@ object SupportedModels {
         "claude-opus-4-0",
         "claude-opus-4-20250514",
         // Sonnet models
+        "claude-sonnet-5",
+        "claude-sonnet-4-8",
+        "claude-sonnet-4-7",
         "claude-sonnet-4-6",
         "claude-sonnet-4-5-20250929",
         "claude-sonnet-4-5",
@@ -128,7 +136,13 @@ object SupportedModels {
     private val OPENROUTER_PATTERNS = setOf(
         // Google Gemini models (1.x and 2.x series)
         Regex("^.*gpt-.*"),
+        // Covers the o-series (openai/o3-deep-research, openai/o4-mini-deep-research),
+        // which the gpt- pattern above does not match.
+        Regex("^.*openai.*"),
         Regex("^.*amazon.*"),
+        Regex("^.*ibm-granite.*"),
+        Regex("^.*thedrummer.*"),
+        Regex("^.*relace.*"),
         Regex("^.*mistralai.*"),
         Regex("^.*arcee.*"),
         Regex("^.*tngtech.*"),
@@ -144,8 +158,21 @@ object SupportedModels {
         Regex("^.*minimax.*"),
         Regex("^.*deepseek.*"),
         Regex("^.*gemini.*"),
+        Regex("^.*tencent.*"),
+        Regex("^.*poolside.*"),
+        Regex("^.*nex-agi.*"),
+        Regex("^.*sakana.*"),
+        Regex("^.*openrouter.*"),
+        Regex("^.*moonshotai.*"),
         Regex("^.*x-ai.*"),
-        Regex("^.*z-ai.*")
+        // models.dev uses "xai/" (no hyphen) as the xAI lab slug, distinct from OpenRouter's "x-ai/".
+        Regex("^.*xai.*"),
+        Regex("^.*z-ai.*"),
+        Regex("^.*zhipuai.*"),
+        Regex("^.*thinkingmachines.*"),
+        Regex("^.*meta.*"),
+        Regex("^.*meituan.*"),
+        Regex("^.*deepreinforce.*")
     )
 
     /**

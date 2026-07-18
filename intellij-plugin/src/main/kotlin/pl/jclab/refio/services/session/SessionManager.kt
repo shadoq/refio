@@ -280,7 +280,7 @@ class SessionManager(private val project: Project) {
             scope = cs
         )
 
-        lifecycleService.initialize(messageDispatcher, subtaskTracker, executionMonitor)
+        lifecycleService.initialize()
 
         coreSessionService = pl.jclab.refio.core.session.CoreSessionService(
             projectRouter = projectRouter,
@@ -306,6 +306,18 @@ class SessionManager(private val project: Project) {
     }
 
     /**
+     * Mode the next session will use when none is active - restored from persisted
+     * UI state at startup, so a clean start still opens in the mode last worked in.
+     */
+    fun getSelectedMode(): TaskMode = lifecycleService.getSelectedMode()
+
+    /**
+     * Suspends until persisted UI state is loaded, so callers reading
+     * [getSelectedMode] at startup do not race the load.
+     */
+    suspend fun awaitInitialization() = lifecycleService.awaitInitialization()
+
+    /**
      * Create a new session.
      */
     suspend fun createSession(name: String, mode: TaskMode, executionMode: ExecutionMode? = null): Session {
@@ -327,7 +339,7 @@ class SessionManager(private val project: Project) {
     }
 
     /**
-     * Load existing session by ID (US-204: History Panel)
+     * Load existing session by ID (History Panel)
      *
      * Flow:
      * 1. Fetch task from database
@@ -341,7 +353,7 @@ class SessionManager(private val project: Project) {
     }
 
     /**
-     * Switch mode for active session (US-100: does NOT create new session).
+     * Switch mode for active session (does NOT create new session).
      *
      * Flow:
      * 1. Lock mutex to prevent race with sendMessage()
@@ -477,7 +489,7 @@ class SessionManager(private val project: Project) {
     }
 
     /**
-     * Set thinking enabled/disabled (US-010).
+     * Set thinking enabled/disabled.
      * Auto-saves UI state to database.
      */
     fun setThinkingEnabled(enabled: Boolean) {
@@ -485,15 +497,15 @@ class SessionManager(private val project: Project) {
     }
 
     /**
-     * Set no-egress enabled/disabled (US-006).
+     * Set no-egress enabled/disabled.
      * Auto-saves UI state to database.
      */
     fun setNoEgressEnabled(enabled: Boolean) {
         lifecycleService.setNoEgressEnabled(enabled)
     }
 
-    suspend fun getAvailableModels(): List<String> {
-        return lifecycleService.getAvailableModels()
+    suspend fun getAvailableModels(fetchIfMissing: Boolean = true): List<String> {
+        return lifecycleService.getAvailableModels(fetchIfMissing)
     }
 
     fun getDefaultModelForMode(): String {
@@ -538,7 +550,7 @@ class SessionManager(private val project: Project) {
     fun clearPendingContextRefs() {
         promptStateTracker.clearPendingContextRefs()
 
-        // Note: pending_context_json is deprecated (see docs/0042-chat-context.md)
+        // Note: pending_context_json is deprecated
         // Context is now stored in chat_messages.metadata, not in tasks table
     }
 

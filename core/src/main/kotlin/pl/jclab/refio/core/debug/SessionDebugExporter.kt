@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.debug
 
+import pl.jclab.refio.core.api.MultiAgentSessionResponse
 import pl.jclab.refio.core.db.MessageRole
 import pl.jclab.refio.core.db.repositories.ApiLogRepository
 import pl.jclab.refio.core.db.repositories.ChatMessageRepository
@@ -9,7 +10,7 @@ import pl.jclab.refio.core.utils.GsonInstance
 
 /**
  * Builds a stable [SessionDebugSnapshot] for a session from core repositories, keyed by `taskId`,
- * and serializes it to the `run.json` contract (docs/0059 §5, docs/0063 §4).
+ * and serializes it to the `run.json` contract.
  *
  * This is the single source of truth behind the CLI `--output json` and (later) the plugin
  * DebugPanel — both render the same snapshot instead of duplicating report logic.
@@ -39,7 +40,7 @@ class SessionDebugExporter(
 
         val warnings = buildList {
             if (options.level == DebugLevel.FULL || options.level == DebugLevel.JUDGE) {
-                add("full/judge extras (active prompt snapshot, agent trace, context sections) are not yet exported — see docs/0063 Faza 4")
+                add("full/judge extras (active prompt snapshot, agent trace, context sections) are not yet exported")
             }
         }
 
@@ -83,6 +84,14 @@ class SessionDebugExporter(
                 apiCallCount = apiLogs.size,
                 toolCallCount = subtasks.size,
                 contextOverflow = ContextOverflowTracker.didOverflow(taskId),
+                failureMarker = TurnFailureMarkerTracker.markerFor(taskId),
+                verification = TurnVerificationTracker.summaryFor(taskId).let {
+                    SessionDebugSnapshot.VerificationInfo(
+                        ran = it.ran,
+                        attempts = it.attempts,
+                        result = it.result,
+                    )
+                },
             ),
             finalOutput = finalOutput,
             subtasks = if (options.includeSubtasks) {
@@ -109,6 +118,9 @@ class SessionDebugExporter(
                         agentName = msg.agentName,
                         contentPreview = msg.content.preview(options.maxContentPreviewChars),
                         toolCalls = msg.toolCalls?.map { it.name } ?: emptyList(),
+                        toolCallDetails = msg.toolCalls?.map {
+                            SessionDebugSnapshot.ToolCallDetail(name = it.name, arguments = it.arguments)
+                        } ?: emptyList(),
                         tokensIn = msg.tokensIn,
                         tokensOut = msg.tokensOut,
                         createdAt = msg.createdAt,
@@ -132,6 +144,77 @@ class SessionDebugExporter(
             } else emptyList(),
             errors = errors,
             warnings = warnings,
+        )
+    }
+
+    /**
+     * Synthesize a snapshot for a multi-agent session. Unlike [export] there is no single task row
+     * to read from - the metrics are rolled up from the per-agent results the runner already
+     * captured, so run.json reports the real aggregate token/cost figures (a combined turn count
+     * would collapse input and output into one misleading number).
+     */
+    fun exportMultiAgent(
+        response: MultiAgentSessionResponse,
+        model: String?,
+        options: SessionDebugOptions,
+    ): SessionDebugSnapshot {
+        val orderedAgents = response.agents.sortedBy { it.startedAt ?: Long.MAX_VALUE }
+        val allOk = response.agents.all { it.success == true }
+        val status = if (allOk) "SUCCESS" else "FAILED"
+        val tokensIn = response.totalTokensIn.toInt()
+        val tokensOut = response.totalTokensOut.toInt()
+
+        return SessionDebugSnapshot(
+            schemaVersion = SESSION_DEBUG_SCHEMA_VERSION,
+            run = SessionDebugSnapshot.RunInfo(
+                debugLevel = options.level.name,
+                durationMs = response.durationMs,
+                startedAt = response.createdAt,
+                endedAt = response.completedAt,
+            ),
+            session = SessionDebugSnapshot.SessionInfo(
+                id = response.sessionId,
+                name = response.name,
+                mode = "MULTI_AGENT",
+                executionMode = "AUTO",
+                model = model,
+                provider = null,
+                status = status,
+                tokensIn = tokensIn,
+                tokensOut = tokensOut,
+                costUsd = response.totalCostUsd,
+            ),
+            metrics = SessionDebugSnapshot.Metrics(
+                durationMs = response.durationMs,
+                tokensIn = tokensIn,
+                tokensOut = tokensOut,
+                costUsd = response.totalCostUsd,
+                apiCallCount = response.agents.size,
+                toolCallCount = 0,
+                contextOverflow = false,
+            ),
+            finalOutput = orderedAgents.joinToString("\n\n") {
+                "--- ${it.agentName} ---\n${it.response ?: ""}"
+            }.preview(options.maxContentPreviewChars),
+            subtasks = emptyList(),
+            conversation = emptyList(),
+            apiLogs = emptyList(),
+            errors = orderedAgents.mapNotNull { a -> a.error?.let { "agent ${a.agentName}: $it" } },
+            warnings = emptyList(),
+            multiAgent = SessionDebugSnapshot.MultiAgentInfo(
+                agents = orderedAgents.map {
+                    SessionDebugSnapshot.AgentRunInfo(
+                        agentName = it.agentName,
+                        status = it.status,
+                        success = it.success == true,
+                        startedAt = it.startedAt,
+                        completedAt = it.completedAt,
+                        tokensIn = it.tokensIn,
+                        tokensOut = it.tokensOut,
+                        costUsd = it.costUsd,
+                    )
+                }
+            ),
         )
     }
 

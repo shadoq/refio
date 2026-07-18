@@ -56,12 +56,18 @@ class LlmCallTool(
 ) : Tool {
 
     override val name = "llm_call"
-    override val description = "Raw single-turn LLM call — no tools, no history, no project context. " +
+    override val description = "Raw single-turn LLM call - no tools, no history, no project context. " +
+        "USE THIS for any LLM-based step (classification, tagging, extraction, transformation, " +
+        "summarization, vision). It runs through the app's configured providers/keys. " +
+        "Do NOT write code that calls OpenAI/Anthropic/etc HTTP APIs from run_code/run_terminal_command - " +
+        "the sandbox has NO API keys and those calls will fail (401); route the LLM step through this tool instead. " +
         "Supports vision via image_path/image_base64. CHEAPER than invoke_subagent."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_PRODUCING
     override val selectionHint =
-        "Single-turn LLM call for analysis/transform/vision. Cheaper than invoke_subagent when no tools needed."
+        "The way to call an LLM from a task: classification/tagging/extraction/transform/summarize/vision. " +
+        "Use instead of calling OpenAI/Anthropic APIs inside run_code (sandbox has no keys). " +
+        "Cheaper than invoke_subagent when no tools needed."
 
     override suspend fun execute(params: Map<String, Any>): ToolResult {
         val userPrompt = params["data"]?.toString()?.trim() ?: ""
@@ -156,6 +162,21 @@ class LlmCallTool(
         )
 
         val cleanContent = stripThinkingTags(response.content)
+
+        // Fail loud on an empty response instead of returning silent empty success.
+        // A reasoning model that emits only thinking (and no answer) would otherwise look
+        // like a successful call that produced nothing - and even write an empty file.
+        if (cleanContent.isBlank()) {
+            logger.warn {
+                "[LLM_CALL] Empty response from $provider/$model " +
+                    "(tokens_out=${response.usage.outputTokens})"
+            }
+            return ToolResult.error(
+                "LLM returned an empty response (provider=$provider, model=$model, " +
+                    "output_tokens=${response.usage.outputTokens}). The model may have produced " +
+                    "only reasoning with no final answer. Try a different model or rephrase the prompt."
+            )
+        }
 
         // Optionally save to file
         if (!saveToFile.isNullOrBlank()) {

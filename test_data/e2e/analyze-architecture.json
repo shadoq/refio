@@ -1,0 +1,22 @@
+{
+  "id": "analyze-architecture",
+  "mode": "PLAN",
+  "description": "PLAN-mode: name the pipeline component classes and describe the direction data flows between them without editing files.",
+  "category": "analysis",
+  "max_iterations": 25,
+  "fixture": "fixtures/analyze-arch",
+  "prompt_file": "prompts/analyze-arch.md",
+  "assert": {
+    "needle_in_output": { "regex": "OrderParser" },
+    "file_unchanged": [
+      "src/pipeline/OrderParser.kt",
+      "src/pipeline/OrderValidator.kt",
+      "src/pipeline/OrderRepository.kt",
+      "src/pipeline/OrderNotifier.kt"
+    ],
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": ["Does the analysis name the four components and the parse->validate->persist->notify data-flow direction, without editing any file?"]
+  }
+}

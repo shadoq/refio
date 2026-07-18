@@ -40,6 +40,11 @@ class TuiRenderer(
     private val jlineTerminal: org.jline.terminal.Terminal
 ) {
 
+    companion object {
+        /** Max unified-diff lines shown inline in the tool approval box. */
+        private const val APPROVAL_DIFF_MAX_LINES = 15
+    }
+
     /** Single output channel — all ANSI goes through JLine's writer. */
     private val output: Writer = jlineTerminal.writer()
 
@@ -81,6 +86,7 @@ class TuiRenderer(
     /**
      * Force a full re-render (e.g. on terminal resize).
      */
+    @Synchronized
     fun forceRender(state: TuiState) {
         lastRenderedHash = 0
         lastWidth = 0
@@ -88,6 +94,10 @@ class TuiRenderer(
         render(state)
     }
 
+    // Synchronized: frames may be triggered concurrently by the state-collect
+    // loop, the resize poller and the WINCH signal handler; interleaved writes
+    // of two frames corrupt the screen and can kill the writer mid-resize.
+    @Synchronized
     fun render(state: TuiState) {
         val width = jlineTerminal.width
         val height = jlineTerminal.height
@@ -347,7 +357,9 @@ class TuiRenderer(
      */
     private fun applyToolApprovalOverlay(screen: TuiScreenBuffer, state: TuiState, layout: TuiLayoutRegions) {
         val req = state.pendingToolApproval ?: return
-        val boxWidth = 60.coerceAtMost(layout.width - 4)
+        val change = req.proposedChange
+        val baseWidth = if (change != null) 90 else 60
+        val boxWidth = baseWidth.coerceAtMost(layout.width - 4)
         val innerWidth = boxWidth - 4
 
         val lines = mutableListOf<String>()
@@ -362,6 +374,13 @@ class TuiRenderer(
         val descLine = " ${req.description}".take(innerWidth).padEnd(innerWidth)
         lines.add(TuiColors.border("│") + " $descLine " + TuiColors.border("│"))
 
+        if (change != null) {
+            lines.add(TuiColors.border("├") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┤"))
+            for (diffLine in buildApprovalDiffLines(change, innerWidth)) {
+                lines.add(TuiColors.border("│") + " $diffLine " + TuiColors.border("│"))
+            }
+        }
+
         lines.add(TuiColors.border("├") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┤"))
         val promptText = " [y] Approve  [t] Trust  [n] Reject"
         lines.add(TuiColors.border("│") + TuiColors.accent(promptText.padEnd(boxWidth - 2)) + TuiColors.border("│"))
@@ -371,6 +390,38 @@ class TuiRenderer(
         val startCol = ((layout.width - boxWidth) / 2).coerceAtLeast(0)
 
         screen.overlay(startRow, startCol, lines)
+    }
+
+    /**
+     * Colored unified-diff preview for the approval box: file header highlighted,
+     * added lines green, removed lines red. Long diffs show the first
+     * [APPROVAL_DIFF_MAX_LINES] lines plus a "(+N more lines)" hint.
+     */
+    private fun buildApprovalDiffLines(
+        change: pl.jclab.refio.core.services.turn.ProposedChange,
+        innerWidth: Int
+    ): List<String> {
+        val out = mutableListOf<String>()
+        out.add(TuiColors.highlight(" ${change.filePath}".take(innerWidth).padEnd(innerWidth)))
+
+        val diffLines = change.unifiedDiff.lines().filter { it.isNotEmpty() }
+        val visible = diffLines.take(APPROVAL_DIFF_MAX_LINES)
+        for (line in visible) {
+            val text = " $line".take(innerWidth).padEnd(innerWidth)
+            val styled = when {
+                line.startsWith("+") -> TuiColors.statusSuccess(text)
+                line.startsWith("-") -> TuiColors.statusFailed(text)
+                line.startsWith("@@") || line.startsWith("---") || line.startsWith("+++") -> TuiColors.muted(text)
+                else -> text
+            }
+            out.add(styled)
+        }
+
+        val hidden = diffLines.size - visible.size
+        if (hidden > 0) {
+            out.add(TuiColors.muted(" (+$hidden more lines)".take(innerWidth).padEnd(innerWidth)))
+        }
+        return out
     }
 
     /**
@@ -392,12 +443,14 @@ class TuiRenderer(
         val maxVisible = 10.coerceAtMost(candidates.size)
         val longestModel = candidates.maxOfOrNull { it.length } ?: 20
         val boxWidth = (longestModel + 6).coerceIn(30, layout.width - 4)
-        val innerWidth = boxWidth - 4
+        // Every row must be exactly boxWidth visible columns so the right border
+        // stays vertical: 1 border + 1 space + 2 marker + innerWidth + 1 space + 1 border.
+        val innerWidth = boxWidth - 6
 
         val lines = mutableListOf<String>()
 
-        // Title
-        lines.add(TuiColors.border("┌─") + TuiColors.highlight(" Select Model ") + TuiColors.border("─".repeat((boxWidth - 18).coerceAtLeast(0)) + "┐"))
+        // Title: 2 + 14 + fill + 1 = boxWidth
+        lines.add(TuiColors.border("┌─") + TuiColors.highlight(" Select Model ") + TuiColors.border("─".repeat((boxWidth - 17).coerceAtLeast(0)) + "┐"))
 
         // Candidates
         val startIdx = if (selected >= maxVisible) selected - maxVisible + 1 else 0

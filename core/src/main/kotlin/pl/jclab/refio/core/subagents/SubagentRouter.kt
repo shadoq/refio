@@ -296,8 +296,12 @@ class SubagentRouter(
         enabled: Boolean = true,
         priority: Int = 0
     ): SubagentDefinition {
+        val normalizedName = name.lowercase().replace(" ", "-")
+        require(normalizedName.matches(Regex("^[a-z0-9]+(?:-[a-z0-9]+)*$"))) {
+            "Subagent name must use lowercase letters, numbers, and single hyphens"
+        }
         val definition = SubagentDefinition(
-            name = name.lowercase().replace(" ", "-"),
+            name = normalizedName,
             description = description,
             systemPrompt = systemPrompt,
             allowedTools = allowedTools,

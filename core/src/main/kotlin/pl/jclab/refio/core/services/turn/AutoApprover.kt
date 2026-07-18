@@ -1,7 +1,7 @@
 package pl.jclab.refio.core.services.turn
 
 /**
- * Pure decision for the headless `--auto-approve <regex>` flow (docs/0063 §6.2).
+ * Pure decision for the headless `--auto-approve <regex>` flow.
  *
  * A regex match approves the tool call; anything else is rejected immediately (fail-closed) so a
  * headless run never blocks on the 5-minute approval timeout. The wiring that subscribes to

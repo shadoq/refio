@@ -595,6 +595,58 @@ class AdvanceCodeEditingToolTest {
         }
 
         @Test
+        fun `should not write multi-line prose to the file when no code fence is present`() = runBlocking {
+            // Guardrail against corrupting the file with a non-code reply. A weak/refusing
+            // editor model can return a multi-line explanation or apology with no fenced code
+            // block. Such prose must never be written verbatim as the file's contents — the
+            // tool re-prompts for a real code block and, failing that, fails loud and leaves
+            // the original file untouched (Rule 11). Here the model returns prose on both the
+            // initial call and the repair retry.
+            val original = "fun original() = 1"
+            Files.writeString(tempDir.resolve("test.kt"), original)
+
+            val prose = """
+                I cannot edit this file as requested.
+                The instructions are ambiguous to me.
+                You should provide a concrete before/after example.
+                Try rephrasing the edit description.
+            """.trimIndent()
+
+            coEvery {
+                mockLLMClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    temperature = any(),
+                    maxTokens = any(),
+                    stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null,
+                    subtaskId = null,
+                    source = "AdvCodeEditor"
+                )
+            } returns LLMResponse(
+                content = prose,
+                usage = LLMUsage(inputTokens = 40, outputTokens = 30, totalTokens = 70),
+                cost = 0.0,
+                model = "test-model",
+                provider = "test-provider"
+            )
+
+            // When
+            val result = tool.execute(mapOf(
+                "path" to "test.kt",
+                "edit_description" to "Modify the content"
+            ))
+
+            // Then — the prose was rejected, the file was not clobbered, and we failed loud
+            assertFalse(result.success, "prose must not be accepted as file content")
+            assertEquals(original, Files.readString(tempDir.resolve("test.kt")))
+            assertTrue(result.error!!.contains("usable code block", ignoreCase = true))
+        }
+
+        @Test
         fun `should return error when file is too large`() = runBlocking {
             // Given
             val strictLimits = FileLimits(maxFileSize = 100)

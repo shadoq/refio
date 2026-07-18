@@ -121,36 +121,40 @@ class MultiAgentRunner(
 
                     val startTime = System.currentTimeMillis()
 
-                    // Setup per-agent metrics
-                    val agentMetrics = GlobalMetrics.forAgent(agentId)
-                    agentMetrics.resetCancellation()
-
-                    // Emit start event
-                    eventBus.emit(AgentEvent.AgentStarted(
-                        id = UUID.randomUUID().toString(),
-                        sessionId = sessionId,
-                        sourceAgentId = agentId,
-                        timestamp = startTime,
-                        correlationId = sessionId,
-                        agentName = spec.name,
-                        profile = spec.profile,
-                        task = spec.task,
-                        model = spec.model,
-                        dependsOn = spec.dependsOn
-                    ))
-
-                    // Register this agent's inbox so peers (or this agent itself) can route
-                    // messages by spec.name via AgentInboxRegistry. The inbox's coroutines die
-                    // with `this` (the supervisorScope launch) when the agent completes.
-                    val inbox = AgentMessageInbox(
-                        agentName = spec.name,
-                        sessionId = sessionId,
-                        eventBus = eventBus,
-                        scope = this,
-                    )
-                    inboxRegistry.register(inbox)
-
+                    // Everything after the dependency wait runs inside this try: if setup
+                    // (metrics, start event, inbox registration) throws, the finally block
+                    // still marks the agent completed so dependents never wait forever.
+                    var inbox: AgentMessageInbox? = null
                     try {
+                        // Setup per-agent metrics
+                        val agentMetrics = GlobalMetrics.forAgent(agentId)
+                        agentMetrics.resetCancellation()
+
+                        // Emit start event
+                        eventBus.emit(AgentEvent.AgentStarted(
+                            id = UUID.randomUUID().toString(),
+                            sessionId = sessionId,
+                            sourceAgentId = agentId,
+                            timestamp = startTime,
+                            correlationId = sessionId,
+                            agentName = spec.name,
+                            profile = spec.profile,
+                            task = spec.task,
+                            model = spec.model,
+                            dependsOn = spec.dependsOn
+                        ))
+
+                        // Register this agent's inbox so peers (or this agent itself) can route
+                        // messages by spec.name via AgentInboxRegistry. The inbox's coroutines die
+                        // with `this` (the supervisorScope launch) when the agent completes.
+                        inbox = AgentMessageInbox(
+                            agentName = spec.name,
+                            sessionId = sessionId,
+                            eventBus = eventBus,
+                            scope = this,
+                        )
+                        inboxRegistry.register(inbox)
+
                         val result = executor(spec, agentId)
                         results[spec.name] = result
 
@@ -200,7 +204,7 @@ class MultiAgentRunner(
 
                         logger.error(e) { "[MULTI_AGENT] Agent '${spec.name}' failed: $errorMsg" }
                     } finally {
-                        inbox.close()
+                        inbox?.close()
                         inboxRegistry.unregister(sessionId, spec.name)
                         GlobalMetrics.removeAgent(agentId)
                         completedAgents.update { it + spec.name }

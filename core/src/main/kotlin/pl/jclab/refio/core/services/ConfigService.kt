@@ -6,6 +6,7 @@ import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.config.ConfigYaml
 import pl.jclab.refio.core.config.HierarchicalConfigLoader
 import pl.jclab.refio.core.db.ConfigScope
+import pl.jclab.refio.core.llm.ReasoningEffort
 import pl.jclab.refio.core.db.repositories.ConfigRepository
 import pl.jclab.refio.core.services.context.ContextBudget
 import pl.jclab.refio.core.subagents.BuiltinSubagentOverrides
@@ -28,7 +29,7 @@ class ConfigService(
     private val defaultProjectId: String? = null,
     private val projectRoot: Path? = null,
     /**
-     * Run-scope config overrides (docs/0063): highest-priority, read-only values injected at
+     * Run-scope config overrides: highest-priority, read-only values injected at
      * process start (e.g. CLI `--config` / `--config-file`). They win over DB/YAML/default but
      * are NEVER written back to the shared database — enabling headless e2e/benchmark of different
      * settings without polluting real sessions. Empty by default (plugin/normal callers unaffected).
@@ -76,9 +77,9 @@ class ConfigService(
         const val KEY_CONTEXT_BUDGET_SECTION_PREFIX = "context.budget.section."
 
         // Hard fallbacks used when neither DB nor YAML provide a value (last resort).
-        const val FALLBACK_MODEL = "qwen2.5:7b"
+        const val FALLBACK_MODEL = "qwen3.5:9b"
         const val FALLBACK_PROVIDER = "ollama"
-        const val FALLBACK_WEAK_MODEL = "qwen2.5:7b"
+        const val FALLBACK_WEAK_MODEL = "qwen3.5:9b"
         const val FALLBACK_WEAK_PROVIDER = "ollama"
         const val FALLBACK_EMBEDDING_MODEL = "nomic-embed-text"
         const val FALLBACK_EMBEDDING_PROVIDER = "ollama"
@@ -154,8 +155,8 @@ class ConfigService(
 
     // ==================== UI CONFIGURATION ====================
 
-    fun setThinkingEnabled(enabled: Boolean, taskId: String? = null) {
-        setTyped(ConfigKeys.GENERAL_THINKING_ENABLED, enabled, taskScope(taskId), taskId)
+    fun setReasoningEffort(effort: ReasoningEffort, taskId: String? = null) {
+        setTyped(ConfigKeys.GENERAL_REASONING_EFFORT, effort, taskScope(taskId), taskId)
     }
 
     fun setNoEgressEnabled(enabled: Boolean, taskId: String? = null) {
@@ -211,7 +212,7 @@ class ConfigService(
     fun setBuiltinSubagentEnabledOverride(name: String, enabled: Boolean) =
         builtinSubagentOverrides.setOverride(name, enabled)
 
-    // ==================== CONTEXT CONFIGURATION (ADR 0017) ====================
+    // ==================== CONTEXT CONFIGURATION ====================
     // Delegated to ContextBudgetResolver to keep budget math out of this class.
 
     private val contextBudgetResolver = ContextBudgetResolver(this)
@@ -280,14 +281,14 @@ class ConfigService(
     ) = resolver.getConfigWithPrecedence(key, taskId, projectId)
 
     /**
-     * Check if intelligent orchestration is enabled (US-028).
+     * Check if intelligent orchestration is enabled.
      *
      * @param taskId Optional task ID for task-level override
      * @return true if orchestration is enabled (default: true)
      */
     /**
      * Check if task verification should run for current turn.
-     * ADR 0019 P13: Auto-enable verification for longer turns (>5 iterations) to catch hallucinations.
+     * Auto-enable verification for longer turns (>5 iterations) to catch hallucinations.
      *
      * @param taskId Task ID (for config override)
      * @param iterationCount Current iteration count in turn

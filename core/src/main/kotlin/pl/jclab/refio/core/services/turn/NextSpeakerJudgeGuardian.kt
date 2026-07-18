@@ -84,6 +84,32 @@ class NextSpeakerJudgeGuardian(
         // judge LLM call + a full prompt iteration per loop. Skipping here saves both.
         if (context.priorReentries > 0 &&
             context.toolsUsed.size <= context.toolsUsedSizeAtPriorReentry) {
+            if (deliverableLikelyProduced(context)) {
+                logger.info {
+                    "[JUDGE] taskId=${context.taskId} priorReentries=${context.priorReentries} " +
+                        "produced no new tool call, but a deliverable was already produced this turn " +
+                        "(writeTools=${context.writeToolsExecutedInTurn}, mode=${context.mode}, " +
+                        "respLen=${context.finalResponse.trim().length}) — finalizing SUCCESS, not INCOMPLETE"
+                }
+                return GuardianDecision.Pass
+            }
+            // One more nudge, once, while the turn is still early and nothing is delivered: the
+            // second reminder escalates to re-include the JSON envelope schema. A single nudge
+            // often does not unstick a weak local model that abandoned the task on iteration 1-3
+            // with an intent announcement and a malformed/absent tool call; the schema reminder
+            // targets exactly that. Bounded by [reentryBudget] so a turn past its early window,
+            // or one that already burned the extra re-entry, still stops INCOMPLETE here.
+            if (context.priorReentries < reentryBudget(context)) {
+                logger.info {
+                    "[JUDGE] taskId=${context.taskId} priorReentries=${context.priorReentries} " +
+                        "produced no new tool call but turn is early (iteration=${context.iteration}/" +
+                        "${context.maxIterations}) and nothing delivered - escalated re-entry with schema nudge"
+                }
+                return GuardianDecision.Reenter(
+                    nudge = buildReentryNudge(context, escalated = true),
+                    reason = "escalated re-entry: still no tool call, turn early, nothing delivered"
+                )
+            }
             logger.info {
                 "[JUDGE] taskId=${context.taskId} priorReentries=${context.priorReentries} " +
                     "produced no new tool call (toolsUsed=${context.toolsUsed.size}, " +
@@ -104,27 +130,36 @@ class NextSpeakerJudgeGuardian(
 
         return try {
             val verdict = callJudge(context, response)
-            // Single bounded re-entry on a MODEL verdict (request not yet delivered).
-            // Restored 2026-05 after manual-tests showed T4 models (qwen3.5:9b) silently
-            // abandon multi-step tasks: they end turns on a bare intent announcement
-            // ("Now let me run git branch…", "I'll now produce the analysis…") with no
-            // tool call. `<focus_discipline>` in the system prompt did not change that
-            // behaviour, so the judge is the only terminal-point safety net.
+            // Bounded re-entry on a MODEL verdict (request not yet delivered). Restored 2026-05
+            // after manual-tests showed T4 models (qwen3.5:9b) silently abandon multi-step tasks:
+            // they end turns on a bare intent announcement ("Now let me run git branch…", "I'll now
+            // produce the analysis…") with no tool call. `<focus_discipline>` in the system prompt
+            // did not change that behaviour, so the judge is the only terminal-point safety net.
             //
-            // No extra LLM call beyond the judge we already ran — the nudge is a constant.
-            // The one-shot cap is the `priorReentries == 0` gate: a second consecutive MODEL
-            // verdict falls through to the else-branch and is reported INCOMPLETE (the request
-            // was never delivered); the no-progress short-circuit above likewise marks INCOMPLETE
-            // when a re-entry produced no new tool call. A USER/UNCERTAIN verdict still Passes.
-            if (verdict == NextSpeakerVerdict.MODEL && context.priorReentries == 0) {
+            // No extra LLM call beyond the judge we already ran - the nudge is a constant. The cap
+            // is [reentryBudget]: one re-entry by default, or up to
+            // [MAX_EARLY_JUDGE_REENTRIES] while the turn is still early and NOTHING has been
+            // delivered (weak models often need a second, schema-carrying nudge). Once the budget
+            // is spent a MODEL verdict falls through to INCOMPLETE (request never delivered); the
+            // no-progress short-circuit above enforces the same cap. A USER/UNCERTAIN verdict Passes.
+            if (verdict == NextSpeakerVerdict.MODEL && context.priorReentries < reentryBudget(context)) {
+                val escalated = context.priorReentries > 0
                 logger.info {
                     "[JUDGE] taskId=${context.taskId} verdict=MODEL (mid-task pause) — " +
-                        "single bounded re-entry with focus nudge"
+                        "re-entry ${context.priorReentries + 1} (escalated=$escalated) with focus nudge"
                 }
                 GuardianDecision.Reenter(
-                    nudge = buildReentryNudge(context),
-                    reason = "judge verdict=MODEL: request not yet delivered (1x re-entry)"
+                    nudge = buildReentryNudge(context, escalated = escalated),
+                    reason = "judge verdict=MODEL: request not yet delivered (re-entry ${context.priorReentries + 1})"
                 )
+            } else if (verdict == NextSpeakerVerdict.MODEL && deliverableLikelyProduced(context)) {
+                logger.info {
+                    "[JUDGE] taskId=${context.taskId} verdict=MODEL and re-entry budget spent, but a " +
+                        "deliverable was already produced this turn (writeTools=${context.writeToolsExecutedInTurn}, " +
+                        "mode=${context.mode}, respLen=${context.finalResponse.trim().length}) — " +
+                        "finalizing SUCCESS, not INCOMPLETE"
+                }
+                GuardianDecision.Pass
             } else if (verdict == NextSpeakerVerdict.MODEL) {
                 logger.info {
                     "[JUDGE] taskId=${context.taskId} verdict=MODEL but re-entry budget " +
@@ -143,6 +178,54 @@ class NextSpeakerJudgeGuardian(
     }
 
     /**
+     * A terminal stall must be reported INCOMPLETE only when the agent ABANDONED the request
+     * before producing a deliverable — never when it produced one and merely signed off with
+     * forward-looking intent ("…fixed. Now let me compile to verify."), which weak local models do
+     * routinely. Without this discriminator a correct edit (or a complete PLAN answer) is reported
+     * as a failed turn (status INCOMPLETE, non-zero headless exit) purely because of the sign-off
+     * phrasing — the dominant local-model instability observed when running the e2e harness on
+     * qwen3.5:4b/9b: a fixed file or a full plan was already on hand, yet the turn returned failure.
+     *
+     *  - AGENT/SUBAGENT: a write/edit executed this turn → the file deliverable is on disk.
+     *  - PLAN: writes are structurally impossible; the deliverable IS the answer text, so a
+     *    substantial reply (a real step-by-step plan, not a bare "Let me produce a plan." stub) counts.
+     *
+     * Q&A AGENT turns that write nothing are still gated by the judge returning USER for a real
+     * answer; the guardian only reaches this fallback when the model stalled. There, a no-write turn
+     * with a short intent stub stays false → INCOMPLETE exactly as before. The deliberate trade-off:
+     * a genuine multi-step task that wrote step A, was nudged once, and still did not do step B is now
+     * reported SUCCESS — accepted, because the model failed despite the nudge (rare) and the common
+     * false-INCOMPLETE on completed single-deliverable turns is the far more damaging, frequent case.
+     */
+    private fun deliverableLikelyProduced(context: GuardianContext): Boolean =
+        TurnDeliverable.produced(
+            context.fileWriteToolsExecutedInTurn,
+            context.mode,
+            context.finalResponse,
+            isSubagent = context.runProfile == TurnRunProfile.SUBAGENT,
+        )
+
+    /**
+     * How many judge-driven re-entries this turn may spend. One (the strict one-shot) by default;
+     * up to [MAX_EARLY_JUDGE_REENTRIES] only while the turn is still early AND nothing has been
+     * delivered yet - the exact window where an extra nudge can still recover a stalled weak model
+     * without wasting an already-productive or already-late turn. Config-gated so the strict
+     * one-shot can be restored. The early window shrinks as iterations are consumed, so a turn that
+     * burns its budget naturally drops back to a single re-entry and then stops INCOMPLETE.
+     */
+    private fun reentryBudget(context: GuardianContext): Int {
+        val extended = configService.getTyped<Boolean>(
+            ConfigKeys.GENERAL_JUDGE_EXTENDED_REENTRY_ENABLED,
+            context.taskId
+        )
+        if (!extended || deliverableLikelyProduced(context)) {
+            return 1
+        }
+        val earlyLimit = (context.maxIterations * EARLY_REENTRY_ITERATION_FRACTION).toInt()
+        return if (context.iteration <= earlyLimit) MAX_EARLY_JUDGE_REENTRIES else 1
+    }
+
+    /**
      * Hard SYSTEM nudge injected on the single bounded re-entry. Names the failure mode
      * (intent announced, no tool call) and demands the next concrete tool call. In goal mode
      * it re-injects the completion condition so the model re-anchors on the contract.
@@ -155,7 +238,7 @@ class NextSpeakerJudgeGuardian(
      * re-reading DatabaseFactory.kt until aborted). The text is a constant (modulo the goal
      * clause) — building it costs no LLM call.
      */
-    private fun buildReentryNudge(context: GuardianContext): String {
+    private fun buildReentryNudge(context: GuardianContext, escalated: Boolean = false): String {
         val goal = context.completionCondition?.takeIf { it.isNotBlank() }?.take(2000)
         val isSubagent = context.runProfile == TurnRunProfile.SUBAGENT
         return buildString {
@@ -174,6 +257,15 @@ class NextSpeakerJudgeGuardian(
                 append("remaining work with the next concrete tool call (read / search / analyze), ")
                 append("then reply with the full result in plain prose — do not restate what you ")
                 append("are about to do.")
+            } else if (context.mode == TaskMode.PLAN) {
+                // PLAN cannot write files — the deliverable is the plan TEXT. The DEFAULT "emit a write
+                // tool" steer is nonsensical here and was observed to send PLAN turns into a wasteful
+                // re-entry on a contract they cannot satisfy.
+                append("You are in PLAN mode: you do NOT edit files — your deliverable is the COMPLETE, ")
+                append("concrete plan as text in this reply (what to change, where, and why). Finish any ")
+                append("remaining investigation with the next read/search tool call only if you still ")
+                append("need it, then write the full plan in plain prose — do not restate what you are ")
+                append("about to do. If the plan is already complete, reply with it only, no preamble.")
             } else {
                 append("Re-read the original request, identify the ONE deliverable still missing, ")
                 append("and emit the tool call that produces it in THIS response — do not restate ")
@@ -184,8 +276,19 @@ class NextSpeakerJudgeGuardian(
                 append("deliverable is genuinely already present, reply with the final result only, ")
                 append("no preamble.")
             }
-            append("\n\n")
-            append("This is your only automatic reminder; if you stop again the turn ends.")
+            if (escalated && !isSubagent && context.mode != TaskMode.PLAN) {
+                // Second reminder for a model that ignored the first: re-state the exact structured
+                // reply contract. The observed stall is an intent sentence with a malformed or
+                // absent tool call, so showing the envelope shape is the concrete correction.
+                append("\n\nYou already ignored one reminder. If your replies use the JSON envelope, ")
+                append("it MUST be exactly this shape with a real tool in `actions`:\n")
+                append("{\"actions\":[{\"tool\":\"TOOL_NAME\",\"args\":{...}}],\"response\":\"...\",\"intent\":\"implementation\"}\n")
+                append("An empty `actions` array, prose without a tool call, or another intent ")
+                append("announcement ends the turn now.")
+            } else {
+                append("\n\n")
+                append("This is your only automatic reminder; if you stop again the turn ends.")
+            }
         }
     }
 
@@ -261,8 +364,14 @@ class NextSpeakerJudgeGuardian(
     }
 
     /**
-     * Strip optional markdown fences and isolate the outermost JSON object. Weak models
-     * sometimes wrap the response in ```json ... ``` despite explicit instructions.
+     * Strip optional markdown fences and isolate the FIRST balanced JSON object. Weak models
+     * sometimes wrap the response in ```json ... ``` despite explicit instructions, and some
+     * (observed: minimax-m3 on OpenRouter as the WEAK judge model) emit two concatenated
+     * objects — `{"speaker":"model",...}{"speaker":"model",...}`. The previous
+     * `indexOf('{')`..`lastIndexOf('}')` slice swallowed BOTH objects, producing invalid JSON
+     * → parse failure → UNCERTAIN → the turn passed as SUCCESS even though the judge had
+     * twice said "model" (continue). We now brace-count from the first `{`, respecting string
+     * literals and escapes, and return the first complete object.
      */
     private fun extractJsonObject(raw: String): String {
         val stripped = raw
@@ -270,8 +379,33 @@ class NextSpeakerJudgeGuardian(
             .removeSuffix("```")
             .trim()
         val start = stripped.indexOf('{')
+        if (start < 0) return stripped
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in start until stripped.length) {
+            val c = stripped[i]
+            if (inString) {
+                when {
+                    escaped -> escaped = false
+                    c == '\\' -> escaped = true
+                    c == '"' -> inString = false
+                }
+                continue
+            }
+            when (c) {
+                '"' -> inString = true
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return stripped.substring(start, i + 1)
+                }
+            }
+        }
+        // Unbalanced (truncated stream) — fall back to the previous best-effort slice so a
+        // single object that merely lost its closing fence still has a chance to parse.
         val end = stripped.lastIndexOf('}')
-        return if (start >= 0 && end > start) stripped.substring(start, end + 1) else stripped
+        return if (end > start) stripped.substring(start, end + 1) else stripped
     }
 
     /**
@@ -309,6 +443,20 @@ class NextSpeakerJudgeGuardian(
     companion object {
         /** Max judge-driven re-entries per turn (cap on consecutive "continue" verdicts). */
         const val MAX_JUDGE_REENTRIES = 3
+
+        /**
+         * Max re-entries the extended budget grants while a turn is early and undelivered. Two
+         * (the strict one-shot plus one schema-carrying escalation) - kept below
+         * [MAX_JUDGE_REENTRIES] so the registry cap stays a backstop, never the primary limit.
+         */
+        const val MAX_EARLY_JUDGE_REENTRIES = 2
+
+        /**
+         * The "still early" window as a fraction of the turn's iteration budget. Beyond it the
+         * extended budget collapses to a single re-entry: a turn that has already spent most of
+         * its iterations without delivering is stuck, not merely slow to start.
+         */
+        const val EARLY_REENTRY_ITERATION_FRACTION = 0.30
 
         private val EXPLICIT_DONE_MARKERS = listOf(
             "task complete",
@@ -371,6 +519,13 @@ DECISION RULES (apply in order):
    the deliverable list from rule 1. Only count them if every deliverable is
    already present.
 
+6b. **Justified restraint IS completion.** If the request was to find/fix a bug
+   or make a change, and the agent — after actually reading the relevant code —
+   concludes WITH justification that no change is needed (the code is already
+   correct, no bug exists), that is a COMPLETE answer → "user". Do not demand an
+   edit the task does not require; "no change needed" backed by reasoning is the
+   deliverable for a restraint task, not a stall.
+
 7. **A clarifying question always wins.** If the reply ends with a genuine
    question to the user (not rhetorical), return "user" — the agent legitimately
    needs input.
@@ -414,6 +569,11 @@ USER REQUEST: "Which file owns ContextBudget?"
 TOOLS USED: grep_search
 AGENT REPLY: "ContextBudget is defined in core/services/context/ContextBudget.kt."
 → {"speaker": "user", "reason": "concrete file:answer to a single-fact question"}
+
+USER REQUEST: "Find and fix the bug in gcd()."
+TOOLS USED: read_file
+AGENT REPLY: "I reviewed gcd(). It implements Euclid's algorithm correctly — the loop terminates and edge cases hold. No bug, no change needed."
+→ {"speaker": "user", "reason": "justified restraint: 'no change needed' with reasoning is the complete answer"}
 """
 
         private const val GOAL_AWARE_JUDGE_PROMPT = """

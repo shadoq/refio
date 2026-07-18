@@ -19,7 +19,7 @@ import pl.jclab.refio.core.logging.dualLogger
  *
  * Trzyma 13 StateFlow reprezentujących **execution state** sesji (active session, history, mode,
  * pending tools, subtasks). Żadne pole nie jest UI-specific — Plugin i TUI obserwują tę samą
- * instancję. Przeniesione z `:intellij-plugin/services/session/` w Sprint 2 §2.
+ * instancję. Przeniesione z `:intellij-plugin/services/session/`.
  */
 class SessionStateManager {
 
@@ -73,7 +73,7 @@ class SessionStateManager {
     private val _totalEstimatedTokens = MutableStateFlow(0)
     val totalEstimatedTokens: StateFlow<Int> = _totalEstimatedTokens.asStateFlow()
 
-    // Transient snapshot of a native tool call being assembled during streaming (docs/0064).
+    // Transient snapshot of a native tool call being assembled during streaming.
     // Non-null only while the model streams a tool call's arguments; cleared when that LLM
     // turn's stream completes. UI renders a "⚙ building <tool>(<args>)" indicator.
     private val _toolCallProgress = MutableStateFlow<pl.jclab.refio.core.api.ToolCallProgress?>(null)

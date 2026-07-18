@@ -86,7 +86,7 @@ class HeadlessTurnListener : TurnEventListener {
         }
         err(
             "■ turn complete: success=${result.success}, iterations=${result.iterations}, " +
-                "tokens=${result.tokensIn + result.tokensOut}, cost=\$${String.format("%.4f", result.cost)}"
+                "tokens=${result.tokensIn + result.tokensOut}, cost=\$${String.format(java.util.Locale.US, "%.4f", result.cost)}"
         )
     }
 }

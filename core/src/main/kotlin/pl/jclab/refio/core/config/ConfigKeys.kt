@@ -1,5 +1,7 @@
 package pl.jclab.refio.core.config
 
+import pl.jclab.refio.core.llm.ReasoningEffort
+
 
 /**
  * Typed configuration key descriptor.
@@ -29,7 +31,7 @@ data class ConfigKey<T>(
 ) {
     /**
      * True when [raw] both parses to a valid value AND passes this key's [validator].
-     * Lets run-scope override parsing (docs/0063) reject bad `--config` values loudly without
+     * Lets run-scope override parsing reject bad `--config` values loudly without
      * exposing the generic type `T` to callers holding a `ConfigKey<*>`.
      */
     fun acceptsRaw(raw: String): Boolean {
@@ -153,11 +155,18 @@ object ConfigKeys {
 
     // ==================== UI ====================
 
-    val GENERAL_THINKING_ENABLED = ConfigKey(
-        key = "general.thinking_enabled",
-        parser = String::toBooleanStrictOrNull,
-        default = false,
-        yamlAccessor = { it.getGeneralThinkingEnabled() }
+    /**
+     * Reasoning strength (OFF/LOW/MEDIUM/HIGH). Replaces the legacy boolean
+     * `general.thinking_enabled`; OFF is the former "thinking off". Adapters translate the
+     * level to their native knob (reasoning effort or token budget). See [ReasoningEffort].
+     */
+    val GENERAL_REASONING_EFFORT = ConfigKey(
+        key = "general.reasoning_effort",
+        parser = ReasoningEffort::parse,
+        default = ReasoningEffort.OFF,
+        serializer = { it.name },
+        validator = { it in ReasoningEffort.entries },
+        yamlAccessor = { it.getGeneralReasoningEffort() }
     )
 
     val GENERAL_NO_EGRESS_ENABLED = ConfigKey(
@@ -180,6 +189,22 @@ object ConfigKeys {
      */
     val GENERAL_NEXT_SPEAKER_JUDGE_ENABLED = ConfigKey(
         key = "general.next_speaker_judge_enabled",
+        parser = String::toBooleanStrictOrNull,
+        default = true
+    )
+
+    /**
+     * When the next-speaker judge decides a turn stalled mid-task, allow more than the single
+     * bounded re-entry while the turn is still early and NOTHING has been delivered yet. Weak
+     * local models (qwen3.5) frequently abandon a task on iteration 1-3 of 20 by announcing
+     * intent without a tool call; a single nudge is often not enough, and the second re-entry
+     * escalates to a nudge that re-includes the JSON envelope schema. Bounded by
+     * [pl.jclab.refio.core.services.turn.NextSpeakerJudgeGuardian.MAX_EARLY_JUDGE_REENTRIES] and
+     * the early-iteration window, so a turn that has burned its iteration budget still stops.
+     * Default `true`; disable to restore the strict one-shot re-entry.
+     */
+    val GENERAL_JUDGE_EXTENDED_REENTRY_ENABLED = ConfigKey(
+        key = "general.judge_extended_reentry_enabled",
         parser = String::toBooleanStrictOrNull,
         default = true
     )
@@ -263,25 +288,25 @@ object ConfigKeys {
     val DEFAULT_MODEL_CHAT = ConfigKey(
         key = "default_model.chat",
         parser = { it.takeIf { s -> s.isNotBlank() } },
-        default = "qwen2.5:7b"
+        default = "qwen3.5:9b"
     )
 
     val DEFAULT_MODEL_PLAN = ConfigKey(
         key = "default_model.plan",
         parser = { it.takeIf { s -> s.isNotBlank() } },
-        default = "qwen2.5:7b"
+        default = "qwen3.5:9b"
     )
 
     val DEFAULT_MODEL_AGENT = ConfigKey(
         key = "default_model.agent",
         parser = { it.takeIf { s -> s.isNotBlank() } },
-        default = "qwen2.5:7b"
+        default = "qwen3.5:9b"
     )
 
     val WEAK_MODEL = ConfigKey(
         key = "default_model.weak",
         parser = { it.takeIf { s -> s.isNotBlank() } },
-        default = "qwen2.5:7b"
+        default = "qwen3.5:9b"
     )
 
     val STRONG_MODEL = ConfigKey<String?>(
@@ -305,7 +330,7 @@ object ConfigKeys {
         yamlAccessor = { it.getRagEnabled() }
     )
 
-    // docs/0060: agentic grep/file search is the primary navigation path; vector RAG is an
+    // Agentic grep/file search is the primary navigation path; vector RAG is an
     // opt-in aid (proven 2025–2026: keyword search reaches ~RAG quality on *code* without the
     // indexing tax). Default OFF so a cold start never pays CPU + embedding cost for users who
     // never use rag_search. Enable explicitly to restore the old auto-indexing behaviour.
@@ -512,7 +537,19 @@ object ConfigKeys {
         default = false
     )
 
-    // ==================== CONTEXT (ADR 0017) ====================
+    /**
+     * Opt-in to let outbound tools (http_request, fetch_webpage) reach loopback / private / local
+     * addresses. Default false: UrlPolicy blocks them as SSRF protection. Turned on only for trusted
+     * local setups - e.g. the e2e harness serving a deterministic fixture from 127.0.0.1. Governs
+     * every UrlPolicy-checked tool uniformly so the two web tools can never diverge.
+     */
+    val SECURITY_ALLOW_LOOPBACK = ConfigKey(
+        key = "security.allow_loopback",
+        parser = String::toBooleanStrictOrNull,
+        default = false
+    )
+
+    // ==================== CONTEXT ====================
 
     val RECENT_WORK_FULL_DATA_LIMIT = ConfigKey(
         key = "context.recent_work.full_data_limit",
@@ -671,7 +708,7 @@ object ConfigKeys {
         yamlAccessor = { it.getZAIBaseUrl() }
     )
 
-    // ==================== AGENT FLOW (ADR 0019) ====================
+    // ==================== AGENT FLOW ====================
 
     val TASK_VERIFICATION_ENABLED = ConfigKey(
         key = "agent.task_verification_enabled",
@@ -704,8 +741,8 @@ object ConfigKeys {
 
     /**
      * Per-session hard cost ceiling in USD. `0.0` (default) disables the guard. When > 0, the turn
-     * loop aborts before an iteration once the session's live cost reaches this value
-     * (docs/0063 §6.1). Surfaced via the CLI `--max-cost` flag (sugar over a run-scope override).
+     * loop aborts before an iteration once the session's live cost reaches this value.
+     * Surfaced via the CLI `--max-cost` flag (sugar over a run-scope override).
      */
     val AGENT_MAX_COST_USD = ConfigKey(
         key = "agent.max_cost_usd",
@@ -729,6 +766,45 @@ object ConfigKeys {
         parser = String::toDoubleOrNull,
         default = 0.7,
         validator = { it in 0.0..2.0 }
+    )
+
+    // ==================== VERIFY ====================
+
+    /**
+     * Master switch for the deterministic post-turn verification step: after an AGENT turn that
+     * wrote files completes, the loop code runs the project's build/test command and feeds
+     * failures back to the model as a concrete error list.
+     */
+    val VERIFY_ENABLED = ConfigKey(
+        key = "verify.enabled",
+        parser = String::toBooleanStrictOrNull,
+        default = true,
+        yamlAccessor = { it.getVerifyEnabled() }
+    )
+
+    /**
+     * The verification command (run through the shell in the project root). Empty (default)
+     * means autodetect from project marker files: build.gradle* -> "./gradlew build -q",
+     * package.json -> "npm test --silent", Cargo.toml -> "cargo build -q"; when no marker is
+     * found verification is skipped.
+     */
+    val VERIFY_COMMAND = ConfigKey(
+        key = "verify.command",
+        parser = { it },
+        default = "",
+        yamlAccessor = { it.getVerifyCommand() }
+    )
+
+    /**
+     * Maximum repair rounds after a failed verification (fail -> error list to the model ->
+     * re-verify). After exhaustion the turn ends as VERIFICATION_FAILED instead of faking success.
+     */
+    val VERIFY_MAX_REPAIR_ROUNDS = ConfigKey(
+        key = "verify.max_repair_rounds",
+        parser = String::toIntOrNull,
+        default = 2,
+        yamlAccessor = { it.getVerifyMaxRepairRounds() },
+        validator = { it >= 0 }
     )
 
     val JSON_THINKING_XML_TAGS = ConfigKey(
@@ -769,7 +845,7 @@ object ConfigKeys {
             RATE_LIMIT_RPM,
             RETRY_DELAY_MS,
             // General (thinking/no-egress/execution mode moved from ui section)
-            GENERAL_THINKING_ENABLED,
+            GENERAL_REASONING_EFFORT,
             GENERAL_NO_EGRESS_ENABLED,
             GENERAL_EXECUTION_MODE,
             // UI
@@ -819,6 +895,7 @@ object ConfigKeys {
             TOOL_SUMMARY_MIN_LENGTH,
             // Security
             SECURITY_ALLOW_SYMLINKS,
+            SECURITY_ALLOW_LOOPBACK,
             // Context
             RECENT_WORK_FULL_DATA_LIMIT,
             RECENT_WORK_SUMMARY_MAX_LENGTH,
@@ -850,7 +927,11 @@ object ConfigKeys {
             MAX_ITERATIONS,
             AGENT_MAX_COST_USD,
             AGENT_DECISION_TEMPERATURE,
-            JSON_THINKING_XML_TAGS
+            JSON_THINKING_XML_TAGS,
+            // Verify
+            VERIFY_ENABLED,
+            VERIFY_COMMAND,
+            VERIFY_MAX_REPAIR_ROUNDS
         ).associateBy { it.key }
     }
 }

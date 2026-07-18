@@ -5,7 +5,7 @@ import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.llm.LLMResponse
 
 /**
- * Weak-model recovery for an empty-content response in JSON-in-text mode (docs/0058, Faza 1).
+ * Weak-model recovery for an empty-content response in JSON-in-text mode.
  *
  * Pure classification — no persistence, no finalization, no loop control. [AgentTurnLoop] owns the
  * side effects; this only decides WHICH path applies so the rescue logic (qwen-style "the JSON

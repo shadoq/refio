@@ -25,5 +25,13 @@ data class AgentResult(
     val tokensUsed: Long = 0,
     val costUsd: Double = 0.0,
     val durationMs: Long = 0,
-    val error: String? = null
+    val error: String? = null,
+    /** Absolute epoch-ms bounds of this agent's turn, so execution order can be reconstructed
+     *  (the runner returns an unordered map). Null when not captured. */
+    val startedAt: Long? = null,
+    val completedAt: Long? = null,
+    /** Prompt/completion token split behind [tokensUsed], so run.json can report a real
+     *  output-token figure instead of collapsing input and output into one number. */
+    val tokensIn: Int = 0,
+    val tokensOut: Int = 0,
 )

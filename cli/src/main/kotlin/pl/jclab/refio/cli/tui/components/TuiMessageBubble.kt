@@ -1,6 +1,7 @@
 package pl.jclab.refio.cli.tui.components
 
 import com.github.ajalt.mordant.terminal.Terminal
+import pl.jclab.refio.api.StreamProgressFormat
 import pl.jclab.refio.cli.tui.rendering.TuiColors
 import pl.jclab.refio.cli.tui.rendering.TuiContentParser
 import pl.jclab.refio.cli.tui.rendering.TuiContentSegment
@@ -90,7 +91,7 @@ object TuiMessageBubble {
         if (!msg.isStreaming && (msg.tokensIn > 0 || msg.tokensOut > 0)) {
             val tokIn = msg.tokensIn
             val tokOut = msg.tokensOut
-            val cost = String.format("%.4f", msg.costUsd)
+            val cost = String.format(java.util.Locale.US, "%.4f", msg.costUsd)
             result.add(TuiColors.muted("  [$tokIn in / $tokOut out, \$$cost]"))
         }
 
@@ -267,14 +268,24 @@ object TuiMessageBubble {
             msg.metadata["success"] == true -> TuiColors.statusSuccess
             else -> TuiColors.tool
         }
-        result.add(headerStyle("  $statusIcon [$toolLabel] ") + TuiColors.muted(time))
+        // While a code-editing tool actively streams generated content, show a live character counter
+        // (the signal that tokens are arriving) and hide the growing body to avoid a noisy preview that
+        // re-wraps on every chunk. The result is shown once the tool completes.
+        val label = if (msg.isToolStreaming) {
+            StreamProgressFormat.withCharCount("[$toolLabel]", msg.content.length)
+        } else {
+            "[$toolLabel]"
+        }
+        result.add(headerStyle("  $statusIcon $label ") + TuiColors.muted(time))
 
-        val content = msg.content.trim()
-        if (content.isNotEmpty()) {
-            val lines = content.lines()
-            val displayLines = if (lines.size > 5) lines.take(5) + listOf("... (${lines.size - 5} more lines)") else lines
-            for (line in displayLines) {
-                result.add(TuiColors.muted("    $line"))
+        if (!msg.isToolStreaming) {
+            val content = msg.content.trim()
+            if (content.isNotEmpty()) {
+                val lines = content.lines()
+                val displayLines = if (lines.size > 5) lines.take(5) + listOf("... (${lines.size - 5} more lines)") else lines
+                for (line in displayLines) {
+                    result.add(TuiColors.muted("    $line"))
+                }
             }
         }
         return result
@@ -290,7 +301,7 @@ object TuiMessageBubble {
             result.add("    $line")
         }
         if (msg.tokensIn > 0 || msg.tokensOut > 0) {
-            val cost = String.format("%.4f", msg.costUsd)
+            val cost = String.format(java.util.Locale.US, "%.4f", msg.costUsd)
             result.add(TuiColors.muted("    [${msg.tokensIn} in / ${msg.tokensOut} out, \$$cost]"))
         }
         return result

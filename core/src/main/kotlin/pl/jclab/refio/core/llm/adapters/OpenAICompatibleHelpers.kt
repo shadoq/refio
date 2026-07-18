@@ -1,5 +1,7 @@
 package pl.jclab.refio.core.llm.adapters
 
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.CancellationException
 import pl.jclab.refio.core.llm.BaseLLMAdapter
@@ -7,7 +9,6 @@ import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.NativeToolCall
 import pl.jclab.refio.core.llm.ToolSchemaSanitizer
 import pl.jclab.refio.core.tools.base.ToolSchema
-import pl.jclab.refio.core.utils.GsonInstance.gson
 
 /**
  * Shared helpers for OpenAI-compatible chat adapters
@@ -116,10 +117,15 @@ internal object OpenAICompatibleHelpers {
         toolCallAccumulator: ToolCallContentNormalizer.OpenAiStreamingToolCallAccumulator,
         onContent: (String) -> Unit,
         checkCancelled: () -> Boolean = { false },
-        onRawChunk: ((Map<String, Any?>) -> Unit)? = null,
+        onRawChunk: ((JsonObject) -> Unit)? = null,
         onToolCallDelta: ((pl.jclab.refio.core.llm.NativeToolCallDelta) -> Unit)? = null,
     ): String? {
         var finishReason: String? = null
+        var anyContentEmitted = false
+        // Buffer reasoning_content deltas as a last-resort fallback: some reasoning models
+        // (e.g. GLM via Z.AI, DeepSeek) stream the whole answer in reasoning_content with an
+        // empty content channel. Only surfaced if no content delta ever arrives.
+        val reasoningFallback = StringBuilder()
         while (!channel.isClosedForRead) {
             if (checkCancelled()) {
                 finishReason = "cancelled"
@@ -130,17 +136,23 @@ internal object OpenAICompatibleHelpers {
             val data = line.removePrefix("data: ").trim()
             if (data == "[DONE]") break
             try {
-                @Suppress("UNCHECKED_CAST")
-                val chunk = gson.fromJson(data, Map::class.java) as Map<String, Any?>
+                // Parse each SSE line once into a JsonObject with direct field access
+                // (cheaper than decoding the whole chunk into nested Maps per line).
+                val chunk = JsonParser.parseString(data).asJsonObject
                 onRawChunk?.invoke(chunk)
-                @Suppress("UNCHECKED_CAST")
-                val choices = chunk["choices"] as? List<Map<String, Any?>> ?: emptyList()
-                val first = choices.firstOrNull() ?: emptyMap()
-                @Suppress("UNCHECKED_CAST")
-                val delta = first["delta"] as? Map<String, Any?>
+                val first = (chunk.get("choices") as? com.google.gson.JsonArray)
+                    ?.firstOrNull() as? JsonObject
+                val delta = first?.get("delta") as? JsonObject
                 toolCallAccumulator.consumeDelta(delta).forEach { tcDelta -> onToolCallDelta?.invoke(tcDelta) }
-                (delta?.get("content") as? String)?.takeIf { it.isNotEmpty() }?.let(onContent)
-                (first["finish_reason"] as? String)?.let { finishReason = it }
+                delta.stringField("content")?.takeIf { it.isNotEmpty() }?.let {
+                    anyContentEmitted = true
+                    onContent(it)
+                }
+                if (!anyContentEmitted) {
+                    delta.stringField("reasoning_content")?.takeIf { it.isNotEmpty() }
+                        ?.let { reasoningFallback.append(it) }
+                }
+                first.stringField("finish_reason")?.let { finishReason = it }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -149,6 +161,9 @@ internal object OpenAICompatibleHelpers {
                 // that match historical behavior — those we silently skip.
                 if (e is IllegalStateException) throw e
             }
+        }
+        if (!anyContentEmitted && reasoningFallback.isNotEmpty()) {
+            onContent(reasoningFallback.toString())
         }
         return finishReason
     }
@@ -169,4 +184,16 @@ internal object OpenAICompatibleHelpers {
             capped
         }
     }
+}
+
+/** Read a string field from a nullable [JsonObject], tolerating absent and JSON-null values. */
+internal fun JsonObject?.stringField(name: String): String? {
+    val element = this?.get(name) ?: return null
+    return if (element.isJsonPrimitive && element.asJsonPrimitive.isString) element.asString else null
+}
+
+/** Read a numeric field from a nullable [JsonObject] as Int, tolerating absent and JSON-null values. */
+internal fun JsonObject?.intField(name: String): Int? {
+    val element = this?.get(name) ?: return null
+    return if (element.isJsonPrimitive && element.asJsonPrimitive.isNumber) element.asInt else null
 }

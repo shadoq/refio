@@ -49,7 +49,8 @@ class ConversationSummaryService(
         taskId: String,
         messages: List<ChatMessage>,
         maxTokens: Int,
-        contentResolver: (ChatMessage) -> String = { it.content }
+        contentResolver: (ChatMessage) -> String = { it.content },
+        agentInstanceId: String? = null
     ): List<ChatMessage> {
         if (messages.isEmpty() || maxTokens <= 0) return messages
 
@@ -147,6 +148,8 @@ class ConversationSummaryService(
             append(summaryBody)
         }
 
+        // Tag the summary with the same thread it summarizes, so a subagent's summary stays in the
+        // subagent's thread instead of surfacing in the parent conversation.
         chatMessageRepository.create(
             taskId = taskId,
             role = MessageRole.SYSTEM,
@@ -154,10 +157,11 @@ class ConversationSummaryService(
             metadata = metadataJson,
             tokensIn = response.usage.inputTokens,
             tokensOut = response.usage.outputTokens,
-            cost = response.cost
+            cost = response.cost,
+            agentInstanceId = agentInstanceId
         )
 
-        return chatMessageRepository.findByTaskId(taskId)
+        return chatMessageRepository.findHistoryForInvocation(taskId, agentInstanceId)
     }
 
     private fun isConversationSummary(message: ChatMessage): Boolean {

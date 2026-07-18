@@ -13,8 +13,8 @@ import java.util.UUID
 /**
  * Reply to a pending [AgentEvent.DataRequest] addressed to this agent.
  *
- * Spec: docs/0054-multiagent.md §3.5 / Step 5. Emits a [AgentEvent.DataResponse] that
- * unblocks the sender's suspended turn (see AgentTurnLoop AWAITING_RESPONSE handling).
+ * Emits a [AgentEvent.DataResponse] that unblocks the sender's suspended turn
+ * (see AgentTurnLoop AWAITING_RESPONSE handling).
  *
  * Validation: the requestId must currently be pending on this agent's inbox. This blocks
  * a hallucinating LLM from forging responses to requests that were never addressed to it.

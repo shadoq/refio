@@ -1,8 +1,12 @@
 package pl.jclab.refio.ui.settings
 
+import com.intellij.icons.AllIcons
+import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.ProjectManager
+import com.intellij.ui.AnActionButton
 import com.intellij.ui.JBColor
+import com.intellij.ui.ToolbarDecorator
 import com.intellij.ui.components.*
 import com.intellij.ui.table.JBTable
 import pl.jclab.refio.core.api.CoreApiRouter
@@ -71,26 +75,19 @@ class PromptsSettingsPanel(
             promptsTable.setShowGrid(true)
             promptsTable.gridColor = JBColor.LIGHT_GRAY
 
-            val scrollPane = JScrollPane(promptsTable).apply {
-                preferredSize = Dimension(600, 300)
-            }
-
-            // Buttons panel
-            val buttonsPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
-                add(JButton("Edit").apply {
-                    addActionListener { onEditPrompt() }
+            // Standard IntelliJ toolbar: edit action plus a custom "Use Default" action
+            val tablePanel = ToolbarDecorator.createDecorator(promptsTable)
+                .setEditAction { onEditPrompt() }
+                .addExtraAction(object : AnActionButton("Use Default", AllIcons.Actions.Rollback) {
+                    override fun actionPerformed(e: AnActionEvent) = onUseDefaultPrompt()
                 })
-                add(JButton("Use Default").apply {
-                    addActionListener { onUseDefaultPrompt() }
-                })
-            }
+                .disableAddAction()
+                .disableRemoveAction()
+                .disableUpDownActions()
+                .createPanel()
+                .apply { preferredSize = Dimension(600, 300) }
 
-            val contentPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-                add(scrollPane, BorderLayout.CENTER)
-                add(buttonsPanel, BorderLayout.SOUTH)
-            }
-
-            add(contentPanel, BorderLayout.CENTER)
+            add(tablePanel, BorderLayout.CENTER)
         }
     }
 
@@ -119,29 +116,16 @@ class PromptsSettingsPanel(
             slashPromptsTable.setShowGrid(true)
             slashPromptsTable.gridColor = JBColor.LIGHT_GRAY
 
-            val scrollPane = JScrollPane(slashPromptsTable).apply {
-                preferredSize = Dimension(600, 300)
-            }
+            // Standard IntelliJ toolbar: +/-/pencil wired to the existing handlers
+            val tablePanel = ToolbarDecorator.createDecorator(slashPromptsTable)
+                .setAddAction { onAddSlashPrompt() }
+                .setEditAction { onEditSlashPrompt() }
+                .setRemoveAction { onDeleteSlashPrompt() }
+                .disableUpDownActions()
+                .createPanel()
+                .apply { preferredSize = Dimension(600, 300) }
 
-            // Buttons panel
-            val buttonsPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
-                add(JButton("Add").apply {
-                    addActionListener { onAddSlashPrompt() }
-                })
-                add(JButton("Edit").apply {
-                    addActionListener { onEditSlashPrompt() }
-                })
-                add(JButton("Delete").apply {
-                    addActionListener { onDeleteSlashPrompt() }
-                })
-            }
-
-            val contentPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-                add(scrollPane, BorderLayout.CENTER)
-                add(buttonsPanel, BorderLayout.SOUTH)
-            }
-
-            add(contentPanel, BorderLayout.CENTER)
+            add(tablePanel, BorderLayout.CENTER)
         }
     }
 

@@ -94,9 +94,18 @@ class HierarchicalConfigLoader private constructor(
     fun getStreamingEnabled(): Boolean? = getConfig().general?.streamingEnabled
     fun getAdvancedView(): Boolean? = getConfig().general?.advancedView
     fun getGeneralThinkingEnabled(): Boolean? = getConfig().general?.thinkingEnabled
+    fun getGeneralReasoningEffort(): String? = getConfig().general?.reasoningEffort
     fun getGeneralNoEgressEnabled(): Boolean? = getConfig().general?.noEgressEnabled
     fun getGeneralExecutionMode(): String? = getConfig().general?.executionMode
     fun getNativeToolsMode(): String? = getConfig().general?.nativeToolsMode
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // Verification Settings
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    fun getVerifyEnabled(): Boolean? = getConfig().verify?.enabled
+    fun getVerifyCommand(): String? = getConfig().verify?.command
+    fun getVerifyMaxRepairRounds(): Int? = getConfig().verify?.maxRepairRounds
 
     // ═══════════════════════════════════════════════════════════════════════════════
     // Provider Settings

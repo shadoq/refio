@@ -1,0 +1,20 @@
+{
+  "id": "infra-compose-config",
+  "category": "analysis",
+  "mode": "PLAN",
+  "description": "PLAN-mode: analyze the Docker Compose deployment and report the port mappings, the two wired services, and the api env vars.",
+  "max_iterations": 20,
+  "fixture": "fixtures/infra-compose",
+  "prompt_file": "prompts/infra-compose-config.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_output": { "regex": "DATABASE_URL" },
+    "file_unchanged": [
+      "Dockerfile",
+      "docker-compose.yml",
+      "config/app.yaml"
+    ],
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["The analysis states host port 8080 maps to container port 8000 for the api service, describes the api and db (postgres) services and the depends_on wiring, and lists DATABASE_URL and LOG_LEVEL as the api env vars, without editing any file."]
+}

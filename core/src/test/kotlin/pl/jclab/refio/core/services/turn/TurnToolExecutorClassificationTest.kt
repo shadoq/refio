@@ -1,8 +1,13 @@
 package pl.jclab.refio.core.services.turn
 
+import pl.jclab.refio.core.db.ApprovalStatus
+import pl.jclab.refio.core.db.Subtask
+import pl.jclab.refio.core.db.SubtaskKind
+import pl.jclab.refio.core.db.TaskStatus
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -131,6 +136,205 @@ class TurnToolExecutorClassificationTest {
                 "advance_code_editing", ToolMode.WRITE, ToolCategory.FILE_PRODUCING, isNoopWrite = false
             )
         )
+    }
+
+    // ---- repeated failed-edit nudge: change approach after thrashing one file ----
+
+    @Test
+    fun `edit path is extracted from path, file_path or file keys`() {
+        assertEquals("src/A.kt", TurnToolExecutor.extractEditPath("""{"path":"src/A.kt","content":"x"}"""))
+        assertEquals("src/B.kt", TurnToolExecutor.extractEditPath("""{"file_path":"src/B.kt"}"""))
+        assertEquals("src/C.kt", TurnToolExecutor.extractEditPath("""{"file":"src/C.kt"}"""))
+    }
+
+    @Test
+    fun `edit path extraction returns null for blank or pathless args`() {
+        assertEquals(null, TurnToolExecutor.extractEditPath(""))
+        assertEquals(null, TurnToolExecutor.extractEditPath("""{"content":"no path here"}"""))
+    }
+
+    @Test
+    fun `no nudge below the failed-edit threshold`() {
+        // One prior failure is normal iteration, not thrashing - stay silent.
+        assertEquals(null, TurnToolExecutor.repeatedFailedEditNudgeText("src/A.kt", priorFailedEdits = 0))
+        assertEquals(null, TurnToolExecutor.repeatedFailedEditNudgeText("src/A.kt", priorFailedEdits = 1))
+    }
+
+    @Test
+    fun `nudge fires at the threshold and names the file and attempt count`() {
+        // 2 prior failures => this is the 3rd attempt; the model should change tactics.
+        val nudge = TurnToolExecutor.repeatedFailedEditNudgeText("src/A.kt", priorFailedEdits = 2)
+        assertTrue(nudge != null && nudge.contains("change approach"))
+        assertTrue(nudge!!.contains("src/A.kt"))
+        assertTrue(nudge.contains("attempt 3"))
+    }
+
+    // ---- repeated execution-failure nudge: change approach after run_code/run_terminal thrashing ----
+
+    @Test
+    fun `no exec-failure nudge below the consecutive-failure threshold`() {
+        // One failed run is normal trial-and-error - stay silent.
+        assertEquals(null, TurnToolExecutor.repeatedExecFailureNudgeText("run_code", priorConsecutiveFailures = 0))
+        assertEquals(null, TurnToolExecutor.repeatedExecFailureNudgeText("run_code", priorConsecutiveFailures = 1))
+    }
+
+    @Test
+    fun `exec-failure nudge fires at the threshold and names the tool and attempt count`() {
+        // 2 prior consecutive failures => this is the 3rd run in a row; isolate the failure.
+        val nudge = TurnToolExecutor.repeatedExecFailureNudgeText("run_code", priorConsecutiveFailures = 2)
+        assertTrue(nudge != null && nudge.contains("change approach"))
+        assertTrue(nudge!!.contains("run_code"))
+        assertTrue(nudge.contains("attempt 3"))
+    }
+
+    @Test
+    fun `only run_code and run_terminal_command are execution tools`() {
+        // The DB-querying nudge only triggers for these; guard the set so reads/edits never qualify.
+        assertTrue("run_code" in TurnToolExecutor.EXECUTION_TOOL_NAMES)
+        assertTrue("run_terminal_command" in TurnToolExecutor.EXECUTION_TOOL_NAMES)
+        assertFalse("read_file" in TurnToolExecutor.EXECUTION_TOOL_NAMES)
+        assertFalse("advance_code_editing" in TurnToolExecutor.EXECUTION_TOOL_NAMES)
+    }
+
+    // ---- re-read-after-write suppression (A) ----
+
+    private fun sub(
+        id: String,
+        kind: SubtaskKind,
+        status: TaskStatus,
+        orderIndex: Int,
+        paramsJson: String? = null,
+        createdAt: Long = 0
+    ) = Subtask(
+        id = id, taskId = "t1", orderIndex = orderIndex, kind = kind, status = status,
+        description = "", paramsJson = paramsJson, stepPlanJson = null, summary = null,
+        requiresApproval = false, approvalStatus = ApprovalStatus.NOT_REQUIRED, approvedAt = null,
+        result = null, errorMessage = null, errorStacktrace = null, llmModel = null,
+        llmProvider = null, inputTokens = 0, outputTokens = 0, costUsd = 0.0, latencyMs = 0,
+        snapshotIdBeforeWrite = null, createdAt = createdAt, updatedAt = 0, startedAt = null, completedAt = null
+    )
+
+    @Test
+    fun `suppresses a re-read of a file written this turn with no failure since`() {
+        // The qwen3.5:122b pattern: create_new_file(success) then read_file the same path repeatedly.
+        val subs = listOf(
+            sub("w", SubtaskKind.CREATE_NEW_FILE, TaskStatus.SUCCESS, 1, """{"path":"game.html","content":"x"}"""),
+            sub("r", SubtaskKind.READ_FILE, TaskStatus.PENDING, 2, """{"path":"game.html"}""")
+        )
+        assertTrue(TurnToolExecutor.shouldSuppressReadAfterWrite("game.html", subs, currentSubtaskId = "r"))
+    }
+
+    @Test
+    fun `does NOT suppress when a tool FAILED after the last write (model may be debugging)`() {
+        // A failed run/edit after the write re-enables reads — the model legitimately needs fresh
+        // content (e.g. to fix a build error or match an exact string for code_editing). This also
+        // prevents a suppression loop: a failed code_editing → read → re-suppress → stuck.
+        val subs = listOf(
+            sub("w", SubtaskKind.ADVANCE_CODE_EDITING, TaskStatus.SUCCESS, 1, """{"path":"game.html"}"""),
+            sub("f", SubtaskKind.RUN_CODE, TaskStatus.FAILED, 2, """{"language":"javascript"}"""),
+            sub("r", SubtaskKind.READ_FILE, TaskStatus.PENDING, 3, """{"path":"game.html"}""")
+        )
+        assertFalse(TurnToolExecutor.shouldSuppressReadAfterWrite("game.html", subs, currentSubtaskId = "r"))
+    }
+
+    @Test
+    fun `does NOT suppress when the path was never written`() {
+        val subs = listOf(
+            sub("w", SubtaskKind.CREATE_NEW_FILE, TaskStatus.SUCCESS, 1, """{"path":"other.html"}"""),
+            sub("r", SubtaskKind.READ_FILE, TaskStatus.PENDING, 2, """{"path":"game.html"}""")
+        )
+        assertFalse(TurnToolExecutor.shouldSuppressReadAfterWrite("game.html", subs, currentSubtaskId = "r"))
+    }
+
+    @Test
+    fun `does NOT suppress when the write of that path FAILED`() {
+        // Only a SUCCESSFUL write makes the content authoritative; a failed write means nothing landed.
+        val subs = listOf(
+            sub("w", SubtaskKind.ADVANCE_CODE_EDITING, TaskStatus.FAILED, 1, """{"path":"game.html"}"""),
+            sub("r", SubtaskKind.READ_FILE, TaskStatus.PENDING, 2, """{"path":"game.html"}""")
+        )
+        assertFalse(TurnToolExecutor.shouldSuppressReadAfterWrite("game.html", subs, currentSubtaskId = "r"))
+    }
+
+    @Test
+    fun `a failure BEFORE the write does not block suppression`() {
+        // Only failures AFTER the last successful write matter — an earlier failed attempt that the
+        // write then resolved must not keep reads open forever.
+        val subs = listOf(
+            sub("f", SubtaskKind.RUN_CODE, TaskStatus.FAILED, 1, """{"language":"javascript"}"""),
+            sub("w", SubtaskKind.CREATE_NEW_FILE, TaskStatus.SUCCESS, 2, """{"path":"game.html"}"""),
+            sub("r", SubtaskKind.READ_FILE, TaskStatus.PENDING, 3, """{"path":"game.html"}""")
+        )
+        assertTrue(TurnToolExecutor.shouldSuppressReadAfterWrite("game.html", subs, currentSubtaskId = "r"))
+    }
+
+    @Test
+    fun `blank read path is never suppressed`() {
+        val subs = listOf(sub("w", SubtaskKind.CREATE_NEW_FILE, TaskStatus.SUCCESS, 1, """{"path":""}"""))
+        assertFalse(TurnToolExecutor.shouldSuppressReadAfterWrite("", subs, currentSubtaskId = "r"))
+    }
+
+    @Test
+    fun `skip notice names the path and points to the diff`() {
+        val notice = TurnToolExecutor.readAfterWriteSkipNotice("game.html")
+        assertTrue(notice.contains("game.html"))
+        assertTrue(notice.contains("changeSummary"))
+        assertTrue(notice.contains("re-enables reads"), "must tell the model how a re-read becomes allowed")
+    }
+
+    @Test
+    fun `does NOT suppress a targeted line-range read after a write`() {
+        // The Particle Forge case: user reports "SyntaxError at line 192", the model reads offset/limit
+        // around that line to fix it. A ranged read is a debugging move, not a wasteful whole-file re-read.
+        val subs = listOf(
+            sub("w", SubtaskKind.ADVANCE_CODE_EDITING, TaskStatus.SUCCESS, 1, """{"path":"game.html"}"""),
+            sub("r", SubtaskKind.READ_FILE, TaskStatus.PENDING, 2, """{"path":"game.html","offset":180,"limit":40}""")
+        )
+        assertFalse(
+            TurnToolExecutor.shouldSuppressReadAfterWrite(
+                "game.html", subs, currentSubtaskId = "r", hasReadRange = true
+            )
+        )
+    }
+
+    @Test
+    fun `does NOT suppress after a user turn following the write`() {
+        // A user message after the write (e.g. "it doesn't render, SyntaxError line 192") is the
+        // human/browser equivalent of a failed check. It arrives as a chat turn, not a FAILED subtask,
+        // so without this the model can never re-read to fix its own broken deliverable.
+        val subs = listOf(
+            sub("w", SubtaskKind.ADVANCE_CODE_EDITING, TaskStatus.SUCCESS, 1, """{"path":"game.html"}""", createdAt = 100),
+            sub("r", SubtaskKind.READ_FILE, TaskStatus.PENDING, 2, """{"path":"game.html"}""", createdAt = 300)
+        )
+        assertFalse(
+            TurnToolExecutor.shouldSuppressReadAfterWrite(
+                "game.html", subs, currentSubtaskId = "r", lastUserMessageAt = 200
+            )
+        )
+    }
+
+    @Test
+    fun `still suppresses when the only user turn predates the write`() {
+        // The original request is a user turn too; only a user turn AFTER the write reopens reads.
+        // Otherwise the very first read-after-write in a normal turn would never be suppressed.
+        val subs = listOf(
+            sub("w", SubtaskKind.CREATE_NEW_FILE, TaskStatus.SUCCESS, 1, """{"path":"game.html"}""", createdAt = 200),
+            sub("r", SubtaskKind.READ_FILE, TaskStatus.PENDING, 2, """{"path":"game.html"}""", createdAt = 300)
+        )
+        assertTrue(
+            TurnToolExecutor.shouldSuppressReadAfterWrite(
+                "game.html", subs, currentSubtaskId = "r", lastUserMessageAt = 50
+            )
+        )
+    }
+
+    @Test
+    fun `readHasRange detects offset or limit and ignores plain reads`() {
+        assertTrue(TurnToolExecutor.readHasRange("""{"path":"a.html","offset":180}"""))
+        assertTrue(TurnToolExecutor.readHasRange("""{"path":"a.html","limit":40}"""))
+        assertTrue(TurnToolExecutor.readHasRange("""{"path":"a.html","offset":0,"limit":40}"""))
+        assertFalse(TurnToolExecutor.readHasRange("""{"path":"a.html"}"""))
+        assertFalse(TurnToolExecutor.readHasRange(""))
     }
 
     @Test

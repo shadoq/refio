@@ -5,6 +5,8 @@ import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.ModelConfig
+import pl.jclab.refio.core.llm.ModelDefinitions
+import pl.jclab.refio.core.llm.ReasoningEffort
 import pl.jclab.refio.core.llm.SupportedModels
 import pl.jclab.refio.core.llm.calculateCost
 import pl.jclab.refio.core.config.ConfigKeys
@@ -23,7 +25,7 @@ import pl.jclab.refio.core.utils.GsonInstance.gson
  *
  * API docs: https://openrouter.ai/docs
  */
-class OpenRouterAdapter(
+open class OpenRouterAdapter(
     model: String = "anthropic/claude-3.5-sonnet",
     configService: ConfigService? = null,
     taskId: String? = null,
@@ -71,14 +73,54 @@ class OpenRouterAdapter(
     ): Map<String, Any> = super.buildRequestBody(
         requestMessages, effectiveMaxTokens, temperature, streaming, kwargs, requestId,
     ).toMutableMap().apply {
-        val thinking = kwargs["thinking"] as? Boolean ?: false
-        if (thinking && model.contains("claude", ignoreCase = true)) {
-            put("thinking", mapOf("type" to "enabled", "budget_tokens" to 10000))
-            logger.info { "[${providerTag}] Enabled thinking mode for $model" }
+        // `thinking` arrives as Boolean true (toggle on, unspecified magnitude) or a non-blank
+        // effort String ("low"/"medium"/"high"); absent/false/blank means thinking OFF.
+        val thinkingRaw = kwargs["thinking"]
+        val thinkingOn = thinkingRaw == true || (thinkingRaw is String && thinkingRaw.isNotBlank())
+        val explicitEffort = ReasoningEffort.fromEffortString(thinkingRaw as? String)
+        val isClaude = model.contains("claude", ignoreCase = true)
+        when {
+            thinkingOn && isClaude -> {
+                // Claude on OpenRouter uses Anthropic-style extended thinking; scale the budget.
+                val budget = when (explicitEffort) {
+                    ReasoningEffort.HIGH -> 20000
+                    ReasoningEffort.LOW -> 2048
+                    else -> 10000
+                }
+                put("thinking", mapOf("type" to "enabled", "budget_tokens" to budget))
+                logger.info { "[${providerTag}] Enabled thinking for $model (budget=$budget)" }
+            }
+            explicitEffort != null -> {
+                // Non-Claude with an explicit level: OpenRouter's unified reasoning effort.
+                put("reasoning", mapOf("effort" to explicitEffort.toEffortString()))
+                logger.info { "[${providerTag}] Set reasoning effort=${explicitEffort.toEffortString()} for $model" }
+            }
+            thinkingOn -> {
+                // Bare on without a level: let the provider reason at its own default.
+            }
+            !reasoningIsMandatory(model) -> {
+                // Honour "thinking OFF": suppress upstream reasoning. Without this the toggle was
+                // a silent no-op for OpenRouter - reasoning models (e.g. minimax-m3) defaulted to
+                // reasoning ON and burned thousands of hidden completion tokens. OpenRouter's
+                // unified `reasoning.enabled=false` suppresses it where the model allows.
+                //
+                // Some endpoints (e.g. moonshotai/kimi-k3) reject reasoning.enabled=false with a
+                // hard error instead of ignoring it, so we skip suppression for those - see
+                // ModelDefinition.reasoningMandatory.
+                put("reasoning", mapOf("enabled" to false))
+                logger.info { "[${providerTag}] Suppressing reasoning for $model (thinking OFF)" }
+            }
         }
         (kwargs["provider"] as? Map<*, *>)?.let { put("provider", it) }
         (kwargs["route"] as? String)?.let { put("route", it) }
     }
+
+    /**
+     * Whether the given OpenRouter model mandates reasoning and rejects an explicit
+     * `reasoning.enabled=false`. Resolved from the static registry (prefix match).
+     */
+    private fun reasoningIsMandatory(modelId: String): Boolean =
+        ModelDefinitions.getDefinition("openrouter", modelId)?.reasoningMandatory == true
 
     /**
      * OpenRouter returns HTTP 200 with `{"error": {...}}` for upstream provider errors.
@@ -99,16 +141,20 @@ class OpenRouterAdapter(
     /**
      * Detect OpenRouter's mid-stream `{"error":{...}}` envelope — throwing from here
      * aborts the SSE loop (see `consumeChatCompletionsSSE`).
+     *
+     * Route through `mapHttpError` so the upstream status keeps its retry semantics:
+     * a mid-stream 429 becomes `LLMRateLimit` (retryable with backoff) just like the
+     * non-streaming path in `ensureSuccess`. Throwing a bare exception here previously
+     * stripped that classification, so a provider rate limit failed the whole turn
+     * instead of being retried.
      */
-    override fun onStreamRawChunk(chunk: Map<String, Any?>) {
-        @Suppress("UNCHECKED_CAST")
-        val error = chunk["error"] as? Map<String, Any?> ?: return
-        val message = error["message"] as? String ?: "Unknown error"
-        val code = (error["code"] as? Number)?.toInt() ?: 500
-        @Suppress("UNCHECKED_CAST")
-        val metadata = error["metadata"] as? Map<String, Any?>
-        val providerFromMeta = metadata?.get("provider_name") as? String ?: "OpenRouter"
-        throw IllegalStateException("$providerFromMeta error (HTTP $code): $message")
+    override fun onStreamRawChunk(chunk: com.google.gson.JsonObject) {
+        val error = chunk.get("error") as? com.google.gson.JsonObject ?: return
+        val message = error.stringField("message") ?: "Unknown error"
+        val code = error.intField("code") ?: 500
+        val metadata = error.get("metadata") as? com.google.gson.JsonObject
+        val providerFromMeta = metadata.stringField("provider_name") ?: "OpenRouter"
+        throw mapHttpError(code, "$providerFromMeta error (HTTP $code): $message")
     }
 
     /**

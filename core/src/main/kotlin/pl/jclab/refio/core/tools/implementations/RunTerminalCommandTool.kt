@@ -8,12 +8,13 @@ import pl.jclab.refio.core.tools.base.ToolResult
 import pl.jclab.refio.core.tools.security.CommandLimits
 import pl.jclab.refio.core.tools.security.CommandRuleMatcher
 import pl.jclab.refio.core.tools.security.RuleAction
-import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import pl.jclab.refio.core.logging.dualLogger
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
 
 private val logger = dualLogger("RunTerminalCommandTool")
 
@@ -87,29 +88,75 @@ class RunTerminalCommandTool(
             logger.info { "Executing command: '$command', workingDir='$workingDir', shell=${shellCommand[0]}" }
 
             // Execute command
-            val process = ProcessBuilder()
+            val processBuilder = ProcessBuilder()
                 .command(shellCommand)
                 .directory(workingDir.toFile())
                 .redirectErrorStream(true)
-                .start()
+            // Force UTF-8 stdio for child processes (e.g. `python -c`) so non-ASCII output
+            // is not mangled by the platform default code page before the JVM reads UTF-8.
+            processBuilder.environment().apply {
+                put("PYTHONUTF8", "1")
+                put("PYTHONIOENCODING", "utf-8")
+            }
+            val process = processBuilder.start()
 
-            // Read process output concurrently to avoid stdout buffer deadlocks on large listings.
-            val outputDeferred = async(Dispatchers.IO) {
-                process.inputStream.bufferedReader().use { it.readText() }
+            // Continuously snapshot the descendant tree while the process is alive. A backgrounded
+            // child (e.g. `python app.py &`) shares stdout with the shell; a non-interactive `sh -c`
+            // has no job control, so `kill %1` in the command is a no-op and the child survives as an
+            // orphan holding the stdout pipe open. Retaining ProcessHandles here lets us reap that
+            // orphan later even after it reparents away from the shell on exit.
+            val descendants = ConcurrentHashMap.newKeySet<ProcessHandle>()
+            val pollerActive = AtomicBoolean(true)
+            val poller = thread(isDaemon = true, name = "rtc-descendants") {
+                while (pollerActive.get() && process.isAlive) {
+                    process.descendants().forEach { descendants.add(it) }
+                    try {
+                        Thread.sleep(DESCENDANT_POLL_INTERVAL_MS)
+                    } catch (interrupted: InterruptedException) {
+                        break
+                    }
+                }
+                process.descendants().forEach { descendants.add(it) }
             }
 
-            // Wait with timeout
+            // Drain stdout/stderr on a dedicated thread so we never block the coroutine indefinitely.
+            // Decode as UTF-8 explicitly: the Windows console emits OEM/ANSI bytes that the JVM
+            // (default UTF-8 since JEP 400) would otherwise turn into replacement characters.
+            val outputBuffer = StringBuilder()
+            val reader = thread(isDaemon = true, name = "rtc-reader") {
+                try {
+                    process.inputStream.bufferedReader(Charsets.UTF_8).use { br ->
+                        val buffer = CharArray(READER_CHUNK_CHARS)
+                        while (true) {
+                            val read = br.read(buffer)
+                            if (read < 0) {
+                                break
+                            }
+                            synchronized(outputBuffer) {
+                                outputBuffer.append(buffer, 0, read)
+                            }
+                        }
+                    }
+                } catch (streamClosed: Exception) {
+                    // Stream was closed (e.g. process tree destroyed) - stop draining.
+                }
+            }
+
+            fun snapshotOutput(): String = synchronized(outputBuffer) { outputBuffer.toString() }
+
+            // Wait for the shell to finish within the wall-clock timeout.
             val completed = process.waitFor(effectiveTimeout, TimeUnit.SECONDS)
+            pollerActive.set(false)
 
             if (!completed) {
-                process.destroyForcibly()
-                // Capture partial output instead of discarding it
-                val partialOutput = withTimeoutOrNull(3000L) {
-                    runCatching { outputDeferred.await() }.getOrDefault("")
-                } ?: ""
+                // Timeout: kill the whole tree (shell + any orphaned child) so nothing lingers,
+                // then collect whatever output was captured before the deadline.
+                destroyProcessTree(process, descendants)
+                reader.join(READER_FINAL_GRACE_MS)
+                val partialOutput = snapshotOutput()
                 val duration = (System.currentTimeMillis() - startTime).toInt()
 
-                logger.warn { "Command timed out after ${effectiveTimeout}s: $command, partial output=${partialOutput.length} chars" }
+                logger.warn { "Command timed out after ${effectiveTimeout}s: $command, partial output=${partialOutput.length} chars; process tree killed" }
 
                 val truncatedPartial = if (partialOutput.length > limits.maxOutputSize) {
                     partialOutput.take(limits.maxOutputSize) + "\n\n... (output truncated)"
@@ -118,7 +165,8 @@ class RunTerminalCommandTool(
                 }
 
                 val message = buildString {
-                    append("Command timed out after $effectiveTimeout seconds.")
+                    append("Command timed out after $effectiveTimeout seconds; process tree killed ")
+                    append("(a backgrounded server may have kept output open).")
                     if (truncatedPartial.isNotBlank()) {
                         append("\n\nPartial output before timeout:\n")
                         append(truncatedPartial)
@@ -139,7 +187,18 @@ class RunTerminalCommandTool(
                 )
             }
 
-            val output = runCatching { outputDeferred.await() }.getOrDefault("")
+            // The shell exited, but a backgrounded orphan may still hold the stdout pipe open,
+            // which would block the reader forever. Give the reader a short grace to flush buffered
+            // output; if it is still blocked, reap the surviving tree so the pipe closes.
+            reader.join(READER_DRAIN_GRACE_MS)
+            val orphanReaped = reader.isAlive
+            if (orphanReaped) {
+                logger.warn { "Command exited but left a child holding stdout open: $command; killing surviving process tree" }
+                destroyProcessTree(process, descendants)
+                reader.join(READER_FINAL_GRACE_MS)
+            }
+
+            val output = snapshotOutput()
             val exitCode = process.exitValue()
             val duration = (System.currentTimeMillis() - startTime).toInt()
 
@@ -162,7 +221,8 @@ class RunTerminalCommandTool(
                     "command" to command,
                     "exit_code" to exitCode,
                     "output_length" to output.length,
-                    "truncated" to (output.length > limits.maxOutputSize)
+                    "truncated" to (output.length > limits.maxOutputSize),
+                    "orphan_reaped" to orphanReaped
                 )
             )
 
@@ -170,6 +230,21 @@ class RunTerminalCommandTool(
             logger.error(e) { "Failed to execute command" }
             return@withContext ToolResult.error("Command execution failed: ${e.message}")
         }
+    }
+
+    /**
+     * Forcibly destroy the process and every descendant it spawned, including retained handles of
+     * children that have already reparented away from the shell. This guarantees no orphaned server
+     * survives holding the inherited stdout pipe open after a timeout or normal completion.
+     */
+    private fun destroyProcessTree(process: Process, retained: Set<ProcessHandle>) {
+        retained.forEach { handle ->
+            runCatching { handle.destroyForcibly() }
+        }
+        runCatching {
+            process.descendants().forEach { it.destroyForcibly() }
+        }
+        process.destroyForcibly()
     }
 
     /**
@@ -185,7 +260,7 @@ class RunTerminalCommandTool(
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                command
+                WINDOWS_UTF8_PREFIX + command
             )
             else -> listOf("/bin/sh", "-c", command)
         }
@@ -211,5 +286,28 @@ class RunTerminalCommandTool(
     companion object {
         const val MIN_TIMEOUT_SECONDS = 30L
         const val MAX_TIMEOUT_SECONDS = 600L
+
+        // How often to snapshot the descendant tree while the shell is alive.
+        private const val DESCENDANT_POLL_INTERVAL_MS = 50L
+
+        // Read buffer size for draining process output.
+        private const val READER_CHUNK_CHARS = 8192
+
+        // Grace given to the reader to flush buffered output after the shell exits, before we
+        // treat a still-blocked reader as a sign of a surviving orphan and reap the tree.
+        private const val READER_DRAIN_GRACE_MS = 2000L
+
+        // Grace given to the reader to reach EOF after the process tree has been destroyed.
+        private const val READER_FINAL_GRACE_MS = 3000L
+
+        /**
+         * Forces UTF-8 for PowerShell output so non-ASCII (e.g. Polish) characters are not
+         * mangled by the console's default OEM/ANSI code page before the JVM reads them as UTF-8.
+         * The [Console]::OutputEncoding assignment is wrapped in try/catch because it can throw
+         * when stdout is redirected; $OutputEncoding alone still covers the pipeline to native tools.
+         */
+        private const val WINDOWS_UTF8_PREFIX =
+            "\$OutputEncoding = [System.Text.Encoding]::UTF8; " +
+            "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}; "
     }
 }

@@ -55,8 +55,6 @@ private val logger = dualLogger("MultiLineEditorTool")
  * - File size limits enforced
  * - Line number validation (bounds checking)
  * - Overlap detection for edits
- *
- * Based on: docs/0041-multi-coding.md (RFC 0041)
  */
 class MultiLineEditorTool(
     sandbox: PathSandbox,

@@ -1,5 +1,7 @@
 package pl.jclab.refio.core.services.hooks
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import pl.jclab.refio.core.config.HookDefinition
 import pl.jclab.refio.core.config.HooksConfig
 import pl.jclab.refio.core.logging.dualLogger
@@ -12,13 +14,17 @@ class HookService(
     private val notifyCallback: (String) -> Unit = {}
 ) {
 
-    fun trigger(eventName: String, variables: Map<String, String>) {
+    suspend fun trigger(eventName: String, variables: Map<String, String>) {
         val config = configProvider() ?: return
         val hooks = getHooksForEvent(config, eventName) ?: return
 
-        for (hook in hooks) {
-            if (!matchesFilter(hook, variables)) continue
-            executeHook(hook, variables)
+        // Hook commands block in Process.waitFor (up to their timeout); run them on the
+        // IO dispatcher so the suspend turn path never blocks its caller thread.
+        withContext(Dispatchers.IO) {
+            for (hook in hooks) {
+                if (!matchesFilter(hook, variables)) continue
+                executeHook(hook, variables)
+            }
         }
     }
 

@@ -67,9 +67,13 @@ class MultiAgentRouter(
         try {
             val results = multiAgentRunner.run(session.id, specs) { spec, agentId ->
                 val instance = instanceMap[spec.name]!!
+                // Capture the real start time locally: the `instance` object is the pre-execution row
+                // (startedAt = null) and is NOT refreshed by updateStatus, so reading instance.startedAt
+                // back would be null and the agent order could not be reconstructed.
+                val agentStartedAt = System.currentTimeMillis()
                 agentInstanceRepository.updateStatus(
                     instance.id, pl.jclab.refio.core.db.AgentInstanceStatus.RUNNING,
-                    startedAt = System.currentTimeMillis()
+                    startedAt = agentStartedAt
                 )
 
                 val agentTask = createTaskFn(CreateTaskRequest(
@@ -116,8 +120,12 @@ class MultiAgentRouter(
                     success = turnResult.success,
                     response = turnResult.response,
                     tokensUsed = (turnResult.tokensIn + turnResult.tokensOut).toLong(),
+                    tokensIn = turnResult.tokensIn,
+                    tokensOut = turnResult.tokensOut,
                     costUsd = turnResult.cost,
-                    durationMs = completedAt - (instance.startedAt ?: completedAt)
+                    durationMs = completedAt - agentStartedAt,
+                    startedAt = agentStartedAt,
+                    completedAt = completedAt
                 )
             }
 
@@ -149,13 +157,19 @@ class MultiAgentRouter(
                     success = inst.status == "COMPLETED",
                     response = inst.result?.take(2000),
                     tokensUsed = (inst.tokensIn + inst.tokensOut).toLong(),
+                    tokensIn = inst.tokensIn,
+                    tokensOut = inst.tokensOut,
                     costUsd = inst.costUsd,
                     durationMs = if (inst.startedAt != null && inst.completedAt != null)
                         inst.completedAt - inst.startedAt else 0,
-                    error = if (inst.status == "FAILED") inst.result else null
+                    error = if (inst.status == "FAILED") inst.result else null,
+                    startedAt = inst.startedAt,
+                    completedAt = inst.completedAt
                 )
             },
             totalTokens = instances.sumOf { (it.tokensIn + it.tokensOut).toLong() },
+            totalTokensIn = instances.sumOf { it.tokensIn.toLong() },
+            totalTokensOut = instances.sumOf { it.tokensOut.toLong() },
             totalCostUsd = instances.sumOf { it.costUsd },
             durationMs = if (session.completedAt != null) session.completedAt - session.createdAt else 0,
             createdAt = session.createdAt,
@@ -191,12 +205,18 @@ class MultiAgentRouter(
                     success = result.success,
                     response = result.response.take(2000),
                     tokensUsed = result.tokensUsed,
+                    tokensIn = result.tokensIn,
+                    tokensOut = result.tokensOut,
                     costUsd = result.costUsd,
                     durationMs = result.durationMs,
-                    error = result.error
+                    error = result.error,
+                    startedAt = result.startedAt,
+                    completedAt = result.completedAt
                 )
             },
             totalTokens = results.values.sumOf { it.tokensUsed },
+            totalTokensIn = results.values.sumOf { it.tokensIn.toLong() },
+            totalTokensOut = results.values.sumOf { it.tokensOut.toLong() },
             totalCostUsd = results.values.sumOf { it.costUsd },
             durationMs = completedAt - startTime,
             createdAt = session.createdAt,

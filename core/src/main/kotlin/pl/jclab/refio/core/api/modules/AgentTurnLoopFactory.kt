@@ -81,7 +81,8 @@ internal class AgentTurnLoopFactory(
             chatMessageRepository = chatMessageRepository,
             approvalService = toolApprovalService,
             permissionsService = toolPermissionsService,
-            hookService = hookService
+            hookService = hookService,
+            proposedChangeBuilder = projectRoot?.let { ProposedChangeBuilder(it) }
         )
 
         val turnLLMCaller = TurnLLMCaller(
@@ -118,6 +119,14 @@ internal class AgentTurnLoopFactory(
             maxSubagentDepth = 3
         )
 
+        // Deterministic post-turn verification: after a file-writing AGENT turn completes, run
+        // the project's build/test command (verify.command or autodetected) and feed failures
+        // back to the model as a bounded repair loop.
+        val turnVerifier = TurnVerifier(
+            configService = configService,
+            projectRoot = projectRoot
+        )
+
         return AgentTurnLoop(
             llmClient = llmClient,
             chatMessageRepository = chatMessageRepository,
@@ -141,7 +150,8 @@ internal class AgentTurnLoopFactory(
             workingMemoryIntegration = workingMemoryIntegration,
             agentEventBus = agentEventBus,
             hookService = hookService,
-            toolPermissionsService = toolPermissionsService
+            toolPermissionsService = toolPermissionsService,
+            turnVerifier = turnVerifier
         )
     }
 }

@@ -1,8 +1,9 @@
 package pl.jclab.refio.ui.components.agents
 
+import com.intellij.ui.JBColor
+import com.intellij.util.ui.UIUtil
 import java.awt.*
 import javax.swing.JPanel
-import javax.swing.UIManager
 
 /**
  * Visual representation of a single agent in the execution graph.
@@ -30,18 +31,21 @@ class AgentNodeComponent(
         isOpaque = false
     }
 
+    // Cap height so BoxLayout.Y_AXIS does not stretch nodes vertically
+    override fun getMaximumSize(): Dimension = Dimension(Int.MAX_VALUE, preferredSize.height)
+
     override fun paintComponent(g: Graphics) {
         super.paintComponent(g)
         val g2 = g.create() as Graphics2D
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
 
         val color = when (status) {
-            AgentNodeStatus.PENDING -> Color(128, 128, 128)
-            AgentNodeStatus.RUNNING -> Color(59, 130, 246)
-            AgentNodeStatus.COMPLETED -> Color(34, 197, 94)
-            AgentNodeStatus.FAILED -> Color(239, 68, 68)
-            AgentNodeStatus.WAITING -> Color(251, 191, 36)
-            AgentNodeStatus.QUEUED -> Color(168, 85, 247)  // purple
+            AgentNodeStatus.PENDING -> JBColor(Color(110, 110, 110), Color(150, 150, 150))
+            AgentNodeStatus.RUNNING -> JBColor(Color(59, 130, 246), Color(100, 160, 255))
+            AgentNodeStatus.COMPLETED -> JBColor(Color(22, 160, 74), Color(80, 200, 120))
+            AgentNodeStatus.FAILED -> JBColor(Color(220, 50, 50), Color(240, 100, 100))
+            AgentNodeStatus.WAITING -> JBColor(Color(200, 140, 20), Color(251, 191, 36))
+            AgentNodeStatus.QUEUED -> JBColor(Color(140, 70, 220), Color(190, 130, 255))  // purple
         }
 
         // Background rounded rect
@@ -58,13 +62,13 @@ class AgentNodeComponent(
         g2.fillOval(8, (height - 8) / 2, 8, 8)
 
         // Agent name
-        g2.color = UIManager.getColor("Label.foreground") ?: Color.WHITE
+        g2.color = UIUtil.getLabelForeground()
         g2.font = g2.font.deriveFont(Font.BOLD, 12f)
         g2.drawString(agentName, 22, height / 2 - 3)
 
         // Metrics line
         g2.font = g2.font.deriveFont(Font.PLAIN, 10f)
-        g2.color = Color(150, 150, 150)
+        g2.color = UIUtil.getContextHelpForeground()
         val metrics = buildString {
             append("iter: $iterationCount")
             if (durationMs > 0) append(" | ${durationMs / 1000}s")

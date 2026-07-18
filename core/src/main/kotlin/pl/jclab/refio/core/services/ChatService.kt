@@ -12,6 +12,7 @@ import pl.jclab.refio.core.db.*
 import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.db.repositories.TaskRepository
 import pl.jclab.refio.core.llm.LLMClient
+import pl.jclab.refio.core.llm.ReasoningEffort
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.TokenEstimator
 import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
@@ -60,7 +61,7 @@ class ChatService(
     /**
      * Process chat request and get LLM response.
      *
-     * RFC 0032: Unified streaming/non-streaming method.
+     * Unified streaming/non-streaming method.
      * - Always uses streamComplete() internally for consistency
      * - If stream=true and onChunk provided, callback is invoked with each chunk
      * - Always returns ChatResponse (streaming is presentation, not API change)
@@ -231,7 +232,8 @@ class ChatService(
 
         // Read UI state from config table (single source of truth)
         // UI state is global plugin state, not task-specific (saved by SessionManager)
-        val thinkingEnabled = configService.get(ConfigKeys.GENERAL_THINKING_ENABLED.key)?.toBoolean() ?: false
+        val reasoningEffort = ReasoningEffort.parse(configService.get(ConfigKeys.GENERAL_REASONING_EFFORT.key)) ?: ReasoningEffort.OFF
+        val thinkingEnabled = reasoningEffort.isOn
         val noEgressEnabled = configService.get(ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key)?.toBoolean() ?: false
 
         // Call LLM
@@ -247,7 +249,7 @@ class ChatService(
                     "temperature=${request.params.temperature ?: 0.7}"
         }
 
-        // RFC 0032: Use unified complete() with stream flag
+        // Use unified complete() with stream flag
         val response = try {
             llmClient.complete(
                 provider = provider,
@@ -257,6 +259,7 @@ class ChatService(
                 maxTokens = request.params.maxTokens,
                 temperature = request.params.temperature ?: 0.7,
                 thinking = thinkingEnabled,
+                reasoningEffort = reasoningEffort.toEffortString(),
                 noEgressEnabled = noEgressEnabled,
                 stream = stream,
                 onChunk = if (stream) onChunk else null,
@@ -300,7 +303,7 @@ class ChatService(
         val endTime = System.currentTimeMillis()
         val latencyMs = (endTime - startTime).toInt()
 
-        // Create metrics using MessageMetrics (US-027)
+        // Create metrics using MessageMetrics
         val metrics = MessageMetrics.fromLLMResponse(
             model = model,
             provider = provider,
@@ -313,8 +316,8 @@ class ChatService(
         )
 
         val metricsJson = MessageMetrics.toJson(metrics)
-        logger.info { "[US-027] Created metrics: $metrics" }
-        logger.info { "[US-027] Metrics JSON length: ${metricsJson.length} chars" }
+        logger.info { "Created metrics: $metrics" }
+        logger.info { "Metrics JSON length: ${metricsJson.length} chars" }
 
         // Save assistant response with metrics in metadata AND columns (Bug #4)
         val assistantMessage = chatMessageRepository.create(
@@ -352,7 +355,8 @@ class ChatService(
             costs = ChatCosts(
                 tokensIn = finalUsage.inputTokens,
                 tokensOut = finalUsage.outputTokens,
-                usdEst = finalCost
+                usdEst = finalCost,
+                cachedTokens = taskRepository.findById(task.id)?.cachedTokens ?: 0
             ),
             toolCalls = emptyList(),  // No tools in CHAT mode
             diffSummary = null,  // No file changes in CHAT mode

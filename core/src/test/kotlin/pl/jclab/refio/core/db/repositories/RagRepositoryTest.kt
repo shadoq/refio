@@ -272,4 +272,51 @@ class RagRepositoryTest {
             }
         }
     }
+
+    @Nested
+    inner class MissingEmbeddingTests {
+
+        @Test
+        fun `getChunksWithoutEmbeddings returns only chunks lacking an embedding for the model`() {
+            transaction {
+                val fileId = repository.createIndexedFile(
+                    projectRoot = "/test/project",
+                    filePath = "/missing.kt",
+                    fileHash = "hash",
+                    fileSize = 100,
+                    lastModified = System.currentTimeMillis(),
+                    mimeType = "text/x-kotlin"
+                )
+                val embedded = repository.createChunk(fileId, 0, "embedded chunk", 1, 5)
+                val missing = repository.createChunk(fileId, 1, "missing chunk", 6, 10)
+                val model = "ollama/nomic-embed-text"
+
+                repository.createEmbedding(embedded, model, byteArrayOf(1, 2, 3, 4), 4)
+                // An embedding for ANOTHER model must not satisfy the requested model
+                repository.createEmbedding(missing, "other-model", byteArrayOf(9, 9), 2)
+
+                val result = repository.getChunksWithoutEmbeddings("/test/project", model)
+
+                assertEquals(listOf(missing), result.map { it.id })
+            }
+        }
+
+        @Test
+        fun `getChunkIdsByIndexForFile maps chunkIndex to id`() {
+            transaction {
+                val fileId = repository.createIndexedFile(
+                    projectRoot = "/test/project",
+                    filePath = "/map.kt",
+                    fileHash = "hash",
+                    fileSize = 100,
+                    lastModified = System.currentTimeMillis(),
+                    mimeType = "text/x-kotlin"
+                )
+                val c0 = repository.createChunk(fileId, 0, "chunk 0", 1, 5)
+                val c1 = repository.createChunk(fileId, 1, "chunk 1", 6, 10)
+
+                assertEquals(mapOf(0 to c0, 1 to c1), repository.getChunkIdsByIndexForFile(fileId))
+            }
+        }
+    }
 }

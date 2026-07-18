@@ -1,5 +1,7 @@
 package pl.jclab.refio.core.services.analysis
 
+import pl.jclab.refio.core.db.repositories.ChunkInsert
+import pl.jclab.refio.core.db.repositories.EmbeddingInsert
 import pl.jclab.refio.core.db.repositories.RagRepository
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ChunkingStrategy
@@ -208,7 +210,7 @@ class FileAnalyzerService(
 
         val embeddings = embeddingsService.generateBatch(chunks.map(CodeChunk::content))
 
-        // docs/0060 Faza 2: previously persisted gson.toJson(analysis.codeElements) into the
+        // Previously persisted gson.toJson(analysis.codeElements) into the
         // IndexFiles.metadata column, but that blob was never deserialized by anyone — search
         // ranking uses cosine + keyword only, and every codeElements consumer reads it in-memory
         // from a fresh FileAnalysis, never from this column. Dropping it removes per-index CPU +
@@ -236,8 +238,11 @@ class FileAnalyzerService(
             )
         }
 
-        chunks.take(configService.getTyped<Int>(ConfigKeys.RAG_MAX_CHUNKS_PER_FILE)).forEachIndexed { index, chunk ->
-            val chunkId = ragRepository.createChunk(
+        // Batched inserts (one writer-lock acquisition per table) instead of one
+        // transaction per chunk/embedding - see RagRepository.createChunksBatch.
+        val limitedChunks = chunks.take(configService.getTyped<Int>(ConfigKeys.RAG_MAX_CHUNKS_PER_FILE))
+        val chunkInserts = limitedChunks.mapIndexed { index, chunk ->
+            ChunkInsert(
                 fileId = fileId,
                 chunkIndex = index,
                 content = chunk.content,
@@ -245,17 +250,25 @@ class FileAnalyzerService(
                 endLine = chunk.endLine,
                 metadata = gson.toJson(chunk.metadata)
             )
+        }
+        ragRepository.createChunksBatch(chunkInserts)
 
+        val chunkIdByIndex = ragRepository.getChunkIdsByIndexForFile(fileId)
+        val embeddingInserts = limitedChunks.indices.mapNotNull { index ->
             val embeddingVector = embeddings.getOrNull(index)
-            if (embeddingVector != null && embeddingVector.isNotEmpty()) {
-                ragRepository.createEmbedding(
+            val chunkId = chunkIdByIndex[index]
+            if (embeddingVector != null && embeddingVector.isNotEmpty() && chunkId != null) {
+                EmbeddingInsert(
                     chunkId = chunkId,
                     model = embeddingModelId(),
                     vector = serializeVector(embeddingVector),
                     dimensions = embeddingVector.size
                 )
+            } else {
+                null
             }
         }
+        ragRepository.createEmbeddingsBatch(embeddingInserts)
 
         logger.info {
             "Indexed ${analysis.filePath} with ${

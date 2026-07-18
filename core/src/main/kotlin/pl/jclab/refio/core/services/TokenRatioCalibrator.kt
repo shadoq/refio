@@ -3,7 +3,7 @@ package pl.jclab.refio.core.services
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Closed-loop chars/token calibration from real token counters (docs/0057, Tier 2).
+ * Closed-loop chars/token calibration from real token counters.
  *
  * The flat [PromptTokenEstimator.CHARS_PER_TOKEN_BASE] = 3.5 ratio is only accurate for
  * cloud models; local code models (qwen/llama/mistral) pack ~3.2 chars/token, so a flat

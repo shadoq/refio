@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![IntelliJ](https://img.shields.io/badge/IntelliJ-2024.1+-orange.svg)](https://www.jetbrains.com/idea/)
-[![Version](https://img.shields.io/badge/version-0.0.1.11-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.0.1.12-green.svg)](CHANGELOG.md)
 [![Stage](https://img.shields.io/badge/stage-early--active-yellow.svg)](docs/ROADMAP.md)
 
 ## A coding agent for developers who want control
@@ -21,9 +21,39 @@ Concretely:
 - **Visible everything.** Each tool call, each token, each cost, each file write - surfaced in the chat stream, not summarized away.
 - **MIT licensed.** Inspect it, fork it, audit it. The repo *is* the spec.
 
-**Stage:** v0.0.1.11, early and actively developed. JetBrains-only by design - no VS Code plans. Not a drop-in replacement for inline completion (different category) and not competing head-on with mature agents like Claude Code (RefIo is earlier on the curve). If you want a polished, mass-market AI coding tool *today*, pick something else. If you want the leverage of AI without giving up observability - read on.
+**Stage:** v0.0.1.12, early and actively developed. JetBrains-only by design - no VS Code plans. Not a drop-in replacement for inline completion (different category) and not competing head-on with mature agents like Claude Code (RefIo is earlier on the curve). If you want a polished, mass-market AI coding tool *today*, pick something else. If you want the leverage of AI without giving up observability - read on.
 
 See the [**Roadmap**](docs/ROADMAP.md) for where it's heading and where you can help.
+
+---
+
+## More than a coding agent: a workbench for building agents
+
+The coding agent is one use of the engine, not the whole point. The same `:core` - turn loop, tools, context pipeline, subagents, MCP, headless runner - is a **workbench for building, running, and hardening agents of your own**, coding or not.
+
+**Build a whole agent workflow, declaratively.**
+
+- **Define an agent** as Markdown + YAML in `.refio/agents/*.md`: its system prompt, the tools it may touch, its model (Claude Code compatible format).
+- **Compose agents.** Multi-agent A2A with per-agent inboxes (`send_message` / `answer_message`) lets agents hand work to each other; subagent invocation (`invoke_subagent`, nested up to depth 3) isolates a sub-task in its own context window - useful for keeping a small local model's context clean.
+- **Give them tools.** Built-in file / grep / terminal / http / code-runner, plus any MCP server (STDIO or HTTP/SSE) you plug in. An agent does not have to be about code - point the tools at whatever your workflow needs.
+- **Steer them.** Project instructions (`AGENTS.md`, `.refio/rules/*.md`), per-mode tool permissions, no-egress, cost ceilings.
+
+**Run any agent headless, and assert on the result.**
+
+The CLI runs the exact same loop as the IDE, but scriptable:
+
+```bash
+./cli/build/install/cli/bin/cli --headless --project <dir> --mode AGENT \
+  --prompt-file task.md --output json --output-file run.json
+```
+
+`run.json` carries the full record - status, tokens, cost, every tool call, errors, warnings. That turns an agent run into something you can **test**, not just watch. The e2e harness (`benchmark/scripts/e2e-run.*` + `test_data/e2e/`) is exactly this: scenarios that drop an agent into a throwaway project and assert on the **final state** (right file changed, build green, files it must not touch left intact) rather than on the path it took. The benchmark harness (`benchmark/`) runs the same prompt across many models to compare how they behave.
+
+**Build agents with agents.**
+
+Because an agent run is *measurable*, a coding agent can drive the loop on RefIo itself: run the e2e gate, read `run.json`, judge regressions (LLM-as-judge), and propose fixes in an isolated worktree - turning "is the agent getting better?" from a hunch into a delta against a baseline. This eval-driven, self-improving loop is the near-term direction (see [`docs/0069-e2e-stabilization-gate.md`](docs/0069-e2e-stabilization-gate.md)), built on the headless runner and harness that already exist.
+
+> **Honest scope.** The subagents, multi-agent inboxes, MCP tools, headless runner and the e2e / benchmark harnesses are here today - you can build and test a non-coding agent workflow now. The *closed* self-improvement loop (an agent that hardens RefIo from its own eval results) is specced and partly built, not finished - see the [Roadmap](docs/ROADMAP.md) Phase 1.
 
 ---
 
@@ -78,9 +108,9 @@ Same core engine, full-screen terminal interface.
 
 ## What's under the hood
 
-**Execution modes** are dispatched by `WorkflowOrchestrator` → mode-specific executors (`ChatExecutor`, `PlanExecutor`, `StepExecutor`) and the `AgentTurnLoop` (Plan / Agent) with iteration limits, output-hash repetition tracking, error-rate circuit breaker, and **content-chanting detection** (Gemini CLI's loop-detection pattern — aborts when the model repeats the same word phrase 10+ times consecutively).
+**Execution modes** are dispatched by `WorkflowOrchestrator` → mode-specific executors (`ChatExecutor`, `PlanExecutor`, `StepExecutor`) and the `AgentTurnLoop` (Plan / Agent) with iteration limits, output-hash repetition tracking, error-rate circuit breaker, and **content-chanting detection** (Gemini CLI's loop-detection pattern - aborts when the model repeats the same word phrase 10+ times consecutively).
 
-**`/goal`** — set an explicit completion condition for the active task (`/goal all tests in src/test pass`). A `NextSpeakerJudgeGuardian` (Gemini CLI's `checkNextSpeaker` pattern) runs after each terminal-of-turn moment in AGENT mode: a cheap weak-model call confirms whether the goal is *demonstrably* met against transcript evidence, or pushes the loop back into another iteration with a nudge re-injecting the goal text. Closes the failure mode where weak models stop mid-task ("Done.") after a single step. Works in both TUI and IntelliJ; condition persisted on the task row across restarts.
+**`/goal`** - set an explicit completion condition for the active task (`/goal all tests in src/test pass`). A `NextSpeakerJudgeGuardian` (Gemini CLI's `checkNextSpeaker` pattern) runs after each terminal-of-turn moment in AGENT mode: a cheap weak-model call confirms whether the goal is *demonstrably* met against transcript evidence, or pushes the loop back into another iteration with a nudge re-injecting the goal text. Closes the failure mode where weak models stop mid-task ("Done.") after a single step. Works in both TUI and IntelliJ; condition persisted on the task row across restarts.
 
 **Tool system** - file ops, grep, terminal, HTTP, code runner, subagent invocation, snapshots. Per-mode permissions via `ToolPermissionsService`. Session-scoped approval via `ToolApprovalService`.
 
@@ -88,7 +118,7 @@ Same core engine, full-screen terminal interface.
 
 **Security layers** - `PathSandbox` with symlink resolution + parent-chain check + TOCTOU revalidation. `CommandRule` (regex `ALLOW` / `BLOCK` / `ASK`). Secret redaction in logs. `detectSensitiveLogging` Gradle task fails the build if an API-key pattern appears in a log statement.
 
-**Models** - 8 providers: Ollama, LM Studio, OpenAI, Anthropic, Gemini, OpenRouter, Custom OpenAI, Z.AI. Universal tool-calling protocol works with models that lack native function calling; native function calling is now wired across the OpenAI-compatible adapters (OpenRouter / Z.AI / Generic OpenAI / LM Studio) too. Models that fail the native-tools probe are remembered across restarts via `models.native_tools_fallbacks`, so users don't pay the probe cost on every fresh process. **Anthropic prompt-prefix caching** — the system prompt is split at a stable/volatile boundary and the stable prefix carries a `cache_control: ephemeral` marker; subsequent turns in the same 5-minute window are billed at the cache-hit rate (~10% of normal input cost).
+**Models** - 8 providers: Ollama, LM Studio, OpenAI, Anthropic, Gemini, OpenRouter, Custom OpenAI, Z.AI. Universal tool-calling protocol works with models that lack native function calling; native function calling is now wired across the OpenAI-compatible adapters (OpenRouter / Z.AI / Generic OpenAI / LM Studio) too. Models that fail the native-tools probe are remembered across restarts via `models.native_tools_fallbacks`, so users don't pay the probe cost on every fresh process. **Anthropic prompt-prefix caching** - the system prompt is split at a stable/volatile boundary and the stable prefix carries a `cache_control: ephemeral` marker; subsequent turns in the same 5-minute window are billed at the cache-hit rate (~10% of normal input cost).
 
 **Extensibility** - subagents as Markdown + YAML (Claude Code compatible format). MCP protocol support (STDIO + HTTP/SSE) with built-in presets. Project instructions via `AGENTS.md`, `.refio/agent.md`, `.refio/rules/*.md` with glob-based activation. `.aiignore` for RAG exclusions.
 
@@ -101,7 +131,7 @@ Same core engine, full-screen terminal interface.
 Honest assessment - developers deserve to know what they're looking at:
 
 - **Orchestration is a light router + executors**, not a deep agent engine. `IntentRouter` maps modes and dispatches; `WorkflowOrchestrator` coordinates executors (~200 LOC).
-- **Multi-agent A2A messaging is now wired** via per-agent inboxes (`AgentInboxRegistry` + `AgentMessageInbox`). `send_message` enqueues to a peer's inbox; the peer reads it on the next turn via the prompt builder; `answer_message` replies to a specific inbound message. Integration-tested but still maturing — production-grade orchestration coverage is incomplete.
+- **Multi-agent A2A messaging is now wired** via per-agent inboxes (`AgentInboxRegistry` + `AgentMessageInbox`). `send_message` enqueues to a peer's inbox; the peer reads it on the next turn via the prompt builder; `answer_message` replies to a specific inbound message. Integration-tested but still maturing - production-grade orchestration coverage is incomplete.
 - **No git worktree isolation per task.** Agents edit files directly (with snapshot rollback), not in an isolated branch.
 - **Planning loop is basic.** Plan executor works, but no plan-refinement iterations (plan → execute → evaluate → refine → continue) yet.
 - **Security layers are pragmatic v1.** Working, but this is defense-at-depth-MVP, not hardened multi-layered security.
@@ -116,7 +146,7 @@ See [**docs/ROADMAP.md**](docs/ROADMAP.md) for where each of these is heading.
 
 - **@mentions** - `@file`, `@folder`, `@codebase` (RAG), `@grep`, `@diff`, `@commit`, `@problems`, `@terminal`, `@docs`, `@url`, `@clipboard`, `@current`, `@recent`, `@open`
 - **RAG-powered semantic search** - automatic project indexing with 5 language analyzers; stored in SQLite; circuit breaker for graceful degradation
-- **Tool library** - 7 read-only + 8 write tools (`http_request`, `run_code`, `invoke_subagent`, `delegate_to_strong_model`, and more), with per-mode permissions
+- **Tool library** - ~30 tools across reading/search, web/HTTP, system, editing, execution and delegation groups (`http_request`, `run_code`, `invoke_subagent`, `delegate_to_strong_model`, and more), with per-mode permissions (PLAN gets the read-only subset, AGENT the full set)
 - **LLM providers** - Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio, Custom OpenAI, Z.AI
 - **MCP protocol support** - STDIO + HTTP/SSE, with built-in presets (GitHub, PostgreSQL, Brave Search, …)
 - **Built-in subagents** - specialized roles invocable with `!agent-name` prefix
@@ -159,7 +189,7 @@ RefIo ships a standalone CLI with a full-screen TUI that mirrors the IntelliJ pl
 ### Features
 
 - **Split-pane layout** - Chat on the left (55%), active tab on the right (45%)
-- **8 tabs + 2 screens** - F1 Help, F2–F7 tabs (Steps, Context, RAG, Logs, Debug, API), F8 Files, F9 Settings
+- **8 tabs + 2 screens** - F1 Help, F2-F7 tabs (Steps, Context, RAG, Logs, Debug, API), F8 Files, F9 Settings
 - **Two input modes** - raw TTY (real terminal) and line mode (IDE terminal, pipes)
 - **`@context` autocomplete** - typing `@` opens a popup with context prefixes
 - **Settings screen** - 11 sub-tabs covering providers, models, prompts, context/RAG, MCP, tools, subagents
@@ -170,7 +200,7 @@ RefIo ships a standalone CLI with a full-screen TUI that mirrors the IntelliJ pl
 | Key | Action |
 |-----|--------|
 | F1 | Help screen |
-| F2–F7 | Switch tabs |
+| F2-F7 | Switch tabs |
 | F9 / Ctrl+S | Settings |
 | Shift+Tab | Cycle mode (Chat → Plan → Agent) |
 | Ctrl+O | Select model |
@@ -217,7 +247,7 @@ See [docs/config.md](docs/config.md) for full configuration reference.
 
 | |                                          |
 |---|------------------------------------------|
-| **Version** | 0.0.1.11                                  |
+| **Version** | 0.0.1.12                                  |
 | **Stage** | Early-stage - active development         |
 | **License** | MIT                                      |
 | **Community** | Small, growing - PRs and issues welcome  |

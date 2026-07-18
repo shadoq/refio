@@ -177,6 +177,8 @@ class ContextServiceTest {
         every { taskRepository.findById(taskId) } returns task
         every { subtaskRepository.findByTaskId(taskId) } returns subtasks
         every { chatMessageRepository.findByTaskId(taskId) } returns messages
+        // buildAgentTurnMessages loads the parent thread via findHistoryForInvocation(null).
+        every { chatMessageRepository.findHistoryForInvocation(taskId, null) } returns messages
     }
 
     // ---- Existing Tests ----
@@ -712,6 +714,58 @@ class ContextServiceTest {
             assertTrue(
                 budget128k.budgetFor(ContextSection.CONVERSATION) >
                     budget32k.budgetFor(ContextSection.CONVERSATION)
+            )
+        }
+    }
+
+    @Nested
+    inner class SubagentTurnIsolationTests {
+
+        private fun stubIsolation() {
+            every { taskRepository.findById("task-1") } returns MockFactory.createTask(id = "task-1", mode = TaskMode.AGENT)
+            every { configService.getContextBudget(any(), any(), any()) } returns
+                pl.jclab.refio.core.services.context.ContextBudget.forContextSize(32_000)
+            val parentMsg = MockFactory.createChatMessage(id = "p1", taskId = "task-1", role = MessageRole.USER, content = "parent question")
+            val subMsg = MockFactory.createChatMessage(id = "s1", taskId = "task-1", role = MessageRole.USER, content = "subagent internal step")
+            // The leaky path returned everything via findByTaskId; the fix must load per-thread instead.
+            every { chatMessageRepository.findByTaskId("task-1") } returns listOf(parentMsg, subMsg)
+            every { chatMessageRepository.findHistoryForInvocation("task-1", null) } returns listOf(parentMsg)
+            every { chatMessageRepository.findHistoryForInvocation("task-1", "sub-1") } returns listOf(subMsg)
+        }
+
+        @Test
+        fun `parent turn prompt excludes a subagent's intermediate steps`() = runTest {
+            stubIsolation()
+
+            val result = service.buildAgentTurnMessages(
+                taskId = "task-1",
+                projectRoot = projectRoot,
+                includeProjectContext = false,
+                agentInstanceId = null
+            )
+
+            assertTrue(result.messages.any { it.content.contains("parent question") }, "parent must see its own thread")
+            assertTrue(
+                result.messages.none { it.content.contains("subagent internal step") },
+                "parent prompt must not include the subagent's intermediate steps"
+            )
+        }
+
+        @Test
+        fun `subagent turn prompt excludes the parent conversation`() = runTest {
+            stubIsolation()
+
+            val result = service.buildAgentTurnMessages(
+                taskId = "task-1",
+                projectRoot = projectRoot,
+                includeProjectContext = false,
+                agentInstanceId = "sub-1"
+            )
+
+            assertTrue(result.messages.any { it.content.contains("subagent internal step") }, "subagent must see its own thread")
+            assertTrue(
+                result.messages.none { it.content.contains("parent question") },
+                "subagent prompt must not include the parent conversation"
             )
         }
     }

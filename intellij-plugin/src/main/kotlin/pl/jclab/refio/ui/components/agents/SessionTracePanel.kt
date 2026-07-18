@@ -1,5 +1,6 @@
 package pl.jclab.refio.ui.components.agents
 
+import com.intellij.ui.JBColor
 import pl.jclab.refio.core.agents.events.AgentEvent
 import java.awt.BorderLayout
 import java.awt.Color
@@ -33,7 +34,7 @@ import javax.swing.tree.DefaultTreeCellRenderer
  */
 class SessionTracePanel : JPanel(BorderLayout()) {
 
-    private val root = DefaultMutableTreeNode("Session —")
+    private val root = DefaultMutableTreeNode("Session -")
     private val treeModel = DefaultTreeModel(root)
     private val tree = JTree(treeModel).apply {
         isRootVisible = true
@@ -49,13 +50,13 @@ class SessionTracePanel : JPanel(BorderLayout()) {
                 val payload = node?.userObject as? TraceNode
                 if (payload != null && !sel) {
                     foreground = when (payload.kind) {
-                        TraceKind.TURN -> Color(70, 120, 200)
-                        TraceKind.LLM -> Color(140, 90, 200)
-                        TraceKind.TOOL_OK -> Color(40, 140, 40)
-                        TraceKind.TOOL_ERR -> Color(200, 50, 50)
-                        TraceKind.SESSION -> Color(200, 160, 40)
-                        TraceKind.MODELS -> Color(120, 120, 120)
-                        TraceKind.SUBAGENT -> Color(0, 140, 180)
+                        TraceKind.TURN -> JBColor(Color(70, 120, 200), Color(110, 160, 235))
+                        TraceKind.LLM -> JBColor(Color(140, 90, 200), Color(175, 135, 235))
+                        TraceKind.TOOL_OK -> JBColor(Color(40, 140, 40), Color(95, 190, 95))
+                        TraceKind.TOOL_ERR -> JBColor(Color(200, 50, 50), Color(235, 105, 105))
+                        TraceKind.SESSION -> JBColor(Color(170, 130, 20), Color(220, 185, 90))
+                        TraceKind.MODELS -> JBColor(Color(120, 120, 120), Color(160, 160, 160))
+                        TraceKind.SUBAGENT -> JBColor(Color(0, 140, 180), Color(85, 185, 220))
                     }
                 }
                 return c
@@ -195,9 +196,11 @@ class SessionTracePanel : JPanel(BorderLayout()) {
                     val label = "[LLM] ${shortenModel(event.model)}  " +
                         "${event.tokensIn} in / ${event.tokensOut} out  " +
                         "${formatCost(event.costUsd)}  ${formatDuration(event.durationMs)}"
+                    val firstChild = parent.childCount == 0
                     parent.add(DefaultMutableTreeNode(TraceNode(label, TraceKind.LLM)))
                     treeModel.nodeStructureChanged(parent)
-                    tree.expandPath(javax.swing.tree.TreePath(parent.path))
+                    // Expand only on first child so user-collapsed branches stay collapsed
+                    if (firstChild) tree.expandPath(javax.swing.tree.TreePath(parent.path))
 
                     totalLlmCalls++
                     totalTokensIn += event.tokensIn
@@ -220,11 +223,13 @@ class SessionTracePanel : JPanel(BorderLayout()) {
                     val turnKey = "$runId:${event.iteration}"
                     val parent = turnNodes[turnKey] ?: root
                     val status = if (event.success) "OK" else "ERR"
-                    val label = "[Tool] ${event.toolName}  ${formatDuration(event.durationMs)}  $status  — ${event.argumentsPreview.take(60)}"
+                    val label = "[Tool] ${event.toolName}  ${formatDuration(event.durationMs)}  $status  - ${event.argumentsPreview.take(60)}"
                     val kind = if (event.success) TraceKind.TOOL_OK else TraceKind.TOOL_ERR
+                    val firstChild = parent.childCount == 0
                     parent.add(DefaultMutableTreeNode(TraceNode(label, kind)))
                     treeModel.nodeStructureChanged(parent)
-                    tree.expandPath(javax.swing.tree.TreePath(parent.path))
+                    // Expand only on first child so user-collapsed branches stay collapsed
+                    if (firstChild) tree.expandPath(javax.swing.tree.TreePath(parent.path))
 
                     totalToolCalls++
                     updateRootLabel()
@@ -235,11 +240,13 @@ class SessionTracePanel : JPanel(BorderLayout()) {
                     val runId = event.runId ?: event.correlationId
                     val turnKey = "$runId:${event.iteration}"
                     val parent = turnNodes[turnKey] ?: root
-                    val label = "[Stream aborted] ${event.code}  — ${event.reason.take(80)}  " +
+                    val label = "[Stream aborted] ${event.code}  - ${event.reason.take(80)}  " +
                         "(partial=${event.partialLength} chars)"
+                    val firstChild = parent.childCount == 0
                     parent.add(DefaultMutableTreeNode(TraceNode(label, TraceKind.TOOL_ERR)))
                     treeModel.nodeStructureChanged(parent)
-                    tree.expandPath(javax.swing.tree.TreePath(parent.path))
+                    // Expand only on first child so user-collapsed branches stay collapsed
+                    if (firstChild) tree.expandPath(javax.swing.tree.TreePath(parent.path))
                     updateRootLabel()
                 }
             }
@@ -285,7 +292,7 @@ class SessionTracePanel : JPanel(BorderLayout()) {
         }
         m.removeAllChildren()
         for ((name, stats) in modelStats) {
-            val line = "${shortenModel(name)} — ${stats.calls} call(s) · " +
+            val line = "${shortenModel(name)} - ${stats.calls} call(s) · " +
                 "${stats.tokensIn} in / ${stats.tokensOut} out · " +
                 "${formatCost(stats.cost)} · " +
                 formatDuration(stats.durationMs)
@@ -296,7 +303,7 @@ class SessionTracePanel : JPanel(BorderLayout()) {
     }
 
     private fun updateRootLabel() {
-        val sid = sessionId?.take(8) ?: "—"
+        val sid = sessionId?.take(8) ?: "-"
         val label = "Session $sid · turns=$totalTurns · llm=$totalLlmCalls · tools=$totalToolCalls · " +
             "tokens ${totalTokensIn}/${totalTokensOut} · ${formatCost(totalCost)} · ${formatDuration(totalDurationMs)}"
         root.userObject = TraceNode(label, TraceKind.SESSION)

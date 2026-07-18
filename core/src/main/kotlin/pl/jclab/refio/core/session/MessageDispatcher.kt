@@ -230,7 +230,8 @@ class MessageDispatcher(
                     toolCallInfo = toolCallInfo,
                     toolStreamContent = toolDisplay.toolStreamContent,
                     agentName = coreMsg.agentName,
-                    agentDepth = coreMsg.agentDepth
+                    agentDepth = coreMsg.agentDepth,
+                    agentInstanceId = coreMsg.agentInstanceId
                 )
 
                 // Skip tool result messages whose content is already inlined into the tool call bubble

@@ -1,0 +1,21 @@
+{
+  "id": "pipeline-root-cause",
+  "category": "analysis",
+  "mode": "PLAN",
+  "description": "PLAN-mode: diagnose why the pipeline drops cents from dollar totals and point at the responsible file and function without fixing.",
+  "max_iterations": 25,
+  "fixture": "fixtures/data-pipeline",
+  "prompt_file": "prompts/pipeline-root-cause.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_output": { "regex": "normalize_amount" },
+    "file_unchanged": [
+      "ingest.py",
+      "transform.py",
+      "load.py",
+      "pipeline.py"
+    ],
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["The diagnosis points at normalize_amount in transform.py and explains that integer division (cents // 100) discards the fractional dollars, without editing any file."]
+}

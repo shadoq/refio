@@ -38,7 +38,7 @@ object TuiRagView {
                     else -> TuiColors.statusFailed
                 }
                 buf.addLine("    Chunks:            ${TuiColors.accent(chunks.toString())}")
-                buf.addLine("    Embeddings:        ${TuiColors.accent(embeddings.toString())} ${pctColor("(${String.format("%.0f", completionPct)}%)")}")
+                buf.addLine("    Embeddings:        ${TuiColors.accent(embeddings.toString())} ${pctColor("(${String.format(java.util.Locale.US, "%.0f", completionPct)}%)")}")
             }
             buf.addLine()
         } else {
@@ -109,8 +109,8 @@ object TuiRagView {
     }
 
     private fun formatFileSize(bytes: Long): String = when {
-        bytes >= 1_048_576 -> "${String.format("%.1f", bytes / 1_048_576.0)}M"
-        bytes >= 1_024 -> "${String.format("%.1f", bytes / 1_024.0)}K"
+        bytes >= 1_048_576 -> "${String.format(java.util.Locale.US, "%.1f", bytes / 1_048_576.0)}M"
+        bytes >= 1_024 -> "${String.format(java.util.Locale.US, "%.1f", bytes / 1_024.0)}K"
         else -> "${bytes}B"
     }
 

@@ -1,0 +1,21 @@
+{
+  "id": "pixel-plumber-add-pause",
+  "mode": "AGENT",
+  "description": "Add an Escape-key pause with a PAUSED overlay to the existing plumber.html game with the smallest clean in-place change.",
+  "category": "other",
+  "max_iterations": 25,
+  "fixture": "fixtures/pixel-plumber-pause",
+  "prompt_file": "prompts/pixel-plumber-add-pause.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needles_in_file": [
+      { "path": "plumber.html", "regex": "[Ee]scape" },
+      { "path": "plumber.html", "regex": "[Pp]aus" },
+      { "path": "plumber.html", "regex": "<canvas" },
+      { "path": "plumber.html", "regex": "requestAnimationFrame" },
+      { "path": "plumber.html", "text": "PIXEL PLUMBER" }
+    ],
+    "no_context_overflow": true
+  },
+  "judge": { "criteria": ["plumber.html now has an Escape-key pause that freezes updates and shows a PAUSED overlay, with Escape again resuming. The change is surgical: the pre-existing movement, jump, coin, score, and game-over behavior are all intact and the file is still a single self-contained canvas game."] }
+}

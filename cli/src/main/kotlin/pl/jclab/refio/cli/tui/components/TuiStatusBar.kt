@@ -35,7 +35,7 @@ object TuiStatusBar {
         val requests = TuiColors.muted(" ${reqCount}req")
 
         // Cost (global)
-        val cost = TuiColors.muted(" \$${String.format("%.4f", state.totalCostUsd)}")
+        val cost = TuiColors.muted(" \$${String.format(java.util.Locale.US, "%.4f", state.totalCostUsd)}")
 
         val newSession = TuiColors.muted(" [Ctrl+W:New]")
         val quit = TuiColors.muted(" [Ctrl+Q]")
@@ -62,6 +62,6 @@ object TuiStatusBar {
     }
 
     private fun formatTokens(tokens: Long): String {
-        return if (tokens > 1000) "${String.format("%.1f", tokens / 1000.0)}K" else tokens.toString()
+        return if (tokens > 1000) "${String.format(java.util.Locale.US, "%.1f", tokens / 1000.0)}K" else tokens.toString()
     }
 }

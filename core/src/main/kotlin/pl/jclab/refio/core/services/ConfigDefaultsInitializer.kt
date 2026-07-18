@@ -73,7 +73,7 @@ internal class ConfigDefaultsInitializer(
          * UI toggles first, then models, then feature flags, then RAG/context/agent knobs.
          */
         private val BUILTIN_DEFAULTS: List<Triple<String, String, String>> = listOf(
-            Triple(ConfigKeys.GENERAL_THINKING_ENABLED.key, "false", "Show LLM thinking process in UI"),
+            Triple(ConfigKeys.GENERAL_REASONING_EFFORT.key, "OFF", "Reasoning strength (OFF/LOW/MEDIUM/HIGH) across providers (Ollama think, Gemini budget, Anthropic extended thinking, OpenRouter/OpenAI reasoning effort); OFF suppresses it where the provider allows"),
             Triple(ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key, "false", "Block external network calls"),
             Triple(ConfigKeys.UI_INTENT_CLASSIFICATION_ENABLED.key, "false", "Enable LLM intent classification"),
             Triple(ConfigKeys.GENERAL_EXECUTION_MODE.key, "AUTO", "Execution mode (AUTO/INTERACTIVE)"),

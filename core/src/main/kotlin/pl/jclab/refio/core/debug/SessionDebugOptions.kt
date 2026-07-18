@@ -1,7 +1,7 @@
 package pl.jclab.refio.core.debug
 
 /**
- * Verbosity of a [SessionDebugSnapshot] (docs/0063 §4 / 0059 §4).
+ * Verbosity of a [SessionDebugSnapshot].
  *
  * - [MINIMAL] — metrics + final output + errors (auto-fill benchmark metrics)
  * - [STANDARD] — minimal + subtasks + conversation + session-scoped API logs

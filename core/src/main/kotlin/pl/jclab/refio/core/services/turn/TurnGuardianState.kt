@@ -7,7 +7,7 @@ import pl.jclab.refio.core.llm.LLMResponse
  *
  * Previously three loose loop variables (`guardianReentryCount`, `candidateFinalResponse`,
  * `usedToolsSizeAtLastReentry`) scattered the re-entry decision across the turn loop, making it
- * impossible to log or replay. Gathering them here (docs/0058, Faza 2) is a pure consolidation —
+ * impossible to log or replay. Gathering them here is a pure consolidation -
  * no behaviour change; `toString()` now yields a single replayable snapshot.
  *
  * **Capture-once policy (deliberate trade-off, not a bug).** A guardian re-entry drops the terminal
@@ -53,4 +53,43 @@ data class TurnGuardianState(
     /** The response to finalize: the restored pre-re-entry answer if applicable, else [current]. */
     fun effectiveResponse(current: LLMResponse, usedToolsSize: Int): LLMResponse =
         restorableResponse(usedToolsSize) ?: current
+
+    /**
+     * Replenish the bounded re-entry budget once the agent has made sustained progress since the
+     * last re-entry, so the budget is "per stall episode" rather than "once per whole turn".
+     *
+     * WHY: the single bounded re-entry used to be spent for the entire turn. A budget consumed
+     * early on a trivial pause left a GENUINE near-completion stall many iterations later with no
+     * safety net (observed: session 2ef4aabc — the judge re-entered on iteration 5 for a
+     * "checking the structure..." pause, then the agent worked productively for 13 iterations and
+     * stalled one tool call short of delivering; the budget was gone → turn finalized INCOMPLETE).
+     * Once [progressThreshold] or more new tool calls have run since the snapshot, that earlier
+     * episode is considered recovered: clear the counter, the now-stale stashed answer, and the
+     * snapshot so the next terminal stall gets a fresh single re-entry.
+     *
+     * This never steals a restorable answer: [restorableResponse] only fires when NO new tools ran
+     * since the snapshot (`usedToolsSize <= usedToolsAtLastReentry`), the exact opposite of the
+     * `>= progressThreshold` new calls required here.
+     *
+     * @return true when an episode was reset (for logging), false otherwise.
+     */
+    fun replenishIfSustainedProgress(usedToolsSize: Int, progressThreshold: Int): Boolean {
+        if (reentryCount == 0) return false
+        if (usedToolsSize - usedToolsAtLastReentry < progressThreshold) return false
+        reentryCount = 0
+        preReentryResponse = null
+        usedToolsAtLastReentry = 0
+        return true
+    }
+
+    companion object {
+        /**
+         * New tool calls required since the last guardian re-entry before the re-entry budget is
+         * replenished. Small enough that an agent that genuinely recovered (the 2ef4aabc case ran
+         * 12+ tools after its re-entry) regains a safety net, large enough that a model flapping
+         * between a bare intent announcement and one token tool call cannot farm infinite
+         * re-entries (it would need [DEFAULT_PROGRESS_RESET_THRESHOLD] real calls between each).
+         */
+        const val DEFAULT_PROGRESS_RESET_THRESHOLD = 3
+    }
 }

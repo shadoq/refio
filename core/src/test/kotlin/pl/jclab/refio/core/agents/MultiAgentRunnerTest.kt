@@ -80,6 +80,28 @@ class MultiAgentRunnerTest {
             assertFalse(results["failing-agent"]!!.success)
             assertEquals("Agent crashed", results["failing-agent"]!!.error)
         }
+
+        @Test
+        fun `dependent agent is not deadlocked when upstream setup throws before execution`() = runTest {
+            // If pre-execution setup (e.g. the AgentStarted emit) throws, the upstream
+            // agent must still be marked completed so dependents don't wait forever.
+            val failingBus = io.mockk.spyk(AgentEventBus())
+            io.mockk.coEvery {
+                failingBus.emit(match { it is AgentEvent.AgentStarted && it.agentName == "upstream" })
+            } throws RuntimeException("event bus down")
+            val runner = MultiAgentRunner(failingBus)
+            val specs = listOf(
+                AgentSpec("upstream", task = "Task A"),
+                AgentSpec("dependent", task = "Task B", dependsOn = listOf("upstream"))
+            )
+
+            val results = withTimeout(10.seconds) {
+                runner.run("s1", specs, successExecutor())
+            }
+
+            assertFalse(results["upstream"]!!.success)
+            assertTrue(results["dependent"]!!.success)
+        }
     }
 
     @Nested

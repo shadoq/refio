@@ -74,7 +74,7 @@ data class TurnProfileOverrides(
     val contextProfile: pl.jclab.refio.core.subagents.models.SubagentContextProfile? = null,
     /**
      * Reasoning effort override for reasoning-capable models. Values: "low" | "medium" | "high".
-     * Sourced from SubagentDefinition.reasoningEffort. Null = use global GENERAL_THINKING_ENABLED config.
+     * Sourced from SubagentDefinition.reasoningEffort. Null = use global GENERAL_REASONING_EFFORT config.
      */
     val reasoningEffort: String? = null
 )
@@ -155,7 +155,8 @@ data class MessageResponse(
     val isSummarized: Boolean = false,  // For TOOL messages - whether content is a summary
     val rawOutput: String? = null,      // For TOOL messages - original full output before summarization
     val agentName: String? = null,      // Subagent name for multi-agent UI
-    val agentDepth: Int? = null         // Nesting depth (0=main, 1=subagent)
+    val agentDepth: Int? = null,        // Nesting depth (0=main, 1=subagent)
+    val agentInstanceId: String? = null // Per-invocation id so sibling subagents render as separate groups
 )
 
 data class GetMessagesResponse(
@@ -306,6 +307,7 @@ data class TaskResponse(
     val updatedAt: Long,
     val tokensIn: Int = 0,
     val tokensOut: Int = 0,
+    val cachedTokens: Int = 0,  // Cache-read input tokens (subset of tokensIn), for UI display
     val costUsd: Double = 0.0,
     val rate: Int? = null,  // User rating: 1 (positive) or -1 (negative), null if not rated
     val projectId: String = LEGACY_PROJECT_ID,
@@ -410,8 +412,8 @@ data class ProjectContextResponse(
     val projectType: String,
     val technologies: List<String>,
     val technologyVersions: Map<String, String?> = emptyMap(),
-    val infrastructure: List<String> = emptyList(),  // Infrastructure tools (Docker, K8s, CI/CD) - ADR 0040
-    val primaryLanguage: String = "Unknown",  // Primary programming language detected - ADR 0040
+    val infrastructure: List<String> = emptyList(),  // Infrastructure tools (Docker, K8s, CI/CD)
+    val primaryLanguage: String = "Unknown",  // Primary programming language detected
     val mainLanguage: String,
     val complexity: String,
     val totalFiles: Int,
@@ -519,6 +521,8 @@ data class MultiAgentSessionResponse(
     val status: String,
     val agents: List<MultiAgentInstanceResponse>,
     val totalTokens: Long = 0,
+    val totalTokensIn: Long = 0,
+    val totalTokensOut: Long = 0,
     val totalCostUsd: Double = 0.0,
     val durationMs: Long = 0,
     val createdAt: Long,
@@ -531,7 +535,12 @@ data class MultiAgentInstanceResponse(
     val success: Boolean? = null,
     val response: String? = null,
     val tokensUsed: Long = 0,
+    val tokensIn: Int = 0,
+    val tokensOut: Int = 0,
     val costUsd: Double = 0.0,
     val durationMs: Long = 0,
-    val error: String? = null
+    val error: String? = null,
+    /** Absolute epoch-ms turn bounds, so consumers can order agents by real execution time. */
+    val startedAt: Long? = null,
+    val completedAt: Long? = null
 )

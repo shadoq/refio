@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.services.hooks
 
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 import pl.jclab.refio.core.config.HookDefinition
@@ -25,7 +26,7 @@ class HookServiceTest {
             notifyCallback = { notifications.add(it) }
         )
 
-        service.trigger("before_tool", mapOf("toolName" to "code_editing", "taskId" to "t1", "mode" to "AGENT"))
+        runBlocking { service.trigger("before_tool", mapOf("toolName" to "code_editing", "taskId" to "t1", "mode" to "AGENT")) }
 
         assertEquals(1, notifications.size)
         assertEquals("Running code_editing", notifications[0])
@@ -49,7 +50,7 @@ class HookServiceTest {
             notifyCallback = { notifications.add(it) }
         )
 
-        service.trigger("before_tool", mapOf("toolName" to "read_file", "taskId" to "t1", "mode" to "AGENT"))
+        runBlocking { service.trigger("before_tool", mapOf("toolName" to "read_file", "taskId" to "t1", "mode" to "AGENT")) }
 
         assertEquals(0, notifications.size)
     }
@@ -72,10 +73,10 @@ class HookServiceTest {
             notifyCallback = { notifications.add(it) }
         )
 
-        service.trigger("on_agent_complete", mapOf("mode" to "PLAN", "taskId" to "t1", "iterations" to "5"))
+        runBlocking { service.trigger("on_agent_complete", mapOf("mode" to "PLAN", "taskId" to "t1", "iterations" to "5")) }
         assertEquals(0, notifications.size, "PLAN mode should not match")
 
-        service.trigger("on_agent_complete", mapOf("mode" to "AGENT", "taskId" to "t1", "iterations" to "5"))
+        runBlocking { service.trigger("on_agent_complete", mapOf("mode" to "AGENT", "taskId" to "t1", "iterations" to "5")) }
         assertEquals(1, notifications.size, "AGENT mode should match")
     }
 
@@ -87,7 +88,7 @@ class HookServiceTest {
             notifyCallback = {}
         )
 
-        service.trigger("before_tool", mapOf("toolName" to "read_file"))
+        runBlocking { service.trigger("before_tool", mapOf("toolName" to "read_file")) }
     }
 
     @Test
@@ -107,7 +108,7 @@ class HookServiceTest {
             notifyCallback = { notifications.add(it) }
         )
 
-        service.trigger("on_agent_error", mapOf("error" to "Max iterations exceeded", "mode" to "AGENT", "taskId" to "t1"))
+        runBlocking { service.trigger("on_agent_error", mapOf("error" to "Max iterations exceeded", "mode" to "AGENT", "taskId" to "t1")) }
 
         assertEquals(1, notifications.size)
         assertEquals("Error: Max iterations exceeded", notifications[0])

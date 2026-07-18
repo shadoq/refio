@@ -63,8 +63,6 @@ private const val CONVERSATION_MIN_PER_MESSAGE_TOKENS = 128
 /**
  * Service for building context for LLM prompts.
  * Combines project analysis with current task state.
- *
- * Based on ADR 0018: Context Building & Visualization System
  */
 class ContextService(
     private val projectAnalyzer: ProjectAnalyzerService,
@@ -211,10 +209,10 @@ class ContextService(
         // 6. Build completed files data
         val completedFiles = taskContextExtractor.buildCompletedFiles(subtasks)
 
-        // 6a. Build structured executed steps for RECENT_WORK (ADR 0041)
+        // 6a. Build structured executed steps for RECENT_WORK
         val executedSteps = taskContextExtractor.buildExecutedSteps(subtasks)
 
-        // 7. Extract user requirements from task description (PHASE 2)
+        // 7. Extract user requirements from task description
         val userRequirements = taskContextExtractor.extractUserRequirements(task.name)
 
         // 8. Build rich DTOs
@@ -381,11 +379,11 @@ class ContextService(
             // Conversation history (filtered!)
             conversationHistory = conversationDTOs,
 
-            // Work history (from PHASE 3)
+            // Work history
             completedFiles = completedFiles,
             executedSteps = executedSteps,
 
-            // User requirements (extracted from task description - PHASE 2)
+            // User requirements (extracted from task description)
             userRequirements = userRequirements,
 
             // User-provided context (from @ mentions)
@@ -419,14 +417,14 @@ class ContextService(
      * Build formatted LLM context prompt from DTO
      * Returns structured prompt with XML-like tags
      *
-     * ADR 0040 ORDER (2025-12-03):
+     * Section order (2025-12-03):
      * 1. PROJECT CONTEXT FIRST - Agent must know the project before getting the task
      * 2. TASK & REQUIREMENTS - What needs to be done
      * 3. USER CONTEXT - Supporting information
      * 4. HISTORY - Previous work and conversation
      */
     /**
-     * Build LLM context prompt (REFACTORED - ADR 0017).
+     * Build LLM context prompt.
      * Organized by TIER priority: Essential → Work → Supplementary → Reference
      */
     fun buildLLMContextPrompt(context: ProjectContextDTO, staticPrefixTokens: Int = 0, modelId: String? = null): String {
@@ -676,7 +674,7 @@ class ContextService(
         )
 
         // Parse XML tags from the built prompt for granular section token breakdown
-        lastSectionTokens = parsePromptSectionTokens(contextPrompt)
+        lastSectionTokens = PromptSectionTokenReport.parsePromptSectionTokens(contextPrompt)
 
         return contextPrompt
     }
@@ -723,10 +721,17 @@ class ContextService(
          */
         includeProjectContext: Boolean = true,
         /**
-         * Resolved model id for model-aware token estimation of section budgets (docs/0057).
+         * Resolved model id for model-aware token estimation of section budgets.
          * Default null keeps the flat-base ratio for callers without model context.
          */
         modelId: String? = null,
+        /**
+         * Invocation id selecting which conversation thread to load. Null loads the main (parent)
+         * thread and excludes every subagent's intermediate steps; a subagent's own id loads only
+         * that subagent's rows. Default null keeps callers that render the parent conversation
+         * (context-panel preview, standalone bootstrap) unchanged.
+         */
+        agentInstanceId: String? = null,
     ): AgentTurnMessagesResult {
         logger.info {
             "[AGENT_TURN] Building messages for task=$taskId, contextRefs=${userContextRefs.size}, " +
@@ -739,7 +744,9 @@ class ContextService(
         val budget = configService.getContextBudget(taskId, modelOperation, staticPrefixTokens)
         val conversationBudget = budget.budgetFor(ContextSection.CONVERSATION)
 
-        val allMessages = transaction { chatMessageRepository.findByTaskId(taskId) }
+        // Load only the caller's own thread: the parent run (null id) never sees a subagent's
+        // intermediate steps, and a subagent never sees the parent conversation.
+        val allMessages = transaction { chatMessageRepository.findHistoryForInvocation(taskId, agentInstanceId) }
         val summarizedMessages = if (conversationSummaryService != null && conversationBudget > 0) {
             // Pass the same resolver that convertChatMessageToLLMMessage uses below, so the
             // summarizer's token estimate reflects the rendered prompt (TOOL bodies truncated
@@ -752,7 +759,8 @@ class ContextService(
                 maxTokens = conversationBudget,
                 contentResolver = { msg ->
                     if (msg.role == MessageRole.TOOL) resolveToolConversationContent(msg) else msg.content
-                }
+                },
+                agentInstanceId = agentInstanceId
             )
         } else {
             allMessages
@@ -821,7 +829,7 @@ class ContextService(
         val base = if (msg.isSummarized) {
             preferred
         } else {
-            truncate(preferred, 1024)
+            ToolOutputFormatting.truncate(preferred, 1024)
         }
         // Even for "summarized" tool messages the body may contain a fenced ```diff
         // block carrying the entire generated file (advance_code_editing pure-create).
@@ -1030,282 +1038,6 @@ class ContextService(
         )
     }
 
-    private fun formatToolOutput(
-        step: ExecutedStepDTO,
-        level: CompressionLevel,
-        config: RecentWorkConfig,
-        compressionConfig: ToolResultCompressionConfig
-    ): String {
-        val fileAttr = buildToolFileAttribute(step, config.includeMetadata)
-        val content = ToolResultCompression.compress(step.result, step.summary, level, compressionConfig, step.subtaskId)
-        val tagSuffix = if (fileAttr.isNotBlank()) " $fileAttr" else ""
-
-        // Add compression level attribute (only show if not FULL)
-        val compressionAttr = if (level != CompressionLevel.FULL) {
-            " compressed=\"${level.name.lowercase()}\""
-        } else {
-            ""
-        }
-
-        // Add metadata: timestamp, params (truncated), summary
-        val timestamp = step.timestamp.toString().take(19)  // ISO format, truncate milliseconds
-        val paramsAttr = formatToolParamsAttribute(step.parameters)
-        val summaryAttr = if (!step.summary.isNullOrBlank() && step.summary.length <= 100) {
-            " summary=\"${step.summary.replace("\"", "'")}\""
-        } else {
-            ""
-        }
-        val subtaskIdAttr = " subtaskId=\"${step.subtaskId.replace("\"", "'")}\""
-
-        return buildString {
-            append("<tool name=\"")
-            append(step.tool)
-            append("\"")
-            append(tagSuffix)
-            append(compressionAttr)
-            append(subtaskIdAttr)
-            append(" timestamp=\"")
-            append(timestamp)
-            append("\"")
-            if (paramsAttr.isNotBlank()) append(paramsAttr)
-            if (summaryAttr.isNotBlank()) append(summaryAttr)
-            append(">\n")
-            append(wrapInMarkdownCodeBlock(content.ifBlank { "-" }))
-            append("\n</tool>")
-        }
-    }
-
-    private fun wrapInMarkdownCodeBlock(content: String): String {
-        val fenceLength = maxOf(3, longestBacktickRun(content) + 1)
-        val fence = "`".repeat(fenceLength)
-        return buildString {
-            append(fence)
-            append("text\n")
-            append(content)
-            append("\n")
-            append(fence)
-        }
-    }
-
-    private fun longestBacktickRun(text: String): Int {
-        var longest = 0
-        var current = 0
-        for (char in text) {
-            if (char == '`') {
-                current += 1
-                if (current > longest) longest = current
-            } else {
-                current = 0
-            }
-        }
-        return longest
-    }
-
-    private fun formatToolParamsAttribute(
-        parameters: Map<String, Any>,
-        maxParams: Int = 5,
-        maxValueLength: Int = 80,
-        maxAttributeLength: Int = 320
-    ): String {
-        if (parameters.isEmpty()) return ""
-
-        val visibleEntries = parameters.entries.take(maxParams)
-        val paramsStr = visibleEntries.joinToString(",") { (key, value) ->
-            val safeKey = sanitizeXmlAttributeValue(key)
-            val safeValue = sanitizeXmlAttributeValue(truncateValue(value.toString(), maxValueLength))
-            "$safeKey=$safeValue"
-        }
-
-        val withCountSuffix = if (parameters.size > maxParams) {
-            "$paramsStr,+${parameters.size - maxParams}_more"
-        } else {
-            paramsStr
-        }
-
-        val trimmed = truncateValue(withCountSuffix, maxAttributeLength)
-        return if (trimmed.isBlank()) "" else " params=\"$trimmed\""
-    }
-
-    private fun sanitizeXmlAttributeValue(value: String): String {
-        return value
-            .replace("&", "&amp;")
-            .replace("\"", "'")
-            .replace("\n", " ")
-            .replace("\r", " ")
-            .trim()
-    }
-
-    private fun truncateValue(value: String, maxLength: Int): String {
-        if (maxLength <= 0) return ""
-        return if (value.length > maxLength) {
-            "${value.take(maxLength)}..."
-        } else {
-            value
-        }
-    }
-
-    private fun buildToolFileAttribute(step: ExecutedStepDTO, includeMetadata: Boolean): String {
-        val filePath = step.file ?: return ""
-        if (!includeMetadata) return "file=\"$filePath\""
-
-        val path = Path.of(filePath)
-        val size = try {
-            val bytes = java.nio.file.Files.size(path)
-            when {
-                bytes < 1024 -> "${bytes}B"
-                bytes < 1024 * 1024 -> "${bytes / 1024}KB"
-                else -> "${bytes / (1024 * 1024)}MB"
-            }
-        } catch (e: Exception) {
-            "?"
-        }
-        val ext = path.fileName.toString().substringAfterLast('.', "").takeIf { it.isNotEmpty() } ?: "txt"
-        return "file=\"$filePath\" size=\"$size\" type=\"$ext\""
-    }
-
-    /**
-     * Truncate text to specified length with ellipsis.
-     * Based on ADR 0017.
-     */
-    /**
-     * Intelligently truncate text, with special handling for code blocks.
-     * Detects markdown code blocks and truncates them with summary instead of raw cut.
-     */
-    private fun truncate(text: String, maxLength: Int): String {
-        if (text.length <= maxLength) {
-            return text
-        }
-
-        // Detect code blocks (``` ... ```)
-        val codeBlockRegex = Regex("```[\\w]*\\n([\\s\\S]*?)```", RegexOption.MULTILINE)
-        val hasCodeBlocks = codeBlockRegex.containsMatchIn(text)
-
-        if (hasCodeBlocks) {
-            val parts = mutableListOf<String>()
-            var lastIndex = 0
-            var totalLength = 0
-
-            codeBlockRegex.findAll(text).forEach { match ->
-                // Add text before code block
-                val beforeCode = text.substring(lastIndex, match.range.first)
-                if (beforeCode.isNotBlank()) {
-                    val available = maxLength - totalLength
-                    if (available > 0) {
-                        val truncated = if (beforeCode.length > available) {
-                            beforeCode.take(available) + "..."
-                        } else {
-                            beforeCode
-                        }
-                        parts.add(truncated)
-                        totalLength += truncated.length
-                    }
-                }
-
-                // Process code block
-                val codeBlock = match.value
-                val codeContent = match.groupValues[1]
-                val lines = codeContent.lines()
-                val available = maxLength - totalLength
-
-                if (available > 50) {  // Minimum space for code preview
-                    if (lines.size <= 10) {
-                        // Short code block - include it fully if space allows
-                        if (codeBlock.length <= available) {
-                            parts.add(codeBlock)
-                            totalLength += codeBlock.length
-                        } else {
-                            val previewLines = lines.take(5).joinToString("\n")
-                            val preview = "```\n$previewLines\n... (${lines.size - 5} more lines)\n```"
-                            parts.add(preview)
-                            totalLength += preview.length
-                        }
-                    } else {
-                        // Large code block - show summary
-                        val previewLines = lines.take(5).joinToString("\n")
-                        val language = match.value.removePrefix("```").substringBefore("\n")
-                        val preview =
-                            "```$language\n$previewLines\n... (${lines.size - 5} more lines, ${codeContent.length} chars total)\n```"
-                        parts.add(preview)
-                        totalLength += preview.length
-                    }
-                } else {
-                    // Not enough space - add summary only
-                    parts.add("[Code block: ${lines.size} lines, ${codeContent.length} chars]")
-                    totalLength += 50
-                }
-
-                lastIndex = match.range.last + 1
-            }
-
-            // Add remaining text after last code block
-            if (lastIndex < text.length) {
-                val remaining = text.substring(lastIndex)
-                val available = maxLength - totalLength
-                if (available > 0 && remaining.isNotBlank()) {
-                    val truncated = if (remaining.length > available) {
-                        remaining.take(available) + "..."
-                    } else {
-                        remaining
-                    }
-                    parts.add(truncated)
-                }
-            }
-
-            return parts.joinToString("")
-        }
-
-        // No code blocks - simple truncation
-        return "${text.take(maxLength)}..."
-    }
-
-    /**
-     * Detect programming language from file path.
-     * Based on ADR 0017.
-     */
-    private fun detectLanguage(path: String): String {
-        val ext = path.substringAfterLast('.', "").lowercase()
-        return when (ext) {
-            "kt" -> "Kotlin"
-            "java" -> "Java"
-            "py" -> "Python"
-            "js" -> "JavaScript"
-            "ts", "tsx" -> "TypeScript"
-            "jsx" -> "React"
-            "html", "htm" -> "HTML"
-            "css", "scss", "sass", "less" -> "CSS"
-            "md", "markdown" -> "Markdown"
-            "json" -> "JSON"
-            "xml" -> "XML"
-            "yaml", "yml" -> "YAML"
-            "sql" -> "SQL"
-            "sh", "bash" -> "Shell"
-            "rs" -> "Rust"
-            "go" -> "Go"
-            "cpp", "cc", "cxx" -> "C++"
-            "c", "h" -> "C"
-            "cs" -> "C#"
-            "rb" -> "Ruby"
-            "php" -> "PHP"
-            "swift" -> "Swift"
-            else -> ext.uppercase().takeIf { it.isNotEmpty() } ?: "Unknown"
-        }
-    }
-
-    /**
-     * Estimate code complexity based on lines and nesting level.
-     * Based on ADR 0017.
-     */
-    private fun estimateComplexity(content: String): String {
-        val lines = content.lines().size
-        val nestingLevel = content.count { it == '{' || it == '(' }
-
-        return when {
-            lines < 20 && nestingLevel < 5 -> "low"
-            lines < 100 && nestingLevel < 20 -> "medium"
-            else -> "high"
-        }
-    }
-
     // ===========================
     // USER CONTEXT RESOLUTION — delegated to ContextReferenceResolver
     // ===========================
@@ -1343,145 +1075,7 @@ class ContextService(
         _context: ProjectContextDTO,
         llmPrompt: String
     ): Map<String, ContextSectionTokenInfo> {
-        return parsePromptSectionTokens(llmPrompt)
-    }
-
-    /**
-     * Parse XML-tagged sections from an LLM context prompt and calculate
-     * per-section token estimates. Returns a map with UI-friendly keys
-     * (e.g. "recent_work", "key_components") suitable for the color palette.
-     */
-    private fun parsePromptSectionTokens(llmPrompt: String): Map<String, ContextSectionTokenInfo> {
-        if (llmPrompt.isBlank()) {
-            logger.debug { "[CONTEXT_TOKENS] Empty LLM prompt, skipping section token calculation" }
-            return emptyMap()
-        }
-
-        // Section patterns that are expected in the generated prompt
-        val sectionPatterns = listOf(
-            "PROJECT_CONTEXT" to "project_overview",
-            "PROJECT_INSTRUCTIONS" to "project_instructions",
-            "CURRENT_TASK" to "current_task",
-            "USER_REQUIREMENTS" to "user_requirements",
-            "USER_PROVIDED_CONTEXT" to "user_context",
-            "WORKING_MEMORY" to "working_memory",
-            "MCP_RESOURCES" to "mcp_resources",
-            "CONVERSATION_HISTORY" to "conversation",
-            "RECENT_WORK" to "recent_work",
-            "SUBTASKS_STATUS" to "subtasks",
-            "KEY_COMPONENTS" to "key_components",
-            "PROJECT_DEPENDENCIES" to "dependencies",
-            "PROJECT_ARCHITECTURE" to "architecture",
-            "FRAMEWORK_ANALYSIS" to "framework_analysis",
-            "TYPESCRIPT_ANALYSIS" to "typescript_analysis",
-            "HTML_ANALYSIS" to "html_analysis",
-            "CSS_ANALYSIS" to "css_analysis",
-            "PATTERNS" to "patterns",
-            "NAVIGATION_MAP" to "navigation_map",
-            "CODE_ANALYSIS" to "code_analysis"
-        )
-
-        val sectionNames = mapOf(
-            "project_overview" to "Project Context",
-            "project_instructions" to "Project Instructions",
-            "current_task" to "Current Task",
-            "user_requirements" to "User Requirements",
-            "user_context" to "User Context",
-            "working_memory" to "Working Memory",
-            "mcp_resources" to "MCP Resources",
-            "conversation" to "Conversation History",
-            "recent_work" to "Recent Work",
-            "subtasks" to "Subtasks",
-            "key_components" to "Key Components",
-            "dependencies" to "Dependencies",
-            "architecture" to "Architecture",
-            "framework_analysis" to "Framework Analysis",
-            "typescript_analysis" to "TypeScript Analysis",
-            "html_analysis" to "HTML Analysis",
-            "css_analysis" to "CSS Analysis",
-            "patterns" to "Patterns",
-            "navigation_map" to "Navigation Map",
-            "code_analysis" to "Code Analysis"
-        )
-
-        // Parse explicit tagged sections from the final generated prompt.
-        // Robust to truncated sections where closing tag was cut by token budget.
-        // IMPORTANT: parse each section independently (from the whole prompt),
-        // because prompt section order is not guaranteed to match sectionPatterns order.
-        val parsedContents = mutableMapOf<String, Pair<String, Boolean>>() // key -> (content, hasClosingTag)
-
-        for ((tag, key) in sectionPatterns) {
-            val openTag = "<$tag>"
-            val closeTag = "</$tag>"
-
-            val openIndex = findTagAtLineStart(llmPrompt, openTag, 0)
-            if (openIndex == -1) continue
-
-            val contentStart = openIndex + openTag.length
-            val closeIndex = findTagAtLineStart(llmPrompt, closeTag, contentStart)
-            val nextSectionIndex = findNextSectionStart(llmPrompt, sectionPatterns, contentStart)
-
-            val hasClosingTag = closeIndex != -1 && (nextSectionIndex == null || closeIndex <= nextSectionIndex)
-            val contentEnd = when {
-                hasClosingTag -> closeIndex
-                nextSectionIndex != null -> nextSectionIndex
-                else -> llmPrompt.length
-            }
-
-            if (contentEnd < contentStart) continue
-
-            val content = llmPrompt.substring(contentStart, contentEnd)
-            parsedContents[key] = content to hasClosingTag
-        }
-
-        val totalPromptChars = llmPrompt.length.coerceAtLeast(1)
-        val result = mutableMapOf<String, ContextSectionTokenInfo>()
-
-        // Process parsed sections only (no fallback estimation).
-        for ((key, parsed) in parsedContents) {
-            val (content, hasClosingTag) = parsed
-            val tagName = sectionPatterns.firstOrNull { it.second == key }?.first ?: key
-            val openTag = "<$tagName>"
-            val closeTag = "</$tagName>"
-            val sectionChars = content.length + openTag.length + if (hasClosingTag) closeTag.length else 0
-            val tokens = (sectionChars / 4).coerceAtLeast(1)
-
-            result[key] = ContextSectionTokenInfo(
-                name = sectionNames[key] ?: key,
-                tokens = tokens,
-                chars = sectionChars,
-                percentage = (sectionChars.toDouble() / totalPromptChars * 100)
-            )
-        }
-
-        return result
-    }
-
-    private fun findNextSectionStart(
-        prompt: String,
-        sectionPatterns: List<Pair<String, String>>,
-        fromIndex: Int
-    ): Int? {
-        var nextIndex: Int? = null
-        for ((tag, _) in sectionPatterns) {
-            val candidate = findTagAtLineStart(prompt, "<$tag>", fromIndex)
-            if (candidate != -1 && (nextIndex == null || candidate < nextIndex)) {
-                nextIndex = candidate
-            }
-        }
-        return nextIndex
-    }
-
-    private fun findTagAtLineStart(prompt: String, tag: String, fromIndex: Int): Int {
-        var index = prompt.indexOf(tag, fromIndex.coerceAtLeast(0))
-        while (index != -1) {
-            val lineStart = prompt.lastIndexOf('\n', (index - 1).coerceAtLeast(0)).let { if (it == -1) 0 else it + 1 }
-            if (prompt.substring(lineStart, index).isBlank()) {
-                return index
-            }
-            index = prompt.indexOf(tag, index + 1)
-        }
-        return -1
+        return PromptSectionTokenReport.parsePromptSectionTokens(llmPrompt)
     }
 
     companion object {

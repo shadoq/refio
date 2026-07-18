@@ -1,6 +1,7 @@
 package pl.jclab.refio.ui.components.chat
 
 import com.intellij.codeInsight.AutoPopupController
+import com.intellij.icons.AllIcons
 import com.intellij.codeInsight.lookup.LookupManager
 import com.intellij.notification.Notification
 import com.intellij.notification.NotificationType
@@ -26,6 +27,7 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.Key
 import com.intellij.ui.EditorTextField
 import com.intellij.ui.components.JBPanel
+import com.intellij.util.ui.JBUI
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -86,6 +88,16 @@ class PromptInputPanel(
         private val ENTER_HANDLER_INSTALLED = AtomicBoolean(false)
         private val SEND_ON_ENTER_KEY = Key.create<() -> Unit>("refio.promptEditor.sendOnEnter")
         private val IS_AUTOCOMPLETE_VISIBLE_KEY = Key.create<() -> Boolean>("refio.promptEditor.isAutocompleteVisible")
+
+        // The Enter override is process-wide (EditorActionManager), so it is restored when
+        // the last live panel is disposed instead of leaking for the rest of the IDE session.
+        private val LIVE_PANEL_COUNT = java.util.concurrent.atomic.AtomicInteger(0)
+        @Volatile
+        private var originalEnterHandler: EditorActionHandler? = null
+    }
+
+    init {
+        LIVE_PANEL_COUNT.incrementAndGet()
     }
 
     private val cs = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -234,9 +246,9 @@ class PromptInputPanel(
         // Add Context button (+)
         addContextButton = JButton("+").apply {
             toolTipText = "Add Context to prompt"
-            minimumSize = Dimension(32, 28)
-            preferredSize = Dimension(32, 28)
-            maximumSize = Dimension(32, 28)
+            minimumSize = Dimension(JBUI.scale(32), JBUI.scale(28))
+            preferredSize = Dimension(JBUI.scale(32), JBUI.scale(28))
+            maximumSize = Dimension(JBUI.scale(32), JBUI.scale(28))
 
             addActionListener {
                 showContextMenu()
@@ -246,12 +258,12 @@ class PromptInputPanel(
         add(addContextButton, gbc)
 
         // Mode dropdown
-        modeSelector = JComboBox(arrayOf("💬 Chat", "📝 Plan", "🤖 Agent")).apply {
+        modeSelector = JComboBox(arrayOf("Chat", "Plan", "Agent")).apply {
             selectedIndex = 0
             toolTipText = "Switch mode (Alt+M)"
-            minimumSize = Dimension(100, 28)
-            preferredSize = Dimension(100, 28)
-            maximumSize = Dimension(110, 28)
+            minimumSize = Dimension(JBUI.scale(100), JBUI.scale(28))
+            preferredSize = Dimension(JBUI.scale(100), JBUI.scale(28))
+            maximumSize = Dimension(JBUI.scale(110), JBUI.scale(28))
 
             addActionListener {
                 // Skip if UI is being updated programmatically
@@ -286,9 +298,9 @@ class PromptInputPanel(
 
         // Model dropdown
         modelSelector = JComboBox<ModelItem>().apply {
-            minimumSize = Dimension(200, 28)
-            preferredSize = Dimension(300, 28)
-            maximumSize = Dimension(400, 28)
+            minimumSize = Dimension(JBUI.scale(200), JBUI.scale(28))
+            preferredSize = Dimension(JBUI.scale(300), JBUI.scale(28))
+            maximumSize = Dimension(JBUI.scale(400), JBUI.scale(28))
 
             renderer = object : DefaultListCellRenderer() {
                 override fun getListCellRendererComponent(
@@ -340,11 +352,11 @@ class PromptInputPanel(
 
         // Send/Stop button (right side of row 1)
         // Transforms: Send → Stop during operation, Stop → Send when idle
-        stopButton = JButton("🔴 Stop").apply {
+        stopButton = JButton("Stop", AllIcons.Actions.Suspend).apply {
             toolTipText = "Stop current operation"
-            minimumSize = Dimension(80, 28)
-            preferredSize = Dimension(80, 28)
-            maximumSize = Dimension(80, 28)
+            minimumSize = Dimension(JBUI.scale(80), JBUI.scale(28))
+            preferredSize = Dimension(JBUI.scale(80), JBUI.scale(28))
+            maximumSize = Dimension(JBUI.scale(80), JBUI.scale(28))
             isVisible = false
             addActionListener { handleStopOperation() }
         }
@@ -353,11 +365,11 @@ class PromptInputPanel(
         gbc.insets = LCATheme.insetsNone
         add(stopButton, gbc)
 
-        sendButton = JButton("🚀 Send").apply {
+        sendButton = JButton("Send", AllIcons.Actions.Execute).apply {
             toolTipText = "Send prompt (Enter)"
-            minimumSize = Dimension(90, 28)
-            preferredSize = Dimension(90, 28)
-            maximumSize = Dimension(90, 28)
+            minimumSize = Dimension(JBUI.scale(90), JBUI.scale(28))
+            preferredSize = Dimension(JBUI.scale(90), JBUI.scale(28))
+            maximumSize = Dimension(JBUI.scale(90), JBUI.scale(28))
             addActionListener { handleSendMessage() }
         }
         gbc.gridx = 6
@@ -367,6 +379,16 @@ class PromptInputPanel(
 
         // Load models from backend
         loadAvailableModels()
+
+        // A fresh IDE start has no active session, so nothing would drive the mode
+        // dropdown off its Chat default. Seed it from the persisted mode instead.
+        cs.launch {
+            sessionManager.awaitInitialization()
+            if (sessionManager.activeSession.value == null) {
+                val persistedMode = sessionManager.getSelectedMode()
+                SwingUtilities.invokeLater { applyModeToSelector(persistedMode) }
+            }
+        }
 
         // Listen to session changes
         cs.launch {
@@ -693,9 +715,13 @@ class PromptInputPanel(
     }
 
     /**
-     * Load available models from embedded core via SessionManager
+     * Load available models from embedded core via SessionManager.
+     *
+     * @param fetchIfMissing false = use whatever the model cache holds instead of calling
+     *        providers. Only the very first load needs a fetch; later redraws must not,
+     *        because a provider call can block for seconds behind a running turn.
      */
-    private fun loadAvailableModels() {
+    private fun loadAvailableModels(fetchIfMissing: Boolean = true) {
         // Treat model list refresh as initialization to prevent accidental persistence during dropdown rebuild.
         isInitializing = true
 
@@ -708,7 +734,7 @@ class PromptInputPanel(
                 logger.info { "Loading available models from embedded core..." }
 
                 // Get models from SessionManager (uses embedded core, in-process)
-                val modelStrings = sessionManager.getAvailableModels()
+                val modelStrings = sessionManager.getAvailableModels(fetchIfMissing = fetchIfMissing)
 
                 // Build "provider/id" -> backend-provided display name map so dynamic
                 // providers (OpenRouter, LM Studio) show friendly names like
@@ -893,7 +919,15 @@ class PromptInputPanel(
     private fun updateSession(session: pl.jclab.refio.api.models.Session) {
         logger.info { "updateSession called: mode=${session.mode}, executionMode=${session.executionMode}" }
 
-        val expectedModeIndex = when (session.mode) {
+        applyModeToSelector(session.mode)
+    }
+
+    /**
+     * Move the mode dropdown to [mode] without firing the listener that would
+     * treat it as a user-driven mode switch.
+     */
+    private fun applyModeToSelector(mode: TaskMode) {
+        val expectedModeIndex = when (mode) {
             TaskMode.CHAT -> 0
             TaskMode.PLAN -> 1
             TaskMode.AGENT -> 2
@@ -1026,12 +1060,12 @@ class PromptInputPanel(
     }
 
     /**
-     * Refresh the model list from core
-     * Call this after settings changes to update dropdown
+     * Redraw the dropdown from the model cache after settings changes. The settings screens
+     * fetch the provider they actually touched, so there is nothing to pull from providers here.
      */
     fun refreshModels() {
-        logger.info { "Refreshing model list from Settings" }
-        loadAvailableModels()
+        logger.info { "Refreshing model list from Settings (cache only)" }
+        loadAvailableModels(fetchIfMissing = false)
     }
 
     private fun createPromptEditor(): EditorTextField {
@@ -1084,6 +1118,7 @@ class PromptInputPanel(
 
         val actionManager = EditorActionManager.getInstance()
         val original = actionManager.getActionHandler(IdeActions.ACTION_EDITOR_ENTER)
+        originalEnterHandler = original
 
         actionManager.setActionHandler(IdeActions.ACTION_EDITOR_ENTER, object : EditorActionHandler() {
             override fun doExecute(
@@ -1885,7 +1920,7 @@ class PromptInputPanel(
             logger.info { "Operation started - prompt stays active for mid-execution input" }
         } else {
             // Operation finished
-            sendButton.text = "🚀 Send"
+            sendButton.text = "Send"
             sendButton.toolTipText = "Send prompt (Enter)"
             sendButton.isVisible = true
             stopButton.isVisible = false
@@ -2163,6 +2198,17 @@ class PromptInputPanel(
         autocompleteTimer.stop()
         Disposer.dispose(editorShortcutsDisposable)
         cs.cancel()
+        uninstallEnterActionHandlerIfLast()
+    }
+
+    private fun uninstallEnterActionHandlerIfLast() {
+        if (LIVE_PANEL_COUNT.decrementAndGet() > 0) return
+        if (ENTER_HANDLER_INSTALLED.compareAndSet(true, false)) {
+            originalEnterHandler?.let {
+                EditorActionManager.getInstance().setActionHandler(IdeActions.ACTION_EDITOR_ENTER, it)
+            }
+            originalEnterHandler = null
+        }
     }
 
     private fun extractInlineProviderContextRefs(

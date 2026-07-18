@@ -27,6 +27,17 @@ internal object ConfigYamlMerger {
             prompts = mergePrompts(base.prompts, override.prompts),
             mcp = mergeMcp(base.mcp, override.mcp),
             hooks = mergeHooks(base.hooks, override.hooks),
+            verify = mergeVerify(base.verify, override.verify),
+        )
+    }
+
+    private fun mergeVerify(base: VerifyConfig?, override: VerifyConfig?): VerifyConfig? {
+        if (base == null) return override
+        if (override == null) return base
+        return VerifyConfig(
+            enabled = override.enabled ?: base.enabled,
+            command = override.command ?: base.command,
+            maxRepairRounds = override.maxRepairRounds ?: base.maxRepairRounds,
         )
     }
 
@@ -38,6 +49,7 @@ internal object ConfigYamlMerger {
             streamingEnabled = override.streamingEnabled ?: base.streamingEnabled,
             advancedView = override.advancedView ?: base.advancedView,
             thinkingEnabled = override.thinkingEnabled ?: base.thinkingEnabled,
+            reasoningEffort = override.reasoningEffort ?: base.reasoningEffort,
             noEgressEnabled = override.noEgressEnabled ?: base.noEgressEnabled,
             executionMode = override.executionMode ?: base.executionMode,
             nativeToolsMode = override.nativeToolsMode ?: base.nativeToolsMode,

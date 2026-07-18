@@ -12,8 +12,6 @@ private val logger = dualLogger("TokenEstimator")
  * Uses tiktoken-compatible algorithm for accurate estimation.
  * Based on average characters per token (3.5) with provider-specific adjustments.
  *
- * Reference: ADR-0028 - Context Management
- *
  * **Single source of truth for chars/token ratio**: [CHARS_PER_TOKEN_BASE] in the companion
  * object below is referenced by [pl.jclab.refio.core.services.context.ContextTokenEstimator]
  * and [pl.jclab.refio.core.llm.TokenEstimator] so all three estimators agree on the base
@@ -30,12 +28,12 @@ class PromptTokenEstimator {
          * Downward safety margin applied to the chars/token ratio when computing *capacity*
          * (how many chars fit in a token budget). Under-estimating capacity is the safe
          * direction — better to leave a little window unused than to overflow it and have
-         * Ollama silently truncate from the head (docs/0057 Tier 3, §3.1).
+         * Ollama silently truncate from the head.
          */
         private const val BUDGET_SAFETY_FACTOR = 0.9
 
         /**
-         * Tier-1 chars/token prior keyed by model-name fragment (docs/0057 §3.1).
+         * Family-level chars/token prior keyed by model-name fragment.
          *
          * The ratio is dominated by *content* (code ~3.0, prose ~4.0) more than by the model,
          * but cloud tokenizers (gpt/claude BPE) and local code-model tokenizers (qwen/llama)
@@ -64,7 +62,7 @@ class PromptTokenEstimator {
         /**
          * Model-aware variant of [estimateBase]. Uses the calibrated/family ratio for [modelId]
          * so dense local-model prompts are not under-counted. [modelId] = null keeps the legacy
-         * flat-base behavior for callers without model context (docs/0057 §1.2).
+         * flat-base behavior for callers without model context.
          */
         fun estimateBase(text: String, modelId: String?): Int {
             if (text.isBlank()) return 0
@@ -75,7 +73,7 @@ class PromptTokenEstimator {
          * Token estimate from a precomputed character count, for callers that only have a length
          * (e.g. summed message sizes) and don't want to materialize the text. Same ratio and
          * rounding as [estimateBase] — the single chars→tokens conversion in :core, so every
-         * estimator agrees instead of sprinkling ad-hoc `length / 4` divisions (docs/0057 §6).
+         * estimator agrees instead of sprinkling ad-hoc `length / 4` divisions.
          */
         fun estimateTokensForChars(chars: Int, modelId: String? = null): Int {
             if (chars <= 0) return 0
@@ -87,7 +85,7 @@ class PromptTokenEstimator {
          * body's `tools` array. These schemas are NOT part of the system-prompt text, so callers
          * that size the context budget against the system prompt alone (TurnPromptBuilder) miss
          * them — letting the dynamic sections over-allocate and push the real prompt past the
-         * model's context window, where Ollama silently truncates from the head (docs/0057).
+         * model's context window, where Ollama silently truncates from the head.
          *
          * The per-schema char measure (name + description + parameters JSON) mirrors the adapters'
          * own overflow guard (e.g. OllamaAdapter.estimateOllamaInputTokens) so the budget
@@ -113,7 +111,7 @@ class PromptTokenEstimator {
         /**
          * Model-aware variant of [maxCharsForTokens]. Applies the [BUDGET_SAFETY_FACTOR] for
          * known models so capacity is under-estimated (never overflowed). [modelId] = null keeps
-         * the legacy flat-base behavior with no margin for backward compatibility (docs/0057 §3.1).
+         * the legacy flat-base behavior with no margin for backward compatibility.
          */
         fun maxCharsForTokens(maxTokens: Int, modelId: String?): Int {
             if (maxTokens <= 0) return 0
@@ -132,6 +130,10 @@ class PromptTokenEstimator {
             "generic_openai" to 1.0,
             "zai" to 1.0
         )
+
+        // Compiled once - estimateString runs on the prompt hot path.
+        private val CODE_FENCE_REGEX = Regex("```")
+        private val JSON_OBJECT_REGEX = Regex("\\{[^}]+\\}")
     }
 
     /**
@@ -161,8 +163,8 @@ class PromptTokenEstimator {
         if (text.isBlank()) return 0
 
         // Count special patterns that typically use more tokens
-        val codeBlockCount = Regex("```").findAll(text).count()
-        val jsonObjectCount = Regex("\\{[^}]+\\}").findAll(text).count()
+        val codeBlockCount = CODE_FENCE_REGEX.findAll(text).count()
+        val jsonObjectCount = JSON_OBJECT_REGEX.findAll(text).count()
 
         val baseEstimate = estimateBase(text)
         val overhead = codeBlockCount * 3 + jsonObjectCount * 2

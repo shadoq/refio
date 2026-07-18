@@ -10,8 +10,6 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Per-session, per-agent queue of incoming [AgentEvent.DataRequest] events.
  *
- * Spec: docs/0054-multiagent.md §3.1 / Step 1.
- *
  * Subscribes to [AgentEventBus] on construction and:
  *  - captures every DataRequest whose `targetAgentId` matches this inbox's agent name,
  *  - drops a request from `pending` once any matching DataResponse appears on the bus

@@ -1,0 +1,18 @@
+{
+  "id": "pipeline-2-agents",
+  "mode": "AGENT",
+  "description": "Run an analyst subagent before a coder subagent so Calc.add is implemented to return a + b and the project builds.",
+  "category": "orchestration",
+  "max_iterations": 25,
+  "fixture": "fixtures/pipeline-2agents",
+  "multi_agent": "multi-agent/pipeline-2agents.yaml",
+  "assert": {
+    "agent_order": ["analyst", "coder"],
+    "needle_in_file": { "path": "src/Calc.kt", "regex": "a[[:space:]]*\\+[[:space:]]*b" },
+    "build_cmd": "kotlinc src/Calc.kt -include-runtime -d build/out.jar && java -jar build/out.jar",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": ["Did the analyst run before the coder, and did the coder implement Calc.add to return a + b so it builds and runs?"]
+  }
+}

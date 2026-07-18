@@ -1,0 +1,21 @@
+{
+  "id": "locate-root-cause",
+  "mode": "PLAN",
+  "description": "PLAN-mode: diagnose why a request effectively never times out and point at the responsible file and declaration without fixing it.",
+  "category": "analysis",
+  "max_iterations": 25,
+  "fixture": "fixtures/locate-cause",
+  "prompt_file": "prompts/locate-cause.md",
+  "assert": {
+    "needle_in_output": { "regex": "Config|requestTimeout" },
+    "file_unchanged": [
+      "src/Config.kt",
+      "src/TimeoutService.kt",
+      "src/RequestHandler.kt"
+    ],
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": ["Does the diagnosis point at Config.requestTimeout (milliseconds treated as seconds) as the root cause, without editing any file?"]
+  }
+}

@@ -22,7 +22,7 @@ private val logger = dualLogger("InvokeSubagentTool")
 
 // Mirrors TurnSubagentValidator(maxSubagentDepth = 3): the turn loop enforces this ceiling when a
 // subagent turn starts; InvokeSubagentTool checks it first so an over-deep call fails BEFORE spawn
-// (docs/0063 §5.1 — defense in depth; a spawn-then-fail still pays the allocation).
+// (defense in depth; a spawn-then-fail still pays the allocation).
 private const val MAX_SUBAGENT_DEPTH = 3
 
 class InvokeSubagentTool(
@@ -94,7 +94,12 @@ class InvokeSubagentTool(
         val contextRefs = parseContextRefs(params["context_refs"])
         val childDepth = parentDepth + 1
 
-        // docs/0063 §5.1 — refuse a spawn that would breach the nesting ceiling before allocating
+        // Fresh instance id isolates this subagent's chat history from the parent and from sibling
+        // subagents. The turn loop tags every row it writes with this id; the prompt builder then
+        // loads only matching rows, so the subagent's intermediate steps never reach the parent.
+        val agentInstanceId = java.util.UUID.randomUUID().toString()
+
+        // Refuse a spawn that would breach the nesting ceiling before allocating
         // the child turn. Reported as a clean ToolResult.error, consistent with the recursion guard
         // above (the turn-loop TurnSubagentValidator remains the backstop).
         if (childDepth > MAX_SUBAGENT_DEPTH) {
@@ -126,6 +131,7 @@ class InvokeSubagentTool(
                 maxIterationsOverride = definition.maxSteps,
                 reasoningEffort = definition.reasoningEffort,
                 parentRunId = parentRunId,
+                agentInstanceId = agentInstanceId,
                 depth = childDepth,
                 // Keep only ancestors in the chain. The active subagent name is
                 // stored separately in subagentName and validated against ancestors.

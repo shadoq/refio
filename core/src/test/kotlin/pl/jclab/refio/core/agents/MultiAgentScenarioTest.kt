@@ -97,6 +97,10 @@ class MultiAgentScenarioTest {
 
                 runner.run("s1", specs, fake.executor)
 
+                // Persistence is async (emit queues saves onto Dispatchers.IO);
+                // drain the queue before reading so the assertions are deterministic.
+                eventBus.flushPersistence()
+
                 // Recover events from DB
                 val loaded = eventBus.loadPersistedEvents("s1")
                 assertTrue(loaded.size >= 6, "Expected at least 6 events (3 started + 3 completed), got ${loaded.size}")
@@ -403,6 +407,10 @@ class MultiAgentScenarioTest {
                 )
 
                 runner.run("s1", specs, fake.executor)
+
+                // Persistence is async (emit queues saves onto Dispatchers.IO);
+                // drain the queue before reading so the assertions are deterministic.
+                eventBus.flushPersistence()
 
                 val originalEvents = collector.events.toList()
 

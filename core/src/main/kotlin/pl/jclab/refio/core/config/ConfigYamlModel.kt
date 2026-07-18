@@ -8,7 +8,10 @@ data class GeneralConfig(
     val formatMarkdown: Boolean? = null,
     val streamingEnabled: Boolean? = null,
     val advancedView: Boolean? = null,
+    // Legacy boolean, kept for backward compatibility with older config.yaml files.
+    // Superseded by [reasoningEffort]; mapped on import when reasoningEffort is absent.
     val thinkingEnabled: Boolean? = null,
+    val reasoningEffort: String? = null,
     val noEgressEnabled: Boolean? = null,
     val executionMode: String? = null,
     val nativeToolsMode: String? = null
@@ -105,6 +108,18 @@ data class LimitsConfig(
     val maxContextSize: Int? = null,
     val maxOutputSize: Int? = null,
     val maxFileSize: Int? = null
+)
+
+/**
+ * Deterministic post-turn verification (project build/test run by the agent loop after a
+ * file-writing AGENT turn completes). Typically set in the project config
+ * (`<project>/.refio/config.yaml`) since the command is project-specific.
+ */
+@Serializable
+data class VerifyConfig(
+    val enabled: Boolean? = null,
+    val command: String? = null,
+    val maxRepairRounds: Int? = null
 )
 
 @Serializable

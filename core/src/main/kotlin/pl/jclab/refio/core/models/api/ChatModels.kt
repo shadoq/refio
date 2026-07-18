@@ -42,7 +42,9 @@ data class ChatRequest(
 data class ChatCosts(
     val tokensIn: Int,
     val tokensOut: Int,
-    val usdEst: Double
+    val usdEst: Double,
+    // Cumulative cache-read input tokens for the task (subset of tokensIn), for UI display.
+    val cachedTokens: Int = 0
 )
 
 /**

@@ -140,7 +140,7 @@ class LLMClient(
         }
     }
     /**
-     * Send completion request to LLM provider (RFC 0032: Unified streaming).
+     * Send completion request to LLM provider (unified streaming).
      *
      * This is the SINGLE entry point for all LLM requests. Supports both streaming
      * and non-streaming modes with identical response handling.
@@ -153,7 +153,7 @@ class LLMClient(
      * @param temperature Sampling temperature
      * @param responseFormat Response format specification (OpenAI/OpenRouter only)
      * @param thinking Enable thinking mode (Anthropic Claude 3.5+ only)
-     * @param noEgressEnabled If true, blocks external network calls (US-006)
+     * @param noEgressEnabled If true, blocks external network calls
      * @param stream If true, streams response and calls onChunk callback
      * @param onChunk Callback for streaming chunks (only used when stream=true)
      * @param taskId For API logging
@@ -202,7 +202,7 @@ class LLMClient(
                     "response_format: $responseFormat thinking: $thinking noEgress: $noEgressEnabled"
         }
 
-        // US-006: No-egress enforcement
+        // No-egress enforcement
         // Known local providers are allowed only if their endpoint is actually local.
         // All other providers are blocked.
         if (noEgressEnabled) {
@@ -330,7 +330,7 @@ class LLMClient(
                 StreamGuardrails.defaults(wallClockMs)
             } else null
 
-            // Per-index accumulation of a streaming native tool call's arguments (docs/0064), so the
+            // Per-index accumulation of a streaming native tool call's arguments, so the
             // api StreamChunk can carry a ready-to-render ToolCallProgress snapshot. Scoped to this
             // single complete() call; the adapter remains the source of truth for the final calls.
             val toolArgsByIndex = linkedMapOf<Int, StringBuilder>()
@@ -468,7 +468,8 @@ class LLMClient(
                         id = taskId,
                         tokensIn = finalResponse.usage.inputTokens,
                         tokensOut = finalResponse.usage.outputTokens,
-                        costUsd = finalResponse.cost
+                        costUsd = finalResponse.cost,
+                        cachedTokens = finalResponse.usage.cachedInputTokens
                     )
                 } catch (e: Exception) {
                     logger.warn(e) { "[LLM_CLIENT] Failed to increment task metrics for $taskId" }
@@ -575,7 +576,9 @@ class LLMClient(
             provider = provider,
             model = model,
             inputTokens = usage.inputTokens,
-            outputTokens = usage.outputTokens
+            outputTokens = usage.outputTokens,
+            cachedInputTokens = usage.cachedInputTokens,
+            cacheWriteInputTokens = usage.cacheWriteInputTokens
         )
     }
 

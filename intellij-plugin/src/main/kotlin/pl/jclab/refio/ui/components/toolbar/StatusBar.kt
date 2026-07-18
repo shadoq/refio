@@ -13,6 +13,8 @@ import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 import pl.jclab.refio.ui.theme.ContextSectionColorPalette
 import pl.jclab.refio.ui.theme.LCATheme
+import com.intellij.ui.JBColor
+import com.intellij.ui.scale.JBUIScale
 import kotlinx.coroutines.*
 import java.awt.*
 import java.awt.event.ComponentAdapter
@@ -37,7 +39,7 @@ class ContextUsageBar : JPanel() {
     data class SectionInfo(val name: String, val tokens: Int, val percentage: Double, val color: Color)
     private var sections: List<SectionInfo> = emptyList()
 
-    private val colorBackground = Color(0xE0E0E0)
+    private val colorBackground = JBColor(Color(0xE0E0E0), Color(0x3C3F41))
 
     init {
         preferredSize = Dimension(140, 14)
@@ -73,8 +75,7 @@ class ContextUsageBar : JPanel() {
         val y = 1
 
         // Background (represents free/unused context)
-        val isDark = LCATheme.isDark
-        g2.color = if (isDark) Color(0x3C3F41) else colorBackground
+        g2.color = colorBackground
         g2.fillRoundRect(x, y, w, h, 6, 6)
 
         // Calculate used width based on overall percentage (relative to context limit)
@@ -107,10 +108,10 @@ class ContextUsageBar : JPanel() {
             // Fallback: single color based on percentage (when no section data)
             val fillWidth = (percentage / 100.0 * w).toInt().coerceAtLeast(4)
             g2.color = when {
-                percentage < 50 -> Color(0x4CAF50)   // Green
-                percentage < 75 -> Color(0xFFC107)   // Yellow
-                percentage < 90 -> Color(0xFF9800)   // Orange
-                else -> Color(0xF44336)              // Red
+                percentage < 50 -> JBColor(Color(0x2E7D32), Color(0x4CAF50))   // Green
+                percentage < 75 -> JBColor(Color(0xB88A00), Color(0xFFC107))   // Yellow
+                percentage < 90 -> JBColor(Color(0xC77700), Color(0xFF9800))   // Orange
+                else -> JBColor(Color(0xC62828), Color(0xF44336))              // Red
             }
             g2.fillRoundRect(x, y, fillWidth, h, 6, 6)
         }
@@ -122,7 +123,7 @@ class ContextUsageBar : JPanel() {
         // Percentage text inside bar if there's enough space
         if (w > 60) {
             g2.color = LCATheme.labelForeground
-            g2.font = Font("SansSerif", Font.BOLD, 9)
+            g2.font = font.deriveFont(Font.BOLD, JBUIScale.scale(9f))
             val text = "$percentage%"
             val fm = g2.fontMetrics
             val textX = x + (w - fm.stringWidth(text)) / 2
@@ -170,15 +171,21 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
     private val contextFillBar: ContextUsageBar
     private val contextPercentLabel: JBLabel
     private val requestsLabel: JBLabel     // "Req: sessionReq/globalReq"
-    private val tokensInLabel: JBLabel     // "⬇️ sessionIn/globalIn"
-    private val tokensOutLabel: JBLabel    // "⬆️ sessionOut/globalOut"
+    private val tokensInLabel: JBLabel     // "in sessionIn/globalIn"
+    private val cachedLabel: JBLabel       // "💾 sessionCached" (cache-read input tokens)
+    private val tokensOutLabel: JBLabel    // "out sessionOut/globalOut"
     private val costLabel: JBLabel         // "$sessionCost/$globalCost"
+
+    // Lowest-priority groups are hidden first when the bar does not fit the panel width.
+    private val hideableGroups: MutableList<List<JComponent>> = mutableListOf()
+    private val row1Panel: JPanel
 
     // State tracking
     private var sessionRequests = 0
     private var prevSessionTokensIn = 0
     private var sessionTokensIn = 0
     private var sessionTokensOut = 0
+    private var sessionCachedTokens = 0
     private var sessionCostUsd = 0.0
     private var globalRequests = 0L
     private var globalTokensIn = 0L
@@ -186,7 +193,7 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
     private var globalCostUsd = 0.0
 
     init {
-        val row1Panel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
+        row1Panel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
             coreHealthLabel = JBLabel("●").apply {
                 font = font.deriveFont(Font.BOLD, 16f)
                 foreground = LCATheme.errorColor
@@ -202,27 +209,42 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
             requestsLabel = JBLabel("Rq:0/0").apply {
                 toolTipText = "Requests: session / global"
             }
-            tokensInLabel = JBLabel("⬇️0/0").apply {
+            tokensInLabel = JBLabel("↓0/0").apply {
                 toolTipText = "Input tokens: session / global"
             }
-            tokensOutLabel = JBLabel("⬆️0/0").apply {
+            cachedLabel = JBLabel("").apply {
+                toolTipText = "Cache-read input tokens this session (subset of input)"
+                foreground = LCATheme.neutralColor
+            }
+            tokensOutLabel = JBLabel("↑0/0").apply {
                 toolTipText = "Output tokens: session / global"
             }
             costLabel = JBLabel("\$0/\$0").apply {
                 toolTipText = "Cost USD: session / global"
             }
 
+            val sep1 = createSeparator()
+            val sep2 = createSeparator()
+            val sep3 = createSeparator()
+
             add(coreHealthLabel)
             add(executionStatusLabel)
-            add(createSeparator())
+            add(sep1)
             add(contextFillBar)
             add(contextPercentLabel)
-            add(createSeparator())
+            add(sep2)
             add(requestsLabel)
             add(tokensInLabel)
+            add(cachedLabel)
             add(tokensOutLabel)
-            add(createSeparator())
+            add(sep3)
             add(costLabel)
+
+            // Hidden first when space runs out: cost, then requests, then the context
+            // token counts (the bar itself and core/execution status always stay).
+            hideableGroups.add(listOf(sep3, costLabel))
+            hideableGroups.add(listOf(requestsLabel))
+            hideableGroups.add(listOf(contextPercentLabel))
         }
 
         val mainPanel = JPanel().apply {
@@ -237,10 +259,25 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
 
         addComponentListener(object : ComponentAdapter() {
             override fun componentResized(e: ComponentEvent?) {
+                applyPriorityVisibility()
                 revalidate()
                 repaint()
             }
         })
+    }
+
+    /**
+     * Hide the lowest-priority groups when the single-row content does not fit
+     * the current width, so the row never wraps or clips important segments.
+     */
+    private fun applyPriorityVisibility() {
+        if (width <= 0) return
+        hideableGroups.flatten().forEach { it.isVisible = true }
+        var hiddenIndex = 0
+        while (row1Panel.preferredSize.width > width && hiddenIndex < hideableGroups.size) {
+            hideableGroups[hiddenIndex].forEach { it.isVisible = false }
+            hiddenIndex++
+        }
     }
 
     /**
@@ -275,13 +312,14 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
             sessionManager.activeSession.collect { session ->
                 SwingUtilities.invokeLater {
                     session?.let {
-                        updateSessionTokens(it.tokensIn, it.tokensOut)
+                        updateSessionTokens(it.tokensIn, it.tokensOut, it.cachedTokens)
                         updateSessionCost(it.costUsd)
                     } ?: run {
                         sessionRequests = 0
                         prevSessionTokensIn = 0
                         sessionTokensIn = 0
                         sessionTokensOut = 0
+                        sessionCachedTokens = 0
                         sessionCostUsd = 0.0
                         contextFillBar.percentage = 0
                         contextFillBar.currentTokens = 0
@@ -407,13 +445,14 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
         refreshCombinedLabels()
     }
 
-    private fun updateSessionTokens(tokensIn: Int, tokensOut: Int) {
+    private fun updateSessionTokens(tokensIn: Int, tokensOut: Int, cachedTokens: Int = 0) {
         if (tokensIn > prevSessionTokensIn) {
             sessionRequests++
             prevSessionTokensIn = tokensIn
         }
         sessionTokensIn = tokensIn
         sessionTokensOut = tokensOut
+        sessionCachedTokens = cachedTokens
         refreshCombinedLabels()
     }
 
@@ -440,10 +479,14 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
         requestsLabel.text = "Rq:$sessionRequests/${formatLargeNumber(globalRequests)}"
         requestsLabel.toolTipText = "Requests: $sessionRequests session / $globalRequests global"
 
-        tokensInLabel.text = "⬇️${formatLargeNumber(sessionTokensIn.toLong())}/${formatLargeNumber(globalTokensIn)}"
+        tokensInLabel.text = "↓${formatLargeNumber(sessionTokensIn.toLong())}/${formatLargeNumber(globalTokensIn)}"
         tokensInLabel.toolTipText = "Input tokens: $sessionTokensIn session / $globalTokensIn global"
 
-        tokensOutLabel.text = "⬆️${formatLargeNumber(sessionTokensOut.toLong())}/${formatLargeNumber(globalTokensOut)}"
+        cachedLabel.text = if (sessionCachedTokens > 0) "💾${formatLargeNumber(sessionCachedTokens.toLong())}" else ""
+        cachedLabel.toolTipText = "Cache-read input tokens this session: $sessionCachedTokens (of $sessionTokensIn input)"
+        cachedLabel.repaint()
+
+        tokensOutLabel.text = "↑${formatLargeNumber(sessionTokensOut.toLong())}/${formatLargeNumber(globalTokensOut)}"
         tokensOutLabel.toolTipText = "Output tokens: $sessionTokensOut session / $globalTokensOut global"
 
         val sessionCostStr = formatCostShort(sessionCostUsd)
@@ -496,12 +539,6 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
             totalTokens = totalInputTokens + totalOutputTokens,
             costUsd = totalCostUsd
         )
-    }
-
-    @Suppress("UNUSED_PARAMETER")
-    fun setAdvancedViewEnabled(_enabled: Boolean) {
-        // Single-row layout - no advanced view
-        logger.debug { "Advanced view toggle ignored (single-row layout)" }
     }
 
     fun dispose() {

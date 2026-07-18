@@ -236,8 +236,9 @@ class SubagentRegistry(
             else -> throw IllegalArgumentException("Invalid scope")
         }
 
+        validateName(definition.name)
         Files.createDirectories(targetDir)
-        val targetFile = targetDir.resolve("${definition.name}.md")
+        val targetFile = resolveInside(targetDir, "${definition.name}.md")
 
         if (targetFile.exists()) {
             throw SubagentAlreadyExistsException("Subagent already exists: ${definition.name}")
@@ -265,6 +266,7 @@ class SubagentRegistry(
         val sourcePath = definition.sourcePath
             ?: throw IllegalArgumentException("Cannot update subagent without source path")
 
+        validateStoredPath(sourcePath, definition.scope)
         if (!sourcePath.exists()) {
             throw SubagentNotFoundException("Subagent file not found: $sourcePath")
         }
@@ -305,6 +307,7 @@ class SubagentRegistry(
         val sourcePath = definition.sourcePath
             ?: throw IllegalArgumentException("Cannot delete subagent without source path")
 
+        validateStoredPath(sourcePath, definition.scope)
         val deleted = Files.deleteIfExists(sourcePath)
         if (deleted) {
             val targetMap = when (definition.scope) {
@@ -323,6 +326,34 @@ class SubagentRegistry(
     /**
      * Buduje zawartość pliku .md dla subagenta.
      */
+    private fun validateName(name: String) {
+        require(name.matches(Regex("^[a-z0-9]+(?:-[a-z0-9]+)*$"))) {
+            "Invalid subagent name: $name"
+        }
+    }
+
+    private fun resolveInside(directory: Path, fileName: String): Path {
+        val normalizedDirectory = directory.toAbsolutePath().normalize()
+        val resolved = normalizedDirectory.resolve(fileName).normalize()
+        require(resolved.startsWith(normalizedDirectory)) { "Subagent path escapes registry directory" }
+        return resolved
+    }
+
+    private fun validateStoredPath(path: Path, scope: SubagentScope) {
+        val directory = when (scope) {
+            SubagentScope.PROJECT -> projectAgentsDir
+            SubagentScope.USER -> userAgentsDir
+            else -> throw IllegalArgumentException("Scope $scope does not have a writable registry directory")
+        }.toAbsolutePath().normalize()
+        val normalized = path.toAbsolutePath().normalize()
+        require(normalized.startsWith(directory)) { "Subagent path escapes registry directory" }
+        if (normalized.exists()) {
+            require(normalized.toRealPath().startsWith(directory.toRealPath())) {
+                "Subagent path escapes registry directory through a symbolic link"
+            }
+        }
+    }
+
     private fun buildSubagentFileContent(definition: SubagentDefinition): String {
         val sb = StringBuilder()
         sb.appendLine("---")

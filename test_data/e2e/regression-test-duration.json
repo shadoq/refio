@@ -1,0 +1,17 @@
+{
+  "id": "regression-test-duration",
+  "mode": "AGENT",
+  "description": "Add a failing regression test for parse_duration of 1h30m in a new file, then fix dates.py so all duration tests pass.",
+  "category": "bugfix",
+  "max_iterations": 30,
+  "fixture": "fixtures/py-duration",
+  "prompt_file": "prompts/regression-test-duration.md",
+  "assert": {
+    "tool_order": ["read_file", "advance_code_editing"],
+    "needle_in_file": { "path": "test_regression.py", "regex": "1h30m" },
+    "file_unchanged": ["test_dates.py"],
+    "build_cmd": "python3 -m unittest discover -s . -p \"test_*.py\" -v",
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["A new test_regression.py covers the 1h30m case and the bug is fixed at the root cause in src/dates.py (minutes no longer dropped when hours are present); the existing test file is untouched."]
+}

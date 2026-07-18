@@ -20,14 +20,29 @@ internal object ToolCallContentNormalizer {
         private val callsByIndex = linkedMapOf<Int, CallBuffer>()
 
         /**
-         * Consume one streaming `delta` and return the per-call increments observed in it
-         * (docs/0064), so the adapter can surface progressive tool-call building via
+         * Consume one streaming `delta` and return the per-call increments observed in it,
+         * so the adapter can surface progressive tool-call building via
          * [StreamChunk.toolCallDelta]. The accumulator remains the source of truth for the final
          * [toNativeToolCalls]; the returned list is purely for live progress.
          */
         fun consumeDelta(delta: Map<String, Any?>?): List<NativeToolCallDelta> {
             if (delta == null) return emptyList()
             return consumeToolCalls(delta["tool_calls"])
+        }
+
+        /**
+         * JsonObject variant of [consumeDelta] used by the SSE loop, which parses each
+         * stream line into a Gson tree instead of nested Maps. Only the `tool_calls`
+         * subtree (rare in a content stream) is converted to the Map shape the
+         * accumulator understands.
+         */
+        fun consumeDelta(delta: com.google.gson.JsonObject?): List<NativeToolCallDelta> {
+            val toolCalls = delta?.get("tool_calls") ?: return emptyList()
+            if (toolCalls.isJsonNull) return emptyList()
+            @Suppress("UNCHECKED_CAST")
+            val asMaps = gson.fromJson(toolCalls, List::class.java) as? List<Map<String, Any?>>
+                ?: return emptyList()
+            return consumeToolCalls(asMaps)
         }
 
         fun consumeToolCalls(rawToolCalls: Any?): List<NativeToolCallDelta> {

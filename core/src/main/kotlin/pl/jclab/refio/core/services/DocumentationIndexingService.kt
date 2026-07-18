@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.services
 
 import pl.jclab.refio.core.db.*
+import pl.jclab.refio.core.db.repositories.ChunkInsert
 import pl.jclab.refio.core.db.repositories.DocumentationRepository
 import pl.jclab.refio.core.db.repositories.RagRepository
 import pl.jclab.refio.core.logging.dualLogger
@@ -186,17 +187,18 @@ class DocumentationIndexingService(
                         CHUNK_OVERLAP_TOKENS
                     )
 
-                    // Create chunks
-                    chunks.forEachIndexed { index, chunk ->
-                        ragRepository.createChunk(
-                            fileId = fileId,
-                            chunkIndex = index,
-                            content = chunk.content,
-                            startLine = chunk.startLine,
-                            endLine = chunk.endLine
-                        )
-                        chunksCreated++
-                    }
+                    // Create chunks in one batched insert (one writer-lock acquisition)
+                    chunksCreated += ragRepository.createChunksBatch(
+                        chunks.mapIndexed { index, chunk ->
+                            ChunkInsert(
+                                fileId = fileId,
+                                chunkIndex = index,
+                                content = chunk.content,
+                                startLine = chunk.startLine,
+                                endLine = chunk.endLine
+                            )
+                        }
+                    )
 
                     pagesIndexed++
 
@@ -332,17 +334,18 @@ class DocumentationIndexingService(
             CHUNK_OVERLAP_TOKENS
         )
 
-        var chunksCreated = 0
-        chunks.forEachIndexed { index, chunk ->
-            ragRepository.createChunk(
-                fileId = fileId,
-                chunkIndex = index,
-                content = chunk.content,
-                startLine = chunk.startLine,
-                endLine = chunk.endLine
-            )
-            chunksCreated++
-        }
+        // Create chunks in one batched insert (one writer-lock acquisition)
+        val chunksCreated = ragRepository.createChunksBatch(
+            chunks.mapIndexed { index, chunk ->
+                ChunkInsert(
+                    fileId = fileId,
+                    chunkIndex = index,
+                    content = chunk.content,
+                    startLine = chunk.startLine,
+                    endLine = chunk.endLine
+                )
+            }
+        )
 
         val fileName = path.fileName?.toString() ?: filePath
         documentationRepository.updateDocSource(

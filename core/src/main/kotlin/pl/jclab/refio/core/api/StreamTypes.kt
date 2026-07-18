@@ -1,7 +1,7 @@
 package pl.jclab.refio.core.api
 
 /**
- * Callback-based streaming types for unified API (RFC 0032).
+ * Callback-based streaming types for unified API.
  *
  * Design Philosophy:
  * - Streaming is a PRESENTATION mechanism, not an API change
@@ -34,7 +34,7 @@ data class StreamChunk(
     val usage: pl.jclab.refio.core.llm.LLMUsage? = null,
     val cost: Double = 0.0,
     /**
-     * Present only while the model is streaming a NATIVE tool call's arguments (docs/0064).
+     * Present only while the model is streaming a NATIVE tool call's arguments.
      * On such a chunk [delta] is typically empty — the model is emitting a structured tool call,
      * not text. Consumers use this to render a progressive "building <tool>(<args>)" indicator.
      */

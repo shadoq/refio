@@ -1,7 +1,9 @@
 package pl.jclab.refio.ui.components.logs
 
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.Gray
+import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
@@ -12,8 +14,8 @@ import kotlinx.coroutines.*
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
-import java.awt.Dialog
 import java.awt.Dimension
+import java.awt.event.ActionEvent
 import java.awt.Font
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -121,47 +123,7 @@ class LogsPanel(private val project: Project) : JBPanel<LogsPanel>(BorderLayout(
      * Show dialog with full message content
      */
     private fun showMessageDialog(entry: LogEntry) {
-        val dialog = JDialog(SwingUtilities.getWindowAncestor(this), "Log Entry Details", Dialog.ModalityType.APPLICATION_MODAL)
-        dialog.defaultCloseOperation = JDialog.DISPOSE_ON_CLOSE
-
-        val textArea = JTextArea().apply {
-            text = buildString {
-                appendLine("Time: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(Date(entry.timestamp))}")
-                appendLine("Level: ${entry.level}")
-                appendLine("Component: ${entry.component}")
-                appendLine()
-                appendLine("Message:")
-                appendLine(entry.message)
-            }
-            isEditable = false
-            lineWrap = true
-            wrapStyleWord = true
-            font = Font("Monospaced", Font.PLAIN, 12)
-            caretPosition = 0
-        }
-
-        val scrollPane = JScrollPane(textArea)
-        scrollPane.preferredSize = Dimension(800, 400)
-
-        val buttonPanel = JPanel(BorderLayout()).apply {
-            add(JButton("Copy Message").apply {
-                addActionListener {
-                    val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-                    clipboard.setContents(StringSelection(entry.message), null)
-                }
-            }, BorderLayout.WEST)
-
-            add(JButton("Close").apply {
-                addActionListener { dialog.dispose() }
-            }, BorderLayout.EAST)
-        }
-
-        dialog.layout = BorderLayout()
-        dialog.add(scrollPane, BorderLayout.CENTER)
-        dialog.add(buttonPanel, BorderLayout.SOUTH)
-        dialog.pack()
-        dialog.setLocationRelativeTo(this)
-        dialog.isVisible = true
+        LogEntryDetailsDialog(project, entry).show()
     }
 
     private fun refreshTable(entries: List<LogEntry>) {
@@ -186,12 +148,67 @@ class LogsPanel(private val project: Project) : JBPanel<LogsPanel>(BorderLayout(
                 appendLine(entry.message)
             }
         }
+        // Logs can carry HTTP details - never export secrets via the clipboard
         val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-        clipboard.setContents(StringSelection(content), null)
+        clipboard.setContents(StringSelection(pl.jclab.refio.core.security.SecureLogger.redact(content)), null)
     }
 
     fun dispose() {
         cs.cancel()
+    }
+}
+
+/**
+ * Detail dialog for a single log entry. Uses DialogWrapper for proper modality,
+ * parenting and ESC handling.
+ */
+private class LogEntryDetailsDialog(
+    project: Project,
+    private val entry: LogEntry
+) : DialogWrapper(project) {
+
+    init {
+        title = "Log Entry Details"
+        init()
+    }
+
+    override fun createCenterPanel(): JComponent {
+        val textArea = JTextArea().apply {
+            text = buildString {
+                appendLine("Time: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(Date(entry.timestamp))}")
+                appendLine("Level: ${entry.level}")
+                appendLine("Component: ${entry.component}")
+                appendLine()
+                appendLine("Message:")
+                appendLine(entry.message)
+            }
+            isEditable = false
+            lineWrap = true
+            wrapStyleWord = true
+            font = Font("Monospaced", Font.PLAIN, 12)
+            caretPosition = 0
+        }
+        return JBScrollPane(textArea).apply {
+            preferredSize = Dimension(800, 400)
+        }
+    }
+
+    override fun createLeftSideActions(): Array<Action> {
+        val copyAction = object : AbstractAction("Copy Message") {
+            override fun actionPerformed(e: ActionEvent?) {
+                val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+                clipboard.setContents(
+                    StringSelection(pl.jclab.refio.core.security.SecureLogger.redact(entry.message)),
+                    null
+                )
+            }
+        }
+        return arrayOf(copyAction)
+    }
+
+    override fun createActions(): Array<Action> {
+        okAction.putValue(Action.NAME, "Close")
+        return arrayOf(okAction)
     }
 }
 
@@ -203,9 +220,53 @@ private class LogTableModel : AbstractTableModel() {
 
     private val columnNames = arrayOf("Time", "Level", "Component", "Message")
 
+    /**
+     * Apply the latest log snapshot incrementally so the table keeps selection/scroll
+     * and does not thrash. The underlying buffer only appends at the tail and drops the
+     * oldest prefix once capped, so a change is expressed as a front deletion plus a tail
+     * insertion. Anything that does not fit that shape (clear/replace) falls back to a
+     * full reset.
+     */
     fun updateEntries(newEntries: List<LogEntry>) {
+        val old = entries
+        if (old == newEntries) return
+
+        val dropped = computeDroppedPrefix(old, newEntries)
+        if (dropped < 0) {
+            entries = newEntries
+            fireTableDataChanged()
+            return
+        }
+
+        val retained = old.size - dropped
+        if (dropped > 0) {
+            entries = old.subList(dropped, old.size).toList()
+            fireTableRowsDeleted(0, dropped - 1)
+        }
         entries = newEntries
-        fireTableDataChanged()
+        if (newEntries.size > retained) {
+            fireTableRowsInserted(retained, newEntries.size - 1)
+        }
+    }
+
+    /**
+     * Returns how many leading rows were dropped if [new] equals [old] with a front prefix
+     * removed and a tail appended, otherwise -1 (not a clean append/drop transition).
+     */
+    private fun computeDroppedPrefix(old: List<LogEntry>, new: List<LogEntry>): Int {
+        for (dropped in 0..old.size) {
+            val retained = old.size - dropped
+            if (retained > new.size) continue
+            var match = true
+            for (i in 0 until retained) {
+                if (old[dropped + i] != new[i]) {
+                    match = false
+                    break
+                }
+            }
+            if (match) return dropped
+        }
+        return -1
     }
 
     fun getEntry(row: Int): LogEntry = entries[row]
@@ -245,11 +306,11 @@ private class LogCellRenderer : DefaultTableCellRenderer() {
         // Color code log levels
         if (!isSelected && column == 1 && value is LogLevel) {
             component.foreground = when (value) {
-                LogLevel.DEBUG -> Gray._164  // Gray
-                LogLevel.INFO -> Color(164, 255, 164)       // Green
-                LogLevel.WARN -> Color(255, 165, 164)     // Orange
-                LogLevel.ERROR -> Color(255, 164, 164)      // Red
-                LogLevel.HTTP -> Color(164, 164, 255)       // Blue
+                LogLevel.DEBUG -> JBColor(Gray._110, Gray._164)  // Gray
+                LogLevel.INFO -> JBColor(Color(0, 128, 0), Color(164, 255, 164))       // Green
+                LogLevel.WARN -> JBColor(Color(160, 90, 0), Color(255, 165, 164))      // Orange
+                LogLevel.ERROR -> JBColor(Color(178, 34, 34), Color(255, 164, 164))    // Red
+                LogLevel.HTTP -> JBColor(Color(0, 0, 200), Color(164, 164, 255))       // Blue
             }
         }
 
@@ -257,7 +318,13 @@ private class LogCellRenderer : DefaultTableCellRenderer() {
         if (column == 3 && value != null) {
             val message = value.toString()
             toolTipText = if (message.length > 50) {
-                "<html>${message.replace("\n", "<br>")}</html>"
+                val escaped = message
+                    .replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                    .replace("\"", "&quot;")
+                    .replace("'", "&#39;")
+                "<html>${escaped.replace("\n", "<br>")}</html>"
             } else {
                 null
             }

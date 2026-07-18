@@ -207,7 +207,7 @@
 
 - **ProcessManager.kt** — Manages long-running background processes; `start(command, workingDir)` returns `ManagedProcess` with `processId`; `readOutput()` non-blocking line reader; `stop()` forcibly destroys; cross-platform shell wrapping (cmd.exe/sh).
 - **AgentExecutor.kt** — Orchestrates step-by-step execution: planning → execution → summarization with subtask lifecycle management.
-- **AgentTurnLoop.kt** — Self-directing tool loop for PLAN/AGENT modes (~988 LOC); delegates to `turn/` sub-components for LLM calls, prompt building, tool execution, response processing, guardrails.
+- **AgentTurnLoop.kt** - Thin facade (~354 LOC) for the self-directing PLAN/AGENT tool loop; keeps the `runTurn` / `continueTurn` / `turnState` / `lastPromptSnapshot` surface byte-stable and delegates the loop body to `turn/TurnExecutor.kt`.
 - **TurnLoopConfig.kt** — Configuration for AgentTurnLoop with factory methods for PLAN (25 iterations) and AGENT (50 iterations) presets; includes auto-compaction thresholds, parallel tools, snapshots, retry config, working memory, read-only budget guard (ADR-0044).
 - **ChatService.kt** — Chat interactions with auto-optimization (conversation summarization on token threshold); builds project context via ContextService.
 - **PlanningService.kt** — Creates execution plans from LLM JSON; validates tools per mode, respects permissions, stores tool_args as suggestions.
@@ -241,6 +241,7 @@
 
 ## `core/services/turn/` — AgentTurnLoop Sub-Components
 
+- **TurnExecutor.kt** - Holds the actual PLAN/AGENT turn loop (`executeTurnLoop` plus its loop-only helpers and the two UI-observed StateFlows), extracted verbatim from `AgentTurnLoop` so the hottest file stays a thin facade; orchestrates the other `turn/` sub-components on each iteration.
 - **TurnPromptBuilder.kt** — Builds system and user prompts for each turn; assembles context, tools, working memory.
 - **TurnToolExecutor.kt** — Executes tool calls from LLM responses; parallel execution for read-only tools.
 - **ToolCallParser.kt** — Parses tool call JSON from LLM responses; handles multiple formats and streaming accumulation.
@@ -303,9 +304,8 @@
 - **AgentSpec.kt** — Data classes for agent specifications (`AgentSpec` with name, task, dependencies, mode, model) and execution results (`AgentResult` with metrics).
 - **MultiAgentRunner.kt** — Orchestrates parallel agent execution with DFS cycle detection in dependency graph; `supervisorScope` coroutines, `MutableStateFlow` for dependency wait.
 - **MultiAgentTaskParser.kt** — Parses YAML multi-agent task definitions into `AgentSpec` objects via Kaml deserialization.
-- **AgentEvent.kt** — Sealed interface with 12 event subtypes: lifecycle (Started/Completed/Failed), data (Request/Response), coordination (Artifact/Spawn), approval, progress.
+- **AgentEvent.kt** - Sealed interface with 14 event subtypes: lifecycle (Started/Completed/Failed), data exchange (Request/Response), approval, progress/stream, and per-turn trace events (TurnStarted/Ended, LLMCallCompleted, ToolCalled, StreamAborted).
 - **AgentEventBus.kt** — Central event bus via `MutableSharedFlow` (200 replay buffer, DROP_OLDEST); optional persistence via repository; filtered subscriptions.
-- **AgentEventHandler.kt** — Per-agent event handler for DataRequest/Response and Approval with `CompletableDeferred` suspension and timeout auto-approval.
 
 ## `core/subagents/` — Subagent System
 

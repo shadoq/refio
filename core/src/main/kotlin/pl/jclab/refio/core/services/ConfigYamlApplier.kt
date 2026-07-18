@@ -90,7 +90,10 @@ class ConfigYamlApplier(
             applyKey(ConfigKeys.FORMAT_MARKDOWN.key, g.formatMarkdown?.toString(), "format markdown")
             applyKey(ConfigKeys.STREAMING_ENABLED.key, g.streamingEnabled?.toString(), "streaming enabled")
             applyKey(ConfigKeys.ADVANCED_VIEW.key, g.advancedView?.toString(), "advanced view")
-            applyKey(ConfigKeys.GENERAL_THINKING_ENABLED.key, g.thinkingEnabled?.toString(), "thinking enabled")
+            // Prefer the new enum; fall back to the legacy boolean for old config.yaml files.
+            val reasoningEffort = g.reasoningEffort
+                ?: g.thinkingEnabled?.let { if (it) "MEDIUM" else "OFF" }
+            applyKey(ConfigKeys.GENERAL_REASONING_EFFORT.key, reasoningEffort, "reasoning effort")
             applyKey(ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key, g.noEgressEnabled?.toString(), "no egress enabled")
             applyKey(ConfigKeys.GENERAL_EXECUTION_MODE.key, g.executionMode, "execution mode")
             applyKey(ConfigKeys.NATIVE_TOOLS_MODE.key, g.nativeToolsMode, "native tools mode")

@@ -54,16 +54,20 @@ class RefioContentPanel(
     private val statusBar: StatusBar
 
     private val stepsQueueView: StepsQueueView
-    private val contextPanel: ContextPanel
-    private val logsPanel: LogsPanel
-    private val debugPanel: DebugPanel
-    private val apiLogsPanel: ApiLogsPanel
+    // Advanced tabs are created lazily on first entry into their tab (see LazyTab).
+    // Fields stay null until instantiated, so dispose() must null-check each one.
+    private var contextPanel: ContextPanel? = null
+    private var logsPanel: LogsPanel? = null
+    private var debugPanel: DebugPanel? = null
+    private var apiLogsPanel: ApiLogsPanel? = null
     private val historyPanel: HistoryPanel
-    private val ragViewPanel: RagViewPanel
+    private var ragViewPanel: RagViewPanel? = null
 
     private val turnStateStatusBar: TurnStateStatusBar
 
     private val tabbedPane: JTabbedPane
+    private val baseTabs: List<Pair<String, java.awt.Component>>
+    private val advancedTabs: List<Pair<String, java.awt.Component>>
     private val middlePanel: JPanel
     private val cardLayout: CardLayout
     private val agentExecutionPanel: pl.jclab.refio.ui.components.agents.AgentExecutionPanel
@@ -104,15 +108,12 @@ class RefioContentPanel(
         }
         statusBar = StatusBar(project)
         stepsQueueView = StepsQueueView(project)
-        contextPanel = ContextPanel(project)
-        logsPanel = LogsPanel(project)
-        debugPanel = DebugPanel(project)
-        apiLogsPanel = ApiLogsPanel(coreApiClient, autoLoadOnInit = false)
         historyPanel = HistoryPanel(project, autoLoadOnInit = false)
-        ragViewPanel = RagViewPanel(project)
+        // turnStateStatusBar and agentExecutionPanel stay eager: both are updated by
+        // session collectors below (turn-state stream / agent-event subscription) before
+        // their tab is ever shown, so they must exist up front.
         turnStateStatusBar = TurnStateStatusBar()
         agentExecutionPanel = pl.jclab.refio.ui.components.agents.AgentExecutionPanel()
-        debugPanel.agentTraceProvider = { agentExecutionPanel.toText() }
 
         cs.launch {
             var turnStateJob: kotlinx.coroutines.Job? = null
@@ -150,19 +151,34 @@ class RefioContentPanel(
             add(stepsQueueView, BorderLayout.CENTER)
         }
 
-        tabbedPane = JTabbedPane().apply {
-            addTab("Chat", chatPanel)
-            addTab("Execution", stepsPanel)
-            addTab("Context", contextPanel)
-            addTab("Agents", agentExecutionPanel)
-            addTab("RAG", ragViewPanel)
-            addTab("Debug", debugPanel)
-            addTab("Logs", logsPanel)
-            addTab("API", apiLogsPanel)
-            addChangeListener {
-                if (selectedIndex >= 0 && getComponentAt(selectedIndex) === apiLogsPanel) {
-                    apiLogsPanel.ensureLoaded()
+        baseTabs = listOf(
+            "Chat" to chatPanel,
+            "Execution" to stepsPanel
+        )
+        // Each heavy advanced panel is wrapped in a LazyTab and only built the first time
+        // its tab is entered. agentExecutionPanel is added directly because it must stay eager.
+        advancedTabs = listOf(
+            "Context" to LazyTab({ ContextPanel(project).also { contextPanel = it } }),
+            "Agents" to agentExecutionPanel,
+            "RAG" to LazyTab({ RagViewPanel(project).also { ragViewPanel = it } }),
+            "Debug" to LazyTab({
+                DebugPanel(project).also {
+                    debugPanel = it
+                    it.agentTraceProvider = { agentExecutionPanel.toText() }
                 }
+            }),
+            "Logs" to LazyTab({ LogsPanel(project).also { logsPanel = it } }),
+            "API" to LazyTab(
+                create = { ApiLogsPanel(coreApiClient, autoLoadOnInit = false).also { apiLogsPanel = it } },
+                onShow = { apiLogsPanel?.ensureLoaded() }
+            )
+        )
+
+        tabbedPane = JTabbedPane().apply {
+            (baseTabs + advancedTabs).forEach { (title, component) -> addTab(title, component) }
+            addChangeListener {
+                val selected = if (selectedIndex >= 0) getComponentAt(selectedIndex) else null
+                (selected as? LazyTab)?.ensureShown()
             }
         }
 
@@ -334,27 +350,17 @@ class RefioContentPanel(
         logger.info { "Setting advanced view: $enabled" }
 
         javax.swing.SwingUtilities.invokeLater {
-            if (enabled) {
-                if (tabbedPane.tabCount == 1) {
-                    tabbedPane.addTab("Steps", stepsQueueView)
-                    tabbedPane.addTab("Context", contextPanel)
-                    tabbedPane.addTab("RAG", ragViewPanel)
-                    tabbedPane.addTab("Logs", logsPanel)
-                    tabbedPane.addTab("Debug", debugPanel)
-                    tabbedPane.addTab("API Logs", apiLogsPanel)
-                }
-                tabbedPane.tabPlacement = JTabbedPane.TOP
-            } else {
-                while (tabbedPane.tabCount > 1) {
-                    tabbedPane.removeTabAt(1)
-                }
-                tabbedPane.selectedIndex = 0
+            val desiredTabs = if (enabled) baseTabs + advancedTabs else baseTabs
+            val currentTitles = (0 until tabbedPane.tabCount).map { tabbedPane.getTitleAt(it) }
+            if (currentTitles != desiredTabs.map { it.first }) {
+                val selectedComponent = tabbedPane.selectedComponent
+                tabbedPane.removeAll()
+                desiredTabs.forEach { (title, component) -> tabbedPane.addTab(title, component) }
+                val restoredIndex = desiredTabs.indexOfFirst { it.second === selectedComponent }
+                tabbedPane.selectedIndex = if (restoredIndex >= 0) restoredIndex else 0
+                tabbedPane.revalidate()
+                tabbedPane.repaint()
             }
-
-            statusBar.setAdvancedViewEnabled(enabled)
-
-            tabbedPane.revalidate()
-            tabbedPane.repaint()
         }
     }
 
@@ -365,12 +371,42 @@ class RefioContentPanel(
         historyPanel.removePropertyChangeListener("sessionLoaded", historySessionLoadedListener)
         historyPanel.removePropertyChangeListener("backToChat", historyBackToChatListener)
         settingsView?.removePropertyChangeListener("advancedViewChanged", advancedViewChangedListener)
+        settingsView?.dispose()
         chatView.dispose()
         stepsQueueView.dispose()
-        contextPanel.dispose()
+        // Lazy advanced panels: dispose only the ones actually instantiated.
+        contextPanel?.dispose()
         promptInputPanel.dispose()
         statusBar.dispose()
-        logsPanel.dispose()
-        debugPanel.dispose()
+        logsPanel?.dispose()
+        debugPanel?.dispose()
+    }
+
+    /**
+     * A lightweight tab placeholder that builds its real content the first time the tab is
+     * shown, then caches it. Keeps tool-window startup cheap by deferring heavy panel creation.
+     */
+    private inner class LazyTab(
+        private val create: () -> java.awt.Component,
+        private val onShow: (() -> Unit)? = null
+    ) : JPanel(BorderLayout()) {
+
+        private var component: java.awt.Component? = null
+
+        init {
+            background = LCATheme.backgroundColor
+            isOpaque = true
+        }
+
+        fun ensureShown() {
+            if (component == null) {
+                val created = create()
+                component = created
+                add(created, BorderLayout.CENTER)
+                revalidate()
+                repaint()
+            }
+            onShow?.invoke()
+        }
     }
 }

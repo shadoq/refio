@@ -32,7 +32,9 @@ object CommandRuleDefaults {
 
         // Destructive git operations
         CommandRule("^git\\s+reset\\s+--hard", RuleAction.BLOCK, "Git hard reset"),
-        CommandRule("^git\\s+clean\\s+-f", RuleAction.BLOCK, "Git force clean"),
+        // Force-clean deletes untracked files. Block it in any flag order/grouping
+        // (-fdx, -xfd, -d -x -f, --force) while leaving non-destructive -n/--dry-run alone.
+        CommandRule("^git\\s+clean\\b(?=.*\\s-(?:-force\\b|[a-z]*f))", RuleAction.BLOCK, "Git force clean"),
         CommandRule("^git\\s+push\\s+.*--force", RuleAction.BLOCK, "Git force push"),
         CommandRule("^git\\s+push\\s+-f\\b", RuleAction.BLOCK, "Git force push (-f)"),
 
@@ -65,46 +67,6 @@ object CommandRuleDefaults {
         // Version control
         "git" to "Git version control",
         // Build tools — Gradle / Maven / Make
-        "gradle" to "Gradle build tool",
-        "gradlew" to "Gradle wrapper",
-        "gradlew.bat" to "Gradle wrapper (Windows)",
-        "./gradlew" to "Gradle wrapper (relative)",
-        "mvn" to "Maven build tool",
-        "mvnw" to "Maven wrapper",
-        "make" to "Make build tool",
-        "cmake" to "CMake build tool",
-        "ninja" to "Ninja build tool",
-        // Node / JS ecosystem
-        "node" to "Node.js runtime",
-        "npm" to "npm package manager",
-        "npx" to "npm package runner",
-        "yarn" to "Yarn package manager",
-        "pnpm" to "pnpm package manager",
-        "tsc" to "TypeScript compiler",
-        "deno" to "Deno runtime",
-        "bun" to "Bun runtime",
-        // Python
-        "python" to "Python interpreter",
-        "python3" to "Python 3 interpreter",
-        "pip" to "Python package manager",
-        "pip3" to "Python 3 package manager",
-        "pytest" to "Python test runner",
-        "poetry" to "Python dependency manager",
-        "uv" to "Python installer/resolver",
-        // JVM / Kotlin
-        "java" to "Java runtime",
-        "javac" to "Java compiler",
-        "kotlin" to "Kotlin runtime",
-        "kotlinc" to "Kotlin compiler",
-        // Other languages
-        "go" to "Go toolchain",
-        "cargo" to "Rust package manager",
-        "rustc" to "Rust compiler",
-        "ruby" to "Ruby interpreter",
-        "bundle" to "Ruby bundler",
-        "php" to "PHP interpreter",
-        "composer" to "PHP dependency manager",
-        "dotnet" to ".NET CLI",
         // Read-only filesystem inspection
         "ls" to "List directory",
         "dir" to "List directory (Windows)",

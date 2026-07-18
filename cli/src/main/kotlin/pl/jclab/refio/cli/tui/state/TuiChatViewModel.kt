@@ -82,6 +82,8 @@ class TuiChatViewModel(
     internal var projectPath: Path = Path.of(".")
     internal var onUpdateTotalTokens: (Long) -> Unit = {}
     internal var onUpdateTotalCost: (Double) -> Unit = {}
+    // Absolute (not additive): the task's cumulative cache-read tokens at turn end.
+    internal var onUpdateCachedTokens: (Int) -> Unit = {}
     internal var onUpdateDebugInfo: (Int) -> Unit = {} // messageCount
     internal var onUpdateExecutionStatus: (String) -> Unit = {}
     internal var onLoadMessagesFromDb: (CoreApiRouter, String) -> Unit = { _, _ -> }
@@ -654,6 +656,7 @@ class TuiChatViewModel(
                         response.costs.let { costs ->
                             onUpdateTotalTokens((costs.tokensIn + costs.tokensOut).toLong())
                             onUpdateTotalCost(costs.usdEst)
+                            onUpdateCachedTokens(costs.cachedTokens)
                         }
                     }
 
@@ -687,6 +690,7 @@ class TuiChatViewModel(
                         // Update metrics
                         onUpdateTotalTokens((result.tokensIn + result.tokensOut).toLong())
                         onUpdateTotalCost(result.cost)
+                        onUpdateCachedTokens(result.cachedTokens)
                         // Reload subtasks from DB -- plan/agent may have created new ones
                         onLoadSubtasksFromDb(r, tid)
                     }

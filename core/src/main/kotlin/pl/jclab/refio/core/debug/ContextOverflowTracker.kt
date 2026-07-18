@@ -3,7 +3,7 @@ package pl.jclab.refio.core.debug
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Records whether a task's prompt ever exceeded the model's context window (docs/0057 Tier 3).
+ * Records whether a task's prompt ever exceeded the model's context window.
  *
  * Context overflow is the silent failure local-first targets: when an input prompt is larger
  * than the window, Ollama truncates it from the head and the agent reasons over a partial
@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap
  * than truncate). Both funnel a `markOverflow(taskId)` here.
  *
  * [pl.jclab.refio.core.debug.SessionDebugExporter] reads it into `run.json.metrics.contextOverflow`,
- * which the e2e harness (docs/0061) treats as a failed run — a silent truncation must never
+ * which the e2e harness treats as a failed run — a silent truncation must never
  * pass as success.
  *
  * Thread-safe process-global singleton keyed by `taskId`, matching the convention of

@@ -7,7 +7,7 @@ import pl.jclab.refio.core.services.turn.AutoApprover
 import pl.jclab.refio.core.services.turn.ToolApprovalService
 
 /**
- * Headless auto-approval (docs/0063 §6.2). Subscribes to [ToolApprovalService.pendingRequests] and
+ * Headless auto-approval. Subscribes to [ToolApprovalService.pendingRequests] and
  * resolves each request via [AutoApprover] so a `--headless` run never blocks on the 5-minute
  * approval timeout. Wired only under `--headless`; TUI/interactive runs always ask a human.
  *

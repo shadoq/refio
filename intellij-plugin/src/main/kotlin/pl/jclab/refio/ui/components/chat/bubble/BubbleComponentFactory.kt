@@ -6,6 +6,7 @@ import com.intellij.icons.AllIcons
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBPanel
+import pl.jclab.refio.api.StreamProgressFormat
 import pl.jclab.refio.api.models.ContextReference
 import pl.jclab.refio.api.models.ContextType
 import pl.jclab.refio.api.models.Message
@@ -59,6 +60,10 @@ internal interface BubbleComponentDependencies {
     suspend fun rewindAndResend(messageId: String, content: String)
     fun isThinkingExpanded(messageId: String): Boolean
     fun setThinkingExpanded(messageId: String, expanded: Boolean)
+    fun isToolContentExpanded(messageId: String): Boolean
+    fun getToolContentSnapshot(messageId: String): String?
+    fun setToolContentExpanded(messageId: String, snapshot: String?)
+    fun registerToolStreamCounter(messageId: String, label: JLabel)
 }
 
 internal class BubbleComponentFactory(
@@ -298,7 +303,7 @@ internal class BubbleComponentFactory(
         }
     }
 
-    fun createToolStatusPanel(status: ToolCallStatus): JPanel {
+    fun createToolStatusPanel(status: ToolCallStatus, charCount: Int? = null, messageId: String? = null): JPanel {
         val (icon, text, color) = when (status) {
             ToolCallStatus.EXECUTING -> Triple("⟳", "Generating...", LCATheme.warningColor)
             ToolCallStatus.COMPLETED -> Triple("✓", "Done", LCATheme.successColor)
@@ -312,7 +317,99 @@ internal class BubbleComponentFactory(
                 foreground = color
                 font = LCATheme.italicFont
             })
+            // While streaming, the char counter lives in its own label so the host can patch just
+            // its text between chunks (see ChatView.tryPatchStreamingCounter) without rebuilding
+            // the bubble. registerToolStreamCounter hands the host that reference.
+            if (charCount != null) {
+                val counter = JLabel(StreamProgressFormat.counterSuffix(charCount)).apply {
+                    foreground = color
+                    font = LCATheme.italicFont
+                }
+                add(counter)
+                if (messageId != null) {
+                    deps.registerToolStreamCounter(messageId, counter)
+                }
+            }
         }
+    }
+
+    /**
+     * Collapsed-by-default view of the content a code-editing tool is streaming. While the tool
+     * generates, only a "Show" toggle is offered; the heavy preview is built lazily on first expand
+     * and pinned to a frozen snapshot of the content at click time, so later chunks do not refresh
+     * (or flicker) what the user is reading. The expanded/collapsed state and the snapshot are kept
+     * per message by the host so they survive the bubble rebuilds that each streamed chunk triggers.
+     */
+    fun createCollapsibleToolContentPanel(
+        messageId: String,
+        liveContent: String,
+        parameters: Map<String, String>
+    ): JPanel {
+        val panel = JBPanel<JBPanel<*>>().apply {
+            layout = BorderLayout()
+            isOpaque = false
+            alignmentX = Component.LEFT_ALIGNMENT
+            border = BorderFactory.createEmptyBorder(4, 0, 0, 0)
+        }
+
+        val headerPanel = JBPanel<JBPanel<*>>().apply {
+            layout = FlowLayout(FlowLayout.LEFT, 6, 0)
+            isOpaque = false
+        }
+        headerPanel.add(JLabel("📝").apply { font = LCATheme.smallFont })
+        headerPanel.add(JLabel("Generated content").apply {
+            font = LCATheme.smallBoldFont
+            foreground = LCATheme.descriptionForeground
+        })
+
+        val toggleButton = JButton("Show").apply {
+            isOpaque = false
+            isBorderPainted = false
+            isContentAreaFilled = false
+            isFocusPainted = false
+            font = LCATheme.smallFont
+            foreground = LCATheme.accentColor
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            margin = Insets(0, 4, 0, 4)
+            border = BorderFactory.createEmptyBorder(0, 4, 0, 4)
+        }
+        headerPanel.add(toggleButton)
+
+        val contentHolder = JBPanel<JBPanel<*>>().apply {
+            layout = BorderLayout()
+            isOpaque = false
+        }
+
+        val initialExpanded = deps.isToolContentExpanded(messageId)
+        if (initialExpanded) {
+            val snapshot = deps.getToolContentSnapshot(messageId) ?: liveContent
+            contentHolder.add(createLLMEditPreviewPanel(snapshot, parameters), BorderLayout.CENTER)
+            contentHolder.isVisible = true
+            toggleButton.text = "Hide"
+        } else {
+            contentHolder.isVisible = false
+        }
+
+        toggleButton.addActionListener {
+            val nowExpanded = !contentHolder.isVisible
+            contentHolder.removeAll()
+            if (nowExpanded) {
+                deps.setToolContentExpanded(messageId, liveContent)
+                contentHolder.add(createLLMEditPreviewPanel(liveContent, parameters), BorderLayout.CENTER)
+                contentHolder.isVisible = true
+                toggleButton.text = "Hide"
+            } else {
+                deps.setToolContentExpanded(messageId, null)
+                contentHolder.isVisible = false
+                toggleButton.text = "Show"
+            }
+            panel.revalidate()
+            panel.repaint()
+        }
+
+        panel.add(headerPanel, BorderLayout.NORTH)
+        panel.add(contentHolder, BorderLayout.CENTER)
+        return panel
     }
 
     fun createToolResultPanel(summary: String): JPanel {
@@ -884,7 +981,7 @@ internal class BubbleComponentFactory(
     }
 
     fun createClickablePathLabel(path: String): JLabel {
-        return JLabel("<html><u>${path}</u></html>").apply {
+        return JLabel("<html><u>${escapeHtml(path)}</u></html>").apply {
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             foreground = LCATheme.accentColor
             font = Font(LCATheme.monoFont.family, Font.PLAIN, LCATheme.bodyFont.size)
@@ -937,7 +1034,7 @@ internal class BubbleComponentFactory(
 
     fun createClickableFileNameLabel(path: String): JLabel {
         val fileName = path.substringAfterLast('/').substringAfterLast('\\').ifBlank { path }
-        return JLabel("<html><u>$fileName</u></html>").apply {
+        return JLabel("<html><u>${escapeHtml(fileName)}</u></html>").apply {
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             foreground = LCATheme.accentColor
             font = Font(LCATheme.monoFont.family, Font.PLAIN, LCATheme.bodyFont.size)
@@ -1027,6 +1124,15 @@ internal class BubbleComponentFactory(
 
                 val valueComponent = if (isPathKey(key)) {
                     createFileReferencePanel(value)
+                } else if (isLargeParamKey(key) && value.length > LARGE_PARAM_PREVIEW_LIMIT) {
+                    // Large parameter values (file content, diffs, old/new strings) are otherwise
+                    // truncated to a flat, unreadable preview. Reuse the collapsible tool-content
+                    // panel so the user can expand the full value on demand.
+                    createCollapsibleToolContentPanel(
+                        messageId = "toolparam:$key:${value.hashCode()}",
+                        liveContent = value,
+                        parameters = params
+                    )
                 } else {
                     JBPanel<JBPanel<*>>(BorderLayout()).apply {
                         isOpaque = false
@@ -1138,6 +1244,13 @@ internal class BubbleComponentFactory(
             normalized.take(COLLAPSED_BUBBLE_PREVIEW_CHARS).trimEnd() + "\n\n[...]"
         }
     }
+
+    private fun escapeHtml(text: String): String = text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&#39;")
 
     private fun getContextIcon(ref: ContextReference): String = when (ref.type) {
         ContextType.FILE -> "\uD83D\uDCC4"

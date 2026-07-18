@@ -6,7 +6,7 @@ import java.time.Duration
 /**
  * Configuration for AgentTurnLoop behavior.
  *
- * Single loop, different configs per mode. Enables ADR-0028 enhancements:
+ * Single loop, different configs per mode. Enables these enhancements:
  * - Auto-compaction when context window fills
  * - Prompt caching for static prefix
  * - Parallel tool execution for READ_ONLY tools

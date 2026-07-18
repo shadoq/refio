@@ -25,7 +25,7 @@ private val logger = dualLogger("CreateNewFileTool")
  * Security:
  * - Path sandbox prevents directory traversal
  * - Creates parent directories if needed
- * - Returns warning (success=true) if file already exists (use code_editing instead)
+ * - Hard fails (success=false) if file already exists (use read_file + code_editing instead)
  */
 class CreateNewFileTool(
     sandbox: PathSandbox,
@@ -33,22 +33,22 @@ class CreateNewFileTool(
 ) : FileTool(sandbox) {
 
     override val name = "create_new_file"
-    override val description = "Create a NEW SMALL file (config, stub, short snippet) " +
-        "where the agent already has the full content ready. " +
-        "Strongly prefer `advance_code_editing` for code files > ~50 lines, HTML pages, full classes, " +
-        "or any content generated from scratch — that tool uses a dedicated LLM call so your agent " +
-        "response stays small and avoids streaming timeouts. Stuffing hundreds of lines into `content` " +
-        "here inflates the agent response, wastes tokens, and risks truncation. " +
+    override val description = "Create a NEW file when you already have the exact final content ready " +
+        "(configs, stubs, short snippets, or any file you can write verbatim). " +
+        "For large code files, HTML pages, full classes, or content generated from scratch, prefer " +
+        "`advance_code_editing`: it delegates generation to a dedicated LLM call, so your agent response " +
+        "stays small and avoids bloating the conversation or risking streaming truncation. " +
         "HARD FAILS if file already exists. Pre-check path in a PRIOR turn (file_search/read_directory). " +
         "On 'File already exists' error: switch to read_file + code_editing."
     override val mode = ToolMode.WRITE
     override val category = ToolCategory.FILE_MODIFYING
     override val selectionHint =
-        "ONLY for small new files (≤50 lines): configs, stubs, short snippets where you already have the exact final content. " +
-        "For HTML pages, full classes, scripts, games, or anything >50 lines: STOP — use `advance_code_editing` instead. " +
-        "Stuffing 200–900 lines into the `content` parameter blows your output-token budget (10K+ wasted tokens), " +
-        "risks streaming truncation, and bloats every subsequent turn's conversation history. " +
-        "`advance_code_editing` delegates generation to the editing model so your agent response stays small."
+        "Best for new files whose exact final content you already have: configs, stubs, short snippets. " +
+        "For HTML pages, full classes, scripts, games, or large files generated from scratch, prefer " +
+        "`advance_code_editing` instead — it delegates generation to the editing model, keeping your agent " +
+        "response small and avoiding wasted output tokens and streaming truncation. " +
+        "Putting hundreds of lines into the `content` parameter works but bloats every later turn, so save " +
+        "this tool for content that is short and already in hand."
 
     override fun validateParams(params: Map<String, Any>) {
         validatePathParam(params)

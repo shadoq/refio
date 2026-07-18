@@ -1,0 +1,24 @@
+{
+  "id": "subagent-two-file-fix",
+  "mode": "AGENT",
+  "description": "Delegate the fix of two separate files to the write-capable refactoring-specialist subagent in two sequential invocations. Exercises sibling subagent isolation end-to-end on the write path: the second delegation must not be polluted by the first, and each subagent must edit only its own file.",
+  "category": "orchestration",
+  "max_iterations": 30,
+  "fixture": "fixtures/py-two-bugs",
+  "prompt_file": "prompts/subagent-two-file-fix.md",
+  "assert": {
+    "tool_invoked": [
+      { "name": "invoke_subagent", "args_regex": "refactoring-specialist" }
+    ],
+    "needles_in_file": [
+      { "path": "src/discount.py", "regex": ">=[[:space:]]*100|100[[:space:]]*<=" },
+      { "path": "src/shipping.py", "regex": ">=[[:space:]]*50|50[[:space:]]*<=" }
+    ],
+    "file_unchanged": ["main.py"],
+    "build_cmd": "python3 main.py",
+    "no_context_overflow": true
+  },
+  "judge_criteria": [
+    "The refactoring-specialist subagent was invoked for each of the two files and it (not the parent) applied the edits, both boundary bugs are fixed (discount applies at exactly 100, shipping is free at exactly 50 kg), and main.py is unchanged."
+  ]
+}

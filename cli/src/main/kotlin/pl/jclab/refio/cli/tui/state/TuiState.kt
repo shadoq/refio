@@ -35,12 +35,19 @@ data class TuiState(
     val model: String? = null,
     val executionMode: String = "AUTO", // AUTO or INTERACTIVE
     val thinkingEnabled: Boolean = false,
+    val reasoningEffort: pl.jclab.refio.core.llm.ReasoningEffort = pl.jclab.refio.core.llm.ReasoningEffort.OFF,
     val noEgressEnabled: Boolean = false,
     val inputBuffer: String = "",
     val totalCostUsd: Double = 0.0,
     val totalTokens: Long = 0,
     val scrollOffset: Int = 0,
     val settingsTab: Int = 0,
+    /**
+     * Bumped whenever the cached settings snapshot (config sections, tool
+     * permissions) is refreshed; the snapshot itself lives outside TuiState,
+     * so this bump is what makes the renderer's dirty-check see a change.
+     */
+    val settingsCacheVersion: Int = 0,
     val autocompleteVisible: Boolean = false,
     val autocompleteCandidates: List<String> = emptyList(),
     val autocompleteSelectedIndex: Int = 0,
@@ -51,6 +58,7 @@ data class TuiState(
     val contextMaxTokens: Int = 128000,
     val sessionTokensIn: Long = 0,
     val sessionTokensOut: Long = 0,
+    val sessionCachedTokens: Long = 0,
     val ragIndexingProgress: Double = -1.0, // -1 = not indexing, 0..1 = progress
     val ragIndexingStatus: String = "",
     val agentFilter: String? = null, // null = show all, "agent-name" = filter to specific agent
@@ -62,6 +70,7 @@ data class TuiState(
     val settingsSelectedField: Int = 0,
     val settingsEditingField: String? = null,
     val settingsEditBuffer: String = "",
+    val settingsResetArmed: Boolean = false,
     val ragIndexedFiles: List<TuiRagFile> = emptyList(),
     val apiLogsFilter: String? = null, // null = show all, or provider name
     val selectedApiLogIndex: Int = 0,
@@ -97,6 +106,7 @@ data class TuiState(
     val fileViewerScrollOffset: Int = 0,
     val fileViewerShowLineNumbers: Boolean = true,  // false for log/debug/API detail views
     val fileViewerAllowAddContext: Boolean = true,   // false for non-file content
+    val fileViewerHintVisible: Boolean = false,      // one-shot "press Esc" hint after an unhandled key
     // Debug panel scroll
     val debugScrollOffset: Int = 0
 )
@@ -130,6 +140,7 @@ data class TuiChatMessage(
     val agentName: String? = null,
     val agentColorIndex: Int? = null,
     val isStreaming: Boolean = false,
+    val isToolStreaming: Boolean = false,
     val messageType: TuiMessageType = TuiMessageType.TEXT,
     val tokensIn: Int = 0,
     val tokensOut: Int = 0,
@@ -241,7 +252,9 @@ data class TuiToolApprovalRequest(
     val requestId: String,
     val toolName: String,
     val description: String,
-    val arguments: Map<String, Any>
+    val arguments: Map<String, Any>,
+    /** Proposed file change (editing tools): rendered as a colored diff in the approval box. */
+    val proposedChange: pl.jclab.refio.core.services.turn.ProposedChange? = null
 )
 
 data class TuiPlanApproval(

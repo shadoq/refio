@@ -1,0 +1,22 @@
+{
+  "id": "node-callgraph",
+  "category": "analysis",
+  "mode": "PLAN",
+  "description": "PLAN-mode: identify the most depended-on Node module and every module that breaks if its exported factory signature changes.",
+  "max_iterations": 25,
+  "fixture": "fixtures/node-app",
+  "prompt_file": "prompts/node-callgraph.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_output": { "regex": "createLogger" },
+    "file_unchanged": [
+      "package.json",
+      "src/logger.js",
+      "src/db.js",
+      "src/orders.js",
+      "src/index.js"
+    ],
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["The analysis identifies src/logger.js (createLogger) as the most depended-on module and lists db.js, orders.js and index.js as the importers that would break, without editing any file."]
+}

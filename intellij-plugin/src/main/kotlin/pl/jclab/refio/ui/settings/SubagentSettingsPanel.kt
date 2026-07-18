@@ -1,8 +1,12 @@
 package pl.jclab.refio.ui.settings
 
+import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.ui.AnActionButton
 import com.intellij.ui.JBColor
+import com.intellij.ui.ToolbarDecorator
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
@@ -46,7 +50,6 @@ class SubagentSettingsPanel(
         val contentPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             border = LCATheme.paddedBorder(8, 0, 0, 0)
             add(createSubagentsTable(), BorderLayout.CENTER)
-            add(createButtonsPanel(), BorderLayout.SOUTH)
         }
 
         add(contentPanel, BorderLayout.CENTER)
@@ -110,9 +113,9 @@ class SubagentSettingsPanel(
                 val component = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column)
                 val scope = value?.toString()?.lowercase()
                 when (scope) {
-                    "builtin" -> foreground = Color(100, 100, 100)  // Gray for builtin
-                    "user" -> foreground = Color(0, 100, 200)      // Blue for user
-                    "project" -> foreground = Color(0, 150, 0)     // Green for project
+                    "builtin" -> foreground = JBColor(Color(100, 100, 100), Color(160, 160, 160))  // Gray for builtin
+                    "user" -> foreground = JBColor(Color(0, 100, 200), Color(100, 160, 255))       // Blue for user
+                    "project" -> foreground = JBColor(Color(0, 128, 0), Color(98, 150, 85))        // Green for project
                 }
                 return component
             }
@@ -133,9 +136,9 @@ class SubagentSettingsPanel(
                 val model = value?.toString()?.lowercase()
                 when (model) {
                     "default" -> foreground = JBColor.foreground()
-                    "weak" -> foreground = Color(150, 100, 0)      // Orange for weak
-                    "coding" -> foreground = Color(0, 150, 0)      // Green for coding
-                    "plan" -> foreground = Color(0, 100, 200)      // Blue for plan
+                    "weak" -> foreground = JBColor(Color(150, 100, 0), Color(210, 160, 80))     // Orange for weak
+                    "coding" -> foreground = JBColor(Color(0, 128, 0), Color(98, 150, 85))      // Green for coding
+                    "plan" -> foreground = JBColor(Color(0, 100, 200), Color(100, 160, 255))    // Blue for plan
                     else -> foreground = JBColor.foreground()
                 }
                 return component
@@ -147,38 +150,17 @@ class SubagentSettingsPanel(
         subagentsTable.gridColor = JBColor.LIGHT_GRAY
         subagentsTable.rowHeight = 28
 
-        return JScrollPane(subagentsTable).apply {
-            border = LCATheme.customLineBorder(LCATheme.grayColor, 1)
-            preferredSize = Dimension(700, 300)
-        }
-    }
-
-    private fun createButtonsPanel(): JPanel {
-        return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 8)).apply {
-            border = LCATheme.paddedBorder(8, 0, 0, 0)
-
-            add(JButton("Create").apply {
-                toolTipText = "Create a new subagent"
-                addActionListener { onCreateSubagent() }
+        // Standard IntelliJ toolbar: +/-/pencil for create/delete/edit, plus a Refresh action
+        return ToolbarDecorator.createDecorator(subagentsTable)
+            .setAddAction { onCreateSubagent() }
+            .setEditAction { onEditSubagent() }
+            .setRemoveAction { onDeleteSubagent() }
+            .addExtraAction(object : AnActionButton("Refresh subagent list from filesystem", AllIcons.Actions.Refresh) {
+                override fun actionPerformed(e: AnActionEvent) = onRefreshSubagents()
             })
-
-            add(JButton("Edit").apply {
-                toolTipText = "Edit selected subagent"
-                addActionListener { onEditSubagent() }
-            })
-
-            add(JButton("Delete").apply {
-                toolTipText = "Delete selected subagent"
-                addActionListener { onDeleteSubagent() }
-            })
-
-            add(JLabel(" | "))
-
-            add(JButton("Refresh").apply {
-                toolTipText = "Refresh subagent list from filesystem"
-                addActionListener { onRefreshSubagents() }
-            })
-        }
+            .disableUpDownActions()
+            .createPanel()
+            .apply { preferredSize = Dimension(700, 300) }
     }
 
     private fun loadSubagents() {

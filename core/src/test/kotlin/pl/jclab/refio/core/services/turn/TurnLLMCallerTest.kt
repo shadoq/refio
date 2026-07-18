@@ -12,6 +12,7 @@ import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.LLMMessage
+import pl.jclab.refio.core.llm.ReasoningEffort
 import pl.jclab.refio.core.config.ConfigKey
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
@@ -43,7 +44,7 @@ class TurnLLMCallerTest {
     fun `should pass thinking and no-egress flags to llm client`() {
         every { configService.getModel(any(), any(), any()) } returns ("model-a" to "anthropic")
         every { configService.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
-        every { configService.getTyped(ConfigKeys.GENERAL_THINKING_ENABLED, "task-1") } returns true
+        every { configService.getTyped(ConfigKeys.GENERAL_REASONING_EFFORT, "task-1") } returns ReasoningEffort.MEDIUM
         every { configService.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, "task-1") } returns true
         coEvery {
             llmClient.complete(
@@ -55,6 +56,7 @@ class TurnLLMCallerTest {
                 temperature = any(),
                 responseFormat = any(),
                 thinking = any(),
+                reasoningEffort = any(),
                 noEgressEnabled = any(),
                 stream = any(),
                 onChunk = any(),
@@ -96,6 +98,7 @@ class TurnLLMCallerTest {
                 temperature = 0.7,
                 responseFormat = mapOf("type" to "json_object"),
                 thinking = true,
+                reasoningEffort = "medium",
                 noEgressEnabled = true,
                 stream = false,
                 onChunk = null,
@@ -124,6 +127,7 @@ class TurnLLMCallerTest {
                 temperature = any(),
                 responseFormat = any(),
                 thinking = any(),
+                reasoningEffort = any(),
                 noEgressEnabled = any(),
                 stream = any(),
                 onChunk = any(),
@@ -163,6 +167,7 @@ class TurnLLMCallerTest {
                 temperature = any(),
                 responseFormat = any(),
                 thinking = any(),
+                reasoningEffort = any(),
                 noEgressEnabled = any(),
                 stream = any(),
                 onChunk = any(),
@@ -174,5 +179,48 @@ class TurnLLMCallerTest {
                 kwargs = any()
             )
         }
+    }
+
+    @Test
+    fun `a stream that aborts before the first token is retried, not fatal`() {
+        // e2e regression (qwen3.5:35b crashes on the gate): the decision call bypassed retry, so an
+        // Ollama stream that ended before done=true with zero bytes killed the whole turn on the
+        // first call. It routes through the retry handler now: no chunk reached the UI, so a clean
+        // re-call is safe and the turn recovers instead of returning "no run.json produced".
+        every { configService.getModel(any(), any(), any()) } returns ("model-a" to "anthropic")
+        every { configService.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
+        val response = LLMResponse(
+            content = "{}", usage = LLMUsage(1, 1, 2), cost = 0.0, model = "model-a", provider = "anthropic"
+        )
+        var calls = 0
+        coEvery {
+            llmClient.complete(
+                provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                reasoningEffort = any(), noEgressEnabled = any(), stream = any(), onChunk = any(),
+                taskId = any(), subtaskId = any(), source = any(), contextContent = any(),
+                systemMessages = any(), kwargs = any()
+            )
+        } answers {
+            calls++
+            if (calls == 1) {
+                throw RuntimeException("Ollama stream ended before done=true final chunk (contentBytes=0)")
+            }
+            response
+        }
+
+        val result = kotlinx.coroutines.runBlocking {
+            caller.callLLM(
+                taskId = "task-1",
+                mode = TaskMode.AGENT,
+                prompt = TurnPrompt(
+                    systemPrompt = "system",
+                    messages = listOf(LLMMessage(role = "user", content = "hello"))
+                )
+            )
+        }
+
+        assertEquals("{}", result.content)
+        assertEquals(2, calls, "the aborted first call must be retried once and then succeed")
     }
 }

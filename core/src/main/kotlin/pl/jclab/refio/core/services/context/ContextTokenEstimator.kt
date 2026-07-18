@@ -13,7 +13,7 @@ import pl.jclab.refio.core.services.PromptTokenEstimator
  */
 object ContextTokenEstimator {
     /**
-     * @param modelId resolved model id for model-aware estimation (docs/0057). When null,
+     * @param modelId resolved model id for model-aware estimation. When null,
      *   falls back to the shared flat-base ratio (backward compatible).
      */
     fun estimateTokens(text: String, modelId: String? = null): Int = PromptTokenEstimator.estimateBase(text, modelId)

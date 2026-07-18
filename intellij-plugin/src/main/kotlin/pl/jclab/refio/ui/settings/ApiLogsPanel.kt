@@ -40,9 +40,18 @@ class ApiLogsPanel(
     private val filterProviderCombo = JComboBox<String>()
     private val filterModelCombo = JComboBox<String>()
     private val filterSourceCombo = JComboBox<String>()
+    private val logCountLabel = JBLabel()
+    private val loadMoreButton = JButton("Load more")
+
+    // Pagination: the router only supports a row limit (no offset), so paging
+    // is done by refetching with a larger limit. Ordering stays stable (DESC by createdAt).
+    private val pageSize = 50
+    private var currentLimit = pageSize
 
     // Data
     private var allLogs = listOf<ApiLog>()
+    // Logs currently rendered in the table (used to preserve selection across a rebuild).
+    private var tableLogs = listOf<ApiLog>()
     private var statistics: ApiLogStatistics? = null
     @Volatile
     private var isLoading = false
@@ -159,7 +168,7 @@ class ApiLogsPanel(
 
     private fun createTableSection(): JPanel {
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = LCATheme.createTitledBorder("Recent Logs (50 latest)")
+            border = LCATheme.createTitledBorder("Recent Logs")
 
             // Setup table model
             tableModel.setColumnIdentifiers(
@@ -208,6 +217,37 @@ class ApiLogsPanel(
             }
 
             add(scrollPane, BorderLayout.CENTER)
+
+            // Bottom bar: "Showing X of N" counter + Load more control.
+            val footer = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+                border = JBUI.Borders.emptyTop(LCATheme.gap)
+
+                logCountLabel.apply {
+                    font = LCATheme.smallFont
+                    foreground = LCATheme.descriptionForeground
+                    text = "-"
+                }
+                add(logCountLabel, BorderLayout.WEST)
+
+                loadMoreButton.apply {
+                    isEnabled = false
+                    addActionListener { loadMore() }
+                }
+                add(loadMoreButton, BorderLayout.EAST)
+            }
+            add(footer, BorderLayout.SOUTH)
+        }
+    }
+
+    private fun loadMore() {
+        currentLimit += pageSize
+        // applyFilters honors currentLimit and works for both filtered and unfiltered views.
+        applyFilters()
+    }
+
+    private fun hasActiveFilter(): Boolean {
+        return listOf(filterProviderCombo, filterModelCombo, filterSourceCombo).any {
+            (it.selectedItem as? String)?.takeIf { s -> s != "All" } != null
         }
     }
 
@@ -254,7 +294,7 @@ class ApiLogsPanel(
                 statistics = stats
 
                 // Load logs
-                val logs = coreApiClient?.apiLogsRouter?.getRecentApiLogs(50) ?: emptyList()
+                val logs = coreApiClient?.apiLogsRouter?.getRecentApiLogs(currentLimit) ?: emptyList()
                 allLogs = logs
 
                 // Load filter options
@@ -342,6 +382,12 @@ class ApiLogsPanel(
     }
 
     private fun updateTable(logs: List<ApiLog>) {
+        // Preserve the selected row by log id across the full model rebuild.
+        val selectedLogId = logsTable.selectedRow
+            .takeIf { it >= 0 }
+            ?.let { logsTable.convertRowIndexToModel(it) }
+            ?.let { tableLogs.getOrNull(it)?.id }
+
         tableModel.rowCount = 0
 
         logs.forEach { log ->
@@ -366,6 +412,32 @@ class ApiLogsPanel(
                 )
             )
         }
+
+        tableLogs = logs
+
+        // Restore selection if the previously selected log is still present.
+        if (selectedLogId != null) {
+            val modelIndex = logs.indexOfFirst { it.id == selectedLogId }
+            if (modelIndex >= 0) {
+                val viewIndex = logsTable.convertRowIndexToView(modelIndex)
+                if (viewIndex >= 0) {
+                    logsTable.setRowSelectionInterval(viewIndex, viewIndex)
+                }
+            }
+        }
+
+        updateLogCounter(logs.size)
+    }
+
+    private fun updateLogCounter(displayed: Int) {
+        val total = statistics?.totalCalls ?: displayed.toLong()
+        logCountLabel.text = if (hasActiveFilter()) {
+            "Showing ${formatNumber(displayed)} filtered (of ${formatNumber(total)} total)"
+        } else {
+            "Showing ${formatNumber(displayed)} of ${formatNumber(total)}"
+        }
+        // A full page likely means there are older entries to load.
+        loadMoreButton.isEnabled = displayed >= currentLimit
     }
 
     private fun applyFilters() {
@@ -383,7 +455,7 @@ class ApiLogsPanel(
                     provider = provider,
                     model = model,
                     source = source,
-                    limit = 50
+                    limit = currentLimit
                 ) ?: emptyList()
 
                 allLogs = filteredLogs
@@ -467,11 +539,20 @@ class ApiLogsPanel(
         }
 
         if (fileChooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
-            try {
-                fileChooser.selectedFile.writeText(content)
-                showInfo("Export saved to:\n${fileChooser.selectedFile.absolutePath}")
-            } catch (e: Exception) {
-                showError("Failed to save file:\n${e.message}")
+            val targetFile = fileChooser.selectedFile
+            // File IO off the EDT; UI feedback back on the EDT.
+            coroutineScope.launch {
+                try {
+                    targetFile.writeText(content)
+                    ApplicationManager.getApplication().invokeLater {
+                        showInfo("Export saved to:\n${targetFile.absolutePath}")
+                    }
+                } catch (e: Exception) {
+                    logger.error(e) { "Failed to save export file" }
+                    ApplicationManager.getApplication().invokeLater {
+                        showError("Failed to save file:\n${e.message}")
+                    }
+                }
             }
         }
     }

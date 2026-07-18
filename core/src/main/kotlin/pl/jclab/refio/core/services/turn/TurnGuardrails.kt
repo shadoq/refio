@@ -384,7 +384,7 @@ class TurnGuardrails {
      *
      * Aborts when the text is recorded [identicalRepeatAbortThreshold] times in a row, where
      * "the same" means byte-identical OR a near-identical PARAPHRASE — token-set similarity
-     * (Dice coefficient) at or above [similarityThreshold] (docs/0066). Exact-hash matching alone
+     * (Dice coefficient) at or above [similarityThreshold]. Exact-hash matching alone
      * missed the common weak-model pathology where the model re-renders the SAME intent with a
      * couple of words swapped ("…standardowe skanowanie…" → "…standardowe wyszukiwanie…", Dice
      * ~0.88) — different hashes, so the run reset and nothing fired.

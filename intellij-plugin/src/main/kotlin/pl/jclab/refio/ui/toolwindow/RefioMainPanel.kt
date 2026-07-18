@@ -6,6 +6,7 @@ import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
+import com.intellij.util.ui.AsyncProcessIcon
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -17,6 +18,7 @@ import pl.jclab.refio.services.execution.StepExecutionService
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.ui.theme.LCATheme
 import java.awt.BorderLayout
+import java.awt.FlowLayout
 import javax.swing.SwingConstants
 
 /**
@@ -44,13 +46,20 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
 
     private val pendingActions = mutableListOf<(RefioContentPanel) -> Unit>()
 
-    private val loader = JBLabel("Initializing Refio…", SwingConstants.CENTER).apply {
+    private val loaderIcon = AsyncProcessIcon("refio-tool-window-init")
+
+    private val loaderLabel = JBLabel("Initializing Refio…", SwingConstants.CENTER)
+
+    private val loader = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.CENTER)).apply {
         background = LCATheme.backgroundColor
         isOpaque = true
+        add(loaderIcon)
+        add(loaderLabel)
     }
 
     init {
         background = LCATheme.backgroundColor
+        loaderIcon.resume()
         add(loader, BorderLayout.CENTER)
 
         cs.launch {
@@ -68,7 +77,9 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
             } catch (e: Throwable) {
                 logger.error(e) { "Failed to initialize Refio tool window" }
                 ApplicationManager.getApplication().invokeLater({
-                    loader.text = "Failed to initialize Refio: ${e.message}"
+                    loaderIcon.suspend()
+                    loaderIcon.isVisible = false
+                    loaderLabel.text = "Failed to initialize Refio: ${e.message}"
                 }, ModalityState.any())
             }
         }
@@ -82,6 +93,7 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
 
         val panel = RefioContentPanel(project, sessionManager, stepExecutionService)
 
+        loaderIcon.suspend()
         remove(loader)
         add(panel, BorderLayout.CENTER)
         revalidate()
@@ -130,6 +142,7 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
 
     override fun dispose() {
         cs.cancel()
+        loaderIcon.dispose()
         content?.dispose()
     }
 }

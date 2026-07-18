@@ -37,12 +37,46 @@ class NetworkPolicyTest {
         assertTrue(ex.message!!.contains("https://example.com"))
     }
 
+    // The gate must not silently fail open: a user who explicitly enabled no-egress must not
+    // have the guarantee voided by a transient config read error mid-session.
     @Test
-    fun `failure to read config defaults to allow`() {
+    fun `config read failure falls back to the last successfully read value`() {
+        val cfg = mockk<ConfigService>()
+        every { cfg.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, any()) } returns true
+        val policy = NetworkPolicy(cfg)
+        assertTrue(policy.isNoEgressEnabled("task-1"))
+
+        every { cfg.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, any()) } throws RuntimeException("boom")
+        assertTrue(policy.isNoEgressEnabled("task-1"))
+        assertThrows(NoEgressViolationException::class.java) {
+            policy.assertEgressAllowed("test_tool", "https://example.com", "task-1")
+        }
+    }
+
+    // With no successful read ever, the safe direction for an egress gate is closed (blocked),
+    // even though the config DEFAULT is no-egress disabled - an unreadable config is an
+    // abnormal state, not the default state.
+    @Test
+    fun `config read failure with no prior read fails closed`() {
         val cfg = mockk<ConfigService>()
         every { cfg.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, any()) } throws RuntimeException("boom")
         val policy = NetworkPolicy(cfg)
 
+        assertTrue(policy.isNoEgressEnabled())
+        assertThrows(NoEgressViolationException::class.java) {
+            policy.assertEgressAllowed("test_tool", "https://example.com")
+        }
+    }
+
+    // Recovery: once the config becomes readable again, the live value wins over the fallback.
+    @Test
+    fun `config becoming readable again overrides the fail-closed fallback`() {
+        val cfg = mockk<ConfigService>()
+        every { cfg.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, any()) } throws RuntimeException("boom")
+        val policy = NetworkPolicy(cfg)
+        assertTrue(policy.isNoEgressEnabled())
+
+        every { cfg.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, any()) } returns false
         assertFalse(policy.isNoEgressEnabled())
         policy.assertEgressAllowed("test_tool", "https://example.com")
     }

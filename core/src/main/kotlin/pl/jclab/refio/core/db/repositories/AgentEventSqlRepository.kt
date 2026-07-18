@@ -22,7 +22,7 @@ class AgentEventSqlRepository : AgentEventRepository {
         .create()
 
     override suspend fun save(event: AgentEvent) {
-        DatabaseFactory.dbQuery {
+        DatabaseFactory.suspendDbQuery {
             AgentEventsTable.insert {
                 it[id] = event.id
                 it[sessionId] = event.sessionId
@@ -35,21 +35,26 @@ class AgentEventSqlRepository : AgentEventRepository {
         }
     }
 
-    override suspend fun findBySessionId(sessionId: String): List<AgentEvent> {
-        return DatabaseFactory.dbQuery {
+    override suspend fun findBySessionId(sessionId: String, limit: Int): List<AgentEvent> {
+        // Fetch the NEWEST `limit` rows, then restore ascending order for replay.
+        return DatabaseFactory.suspendDbQuery {
             AgentEventsTable.selectAll()
                 .where { AgentEventsTable.sessionId eq sessionId }
-                .orderBy(AgentEventsTable.timestamp, SortOrder.ASC)
+                .orderBy(AgentEventsTable.timestamp, SortOrder.DESC)
+                .limit(limit)
                 .mapNotNull { row -> deserializeEvent(row) }
+                .asReversed()
         }
     }
 
-    override suspend fun findByAgentId(agentId: String): List<AgentEvent> {
-        return DatabaseFactory.dbQuery {
+    override suspend fun findByAgentId(agentId: String, limit: Int): List<AgentEvent> {
+        return DatabaseFactory.suspendDbQuery {
             AgentEventsTable.selectAll()
                 .where { AgentEventsTable.sourceAgentId eq agentId }
-                .orderBy(AgentEventsTable.timestamp, SortOrder.ASC)
+                .orderBy(AgentEventsTable.timestamp, SortOrder.DESC)
+                .limit(limit)
                 .mapNotNull { row -> deserializeEvent(row) }
+                .asReversed()
         }
     }
 
@@ -72,9 +77,6 @@ class AgentEventSqlRepository : AgentEventRepository {
             "AgentFailed" to AgentEvent.AgentFailed::class.java,
             "DataRequest" to AgentEvent.DataRequest::class.java,
             "DataResponse" to AgentEvent.DataResponse::class.java,
-            "ArtifactProduced" to AgentEvent.ArtifactProduced::class.java,
-            "SpawnAgentRequest" to AgentEvent.SpawnAgentRequest::class.java,
-            "AgentSpawned" to AgentEvent.AgentSpawned::class.java,
             "ApprovalRequired" to AgentEvent.ApprovalRequired::class.java,
             "ApprovalDecision" to AgentEvent.ApprovalDecision::class.java,
             "ProgressUpdate" to AgentEvent.ProgressUpdate::class.java,
@@ -97,9 +99,6 @@ private fun AgentEvent.eventTypeName(): String = when (this) {
     is AgentEvent.AgentFailed -> "AgentFailed"
     is AgentEvent.DataRequest -> "DataRequest"
     is AgentEvent.DataResponse -> "DataResponse"
-    is AgentEvent.ArtifactProduced -> "ArtifactProduced"
-    is AgentEvent.SpawnAgentRequest -> "SpawnAgentRequest"
-    is AgentEvent.AgentSpawned -> "AgentSpawned"
     is AgentEvent.ApprovalRequired -> "ApprovalRequired"
     is AgentEvent.ApprovalDecision -> "ApprovalDecision"
     is AgentEvent.ProgressUpdate -> "ProgressUpdate"

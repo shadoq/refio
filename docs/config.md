@@ -106,12 +106,12 @@ general:
   formatMarkdown: true        # Format LLM responses as markdown
   streamingEnabled: true      # Stream responses in real-time
   advancedView: false         # Show advanced UI tabs (Steps, Context, RAG, Debug)
-  thinkingEnabled: false      # Extended reasoning/thinking for models that support it
+  reasoningEffort: "OFF"      # Reasoning strength: OFF/LOW/MEDIUM/HIGH (replaces the old thinkingEnabled boolean)
   noEgressEnabled: false      # Block outbound network calls (local-only mode)
   executionMode: "AUTO"       # AUTO (runs steps automatically) or INTERACTIVE (waits for confirmation)
 ```
 
-All six fields are edited from the **General** tab in Settings (plugin and TUI). `thinkingEnabled`, `noEgressEnabled`, and `executionMode` used to live under `ui:` — they moved to `general:` so the storage layout mirrors the UI tab 1:1.
+All six fields are edited from the **General** tab in Settings (plugin and TUI). `reasoningEffort`, `noEgressEnabled`, and `executionMode` used to live under `ui:`; they moved to `general:` so the storage layout mirrors the UI tab 1:1. `reasoningEffort` replaces the former `thinkingEnabled` boolean (old config files are still read: `true` maps to `MEDIUM`, `false` to `OFF`).
 
 ### Provider Configuration
 
@@ -293,7 +293,7 @@ ui:
   selectedModel: ""             # Currently selected model (empty = auto)
 ```
 
-The `ui:` section only holds transient session state (what the user last picked in the sidebar). User-facing preferences — `thinkingEnabled`, `noEgressEnabled`, `executionMode` — now live under `general:` (see *General Settings* above).
+The `ui:` section only holds transient session state (what the user last picked in the sidebar). User-facing preferences (`reasoningEffort`, `noEgressEnabled`, `executionMode`) now live under `general:` (see *General Settings* above).
 
 ### Custom Prompts (Project-Specific)
 
@@ -397,7 +397,7 @@ mcp:
 | `general.formatMarkdown` | `general.format_markdown` | `true` |
 | `general.streamingEnabled` | `general.streaming_enabled` | `true` |
 | `general.advancedView` | `general.advanced_view` | `false` |
-| `general.thinkingEnabled` | `general.thinking_enabled` | `false` |
+| `general.reasoningEffort` | `general.reasoning_effort` | `OFF` |
 | `general.noEgressEnabled` | `general.no_egress_enabled` | `false` |
 | `general.executionMode` | `general.execution_mode` | `AUTO` |
 | `providers.ollama.endpoint` | `ollama_endpoint` | `http://localhost:11434` |
@@ -420,6 +420,7 @@ mcp:
 | `limits.maxFileSize` | `limits.max_file_size` | `10` |
 | `advanced.readOnlyMode` | `advanced.read_only_mode` | `false` |
 | `security.allowSymlinks` | `security.allow_symlinks` | `false` |
+| `security.allowLoopback` | `security.allow_loopback` | `false` |
 | `rag.enabled` | `rag.enabled` | `true` |
 | `rag.indexOnStartup` | `rag.index_on_startup` | `false` |
 | `rag.autoIndexOnContextBuild` | `rag.auto_index_on_context_build` | `false` |

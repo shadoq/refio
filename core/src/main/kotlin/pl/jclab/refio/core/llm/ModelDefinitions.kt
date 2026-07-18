@@ -72,6 +72,149 @@ object ModelDefinitions {
     val OPENAI_MODELS = mapOf(
 
         //
+        // GPT 5.6 (models.dev)
+        //
+        "gpt-5.6" to ModelDefinition(
+            id = "gpt-5.6",
+            name = "GPT-5.6",
+            provider = "openai",
+            description = "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 5.00,
+            costPer1MOutput = 30.00,
+            costPer1MCachedInput = 0.5,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+        "gpt-5.6-sol" to ModelDefinition(
+            id = "gpt-5.6-sol",
+            name = "GPT-5.6 Sol",
+            provider = "openai",
+            description = "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 5.00,
+            costPer1MOutput = 30.00,
+            costPer1MCachedInput = 0.5,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+        "gpt-5.6-terra" to ModelDefinition(
+            id = "gpt-5.6-terra",
+            name = "GPT-5.6 Terra",
+            provider = "openai",
+            description = "Balanced GPT-5.6 model for capable, cost-efficient everyday work",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 2.50,
+            costPer1MOutput = 15.00,
+            costPer1MCachedInput = 0.25,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+        "gpt-5.6-luna" to ModelDefinition(
+            id = "gpt-5.6-luna",
+            name = "GPT-5.6 Luna",
+            provider = "openai",
+            description = "Cost-efficient GPT-5.6 model for fast, high-volume workloads",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 1.00,
+            costPer1MOutput = 6.00,
+            costPer1MCachedInput = 0.1,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+        //
         // GPT 5.5
         //
         "gpt-5.5" to ModelDefinition(
@@ -87,8 +230,9 @@ object ModelDefinitions {
             modelType = ModelType.TEXT,
             maxContext = 1_050_000,
             maxOutputTokens = 128_000,
-            costPer1MInput = 2.50,
-            costPer1MOutput = 15.00,
+            costPer1MInput = 5.00,
+            costPer1MOutput = 30.00,
+            costPer1MCachedInput = 0.5,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -333,6 +477,7 @@ object ModelDefinitions {
             maxOutputTokens = 128_000,
             costPer1MInput = 2.50,
             costPer1MOutput = 15.00,
+            costPer1MCachedInput = 0.25,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -362,8 +507,9 @@ object ModelDefinitions {
             modelType = ModelType.TEXT,
             maxContext = 128_000,
             maxOutputTokens = 32_768,
-            costPer1MInput = 0.25,
-            costPer1MOutput = 2.00,
+            costPer1MInput = 0.75,
+            costPer1MOutput = 4.50,
+            costPer1MCachedInput = 0.075,
             supportsVision = false,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -392,8 +538,9 @@ object ModelDefinitions {
             modelType = ModelType.TEXT,
             maxContext = 128_000,
             maxOutputTokens = 32_768,
-            costPer1MInput = 0.05,
-            costPer1MOutput = 0.40,
+            costPer1MInput = 0.20,
+            costPer1MOutput = 1.25,
+            costPer1MCachedInput = 0.02,
             supportsVision = false,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -1309,6 +1456,7 @@ object ModelDefinitions {
             maxOutputTokens = 64_000,
             costPer1MInput = 3.00,
             costPer1MOutput = 15.00,
+            costPer1MCachedInput = 0.3,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1332,6 +1480,7 @@ object ModelDefinitions {
             maxOutputTokens = 64_000,
             costPer1MInput = 3.00,
             costPer1MOutput = 15.00,
+            costPer1MCachedInput = 0.3,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1355,6 +1504,7 @@ object ModelDefinitions {
             maxOutputTokens = 64_000,
             costPer1MInput = 3.00,
             costPer1MOutput = 15.00,
+            costPer1MCachedInput = 0.3,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1378,6 +1528,7 @@ object ModelDefinitions {
             maxOutputTokens = 64_000,
             costPer1MInput = 3.00,
             costPer1MOutput = 15.00,
+            costPer1MCachedInput = 0.3,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1401,6 +1552,7 @@ object ModelDefinitions {
             maxOutputTokens = 64_000,
             costPer1MInput = 3.00,
             costPer1MOutput = 15.00,
+            costPer1MCachedInput = 0.3,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1424,6 +1576,7 @@ object ModelDefinitions {
             maxOutputTokens = 64_000,
             costPer1MInput = 3.00,
             costPer1MOutput = 15.00,
+            costPer1MCachedInput = 0.3,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1447,6 +1600,7 @@ object ModelDefinitions {
             maxOutputTokens = 64_000,
             costPer1MInput = 3.00,
             costPer1MOutput = 15.00,
+            costPer1MCachedInput = 0.3,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1470,6 +1624,7 @@ object ModelDefinitions {
             maxOutputTokens = 64_000,
             costPer1MInput = 3.00,
             costPer1MOutput = 15.00,
+            costPer1MCachedInput = 0.3,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1496,6 +1651,7 @@ object ModelDefinitions {
             maxOutputTokens = 128_000,
             costPer1MInput = 5.00,
             costPer1MOutput = 25.00,
+            costPer1MCachedInput = 0.5,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1519,6 +1675,55 @@ object ModelDefinitions {
             maxOutputTokens = 128_000,
             costPer1MInput = 10.00,
             costPer1MOutput = 50.00,
+            costPer1MCachedInput = 1.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            removeParams = listOf("temperature"),
+            active = true
+        ),
+        "claude-sonnet-5" to ModelDefinition(
+            id = "claude-sonnet-5",
+            name = "Claude Sonnet 5",
+            provider = "anthropic",
+            description = "Best balance of speed and intelligence in the Sonnet tier, near-Opus coding and agentic quality, 1M context with adaptive thinking",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 3.00,
+            costPer1MOutput = 15.00,
+            costPer1MCachedInput = 0.3,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            removeParams = listOf("temperature"),
+            active = true
+        ),
+        "claude-mythos-5" to ModelDefinition(
+            id = "claude-mythos-5",
+            name = "Claude Mythos 5",
+            provider = "anthropic",
+            description = "Same capabilities as Fable 5, available via Project Glasswing, 1M context with reasoning and agentic coding",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 10.00,
+            costPer1MOutput = 50.00,
+            costPer1MCachedInput = 1.0,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -1542,6 +1747,7 @@ object ModelDefinitions {
             maxOutputTokens = 128_000,
             costPer1MInput = 5.00,
             costPer1MOutput = 25.00,
+            costPer1MCachedInput = 0.5,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1566,6 +1772,7 @@ object ModelDefinitions {
             maxOutputTokens = 128_000,
             costPer1MInput = 5.00,
             costPer1MOutput = 25.00,
+            costPer1MCachedInput = 0.5,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1590,6 +1797,7 @@ object ModelDefinitions {
             maxOutputTokens = 64_000,
             costPer1MInput = 5.00,
             costPer1MOutput = 25.00,
+            costPer1MCachedInput = 0.5,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1613,6 +1821,7 @@ object ModelDefinitions {
             maxOutputTokens = 64_000,
             costPer1MInput = 5.00,
             costPer1MOutput = 25.00,
+            costPer1MCachedInput = 0.5,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1635,6 +1844,7 @@ object ModelDefinitions {
             maxOutputTokens = 64_000,
             costPer1MInput = 5.00,
             costPer1MOutput = 25.00,
+            costPer1MCachedInput = 0.5,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1658,6 +1868,7 @@ object ModelDefinitions {
             maxOutputTokens = 64_000,
             costPer1MInput = 5.00,
             costPer1MOutput = 25.00,
+            costPer1MCachedInput = 0.5,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1681,6 +1892,7 @@ object ModelDefinitions {
             maxOutputTokens = 32_000,
             costPer1MInput = 15.00,
             costPer1MOutput = 75.00,
+            costPer1MCachedInput = 1.5,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1704,6 +1916,7 @@ object ModelDefinitions {
             maxOutputTokens = 32_000,
             costPer1MInput = 15.00,
             costPer1MOutput = 75.00,
+            costPer1MCachedInput = 1.5,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1727,6 +1940,7 @@ object ModelDefinitions {
             maxOutputTokens = 32_000,
             costPer1MInput = 15.00,
             costPer1MOutput = 75.00,
+            costPer1MCachedInput = 1.5,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1750,6 +1964,7 @@ object ModelDefinitions {
             maxOutputTokens = 32_000,
             costPer1MInput = 15.00,
             costPer1MOutput = 75.00,
+            costPer1MCachedInput = 1.5,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1774,6 +1989,7 @@ object ModelDefinitions {
             maxOutputTokens = 64_000,
             costPer1MInput = 1.00,
             costPer1MOutput = 5.00,
+            costPer1MCachedInput = 0.1,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1797,6 +2013,7 @@ object ModelDefinitions {
             maxOutputTokens = 64_000,
             costPer1MInput = 1.00,
             costPer1MOutput = 5.00,
+            costPer1MCachedInput = 0.1,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1820,6 +2037,7 @@ object ModelDefinitions {
             maxOutputTokens = 8_192,
             costPer1MInput = 0.80,
             costPer1MOutput = 4.00,
+            costPer1MCachedInput = 0.08,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1842,6 +2060,7 @@ object ModelDefinitions {
             maxOutputTokens = 8_192,
             costPer1MInput = 0.80,
             costPer1MOutput = 4.00,
+            costPer1MCachedInput = 0.08,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1864,6 +2083,7 @@ object ModelDefinitions {
             maxOutputTokens = 4_096,
             costPer1MInput = 0.25,
             costPer1MOutput = 1.25,
+            costPer1MCachedInput = 0.025,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -1894,6 +2114,7 @@ object ModelDefinitions {
             maxOutputTokens = 65_536,
             costPer1MInput = 2.0,
             costPer1MOutput = 12.0,
+            costPer1MCachedInput = 0.5,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -1916,6 +2137,7 @@ object ModelDefinitions {
             maxOutputTokens = 65_536,
             costPer1MInput = 1.5,
             costPer1MOutput = 9.0,
+            costPer1MCachedInput = 0.375,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -1938,6 +2160,7 @@ object ModelDefinitions {
             maxOutputTokens = 65_536,
             costPer1MInput = 2.0,
             costPer1MOutput = 12.0,
+            costPer1MCachedInput = 0.5,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -1960,6 +2183,7 @@ object ModelDefinitions {
             maxOutputTokens = 65_536,
             costPer1MInput = 0.25,
             costPer1MOutput = 1.5,
+            costPer1MCachedInput = 0.0625,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -1982,6 +2206,7 @@ object ModelDefinitions {
             maxOutputTokens = 65_536,
             costPer1MInput = 0.5,
             costPer1MOutput = 3.0,
+            costPer1MCachedInput = 0.125,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -2005,6 +2230,7 @@ object ModelDefinitions {
             maxOutputTokens = 65_536,
             costPer1MInput = 1.25,
             costPer1MOutput = 10.0,
+            costPer1MCachedInput = 0.3125,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -2028,6 +2254,7 @@ object ModelDefinitions {
             maxOutputTokens = 65_536,
             costPer1MInput = 0.30,
             costPer1MOutput = 2.50,
+            costPer1MCachedInput = 0.075,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -2050,6 +2277,7 @@ object ModelDefinitions {
             maxOutputTokens = 65_536,
             costPer1MInput = 0.10,
             costPer1MOutput = 0.40,
+            costPer1MCachedInput = 0.025,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -2072,6 +2300,7 @@ object ModelDefinitions {
             maxOutputTokens = 65_536,
             costPer1MInput = 0.10,
             costPer1MOutput = 0.40,
+            costPer1MCachedInput = 0.025,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -2094,6 +2323,7 @@ object ModelDefinitions {
             maxOutputTokens = 4_096,
             costPer1MInput = 0.50,
             costPer1MOutput = 2.0,
+            costPer1MCachedInput = 0.125,
             supportsVision = false,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -2116,6 +2346,7 @@ object ModelDefinitions {
             maxOutputTokens = 4_096,
             costPer1MInput = 0.30,
             costPer1MOutput = 2.50,
+            costPer1MCachedInput = 0.075,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = false,
@@ -2136,6 +2367,7 @@ object ModelDefinitions {
             maxOutputTokens = null,
             costPer1MInput = 0.50,
             costPer1MOutput = 10.0,
+            costPer1MCachedInput = 0.125,
             supportsVision = false,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -2156,6 +2388,7 @@ object ModelDefinitions {
             maxOutputTokens = null,
             costPer1MInput = 1.0,
             costPer1MOutput = 20.0,
+            costPer1MCachedInput = 0.25,
             supportsVision = false,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -2179,6 +2412,7 @@ object ModelDefinitions {
             maxOutputTokens = 8_192,
             costPer1MInput = 0.10,
             costPer1MOutput = 0.40,
+            costPer1MCachedInput = 0.025,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -2201,6 +2435,7 @@ object ModelDefinitions {
             maxOutputTokens = 4_096,
             costPer1MInput = 0.075,
             costPer1MOutput = 0.30,
+            costPer1MCachedInput = 0.01875,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -2221,6 +2456,7 @@ object ModelDefinitions {
             maxOutputTokens = null,
             costPer1MInput = 0.15,
             costPer1MOutput = 0.0,
+            costPer1MCachedInput = 0.0375,
             supportsVision = false,
             supportsReasoning = false,
             supportsStreaming = false,
@@ -2244,6 +2480,7 @@ object ModelDefinitions {
             maxOutputTokens = 8_192,
             costPer1MInput = 0.30,
             costPer1MOutput = 2.50,
+            costPer1MCachedInput = 0.075,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -2266,6 +2503,7 @@ object ModelDefinitions {
             maxOutputTokens = 65_536,
             costPer1MInput = 1.25,
             costPer1MOutput = 10.0,
+            costPer1MCachedInput = 0.3125,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -2289,6 +2527,7 @@ object ModelDefinitions {
             maxOutputTokens = 65_536,
             costPer1MInput = 0.30,
             costPer1MOutput = 2.50,
+            costPer1MCachedInput = 0.075,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -2311,6 +2550,7 @@ object ModelDefinitions {
             maxOutputTokens = 65_536,
             costPer1MInput = 0.10,
             costPer1MOutput = 0.40,
+            costPer1MCachedInput = 0.025,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -2334,6 +2574,7 @@ object ModelDefinitions {
             maxOutputTokens = 65_536,
             costPer1MInput = 1.25,
             costPer1MOutput = 10.0,
+            costPer1MCachedInput = 0.3125,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -5177,6 +5418,455 @@ object ModelDefinitions {
             active = true
         ),
 
+        "minimax-m3:cloud" to ModelDefinition(
+            id = "minimax-m3:cloud",
+            name = "MiniMax M3 (Cloud)",
+            provider = "ollama",
+            description = "MiniMax M3 model for coding and agentic workflows, 512K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 512_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "minimax-m2.5:cloud" to ModelDefinition(
+            id = "minimax-m2.5:cloud",
+            name = "MiniMax M2.5 (Cloud)",
+            provider = "ollama",
+            description = "MiniMax M2-series model for chat, coding, office work, and agentic tasks, 200K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 204_800,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "minimax-m2.1:cloud" to ModelDefinition(
+            id = "minimax-m2.1:cloud",
+            name = "MiniMax M2.1 (Cloud)",
+            provider = "ollama",
+            description = "MiniMax M2-series model for chat, coding, office work, and agentic tasks, 200K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 204_800,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        // ═══════════════════════════════════════════════════════════════════
+        // ORNITH FAMILY (DeepReinforce, open weights)
+        // ═══════════════════════════════════════════════════════════════════
+
+        // Ornith 1.0 - reasoning + tool use, 256K context
+        "ornith:9b" to ModelDefinition(
+            id = "ornith:9b",
+            name = "Ornith 1.0 9B",
+            provider = "ollama",
+            description = "Lightweight Ornith 1.0 open model with tools and thinking, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        "ornith:31b" to ModelDefinition(
+            id = "ornith:31b",
+            name = "Ornith 1.0 31B",
+            provider = "ollama",
+            description = "Mid-size Ornith 1.0 open model with tools and thinking, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        "ornith:35b" to ModelDefinition(
+            id = "ornith:35b",
+            name = "Ornith 1.0 35B",
+            provider = "ollama",
+            description = "Ornith 1.0 open model with tools and thinking, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        "ornith:397b" to ModelDefinition(
+            id = "ornith:397b",
+            name = "Ornith 1.0 397B",
+            provider = "ollama",
+            description = "Flagship Ornith 1.0 MoE open model with tools and thinking, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 2026 CLOUD/OPEN ADDITIONS (models.dev)
+        // ═══════════════════════════════════════════════════════════════════
+
+        // GLM-5.2 (Zhipu AI) - flagship agentic engineering with vision, 1M context
+        "glm-5.2:cloud" to ModelDefinition(
+            id = "glm-5.2:cloud",
+            name = "GLM-5.2 (Cloud)",
+            provider = "ollama",
+            description = "Flagship agentic engineering model with vision and strong coding, 1M context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        // Kimi K2.7 Code (Moonshot AI) - agentic coding with vision, 256K context
+        "kimi-k2.7-code:cloud" to ModelDefinition(
+            id = "kimi-k2.7-code:cloud",
+            name = "Kimi K2.7 Code (Cloud)",
+            provider = "ollama",
+            description = "Moonshot AI agentic coding model with vision, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        "kimi-k2.7-code-highspeed:cloud" to ModelDefinition(
+            id = "kimi-k2.7-code-highspeed:cloud",
+            name = "Kimi K2.7 Code Highspeed (Cloud)",
+            provider = "ollama",
+            description = "Latency-optimized Moonshot AI Kimi K2.7 Code variant with vision, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        // Kimi K2.6 (Moonshot AI) - multimodal agent for visual understanding, coding, planning
+        "kimi-k2.6:cloud" to ModelDefinition(
+            id = "kimi-k2.6:cloud",
+            name = "Kimi K2.6 (Cloud)",
+            provider = "ollama",
+            description = "Moonshot AI multimodal agent model for visual understanding, coding, and planning, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        "kimi-k2.5:cloud" to ModelDefinition(
+            id = "kimi-k2.5:cloud",
+            name = "Kimi K2.5 (Cloud)",
+            provider = "ollama",
+            description = "Moonshot AI multimodal agent model for visual understanding, coding, and planning, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        // Mistral Large 3 (Mistral AI) - flagship for advanced reasoning, coding, multilingual work
+        "mistral-large-3:cloud" to ModelDefinition(
+            id = "mistral-large-3:cloud",
+            name = "Mistral Large 3 (Cloud)",
+            provider = "ollama",
+            description = "Flagship Mistral model for advanced reasoning, coding, and multilingual work with vision, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 262_144,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        // DeepSeek V4 (DeepSeek) - reasoning + vision, 1M context
+        "deepseek-v4-pro:cloud" to ModelDefinition(
+            id = "deepseek-v4-pro:cloud",
+            name = "DeepSeek V4 Pro (Cloud)",
+            provider = "ollama",
+            description = "DeepSeek V4 Pro reasoning model with vision, 1M context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        "deepseek-v4-flash:cloud" to ModelDefinition(
+            id = "deepseek-v4-flash:cloud",
+            name = "DeepSeek V4 Flash (Cloud)",
+            provider = "ollama",
+            description = "Fast DeepSeek V4 reasoning model with vision, 1M context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        // Step 3.7 Flash (StepFun) - reasoning, 256K context
+        "step-3.7-flash:cloud" to ModelDefinition(
+            id = "step-3.7-flash:cloud",
+            name = "Step 3.7 Flash (Cloud)",
+            provider = "ollama",
+            description = "StepFun Step 3.7 Flash reasoning model, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        // Nemotron 3 Ultra 550B A55B (NVIDIA) - reasoning, 1M context
+        "nemotron-3-ultra:550b" to ModelDefinition(
+            id = "nemotron-3-ultra:550b",
+            name = "Nemotron 3 Ultra 550B A55B",
+            provider = "ollama",
+            description = "NVIDIA Nemotron 3 Ultra MoE reasoning model, 1M context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_000_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        // Nemotron 3 Nano Omni 30B A3B Reasoning (NVIDIA) - reasoning, 256K context
+        "nemotron-3-nano-omni:30b" to ModelDefinition(
+            id = "nemotron-3-nano-omni:30b",
+            name = "Nemotron 3 Nano Omni 30B A3B",
+            provider = "ollama",
+            description = "NVIDIA Nemotron 3 Nano Omni reasoning model, 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+        // MiMo V2.5 Pro UltraSpeed (Xiaomi) - reasoning, 1M context
+        "mimo-v2.5-pro:cloud" to ModelDefinition(
+            id = "mimo-v2.5-pro:cloud",
+            name = "MiMo V2.5 Pro UltraSpeed (Cloud)",
+            provider = "ollama",
+            description = "Xiaomi MiMo V2.5 Pro low-latency reasoning model, 1M context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.CODE_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_048_576,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
         // ═══════════════════════════════════════════════════════════════════
         // LIQUID AI FAMILY
         // ═══════════════════════════════════════════════════════════════════
@@ -5541,50 +6231,93 @@ object ModelDefinitions {
         // OpenAI — gpt-5.4-pro $30/$180, gpt-5.4 $2.50/$15, gpt-5* $5/$30, gpt-* $0.50/$1.50
         "openai/gpt-5.4-pro" to openrouterDef("openai/gpt-5.4-pro", maxContext = 1_050_000, vision = true, inPrice = 30.0, outPrice = 180.0),
         "openai/gpt-5.4" to openrouterDef("openai/gpt-5.4-*", maxContext = 400_000, vision = true, inPrice = 2.50, outPrice = 15.0),
+        // gpt-5.6 (luna/sol/terra) ships a 1.05M window; must precede "openai/gpt-5".
+        "openai/gpt-5.6" to openrouterDef("openai/gpt-5.6*", maxContext = 1_050_000, vision = true, reasoning = true, inPrice = 5.0, outPrice = 30.0),
+        // gpt-5.1 ships a 400k window; without these it would fall through to the 128k
+        // "openai/gpt-" family. Chat is the 128k exception. All must precede "openai/gpt-5".
+        "openai/gpt-5.1-codex-mini" to openrouterDef("openai/gpt-5.1-codex-mini*", maxContext = 400_000, vision = true, reasoning = true, inPrice = 0.25, outPrice = 2.0),
+        "openai/gpt-5.1-codex" to openrouterDef("openai/gpt-5.1-codex*", maxContext = 400_000, vision = true, reasoning = true, inPrice = 1.25, outPrice = 10.0),
+        "openai/gpt-5.1-chat" to openrouterDef("openai/gpt-5.1-chat*", maxContext = 128_000, vision = true, inPrice = 1.25, outPrice = 10.0),
+        "openai/gpt-5.1" to openrouterDef("openai/gpt-5.1*", maxContext = 400_000, vision = true, reasoning = true, inPrice = 1.25, outPrice = 10.0),
+        "openai/gpt-5-pro" to openrouterDef("openai/gpt-5-pro*", maxContext = 400_000, vision = true, reasoning = true, inPrice = 15.0, outPrice = 120.0),
+        "openai/gpt-5-image-mini" to openrouterDef("openai/gpt-5-image-mini*", maxContext = 400_000, vision = true, inPrice = 2.50, outPrice = 2.0),
+        "openai/gpt-5-image" to openrouterDef("openai/gpt-5-image*", maxContext = 400_000, vision = true, inPrice = 10.0, outPrice = 10.0),
         "openai/gpt-5" to openrouterDef("openai/gpt-5-*", maxContext = 400_000, vision = true, inPrice = 5.0, outPrice = 30.0),
         "openai/gpt-audio" to openrouterDef("openai/gpt-audio*", maxContext = 128_000, inPrice = 2.50, outPrice = 10.0),
+        // Realtime tier carries its own premium pricing; must precede the "openai/gpt-" baseline.
+        "openai/gpt-realtime" to openrouterDef("openai/gpt-realtime*", maxContext = 128_000, vision = true, inPrice = 4.0, outPrice = 24.0),
         "openai/gpt-" to openrouterDef("openai/gpt-*", maxContext = 128_000, vision = true, inPrice = 0.50, outPrice = 1.50),
         // o-series reasoning — premium pricing
         "openai/o" to openrouterDef("openai/o*", maxContext = 200_000, reasoning = true, inPrice = 15.0, outPrice = 60.0),
         // Google — gemini-pro $2/$12, gemini-flash $0.50/$3
         "google/gemini-3" to openrouterDef("google/gemini-3*", maxContext = 1_048_576, vision = true, inPrice = 2.0, outPrice = 12.0),
+        // Image-generation tier ships a 32k window, far below the text Gemini family.
+        // Must precede "google/gemini-".
+        "google/gemini-2.5-flash-image" to openrouterDef("google/gemini-2.5-flash-image*", maxContext = 32_768, vision = true, inPrice = 0.30, outPrice = 2.50),
+        // Omni Flash does not emit native tool_calls (models.dev: Tool Call = No) → JSON envelope path.
+        "google/gemini-omni-flash" to openrouterDef("google/gemini-omni-flash*", maxContext = 1_048_576, vision = true, reasoning = true, functionCalling = false, inPrice = 1.50, outPrice = 9.0),
         "google/gemini-" to openrouterDef("google/gemini-*", maxContext = 1_000_000, vision = true, inPrice = 1.25, outPrice = 5.0),
         "google/gemma-" to openrouterDef("google/gemma-*", maxContext = 262_144, vision = true, inPrice = 0.05, outPrice = 0.10),
         // Amazon Nova — lite $0.06/$0.24, pro $0.80/$3.20 (mid-tier baseline)
+        // Premier is the 1M-context flagship tier; must precede "amazon/nova-".
+        "amazon/nova-premier" to openrouterDef("amazon/nova-premier*", maxContext = 1_000_000, vision = true, inPrice = 2.50, outPrice = 12.50),
         "amazon/nova-" to openrouterDef("amazon/nova-*", maxContext = 300_000, vision = true, inPrice = 0.80, outPrice = 3.20),
         // Meta Llama — 3.3-70b ~$0.18/$0.18
         "meta-llama/llama-" to openrouterDef("meta-llama/llama-*", maxContext = 128_000, inPrice = 0.20, outPrice = 0.60),
         "meta-llama/" to openrouterDef("meta-llama/*", maxContext = 128_000, inPrice = 0.20, outPrice = 0.60),
         // Mistral — small $0.15/$0.60 baseline
         "mistralai/" to openrouterDef("mistralai/*", maxContext = 262_144, inPrice = 0.15, outPrice = 0.60),
-        // Qwen — 3.6-max $1.04/$6.24, 3.5-plus $0.40/$2.40, 3-* small models
+        // Qwen — 3.7-max/plus $1.05/$6.25, 3.6-max $1.04/$6.24, 3.6-flash $0.20/$0.60, 3.5-plus $0.40/$2.40, 3-* small models
+        "qwen/qwen3.7" to openrouterDef("qwen/qwen3.7-*", maxContext = 1_000_000, reasoning = true, inPrice = 1.05, outPrice = 6.25),
+        // 3.6-flash is a cheaper/faster tier — must precede "qwen/qwen3.6" to win the prefix match.
+        "qwen/qwen3.6-flash" to openrouterDef("qwen/qwen3.6-flash-*", maxContext = 1_000_000, vision = true, reasoning = true, inPrice = 0.20, outPrice = 0.60),
         "qwen/qwen3.6" to openrouterDef("qwen/qwen3.6-*", maxContext = 1_000_000, vision = true, inPrice = 1.05, outPrice = 6.25),
         "qwen/qwen3.5" to openrouterDef("qwen/qwen3.5-*", maxContext = 262_144, vision = true, inPrice = 0.40, outPrice = 2.40),
         // qwen3-coder-* variants emit XML pseudo-tags instead of native tool_calls
         // (observed: `<create_new_file><path>...</path><content>...</content></create_new_file>`).
         // Prefix entry must come before "qwen/qwen3" to win the prefix match.
+        // VL variants are multimodal; the plain qwen3 family below is text-only.
+        "qwen/qwen3-vl" to openrouterDef("qwen/qwen3-vl-*", maxContext = 262_144, vision = true, inPrice = 0.13, outPrice = 0.52),
         "qwen/qwen3-coder" to openrouterDef("qwen/qwen3-coder-*", maxContext = 262_144, functionCalling = false, inPrice = 0.50, outPrice = 2.0),
         "qwen/qwen3" to openrouterDef("qwen/qwen3-*", maxContext = 262_144, inPrice = 0.20, outPrice = 0.60),
         "qwen/" to openrouterDef("qwen/*", maxContext = 128_000, inPrice = 0.20, outPrice = 0.60),
         // DeepSeek — v4-flash $0.14/$0.28, v4-pro $0.43/$0.87, R1 $0.27/$1.10
+        // v3.2 ships a 163,840 window; must precede the 128k "deepseek/" family.
+        "deepseek/deepseek-v3.2" to openrouterDef("deepseek/deepseek-v3.2*", maxContext = 163_840, inPrice = 0.27, outPrice = 0.41),
         "deepseek/" to openrouterDef("deepseek/*", maxContext = 128_000, inPrice = 0.27, outPrice = 1.10),
         // xAI Grok — grok-4 $5/$15, grok-3 $5/$25, grok-fast variants cheaper
         "x-ai/grok-" to openrouterDef("x-ai/grok-*", maxContext = 2_000_000, vision = true, inPrice = 3.0, outPrice = 15.0),
-        // Cohere Command — command-r ~$0.50/$1.50
+        // models.dev exposes xAI as "xai/" (no hyphen); grok-4.5 ships a 500k window.
+        "xai/grok-" to openrouterDef("xai/grok-*", maxContext = 500_000, vision = true, inPrice = 2.0, outPrice = 6.0),
+        "xai/" to openrouterDef("xai/*", maxContext = 128_000, vision = true, inPrice = 2.0, outPrice = 6.0),
+        // Cohere — command-a-plus $2.50/$10, north-mini-code (open, coding), command-r ~$0.50/$1.50
+        "cohere/command-a" to openrouterDef("cohere/command-a-*", maxContext = 128_000, vision = true, reasoning = true, inPrice = 2.50, outPrice = 10.0),
+        "cohere/north" to openrouterDef("cohere/north-*", maxContext = 256_000, vision = true, reasoning = true),
         "cohere/command-" to openrouterDef("cohere/command-*", maxContext = 128_000, inPrice = 0.50, outPrice = 1.50),
         // Moonshot Kimi — k2 $0.74/$3.49
-        "moonshotai/kimi" to openrouterDef("moonshotai/kimi-*", maxContext = 262_144, vision = true, inPrice = 0.74, outPrice = 3.49),
+        // Kimi K3 jumps to a 1.05M window (open weights); must precede "moonshotai/kimi".
+        // The Kimi family mandates reasoning on OpenRouter: kimi-k3 and kimi-k2.7-code both
+        // reject reasoning.enabled=false with a hard error, so reasoningMandatory covers the
+        // whole family (over-applying only leaves reasoning at its default, which is safe).
+        "moonshotai/kimi-k3" to openrouterDef("moonshotai/kimi-k3*", maxContext = 1_048_576, vision = true, reasoning = true, reasoningMandatory = true, inPrice = 0.60, outPrice = 2.50),
+        "moonshotai/kimi" to openrouterDef("moonshotai/kimi-*", maxContext = 262_144, vision = true, reasoning = true, reasoningMandatory = true, inPrice = 0.74, outPrice = 3.49),
         "moonshotai/" to openrouterDef("moonshotai/*", maxContext = 128_000, inPrice = 0.50, outPrice = 2.0),
         // MiniMax — m2.5 $0.15/$1.15
         // minimax-m2.7 emits `<minimax:tool_call><invoke name="...">...</invoke></minimax:tool_call>`
         // pseudo-XML instead of native tool_calls. Force JSON envelope mode.
         "minimax/minimax-m2.7" to openrouterDef("minimax/minimax-m2.7*", maxContext = 196_608, functionCalling = false, inPrice = 0.15, outPrice = 1.15),
-        "minimax/minimax-m2" to openrouterDef("minimax/minimax-m2*", maxContext = 196_608, inPrice = 0.15, outPrice = 1.15),
+        // m2.5 keeps its own window; m2 ships a 204,800 context. The explicit m2.5 entry
+        // must precede "minimax/minimax-m2" so the m2 bump below does not steal it.
+        "minimax/minimax-m2.5" to openrouterDef("minimax/minimax-m2.5*", maxContext = 196_608, inPrice = 0.15, outPrice = 1.15),
+        "minimax/minimax-m2" to openrouterDef("minimax/minimax-m2*", maxContext = 204_800, inPrice = 0.255, outPrice = 1.02),
         "minimax/" to openrouterDef("minimax/*", maxContext = 128_000, inPrice = 0.15, outPrice = 1.15),
         // Z.AI GLM — glm-5.1 $1.05/$3.50
         "z-ai/glm-5v" to openrouterDef("z-ai/glm-5v*", maxContext = 202_752, vision = true, inPrice = 1.20, outPrice = 4.0),
         "z-ai/glm-" to openrouterDef("z-ai/glm-*", maxContext = 202_752, inPrice = 1.05, outPrice = 3.50),
         "z-ai/" to openrouterDef("z-ai/*", maxContext = 128_000, inPrice = 1.0, outPrice = 3.0),
+        // models.dev exposes Zhipu as "zhipuai/"; glm-5.2 ships a 1M window (open weights).
+        "zhipuai/glm-" to openrouterDef("zhipuai/glm-*", maxContext = 1_000_000, inPrice = 0.60, outPrice = 2.20),
+        "zhipuai/" to openrouterDef("zhipuai/*", maxContext = 202_752, inPrice = 1.0, outPrice = 3.0),
         // ByteDance Seed
         "bytedance-seed/" to openrouterDef("bytedance-seed/*", maxContext = 262_144, vision = true, inPrice = 0.40, outPrice = 1.40),
         // NVIDIA Nemotron — super-120b $0.09/$0.45
@@ -5618,6 +6351,31 @@ object ModelDefinitions {
         "aion-labs/" to openrouterDef("aion-labs/*", maxContext = 131_072, inPrice = 0.30, outPrice = 0.80),
         // Baidu Ernie
         "baidu/" to openrouterDef("baidu/*", maxContext = 65_536, vision = true, inPrice = 0.20, outPrice = 0.60),
+        // Sakana AI Fugu — ultra $5/$30; fugu-ultra must precede fugu to win the prefix match
+        "sakana/fugu-ultra" to openrouterDef("sakana/fugu-ultra*", maxContext = 1_000_000, vision = true, reasoning = true, inPrice = 5.0, outPrice = 30.0),
+        "sakana/fugu" to openrouterDef("sakana/fugu*", maxContext = 1_000_000, vision = true, reasoning = true),
+        // Deep Cogito — cogito v2.1 671b $1.25/$1.25
+        "deepcogito/" to openrouterDef("deepcogito/*", maxContext = 128_000, reasoning = true, inPrice = 1.25, outPrice = 1.25),
+        // Perplexity Sonar — search-grounded, sonar-pro-search $3/$15
+        "perplexity/sonar-pro" to openrouterDef("perplexity/sonar-pro*", maxContext = 200_000, inPrice = 3.0, outPrice = 15.0),
+        "perplexity/" to openrouterDef("perplexity/*", maxContext = 128_000, inPrice = 1.0, outPrice = 1.0),
+        // IBM Granite — micro tier $0.017/$0.112
+        "ibm-granite/" to openrouterDef("ibm-granite/*", maxContext = 131_000, inPrice = 0.017, outPrice = 0.112),
+        // TheDrummer — community fine-tunes
+        "thedrummer/" to openrouterDef("thedrummer/*", maxContext = 131_072, inPrice = 0.30, outPrice = 0.50),
+        // Relace — apply/edit specialist, not a general chat model
+        "relace/" to openrouterDef("relace/*", maxContext = 256_000, inPrice = 0.85, outPrice = 1.25),
+        // Thinking Machines — inkling, 256k reasoning model
+        "thinkingmachines/" to openrouterDef("thinkingmachines/*", maxContext = 256_000, vision = true, reasoning = true, inPrice = 1.0, outPrice = 4.05),
+        // Meta proprietary (Muse family), distinct from the meta-llama open weights above
+        "meta/muse" to openrouterDef("meta/muse-*", maxContext = 1_000_000, vision = true, reasoning = true, inPrice = 1.25, outPrice = 4.25),
+        "meta/" to openrouterDef("meta/*", maxContext = 128_000, inPrice = 0.20, outPrice = 0.60),
+        // Poolside Laguna — open-weight coding models, 262k window
+        "poolside/" to openrouterDef("poolside/*", maxContext = 262_144, reasoning = true),
+        // Meituan LongCat — 1M window
+        "meituan/" to openrouterDef("meituan/*", maxContext = 1_000_000, reasoning = true, inPrice = 0.75, outPrice = 2.95),
+        // DeepReinforce Ornith — open-weight, 262k window
+        "deepreinforce/" to openrouterDef("deepreinforce/*", maxContext = 262_144, vision = true, reasoning = true),
         // OpenRouter meta-models (auto-router)
         "openrouter/" to openrouterDef("openrouter/*", maxContext = 200_000, vision = true, inPrice = 1.0, outPrice = 3.0)
     )
@@ -5636,6 +6394,13 @@ object ModelDefinitions {
          * (e.g. `<minimax:tool_call>`, `<create_new_file>...</...>`).
          */
         functionCalling: Boolean = true,
+        /**
+         * Whether the upstream endpoint mandates reasoning and rejects an
+         * explicit `reasoning.enabled=false` (e.g. moonshotai/kimi-k3 returns
+         * "Reasoning is mandatory for this endpoint and cannot be disabled").
+         * When true, adapters must not suppress reasoning on thinking OFF.
+         */
+        reasoningMandatory: Boolean = false,
         /**
          * USD per 1M input tokens. Family-level baseline used when no live
          * pricing is available from OpenRouter's `/models` endpoint.
@@ -5665,6 +6430,7 @@ object ModelDefinitions {
         costPer1MOutput = outPrice,
         supportsVision = vision,
         supportsReasoning = reasoning,
+        reasoningMandatory = reasoningMandatory,
         supportsStreaming = true,
         supportsFunctionCalling = functionCalling,
         endpointType = ApiEndpointType.CHAT_COMPLETIONS,

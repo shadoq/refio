@@ -1,7 +1,7 @@
 # Refio - Technical Architecture Overview
 
-> **Last Updated:** 2026-05-31
-> **Version:** 0.0.1.11
+> **Last Updated:** 2026-06-28
+> **Version:** 0.0.1.12
 > **Status:** Active Development
 
 This document provides a comprehensive technical overview of Refio - a local-first AI coding assistant for IntelliJ IDEA and the terminal.
@@ -46,7 +46,7 @@ Traditional Approach:          Refio Approach:
 ```
 
 **Benefits:**
-- Lower API costs (50-70% token reduction)
+- Lower API costs (less context sent per call)
 - Faster responses
 - Works with smaller context windows (local models)
 - Privacy-first (no-egress mode)
@@ -122,7 +122,7 @@ Refio runs in two environments sharing the same `:core` module:
 ├─────────────────────────────────────────────────────────────────────────┤
 │  Infrastructure Layer                                                   │
 │  ├── LLMClient (unified) → 8 provider adapters                          │
-│  ├── ToolRegistry → 24 registered tools (14 read-only, 10 write)         │
+│  ├── ToolRegistry → ~30 registered tools across 6 groups                 │
 │  ├── MCPManager → MCP server lifecycle (STDIO/HTTP)                     │
 │  ├── EmbeddingsService → Ollama/OpenAI embeddings                       │
 │  └── DatabaseFactory → SQLite (WAL) + Exposed ORM                       │
@@ -217,7 +217,7 @@ Unknown placeholders remain unchanged.
 | **AGENT** | AgentTurnLoop | ALL (24) | Yes | Code generation, refactoring |
 | **SUBAGENT** | AgentTurnLoop (`runProfile=SUBAGENT`) | Profile-filtered | Yes | Specialized delegated tasks |
 
-`ToolRegistry` has 24 registered tools (14 read-only, 10 write); `run_terminal_command` is enabled by default in AGENT mode and restricted by terminal whitelist rules.
+`ToolRegistry` has ~30 registered tools across 6 functional groups (reading & search, web & HTTP, system, editing, execution, delegation); PLAN exposes the read-only subset, AGENT the full set. `run_terminal_command` is `ASK` by default in AGENT mode and validated by `CommandRule` (regex `ALLOW` / `BLOCK` / `ASK`).
 `invoke_subagent` is enabled by default in PLAN and AGENT, and is displayed as `subagent` in Tools Settings.
 `delegate_to_strong_model` is registered only when `models.defaults.strong` is configured; it delegates complex tasks to a more capable model (single-shot or tool-enabled sub-agent mode).
 
@@ -251,7 +251,7 @@ SessionManager.sendMessage()
     ↓
 AgentTurnLoop.runTurn()
     ├─ Save user message to history
-    ├─ LOOP (max 25 iterations):
+    ├─ LOOP (max 100 iterations):
     │   ├→ Build prompt (history + context + tool descriptions)
     │   ├→ Call LLM
     │   ├→ If tool calls in response:
@@ -276,7 +276,7 @@ UI Update via StateFlow
 
 **Location:** `core/services/AgentTurnLoop.kt`
 
-The primary execution engine for PLAN, AGENT, and SUBAGENT run profiles, implementing a Codex CLI-style turn-based pattern with ADR-0028/ADR-0029 enhancements for optimized performance and unified execution.
+The primary execution engine for PLAN, AGENT, and SUBAGENT run profiles, implementing a Codex CLI-style turn-based pattern with performance and unified-execution enhancements.
 
 ### Key Features
 
@@ -287,14 +287,14 @@ The primary execution engine for PLAN, AGENT, and SUBAGENT run profiles, impleme
 | **Tool Filtering** | PLAN = READ_ONLY, AGENT = all tools |
 | **Subtask Tracking** | Each tool call creates database entry with status lifecycle |
 | **Result Summarization** | Tool results summarized to reduce context size |
-| **Safety Limits** | Max 25 iterations, loop detection, error rate monitoring |
-| **Auto-Compaction** | Automatic conversation compression at 80-85% context window (ADR-0028) |
-| **Prompt Caching** | Static prompt components cached for faster execution (ADR-0028) |
-| **Parallel Tools** | READ_ONLY tools execute concurrently for better performance (ADR-0028) |
-| **Retry Logic** | Exponential backoff for transient API errors (ADR-0028) |
-| **Token Estimation** | Pre-flight token counting prevents context overflow (ADR-0028) |
-| **Run Profiles** | `DEFAULT` and `SUBAGENT` with per-run overrides (ADR-0029) |
-| **Nested Metadata** | `runId`, `parentRunId`, `depth` attached to turn lifecycle (ADR-0029) |
+| **Safety Limits** | Max 100 iterations, loop detection, error rate monitoring |
+| **Auto-Compaction** | Automatic conversation compression at 80-85% context window |
+| **Prompt Caching** | Static prompt components cached for faster execution |
+| **Parallel Tools** | READ_ONLY tools execute concurrently for better performance |
+| **Retry Logic** | Exponential backoff for transient API errors |
+| **Token Estimation** | Pre-flight token counting prevents context overflow |
+| **Run Profiles** | `DEFAULT` and `SUBAGENT` with per-run overrides |
+| **Nested Metadata** | `runId`, `parentRunId`, `depth` attached to turn lifecycle |
 | **Centralized Metric Tracking** | `LLMClient` accepts `taskRepository` + `subtaskRepository` and auto-increments `tokens_in` / `tokens_out` / `cost_usd` on the `task` and `subtask` rows after every successful call. The `task` row is the single source of truth for live stats — UI reads it directly instead of summing per-message tokens. |
 | **Task Status Transitions** | AGENT turns flip `task.status` `RUNNING` on entry, `SUCCESS` / `FAILED` / `INCOMPLETE` on completion (was previously stuck at `NEW`). `INCOMPLETE` marks a turn that stopped without delivering the request (a completion guardian gave up, or a no-op-write / read-spree abort fired) — distinct from `FAILED` (an error) and `SUCCESS` (delivered). Followed by a `pushSessionRefresh()` that re-reads the row and re-publishes via the `activeSession` `StateFlow`. |
 | **Skip Redundant Config Writes** | `SessionLifecycleService.updateSession(persistSettings = false)` skips the 5 `ConfigRepository` writes that `saveCurrentSessionState()` would otherwise emit on every token-only refresh (~10 fewer DB writes per turn). |
@@ -310,7 +310,7 @@ PENDING → RUNNING → SUCCESS/FAILED
    +-- Subtask created for tool call
 ```
 
-### ADR-0028 Enhancements (2026-02-02)
+### Turn-loop Enhancements (2026-02-02)
 
 The turn loop has been enhanced with six major optimizations inspired by Codex CLI, Claude Code, and industry research:
 
@@ -415,7 +415,7 @@ Next Prompt → Build Working Memory Section → Inject as Reminder
 
 | Parameter | PLAN | AGENT | Description |
 |-----------|------|-------|-------------|
-| maxIterations | 25 | 50 | Max LLM calls per turn |
+| maxIterations | 100 | 100 | Max LLM calls per turn |
 | compactionThreshold | 0.85 | 0.80 | Trigger at % of context |
 | parallelReadTools | true | true | Concurrent READ_ONLY |
 | enableSnapshots | false | true | File backups before write |
@@ -449,9 +449,9 @@ Summarizes tool execution results to reduce context size:
 
 | Mechanism | Description |
 |-----------|-------------|
-| **Loop Detection** | Prevents same tool call 3+ consecutive times or 5+ total |
-| **Error Rate Monitoring** | Aborts if >70% failure rate AND >= 5 operations |
-| **Max Iterations** | Hard limit per turn (PLAN: 25, AGENT: 50) |
+| **Loop Detection** | Aborts when a tool returns byte-identical output 4x in a row on the same target (hash-based); content-chanting detector for runaway text |
+| **Error Rate Monitoring** | Aborts if >= 70% failure rate over the last 10 tool calls |
+| **Max Iterations** | Hard limit per turn (PLAN: 100, AGENT: 100) |
 | **Timeout** | Configurable per-tool execution timeout |
 
 ---
@@ -697,7 +697,7 @@ interface Tool {
 | `multi_edit` | edits[] | Atomic multi-file edit | Free |
 | `multi_line_editor` | path, edit_description | LLM identifies line ranges | ~$0.02 |
 | `advance_code_editing` | path, edit_description | Full file regeneration | ~$0.06 |
-| `run_terminal_command` | command | Shell execution (whitelist-protected) | **AGENT: ON (default)** |
+| `run_terminal_command` | command | Shell execution (CommandRule-protected) | **AGENT: ASK (default)** |
 | `http_request` | url, method, headers, body, save_to_file | HTTP requests (GET/POST/PUT/DELETE), 5 MB limit, 60s timeout | Free |
 | `run_code` | language, code | Execute Python/JavaScript/Kotlin Script snippets, 120s timeout | **OFF by default** |
 | `run_process_background` | command | Start command in background, return process_id | Free |
@@ -719,10 +719,10 @@ Layer 2: FileLimits
 ├── Excluded directories: 24 (.git, node_modules, build, etc.)
 └── Excluded extensions: 34 (.class, .jar, .exe, .dll, etc.)
 
-Layer 3: Terminal Whitelist + Filters
-├── Allowlist for programs/subcommands/flags
+Layer 3: Terminal CommandRule engine
+├── Regex rules with ALLOW / BLOCK / ASK actions (CommandRuleDefaults)
 ├── Global blocked patterns (pipes to shell, command substitution, etc.)
-└── Optional denylist fallback mode
+└── Unknown commands fall through to ASK (user approval)
 
 Layer 4: ToolPermissions
 ├── Per-mode permissions (PLAN=read-only, AGENT=read-write)
@@ -960,9 +960,9 @@ You are a security expert specializing in code security audits.
 | `plan` | ConfigService PLAN model |
 | `coding` | ConfigService CODING model |
 | `weak` | ConfigService WEAK model |
-| `sonnet` | claude-3-5-sonnet-20241022 |
-| `opus` | claude-3-opus-20240229 |
-| `haiku` | claude-3-haiku-20240307 |
+
+Any other value is treated as a literal model string (provider inferred from the prefix:
+`gpt-`/`o1`/`o3` -> openai, `claude-` -> anthropic, `gemini-` -> gemini, else ollama).
 
 ### Built-in Subagents (21)
 
@@ -1224,7 +1224,7 @@ User: "Add authentication to the API"
     ↓
 AgentTurnLoop.runTurn()
     ↓
-Loop (max 25):
+Loop (max 100):
 ├── Build prompt with tools
 ├── LLM response with tool calls
 ├── Create subtasks (PENDING)

@@ -62,11 +62,11 @@ The parent agent may ask the user if it doesn't know the answer."""
         val type = params["type"] as? String ?: "question"
         val to = params["to"] as? String ?: "parent"
 
-        // Routing rules (Phase 1, spec §3.3 / Step 6):
+        // Routing rules:
         //   - "parent": resolved via PARENT_RUN_ID (subagent → invoking turn). Kept unchanged.
         //   - named peer: validated against AgentInboxRegistry. Unknown peer fails fast instead of
         //     letting AgentTurnLoop suspend for 5 minutes on a response that will never come.
-        //   - blank: rejected. Broadcast (no target) is not supported in Phase 1.
+        //   - blank: rejected. Broadcast (no target) is not supported.
         val targetAgentId: String = when {
             to == "parent" -> parentRunId
                 ?: return ToolResult.error("'to: parent' used outside a subagent invocation (no PARENT_RUN_ID)")

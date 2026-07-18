@@ -194,7 +194,7 @@ class CoreSessionService(
                     streamStateMutex.withLock {
                         val now = System.currentTimeMillis()
 
-                        // Surface progressive native tool-call building to the UI (docs/0064). The
+                        // Surface progressive native tool-call building to the UI. The
                         // snapshot is transient: shown while arguments stream, cleared on completion.
                         chunk.toolCallProgress?.let { stateManager.setToolCallProgress(it) }
 
@@ -616,6 +616,7 @@ class CoreSessionService(
                 session.copy(
                     tokensIn = freshTask.tokensIn,
                     tokensOut = freshTask.tokensOut,
+                    cachedTokens = freshTask.cachedTokens,
                     costUsd = freshTask.costUsd,
                 ),
                 persistSettings = false,

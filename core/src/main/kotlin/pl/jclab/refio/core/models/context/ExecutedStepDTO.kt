@@ -6,8 +6,6 @@ import java.time.Instant
  * DTO for a single executed step from previous subtasks.
  * Used in RECENT_WORK section to show detailed action history.
  *
- * Based on ADR 0041: Structured Recent Work Context
- *
  * @property subtaskId Source subtask ID for this executed step
  * @property file Optional file path affected by this step
  * @property tool Tool name that was executed

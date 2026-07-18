@@ -2,8 +2,10 @@ package pl.jclab.refio.core.services.turn
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 
@@ -91,5 +93,66 @@ class TurnGuardianStateTest {
         state.captureIfFirst(resp(""), hasVisibleText = false)
 
         assertNull(state.preReentryResponse)
+    }
+
+    // ---- replenishIfSustainedProgress: per-episode re-entry budget, not per-whole-turn ----
+
+    @Test
+    fun `replenishes the budget after sustained progress since the last re-entry`() {
+        // Episode: a re-entry happened at usedTools.size == 4 (the 2ef4aabc shape: judge re-entered
+        // early on a trivial pause). The agent then worked productively — many new tool calls.
+        val state = TurnGuardianState()
+        state.captureIfFirst(resp("early pause answer"), hasVisibleText = true)
+        state.onReentry(usedToolsSize = 4)
+
+        // 12 tools now (8 new since the snapshot) >= threshold → episode is recovered, budget reset.
+        val reset = state.replenishIfSustainedProgress(usedToolsSize = 12, progressThreshold = 3)
+
+        assertTrue(reset)
+        assertEquals(0, state.reentryCount)         // fresh single re-entry available again
+        assertNull(state.preReentryResponse)        // the early stash is stale after real progress
+        assertEquals(0, state.usedToolsAtLastReentry)
+    }
+
+    @Test
+    fun `does not replenish before the progress threshold is reached`() {
+        // Only 2 new tool calls since the re-entry (4 -> 6) — below the threshold of 3. A model that
+        // flaps between a bare intent announcement and one token tool call must NOT farm re-entries.
+        val state = TurnGuardianState()
+        state.onReentry(usedToolsSize = 4)
+
+        val reset = state.replenishIfSustainedProgress(usedToolsSize = 6, progressThreshold = 3)
+
+        assertFalse(reset)
+        assertEquals(1, state.reentryCount)         // budget stays spent
+        assertEquals(4, state.usedToolsAtLastReentry)
+    }
+
+    @Test
+    fun `replenish is a no-op when no re-entry has happened yet`() {
+        // No episode to recover — even a large tool count must not touch the (already full) budget.
+        val state = TurnGuardianState()
+
+        val reset = state.replenishIfSustainedProgress(usedToolsSize = 50, progressThreshold = 3)
+
+        assertFalse(reset)
+        assertEquals(0, state.reentryCount)
+    }
+
+    @Test
+    fun `replenish never steals a restorable answer`() {
+        // restorableResponse fires only when NO new tools ran since the snapshot; replenish requires
+        // >= threshold new calls. The two conditions are mutually exclusive — a reset can never drop
+        // an answer that was about to be restored. Pin that: at the snapshot size, nothing resets and
+        // the stash is still restorable.
+        val state = TurnGuardianState()
+        val answerA = resp("A — the answer the user already saw")
+        state.captureIfFirst(answerA, hasVisibleText = true)
+        state.onReentry(usedToolsSize = 5)
+
+        // No new tools (size still 5): not sustained progress, so no reset...
+        assertFalse(state.replenishIfSustainedProgress(usedToolsSize = 5, progressThreshold = 3))
+        // ...and the stashed answer remains restorable.
+        assertSame(answerA, state.restorableResponse(usedToolsSize = 5))
     }
 }

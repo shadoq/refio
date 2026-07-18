@@ -96,7 +96,7 @@ abstract class OpenAICompatibleAdapter(
      * [IllegalStateException] from here propagates up as a stream error
      * (used by OpenRouter to surface mid-stream provider errors).
      */
-    protected open fun onStreamRawChunk(chunk: Map<String, Any?>) = Unit
+    protected open fun onStreamRawChunk(chunk: com.google.gson.JsonObject) = Unit
 
     /** Rate-limit retry hook (Z.AI). Default: no retry. */
     protected open suspend fun <T> executeWithRateLimitRetry(endpoint: String, block: suspend () -> T): T = block()
@@ -174,7 +174,9 @@ abstract class OpenAICompatibleAdapter(
         val promptTokens = (usageMap["prompt_tokens"] as? Number)?.toInt() ?: 0
         val completionTokens = (usageMap["completion_tokens"] as? Number)?.toInt() ?: 0
         val totalTokens = (usageMap["total_tokens"] as? Number)?.toInt() ?: (promptTokens + completionTokens)
-        return LLMUsage(promptTokens, completionTokens, totalTokens)
+        val cachedTokens = ((usageMap["prompt_tokens_details"] as? Map<*, *>)
+            ?.get("cached_tokens") as? Number)?.toInt() ?: 0
+        return LLMUsage(promptTokens, completionTokens, totalTokens, cachedInputTokens = cachedTokens)
     }
 
     /**
@@ -293,7 +295,17 @@ abstract class OpenAICompatibleAdapter(
             val firstChoice = choices.firstOrNull() ?: emptyMap()
             @Suppress("UNCHECKED_CAST")
             val message = firstChoice["message"] as? Map<String, Any?> ?: emptyMap()
-            val content = message["content"] as? String ?: ""
+            val rawContent = message["content"] as? String ?: ""
+            // Some reasoning models (e.g. GLM via Z.AI, DeepSeek) put the whole answer in
+            // `reasoning_content` and leave `content` empty. Recover it as the response text
+            // when there is no content and no tool_calls, so the turn isn't fed a blank reply.
+            val content = if (rawContent.isNotBlank() || message["tool_calls"] != null) {
+                rawContent
+            } else {
+                (message["reasoning_content"] as? String)?.takeIf { it.isNotBlank() }
+                    ?.also { logger.info { "$logPrefix [REASONING_FALLBACK] content empty, recovered ${it.length} chars from reasoning_content" } }
+                    ?: ""
+            }
             val normalizedToolCallsJson = if (content.isBlank()) {
                 ToolCallContentNormalizer.fromOpenAiToolCalls(message["tool_calls"])
             } else {
@@ -415,19 +427,21 @@ abstract class OpenAICompatibleAdapter(
                                 onStreamChunk(StreamChunk(delta = "", toolCallDelta = tcDelta))
                             },
                             onRawChunk = { chunk ->
-                                @Suppress("UNCHECKED_CAST")
-                                (chunk["usage"] as? Map<String, Any?>)?.let { usageMap ->
-                                    val promptTokens = (usageMap["prompt_tokens"] as? Number)?.toInt() ?: 0
-                                    val completionTokens = (usageMap["completion_tokens"] as? Number)?.toInt() ?: 0
-                                    val totalTokens = (usageMap["total_tokens"] as? Number)?.toInt()
+                                (chunk.get("usage") as? com.google.gson.JsonObject)?.let { usageObj ->
+                                    val promptTokens = usageObj.intField("prompt_tokens") ?: 0
+                                    val completionTokens = usageObj.intField("completion_tokens") ?: 0
+                                    val totalTokens = usageObj.intField("total_tokens")
                                         ?: (promptTokens + completionTokens)
+                                    val cachedTokens = (usageObj.get("prompt_tokens_details")
+                                        as? com.google.gson.JsonObject).intField("cached_tokens") ?: 0
                                     streamUsage = LLMUsage(
                                         inputTokens = promptTokens,
                                         outputTokens = completionTokens,
                                         totalTokens = totalTokens,
+                                        cachedInputTokens = cachedTokens,
                                     )
-                                    val details = usageMap["completion_tokens_details"] as? Map<*, *>
-                                    val reasoning = (details?.get("reasoning_tokens") as? Number)?.toInt()
+                                    val details = usageObj.get("completion_tokens_details") as? com.google.gson.JsonObject
+                                    val reasoning = details.intField("reasoning_tokens")
                                     logger.info {
                                         "$logPrefix [STREAM_USAGE] prompt=$promptTokens, completion=$completionTokens" +
                                             (reasoning?.let { ", reasoning=$it (incl. in completion)" } ?: "")
@@ -469,8 +483,8 @@ abstract class OpenAICompatibleAdapter(
                         else -> 0
                     }
                 } ?: 0
-                // Provider omitted usage on the stream — estimate via the shared chars→tokens
-                // converter (docs/0057 §6) so input and output agree on one ratio instead of the
+                // Provider omitted usage on the stream - estimate via the shared chars→tokens
+                // converter so input and output agree on one ratio instead of the
                 // old split (input = raw chars, output = chars/4).
                 val inputTokensEstimate = pl.jclab.refio.core.services.PromptTokenEstimator.estimateTokensForChars(inputChars)
                 val outputTokensEstimate = pl.jclab.refio.core.services.PromptTokenEstimator.estimateBase(contentBuilder.toString())
@@ -626,7 +640,14 @@ abstract class OpenAICompatibleAdapter(
         }
     }
 
-    override fun estimateCost(usage: LLMUsage): Double = 0.0
+    // Cost from the central pricing table (provider/model based). Returning 0.0 here used to
+    // leave the API Logs rows at $0.00 for Z.AI/OpenRouter/etc even though the turn trace
+    // (computed separately in LLMClient) showed the real cost - the two sources disagreed.
+    override fun estimateCost(usage: LLMUsage): Double =
+        pl.jclab.refio.core.llm.calculateCost(
+            provider, model, usage.inputTokens, usage.outputTokens,
+            usage.cachedInputTokens, usage.cacheWriteInputTokens
+        )
 
     override suspend fun close() {
         client.close()

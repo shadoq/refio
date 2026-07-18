@@ -181,7 +181,7 @@ class SubtaskRepository {
     }
 
     /**
-     * Update LLM metrics (US-027)
+     * Update LLM metrics
      * Simpler version that only updates tokens, cost, and latency
      */
     fun updateMetrics(
@@ -220,6 +220,9 @@ class SubtaskRepository {
         latencyMs: Int
     ): Subtask? {
         return transaction {
+            // Read only to decide the set-once model/provider fields; the numeric
+            // metrics use atomic in-database increments to avoid losing updates
+            // when multiple LLM calls finish concurrently.
             val existing = findById(id) ?: return@transaction null
 
             SubtasksTable.update({ SubtasksTable.id eq id }) {
@@ -229,10 +232,12 @@ class SubtaskRepository {
                 if (existing.llmProvider.isNullOrBlank() && llmProvider != null) {
                     it[SubtasksTable.llmProvider] = llmProvider
                 }
-                it[SubtasksTable.inputTokens] = existing.inputTokens + inputTokens
-                it[SubtasksTable.outputTokens] = existing.outputTokens + outputTokens
-                it[SubtasksTable.costUsd] = existing.costUsd + costUsd
-                it[SubtasksTable.latencyMs] = existing.latencyMs + latencyMs
+                with(SqlExpressionBuilder) {
+                    it[SubtasksTable.inputTokens] = SubtasksTable.inputTokens + inputTokens
+                    it[SubtasksTable.outputTokens] = SubtasksTable.outputTokens + outputTokens
+                    it[SubtasksTable.costUsd] = SubtasksTable.costUsd + costUsd
+                    it[SubtasksTable.latencyMs] = SubtasksTable.latencyMs + latencyMs
+                }
                 it[updatedAt] = System.currentTimeMillis()
             }
 

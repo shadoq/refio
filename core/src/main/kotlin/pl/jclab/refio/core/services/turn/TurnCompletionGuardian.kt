@@ -61,8 +61,14 @@ data class GuardianContext(
      * if only the set of names matters.
      */
     val toolsUsed: List<String>,
-    /** How many WRITE-mode tools executed in this turn. */
+    /** How many WRITE-mode tools executed in this turn (includes run_terminal_command/run_code). */
     val writeToolsExecutedInTurn: Int,
+    /**
+     * How many real FILE-producing writes (edit/create) executed this turn - the strict deliverable
+     * signal, excluding run_terminal_command/run_code which leave no file. Defaults to 0 so older
+     * construction sites stay valid; the deliverable check treats a mkdir-only turn as no deliverable.
+     */
+    val fileWriteToolsExecutedInTurn: Int = 0,
     /** How many verification (read-only) tool calls happened after the last write. */
     val verificationToolsExecutedAfterWrite: Int,
     /** How many times any guardian has already requested re-entry in this turn. */

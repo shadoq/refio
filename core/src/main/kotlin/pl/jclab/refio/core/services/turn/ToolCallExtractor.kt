@@ -46,7 +46,7 @@ sealed interface ExtractionResult {
  * Single entry point that turns an [LLMResponse] into tool calls regardless of how the model
  * expressed them. Strategies are tried in order; the first that yields calls wins and its
  * `source` is reported. The turn loop no longer branches "native vs JSON" itself — it asks
- * this extractor (docs/0056).
+ * this extractor.
  *
  * Strategy order:
  *  1. `provider-native`  — [LLMResponse.nativeToolCalls] the runtime already parsed.
@@ -54,7 +54,7 @@ sealed interface ExtractionResult {
  *  3. `hermes`           — `<tool_call>{json}</tool_call>` tags (guarded recovery).
  *  4. `qwen-coder-xml`   — `<function=NAME><parameter=KEY>VAL</parameter></function>` (guarded recovery).
  *
- * **Rule 7 / docs/0056 §1:** parsing of XML pseudo-tags was deliberately removed once because it
+ * **Rule 7:** parsing of XML pseudo-tags was deliberately removed once because it
  * masked the real failure (a wrong `supportsFunctionCalling` flag) and encouraged garbage output.
  * The recovery strategies (3, 4) are therefore intentionally NARROW: they run only when the
  * structured native channel was NOT used AND the JSON contract produced nothing, and they accept
@@ -74,6 +74,12 @@ class ToolCallExtractor(
     // Labeled-line recovery: `[TOOL] name: args` (marker optional after the first line). Anchored per
     // trimmed line so `name:` must lead the line — prose like "Let me examine X" never matches.
     private val labeledLineRegex = Regex("""^(?:\[TOOL]\s*)?([A-Za-z_]\w*)\s*:\s*(.+)$""")
+    // Space-form tool line: `name key="value" key2=value2` (NO colon), used by some weak local
+    // models (qwen3-coder) that emit a standalone `[TOOL]` marker line then a space-separated call.
+    // Armed ONLY when a bare `[TOOL]` marker line is present (see extractLabeledToolLines), so prose
+    // `result equals x = y` never false-positives without the explicit marker; the args group must
+    // still carry a `key=value` and the name must be a registered tool.
+    private val labeledSpaceLineRegex = Regex("""^([A-Za-z_]\w*)\s+(.+=.+)$""")
     // One `key=value` arg: quoted value taken verbatim (group 2, commas/pipes preserved) or a bare
     // value up to the next comma (group 3).
     private val labeledArgRegex = Regex("""([A-Za-z_]\w*)\s*=\s*(?:"([^"]*)"|([^,]+))""")
@@ -98,7 +104,7 @@ class ToolCallExtractor(
         }
 
         // 1b. Native channel active but EMPTY (real adapters return emptyList — NOT null — when native
-        //     tools were requested and the model produced 0 native calls; docs/0068). Normally this is
+        //     tools were requested and the model produced 0 native calls). Normally this is
         //     authoritative "the model finished with prose". EXCEPT: some models flagged native-capable
         //     emit the project's canonical {response, actions:[...]} envelope in TEXT instead of using
         //     the channel. Because there is NO native call here, recovering that envelope cannot spawn a
@@ -147,8 +153,8 @@ class ToolCallExtractor(
         // 5. Truncation: the model hit the output-token cap mid-envelope (`finishReason=length`) and
         //    left an unparseable, unclosed JSON object. This is a distinct, actionable failure — not a
         //    "model finished in prose" — so it gets its own reason. Detecting it HERE (instead of a
-        //    parallel guard in AgentTurnLoop) keeps the native-vs-text envelope inspection in one place
-        //    (docs/0056 §4 / docs/0064). The native path never reaches this point (it returned above),
+        //    parallel guard in AgentTurnLoop) keeps the native-vs-text envelope inspection in one place.
+        //    The native path never reaches this point (it returned above),
         //    matching the turn loop's long-standing `!usedNativeChannel` precondition.
         if (response.finishReason == "length") {
             val envelope = parser.inspectJsonEnvelope(contentForExtraction)
@@ -164,12 +170,12 @@ class ToolCallExtractor(
             else -> "final-text-no-toolcall"                     // normal final answer
         }
         if (reason == "attempted-toolcall-unparseable") {
-            // The bug behind docs/0055-0056 (session 79abb6e5): a weak model emits prose that *wants*
+            // A weak model (session 79abb6e5) emits prose that *wants*
             // to call a tool but matches no contract, and the loop used to finish silently on it.
             logger.warn {
                 "[TOOLCALL] all strategies failed but content looks like an attempted tool call " +
                     "(finishReason=${response.finishReason}, len=${contentForExtraction.length}, model=${response.model}) " +
-                    "— model follows no tool-call contract; verify its supportsFunctionCalling flag (docs/0056)."
+                    "— model follows no tool-call contract; verify its supportsFunctionCalling flag."
             }
         }
         return ExtractionResult.None(reason)
@@ -200,7 +206,7 @@ class ToolCallExtractor(
      * native channel and the JSON contract (session 6a1534a9, qwen3.5:35b): one tool per line as
      * `[TOOL] name: key="value", key2=value2`, the first line carrying a literal `[TOOL]` marker.
      *
-     * Deliberately NARROW (Rule 7 / docs/0056-0067): recovery arms ONLY when the literal `[TOOL]`
+     * Deliberately NARROW (Rule 7): recovery arms ONLY when the literal `[TOOL]`
      * marker actually PREFIXES a tool-shaped line (`[TOOL] name: args`) — a bare `Field: a=b` prose
      * line never false-positives, even alongside an unrelated `[TOOL]` mention elsewhere in the prose.
      * A line is accepted only when its name is a registered tool, and only when it actually carries
@@ -209,30 +215,44 @@ class ToolCallExtractor(
      */
     private fun extractLabeledToolLines(content: String): List<ToolCallData> {
         val lines = content.lineSequence().map { it.trim() }.toList()
-        // Arm only when the marker genuinely prefixes a tool-shaped line. A bare
-        // `content.contains("[TOOL]")` armed on any prose mention of the marker, after which every
-        // `registeredTool: key=value` prose line false-positived into a spurious call. The documented
-        // batch format carries the marker on the first tool line; subsequent lines stay bare.
-        val armed = lines.any { line ->
+        // Shape A (documented): the marker genuinely prefixes a colon-form tool line, `[TOOL] name: args`.
+        // A bare `content.contains("[TOOL]")` armed on any prose mention of the marker, after which every
+        // `registeredTool: key=value` prose line false-positived into a spurious call.
+        val armedColon = lines.any { line ->
             line.startsWith(LABELED_TOOL_MARKER, ignoreCase = true) && labeledLineRegex.matches(line)
         }
-        if (!armed) return emptyList()
+        // Shape B (qwen3-coder): a STANDALONE `[TOOL]` marker line, then space-form `name key="value"`
+        // tool lines (no colon). Armed only by the bare marker line so `result equals x = y` prose never
+        // false-positives; each candidate still needs a registered tool name and parseable key=value args.
+        val armedSpace = lines.any { it.equals(LABELED_TOOL_MARKER, ignoreCase = true) }
+        if (!armedColon && !armedSpace) return emptyList()
         val calls = mutableListOf<ToolCallData>()
+        val seen = HashSet<String>()
         for (line in lines) {
-            val match = labeledLineRegex.find(line) ?: continue
-            val name = match.groupValues[1]
-            if (!toolRegistry.hasTool(name)) continue
-            val argMatches = labeledArgRegex.findAll(match.groupValues[2]).toList()
-            if (argMatches.isEmpty()) continue
-            val argsObject = buildJsonObject {
-                for (arg in argMatches) {
-                    val value = arg.groups[2]?.value ?: arg.groupValues[3].trim()
-                    put(arg.groupValues[1], value)
-                }
+            // Shape A: colon form (marker optional after the first line).
+            labeledLineRegex.find(line)?.let { addLabeledCall(it.groupValues[1], it.groupValues[2], calls, seen) }
+            // Shape B: space form, but never the marker line itself, and only when the marker armed it.
+            if (armedSpace && !line.startsWith(LABELED_TOOL_MARKER, ignoreCase = true)) {
+                labeledSpaceLineRegex.find(line)?.let { addLabeledCall(it.groupValues[1], it.groupValues[2], calls, seen) }
             }
-            calls.add(ToolCallData(id = UUID.randomUUID().toString(), name = name, arguments = argsObject.toString()))
         }
         return calls
+    }
+
+    /** Add one recovered labeled-line call if [name] is a registered tool with parseable key=value args. */
+    private fun addLabeledCall(name: String, argStr: String, calls: MutableList<ToolCallData>, seen: MutableSet<String>) {
+        if (!toolRegistry.hasTool(name)) return
+        val argMatches = labeledArgRegex.findAll(argStr).toList()
+        if (argMatches.isEmpty()) return
+        val argsObject = buildJsonObject {
+            for (arg in argMatches) {
+                put(arg.groupValues[1], arg.groups[2]?.value ?: arg.groupValues[3].trim())
+            }
+        }
+        // Dedup so a line that matches both shapes (it cannot, but defensively) is not double-counted.
+        if (seen.add("$name:$argsObject")) {
+            calls.add(ToolCallData(id = UUID.randomUUID().toString(), name = name, arguments = argsObject.toString()))
+        }
     }
 
     /** Qwen3-Coder convention: `<function=NAME><parameter=KEY>VALUE</parameter>...</function>`, no JSON. */
@@ -280,7 +300,7 @@ class ToolCallExtractor(
         logger.warn {
             "[TOOLCALL_RECOVERED] strategy=$strategy recovered ${calls.size} call(s) " +
                 "[${calls.joinToString(",") { it.name }}] from text (model=$model) — model bypassed both the native " +
-                "and JSON contracts; consider fixing its supportsFunctionCalling flag (docs/0056)."
+                "and JSON contracts; consider fixing its supportsFunctionCalling flag."
         }
     }
 }

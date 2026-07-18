@@ -1,0 +1,19 @@
+{
+  "id": "fetch-local-json",
+  "mode": "AGENT",
+  "description": "Fetch a local JSON document over HTTP, read its city field, and write that value into a new result.txt file.",
+  "category": "other",
+  "max_iterations": 20,
+  "fixture": "fixtures/fetch-local-json",
+  "prompt_file": "prompts/fetch-local-json.md",
+  "fixture_server": { "dir": "server", "port": 8723 },
+  "assert": {
+    "tool_invoked": [ { "name": "http_request" } ],
+    "needle_in_file": { "path": "result.txt", "regex": "Gdansk" },
+    "file_unchanged": ["server/data.json"],
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": ["Did the agent fetch the JSON from the local server over HTTP and write the city (Gdansk) into result.txt, leaving the served file untouched?"]
+  }
+}

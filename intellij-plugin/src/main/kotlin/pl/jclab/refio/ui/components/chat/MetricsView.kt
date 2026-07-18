@@ -8,7 +8,7 @@ import java.awt.*
 import javax.swing.*
 
 /**
- * Component wyświetlający metryki wykonania pod wiadomością (US-027)
+ * Component wyświetlający metryki wykonania pod wiadomością
  */
 class MetricsView(private val metrics: MessageMetrics) : JBPanel<MetricsView>(GridBagLayout()) {
 

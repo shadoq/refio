@@ -3,9 +3,13 @@ package pl.jclab.refio.core.agents.events
 import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -278,6 +282,23 @@ class AgentEventBusTest {
     inner class PersistenceResilience {
 
         @Test
+        fun `slow persistence does not delay live emission`() = runBlocking {
+            val releaseSave = CompletableDeferred<Unit>()
+            val mockRepo = mockk<AgentEventRepository> {
+                coEvery { save(any()) } coAnswers { releaseSave.await() }
+            }
+            val bus = AgentEventBus()
+            bus.setRepository(mockRepo)
+
+            withTimeout(1_000) { bus.emit(makeStarted()) }
+
+            assertIs<AgentEvent.AgentStarted>(withTimeout(1_000) { bus.events.first() })
+            releaseSave.complete(Unit)
+            bus.flushPersistence()
+            bus.close()
+        }
+
+        @Test
         fun `persistence failure should not block emission`() = runTest {
             val mockRepo = mockk<AgentEventRepository> {
                 coEvery { save(any()) } throws RuntimeException("DB is down")
@@ -301,8 +322,6 @@ class AgentEventBusTest {
             val db = TestDatabase.createSharedInMemory()
             try {
                 val repo = AgentEventSqlRepository()
-                val bus1 = AgentEventBus()
-                bus1.setRepository(repo)
 
                 // Use monotonic timestamps for ordering
                 var ts = 1000L
@@ -372,7 +391,12 @@ class AgentEventBusTest {
                     )
                 )
 
-                originalEvents.forEach { bus1.emit(it) }
+                // Persist synchronously through the repository. The bus's own
+                // fire-and-forget persistence worker is best-effort by design (it
+                // swallows failures to never block live emission - covered by the
+                // sibling resilience tests); routing this round-trip assertion
+                // through it would race the detached IO worker, so persist directly.
+                originalEvents.forEach { repo.save(it) }
 
                 // Create fresh EventBus with same repo, load persisted events
                 val bus2 = AgentEventBus()

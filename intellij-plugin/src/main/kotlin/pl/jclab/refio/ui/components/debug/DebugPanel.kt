@@ -3,6 +3,8 @@ package pl.jclab.refio.ui.components.debug
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.scale.JBUIScale
+import com.intellij.ui.table.JBTable
 import pl.jclab.refio.core.api.SubtaskResponse
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.services.core.CoreConnectionManager
@@ -20,6 +22,9 @@ import java.awt.Dimension
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import javax.swing.*
+import javax.swing.table.AbstractTableModel
+import javax.swing.table.DefaultTableCellRenderer
+import java.awt.Component
 import java.text.SimpleDateFormat
 import java.util.Date
 
@@ -39,6 +44,7 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
 
     private val statePanel: JPanel
     private val refreshButton: JButton
+    private var autoRefreshTimer: Timer? = null
 
     // State labels
     private val sessionIdLabel = JLabel("-")
@@ -68,33 +74,56 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
     private val errorCountLabel = JLabel("-")
 
     // Recent API Logs
-    private val recentLogsArea = JTextArea().apply {
-        isEditable = false
-        font = Font("Monospaced", Font.PLAIN, 11)
-        lineWrap = false
-        rows = 8
+    private val recentLogsModel = ApiLogsTableModel()
+    private val recentLogsTable = JBTable(recentLogsModel).apply {
+        emptyText.text = "No API logs yet"
+        autoResizeMode = JTable.AUTO_RESIZE_LAST_COLUMN
+        setDefaultRenderer(Any::class.java, TooltipCellRenderer())
+        columnModel.getColumn(0).preferredWidth = 70   // Time
+        columnModel.getColumn(1).preferredWidth = 100  // Source
+        columnModel.getColumn(2).preferredWidth = 110  // Provider
+        columnModel.getColumn(3).preferredWidth = 130  // Model
+        columnModel.getColumn(4).preferredWidth = 50   // In
+        columnModel.getColumn(5).preferredWidth = 50   // Out
+        columnModel.getColumn(6).preferredWidth = 60   // Lat
+        columnModel.getColumn(7).preferredWidth = 80   // Cost
+        columnModel.getColumn(8).preferredWidth = 120  // Status
     }
 
     // Tool Usage Analytics
-    private val toolUsageArea = JTextArea().apply {
-        isEditable = false
-        font = Font("Monospaced", Font.PLAIN, 11)
-        lineWrap = false
-        rows = 8
+    private val toolUsageModel = ToolUsageTableModel()
+    private val toolUsageTable = JBTable(toolUsageModel).apply {
+        emptyText.text = "No tool invocations recorded yet"
+        autoResizeMode = JTable.AUTO_RESIZE_LAST_COLUMN
+        setDefaultRenderer(Any::class.java, TooltipCellRenderer())
+        columnModel.getColumn(0).preferredWidth = 180  // Tool
+        columnModel.getColumn(1).preferredWidth = 60   // Count
+        columnModel.getColumn(2).preferredWidth = 70   // Success
+        columnModel.getColumn(3).preferredWidth = 80   // Avg
+        columnModel.getColumn(4).preferredWidth = 80   // Max
+        columnModel.getColumn(5).preferredWidth = 300  // Last Error
     }
 
     // Model Usage Analytics
-    private val modelUsageArea = JTextArea().apply {
-        isEditable = false
-        font = Font("Monospaced", Font.PLAIN, 11)
-        lineWrap = false
-        rows = 8
+    private val modelUsageModel = ModelUsageTableModel()
+    private val modelUsageTable = JBTable(modelUsageModel).apply {
+        emptyText.text = "No LLM calls recorded yet"
+        autoResizeMode = JTable.AUTO_RESIZE_LAST_COLUMN
+        setDefaultRenderer(Any::class.java, TooltipCellRenderer())
+        columnModel.getColumn(0).preferredWidth = 100  // Provider
+        columnModel.getColumn(1).preferredWidth = 220  // Model
+        columnModel.getColumn(2).preferredWidth = 60   // Calls
+        columnModel.getColumn(3).preferredWidth = 90   // Tokens In
+        columnModel.getColumn(4).preferredWidth = 90   // Tokens Out
+        columnModel.getColumn(5).preferredWidth = 90   // Cost
+        columnModel.getColumn(6).preferredWidth = 80   // Avg
+        columnModel.getColumn(7).preferredWidth = 80   // Max
     }
 
     init {
         // Title panel
         val includeDebugLogsCheckbox = JCheckBox("Include DEBUG", false).apply {
-            font = font.deriveFont(10f)
+            font = font.deriveFont(JBUIScale.scale(10f))
             toolTipText = "Include DEBUG-level log entries in the export"
         }
         val maxLogEntriesSpinner = JSpinner(SpinnerNumberModel(200, 50, 1000, 50)).apply {
@@ -102,7 +131,7 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
             preferredSize = Dimension(70, preferredSize.height)
         }
         val copySessionDebugButton = JButton("Copy Session Debug").apply {
-            font = font.deriveFont(10f)
+            font = font.deriveFont(JBUIScale.scale(10f))
             toolTipText = "Copy comprehensive session debug info to clipboard (for LLM analysis)"
             addActionListener {
                 val includeDebug = includeDebugLogsCheckbox.isSelected
@@ -117,7 +146,7 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
             }, BorderLayout.WEST)
 
             val buttonsPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
-                add(JLabel("Logs:").apply { font = font.deriveFont(10f) })
+                add(JLabel("Logs:").apply { font = font.deriveFont(JBUIScale.scale(10f)) })
                 add(maxLogEntriesSpinner)
                 add(includeDebugLogsCheckbox)
                 add(copySessionDebugButton)
@@ -173,7 +202,7 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
             // Recent API Logs
             add(Box.createVerticalStrut(10))
             add(createSectionHeader("Recent API Logs (Last 10)"))
-            val logsScrollPane = JBScrollPane(recentLogsArea).apply {
+            val logsScrollPane = JBScrollPane(recentLogsTable).apply {
                 preferredSize = Dimension(Int.MAX_VALUE, 200)
                 maximumSize = Dimension(Int.MAX_VALUE, 200)
             }
@@ -182,7 +211,7 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
             // Tool Usage Analytics
             add(Box.createVerticalStrut(10))
             add(createSectionHeader("Tool Usage Analytics"))
-            val toolUsageScrollPane = JBScrollPane(toolUsageArea).apply {
+            val toolUsageScrollPane = JBScrollPane(toolUsageTable).apply {
                 preferredSize = Dimension(Int.MAX_VALUE, 200)
                 maximumSize = Dimension(Int.MAX_VALUE, 200)
             }
@@ -191,7 +220,7 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
             // Model Usage Analytics
             add(Box.createVerticalStrut(10))
             add(createSectionHeader("Model Usage Analytics"))
-            val modelUsageScrollPane = JBScrollPane(modelUsageArea).apply {
+            val modelUsageScrollPane = JBScrollPane(modelUsageTable).apply {
                 preferredSize = Dimension(Int.MAX_VALUE, 200)
                 maximumSize = Dimension(Int.MAX_VALUE, 200)
             }
@@ -212,8 +241,9 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
         add(titlePanel, BorderLayout.NORTH)
         add(scrollPane, BorderLayout.CENTER)
 
-        // Auto-refresh every 30 seconds
-        Timer(30000) {
+        // Auto-refresh every 30 seconds; stopped in dispose() so the panel does not
+        // keep querying the DB after the tool window is closed.
+        autoRefreshTimer = Timer(30000) {
             refreshState()
         }.apply {
             isRepeats = true
@@ -302,9 +332,9 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
 
                 // Core connection
                 coreHealthLabel.text = when (health.state) {
-                    pl.jclab.refio.services.core.CoreHealthState.CONNECTED -> "✅ CONNECTED"
-                    pl.jclab.refio.services.core.CoreHealthState.DEGRADED -> "⚠️ DEGRADED"
-                    pl.jclab.refio.services.core.CoreHealthState.DISCONNECTED -> "❌ DISCONNECTED"
+                    pl.jclab.refio.services.core.CoreHealthState.CONNECTED -> "OK CONNECTED"
+                    pl.jclab.refio.services.core.CoreHealthState.DEGRADED -> "WARN DEGRADED"
+                    pl.jclab.refio.services.core.CoreHealthState.DISCONNECTED -> "ERR DISCONNECTED"
                 }
                 coreUrlLabel.text = "In-process (embedded Kotlin core)"
                 coreLatencyLabel.text = "< 1ms"
@@ -326,102 +356,14 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
                     errorCountLabel.text = "-"
                 }
 
-                // Recent API Logs - formatted as table
-                if (recentLogs.isNotEmpty()) {
-                    val logsText = buildString {
-                        // Header
-                        append(String.format("%-8s %-12s %-15s %-15s %6s %6s %6s %-10s %s\n",
-                            "Time", "Source", "Provider", "Model", "In", "Out", "Lat", "Cost", "Status"))
-                        append("─".repeat(110))
-                        append("\n")
-
-                        // Rows
-                        recentLogs.forEach { log ->
-                            val time = SimpleDateFormat("HH:mm:ss").format(Date(log.createdAt))
-                            val requestSource = log.requestSource
-                            val source = if (requestSource != null) {
-                                if (requestSource.length > 12) requestSource.take(9) + "..." else requestSource
-                            } else "-"
-                            val provider = if (log.provider.length > 15) log.provider.take(12) + "..." else log.provider
-                            val model = if (log.model.length > 15) log.model.take(12) + "..." else log.model
-                            val tokensIn = formatTokens(log.inputTokens)
-                            val tokensOut = formatTokens(log.outputTokens)
-                            val latency = "${log.latencyMs}ms"
-                            val cost = String.format("$%.4f", log.costUsd)
-                            val errorMessage = log.errorMessage
-                            val httpStatus = log.httpStatus
-                            val status = when {
-                                errorMessage != null -> "❌ ${log.errorType ?: "Error"}".take(20)
-                                httpStatus != null && httpStatus in 200..299 -> "✓"
-                                httpStatus != null -> "HTTP $httpStatus"
-                                else -> "?"
-                            }
-
-                            append(String.format("%-8s %-12s %-15s %-15s %6s %6s %6s %-10s %s\n",
-                                time, source, provider, model, tokensIn, tokensOut, latency, cost, status))
-
-                            // If error, show error message on next line
-                            if (errorMessage != null && errorMessage.isNotEmpty()) {
-                                val errorMsg = errorMessage.take(80)
-                                append(String.format("  └─ %s\n", errorMsg))
-                            }
-                        }
-                    }
-                    recentLogsArea.text = logsText
-                    recentLogsArea.caretPosition = 0 // Scroll to top
-                } else {
-                    recentLogsArea.text = "No API logs yet"
-                }
+                // Recent API Logs
+                recentLogsModel.updateRows(recentLogs)
 
                 // Tool Usage Analytics
-                val toolRows = pl.jclab.refio.core.services.monitoring.ToolUsageStats.snapshot()
-                if (toolRows.isNotEmpty()) {
-                    val toolText = buildString {
-                        append(String.format("%-22s %6s %8s %9s %9s  %s\n",
-                            "Tool", "Count", "Success", "Avg", "Max", "Last Error"))
-                        append("─".repeat(110))
-                        append("\n")
-                        toolRows.forEach { row ->
-                            val name = if (row.toolName.length > 22) row.toolName.take(19) + "..." else row.toolName
-                            val successPct = String.format("%.0f%%", row.successRate * 100)
-                            val avg = formatMs(row.avgDurationMs)
-                            val max = formatMs(row.maxDurationMs)
-                            val err = row.lastError?.replace('\n', ' ')?.take(60) ?: "-"
-                            append(String.format("%-22s %6d %8s %9s %9s  %s\n",
-                                name, row.count, successPct, avg, max, err))
-                        }
-                    }
-                    toolUsageArea.text = toolText
-                    toolUsageArea.caretPosition = 0
-                } else {
-                    toolUsageArea.text = "No tool invocations recorded yet"
-                }
+                toolUsageModel.updateRows(pl.jclab.refio.core.services.monitoring.ToolUsageStats.snapshot())
 
                 // Model Usage Analytics
-                val modelRows = pl.jclab.refio.core.services.monitoring.ModelUsageStats.snapshot()
-                if (modelRows.isNotEmpty()) {
-                    val modelText = buildString {
-                        append(String.format("%-12s %-26s %6s %10s %10s %10s %9s %9s\n",
-                            "Provider", "Model", "Calls", "Tokens In", "Tokens Out", "Cost", "Avg", "Max"))
-                        append("─".repeat(110))
-                        append("\n")
-                        modelRows.forEach { row ->
-                            val provider = if (row.provider.length > 12) row.provider.take(9) + "..." else row.provider
-                            val modelName = if (row.model.length > 26) row.model.take(23) + "..." else row.model
-                            val cost = String.format("$%.4f", row.costUsd)
-                            val avg = formatMs(row.avgDurationMs)
-                            val max = formatMs(row.maxDurationMs)
-                            append(String.format("%-12s %-26s %6d %10s %10s %10s %9s %9s\n",
-                                provider, modelName, row.calls,
-                                formatNumber(row.tokensIn), formatNumber(row.tokensOut),
-                                cost, avg, max))
-                        }
-                    }
-                    modelUsageArea.text = modelText
-                    modelUsageArea.caretPosition = 0
-                } else {
-                    modelUsageArea.text = "No LLM calls recorded yet"
-                }
+                modelUsageModel.updateRows(pl.jclab.refio.core.services.monitoring.ModelUsageStats.snapshot())
 
                 // Debug info
                 projectRootLabel.text = project.basePath ?: "Unknown"
@@ -437,7 +379,11 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
      */
     private fun copySessionDebugToClipboard(includeDebugLogs: Boolean, maxLogEntries: Int) {
         cs.launch {
-            val report = buildSessionDebugReport(includeDebugLogs, maxLogEntries)
+            // The report carries full prompts, tool outputs and logs - redact secrets
+            // (API keys, tokens) before anything leaves the plugin via the clipboard.
+            val report = pl.jclab.refio.core.security.SecureLogger.redact(
+                buildSessionDebugReport(includeDebugLogs, maxLogEntries)
+            )
             SwingUtilities.invokeLater {
                 val sel = StringSelection(report)
                 Toolkit.getDefaultToolkit().systemClipboard.setContents(sel, null)
@@ -853,7 +799,149 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
         else -> String.format("%.2fs", ms / 1000.0)
     }
 
+    /**
+     * Table model for the Recent API Logs table. Holds the raw ApiLog rows and
+     * formats each cell on demand; full values are exposed via the tooltip renderer
+     * so long provider/model/source strings size instead of being hard-truncated.
+     */
+    private inner class ApiLogsTableModel : AbstractTableModel() {
+        private var rows: List<pl.jclab.refio.core.db.ApiLog> = emptyList()
+        private val columns = arrayOf("Time", "Source", "Provider", "Model", "In", "Out", "Lat", "Cost", "Status")
+
+        fun updateRows(newRows: List<pl.jclab.refio.core.db.ApiLog>) {
+            rows = newRows
+            fireTableDataChanged()
+        }
+
+        override fun getRowCount(): Int = rows.size
+        override fun getColumnCount(): Int = columns.size
+        override fun getColumnName(column: Int): String = columns[column]
+
+        override fun getValueAt(rowIndex: Int, columnIndex: Int): Any {
+            val log = rows[rowIndex]
+            return when (columnIndex) {
+                0 -> SimpleDateFormat("HH:mm:ss").format(Date(log.createdAt))
+                1 -> log.requestSource ?: "-"
+                2 -> log.provider
+                3 -> log.model
+                4 -> formatTokens(log.inputTokens)
+                5 -> formatTokens(log.outputTokens)
+                6 -> "${log.latencyMs}ms"
+                7 -> String.format("$%.4f", log.costUsd)
+                8 -> statusText(log)
+                else -> ""
+            }
+        }
+
+        private fun statusText(log: pl.jclab.refio.core.db.ApiLog): String {
+            val errorMessage = log.errorMessage
+            val httpStatus = log.httpStatus
+            return when {
+                // Full error text stays available via the cell tooltip.
+                errorMessage != null -> "ERR ${log.errorType ?: "Error"}${if (errorMessage.isNotEmpty()) ": ${errorMessage.replace('\n', ' ')}" else ""}"
+                httpStatus != null && httpStatus in 200..299 -> "OK"
+                httpStatus != null -> "HTTP $httpStatus"
+                else -> "?"
+            }
+        }
+    }
+
+    /**
+     * Table model for the Tool Usage Analytics table.
+     */
+    private inner class ToolUsageTableModel : AbstractTableModel() {
+        private var rows: List<pl.jclab.refio.core.services.monitoring.ToolUsageStats.Row> = emptyList()
+        private val columns = arrayOf("Tool", "Count", "Success", "Avg", "Max", "Last Error")
+
+        fun updateRows(newRows: List<pl.jclab.refio.core.services.monitoring.ToolUsageStats.Row>) {
+            rows = newRows
+            fireTableDataChanged()
+        }
+
+        override fun getRowCount(): Int = rows.size
+        override fun getColumnCount(): Int = columns.size
+        override fun getColumnName(column: Int): String = columns[column]
+
+        override fun getValueAt(rowIndex: Int, columnIndex: Int): Any {
+            val row = rows[rowIndex]
+            return when (columnIndex) {
+                0 -> row.toolName
+                1 -> row.count
+                2 -> String.format("%.0f%%", row.successRate * 100)
+                3 -> formatMs(row.avgDurationMs)
+                4 -> formatMs(row.maxDurationMs)
+                5 -> row.lastError?.replace('\n', ' ') ?: "-"
+                else -> ""
+            }
+        }
+    }
+
+    /**
+     * Table model for the Model Usage Analytics table.
+     */
+    private inner class ModelUsageTableModel : AbstractTableModel() {
+        private var rows: List<pl.jclab.refio.core.services.monitoring.ModelUsageStats.Row> = emptyList()
+        private val columns = arrayOf("Provider", "Model", "Calls", "Tokens In", "Tokens Out", "Cost", "Avg", "Max")
+
+        fun updateRows(newRows: List<pl.jclab.refio.core.services.monitoring.ModelUsageStats.Row>) {
+            rows = newRows
+            fireTableDataChanged()
+        }
+
+        override fun getRowCount(): Int = rows.size
+        override fun getColumnCount(): Int = columns.size
+        override fun getColumnName(column: Int): String = columns[column]
+
+        override fun getValueAt(rowIndex: Int, columnIndex: Int): Any {
+            val row = rows[rowIndex]
+            return when (columnIndex) {
+                0 -> row.provider
+                1 -> row.model
+                2 -> row.calls
+                3 -> formatNumber(row.tokensIn)
+                4 -> formatNumber(row.tokensOut)
+                5 -> String.format("$%.4f", row.costUsd)
+                6 -> formatMs(row.avgDurationMs)
+                7 -> formatMs(row.maxDurationMs)
+                else -> ""
+            }
+        }
+    }
+
+    /**
+     * Renders each cell as text and exposes the full (untruncated) value as an
+     * HTML-escaped tooltip, so columns can size while long values stay readable
+     * on hover instead of being cut off.
+     */
+    private class TooltipCellRenderer : DefaultTableCellRenderer() {
+        override fun getTableCellRendererComponent(
+            table: JTable?,
+            value: Any?,
+            isSelected: Boolean,
+            hasFocus: Boolean,
+            row: Int,
+            column: Int
+        ): Component {
+            val component = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column)
+            val text = value?.toString()
+            toolTipText = if (!text.isNullOrEmpty()) {
+                val escaped = text
+                    .replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                    .replace("\"", "&quot;")
+                    .replace("'", "&#39;")
+                "<html>$escaped</html>"
+            } else {
+                null
+            }
+            return component
+        }
+    }
+
     fun dispose() {
+        autoRefreshTimer?.stop()
+        autoRefreshTimer = null
         cs.cancel()
     }
 }

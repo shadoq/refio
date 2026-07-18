@@ -1,0 +1,16 @@
+{
+  "id": "edge-case-empty-stats",
+  "mode": "AGENT",
+  "description": "Fix summarize in stats.py to handle an empty list per its docstring instead of raising ZeroDivisionError.",
+  "category": "bugfix",
+  "max_iterations": 25,
+  "fixture": "fixtures/py-stats",
+  "prompt_file": "prompts/edge-case-empty-stats.md",
+  "assert": {
+    "tool_order": ["read_file", "advance_code_editing"],
+    "file_unchanged": ["test_stats.py"],
+    "build_cmd": "python3 -m unittest test_stats -v",
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["The empty-input edge case is handled inside src/stats.py (count 0, mean None) without try/except papering over the division; tests untouched."]
+}

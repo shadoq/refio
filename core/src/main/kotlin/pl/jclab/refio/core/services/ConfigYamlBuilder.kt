@@ -41,7 +41,7 @@ internal class ConfigYamlBuilder(
         formatMarkdown = configService.getTyped(ConfigKeys.FORMAT_MARKDOWN),
         streamingEnabled = configService.getTyped(ConfigKeys.STREAMING_ENABLED),
         advancedView = configService.getTyped(ConfigKeys.ADVANCED_VIEW),
-        thinkingEnabled = configService.getTyped(ConfigKeys.GENERAL_THINKING_ENABLED),
+        reasoningEffort = configService.getTyped(ConfigKeys.GENERAL_REASONING_EFFORT).name,
         noEgressEnabled = configService.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED),
         executionMode = configService.getTyped(ConfigKeys.GENERAL_EXECUTION_MODE)
     )

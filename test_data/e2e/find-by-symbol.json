@@ -1,0 +1,26 @@
+{
+  "id": "find-by-symbol",
+  "mode": "AGENT",
+  "description": "Fix formatMoney so it includes the remaining cents (1099 renders as $10.99), changing only the function definition.",
+  "category": "bugfix",
+  "max_iterations": 20,
+  "fixture": "fixtures/find-by-symbol",
+  "prompt_file": "prompts/find-by-symbol.md",
+  "assert": {
+    "needle_in_file": {
+      "path": "src/money/Money.kt",
+      "regex": "cents[[:space:]]*%[[:space:]]*100|%02d"
+    },
+    "file_unchanged": [
+      "src/order/Cart.kt",
+      "src/order/Receipt.kt",
+      "src/report/Summary.kt",
+      "src/ui/Display.kt",
+      "src/log/AuditLog.kt"
+    ],
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": ["Was only the formatMoney definition changed so it includes the cents, with all five call sites left byte-identical?"]
+  }
+}

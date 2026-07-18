@@ -523,6 +523,66 @@ class InvokeSubagentToolTest {
     }
 
     @Nested
+    inner class SubagentIsolationTests {
+
+        @Test
+        fun `subagent invocation tags the child turn with its own history id`() = runBlocking {
+            // Without an instance id the subagent's chat rows fall into the parent thread, mixing its
+            // intermediate steps into the parent's prompt and inflating its token budget.
+            val params = mapOf(
+                "_task_id" to "task-123",
+                "subagent_name" to "test-agent",
+                "goal" to "Review the code"
+            )
+
+            val result = tool.execute(params)
+
+            assertTrue(result.success)
+            val request = lastRunTurnRequest as TurnRequest
+            assertNotNull(
+                request.profileOverrides?.agentInstanceId,
+                "invoke_subagent must isolate the subagent by assigning an instance id"
+            )
+        }
+
+        @Test
+        fun `sibling subagent invocations get distinct history ids`() = runBlocking {
+            val capturedIds = mutableListOf<String?>()
+            val capturingTool = InvokeSubagentTool(
+                subagentRouterProvider = mockSubagentRouterProvider,
+                runTurnCallback = { request, _, _ ->
+                    capturedIds.add(request.profileOverrides?.agentInstanceId)
+                    TurnResult(
+                        success = true,
+                        response = "done",
+                        iterations = 1,
+                        tokensIn = 1,
+                        tokensOut = 1,
+                        cost = 0.0
+                    )
+                },
+                configServiceProvider = mockConfigServiceProvider
+            )
+            val params = mapOf(
+                "_task_id" to "task-123",
+                "subagent_name" to "test-agent",
+                "goal" to "Review the code"
+            )
+
+            capturingTool.execute(params)
+            capturingTool.execute(params)
+
+            assertEquals(2, capturedIds.size)
+            assertNotNull(capturedIds[0])
+            assertNotNull(capturedIds[1])
+            assertTrue(
+                capturedIds[0] != capturedIds[1],
+                "two invocations must not share a history bucket: ${capturedIds}"
+            )
+        }
+    }
+
+    @Nested
     inner class ParameterSchemaTests {
 
         @Test

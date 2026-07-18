@@ -5,6 +5,7 @@ import pl.jclab.refio.cli.tui.components.TuiMessageBubble
 import pl.jclab.refio.cli.tui.components.TuiPromptInput
 import pl.jclab.refio.cli.tui.rendering.TuiColors
 import pl.jclab.refio.cli.tui.rendering.TuiRenderBuffer
+import pl.jclab.refio.cli.tui.state.TuiChatMessage
 import pl.jclab.refio.cli.tui.state.TuiState
 
 /**
@@ -12,6 +13,33 @@ import pl.jclab.refio.cli.tui.state.TuiState
  * Renders into a TuiRenderBuffer for split-pane composition.
  */
 object TuiChatView {
+
+    private const val WRAP_CACHE_MAX = 500
+
+    private data class CachedWrap(val msgHash: Int, val width: Int, val lines: List<String>)
+
+    /**
+     * Per-message cache of rendered + wrapped lines, keyed by message id.
+     * A message re-renders only when its content changed (streaming last
+     * message) or the width changed; all other messages reuse cached lines.
+     * Access is confined to the render path (TuiRenderer.render is
+     * synchronized). LRU-evicted so long sessions stay bounded.
+     */
+    private val wrapCache = object : LinkedHashMap<String, CachedWrap>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedWrap>): Boolean =
+            size > WRAP_CACHE_MAX
+    }
+
+    private fun wrappedLinesFor(terminal: Terminal, msg: TuiChatMessage, width: Int): List<String> {
+        val hash = msg.hashCode()
+        val cached = wrapCache[msg.id]
+        if (cached != null && cached.msgHash == hash && cached.width == width) {
+            return cached.lines
+        }
+        val lines = TuiMessageBubble.renderToLines(terminal, msg).flatMap { wrapLine(it, width) }
+        wrapCache[msg.id] = CachedWrap(hash, width, lines)
+        return lines
+    }
 
     /** Render chat messages (without prompt) into a buffer. */
     fun renderMessages(terminal: Terminal, state: TuiState, width: Int, height: Int): TuiRenderBuffer {
@@ -24,7 +52,15 @@ object TuiChatView {
         }
 
         if (messages.isEmpty()) {
-            buf.addLine(TuiColors.muted("No messages yet. Type a message and press Enter."))
+            // Welcome screen for an empty session: show what is configured and
+            // how to start, instead of a bare "no messages" line.
+            buf.addLine(TuiColors.highlight("Welcome to Refio"))
+            buf.addLine()
+            buf.addLine("  Model: ${TuiColors.accent(state.model?.takeIf { it.isNotBlank() } ?: "(not selected - Ctrl+O)")}")
+            buf.addLine("  Mode:  ${TuiColors.accent(state.mode)} ${TuiColors.muted("(Shift+Tab to cycle CHAT/PLAN/AGENT)")}")
+            buf.addLine()
+            buf.addLine(TuiColors.muted("  Type a message and press Enter to start."))
+            buf.addLine(TuiColors.muted("  [F1] Help  [F9] Settings  [Ctrl+O] Model  [Ctrl+Q] Quit"))
             buf.addLine()
             return buf
         }
@@ -34,13 +70,13 @@ object TuiChatView {
         val allWrapped = mutableListOf<String>()
         val selectedIdx = state.selectedMessageIndex
         for ((idx, msg) in messages.withIndex()) {
-            val msgLines = TuiMessageBubble.renderToLines(terminal, msg)
+            val wrapped = wrappedLinesFor(terminal, msg, width)
             if (idx == selectedIdx) {
                 allWrapped.add(TuiColors.statusPending("  ► ─── selected ───"))
-                allWrapped.addAll(msgLines.flatMap { wrapLine(it, width) })
+                allWrapped.addAll(wrapped)
                 allWrapped.add(TuiColors.statusPending("  ── Ctrl+Y to copy ──"))
             } else {
-                allWrapped.addAll(msgLines.flatMap { wrapLine(it, width) })
+                allWrapped.addAll(wrapped)
             }
             allWrapped.add("") // blank line between messages
         }

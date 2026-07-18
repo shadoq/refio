@@ -20,7 +20,7 @@ enum class TaskMode {
 enum class TaskStatus {
     NEW,
     PENDING,
-    PLANNED,  // Subtask has been prepared but not yet executed (US-101)
+    PLANNED,  // Subtask has been prepared but not yet executed
     RUNNING,
     SUCCESS,
     FAILED,
@@ -44,6 +44,7 @@ data class Session(
     val model: String? = null,
     val tokensIn: Int = 0,
     val tokensOut: Int = 0,
+    val cachedTokens: Int = 0,  // Cache-read input tokens (subset of tokensIn), for UI display
     val costUsd: Double = 0.0,
     val contextWarningShown: Boolean = false,
     val executionMode: ExecutionMode = ExecutionMode.AUTO,
@@ -72,7 +73,7 @@ data class Message(
     val costUsd: Double? = null,
     val createdAt: Long,
     val pendingApprovalSubtaskId: String? = null, // For INTERACTIVE mode approval buttons
-    val metrics: MessageMetrics? = null, // Detailed metrics from MessageMetrics (US-027)
+    val metrics: MessageMetrics? = null, // Detailed metrics from MessageMetrics
     val metadata: String? = null, // JSON metadata for special message types (e.g., orchestrator questions)
     val toolCallId: String? = null, // For TOOL messages - references which tool call this is a result for
 
@@ -84,8 +85,9 @@ data class Message(
     // Agent identity for multi-agent UI
     val agentName: String? = null,         // Subagent name (null = main orchestrator)
     val agentDepth: Int? = null,           // Nesting depth (0=main, 1=subagent, 2=sub-subagent)
+    val agentInstanceId: String? = null,   // Per-invocation id (null = main); groups sibling subagents apart
 
-    // Streaming fields (US-027)
+    // Streaming fields
     val isStreaming: Boolean = false,      // Whether message is currently streaming
     val streamStartedAt: Long? = null,     // When streaming started (epoch ms)
     val lastChunkAt: Long? = null          // When last chunk was received (epoch ms)

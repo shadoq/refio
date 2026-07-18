@@ -158,13 +158,18 @@ class RagSearchService(
         val similarityByChunkId = mutableMapOf<Int, Float>()
         val topHeap = PriorityQueue<Pair<Float, Int>>(config.topK + 1, compareBy { it.first })
 
-        var offset = 0L
-        while (offset < totalEmbeddings) {
+        // Query vector norm is constant for the whole search - compute it once
+        // instead of once per compared chunk.
+        val queryNorm = vectorNorm(queryVector)
+
+        var lastSeenId = 0
+        var scanned = 0
+        while (scanned < totalEmbeddings) {
             val batch = ragRepository.getEmbeddingsBatch(
                 projectRoot = projectRoot,
                 model = model,
                 contentType = config.contentType,
-                offset = offset,
+                afterId = lastSeenId,
                 limit = SEARCH_BATCH_SIZE
             )
             if (batch.isEmpty()) {
@@ -174,7 +179,7 @@ class RagSearchService(
             batch.forEach { embedding ->
                 try {
                     val chunkVector = deserializeVector(embedding.vector)
-                    val similarity = cosineSimilarity(queryVector, chunkVector)
+                    val similarity = cosineSimilarity(queryVector, chunkVector, queryNorm)
 
                     similarityByChunkId[embedding.chunkId] = similarity
 
@@ -189,7 +194,8 @@ class RagSearchService(
                 }
             }
 
-            offset += batch.size
+            scanned += batch.size
+            lastSeenId = batch.last().id
         }
 
         val chunkIdsAboveThreshold = similarityByChunkId
@@ -488,25 +494,32 @@ class RagSearchService(
      * - 0.0 = orthogonal (no similarity)
      * - -1.0 = opposite vectors
      */
-    private fun cosineSimilarity(a: FloatArray, b: FloatArray): Float {
+    private fun cosineSimilarity(a: FloatArray, b: FloatArray, precomputedNormA: Float): Float {
         require(a.size == b.size) { "Vectors must have same dimensions (a=${a.size}, b=${b.size})" }
 
         var dotProduct = 0f
-        var normA = 0f
         var normB = 0f
 
         for (i in a.indices) {
             dotProduct += a[i] * b[i]
-            normA += a[i] * a[i]
             normB += b[i] * b[i]
         }
 
         // Handle zero vectors
-        if (normA == 0f || normB == 0f) {
+        if (precomputedNormA == 0f || normB == 0f) {
             return 0f
         }
 
-        return dotProduct / (sqrt(normA) * sqrt(normB))
+        return dotProduct / (precomputedNormA * sqrt(normB))
+    }
+
+    /** Euclidean (L2) norm of a vector. */
+    private fun vectorNorm(v: FloatArray): Float {
+        var sum = 0f
+        for (x in v) {
+            sum += x * x
+        }
+        return sqrt(sum)
     }
 }
 

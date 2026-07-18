@@ -22,8 +22,6 @@ private val logger = dualLogger("ParallelToolExecutor")
  *
  * WRITE tools are always executed sequentially to maintain atomicity.
  * READ_ONLY tools are executed in parallel for better performance.
- *
- * Reference: ADR-0028 - Parallel Tool Execution
  */
 class ParallelToolExecutor(
     private val toolExecutor: ToolExecutor,
@@ -142,6 +140,7 @@ class ParallelToolExecutor(
                     toolCallId = toolCall.id,
                     content = result.output ?: result.error ?: "No output",
                     isSummarized = false,
+                    success = result.success,
                     rawOutput = result.output
                 )
             }
@@ -153,6 +152,7 @@ class ParallelToolExecutor(
                 toolCallId = toolCall.id,
                 content = "Error: Tool execution timed out after ${config.toolTimeout}",
                 isSummarized = false,
+                success = false,
                 rawOutput = null
             )
         } catch (e: Exception) {
@@ -161,6 +161,7 @@ class ParallelToolExecutor(
                 toolCallId = toolCall.id,
                 content = "Error: ${e.message}",
                 isSummarized = false,
+                success = false,
                 rawOutput = null
             )
         }

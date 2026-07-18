@@ -95,14 +95,21 @@ class RunCodeTool(
             val command = langConfig.buildCommand(tempFileName)
             val shellCommand = getShellCommand(command)
 
-            val process = ProcessBuilder()
+            val processBuilder = ProcessBuilder()
                 .command(shellCommand)
                 .directory(workingDir.toFile())
                 .redirectErrorStream(true)
-                .start()
+            // Force UTF-8 stdio so non-ASCII (e.g. Polish) output is not mangled by the platform
+            // default code page (Windows uses CP1250/CP852; the JVM reads UTF-8 since JEP 400).
+            // PYTHONUTF8 additionally makes Python read source/data files as UTF-8 by default.
+            processBuilder.environment().apply {
+                put("PYTHONUTF8", "1")
+                put("PYTHONIOENCODING", "utf-8")
+            }
+            val process = processBuilder.start()
 
             val outputDeferred = async(Dispatchers.IO) {
-                process.inputStream.bufferedReader().use { it.readText() }
+                process.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             }
 
             val completed = process.waitFor(effectiveTimeout, TimeUnit.SECONDS)

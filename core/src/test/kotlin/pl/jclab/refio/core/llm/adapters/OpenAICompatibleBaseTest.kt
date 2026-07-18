@@ -68,6 +68,122 @@ class OpenAICompatibleBaseTest {
     }
 
     @Test
+    fun `reasoning model answer in reasoning_content is recovered when content is empty`() = runTest {
+        // GLM via Z.AI and similar reasoning models sometimes put the whole answer in
+        // reasoning_content and leave content empty. The turn must still see the answer,
+        // not a blank reply that wastes the iteration.
+        val config = mockConfig()
+        val fixture = """
+            {
+              "choices": [
+                {
+                  "message": {"role": "assistant", "content": "", "reasoning_content": "the real answer"},
+                  "finish_reason": "stop"
+                }
+              ],
+              "usage": {"prompt_tokens": 5, "completion_tokens": 100, "total_tokens": 105}
+            }
+        """.trimIndent()
+
+        val adapter = GenericOpenAIAdapter(
+            model = "gpt-test",
+            providerName = "generic_openai",
+            configService = config,
+            baseUrlOverride = "https://mock.test/v1",
+            httpClientOverride = mockHttpClient(fixture),
+        )
+
+        val response = adapter.chat(
+            messages = listOf(LLMMessage(role = "user", content = "hi")),
+            systemMessages = emptyList(),
+            maxTokens = 64,
+            temperature = 0.0,
+            streaming = false,
+            onStreamChunk = null,
+            kwargs = emptyMap(),
+        )
+
+        assertEquals("the real answer", response.content)
+    }
+
+    @Test
+    fun `content takes precedence over reasoning_content when both present`() = runTest {
+        // Reasoning is internal scratch work, not the answer. When the model fills content,
+        // reasoning_content must be ignored so we never leak thinking into the reply.
+        val config = mockConfig()
+        val fixture = """
+            {
+              "choices": [
+                {
+                  "message": {"role": "assistant", "content": "final answer", "reasoning_content": "scratch work"},
+                  "finish_reason": "stop"
+                }
+              ],
+              "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+            }
+        """.trimIndent()
+
+        val adapter = GenericOpenAIAdapter(
+            model = "gpt-test",
+            providerName = "generic_openai",
+            configService = config,
+            baseUrlOverride = "https://mock.test/v1",
+            httpClientOverride = mockHttpClient(fixture),
+        )
+
+        val response = adapter.chat(
+            messages = listOf(LLMMessage(role = "user", content = "hi")),
+            systemMessages = emptyList(),
+            maxTokens = 64,
+            temperature = 0.0,
+            streaming = false,
+            onStreamChunk = null,
+            kwargs = emptyMap(),
+        )
+
+        assertEquals("final answer", response.content)
+    }
+
+    @Test
+    fun `cost is taken from the pricing table, not hardcoded to zero`() = runTest {
+        // The API Logs table was showing $0.00 for priced OpenAI-compatible providers (e.g. Z.AI)
+        // because the adapter's estimateCost returned 0.0, diverging from the turn trace which
+        // priced the same call via the central table. The adapter must price it too.
+        val config = mockZaiConfig()
+        val fixture = """
+            {
+              "choices": [
+                {
+                  "message": {"role": "assistant", "content": "priced response"},
+                  "finish_reason": "stop"
+                }
+              ],
+              "usage": {"prompt_tokens": 10000, "completion_tokens": 5000, "total_tokens": 15000}
+            }
+        """.trimIndent()
+
+        val adapter = GenericOpenAIAdapter(
+            model = "glm-5.2",
+            providerName = "zai",
+            configService = config,
+            baseUrlOverride = "https://mock.test/v1",
+            httpClientOverride = mockHttpClient(fixture),
+        )
+
+        val response = adapter.chat(
+            messages = listOf(LLMMessage(role = "user", content = "hi")),
+            systemMessages = emptyList(),
+            maxTokens = 64,
+            temperature = 0.0,
+            streaming = false,
+            onStreamChunk = null,
+            kwargs = emptyMap(),
+        )
+
+        assertTrue(response.cost > 0.0, "priced model must report non-zero cost, was ${response.cost}")
+    }
+
+    @Test
     fun `GenericOpenAI maps 401 to LLMAuthentication`() = runTest {
         val config = mockConfig()
         val adapter = GenericOpenAIAdapter(

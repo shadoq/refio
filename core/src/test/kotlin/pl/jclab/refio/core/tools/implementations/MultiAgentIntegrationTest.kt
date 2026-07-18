@@ -7,7 +7,6 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import pl.jclab.refio.core.agents.events.AgentEvent
 import pl.jclab.refio.core.agents.events.AgentEventBus
-import pl.jclab.refio.core.agents.events.AgentEventHandler
 import pl.jclab.refio.core.services.AgentPlanService
 import pl.jclab.refio.core.services.PlanStepStatus
 import pl.jclab.refio.core.services.context.WorkingMemoryService
@@ -127,48 +126,6 @@ class MultiAgentIntegrationTest {
             .first()
         assertEquals("How long should the promotion last?", emittedEvent.query)
         assertEquals("parent-run", emittedEvent.targetAgentId)
-    }
-
-    @Test
-    fun `AgentEventHandler requestData and respond flow`() = runBlocking {
-        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-
-        val childHandler = AgentEventHandler(
-            agentId = "child-1",
-            sessionId = "session-1",
-            correlationId = "corr-1",
-            eventBus = eventBus,
-            scope = scope
-        )
-
-        // Simulate parent responding to child's request
-        val responseJob = launch {
-            delay(100)
-            val request = eventBus.eventsOfType<AgentEvent.DataRequest>().first()
-            eventBus.emit(AgentEvent.DataResponse(
-                id = "resp-1",
-                sessionId = "session-1",
-                sourceAgentId = "parent-1",
-                timestamp = System.currentTimeMillis(),
-                correlationId = "corr-1",
-                targetAgentId = "child-1",
-                requestId = request.id,
-                response = "7 days"
-            ))
-        }
-
-        val response = childHandler.requestData(
-            targetAgentId = "parent-1",
-            query = "How long?",
-            timeout = kotlin.time.Duration.parse("5s")
-        )
-
-        responseJob.join()
-        assertNotNull(response)
-        assertEquals("7 days", response.response)
-
-        childHandler.shutdown()
-        scope.cancel()
     }
 
     @Test

@@ -3,6 +3,7 @@ package pl.jclab.refio.ui.components.chat.bubble
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import pl.jclab.refio.api.models.Message
+import pl.jclab.refio.api.models.ToolCallStatus
 import pl.jclab.refio.ui.theme.LCATheme
 import java.awt.Component
 import java.awt.GridBagConstraints
@@ -36,7 +37,8 @@ internal class ToolBubbleRenderer(
 
     private data class RelatedToolCallInfo(
         val toolName: String,
-        val path: String?
+        val path: String?,
+        val success: Boolean?
     )
 
     private val factory get() = context.bubbleContentContext.componentFactory
@@ -47,7 +49,8 @@ internal class ToolBubbleRenderer(
         val metadata = parseMetadata(message.metadata)
         val relatedToolCallInfo = resolveRelatedToolCallInfo(message)
         val toolName = resolveToolName(message, metadata, relatedToolCallInfo)
-        val status = resolveStatus(message.content)
+        val explicitSuccess = resolveExplicitSuccess(metadata, relatedToolCallInfo)
+        val status = resolveStatus(message.content, explicitSuccess)
 
         val title = buildToolResultTitle(toolName, metadata)
         if (shouldUseCodeBlock(toolName, message.content, status)) {
@@ -304,6 +307,11 @@ internal class ToolBubbleRenderer(
                     toolName = info.toolName,
                     path = PATH_KEYS.firstNotNullOfOrNull { key ->
                         info.parameters[key]?.takeIf { it.isNotBlank() }
+                    },
+                    success = info.result?.success ?: when (info.status) {
+                        ToolCallStatus.COMPLETED -> true
+                        ToolCallStatus.FAILED -> false
+                        ToolCallStatus.EXECUTING -> null
                     }
                 )
             }
@@ -328,7 +336,21 @@ internal class ToolBubbleRenderer(
         }
     }
 
-    private fun resolveStatus(content: String): RenderStatus {
+    /**
+     * Prefer the authoritative status carried by the originating tool call (or explicit result
+     * metadata) over scanning the output text. Substring scanning produces false errors when the
+     * output legitimately contains words like "failed" or "error:" (e.g. code diffs, log excerpts).
+     * The substring heuristic is kept only as a fallback when no explicit status is available.
+     */
+    private fun resolveStatus(content: String, explicitSuccess: Boolean?): RenderStatus {
+        if (explicitSuccess != null) {
+            return if (explicitSuccess) {
+                RenderStatus(isError = false, icon = "\u2713")
+            } else {
+                RenderStatus(isError = true, icon = "\u2717")
+            }
+        }
+
         val lower = content.lowercase()
         val isError = lower.startsWith("error") ||
             lower.contains(" failed") ||
@@ -338,6 +360,18 @@ internal class ToolBubbleRenderer(
             RenderStatus(isError = true, icon = "\u2717")
         } else {
             RenderStatus(isError = false, icon = "\u2713")
+        }
+    }
+
+    private fun resolveExplicitSuccess(
+        metadata: Map<*, *>?,
+        relatedToolCallInfo: RelatedToolCallInfo?
+    ): Boolean? {
+        relatedToolCallInfo?.success?.let { return it }
+        return when (val raw = metadata?.get("success") ?: metadata?.get("result_success")) {
+            is Boolean -> raw
+            is String -> raw.toBooleanStrictOrNull()
+            else -> null
         }
     }
 

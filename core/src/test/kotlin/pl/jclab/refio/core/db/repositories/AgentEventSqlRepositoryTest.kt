@@ -166,4 +166,22 @@ class AgentEventSqlRepositoryTest {
         assertEquals("id-1", events[0].id) // Earlier timestamp first
         assertEquals("id-2", events[1].id)
     }
+
+    @Test
+    fun `limit keeps the newest events but preserves ascending replay order`() = runTest {
+        (1..5).forEach { i ->
+            repository.save(
+                AgentEvent.AgentStarted(
+                    id = "id-$i", sessionId = "session-1", sourceAgentId = "agent-1",
+                    timestamp = i * 1000L, correlationId = "corr-1",
+                    agentName = "a$i", profile = null, task = "T$i", model = null, dependsOn = emptyList()
+                )
+            )
+        }
+
+        val events = repository.findBySessionId("session-1", limit = 3)
+
+        // Newest 3 survive the cap, replayed oldest-to-newest
+        assertEquals(listOf("id-3", "id-4", "id-5"), events.map { it.id })
+    }
 }

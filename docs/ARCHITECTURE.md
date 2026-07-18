@@ -29,7 +29,7 @@ Refio is a **local-first AI assistant** packaged as an IntelliJ plugin written e
 
 Unlike tools that send entire codebases to LLMs, Refio uses **selective context injection** through RAG (Retrieval-Augmented Generation) and comprehensive code analysis. This approach:
 
-- Reduces API costs by 50-70%
+- Reduces API cost by sending less context per call
 - Provides faster responses
 - Works with smaller context windows (local models)
 - Maintains privacy (no-egress mode available)
@@ -41,10 +41,10 @@ Unlike tools that send entire codebases to LLMs, Refio uses **selective context 
 | Feature | Description                                                                          |
 |---------|--------------------------------------------------------------------------------------|
 | **Three UI Modes + Subagent Profile** | Chat, Plan, Agent + Subagent profile on unified turn loop                     |
-| **Enhanced AgentTurnLoop** | AgentTurnLoop execution + ADR-0028/ADR-0029 profile support, caching, parallel tools |
+| **Enhanced AgentTurnLoop** | AgentTurnLoop execution + subagent profile support, caching, parallel tools |
 | **14 Context Providers** | @file, @folder, @codebase, @grep, @url, @docs, @commit, and more                     |
 | **RAG Indexing** | Automatic project indexing with language-specific analyzers                          |
-| **24 Registered Tools** | 14 read-only + 10 write tools (AGENT enables full toolset by default)               |
+| **~30 Registered Tools** | 6 functional groups; PLAN exposes the read-only subset, AGENT the full set     |
 | **8 LLM Adapters** | Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio, Custom OpenAI, Z.AI        |
 | **Native Function Calling** | Provider-native tool API (Ollama, OpenAI, Anthropic, Gemini, OpenRouter, Z.AI, LM Studio, Generic OpenAI) with JSON-in-text fallback |
 | **`/goal` Autonomous Workflow** | Explicit completion condition + LLM judge (Gemini CLI `checkNextSpeaker` pattern) verifies goal is *demonstrably* met before turn closes |
@@ -87,7 +87,7 @@ Unlike tools that send entire codebases to LLMs, Refio uses **selective context 
 +-------------------------------------------------------------------------+
 |  Infrastructure Layer                                                   |
 |  +-- LLMClient (unified) -> 8 provider adapters                        |
-|  +-- ToolRegistry -> 24 registered tools with security layers            |
+|  +-- ToolRegistry -> ~30 registered tools with security layers           |
 |  +-- MCPManager -> MCP server lifecycle (STDIO/HTTP)                    |
 |  +-- EmbeddingsService -> Ollama/OpenAI embeddings                      |
 |  +-- DatabaseFactory -> SQLite (WAL) + Exposed ORM                      |
@@ -164,7 +164,7 @@ Specialized execution profile on the same `AgentTurnLoop`.
 - Smart default: `subagent` is enabled in PLAN and AGENT
 - Includes recursion/depth safeguards (`maxSubagentDepth = 3`)
 
-### Performance Optimizations (ADR-0028)
+### Performance Optimizations
 
 AgentTurnLoop includes production-grade enhancements:
 
@@ -199,13 +199,14 @@ Cap mechanics (3 layers):
 
 ### Loop-Detection Guards (`TurnGuardrails`)
 
-Three independent abort signals operating BELOW the guardian layer (inside the iteration, not at turn-end):
+Four independent abort signals operating BELOW the guardian layer (inside the iteration, not at turn-end):
 
 | Guard | Pathology | Trigger |
 |---|---|---|
 | `ToolErrorTracker` | Tool calls failing repeatedly | ≥70% error rate over last 10 calls |
 | `TurnRepetitionTracker` | Same tool produces byte-identical output | Identical output hash 4× in a row on same `(tool, target)` key |
-| `ContentChantingDetector` | Model echoes itself in a runaway loop | Same word phrase (length 1-10) repeated ≥10× consecutively |
+| `ContentChantingDetector` | Model echoes itself in a runaway loop | Same word phrase (length 1-10) repeated ≥10× consecutively. Pure-symbol runs (box-drawing, table borders, separators) are exempt - an ASCII diagram is structure, not a loop |
+| `ConsecutiveTextRepetitionTracker` | Model re-emits near-identical prose across iterations without acting | Near-identical text (exact, or ≥0.85 Dice similarity for ≥4 tokens) 2× in a row with no tool call |
 
 Earlier prose-pattern detectors (`looksLikeIntentAnnouncement`, `looksLikeToolMarkerOnly`) were removed: the system prompt already enforces "don't narrate without a tool call", and regex detection on top produced false positives on legitimate trailing prose. Format-retry now fires only on objectively-broken outputs (empty envelope, native-text-embedded tool call, malformed JSON).
 
@@ -408,6 +409,21 @@ RagSearchResult[]
 | `run_process_background` | command | Start command in background, return process_id | Free |
 | `llm_call` | prompt, data?, file_path?, model? | Raw single-turn LLM call | ~$0.01 |
 
+### SYSTEM & DELEGATION Tools (6)
+
+These are registered on top of the read-only / write sets above (the two tables list 24; these
+six bring the registry to ~30). They do not write project files, so most are available in both
+PLAN and AGENT.
+
+| Tool | Parameters | Description |
+|------|------------|-------------|
+| `rag_search` | query, top_k? | Semantic search over the indexed project (vector RAG) |
+| `tasks` | action, … | Read / update the agent's plan steps |
+| `memory` | action, key?, value? | Working-memory / subtask-output store and recall |
+| `manage_subagent` | action, name? | List / enable / disable available subagents |
+| `send_message` | target_agent, content | Enqueue a message to a peer agent's inbox (A2A) |
+| `answer_message` | message_id, content | Reply to a specific inbound agent message (A2A) |
+
 ### Tool Availability by Mode
 
 | Mode | READ_ONLY | WRITE |
@@ -493,9 +509,8 @@ You are a specialized assistant for...
 | `plan` | ConfigService PLAN model |
 | `coding` | ConfigService CODING model |
 | `weak` | ConfigService WEAK model |
-| `sonnet` | claude-3-5-sonnet-20241022 |
-| `opus` | claude-3-opus-20240229 |
-| `haiku` | claude-3-haiku-20240307 |
+
+Any other value is treated as a literal model string; the provider is inferred from the prefix (`gpt-`/`o1`/`o3` -> openai, `claude-` -> anthropic, `gemini-` -> gemini, otherwise ollama).
 
 ---
 
@@ -564,7 +579,7 @@ mcp:
 
 ## Tech Stack
 
-- **Language/Platform**: Kotlin 1.9.25, JVM target 17, IntelliJ Platform 2024.1.7 (IC), builds 241-261.*
+- **Language/Platform**: Kotlin 2.3.20 compiler (apiVersion/languageVersion pinned to 1.9), JVM target 17 for `:core` / `:cli`, plugin compiled against JDK 21; IntelliJ Platform 2026.1 (IC), builds 241-261.*
 - **UI**: Native IntelliJ Swing components (no webview)
 - **Core/Transport**: CoreApiRouter (composition root) + 12 domain routers; Ktor server for HTTP transport
 - **LLM/HTTP**: Ktor Client 2.3.7 with 8 provider adapters
@@ -572,7 +587,7 @@ mcp:
 - **Serialization**: Gson 2.10.1, kotlinx-serialization-json 1.6.2, KAML 0.55.0
 - **Markdown**: commonmark 0.21.0
 - **Logging**: kotlin-logging + logback 1.4.14
-- **Build**: Gradle IntelliJ Plugin 1.17.4
+- **Build**: IntelliJ Platform Gradle Plugin 2.14.0
 
 ---
 
@@ -629,7 +644,7 @@ Available placeholders:
 |------|----------|---------|
 | User config | `~/.refio/config.yaml` | Personal settings, API keys |
 | Project config | `<project>/.refio/config.yaml` | Project-specific prompts, MCP servers |
-| Database | `refio_poc.db` (project root) | Session data, messages, RAG index |
+| Database | `~/.refio/data/database.sqlite` | Session data, messages, RAG index (shared across projects) |
 | Ignore patterns | `<project>/.aiignore` | RAG indexing exclusions |
 
 ### Quick Start Config
@@ -696,9 +711,9 @@ core/src/main/kotlin/pl/jclab/refio/
 |   +-- llm/                  # LLM integration (8 adapters)
 |   +-- services/             # Core services (~35 services)
 |   +-- services/context/     # ContextService sub-components (6 extracted classes)
-|   +-- services/turn/        # AgentTurnLoop sub-components (13 files)
+|   +-- services/turn/        # AgentTurnLoop sub-components (~27 files)
 |   +-- subagents/            # Subagent system
-|   +-- tools/                # Tool system (15 registered implementations)
+|   +-- tools/                # Tool system (~30 registered implementations)
 |   +-- prompts/              # Prompt templates
 +-- api/                      # Shared API models (DTOs)
 

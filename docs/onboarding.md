@@ -1,7 +1,7 @@
 # Onboarding: Refio
 
-> **Last Updated:** 2026-05-31
-> **Version:** 0.0.1.11
+> **Last Updated:** 2026-06-28
+> **Version:** 0.0.1.12
 > **Status:** Active Development
 
 This guide helps new contributors get up and running. For technical reference, see [overview.md](overview.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -10,9 +10,9 @@ This guide helps new contributors get up and running. For technical reference, s
 
 ## Welcome
 
-**Refio** is a local-first AI coding assistant for IntelliJ IDEA and the terminal (CLI/TUI). Written in Kotlin, built on a modular Gradle architecture, supporting 8 LLM providers (including local models via Ollama/LM Studio), 24 tools, 21 built-in subagents, and a full RAG system. Refio is MIT-licensed, with no telemetry and no vendor lock-in.
+**Refio** is a local-first AI coding assistant for IntelliJ IDEA and the terminal (CLI/TUI). Written in Kotlin, built on a modular Gradle architecture, supporting 8 LLM providers (including local models via Ollama/LM Studio), ~30 tools, 21 built-in subagents, and a full RAG system. Refio is MIT-licensed, with no telemetry and no vendor lock-in.
 
-**Core philosophy:** Minimize LLM context through selective context injection (RAG + code analysis), resulting in 50-70% lower API costs and compatibility with smaller context windows of local models.
+**Core philosophy:** Minimize LLM context through selective context injection (RAG + code analysis), reducing API cost and staying compatible with the smaller context windows of local models.
 
 ---
 
@@ -42,7 +42,7 @@ UI (IntelliJ Swing / TUI Mordant+JLine3)
     -> Domain Routers (12 routers: Task, Chat, Agent, Subtask, Config, Prompts, Tool, RAG, ApiLogs, MultiAgent, ProjectContext, Subagent)
     -> CoreApiRouter (composition root — creates dependencies, exposes routers, zero business logic)
       -> Execution (WorkflowOrchestrator -> ChatService for CHAT | AgentTurnLoop for PLAN/AGENT)
-        -> LLMClient (8 adapters) + ToolRegistry (24 tools) + ContextService (14 providers)
+        -> LLMClient (8 adapters) + ToolRegistry (~30 tools) + ContextService (14 providers)
           -> Infrastructure (SQLite via Exposed ORM, Ktor HTTP, Caffeine cache)
 ```
 
@@ -53,29 +53,29 @@ UI (IntelliJ Swing / TUI Mordant+JLine3)
 ### `:core` — Core (IDE-independent)
 
 - **Role:** All business logic, LLM clients, tools, RAG, agents, database. No IntelliJ SDK dependency.
-- **Kotlin:** 1.9.25, JDK 17
+- **Kotlin:** 2.3.20 compiler (apiVersion/languageVersion pinned to 1.9), JDK 17
 
 | Package | Files | Description |
 |---------|-------|-------------|
 | `api/routers/` | ~12 | Domain routers (Task, Chat, Agent, Config, RAG, Tool, etc.) |
 | `llm/adapters/` | 8 | LLM adapters: Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio, Custom OpenAI, Z.AI |
-| `tools/implementations/` | 14 | Tools: read_file, grep_search, code_editing, http_request, run_code, invoke_subagent, etc. |
+| `tools/implementations/` | ~30 | Tools: read_file, grep_search, code_editing, http_request, run_code, invoke_subagent, rag_search, tasks, memory, send_message, etc. |
 | `tools/security/` | ~7 | CommandRule (regex ALLOW/BLOCK/ASK), FileLimits, PathSandbox |
 | `services/` | ~35 | AgentTurnLoop, ContextService, RagIndexingService, ConfigService, ToolPermissionsService, etc. |
-| `services/turn/` | ~13 | AgentTurnLoop sub-components: TurnLLMCaller, TurnPromptBuilder, TurnToolExecutor, ToolApprovalService, etc. |
+| `services/turn/` | ~27 | AgentTurnLoop sub-components: TurnLLMCaller, TurnPromptBuilder, TurnToolExecutor, ToolApprovalService, guardians, ToolCallExtractor, etc. |
 | `services/context/` | ~7 | ContextBudget, WorkingMemoryService, ProjectInstructionsLoader, ToolResultCompression, **DiffCompressor** (content-aware diff body elision) |
 | `subagents/` | ~6 | Parser, router, profiles, tool filtering; definitions in `resources/subagents/*.md` (21 agents) |
 | `agents/` | ~6 | Multi-agent orchestration (EventBus, Runner, cycle detection) |
 | `db/` | ~31 | SQLite via Exposed ORM: tables, repositories, migrations |
 | `config/` | 3 | ConfigKeys (70+ keys), ConfigYaml, HierarchicalConfigLoader |
 
-- **Resources:** 15 system prompts (`resources/prompts/`), 21 subagent definitions (`resources/subagents/`)
+- **Resources:** 14 system prompts (`resources/prompts/`), 21 subagent definitions (`resources/subagents/`)
 - **Tests:** 99 test files (JUnit 5, MockK, Turbine)
 
 ### `:cli` — Terminal User Interface
 
 - **Role:** Standalone full-screen TUI mirroring the IntelliJ plugin GUI. Works in any terminal emulator.
-- **Kotlin:** 2.0.21, JDK 17
+- **Kotlin:** 2.3.20 compiler (apiVersion/languageVersion pinned to 1.9), JDK 17
 - **Dependencies:** Clikt 5.0.2 (CLI args), Mordant 3.0.1 (ANSI rendering), JLine 3.26.3 (raw input)
 
 | Component | Description |
@@ -93,8 +93,8 @@ UI (IntelliJ Swing / TUI Mordant+JLine3)
 ### `:intellij-plugin` — IntelliJ IDEA Plugin
 
 - **Role:** Native plugin with Swing UI, settings panels, IDE integration (terminals, editor, clipboard, problems).
-- **Kotlin:** 1.9.25, gradle-intellij-plugin 1.17.4
-- **Target:** IntelliJ 2024.1.7 (IC), builds 241-261.*
+- **Kotlin:** 2.3.20 compiler (api/lang pinned to 1.9), compiled against JDK 21, IntelliJ Platform Gradle Plugin 2.14.0
+- **Target:** IntelliJ 2026.1 (IC), builds 241-261.*
 
 | Component | Files | Description |
 |-----------|-------|-------------|
@@ -120,7 +120,7 @@ Quick summary of what the engine supports:
 | Area | Count |
 |------|-------|
 | Execution modes | 4 (Chat, Plan, Agent, Subagent profile) |
-| Tools | 24 (14 read-only + 10 write) |
+| Tools | ~30 across 6 groups (PLAN: read-only subset, AGENT: full set) |
 | LLM providers | 8 (Ollama, LM Studio, OpenAI, Anthropic, Gemini, OpenRouter, Custom OpenAI, Z.AI) |
 | Context providers | 14 (@file, @codebase, @grep, @diff, @url, …) |
 | Built-in subagents | 21 |
@@ -139,14 +139,14 @@ Quick summary of what the engine supports:
 
 ## Development Context
 
-### Active Areas (as of v0.0.1.11, 2026-05-31)
+### Active Areas (as of v0.0.1.12, 2026-06-28)
 
 1. **Native function calling** — provider-native tool API for Ollama, OpenAI, Anthropic, Gemini, plus all OpenAI-compatible providers (OpenRouter, Z.AI, Generic OpenAI, LM Studio) via `OpenAICompatibleHelpers.buildOpenAIToolsArray` / `parseOpenAIToolCalls`. JSON-in-text fallback for the rest. Controlled by `tools.native_tools: auto|always|never`. **Persistent fallback list** in `models.native_tools_fallbacks` survives process restart.
 2. **Centralized stats tracking** — `LLMClient` is now the single writer of `task.tokens_in/out/cost_usd` and (when `subtaskId` is provided) `subtask.tokens_in/out/cost_usd`. Per-call-site bookkeeping (~20 sites) was removed; new `complete()` callers just pass `taskId` / `subtaskId` and metrics increment automatically. `SessionStatsCalculator` reads the `task` row directly; `api_logs` is no longer a stats source.
 3. **Tool-result compression** — `DiffCompressor` elides bodies of large diffs in tool results (small / pure-create / mixed paths). The wrap-up agent turn no longer pays for the file the agent just generated. Subtask id is plumbed through so the recovery hint embeds the literal id.
-4. **Multi-agent infrastructure** — `AgentEventBus`, `MultiAgentRunner`, parallel orchestration wired; peer-to-peer A2A messaging (`send_message` → `answer_message` loop) not yet production-ready.
+4. **Multi-agent infrastructure** — `AgentEventBus`, `MultiAgentRunner`, parallel orchestration wired; peer-to-peer A2A messaging now goes through per-agent inboxes (`AgentInboxRegistry` + `AgentMessageInbox`): `send_message` enqueues, `answer_message` replies, the next turn's prompt builder injects pending inbound messages. Integration-tested but still maturing.
 5. **Ongoing refactor** — CoreApiRouter and ConfigService being slimmed down; session layer migration to `:core` in progress.
-6. **CommandRule security system** — regex-based ALLOW/BLOCK/ASK replacing legacy `CommandWhitelist`. New code should use `CommandRule`.
+6. **CommandRule security system** — regex-based ALLOW/BLOCK/ASK is the only terminal-command policy engine; the legacy `CommandWhitelist` / `CommandDenylist` classes have been removed.
 7. **Reference model for testing:** `ollama/qwen3.5:9b`
 8. **Turn-loop reliability (v0.0.1.11)** — `INCOMPLETE` task status for turns that stop without delivering, read-spree consolidation nudge, no-op-write streak abort, `ConsecutiveTextRepetitionTracker`, and loop detectors that exempt ASCII diagrams/separators.
 9. **MCP & model resolution (v0.0.1.11)** — global-server tools exposed to the agent as `mcp_<server>_*`; `ModelWindow` as the single context-window resolver; RAG duplicate/overlapping-chunk dedup and batched index writes.
@@ -179,9 +179,9 @@ Files that are large, structurally central, or require special care:
 ## Pitfalls for New Developers
 
 1. **`:core` cannot depend on IntelliJ SDK** — all core code must work without the IDE. IDE-dependent context providers live in `intellij-plugin/core/context/providers/`.
-2. **Kotlin version mismatch** — `:core` and `:intellij-plugin`: Kotlin 1.9.25; `:cli`: Kotlin 2.0.21. Keep this in mind when adding dependencies.
+2. **Kotlin compiler vs source level** — all three modules use the Kotlin 2.3.20 compiler with `apiVersion`/`languageVersion` pinned to 1.9 for source compatibility. `:core` / `:cli` target JDK 17; `:intellij-plugin` is compiled against JDK 21 (IntelliJ 2026.1). Keep the 1.9 source level in mind when using newer stdlib APIs.
 3. **Thin Router Pattern** — never add business logic to CoreApiRouter or domain routers. Routers = delegation only.
-4. **CommandRule vs CommandWhitelist** — `CommandWhitelist` is legacy. New code uses `CommandRule` (regex-based ALLOW/BLOCK/ASK).
+4. **Terminal command policy is `CommandRule`** — regex-based ALLOW/BLOCK/ASK. The legacy `CommandWhitelist` / `CommandDenylist` classes have been removed; do not reintroduce them.
 5. **ToolPermissions are 3-level** — ON/ASK/OFF, not a boolean. `run_terminal_command` is ASK in AGENT by default, not ON.
 6. **Database location** — moved from `refio_poc.db` (project root) to `~/.refio/data/database.sqlite` (shared across projects).
 7. **Native tools path vs JSON path** — `AgentTurnLoop` takes the native path when `LLMResponse.nativeToolCalls != null`, skipping `ToolCallParser` entirely. Both paths must stay consistent.
@@ -193,9 +193,8 @@ Files that are large, structurally central, or require special care:
 
 ## Questions for Maintainers
 
-1. What is the timeline for removing `CommandWhitelist` now that `CommandRule` is the standard?
-2. Which LLM models besides `qwen3.5:9b` are regularly tested? Is there a model compatibility matrix?
-3. What is the plan for completing A2A messaging in the multi-agent system?
+1. Which LLM models besides `qwen3.5:9b` are regularly tested? Is there a model compatibility matrix?
+2. What is the plan for hardening A2A messaging (per-agent inboxes are wired and integration-tested, but production-grade orchestration coverage is still incomplete)?
 4. What are the testing priorities — increasing plugin coverage (currently ~5 files) or expanding core tests?
 5. Is support for other IDEs planned beyond IntelliJ IDEA?
 

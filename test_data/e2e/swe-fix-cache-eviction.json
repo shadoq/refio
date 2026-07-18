@@ -1,0 +1,16 @@
+{
+  "id": "swe-fix-cache-eviction",
+  "mode": "AGENT",
+  "description": "Fix LruCache so a successful get marks the key most recently used and the correct entry is evicted, making the tests pass.",
+  "category": "bugfix",
+  "max_iterations": 25,
+  "fixture": "fixtures/py-cache",
+  "prompt_file": "prompts/swe-fix-cache-eviction.md",
+  "assert": {
+    "tool_order": ["read_file", "advance_code_editing"],
+    "file_unchanged": ["test_cache.py"],
+    "build_cmd": "python3 -m unittest test_cache -v",
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["get() now refreshes recency (read entries survive the next eviction); the fix is in src/cache.py only and the tests were not weakened."]
+}

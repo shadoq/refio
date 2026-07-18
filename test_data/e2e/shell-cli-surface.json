@@ -1,0 +1,20 @@
+{
+  "id": "shell-cli-surface",
+  "category": "analysis",
+  "mode": "PLAN",
+  "description": "PLAN-mode: summarize a shell CLI's API surface, listing every function with its file and arguments plus the Makefile targets.",
+  "max_iterations": 20,
+  "fixture": "fixtures/shell-cli",
+  "prompt_file": "prompts/shell-cli-surface.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_output": { "regex": "require_env" },
+    "file_unchanged": [
+      "lib/common.sh",
+      "bin/deploy.sh",
+      "Makefile"
+    ],
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["The summary lists the shell functions (require_env and log in common.sh; build_artifact, push_artifact, main in deploy.sh) with their arguments and the Makefile targets build/deploy/lint, without editing any file."]
+}

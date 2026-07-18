@@ -53,7 +53,8 @@ class TurnToolExecutor(
     private val chatMessageRepository: ChatMessageRepository? = null,
     private val approvalService: ToolApprovalService? = null,
     private val permissionsService: ToolPermissionsService? = null,
-    private val hookService: pl.jclab.refio.core.services.hooks.HookService? = null
+    private val hookService: pl.jclab.refio.core.services.hooks.HookService? = null,
+    private val proposedChangeBuilder: ProposedChangeBuilder? = null
 ) {
     /** Callback to update turn phase (set by AgentTurnLoop before each turn) */
     var turnStateUpdater: ((TurnPhase) -> Unit)? = null
@@ -127,6 +128,78 @@ class TurnToolExecutor(
         }.trim()
     }
 
+    /**
+     * When an edit tool keeps FAILING on the same file, the model is usually thrashing - rewriting
+     * the whole file again and again with a slightly different approach instead of stepping back.
+     * That burns turns and inflates context with dead diffs. After [REPEATED_FAILED_EDIT_THRESHOLD]+
+     * prior failed edits of the same path, nudge it to change tactics. Counts FAILED subtasks only
+     * (success/noop are handled by other guards), so legitimate iterative editing is not flagged.
+     */
+    private fun buildRepeatedFileEditNudge(
+        taskId: String,
+        currentSubtaskId: String,
+        toolName: String,
+        argumentsJson: String
+    ): String? {
+        if (toolName !in codingToolNames) return null
+        val path = extractEditPath(argumentsJson) ?: return null
+
+        val priorFailedEdits = try {
+            transaction { subtaskRepository.findByTaskId(taskId) }
+                .asSequence()
+                .filter { it.id != currentSubtaskId }
+                .filter { it.status == TaskStatus.FAILED }
+                .filter { sub -> codingToolNames.any { it.equals(sub.kind.name, ignoreCase = true) } }
+                .filter { extractEditPath(it.paramsJson.orEmpty()) == path }
+                .take(5)
+                .count()
+        } catch (e: Exception) {
+            logger.debug { "[REPEATED_EDIT_NUDGE] query failed, skipping: ${e.message}" }
+            return null
+        }
+
+        val nudge = repeatedFailedEditNudgeText(path, priorFailedEdits) ?: return null
+        logger.info {
+            "[REPEATED_FAILED_EDIT] tool=$toolName path=$path taskId=$taskId priorFailures=$priorFailedEdits"
+        }
+        return nudge
+    }
+
+    /**
+     * When `run_code` / `run_terminal_command` keep failing back-to-back (syntax errors, non-zero
+     * exit), the model is usually re-running a slightly different version of the same broken script
+     * instead of shrinking the problem. After [REPEATED_EXEC_FAILURE_THRESHOLD]+ consecutive failed
+     * runs of execution tools, nudge it to isolate the failure and build up in small steps.
+     * Counts only the trailing run of FAILED execution subtasks - a success in between resets it.
+     */
+    private fun buildRepeatedExecFailureNudge(
+        taskId: String,
+        currentSubtaskId: String,
+        toolName: String
+    ): String? {
+        if (toolName !in EXECUTION_TOOL_NAMES) return null
+
+        val priorConsecutiveFailures = try {
+            transaction { subtaskRepository.findByTaskId(taskId) }
+                .asReversed()
+                .asSequence()
+                .filter { it.id != currentSubtaskId }
+                .filter { sub -> EXECUTION_TOOL_NAMES.any { it.equals(sub.kind.name, ignoreCase = true) } }
+                .take(6)
+                .takeWhile { it.status == TaskStatus.FAILED }
+                .count()
+        } catch (e: Exception) {
+            logger.debug { "[REPEATED_EXEC_NUDGE] query failed, skipping: ${e.message}" }
+            return null
+        }
+
+        val nudge = repeatedExecFailureNudgeText(toolName, priorConsecutiveFailures) ?: return null
+        logger.info {
+            "[REPEATED_EXEC_FAILURE] tool=$toolName taskId=$taskId priorConsecutiveFailures=$priorConsecutiveFailures"
+        }
+        return nudge
+    }
+
     companion object {
         /**
          * A single tool call is "information gathering" — a read/search of the codebase or web
@@ -162,6 +235,138 @@ class TurnToolExecutor(
                 (category == ToolCategory.SYSTEM && name != "think") ||
                 name == "delegate_to_strong_model" ||
                 name == "invoke_subagent"
+
+        /**
+         * Min number of PRIOR failed edits of the same file before the "change approach" nudge
+         * fires. 2 prior failures means the current (failing) call is the 3rd attempt.
+         */
+        const val REPEATED_FAILED_EDIT_THRESHOLD = 2
+
+        /** Target file path of an edit tool call (path / file_path / file), or null. Pure. */
+        internal fun extractEditPath(argumentsJson: String): String? {
+            if (argumentsJson.isBlank()) return null
+            return try {
+                val map = TurnJsonUtils.parseJsonToMap(argumentsJson)
+                (map["path"] ?: map["file_path"] ?: map["file"])
+                    ?.toString()?.trim()?.takeIf { it.isNotBlank() }
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        /**
+         * True when a `read_file` call requests a specific line range (offset and/or limit). Such a
+         * read after a write is a targeted debugging move ("show me lines 180-220 around this error"),
+         * not a wasteful whole-file re-read, so it must not be suppressed. Pure.
+         */
+        internal fun readHasRange(argumentsJson: String): Boolean {
+            if (argumentsJson.isBlank()) return false
+            return try {
+                val map = TurnJsonUtils.parseJsonToMap(argumentsJson)
+                (map["offset"] ?: map["limit"]) != null
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        /**
+         * Path-writing tools whose SUCCESSFUL write makes a later same-path `read_file` redundant —
+         * the write result's changeSummary (diff + line counts) is already in history. multi_edit is
+         * intentionally absent: its path lives in `edits[].path`, not a top-level `path`, so
+         * [extractEditPath] can't match it and it would never short-circuit anyway.
+         */
+        internal val PATH_WRITE_TOOL_NAMES = setOf(
+            "create_new_file", "code_editing", "advance_code_editing", "multi_line_editor"
+        )
+
+        /**
+         * True when a `read_file` of [readPath] should be short-circuited instead of executed: a write
+         * tool already wrote that exact path successfully in this task AND nothing has FAILED since.
+         * Re-reading a file you just wrote returns nothing the diff didn't already give you and burns
+         * tokens — observed: qwen3.5:122b read its 1182-line file 5×, deepseek-v4-pro re-read repeatedly,
+         * filling RECENT_WORK and (on small-window models) the context budget.
+         *
+         * Safety: reads are re-enabled (never suppressed) by ANY of these signals, so the model can
+         * never get stuck unable to inspect its own file:
+         *  - a FAILED subtask after the last successful write (failed edit "string not found", failed
+         *    build/test that legitimately needs a fresh read);
+         *  - a targeted line-range read ([hasReadRange]) — a debugging move, not a wasteful re-read;
+         *  - a USER message created after the write ([lastUserMessageAt]) — the human/browser equivalent
+         *    of a failed check. A user reporting "SyntaxError at line 192" is a concrete failure the
+         *    write diff cannot show, but it arrives as a chat turn, not a FAILED subtask; without this
+         *    the fix path stays blocked forever.
+         * Pure (no DB) so it is unit-testable.
+         */
+        internal fun shouldSuppressReadAfterWrite(
+            readPath: String,
+            subtasks: List<Subtask>,
+            currentSubtaskId: String,
+            hasReadRange: Boolean = false,
+            lastUserMessageAt: Long? = null
+        ): Boolean {
+            val normalized = readPath.trim()
+            if (normalized.isEmpty()) return false
+            if (hasReadRange) return false
+            val others = subtasks.filter { it.id != currentSubtaskId }
+            val lastWrite = others
+                .filter { it.status == TaskStatus.SUCCESS }
+                .filter { sub -> PATH_WRITE_TOOL_NAMES.any { it.equals(sub.kind.name, ignoreCase = true) } }
+                .filter { extractEditPath(it.paramsJson.orEmpty()) == normalized }
+                .maxByOrNull { it.orderIndex }
+                ?: return false
+            val failedAfterWrite = others.any {
+                it.status == TaskStatus.FAILED && it.orderIndex > lastWrite.orderIndex
+            }
+            if (failedAfterWrite) return false
+            if (lastUserMessageAt != null && lastUserMessageAt > lastWrite.createdAt) return false
+            return true
+        }
+
+        /** In-band notice returned in place of a re-read file's content. Pure so it is testable. */
+        internal fun readAfterWriteSkipNotice(path: String): String = buildString {
+            appendLine("[skipped re-read — you wrote this file in this turn]")
+            appendLine("`$path` was written by a write tool earlier in this task and nothing has failed since.")
+            appendLine("The write result's changeSummary (added/removed lines + unified diff) is already in your")
+            appendLine("history and IS the authoritative current content — re-reading returns nothing new and wastes")
+            appendLine("tokens. Move on to the next outstanding step of the request and deliver.")
+            append("Re-read only if a LATER build/test/lint/run reports a concrete error pointing at this file; ")
+            append("any such failure automatically re-enables reads of this path.")
+        }.trim()
+
+        /**
+         * The "change approach" nudge text, or null when [priorFailedEdits] is below
+         * [REPEATED_FAILED_EDIT_THRESHOLD]. Pure (no DB) so the threshold + message are testable.
+         */
+        internal fun repeatedFailedEditNudgeText(path: String, priorFailedEdits: Int): String? {
+            if (priorFailedEdits < REPEATED_FAILED_EDIT_THRESHOLD) return null
+            return buildString {
+                appendLine("[⚠ change approach - repeated failed edits]")
+                appendLine("This is attempt ${priorFailedEdits + 1} to edit `$path`; the previous $priorFailedEdits attempt(s) failed.")
+                appendLine("Repeating the same rewrite will likely keep failing. Instead: (1) read_file the current content to re-check the exact text, (2) make a smaller, targeted edit, (3) use create_new_file to rewrite from scratch if the file is small, or (4) call delegate_to_strong_model with a concrete summary of what keeps failing.")
+            }.trim()
+        }
+
+        /** Execution tools whose repeated back-to-back failures trigger the change-approach nudge. */
+        val EXECUTION_TOOL_NAMES = setOf("run_code", "run_terminal_command")
+
+        /**
+         * Min number of PRIOR consecutive execution failures before the change-approach nudge fires.
+         * 2 prior failures means the current (failing) run is the 3rd in a row.
+         */
+        const val REPEATED_EXEC_FAILURE_THRESHOLD = 2
+
+        /**
+         * The "change approach" nudge for repeated `run_code` / `run_terminal_command` failures, or
+         * null below [REPEATED_EXEC_FAILURE_THRESHOLD]. Pure (no DB) so threshold + message are testable.
+         */
+        internal fun repeatedExecFailureNudgeText(toolName: String, priorConsecutiveFailures: Int): String? {
+            if (priorConsecutiveFailures < REPEATED_EXEC_FAILURE_THRESHOLD) return null
+            return buildString {
+                appendLine("[⚠ change approach - repeated execution failures]")
+                appendLine("The last $priorConsecutiveFailures `$toolName` runs failed back-to-back (this is attempt ${priorConsecutiveFailures + 1}).")
+                appendLine("Re-running a slightly different version keeps hitting the same wall. Instead: (1) write the SMALLEST snippet that isolates the failing piece (a few lines), (2) for syntax errors build the file incrementally and run after each small addition, (3) read the exact error line before retrying, or (4) call delegate_to_strong_model with the code and the exact error.")
+            }.trim()
+        }
 
         /** Max raw output size (chars) to preserve in-context for DATA_PRODUCING tools */
         const val DATA_PRODUCING_RAW_OUTPUT_BUFFER = 16_000
@@ -278,6 +483,7 @@ class TurnToolExecutor(
                     subtaskId = subtaskId,
                     content = errorText,
                     isSummarized = false,
+                    success = false,
                     rawOutput = null,
                     metadata = null
                 )
@@ -352,21 +558,8 @@ class TurnToolExecutor(
                     }
                     val subtaskId = subtaskIds[toolCall.id]!!
 
-                    if (config.enableSnapshots && snapshotService != null) {
-                        try {
-                            val params = TurnJsonUtils.parseJsonToMap(toolCall.arguments)
-                            val path = params["path"]?.toString()
-                            if (path != null) {
-                                val snapshotId = snapshotService.createSnapshot(taskId, subtaskId, listOf(path))
-                                if (snapshotId != null) {
-                                    subtaskRepository.linkSnapshot(subtaskId, snapshotId)
-                                }
-                            }
-                        } catch (e: Exception) {
-                            logger.warn(e) { "[SNAPSHOT] Failed to create snapshot for ${toolCall.name}" }
-                        }
-                    }
-
+                    // Snapshot-before-write is centralized in executeSingleTool (covers the
+                    // non-streaming write path uniformly), so the parallel branch needs no extra block.
                     val result = executeSingleTool(
                         taskId = taskId,
                         toolCall = toolCall,
@@ -428,6 +621,36 @@ class TurnToolExecutor(
     }
 
     /**
+     * Snapshot a write tool's target file before execution so the edit can be rolled back.
+     * Covers the non-streaming execution path (toolExecutor.executeTool); streaming editors
+     * already snapshot inside ToolExecutor.executeToolsWithStreaming. No-op for reads, for
+     * disabled snapshots, or when no path / snapshot service is available.
+     */
+    private fun maybeSnapshotBeforeWrite(
+        taskId: String,
+        subtaskId: String,
+        toolCall: ToolCallData,
+        tool: Tool?,
+        config: TurnLoopConfig
+    ) {
+        if (!config.enableSnapshots || snapshotService == null) {
+            return
+        }
+        if (tool?.mode != ToolMode.WRITE) {
+            return
+        }
+        try {
+            val path = extractEditPath(toolCall.arguments) ?: return
+            val snapshotId = snapshotService.createSnapshot(taskId, subtaskId, listOf(path))
+            if (snapshotId != null) {
+                subtaskRepository.linkSnapshot(subtaskId, snapshotId)
+            }
+        } catch (e: Exception) {
+            logger.warn(e) { "[SNAPSHOT] Failed to create snapshot for ${toolCall.name}" }
+        }
+    }
+
+    /**
      * Execute a single tool call.
      */
     @Suppress("UNUSED_PARAMETER")
@@ -464,6 +687,7 @@ class TurnToolExecutor(
                 subtaskId = subtaskId,
                 content = errorText,
                 isSummarized = false,
+                success = false,
                 rawOutput = null,
                 metadata = null
             )
@@ -481,7 +705,8 @@ class TurnToolExecutor(
                     taskId = taskId,
                     toolName = toolCall.name,
                     arguments = argumentsMap,
-                    description = buildToolDescription(toolCall)
+                    description = buildToolDescription(toolCall),
+                    proposedChange = proposedChangeBuilder?.build(toolCall.name, argumentsMap)
                 )
 
                 val decision = approvalService.requestApproval(request)
@@ -512,6 +737,55 @@ class TurnToolExecutor(
             }
         }
         // --- end ASK permission check ---
+
+        // --- Re-read-after-write suppression ---
+        // If this read_file targets a path a write tool already produced this turn (with no failure
+        // since), return a short in-band notice instead of the file content. The write's diff is
+        // authoritative; re-reading just burns tokens. A later failure auto-reopens reads (see
+        // [shouldSuppressReadAfterWrite]).
+        if (toolCall.name.equals("read_file", ignoreCase = true)) {
+            val readPath = extractEditPath(toolCall.arguments)
+            val hasReadRange = readHasRange(toolCall.arguments)
+            val suppress = readPath != null && try {
+                val subs = transaction { subtaskRepository.findByTaskId(taskId) }
+                val lastUserMessageAt = chatMessageRepository?.let { repo ->
+                    transaction { repo.findByTaskId(taskId) }
+                        .filter { it.role == MessageRole.USER }
+                        .maxOfOrNull { it.createdAt }
+                }
+                shouldSuppressReadAfterWrite(readPath, subs, subtaskId, hasReadRange, lastUserMessageAt)
+            } catch (e: Exception) {
+                logger.debug { "[READ_AFTER_WRITE] query failed, allowing read: ${e.message}" }
+                false
+            }
+            if (suppress) {
+                val notice = readAfterWriteSkipNotice(readPath!!)
+                logger.info {
+                    "[READ_AFTER_WRITE] short-circuit read_file path=$readPath taskId=$taskId — " +
+                        "written this turn, no failure since"
+                }
+                listener?.onToolExecutionStarted(taskId, toolCall)
+                listener?.onToolExecutionCompleted(taskId, toolCall, notice, true)
+                hookService?.trigger("after_tool", mapOf(
+                    "toolName" to toolCall.name,
+                    "taskId" to taskId,
+                    "success" to "true",
+                    "mode" to mode.name
+                ))
+                subtaskRepository.updateStatus(subtaskId, TaskStatus.SUCCESS)
+                subtaskRepository.updateResult(subtaskId, result = notice, summary = notice)
+                return ToolResultData(
+                    toolCallId = toolCall.id,
+                    subtaskId = subtaskId,
+                    content = notice,
+                    isSummarized = false,
+                    success = true,
+                    rawOutput = notice,
+                    metadata = null
+                )
+            }
+        }
+        // --- end re-read-after-write suppression ---
 
         val toolToken = GlobalMetrics.beginOperation(
             OperationInfo.TurnToolExecution(toolCall.name, iteration)
@@ -631,6 +905,7 @@ class TurnToolExecutor(
                     changeSummary = output.changeSummary
                 )
             } else {
+                maybeSnapshotBeforeWrite(taskId, subtaskId, toolCall, tool, _config)
                 toolExecutor.executeTool(toolCallRequest, taskId)
             }
 
@@ -821,6 +1096,7 @@ class TurnToolExecutor(
                     subtaskId = subtaskId,
                     content = effectiveContent,
                     isSummarized = effectivelySummarized,
+                    success = true,
                     rawOutput = outputWithWarnings,
                     // `rawOutput` above (the tool's own output, before hints/repeatedCallNudge) — NOT
                     // outputWithWarnings, whose nudge embeds a per-call subtask UUID that would defeat
@@ -852,6 +1128,12 @@ class TurnToolExecutor(
                         append("\nNext steps:")
                         hints.forEach { append("\n- ").append(it) }
                     }
+                    buildRepeatedFileEditNudge(taskId, subtaskId, toolCall.name, toolCall.arguments)?.let {
+                        append("\n\n").append(it)
+                    }
+                    buildRepeatedExecFailureNudge(taskId, subtaskId, toolCall.name)?.let {
+                        append("\n\n").append(it)
+                    }
                 }
                 listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
                 hookService?.trigger("after_tool", mapOf(
@@ -872,6 +1154,7 @@ class TurnToolExecutor(
                     subtaskId = subtaskId,
                     content = errorText,
                     isSummarized = false,
+                    success = false,
                     rawOutput = null,
                     metadata = null
                 )
@@ -901,6 +1184,7 @@ class TurnToolExecutor(
                 subtaskId = subtaskId,
                 content = errorText,
                 isSummarized = false,
+                success = false,
                 rawOutput = null,
                 metadata = null
             )
@@ -984,9 +1268,30 @@ class TurnToolExecutor(
         return toolCalls.count { isWriteTool(it.name) }
     }
 
-    fun countVerificationToolCalls(toolCalls: List<ToolCallData>): Int {
-        return toolCalls.count { it.name in setOf("run_terminal_command", "grep_search", "read_file", "view_diff") }
+    /**
+     * Count only calls that produce a real FILE deliverable (edit/create), excluding the execution
+     * tools (run_code / run_terminal_command). A `mkdir`/`ls`/build via run_terminal_command is
+     * mode=WRITE for approval but leaves no file, so it must not be mistaken for a delivered turn.
+     */
+    fun countFileWriteToolCalls(toolCalls: List<ToolCallData>): Int {
+        return toolCalls.count { isFileWriteTool(it.name) }
     }
+
+    fun countVerificationToolCalls(toolCalls: List<ToolCallData>): Int {
+        return toolCalls.count { isVerificationTool(it.name) }
+    }
+
+    /** A read-only / self-verification tool (compile/run, search, read, diff) - never a deliverable itself. */
+    fun isVerificationTool(toolName: String): Boolean =
+        toolName in setOf("run_terminal_command", "grep_search", "read_file", "view_diff")
+
+    /**
+     * A WRITE tool that actually produces a FILE deliverable (edit/create). Excludes the execution
+     * tools (run_code / run_terminal_command) which are mode=WRITE for approval purposes but produce
+     * no file - so a loop of failing commands with no real edit is never mistaken for a delivered turn.
+     */
+    fun isFileWriteTool(toolName: String): Boolean =
+        isWriteTool(toolName) && toolName !in EXECUTION_TOOL_NAMES
 
     /**
      * Count information-gathering calls (reads/searches) in a batch. Feeds the consolidation

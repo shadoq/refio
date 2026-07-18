@@ -66,7 +66,7 @@ object TuiStepsView {
                 subtask.model?.let { parts.add(it) }
                 if (subtask.startedAt != null && subtask.finishedAt != null) {
                     val durationSec = (subtask.finishedAt!! - subtask.startedAt!!) / 1000.0
-                    parts.add("${String.format("%.1f", durationSec)}s")
+                    parts.add("${String.format(java.util.Locale.US, "%.1f", durationSec)}s")
                 }
                 if (parts.isNotEmpty()) TuiColors.muted(" [${parts.joinToString(" ")}]") else ""
             } else ""
@@ -91,12 +91,12 @@ object TuiStepsView {
                         "       Tokens: ${subtask.tokensIn} in / ${subtask.tokensOut} out ($totalTokens total)"
                     ))
                     buf.addLine(TuiColors.muted(
-                        "       Cost: $${String.format("%.6f", subtask.costUsd)}"
+                        "       Cost: $${String.format(java.util.Locale.US, "%.6f", subtask.costUsd)}"
                     ))
                 }
                 if (subtask.startedAt != null && subtask.finishedAt != null) {
                     val durationSec = (subtask.finishedAt!! - subtask.startedAt!!) / 1000.0
-                    buf.addLine(TuiColors.muted("       Duration: ${String.format("%.1f", durationSec)}s"))
+                    buf.addLine(TuiColors.muted("       Duration: ${String.format(java.util.Locale.US, "%.1f", durationSec)}s"))
                 }
                 if (subtask.kind.isNotEmpty()) {
                     buf.addLine(TuiColors.muted("       Tool: ${subtask.kind}"))

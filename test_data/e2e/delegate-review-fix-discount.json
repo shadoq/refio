@@ -1,0 +1,19 @@
+{
+  "id": "delegate-review-fix-discount",
+  "mode": "AGENT",
+  "description": "Delegate a review of discount.py to a subagent, then fix the boundary so orders totaling exactly 100 qualify for the discount.",
+  "category": "orchestration",
+  "max_iterations": 25,
+  "fixture": "fixtures/py-discount",
+  "prompt_file": "prompts/delegate-review-fix-discount.md",
+  "assert": {
+    "tool_invoked": [
+      { "name": "invoke_subagent", "args_regex": "code-reviewer" }
+    ],
+    "needle_in_file": { "path": "src/discount.py", "regex": ">=[[:space:]]*100|100[[:space:]]*<=" },
+    "file_unchanged": ["main.py"],
+    "build_cmd": "python3 main.py",
+    "no_context_overflow": true
+  },
+  "judge_criteria": ["The code-reviewer subagent was actually invoked before the fix, and discounted_total now applies the discount at exactly 100; main.py is untouched."]
+}

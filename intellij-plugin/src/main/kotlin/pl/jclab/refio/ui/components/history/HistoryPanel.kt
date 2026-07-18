@@ -26,7 +26,7 @@ import javax.swing.event.DocumentListener
 /**
  * History Panel - Slide-in overlay for browsing session history
  *
- * Features (US-101):
+ * Features:
  * - Search by session name
  * - Filter by mode (Chat/Plan/Agent)
  * - Session cards with metadata
@@ -45,7 +45,7 @@ class HistoryPanel(
     private val logger = dualLogger("HistoryPanel")
 
     private val searchField: SearchTextField
-    private val filterTabs: JTabbedPane
+    private val modeFilterButtons: List<JToggleButton>
     private val sortCombo: JComboBox<SortOrder>
     private val statusCombo: JComboBox<StatusFilter>
     private val groupPinnedCheckbox: JCheckBox
@@ -138,17 +138,18 @@ class HistoryPanel(
             add(searchField, BorderLayout.CENTER)
         }
 
-        // Filter tabs (mode)
-        filterTabs = JTabbedPane().apply {
-            addTab("All", JPanel())
-            addTab("Chat", JPanel())
-            addTab("Plan", JPanel())
-            addTab("Agent", JPanel())
-
-            // Listen to tab changes
-            addChangeListener {
-                applyFilters()
+        // Mode filter as a segmented row of toggle buttons (no dead content band like tabs)
+        val modeGroup = ButtonGroup()
+        modeFilterButtons = listOf("All", "Chat", "Plan", "Agent").map { label ->
+            JToggleButton(label).apply {
+                isFocusPainted = false
+                addActionListener { applyFilters() }
+                modeGroup.add(this)
             }
+        }
+        modeFilterButtons.first().isSelected = true
+        val modeFilterRow = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+            modeFilterButtons.forEach { add(it) }
         }
 
         // Sort + status filter row
@@ -194,11 +195,11 @@ class HistoryPanel(
             })
         }
 
-        // Top panel combining header, filter tabs, and sort/status row
+        // Top panel combining header, mode filter row, and sort/status row
         val topPanel = JBPanel<JBPanel<*>>().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             add(headerPanel)
-            add(filterTabs)
+            add(modeFilterRow)
             add(filterRow)
         }
 
@@ -300,11 +301,11 @@ class HistoryPanel(
 
     /**
      * Apply search and filter to session list
-     * US-204: Sort by pinned first, then by recency
+     * Sort by pinned first, then by recency
      */
     private fun applyFilters() {
         val query = searchField.text.lowercase()
-        val selectedTab = filterTabs.selectedIndex
+        val selectedTab = modeFilterButtons.indexOfFirst { it.isSelected }.coerceAtLeast(0)
         val statusFilter = (statusCombo.selectedItem as? StatusFilter) ?: StatusFilter.ALL
         val sortOrder = (sortCombo.selectedItem as? SortOrder) ?: SortOrder.UPDATED_DESC
         val groupPinned = groupPinnedCheckbox.isSelected
@@ -355,7 +356,7 @@ class HistoryPanel(
 
     /**
      * Refresh session list UI
-     * US-204: Group by pinned/recent with section headers
+     * Group by pinned/recent with section headers
      */
     private fun refreshSessionList() {
         logger.debug { "refreshSessionList: rendering ${filteredSessions.size} sessions" }
@@ -457,9 +458,10 @@ class HistoryPanel(
                 }
 
                 if (session.tokensIn > 0 || session.tokensOut > 0) {
-                    add(JBLabel("Tokens: ${session.tokensIn}↓ ${session.tokensOut}↑").apply {
+                    add(JBLabel("Tokens: ${formatTokenCount(session.tokensIn)}↓ ${formatTokenCount(session.tokensOut)}↑").apply {
                         foreground = LCATheme.grayColor
                         font = font.deriveFont(11f)
+                        toolTipText = "Tokens: ${session.tokensIn} in, ${session.tokensOut} out"
                     })
                 }
 
@@ -563,8 +565,16 @@ class HistoryPanel(
         return formatter.format(date)
     }
 
+    private fun formatTokenCount(count: Int): String {
+        return when {
+            count >= 1_000_000 -> String.format("%.1fM", count / 1_000_000.0)
+            count >= 1_000 -> String.format("%.1fK", count / 1_000.0)
+            else -> count.toString()
+        }
+    }
+
     private fun formatDuration(millis: Long): String {
-        if (millis <= 0) return "—"
+        if (millis <= 0) return "-"
         val totalSeconds = millis / 1000
         val hours = totalSeconds / 3600
         val minutes = (totalSeconds % 3600) / 60

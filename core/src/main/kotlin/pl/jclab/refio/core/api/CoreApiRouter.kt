@@ -33,7 +33,7 @@ class CoreApiRouter(
     /** Callback to invalidate codebase context cache after RAG operations. Set by plugin layer. */
     private val codebaseCacheInvalidator: (projectRoot: String) -> Unit = {},
     /**
-     * Run-scope config overrides (docs/0063) threaded into this router's [configService] and any
+     * Run-scope config overrides threaded into this router's [configService] and any
      * project router it spawns via [createProjectRouter]. Highest priority, read-only, never
      * persisted. Empty by default — plugin and normal callers are unaffected.
      */
@@ -55,7 +55,7 @@ class CoreApiRouter(
         setRepository(persistence.agentEventSqlRepository)
     }
 
-    // Per-session, per-agent inbox lookup for A2A peer messaging (spec docs/0054-multiagent.md).
+    // Per-session, per-agent inbox lookup for A2A peer messaging.
     val agentInboxRegistry = pl.jclab.refio.core.agents.events.AgentInboxRegistry()
 
     // Core services (public for cross-module access by plugin services)
@@ -66,7 +66,7 @@ class CoreApiRouter(
         runConfigOverrides = runConfigOverrides
     )
 
-    /** Builds the structured `run.json` session snapshot for the CLI `--output json` (docs/0063). */
+    /** Builds the structured `run.json` session snapshot for the CLI `--output json`. */
     val sessionDebugExporter = pl.jclab.refio.core.debug.SessionDebugExporter(
         taskRepository = persistence.taskRepository,
         subtaskRepository = persistence.subtaskRepository,
@@ -213,7 +213,7 @@ class CoreApiRouter(
     val lastPromptSnapshot: kotlinx.coroutines.flow.StateFlow<pl.jclab.refio.core.services.turn.PromptSnapshot?>?
         get() = agentTurnLoop?.lastPromptSnapshot
 
-    // ========== Domain Routers (RFC 0005) - Public API ==========
+    // ========== Domain Routers - Public API ==========
     // All 12 router lazy vals + workflow plumbing live in [DomainRouters] so
     // composition-root concerns stay separated from public API wiring.
 
@@ -306,6 +306,7 @@ class CoreApiRouter(
     fun close() {
         subagentRouter?.clearTemporary()
         agentPlanService.clear()
+        agentEventBus.close()
         routerScope.cancel("CoreApiRouter closing")
     }
 }
