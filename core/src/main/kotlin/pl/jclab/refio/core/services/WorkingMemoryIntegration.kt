@@ -11,8 +11,6 @@ private val logger = dualLogger("WorkingMemoryIntegration")
  *
  * Inspired by Claude Code's reminder injection pattern.
  * Provides relevance-filtered working memory sections for prompts.
- *
- * Reference: ADR-0028 - Enhanced Working Memory
  */
 class WorkingMemoryIntegration(
     private val workingMemoryService: WorkingMemoryService

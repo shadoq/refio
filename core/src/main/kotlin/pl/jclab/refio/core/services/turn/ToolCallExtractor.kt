@@ -46,7 +46,7 @@ sealed interface ExtractionResult {
  * Single entry point that turns an [LLMResponse] into tool calls regardless of how the model
  * expressed them. Strategies are tried in order; the first that yields calls wins and its
  * `source` is reported. The turn loop no longer branches "native vs JSON" itself — it asks
- * this extractor (docs/0056).
+ * this extractor.
  *
  * Strategy order:
  *  1. `provider-native`  — [LLMResponse.nativeToolCalls] the runtime already parsed.
@@ -54,7 +54,7 @@ sealed interface ExtractionResult {
  *  3. `hermes`           — `<tool_call>{json}</tool_call>` tags (guarded recovery).
  *  4. `qwen-coder-xml`   — `<function=NAME><parameter=KEY>VAL</parameter></function>` (guarded recovery).
  *
- * **Rule 7 / docs/0056 §1:** parsing of XML pseudo-tags was deliberately removed once because it
+ * **Rule 7:** parsing of XML pseudo-tags was deliberately removed once because it
  * masked the real failure (a wrong `supportsFunctionCalling` flag) and encouraged garbage output.
  * The recovery strategies (3, 4) are therefore intentionally NARROW: they run only when the
  * structured native channel was NOT used AND the JSON contract produced nothing, and they accept
@@ -104,7 +104,7 @@ class ToolCallExtractor(
         }
 
         // 1b. Native channel active but EMPTY (real adapters return emptyList — NOT null — when native
-        //     tools were requested and the model produced 0 native calls; docs/0068). Normally this is
+        //     tools were requested and the model produced 0 native calls). Normally this is
         //     authoritative "the model finished with prose". EXCEPT: some models flagged native-capable
         //     emit the project's canonical {response, actions:[...]} envelope in TEXT instead of using
         //     the channel. Because there is NO native call here, recovering that envelope cannot spawn a
@@ -153,8 +153,8 @@ class ToolCallExtractor(
         // 5. Truncation: the model hit the output-token cap mid-envelope (`finishReason=length`) and
         //    left an unparseable, unclosed JSON object. This is a distinct, actionable failure — not a
         //    "model finished in prose" — so it gets its own reason. Detecting it HERE (instead of a
-        //    parallel guard in AgentTurnLoop) keeps the native-vs-text envelope inspection in one place
-        //    (docs/0056 §4 / docs/0064). The native path never reaches this point (it returned above),
+        //    parallel guard in AgentTurnLoop) keeps the native-vs-text envelope inspection in one place.
+        //    The native path never reaches this point (it returned above),
         //    matching the turn loop's long-standing `!usedNativeChannel` precondition.
         if (response.finishReason == "length") {
             val envelope = parser.inspectJsonEnvelope(contentForExtraction)
@@ -170,12 +170,12 @@ class ToolCallExtractor(
             else -> "final-text-no-toolcall"                     // normal final answer
         }
         if (reason == "attempted-toolcall-unparseable") {
-            // The bug behind docs/0055-0056 (session 79abb6e5): a weak model emits prose that *wants*
+            // A weak model (session 79abb6e5) emits prose that *wants*
             // to call a tool but matches no contract, and the loop used to finish silently on it.
             logger.warn {
                 "[TOOLCALL] all strategies failed but content looks like an attempted tool call " +
                     "(finishReason=${response.finishReason}, len=${contentForExtraction.length}, model=${response.model}) " +
-                    "— model follows no tool-call contract; verify its supportsFunctionCalling flag (docs/0056)."
+                    "— model follows no tool-call contract; verify its supportsFunctionCalling flag."
             }
         }
         return ExtractionResult.None(reason)
@@ -206,7 +206,7 @@ class ToolCallExtractor(
      * native channel and the JSON contract (session 6a1534a9, qwen3.5:35b): one tool per line as
      * `[TOOL] name: key="value", key2=value2`, the first line carrying a literal `[TOOL]` marker.
      *
-     * Deliberately NARROW (Rule 7 / docs/0056-0067): recovery arms ONLY when the literal `[TOOL]`
+     * Deliberately NARROW (Rule 7): recovery arms ONLY when the literal `[TOOL]`
      * marker actually PREFIXES a tool-shaped line (`[TOOL] name: args`) — a bare `Field: a=b` prose
      * line never false-positives, even alongside an unrelated `[TOOL]` mention elsewhere in the prose.
      * A line is accepted only when its name is a registered tool, and only when it actually carries
@@ -300,7 +300,7 @@ class ToolCallExtractor(
         logger.warn {
             "[TOOLCALL_RECOVERED] strategy=$strategy recovered ${calls.size} call(s) " +
                 "[${calls.joinToString(",") { it.name }}] from text (model=$model) — model bypassed both the native " +
-                "and JSON contracts; consider fixing its supportsFunctionCalling flag (docs/0056)."
+                "and JSON contracts; consider fixing its supportsFunctionCalling flag."
         }
     }
 }

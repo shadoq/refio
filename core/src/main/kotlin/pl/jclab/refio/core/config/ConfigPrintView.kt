@@ -1,7 +1,7 @@
 package pl.jclab.refio.core.config
 
 /**
- * Renders the resolved Refio configuration for the CLI `--print-config` flag (docs/0063) — a
+ * Renders the resolved Refio configuration for the CLI `--print-config` flag - a
  * deterministic, LLM-free view of what each [ConfigKey] resolves to after run-scope overrides are
  * applied (override > DB > YAML > default). Secrets are redacted; overridden keys are marked.
  */

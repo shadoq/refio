@@ -27,7 +27,7 @@ class GeneralSettingsPanel(
     private val formatMarkdownCheckbox: JBCheckBox
     private val streamingEnabledCheckbox: JBCheckBox
     private val advancedViewCheckbox: JBCheckBox
-    private val thinkingEnabledCheckbox: JBCheckBox
+    private val reasoningEffortCombo: JComboBox<String>
     private val noEgressEnabledCheckbox: JBCheckBox
     private val executionModeCombo: JComboBox<String>
     private val nativeToolsModeCombo: JComboBox<String>
@@ -67,7 +67,7 @@ class GeneralSettingsPanel(
         gbc.insets = LCATheme.insetsDetailsIndented
         add(JLabel("<html><font color='gray'>Enable markdown rendering in chat responses</font></html>"), gbc)
 
-        // Enable Streaming option (US-027)
+        // Enable Streaming option
         gbc.gridy++
         gbc.insets = LCATheme.insetsGridBagLarge
         streamingEnabledCheckbox = JBCheckBox("Enable streaming responses", true).apply {
@@ -86,7 +86,7 @@ class GeneralSettingsPanel(
         // Add description
         gbc.gridy++
         gbc.insets = LCATheme.insetsDetailsIndented
-        add(JLabel("<html><font color='gray'>Stream LLM responses in real-time (US-027)</font></html>"), gbc)
+        add(JLabel("<html><font color='gray'>Stream LLM responses in real-time</font></html>"), gbc)
 
         // Advanced View option
         gbc.gridy++
@@ -112,25 +112,29 @@ class GeneralSettingsPanel(
             gbc
         )
 
-        // Thinking mode
+        // Reasoning effort
         gbc.gridy++
         gbc.insets = LCATheme.insetsGridBagLarge
-        thinkingEnabledCheckbox = JBCheckBox("Thinking mode", false).apply {
-            addItemListener { event ->
+        reasoningEffortCombo = JComboBox(arrayOf("OFF", "LOW", "MEDIUM", "HIGH")).apply {
+            addActionListener {
                 if (!isUpdatingProgrammatically) {
-                    val isSelected = event.stateChange == ItemEvent.SELECTED
+                    val value = selectedItem as? String ?: return@addActionListener
                     val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.config.ConfigKeys.GENERAL_THINKING_ENABLED.key
+                        pl.jclab.refio.core.config.ConfigKeys.GENERAL_REASONING_EFFORT.key
                     )
-                    onSettingChanged(section, key, isSelected)
+                    onSettingChanged(section, key, value)
                 }
             }
         }
-        add(thinkingEnabledCheckbox, gbc)
+        val reasoningPanel = JBPanel<JBPanel<*>>(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0)).apply {
+            add(JLabel("Reasoning effort: "))
+            add(reasoningEffortCombo)
+        }
+        add(reasoningPanel, gbc)
 
         gbc.gridy++
         gbc.insets = LCATheme.insetsDetailsIndented
-        add(JLabel("<html><font color='gray'>Enable extended reasoning/thinking for models that support it</font></html>"), gbc)
+        add(JLabel("<html><font color='gray'>Reasoning strength for models that support it (OFF disables it where the provider allows)</font></html>"), gbc)
 
         // No-egress mode
         gbc.gridy++
@@ -224,14 +228,14 @@ class GeneralSettingsPanel(
     }
 
     /**
-     * Get current streaming enabled setting (US-027)
+     * Get current streaming enabled setting
      */
     fun isStreamingEnabled(): Boolean {
         return streamingEnabledCheckbox.isSelected
     }
 
     /**
-     * Set streaming enabled setting (US-027)
+     * Set streaming enabled setting
      */
     fun setStreamingEnabled(enabled: Boolean) {
         streamingEnabledCheckbox.isSelected = enabled
@@ -279,7 +283,8 @@ class GeneralSettingsPanel(
             formatMarkdownCheckbox.isSelected = (settings["format_markdown"] as? String).toBoolean()
             streamingEnabledCheckbox.isSelected = (settings["streaming_enabled"] as? String).toBoolean()
             advancedViewCheckbox.isSelected = (settings["advanced_view"] as? String).toBoolean()
-            thinkingEnabledCheckbox.isSelected = (settings["thinking_enabled"] as? String).toBoolean()
+            val reasoningEffort = (settings["reasoning_effort"] as? String)?.trim()?.uppercase()
+            reasoningEffortCombo.selectedItem = if (reasoningEffort in setOf("LOW", "MEDIUM", "HIGH")) reasoningEffort else "OFF"
             noEgressEnabledCheckbox.isSelected = (settings["no_egress_enabled"] as? String).toBoolean()
 
             val executionMode = (settings["execution_mode"] as? String)?.trim()?.uppercase()
@@ -303,7 +308,7 @@ class GeneralSettingsPanel(
         formatMarkdownCheckbox.isSelected = true
         streamingEnabledCheckbox.isSelected = true
         advancedViewCheckbox.isSelected = false
-        thinkingEnabledCheckbox.isSelected = false
+        reasoningEffortCombo.selectedItem = "OFF"
         noEgressEnabledCheckbox.isSelected = false
         executionModeCombo.selectedItem = "AUTO"
         nativeToolsModeCombo.selectedItem = "auto"

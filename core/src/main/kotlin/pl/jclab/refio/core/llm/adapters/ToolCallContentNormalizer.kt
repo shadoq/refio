@@ -20,8 +20,8 @@ internal object ToolCallContentNormalizer {
         private val callsByIndex = linkedMapOf<Int, CallBuffer>()
 
         /**
-         * Consume one streaming `delta` and return the per-call increments observed in it
-         * (docs/0064), so the adapter can surface progressive tool-call building via
+         * Consume one streaming `delta` and return the per-call increments observed in it,
+         * so the adapter can surface progressive tool-call building via
          * [StreamChunk.toolCallDelta]. The accumulator remains the source of truth for the final
          * [toNativeToolCalls]; the returned list is purely for live progress.
          */

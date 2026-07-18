@@ -5,8 +5,6 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Session-scoped lookup of per-agent inboxes, keyed by (sessionId, agentName).
  *
- * Spec: docs/0054-multiagent.md §3.1 / Step 2.
- *
  * Launchers (MultiAgentRunner today, future interactive TUI or plugin UI) populate
  * the registry when an agent starts and clear the entry when it completes.
  * [pl.jclab.refio.core.services.AgentTurnLoop] and [pl.jclab.refio.core.tools.implementations.AnswerMessageTool]

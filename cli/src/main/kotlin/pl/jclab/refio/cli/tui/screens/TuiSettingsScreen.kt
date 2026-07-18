@@ -251,6 +251,21 @@ object TuiSettingsScreen {
         return FieldItem(SettingsField("$section.$key", label, FieldType.BOOL), display = "", checked = checked)
     }
 
+    private fun cycleItem(
+        section: String,
+        key: String,
+        label: String,
+        config: Map<String, String>,
+        options: List<String>,
+        default: String
+    ): FieldItem {
+        val current = config[key]?.trim()?.uppercase()?.takeIf { it in options } ?: default
+        return FieldItem(
+            SettingsField("$section.$key", label, FieldType.CYCLE, default = default, options = options),
+            display = current
+        )
+    }
+
     private fun valueItem(
         section: String,
         key: String,
@@ -286,7 +301,7 @@ object TuiSettingsScreen {
         boolItem(section, "advanced_view", "Advanced view (show all tabs)", config),
         BlankItem,
         HeaderItem("Execution"),
-        boolItem(section, "thinking_enabled", "Thinking mode", config),
+        cycleItem(section, "reasoning_effort", "Reasoning effort (Enter to cycle)", config, REASONING_EFFORT_OPTIONS, "OFF"),
         boolItem(section, "no_egress_enabled", "No-egress (block network)", config),
         valueItem(section, "execution_mode", "Execution mode (AUTO/INTERACTIVE)", config, "AUTO")
     )
@@ -554,6 +569,7 @@ object TuiSettingsScreen {
     // ── Tools ────────────────────────────────────────────────────────────
 
     private val PERMISSION_OPTIONS = listOf("ON", "ASK", "OFF")
+    private val REASONING_EFFORT_OPTIONS = listOf("OFF", "LOW", "MEDIUM", "HIGH")
 
     private fun toolsSpec(): List<Item> {
         val items = mutableListOf<Item>()

@@ -15,6 +15,7 @@ import pl.jclab.refio.core.llm.BaseLLMAdapter
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
+import pl.jclab.refio.core.llm.ReasoningEffort
 import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.llm.NativeToolCall
 import pl.jclab.refio.core.llm.NativeToolCallDelta
@@ -168,9 +169,23 @@ class GeminiAdapter(
         generationConfig["maxOutputTokens"] = effectiveMax
         generationConfig["temperature"] = temperature
 
-        val thinkingEnabled = kwargs["thinking"] as? Boolean ?: false
-        if (!thinkingEnabled) {
-            generationConfig["thinkingConfig"] = mapOf("thinkingBudget" to 0)
+        // An explicit effort level scales the thinking budget (values stay within the Gemini 2.5
+        // family's documented caps); OFF pins the budget to 0; a bare "on" (Boolean true, no
+        // magnitude) leaves Gemini's own dynamic-thinking default in place.
+        val thinkingRaw = kwargs["thinking"]
+        val explicitEffort = ReasoningEffort.fromEffortString(thinkingRaw as? String)
+        val thinkingOn = thinkingRaw == true || (thinkingRaw is String && thinkingRaw.isNotBlank())
+        when {
+            explicitEffort != null -> {
+                val budget = when (explicitEffort) {
+                    ReasoningEffort.HIGH -> 24576
+                    ReasoningEffort.MEDIUM -> 8192
+                    else -> 2048
+                }
+                generationConfig["thinkingConfig"] = mapOf("thinkingBudget" to budget)
+            }
+            thinkingOn -> { /* bare on: keep Gemini's dynamic default (no thinkingConfig) */ }
+            else -> generationConfig["thinkingConfig"] = mapOf("thinkingBudget" to 0)
         }
 
         // Optional extras
@@ -486,7 +501,7 @@ class GeminiAdapter(
                         val baseIndex = functionCallParts.size
                         functionCallParts.addAll(fnParts)
                         // Gemini delivers each functionCall whole in a part (no per-arg streaming),
-                        // so surface one progress snapshot per call (docs/0064).
+                        // so surface one progress snapshot per call.
                         fnParts.forEachIndexed { idx, part ->
                             @Suppress("UNCHECKED_CAST")
                             val fc = part["functionCall"] as? Map<String, Any?> ?: return@forEachIndexed
@@ -650,10 +665,14 @@ class GeminiAdapter(
         if (thoughtsTokens > 0) {
             logger.info { "[GEMINI] usage: prompt=$promptTokens, candidates=$candidateTokens, thoughts=$thoughtsTokens (folded into output)" }
         }
+        // promptTokenCount already includes the cached content; cachedContentTokenCount is the
+        // discounted subset served from a cached context.
+        val cachedTokens = (usageMetadata["cachedContentTokenCount"] as? Number)?.toInt() ?: 0
         return LLMUsage(
             inputTokens = promptTokens,
             outputTokens = outputTokens,
-            totalTokens = totalTokens
+            totalTokens = totalTokens,
+            cachedInputTokens = cachedTokens
         )
     }
 
@@ -704,7 +723,9 @@ class GeminiAdapter(
             provider = provider,
             model = model,
             inputTokens = usage.inputTokens,
-            outputTokens = usage.outputTokens
+            outputTokens = usage.outputTokens,
+            cachedInputTokens = usage.cachedInputTokens,
+            cacheWriteInputTokens = usage.cacheWriteInputTokens
         )
     }
 

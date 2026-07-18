@@ -63,8 +63,6 @@ private const val CONVERSATION_MIN_PER_MESSAGE_TOKENS = 128
 /**
  * Service for building context for LLM prompts.
  * Combines project analysis with current task state.
- *
- * Based on ADR 0018: Context Building & Visualization System
  */
 class ContextService(
     private val projectAnalyzer: ProjectAnalyzerService,
@@ -211,10 +209,10 @@ class ContextService(
         // 6. Build completed files data
         val completedFiles = taskContextExtractor.buildCompletedFiles(subtasks)
 
-        // 6a. Build structured executed steps for RECENT_WORK (ADR 0041)
+        // 6a. Build structured executed steps for RECENT_WORK
         val executedSteps = taskContextExtractor.buildExecutedSteps(subtasks)
 
-        // 7. Extract user requirements from task description (PHASE 2)
+        // 7. Extract user requirements from task description
         val userRequirements = taskContextExtractor.extractUserRequirements(task.name)
 
         // 8. Build rich DTOs
@@ -381,11 +379,11 @@ class ContextService(
             // Conversation history (filtered!)
             conversationHistory = conversationDTOs,
 
-            // Work history (from PHASE 3)
+            // Work history
             completedFiles = completedFiles,
             executedSteps = executedSteps,
 
-            // User requirements (extracted from task description - PHASE 2)
+            // User requirements (extracted from task description)
             userRequirements = userRequirements,
 
             // User-provided context (from @ mentions)
@@ -419,14 +417,14 @@ class ContextService(
      * Build formatted LLM context prompt from DTO
      * Returns structured prompt with XML-like tags
      *
-     * ADR 0040 ORDER (2025-12-03):
+     * Section order (2025-12-03):
      * 1. PROJECT CONTEXT FIRST - Agent must know the project before getting the task
      * 2. TASK & REQUIREMENTS - What needs to be done
      * 3. USER CONTEXT - Supporting information
      * 4. HISTORY - Previous work and conversation
      */
     /**
-     * Build LLM context prompt (REFACTORED - ADR 0017).
+     * Build LLM context prompt.
      * Organized by TIER priority: Essential → Work → Supplementary → Reference
      */
     fun buildLLMContextPrompt(context: ProjectContextDTO, staticPrefixTokens: Int = 0, modelId: String? = null): String {
@@ -723,10 +721,17 @@ class ContextService(
          */
         includeProjectContext: Boolean = true,
         /**
-         * Resolved model id for model-aware token estimation of section budgets (docs/0057).
+         * Resolved model id for model-aware token estimation of section budgets.
          * Default null keeps the flat-base ratio for callers without model context.
          */
         modelId: String? = null,
+        /**
+         * Invocation id selecting which conversation thread to load. Null loads the main (parent)
+         * thread and excludes every subagent's intermediate steps; a subagent's own id loads only
+         * that subagent's rows. Default null keeps callers that render the parent conversation
+         * (context-panel preview, standalone bootstrap) unchanged.
+         */
+        agentInstanceId: String? = null,
     ): AgentTurnMessagesResult {
         logger.info {
             "[AGENT_TURN] Building messages for task=$taskId, contextRefs=${userContextRefs.size}, " +
@@ -739,7 +744,9 @@ class ContextService(
         val budget = configService.getContextBudget(taskId, modelOperation, staticPrefixTokens)
         val conversationBudget = budget.budgetFor(ContextSection.CONVERSATION)
 
-        val allMessages = transaction { chatMessageRepository.findByTaskId(taskId) }
+        // Load only the caller's own thread: the parent run (null id) never sees a subagent's
+        // intermediate steps, and a subagent never sees the parent conversation.
+        val allMessages = transaction { chatMessageRepository.findHistoryForInvocation(taskId, agentInstanceId) }
         val summarizedMessages = if (conversationSummaryService != null && conversationBudget > 0) {
             // Pass the same resolver that convertChatMessageToLLMMessage uses below, so the
             // summarizer's token estimate reflects the rendered prompt (TOOL bodies truncated
@@ -752,7 +759,8 @@ class ContextService(
                 maxTokens = conversationBudget,
                 contentResolver = { msg ->
                     if (msg.role == MessageRole.TOOL) resolveToolConversationContent(msg) else msg.content
-                }
+                },
+                agentInstanceId = agentInstanceId
             )
         } else {
             allMessages

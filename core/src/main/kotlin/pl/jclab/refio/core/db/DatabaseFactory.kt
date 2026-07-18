@@ -92,7 +92,7 @@ object DatabaseFactory {
                     IndexChunksTable,
                     EmbeddingsTable,
                     IndexingProgressTable,
-                    DocumentationSourcesTable,  // External documentation sources (US-024)
+                    DocumentationSourcesTable,  // External documentation sources
                     ProjectAnalysisReportsTable,
                     // Multi-agent tables
                     AgentSessionsTable,

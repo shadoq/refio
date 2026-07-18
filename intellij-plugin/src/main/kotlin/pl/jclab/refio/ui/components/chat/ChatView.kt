@@ -489,7 +489,7 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
             }
         }
 
-        // Observe native tool-call streaming progress (docs/0064, Variant C).
+        // Observe native tool-call streaming progress (Variant C).
         // Non-null only while the model streams a tool call's arguments; reset to null when done.
         cs.launch {
             sessionManager.toolCallProgress.collect { progress ->

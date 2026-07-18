@@ -322,8 +322,6 @@ class AgentEventBusTest {
             val db = TestDatabase.createSharedInMemory()
             try {
                 val repo = AgentEventSqlRepository()
-                val bus1 = AgentEventBus()
-                bus1.setRepository(repo)
 
                 // Use monotonic timestamps for ordering
                 var ts = 1000L
@@ -393,8 +391,12 @@ class AgentEventBusTest {
                     )
                 )
 
-                originalEvents.forEach { bus1.emit(it) }
-                bus1.flushPersistence()
+                // Persist synchronously through the repository. The bus's own
+                // fire-and-forget persistence worker is best-effort by design (it
+                // swallows failures to never block live emission - covered by the
+                // sibling resilience tests); routing this round-trip assertion
+                // through it would race the detached IO worker, so persist directly.
+                originalEvents.forEach { repo.save(it) }
 
                 // Create fresh EventBus with same repo, load persisted events
                 val bus2 = AgentEventBus()

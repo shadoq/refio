@@ -5,6 +5,8 @@ import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.ModelConfig
+import pl.jclab.refio.core.llm.ModelDefinitions
+import pl.jclab.refio.core.llm.ReasoningEffort
 import pl.jclab.refio.core.llm.SupportedModels
 import pl.jclab.refio.core.llm.calculateCost
 import pl.jclab.refio.core.config.ConfigKeys
@@ -71,26 +73,54 @@ open class OpenRouterAdapter(
     ): Map<String, Any> = super.buildRequestBody(
         requestMessages, effectiveMaxTokens, temperature, streaming, kwargs, requestId,
     ).toMutableMap().apply {
-        // `thinking` arrives as Boolean true (toggle on) or a non-blank effort String
-        // ("low"/"medium"/"high"); absent/false/blank means the user turned thinking OFF.
+        // `thinking` arrives as Boolean true (toggle on, unspecified magnitude) or a non-blank
+        // effort String ("low"/"medium"/"high"); absent/false/blank means thinking OFF.
         val thinkingRaw = kwargs["thinking"]
         val thinkingOn = thinkingRaw == true || (thinkingRaw is String && thinkingRaw.isNotBlank())
-        if (thinkingOn && model.contains("claude", ignoreCase = true)) {
-            put("thinking", mapOf("type" to "enabled", "budget_tokens" to 10000))
-            logger.info { "[${providerTag}] Enabled thinking mode for $model" }
-        } else if (!thinkingOn) {
-            // Honour "thinking OFF": suppress upstream reasoning. Without this the toggle was
-            // a silent no-op for OpenRouter — reasoning models (e.g. minimax-m3) defaulted to
-            // reasoning ON and burned thousands of hidden completion tokens (observed: 23.7k
-            // reasoning tokens, zero tool calls, turn ended on intent prose). OpenRouter's
-            // unified `reasoning.enabled=false` suppresses it where the model allows; always-on
-            // reasoning models ignore it harmlessly.
-            put("reasoning", mapOf("enabled" to false))
-            logger.info { "[${providerTag}] Suppressing reasoning for $model (thinking OFF)" }
+        val explicitEffort = ReasoningEffort.fromEffortString(thinkingRaw as? String)
+        val isClaude = model.contains("claude", ignoreCase = true)
+        when {
+            thinkingOn && isClaude -> {
+                // Claude on OpenRouter uses Anthropic-style extended thinking; scale the budget.
+                val budget = when (explicitEffort) {
+                    ReasoningEffort.HIGH -> 20000
+                    ReasoningEffort.LOW -> 2048
+                    else -> 10000
+                }
+                put("thinking", mapOf("type" to "enabled", "budget_tokens" to budget))
+                logger.info { "[${providerTag}] Enabled thinking for $model (budget=$budget)" }
+            }
+            explicitEffort != null -> {
+                // Non-Claude with an explicit level: OpenRouter's unified reasoning effort.
+                put("reasoning", mapOf("effort" to explicitEffort.toEffortString()))
+                logger.info { "[${providerTag}] Set reasoning effort=${explicitEffort.toEffortString()} for $model" }
+            }
+            thinkingOn -> {
+                // Bare on without a level: let the provider reason at its own default.
+            }
+            !reasoningIsMandatory(model) -> {
+                // Honour "thinking OFF": suppress upstream reasoning. Without this the toggle was
+                // a silent no-op for OpenRouter - reasoning models (e.g. minimax-m3) defaulted to
+                // reasoning ON and burned thousands of hidden completion tokens. OpenRouter's
+                // unified `reasoning.enabled=false` suppresses it where the model allows.
+                //
+                // Some endpoints (e.g. moonshotai/kimi-k3) reject reasoning.enabled=false with a
+                // hard error instead of ignoring it, so we skip suppression for those - see
+                // ModelDefinition.reasoningMandatory.
+                put("reasoning", mapOf("enabled" to false))
+                logger.info { "[${providerTag}] Suppressing reasoning for $model (thinking OFF)" }
+            }
         }
         (kwargs["provider"] as? Map<*, *>)?.let { put("provider", it) }
         (kwargs["route"] as? String)?.let { put("route", it) }
     }
+
+    /**
+     * Whether the given OpenRouter model mandates reasoning and rejects an explicit
+     * `reasoning.enabled=false`. Resolved from the static registry (prefix match).
+     */
+    private fun reasoningIsMandatory(modelId: String): Boolean =
+        ModelDefinitions.getDefinition("openrouter", modelId)?.reasoningMandatory == true
 
     /**
      * OpenRouter returns HTTP 200 with `{"error": {...}}` for upstream provider errors.

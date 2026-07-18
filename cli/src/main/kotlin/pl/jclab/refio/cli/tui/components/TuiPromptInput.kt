@@ -54,7 +54,7 @@ object TuiPromptInput {
 
         // Toggle indicators
         val execIcon = if (state.executionMode == "AUTO") "⚡" else "🤚"
-        val thinkIcon = if (state.thinkingEnabled) "🧠" else ""
+        val thinkIcon = if (state.reasoningEffort.isOn) "🧠${state.reasoningEffort.name.take(1)}" else ""
         val egressIcon = if (state.noEgressEnabled) "🔒" else ""
         val toggles = listOfNotNull(
             execIcon,
@@ -69,7 +69,9 @@ object TuiPromptInput {
         val tokOut = formatTokensShort(state.sessionTokensOut)
         val cost = String.format(java.util.Locale.US, "%.4f", state.totalCostUsd)
         val reqCount = state.apiLogs.size
-        val metrics = " $ctxBar ${TuiColors.muted("⬇${tokIn} ⬆${tokOut} ${reqCount}req \$${cost}")}"
+        // Cache-read tokens (💾) shown only when the model served part of the context from cache.
+        val cachedPart = if (state.sessionCachedTokens > 0) " 💾${formatTokensShort(state.sessionCachedTokens)}" else ""
+        val metrics = " $ctxBar ${TuiColors.muted("⬇${tokIn}$cachedPart ⬆${tokOut} ${reqCount}req \$${cost}")}"
 
         if (state.pendingQuestionId != null) {
             val questionHint = TuiColors.statusPending(" [?] Awaiting answer")

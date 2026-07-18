@@ -6,7 +6,7 @@ import java.util.concurrent.ConcurrentHashMap
  * Records the specific guardrail that aborted a task's turn, so a failing run can be classified by
  * *why* it stopped rather than only by the coarse `session.status`.
  *
- * The e2e harness (docs/0061) otherwise buckets every INCOMPLETE turn as "loop" and every FAILED
+ * The e2e harness otherwise buckets every INCOMPLETE turn as "loop" and every FAILED
  * turn as "agent-fail", which hides the difference between a byte-identical repetition loop and a
  * stalled no-op writer - a distinction the stabilization gate's failure-mode breakdown (and the
  * self-improve diagnosis) needs. The turn loop calls [record] at the abort site; the marker survives

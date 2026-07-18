@@ -101,7 +101,7 @@ internal class TaskContextExtractor {
     }
 
     /**
-     * Build structured executed steps for RECENT_WORK (ADR 0041).
+     * Build structured executed steps for RECENT_WORK.
      * Parses subtask result JSON to extract tool runs with parameters and outputs.
      *
      * Returns ALL terminal subtasks (both SUCCESS and FAILED) without any count cap —

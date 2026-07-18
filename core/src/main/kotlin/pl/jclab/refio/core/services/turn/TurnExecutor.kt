@@ -102,7 +102,7 @@ internal class TurnExecutor(
      */
     private val completionGuardians: GuardianRegistry = GuardianRegistry(),
 
-    // ADR-0028: Optional dependencies for enhanced turn loop
+    // Optional dependencies for enhanced turn loop
     private val tokenEstimator: PromptTokenEstimator = PromptTokenEstimator(),
     private val conversationCompactor: ConversationCompactor? = null,
     private val llmRetryHandler: LLMRetryHandler? = null,
@@ -120,7 +120,7 @@ internal class TurnExecutor(
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
 
     /**
-     * Unified tool-call extraction (docs/0056). Wraps [toolCallParser] + native mapping + guarded
+     * Unified tool-call extraction. Wraps [toolCallParser] + native mapping + guarded
      * Hermes / Qwen-Coder-XML recovery behind one [ToolCallExtractor.extract] call, so the turn loop
      * no longer branches "native vs JSON" to figure out what the model invoked.
      */
@@ -292,6 +292,10 @@ internal class TurnExecutor(
         // Counter for write tools executed in the current turn — still tracked because
         // buildPrompt and the completion guardians both want to know.
         var writeToolsExecutedInTurn = 0
+        // Strict deliverable signal: only real FILE edits/creates, NOT run_terminal_command/run_code
+        // (mode=WRITE for approval but produce no file). This is what the deliverable-aware
+        // finalization checks, so a `mkdir`-and-stall is not mistaken for a completed turn.
+        var fileWriteToolsExecutedInTurn = 0
         var verificationToolsExecutedAfterWrite = 0
         // "Read forever, never deliver" soft guard: consecutive information-gathering calls
         // (reads/searches) with no write/persist/deliver in between. A long read-only spree
@@ -344,7 +348,7 @@ internal class TurnExecutor(
         // IntelliJ chat bubble renderer groups them under a per-agent header.
         // agentInstanceId isolates the subagent's chat history from the parent and from
         // sibling subagents — see ChatMessageRepository.findHistoryForInvocation.
-        val persistAgentInstanceId: String? = profileOverrides?.agentInstanceId
+        val persistAgentInstanceId: String? = resolveSubagentInstanceId(profileOverrides)
         val persistAgentName: String? = profileOverrides?.subagentName
         val persistAgentDepth: Int? = if (persistAgentName != null) (profileOverrides?.depth ?: 0) + 1 else null
 
@@ -359,7 +363,7 @@ internal class TurnExecutor(
         // while the subagent's LLM is still generating. Top-level turns skip the wrapper — their
         // deltas already feed the main streaming message directly via streamCallback.
         // Forward native tool-call progress snapshots to the TurnEventListener (headless/lifecycle
-        // observability, docs/0064) while still chaining to the caller's UI streamCallback. The UI
+        // observability) while still chaining to the caller's UI streamCallback. The UI
         // (WorkflowEventListener) gets the same snapshots via CoreSessionService's own streamCallback.
         val baseStreamCallback: StreamCallback? = if (streamCallback != null || listener != null) {
             { chunk ->
@@ -415,7 +419,7 @@ internal class TurnExecutor(
             taskId, mode, effectiveModel, effectiveProvider, profileOverrides
         )
         var activeNativeToolSchemas = initialNativeToolSchemas
-        // R1 (docs/0068): consecutive iterations where native tools were offered but the model
+        // R1: consecutive iterations where native tools were offered but the model
         // ignored the native channel and emitted a {response,actions} JSON envelope in text instead.
         // A capable native model occasionally mirrors the envelope shown as a negative example in the
         // prompt; demoting it off native on the FIRST such slip (the old one-strike behavior) was too
@@ -446,7 +450,7 @@ internal class TurnExecutor(
 
                 logger.info { "[TURN_ITERATION] taskId=$taskId, iteration=$iteration/$maxIterations" }
 
-                // Hard cost ceiling (docs/0063 §6.1): stop BEFORE paying for another LLM call once the
+                // Hard cost ceiling: stop BEFORE paying for another LLM call once the
                 // session's live cost (auto-incremented in LLMClient.complete) reaches --max-cost.
                 if (maxCostUsd > 0.0) {
                     val currentCostUsd = taskRepository.findById(taskId)?.costUsd ?: 0.0
@@ -549,7 +553,8 @@ internal class TurnExecutor(
                         currentPrompt: TurnPrompt,
                         nativeSchemas: List<ToolSchema>?
                     ) = if (config.maxRetries > 0 && llmRetryHandler != null) {
-                        val thinkingRequested = configService.getTyped<Boolean>(ConfigKeys.GENERAL_THINKING_ENABLED, taskId)
+                        val configuredEffort = configService.getTyped(ConfigKeys.GENERAL_REASONING_EFFORT, taskId)
+                        val thinkingEnabled = turnLLMCaller.resolveThinkingEnabled(effectiveProvider, effectiveModel, configuredEffort.isOn)
                         llmRetryHandler.callWithRetry(
                             provider = effectiveProvider,
                             model = effectiveModel,
@@ -562,8 +567,9 @@ internal class TurnExecutor(
                             maxRetries = config.maxRetries,
                             baseDelayMs = config.retryBackoffMs,
                             responseFormat = responseFormat,
-                            thinking = turnLLMCaller.resolveThinkingEnabled(effectiveProvider, effectiveModel, thinkingRequested),
-                            reasoningEffort = profileOverrides?.reasoningEffort,
+                            thinking = thinkingEnabled,
+                            reasoningEffort = profileOverrides?.reasoningEffort
+                                ?: configuredEffort.toEffortString()?.takeIf { thinkingEnabled },
                             noEgressEnabled = configService.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, taskId),
                             stream = effectiveStreamCallback != null,
                             onChunk = effectiveStreamCallback,
@@ -668,13 +674,13 @@ internal class TurnExecutor(
                     }
                     val llmDurationMs = (System.nanoTime() - llmCallStartNanos) / 1_000_000
 
-                    // Closed-loop chars/token calibration (docs/0057 Tier 2): feed the real
+                    // Closed-loop chars/token calibration: feed the real
                     // input-token count back so the next turn's budget math self-corrects per model.
                     val promptChars = prompt.systemPrompt.length +
                         prompt.messages.sumOf { it.content.length }
                     TokenRatioCalibrator.observe(effectiveModel, promptChars, llmResponse.usage.inputTokens)
 
-                    // Generic context-overflow guard (docs/0057 §3.2) for providers that report the
+                    // Generic context-overflow guard for providers that report the
                     // TRUE pre-truncation input count (cloud: OpenAI/Anthropic/Gemini). Ollama is
                     // covered separately by its pre-send estimate (its returned usage is already
                     // post-truncation, so it can't trip this). Never let a too-large prompt pass as
@@ -883,7 +889,12 @@ internal class TurnExecutor(
                                 // could not recover, so a correct task returned failure. Same
                                 // predicate the format hard-fail and the guardian already use.
                                 val deliverableProduced =
-                                    TurnDeliverable.produced(writeToolsExecutedInTurn, mode, "")
+                                    TurnDeliverable.produced(
+                                        fileWriteToolsExecutedInTurn,
+                                        mode,
+                                        "",
+                                        isSubagent = runProfile == TurnRunProfile.SUBAGENT,
+                                    )
                                 if (deliverableProduced) {
                                     logger.warn {
                                         "[TURN_EMPTY_CONTENT_DELIVERABLE] taskId=$taskId, iteration=$iteration: " +
@@ -984,7 +995,7 @@ internal class TurnExecutor(
                         nativeIgnoredStreak = 0
                     }
 
-                    // Unified extraction (docs/0056): one call regardless of how the model expressed the
+                    // Unified extraction: one call regardless of how the model expressed the
                     // tool call (native channel / JSON envelope / Hermes / Qwen-Coder XML). On the native
                     // path the content is left raw and envelope inspection is skipped (it is authoritative);
                     // otherwise content is preprocessed and inspected for the downstream truncation guards.
@@ -1023,7 +1034,7 @@ internal class TurnExecutor(
                     }
 
                     // Truncated response with incomplete JSON. Detection now lives in ToolCallExtractor
-                    // (docs/0064) — it inspects the envelope and reports the distinct reason — so the
+                    // — it inspects the envelope and reports the distinct reason — so the
                     // turn loop only reacts to that verdict instead of re-deriving the condition here.
                     val isTruncatedWithIncompleteJson =
                         extraction is ExtractionResult.None && extraction.reason == "incomplete-json-truncated"
@@ -1251,7 +1262,7 @@ internal class TurnExecutor(
 
                         if (repetitionAbort != null) {
                             logger.warn { "[REPETITION_ABORT] taskId=$taskId, incomplete=${repetitionAbort.incomplete}, reason=${repetitionAbort.reason}" }
-                            // Deliverable-aware (docs/0070 FM-3): a byte-identical-OUTPUT loop (NOT a
+                            // Deliverable-aware (FM-3): a byte-identical-OUTPUT loop (NOT a
                             // no-op-write streak) on an optional VERIFICATION tool (compile/run/search/read),
                             // AFTER a deliverable already landed this turn, is the model flailing on
                             // self-verification — the real work is done, so report SUCCESS instead of failing a
@@ -1287,7 +1298,7 @@ internal class TurnExecutor(
                                 return turnPersistence.finish(okResult, persistAssistantMessage = true)
                             }
                             // Record why the turn aborted so the e2e classifier can tell a no-op-write
-                            // stall from a byte-identical output loop (docs/0069 P2).
+                            // stall from a byte-identical output loop.
                             TurnFailureMarkerTracker.record(
                                 taskId,
                                 if (repetitionAbort.incomplete) TurnFailureMarkerTracker.NOOP_WRITE_STALL
@@ -1312,6 +1323,7 @@ internal class TurnExecutor(
                         val writeToolCalls = turnToolExecutor.countWriteToolCalls(toolCalls)
                         val verificationToolCalls = turnToolExecutor.countVerificationToolCalls(toolCalls)
                         writeToolsExecutedInTurn += writeToolCalls
+                        fileWriteToolsExecutedInTurn += turnToolExecutor.countFileWriteToolCalls(toolCalls)
                         if (writeToolCalls > 0) {
                             verificationToolsExecutedAfterWrite = 0
                         } else if (writeToolsExecutedInTurn > 0) {
@@ -1582,7 +1594,12 @@ internal class TurnExecutor(
                             // that produced NO deliverable stays INCOMPLETE — a genuine format
                             // breakdown with nothing delivered, the case this gate was built for.
                             val deliverableProduced =
-                                TurnDeliverable.produced(writeToolsExecutedInTurn, mode, contentForExtraction)
+                                TurnDeliverable.produced(
+                                    fileWriteToolsExecutedInTurn,
+                                    mode,
+                                    contentForExtraction,
+                                    isSubagent = runProfile == TurnRunProfile.SUBAGENT,
+                                )
                             logger.error {
                                 "[FORMAT_UNRECOVERABLE] taskId=$taskId, iteration=$iteration: " +
                                     "model kept returning plain text after ${recoveryState.nudgeCount} nudge(s) " +
@@ -1740,6 +1757,7 @@ internal class TurnExecutor(
                                 // and made the judge wrongly re-enter a completed multi-call task.
                                 toolsUsed = usedTools.toList(),
                                 writeToolsExecutedInTurn = writeToolsExecutedInTurn,
+                                fileWriteToolsExecutedInTurn = fileWriteToolsExecutedInTurn,
                                 verificationToolsExecutedAfterWrite = verificationToolsExecutedAfterWrite,
                                 priorReentries = guardianState.reentryCount,
                                 toolsUsedSizeAtPriorReentry = guardianState.usedToolsAtLastReentry,
@@ -1756,7 +1774,7 @@ internal class TurnExecutor(
                                         hasVisibleText = guardianTextResponse.ifEmpty { llmResponse.content }.isNotBlank(),
                                     )
                                     guardianState.onReentry(usedTools.size)
-                                    // Soft fallback native→JSON on a stalled re-entry (docs/0065). The model
+                                    // Soft fallback native→JSON on a stalled re-entry. The model
                                     // reached this terminal point by emitting prose with no tool call. If it
                                     // was on the native channel, re-entering on that SAME channel tends to
                                     // reproduce the stall (observed: qwen3.5:9b narrating "Let me explore…"
@@ -2258,7 +2276,7 @@ internal class TurnExecutor(
         var repetitionAbort: TurnGuardrails.LoopStatus.ABORT? = null
         // Name of the tool that triggered the repetition abort (for deliverable-aware
         // handling: a loop on an optional VERIFICATION tool after the work is done is not
-        // the same as a loop that never produced the deliverable). See docs/0070 FM-3.
+        // the same as a loop that never produced the deliverable).
         var repetitionAbortToolName: String? = null
         // Ids of write calls whose generated content was identical to the file (no-op).
         // A no-op write is NOT consolidation progress (P1) — it must not reset the
@@ -2324,8 +2342,8 @@ internal class TurnExecutor(
      *
      * @param taskId Task ID
      * @param mode Task mode
-     * @param currentIteration Current iteration number (for AGENT mode iteration tracking, ADR 0019 P12)
-     * @param maxIterations Maximum iterations (for AGENT mode iteration tracking, ADR 0019 P12)
+     * @param currentIteration Current iteration number (for AGENT mode iteration tracking)
+     * @param maxIterations Maximum iterations (for AGENT mode iteration tracking)
      * @param userContextRefs User-provided @ mentions for context
      * @return Prompt with system message and conversation history
      */
@@ -2496,7 +2514,7 @@ internal class TurnExecutor(
             ?: getLastUserMessage(taskId, agentInstanceId)
             ?: throw IllegalStateException("Missing user message for task verification: $taskId")
 
-        val verification = taskVerifier.verifyCompletion(taskId, userRequest, llmContent)
+        val verification = taskVerifier.verifyCompletion(taskId, userRequest, llmContent, agentInstanceId)
         if (verification.isComplete) {
             return true
         }
@@ -2662,7 +2680,7 @@ internal class TurnExecutor(
         private const val MAX_CONSOLIDATION_NUDGES = 2
 
         /**
-         * R1 (docs/0068): how many CONSECUTIVE native-ignored JSON-envelope-in-text responses demote a
+         * R1: how many CONSECUTIVE native-ignored JSON-envelope-in-text responses demote a
          * model off native tool-calling (a persisted `NativeToolsFallbackTracker` mark). A capable model
          * occasionally mirrors the envelope shown as a negative example in the prompt; one slip must not
          * permanently kick it off native, but a repeated streak is a genuine "won't use native here" signal.

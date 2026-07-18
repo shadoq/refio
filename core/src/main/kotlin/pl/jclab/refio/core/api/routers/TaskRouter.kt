@@ -45,6 +45,7 @@ class TaskRouter(
         updatedAt = updatedAt,
         tokensIn = tokensInOverride ?: tokensIn,
         tokensOut = tokensOutOverride ?: tokensOut,
+        cachedTokens = cachedTokens,
         costUsd = costUsdOverride ?: costUsd,
         rate = rate,
         projectId = projectId,

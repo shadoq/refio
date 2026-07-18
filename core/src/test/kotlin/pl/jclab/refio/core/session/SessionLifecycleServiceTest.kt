@@ -4,12 +4,17 @@ import pl.jclab.refio.core.session.SessionStateManager
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkStatic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import org.jetbrains.exposed.sql.Transaction
+import org.jetbrains.exposed.sql.transactions.transaction
 import org.junit.jupiter.api.Test
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.api.models.ExecutionMode
 import pl.jclab.refio.api.models.Session
 import pl.jclab.refio.api.models.TaskMode
@@ -20,8 +25,61 @@ import pl.jclab.refio.core.api.TaskResponse
 import pl.jclab.refio.core.services.ConfigService
 import kotlin.test.assertEquals
 import kotlin.test.assertContentEquals
+import kotlin.test.assertNull
 
 class SessionLifecycleServiceTest {
+
+    /**
+     * A restart must not silently resume the previous conversation: the user opens
+     * the tool window on an empty chat, and the session is created on first prompt.
+     */
+    @Test
+    fun `initialize leaves no active session even when the project has a previous one`() = runBlocking {
+        mockkStatic("org.jetbrains.exposed.sql.transactions.ThreadLocalTransactionManagerKt")
+        every { transaction(any(), any<Function1<Transaction, Any>>()) } answers {
+            val block = arg<Transaction.() -> Any>(1)
+            block(mockk())
+        }
+        try {
+            val projectRouter = mockk<CoreApiRouter>(relaxed = true)
+            val configService = mockk<ConfigService>(relaxed = true)
+            val stateManager = SessionStateManager()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+
+            every { configService.get(ConfigKeys.UI_SELECTED_MODE.key) } returns TaskMode.AGENT.name
+            every { projectRouter.taskRouter.getLastSessionForProject("project-1") } returns TaskResponse(
+                id = "session-old",
+                name = "Yesterday's work",
+                mode = TaskMode.AGENT.name,
+                status = TaskStatus.PENDING.name,
+                readOnly = false,
+                pinned = false,
+                executionMode = ExecutionMode.INTERACTIVE.name,
+                uiState = null,
+                createdAt = 1L,
+                updatedAt = 2L
+            )
+
+            val service = SessionLifecycleService(
+                projectRouter = projectRouter,
+                configService = configService,
+                stateManager = stateManager,
+                modeSwitchMutex = Mutex(),
+                projectId = "project-1",
+                normalizedProjectPath = "C:\\\\project",
+                scope = scope
+            )
+
+            service.initialize()
+            service.awaitInitialization()
+
+            assertNull(stateManager.getActiveSession())
+            // The conversation is dropped, but the mode the user last worked in is not.
+            assertEquals(TaskMode.AGENT, service.getSelectedMode())
+        } finally {
+            unmockkStatic("org.jetbrains.exposed.sql.transactions.ThreadLocalTransactionManagerKt")
+        }
+    }
 
     @Test
     fun `switchMode updates session mode`() = runBlocking {
@@ -95,6 +153,35 @@ class SessionLifecycleServiceTest {
         val models = service.getAvailableModels()
 
         assertContentEquals(listOf("Openai/gpt-4o-mini"), models)
+    }
+
+    /**
+     * Redrawing the dropdown must not reach out to providers: a provider call can block for
+     * seconds behind a running turn, and a timeout there used to empty the dropdown.
+     */
+    @Test
+    fun `getAvailableModels can answer from cache without contacting providers`() = runBlocking {
+        val projectRouter = mockk<CoreApiRouter>()
+        val configService = mockk<ConfigService>(relaxed = true)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+
+        coEvery { projectRouter.configRouter.getModelsWithVisibility(fetchIfMissing = false) } returns listOf(
+            modelInfo("glm-5.1", "zai", true)
+        )
+
+        val service = SessionLifecycleService(
+            projectRouter = projectRouter,
+            configService = configService,
+            stateManager = SessionStateManager(),
+            modeSwitchMutex = Mutex(),
+            projectId = "project-1",
+            normalizedProjectPath = "C:\\\\project",
+            scope = scope
+        )
+
+        val models = service.getAvailableModels(fetchIfMissing = false)
+
+        assertContentEquals(listOf("Zai/glm-5.1"), models)
     }
 
     @Test

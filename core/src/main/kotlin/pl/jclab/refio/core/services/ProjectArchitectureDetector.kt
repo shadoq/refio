@@ -8,7 +8,6 @@ internal object ProjectArchitectureDetector {
 
     /**
      * Detect architectural patterns in the project.
-     * Based on ADR 0017.
      */
     fun detectArchitecturalPatterns(fileTree: FileNode): ArchitectureInfo {
         val patterns = mutableListOf<String>()
@@ -51,7 +50,6 @@ internal object ProjectArchitectureDetector {
 
     /**
      * Detect entry points in the project.
-     * Based on ADR 0017.
      */
     private fun detectEntryPoints(files: List<FileNode>): List<EntryPoint> {
         val entryPoints = mutableListOf<EntryPoint>()
@@ -81,7 +79,6 @@ internal object ProjectArchitectureDetector {
 
     /**
      * Detect modules in the project.
-     * Based on ADR 0017.
      */
     private fun detectModules(fileTree: FileNode): List<ModuleInfo> {
         val modules = mutableListOf<ModuleInfo>()
@@ -135,7 +132,6 @@ internal object ProjectArchitectureDetector {
 
     /**
      * Infer module description from name.
-     * Based on ADR 0017.
      */
     private fun inferModuleDescription(name: String): String {
         return when {

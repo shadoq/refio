@@ -174,7 +174,9 @@ abstract class OpenAICompatibleAdapter(
         val promptTokens = (usageMap["prompt_tokens"] as? Number)?.toInt() ?: 0
         val completionTokens = (usageMap["completion_tokens"] as? Number)?.toInt() ?: 0
         val totalTokens = (usageMap["total_tokens"] as? Number)?.toInt() ?: (promptTokens + completionTokens)
-        return LLMUsage(promptTokens, completionTokens, totalTokens)
+        val cachedTokens = ((usageMap["prompt_tokens_details"] as? Map<*, *>)
+            ?.get("cached_tokens") as? Number)?.toInt() ?: 0
+        return LLMUsage(promptTokens, completionTokens, totalTokens, cachedInputTokens = cachedTokens)
     }
 
     /**
@@ -430,10 +432,13 @@ abstract class OpenAICompatibleAdapter(
                                     val completionTokens = usageObj.intField("completion_tokens") ?: 0
                                     val totalTokens = usageObj.intField("total_tokens")
                                         ?: (promptTokens + completionTokens)
+                                    val cachedTokens = (usageObj.get("prompt_tokens_details")
+                                        as? com.google.gson.JsonObject).intField("cached_tokens") ?: 0
                                     streamUsage = LLMUsage(
                                         inputTokens = promptTokens,
                                         outputTokens = completionTokens,
                                         totalTokens = totalTokens,
+                                        cachedInputTokens = cachedTokens,
                                     )
                                     val details = usageObj.get("completion_tokens_details") as? com.google.gson.JsonObject
                                     val reasoning = details.intField("reasoning_tokens")
@@ -478,8 +483,8 @@ abstract class OpenAICompatibleAdapter(
                         else -> 0
                     }
                 } ?: 0
-                // Provider omitted usage on the stream — estimate via the shared chars→tokens
-                // converter (docs/0057 §6) so input and output agree on one ratio instead of the
+                // Provider omitted usage on the stream - estimate via the shared chars→tokens
+                // converter so input and output agree on one ratio instead of the
                 // old split (input = raw chars, output = chars/4).
                 val inputTokensEstimate = pl.jclab.refio.core.services.PromptTokenEstimator.estimateTokensForChars(inputChars)
                 val outputTokensEstimate = pl.jclab.refio.core.services.PromptTokenEstimator.estimateBase(contentBuilder.toString())
@@ -639,7 +644,10 @@ abstract class OpenAICompatibleAdapter(
     // leave the API Logs rows at $0.00 for Z.AI/OpenRouter/etc even though the turn trace
     // (computed separately in LLMClient) showed the real cost - the two sources disagreed.
     override fun estimateCost(usage: LLMUsage): Double =
-        pl.jclab.refio.core.llm.calculateCost(provider, model, usage.inputTokens, usage.outputTokens)
+        pl.jclab.refio.core.llm.calculateCost(
+            provider, model, usage.inputTokens, usage.outputTokens,
+            usage.cachedInputTokens, usage.cacheWriteInputTokens
+        )
 
     override suspend fun close() {
         client.close()

@@ -1268,6 +1268,15 @@ class TurnToolExecutor(
         return toolCalls.count { isWriteTool(it.name) }
     }
 
+    /**
+     * Count only calls that produce a real FILE deliverable (edit/create), excluding the execution
+     * tools (run_code / run_terminal_command). A `mkdir`/`ls`/build via run_terminal_command is
+     * mode=WRITE for approval but leaves no file, so it must not be mistaken for a delivered turn.
+     */
+    fun countFileWriteToolCalls(toolCalls: List<ToolCallData>): Int {
+        return toolCalls.count { isFileWriteTool(it.name) }
+    }
+
     fun countVerificationToolCalls(toolCalls: List<ToolCallData>): Int {
         return toolCalls.count { isVerificationTool(it.name) }
     }

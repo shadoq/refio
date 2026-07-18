@@ -17,7 +17,7 @@ enum class MCPPresetCategory(val displayName: String, val icon: String) {
 }
 
 /**
- * Built-in MCP server presets derived from ADR 0001.
+ * Built-in MCP server presets.
  */
 object MCPServerPresets {
     data class Preset(

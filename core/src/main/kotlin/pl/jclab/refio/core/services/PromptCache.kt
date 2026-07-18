@@ -19,8 +19,6 @@ private val logger = dualLogger("PromptCache")
  * - Dynamic content (conversation, tool results) at the end
  * - Cache invalidation on config changes
  * - TTL matching Anthropic cache lifetime (5 minutes)
- *
- * Reference: ADR-0028 - Prompt Caching
  */
 class PromptCache(
     private val toolDescriptionBuilder: ToolDescriptionBuilder,

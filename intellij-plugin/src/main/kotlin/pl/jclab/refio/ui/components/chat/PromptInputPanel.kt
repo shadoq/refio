@@ -380,6 +380,16 @@ class PromptInputPanel(
         // Load models from backend
         loadAvailableModels()
 
+        // A fresh IDE start has no active session, so nothing would drive the mode
+        // dropdown off its Chat default. Seed it from the persisted mode instead.
+        cs.launch {
+            sessionManager.awaitInitialization()
+            if (sessionManager.activeSession.value == null) {
+                val persistedMode = sessionManager.getSelectedMode()
+                SwingUtilities.invokeLater { applyModeToSelector(persistedMode) }
+            }
+        }
+
         // Listen to session changes
         cs.launch {
             var lastSessionId: String? = sessionManager.activeSession.value?.id
@@ -705,9 +715,13 @@ class PromptInputPanel(
     }
 
     /**
-     * Load available models from embedded core via SessionManager
+     * Load available models from embedded core via SessionManager.
+     *
+     * @param fetchIfMissing false = use whatever the model cache holds instead of calling
+     *        providers. Only the very first load needs a fetch; later redraws must not,
+     *        because a provider call can block for seconds behind a running turn.
      */
-    private fun loadAvailableModels() {
+    private fun loadAvailableModels(fetchIfMissing: Boolean = true) {
         // Treat model list refresh as initialization to prevent accidental persistence during dropdown rebuild.
         isInitializing = true
 
@@ -720,7 +734,7 @@ class PromptInputPanel(
                 logger.info { "Loading available models from embedded core..." }
 
                 // Get models from SessionManager (uses embedded core, in-process)
-                val modelStrings = sessionManager.getAvailableModels()
+                val modelStrings = sessionManager.getAvailableModels(fetchIfMissing = fetchIfMissing)
 
                 // Build "provider/id" -> backend-provided display name map so dynamic
                 // providers (OpenRouter, LM Studio) show friendly names like
@@ -905,7 +919,15 @@ class PromptInputPanel(
     private fun updateSession(session: pl.jclab.refio.api.models.Session) {
         logger.info { "updateSession called: mode=${session.mode}, executionMode=${session.executionMode}" }
 
-        val expectedModeIndex = when (session.mode) {
+        applyModeToSelector(session.mode)
+    }
+
+    /**
+     * Move the mode dropdown to [mode] without firing the listener that would
+     * treat it as a user-driven mode switch.
+     */
+    private fun applyModeToSelector(mode: TaskMode) {
+        val expectedModeIndex = when (mode) {
             TaskMode.CHAT -> 0
             TaskMode.PLAN -> 1
             TaskMode.AGENT -> 2
@@ -1038,12 +1060,12 @@ class PromptInputPanel(
     }
 
     /**
-     * Refresh the model list from core
-     * Call this after settings changes to update dropdown
+     * Redraw the dropdown from the model cache after settings changes. The settings screens
+     * fetch the provider they actually touched, so there is nothing to pull from providers here.
      */
     fun refreshModels() {
-        logger.info { "Refreshing model list from Settings" }
-        loadAvailableModels()
+        logger.info { "Refreshing model list from Settings (cache only)" }
+        loadAvailableModels(fetchIfMissing = false)
     }
 
     private fun createPromptEditor(): EditorTextField {

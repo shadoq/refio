@@ -4,6 +4,7 @@ import pl.jclab.refio.core.llm.BaseLLMAdapter
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
+import pl.jclab.refio.core.llm.ReasoningEffort
 import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.llm.NativeToolCall
 import pl.jclab.refio.core.llm.NativeToolCallDelta
@@ -92,7 +93,7 @@ class OllamaAdapter(
             schema.name.length + schema.description.length + schema.parametersJsonSchema.toString().length
         } ?: 0
         // Pass [model] so dense local tokenizers (qwen/llama ~3.2 chars/token) are not under-counted
-        // by the flat 3.5 default — otherwise the overflow guard misses real num_ctx overflows (docs/0057).
+        // by the flat 3.5 default - otherwise the overflow guard misses real num_ctx overflows.
         return pl.jclab.refio.core.services.PromptTokenEstimator.estimateBase("x".repeat(messageChars + toolChars), model)
     }
 
@@ -153,7 +154,8 @@ class OllamaAdapter(
 
         val responseFormat = kwargs["response_format"] as? Map<*, *>
         val jsonMode = responseFormat?.get("type") == "json_object"
-        val thinkingRequested = kwargs["thinking"] as? Boolean ?: false
+        // Ollama's `think` is a plain on/off with no magnitude, so any effort level enables it.
+        val thinkingRequested = ReasoningEffort.fromThinkingKwarg(kwargs["thinking"]).isOn
         @Suppress("UNCHECKED_CAST")
         val nativeTools = kwargs["native_tools"] as? List<ToolSchema>
 
@@ -283,7 +285,7 @@ class OllamaAdapter(
                             "truncate from the head — expect empty or low-quality output. " +
                             "Increase providers.ollama.ollama_context_size or reduce the prompt."
                     }
-                    // Surface the silent truncation into run.json (docs/0057 Tier 3). Pre-send
+                    // Surface the silent truncation into run.json. Pre-send
                     // estimate is the ONLY reliable signal for Ollama: its returned prompt_eval_count
                     // is already post-truncation, so a returned-usage check would never fire.
                     taskId?.let { pl.jclab.refio.core.debug.ContextOverflowTracker.markOverflow(it) }
@@ -620,7 +622,7 @@ class OllamaAdapter(
                                 rawToolCalls.clear()
                                 rawToolCalls.addAll(toolCalls)
                                 // Ollama emits the whole tool call at once (no per-arg streaming),
-                                // so surface one progress snapshot per call (docs/0064).
+                                // so surface one progress snapshot per call.
                                 parseNativeOllamaToolCalls(toolCalls).forEachIndexed { idx, call ->
                                     onStreamChunk(
                                         StreamChunk(

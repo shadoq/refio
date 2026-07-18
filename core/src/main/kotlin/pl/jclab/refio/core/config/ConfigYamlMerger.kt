@@ -49,6 +49,7 @@ internal object ConfigYamlMerger {
             streamingEnabled = override.streamingEnabled ?: base.streamingEnabled,
             advancedView = override.advancedView ?: base.advancedView,
             thinkingEnabled = override.thinkingEnabled ?: base.thinkingEnabled,
+            reasoningEffort = override.reasoningEffort ?: base.reasoningEffort,
             noEgressEnabled = override.noEgressEnabled ?: base.noEgressEnabled,
             executionMode = override.executionMode ?: base.executionMode,
             nativeToolsMode = override.nativeToolsMode ?: base.nativeToolsMode,

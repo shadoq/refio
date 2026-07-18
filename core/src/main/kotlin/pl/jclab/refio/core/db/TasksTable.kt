@@ -9,7 +9,7 @@ import java.util.UUID
 enum class TaskStatus {
     NEW,
     PENDING,
-    PLANNED,  // Subtask has been prepared but not yet executed (US-101)
+    PLANNED,  // Subtask has been prepared but not yet executed
     RUNNING,
     SUCCESS,
     FAILED,
@@ -108,6 +108,7 @@ object TasksTable : Table("tasks") {
     val rate = integer("rate").nullable()  // User rating: 1 (positive) or -1 (negative), null if not rated
     val tokensIn = integer("tokens_in").default(0)  // Total input tokens for this task
     val tokensOut = integer("tokens_out").default(0)  // Total output tokens for this task
+    val cachedTokens = integer("cached_tokens").default(0)  // Cache-read input tokens (subset of tokens_in)
     val costUsd = double("cost_usd").default(0.0)  // Total cost in USD for this task
     val uiState = text("ui_state").nullable()  // JSON: {selectedModel, thinkingEnabled, noEgressEnabled}
     val coreApiVersion = varchar("core_api_version", 16).nullable()
@@ -116,7 +117,7 @@ object TasksTable : Table("tasks") {
     val createdAt = long("created_at").clientDefault { System.currentTimeMillis() }
     val updatedAt = long("updated_at").clientDefault { System.currentTimeMillis() }
 
-    // Plan execution tracking (US-001: Plan as Specification)
+    // Plan execution tracking (Plan as Specification)
     val sourcePlanId = varchar("source_plan_id", 128).nullable()  // Link to source plan for AGENT sessions
     val planVersion = integer("plan_version").nullable()  // Plan version at execution time
 
@@ -154,9 +155,10 @@ data class Task(
     val rate: Int? = null,  // User rating: 1 (positive) or -1 (negative), null if not rated
     val tokensIn: Int = 0,  // Total input tokens for this task
     val tokensOut: Int = 0,  // Total output tokens for this task
+    val cachedTokens: Int = 0,  // Cache-read input tokens (subset of tokensIn)
     val costUsd: Double = 0.0,  // Total cost in USD for this task
-    val sourcePlanId: String? = null,  // Link to source plan for AGENT sessions (US-001)
-    val planVersion: Int? = null,  // Plan version at execution time (US-001)
+    val sourcePlanId: String? = null,  // Link to source plan for AGENT sessions
+    val planVersion: Int? = null,  // Plan version at execution time
     val completionCondition: String? = null,  // User-set goal for /goal-aware NextSpeakerJudge
     val createdAt: Long,
     val updatedAt: Long

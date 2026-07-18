@@ -36,11 +36,11 @@ class ConfigPrintViewTest {
         val out = ConfigPrintView.render(
             listOf(
                 ConfigPrintView.Entry("tools.native_tools", "never", isOverride = true),
-                ConfigPrintView.Entry("general.thinking_enabled", "false", isOverride = false),
+                ConfigPrintView.Entry("general.reasoning_effort", "false", isOverride = false),
             )
         )
         val overridden = out.lineSequence().first { it.startsWith("tools.native_tools ") }
-        val normal = out.lineSequence().first { it.startsWith("general.thinking_enabled ") }
+        val normal = out.lineSequence().first { it.startsWith("general.reasoning_effort ") }
         assertTrue(overridden.contains("[override]"))
         assertFalse(normal.contains("[override]"))
     }

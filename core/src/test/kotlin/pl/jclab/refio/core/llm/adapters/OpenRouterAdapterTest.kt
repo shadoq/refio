@@ -53,9 +53,37 @@ class OpenRouterAdapterTest {
     }
 
     @Test
-    fun `a reasoning-effort string counts as thinking ON and does not suppress reasoning`() {
-        // reasoningEffort ("low"/"medium"/"high") arrives via kwargs["thinking"] as a String.
+    fun `an effort string sets OpenRouter unified reasoning effort for a non-claude model`() {
+        // reasoningEffort ("low"/"medium"/"high") arrives via kwargs["thinking"] as a String and
+        // must translate to OpenRouter's unified reasoning.effort (not a suppression, not ignored).
         val body = Testable("minimax/minimax-m3").body(mapOf("thinking" to "high"))
-        assertTrue(!body.containsKey("reasoning"), "effort string means thinking ON → no reasoning suppression")
+        @Suppress("UNCHECKED_CAST")
+        val reasoning = body["reasoning"] as? Map<String, Any>
+        assertEquals("high", reasoning?.get("effort"), "effort string must set reasoning.effort")
+    }
+
+    @Test
+    fun `an effort string scales the claude thinking budget on OpenRouter`() {
+        // Claude on OpenRouter uses a token budget rather than an effort enum; HIGH must map to
+        // a larger budget than LOW so the level is actually honored.
+        @Suppress("UNCHECKED_CAST")
+        fun budget(effort: String): Int =
+            (Testable("anthropic/claude-opus-4-7").body(mapOf("thinking" to effort))["thinking"]
+                as Map<String, Any>)["budget_tokens"] as Int
+        assertTrue(budget("high") > budget("low"), "HIGH budget must exceed LOW budget")
+    }
+
+    @Test
+    fun `thinking OFF does not suppress reasoning for mandatory-reasoning Kimi endpoints`() {
+        // The Kimi family rejects reasoning.enabled=false ("Reasoning is mandatory for this
+        // endpoint and cannot be disabled"), so thinking OFF must NOT emit the suppression key
+        // for any kimi variant — both the 1M-context k3 and the family fallback (e.g. k2.7-code).
+        for (model in listOf("moonshotai/kimi-k3", "moonshotai/kimi-k2.7-code")) {
+            val body = Testable(model).body(emptyMap())
+            assertTrue(
+                !body.containsKey("reasoning"),
+                "mandatory-reasoning model $model must not receive reasoning.enabled=false"
+            )
+        }
     }
 }

@@ -7,6 +7,7 @@ import pl.jclab.refio.core.llm.BaseLLMAdapter
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
+import pl.jclab.refio.core.llm.ReasoningEffort
 import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.llm.NativeToolCall
 import pl.jclab.refio.core.llm.NativeToolCallDelta
@@ -244,14 +245,20 @@ class AnthropicAdapter(
                 }
             }
 
-            // Enable thinking mode for Claude 3.5+ if requested
-            val thinking = kwargs["thinking"] as? Boolean ?: false
-            if (thinking) {
+            // Enable thinking mode for Claude 3.5+ if requested. The effort level scales the
+            // extended-thinking token budget; OFF omits the block entirely.
+            val effort = ReasoningEffort.fromThinkingKwarg(kwargs["thinking"])
+            if (effort.isOn) {
+                val budget = when (effort) {
+                    ReasoningEffort.HIGH -> 12288
+                    ReasoningEffort.LOW -> 2048
+                    else -> 4096
+                }
                 put("thinking", mapOf(
                     "type" to "enabled",
-                    "budget_tokens" to 4096
+                    "budget_tokens" to budget
                 ))
-                logger.info { "[ANTHROPIC] Enabled thinking mode for $model" }
+                logger.info { "[ANTHROPIC] Enabled thinking mode for $model (effort=$effort, budget=$budget)" }
             }
 
             // Additional parameters
@@ -410,7 +417,9 @@ class AnthropicAdapter(
             val usage = LLMUsage(
                 inputTokens = inputTokens,
                 outputTokens = outputTokens,
-                totalTokens = inputTokens + outputTokens
+                totalTokens = inputTokens + outputTokens,
+                cachedInputTokens = cacheRead,
+                cacheWriteInputTokens = cacheCreation
             )
 
             val cost = estimateCost(usage)
@@ -529,6 +538,8 @@ class AnthropicAdapter(
         val completedToolUseBlocks = mutableListOf<Map<String, Any?>>()
         var inputTokens = 0
         var outputTokens = 0
+        var cacheReadTokens = 0
+        var cacheWriteTokens = 0
         var httpStatus: Int? = null
         var finalStopReason: String? = null
 
@@ -626,6 +637,8 @@ class AnthropicAdapter(
                                         val cacheCreation = (usage?.get("cache_creation_input_tokens") as? Number)?.toInt() ?: 0
                                         val cacheRead = (usage?.get("cache_read_input_tokens") as? Number)?.toInt() ?: 0
                                         inputTokens = rawInput + cacheCreation + cacheRead
+                                        cacheReadTokens = cacheRead
+                                        cacheWriteTokens = cacheCreation
                                         if (cacheCreation > 0 || cacheRead > 0) {
                                             logger.info { "[ANTHROPIC] Stream usage: input=$rawInput, cache_creation=$cacheCreation, cache_read=$cacheRead" }
                                         } else {
@@ -647,7 +660,7 @@ class AnthropicAdapter(
                                                     argsBuilder.append(gson.toJson(input))
                                                 }
                                                 activeToolUseByIndex[index] = Triple(id, name, argsBuilder)
-                                                // Surface the call name as soon as the block opens (docs/0064).
+                                                // Surface the call name as soon as the block opens.
                                                 onStreamChunk(StreamChunk(
                                                     delta = "",
                                                     toolCallDelta = NativeToolCallDelta(
@@ -696,7 +709,7 @@ class AnthropicAdapter(
                                                 val partialJson = delta["partial_json"] as? String
                                                 if (!partialJson.isNullOrEmpty()) {
                                                     activeToolUseByIndex[index]?.third?.append(partialJson)
-                                                    // Stream the growing arguments JSON (docs/0064).
+                                                    // Stream the growing arguments JSON.
                                                     onStreamChunk(StreamChunk(
                                                         delta = "",
                                                         toolCallDelta = NativeToolCallDelta(
@@ -770,7 +783,9 @@ class AnthropicAdapter(
             val usage = LLMUsage(
                 inputTokens = inputTokens,
                 outputTokens = outputTokens,
-                totalTokens = inputTokens + outputTokens
+                totalTokens = inputTokens + outputTokens,
+                cachedInputTokens = cacheReadTokens,
+                cacheWriteInputTokens = cacheWriteTokens
             )
 
             val cost = estimateCost(usage)
@@ -964,7 +979,9 @@ class AnthropicAdapter(
             provider = provider,
             model = model,
             inputTokens = usage.inputTokens,
-            outputTokens = usage.outputTokens
+            outputTokens = usage.outputTokens,
+            cachedInputTokens = usage.cachedInputTokens,
+            cacheWriteInputTokens = usage.cacheWriteInputTokens
         )
     }
 

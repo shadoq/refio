@@ -62,8 +62,6 @@ private val logger = dualLogger("ContextPanel")
 /**
  * Panel displaying project context (analysis + current state).
  * Updates in real-time as agent works.
- *
- * Based on ADR 0018: Context Building & Visualization System
  */
 @OptIn(kotlinx.coroutines.FlowPreview::class)
 class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderLayout()) {
@@ -335,7 +333,7 @@ class ContextPanel(private val project: Project) : JBPanel<ContextPanel>(BorderL
         add(scrollPane, BorderLayout.CENTER)
 
         // Assemble sections in contentPanel
-        // Order matches ADR 0040 - Phase 2: Project context first, then task, then history
+        // Order: Project context first, then task, then history
         // Priority: Project Meta → Task → User Context → Conversation → Work History
         applySectionOrder(sectionEntries.sortedBy { it.order })
 

@@ -81,7 +81,7 @@ class AgentTurnLoop(
      */
     private val completionGuardians: GuardianRegistry = GuardianRegistry(),
 
-    // ADR-0028: Optional dependencies for enhanced turn loop
+    // Optional dependencies for enhanced turn loop
     private val tokenEstimator: PromptTokenEstimator = PromptTokenEstimator(),
     private val conversationCompactor: ConversationCompactor? = null,
     private val llmRetryHandler: LLMRetryHandler? = null,
@@ -223,7 +223,7 @@ class AgentTurnLoop(
         // tool subtask-status writes ~122s. try/finally keeps the count balanced.
         GlobalMetrics.beginAgentTurn()
         return try {
-            turnExecutor.execute(
+            val result = turnExecutor.execute(
                 taskId = taskId,
                 mode = mode,
                 executionMode = executionMode,
@@ -243,6 +243,9 @@ class AgentTurnLoop(
                 emitSourceAgentId = emitSourceAgentId,
                 agentName = agentName
             )
+            // Surface the task's cumulative cache-read tokens (incremented per LLM call) so the UI
+            // can show how much context was served from cache.
+            result.copy(cachedTokens = taskRepository.findById(taskId)?.cachedTokens ?: 0)
         } finally {
             GlobalMetrics.endAgentTurn()
         }
@@ -364,5 +367,10 @@ data class TurnResult(
      * considered but never executed. `result == "FAILED"` means the repair rounds were exhausted
      * and the turn ended as a verification failure - never faked as success.
      */
-    val verification: pl.jclab.refio.core.debug.VerificationSummary? = null
+    val verification: pl.jclab.refio.core.debug.VerificationSummary? = null,
+    /**
+     * Cumulative cache-read input tokens for the whole task at turn end (subset of the task's
+     * total input). Surfaced so the UI can show how much of the context was served from cache.
+     */
+    val cachedTokens: Int = 0
 )

@@ -732,11 +732,15 @@ class OpenAIAdapter(
             val promptTokens = (usageMap["prompt_tokens"] as? Number)?.toInt() ?: 0
             val completionTokens = (usageMap["completion_tokens"] as? Number)?.toInt() ?: 0
             val totalTokens = (usageMap["total_tokens"] as? Number)?.toInt() ?: 0
+            // prompt_tokens already includes cached tokens; cached_tokens is the discounted subset.
+            val cachedTokens = ((usageMap["prompt_tokens_details"] as? Map<*, *>)
+                ?.get("cached_tokens") as? Number)?.toInt() ?: 0
 
             val usage = LLMUsage(
                 inputTokens = promptTokens,
                 outputTokens = completionTokens,
-                totalTokens = totalTokens
+                totalTokens = totalTokens,
+                cachedInputTokens = cachedTokens
             )
 
             val cost = estimateCost(usage)
@@ -961,10 +965,13 @@ class OpenAIAdapter(
                             val completionTokens = (usageMap["completion_tokens"] as? Number)?.toInt() ?: 0
                             val totalTokens = (usageMap["total_tokens"] as? Number)?.toInt()
                                 ?: (promptTokens + completionTokens)
+                            val cachedTokens = ((usageMap["prompt_tokens_details"] as? Map<*, *>)
+                                ?.get("cached_tokens") as? Number)?.toInt() ?: 0
                             streamUsage = LLMUsage(
                                 inputTokens = promptTokens,
                                 outputTokens = completionTokens,
-                                totalTokens = totalTokens
+                                totalTokens = totalTokens,
+                                cachedInputTokens = cachedTokens
                             )
                             logger.info {
                                 val details = usageMap["completion_tokens_details"] as? Map<*, *>
@@ -1485,11 +1492,15 @@ class OpenAIAdapter(
         val resolvedInput = inputTokens ?: 0
         val resolvedOutput = outputTokens ?: 0
         val resolvedTotal = totalTokens ?: (resolvedInput + resolvedOutput)
+        // Responses API reports the cached subset under input_tokens_details.cached_tokens.
+        val cachedTokens = ((usageMap["input_tokens_details"] as? Map<*, *>)
+            ?.get("cached_tokens") as? Number)?.toInt() ?: 0
 
         return LLMUsage(
             inputTokens = resolvedInput,
             outputTokens = resolvedOutput,
-            totalTokens = resolvedTotal
+            totalTokens = resolvedTotal,
+            cachedInputTokens = cachedTokens
         )
     }
 
@@ -1620,7 +1631,9 @@ class OpenAIAdapter(
             provider = provider,
             model = model,
             inputTokens = usage.inputTokens,
-            outputTokens = usage.outputTokens
+            outputTokens = usage.outputTokens,
+            cachedInputTokens = usage.cachedInputTokens,
+            cacheWriteInputTokens = usage.cacheWriteInputTokens
         )
     }
 

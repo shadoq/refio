@@ -68,6 +68,9 @@ data class ModelDefinition(
     // Pricing (USD per 1M tokens - industry standard)
     val costPer1MInput: Double,        // $0.15 / 1M input tokens
     val costPer1MOutput: Double,       // $0.60 / 1M output tokens
+    // Cache-read price per 1M tokens for prompt caching. null = unknown; cached input is then
+    // billed at the full input rate (no discount) so the total never underestimates.
+    val costPer1MCachedInput: Double? = null,
 
     // Features & Capabilities
     val supportsVision: Boolean = false,
@@ -78,6 +81,10 @@ data class ModelDefinition(
 
     // Reasoning Model Settings
     val reasoningTokensMultiplier: Double? = null,  // For reasoning models: multiply max_tokens by this factor (e.g., 2.5)
+    // Some endpoints (e.g. OpenRouter's moonshotai/kimi-k3) reject an explicit
+    // reasoning.enabled=false with a hard error. When true, adapters must not try to
+    // suppress reasoning even when the user turns thinking OFF.
+    val reasoningMandatory: Boolean = false,
 
     // Provider-specific
     val endpointType: ApiEndpointType = ApiEndpointType.CHAT_COMPLETIONS,  // API endpoint to use (CHAT_COMPLETIONS, RESPONSES, etc.)
@@ -195,6 +202,28 @@ fun getCachedModelsSnapshot(): List<ModelConfig> {
 }
 
 /**
+ * Builds the new cache from a refresh round. A provider that failed or timed out is
+ * reported as `null` and keeps whatever it had before: an unreachable provider is not
+ * the same as a provider with no models, and dropping its entry would make every model
+ * it offers vanish from the UI until the next successful fetch.
+ *
+ * An empty (non-null) result IS authoritative - that is how a provider says "nothing
+ * here anymore" after its key or endpoint was removed.
+ */
+internal fun mergeProviderModels(
+    previous: Map<String, List<ModelConfig>>,
+    fetched: Map<String, List<ModelConfig>?>
+): Map<String, List<ModelConfig>> {
+    val merged = previous.toMutableMap()
+    fetched.forEach { (provider, models) ->
+        if (models != null) {
+            merged[provider] = models
+        }
+    }
+    return merged
+}
+
+/**
  * Gets all models from all providers dynamically.
  * Results are cached for 5 minutes to avoid excessive API calls.
  *
@@ -228,7 +257,10 @@ suspend fun getAllModels(
         val now = System.currentTimeMillis()
         logger.info { "[ModelRegistry] Fetching models from all providers (single-flight, parallel providers)" }
 
-        data class ProviderFetch(val name: String, val models: List<ModelConfig>)
+        // Null models = fetch failed; the provider keeps its previous entry (see mergeProviderModels).
+        data class ProviderFetch(val name: String, val models: List<ModelConfig>?)
+
+        val previousModels = modelsCache ?: emptyMap()
 
         val genericOpenAiConfigured = configService
             ?.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_BASE_URL)
@@ -264,21 +296,27 @@ suspend fun getAllModels(
                             }
                         }
                         if (models == null) {
-                            logger.warn { "[ModelRegistry] Timeout fetching $name models (${listModelsTimeoutFor(name)}ms)" }
-                            ProviderFetch(name, emptyList())
+                            logger.warn {
+                                "[ModelRegistry] Timeout fetching $name models (${listModelsTimeoutFor(name)}ms), " +
+                                    "keeping ${previousModels[name]?.size ?: 0} previously known models"
+                            }
+                            ProviderFetch(name, null)
                         } else {
                             logger.info { "[ModelRegistry] Fetched ${models.size} models from $name" }
                             ProviderFetch(name, models)
                         }
                     } catch (e: Exception) {
-                        logger.warn { "[ModelRegistry] Failed to fetch $name models: ${e.message}" }
-                        ProviderFetch(name, emptyList())
+                        logger.warn {
+                            "[ModelRegistry] Failed to fetch $name models: ${e.message}, " +
+                                "keeping ${previousModels[name]?.size ?: 0} previously known models"
+                        }
+                        ProviderFetch(name, null)
                     }
                 }
             }.awaitAll()
         }
 
-        val allModels = results.associate { it.name to it.models }
+        val allModels = mergeProviderModels(previousModels, results.associate { it.name to it.models })
         modelsCache = allModels
         cacheTimestamp = now
 
@@ -358,16 +396,19 @@ suspend fun getModelsByProvider(
                 }
             }
         }
+        val existing = modelsCache ?: emptyMap()
         val fetched = if (models == null) {
-            logger.warn { "[ModelRegistry] Timeout fetching $provider models (${listModelsTimeoutFor(provider.lowercase())}ms)" }
-            emptyList()
+            logger.warn {
+                "[ModelRegistry] Timeout fetching $provider models (${listModelsTimeoutFor(provider.lowercase())}ms), " +
+                    "keeping ${existing[provider]?.size ?: 0} previously known models"
+            }
+            existing[provider].orEmpty()
         } else {
             models
         }
 
         // Merge result into shared cache so subsequent cache-only reads
         // (e.g. StatusBar via getModelConfigFromCache) see fresh data.
-        val existing = modelsCache ?: emptyMap()
         modelsCache = existing + (provider to fetched)
         if (cacheTimestamp == 0L) {
             cacheTimestamp = System.currentTimeMillis()

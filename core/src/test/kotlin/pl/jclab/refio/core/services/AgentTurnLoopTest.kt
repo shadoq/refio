@@ -957,6 +957,46 @@ class AgentTurnLoopTest {
             }
         }
 
+        @Test
+        fun `a mkdir-only turn that then breaks format stays INCOMPLETE - a trivial command is not a file deliverable`() = runTest {
+            // e2e regression (build-cli-todo-app, qwen3.5:122b): the model ran ONLY `mkdir -p tests`
+            // and then stopped without writing any source file, yet the turn self-reported SUCCESS
+            // because run_terminal_command is mode=WRITE. Execution tools (run_terminal_command /
+            // run_code) produce NO file, so they must not satisfy the deliverable proxy - only a real
+            // file edit/create does. Otherwise a scaffold-and-stall reports a completed deliverable.
+            val cmdTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "run_terminal_command"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.WRITE
+            }
+            every { toolRegistry.getTool("run_terminal_command") } returns cmdTool
+            coEvery { toolExecutor.executeTool(match { it.name == "run_terminal_command" }, any()) } returns
+                ToolResult(success = true, output = "created tests/")
+
+            val mkdir = createLLMResponse("""{"response":"scaffolding the project","actions":[{"tool":"run_terminal_command","arguments":{"command":"mkdir -p tests"}}]}""")
+            val broken = createLLMResponse("""```json
+{response:"still working",
+""")
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(mkdir, broken, broken, broken, broken, broken)
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Build the todo app with app.py, store.py and tests",
+                mode = TaskMode.AGENT
+            )
+
+            assertFalse(
+                result.success,
+                "mkdir alone is not a file deliverable; a format breakdown after it must not finalize SUCCESS: ${result.response}"
+            )
+        }
+
         // NOTE: the bounded nudge-retry machinery is intentionally still here. On an empty or
         // malformed structured response the loop injects a SYSTEM message telling the model to
         // regenerate the JSON envelope from scratch (the MessageRole.SYSTEM writes in

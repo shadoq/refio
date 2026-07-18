@@ -27,11 +27,11 @@ data class ProjectContextDTO(
     // Conversation history
     val conversationHistory: List<ConversationMessageDTO> = emptyList(),
 
-    // Work history (from PHASE 3, refactored in ADR 0041)
+    // Work history
     val completedFiles: List<String> = emptyList(),
     val executedSteps: List<ExecutedStepDTO> = emptyList(),
 
-    // User requirements (extracted from task description - PHASE 2)
+    // User requirements (extracted from task description)
     val userRequirements: Map<String, Any> = emptyMap(),
 
     // User-provided context (from @ mentions + extracted from messages)

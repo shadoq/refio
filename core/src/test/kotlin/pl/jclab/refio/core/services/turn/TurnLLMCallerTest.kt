@@ -12,6 +12,7 @@ import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.LLMMessage
+import pl.jclab.refio.core.llm.ReasoningEffort
 import pl.jclab.refio.core.config.ConfigKey
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
@@ -43,7 +44,7 @@ class TurnLLMCallerTest {
     fun `should pass thinking and no-egress flags to llm client`() {
         every { configService.getModel(any(), any(), any()) } returns ("model-a" to "anthropic")
         every { configService.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
-        every { configService.getTyped(ConfigKeys.GENERAL_THINKING_ENABLED, "task-1") } returns true
+        every { configService.getTyped(ConfigKeys.GENERAL_REASONING_EFFORT, "task-1") } returns ReasoningEffort.MEDIUM
         every { configService.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, "task-1") } returns true
         coEvery {
             llmClient.complete(
@@ -55,6 +56,7 @@ class TurnLLMCallerTest {
                 temperature = any(),
                 responseFormat = any(),
                 thinking = any(),
+                reasoningEffort = any(),
                 noEgressEnabled = any(),
                 stream = any(),
                 onChunk = any(),
@@ -96,6 +98,7 @@ class TurnLLMCallerTest {
                 temperature = 0.7,
                 responseFormat = mapOf("type" to "json_object"),
                 thinking = true,
+                reasoningEffort = "medium",
                 noEgressEnabled = true,
                 stream = false,
                 onChunk = null,
@@ -124,6 +127,7 @@ class TurnLLMCallerTest {
                 temperature = any(),
                 responseFormat = any(),
                 thinking = any(),
+                reasoningEffort = any(),
                 noEgressEnabled = any(),
                 stream = any(),
                 onChunk = any(),
@@ -163,6 +167,7 @@ class TurnLLMCallerTest {
                 temperature = any(),
                 responseFormat = any(),
                 thinking = any(),
+                reasoningEffort = any(),
                 noEgressEnabled = any(),
                 stream = any(),
                 onChunk = any(),

@@ -43,7 +43,7 @@ class ChatRouter(
     // ===== Chat Operations =====
 
     /**
-     * Send chat message and get LLM response (RFC 0032: unified streaming/non-streaming).
+     * Send chat message and get LLM response (unified streaming/non-streaming).
      *
      * This endpoint handles conversational interactions with LLM providers.
      * Must be called with an existing task in CHAT mode.
@@ -117,7 +117,8 @@ class ChatRouter(
                     isSummarized = msg.isSummarized,
                     rawOutput = msg.rawOutput,
                     agentName = msg.agentName,
-                    agentDepth = msg.agentDepth
+                    agentDepth = msg.agentDepth,
+                    agentInstanceId = msg.agentInstanceId
                 )
             },
             count = messages.size

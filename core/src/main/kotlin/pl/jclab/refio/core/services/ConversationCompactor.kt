@@ -23,8 +23,6 @@ private val logger = dualLogger("ConversationCompactor")
  * - Keep last N messages raw (for context continuity)
  * - Summarize older messages into a single system message
  * - Preserve key decisions, files, errors, and next steps
- *
- * Reference: ADR-0028 - Context Management
  */
 class ConversationCompactor(
     private val llmClient: LLMClient,

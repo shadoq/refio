@@ -1,5 +1,7 @@
 package pl.jclab.refio.core.config
 
+import pl.jclab.refio.core.llm.ReasoningEffort
+
 
 /**
  * Typed configuration key descriptor.
@@ -29,7 +31,7 @@ data class ConfigKey<T>(
 ) {
     /**
      * True when [raw] both parses to a valid value AND passes this key's [validator].
-     * Lets run-scope override parsing (docs/0063) reject bad `--config` values loudly without
+     * Lets run-scope override parsing reject bad `--config` values loudly without
      * exposing the generic type `T` to callers holding a `ConfigKey<*>`.
      */
     fun acceptsRaw(raw: String): Boolean {
@@ -153,11 +155,18 @@ object ConfigKeys {
 
     // ==================== UI ====================
 
-    val GENERAL_THINKING_ENABLED = ConfigKey(
-        key = "general.thinking_enabled",
-        parser = String::toBooleanStrictOrNull,
-        default = false,
-        yamlAccessor = { it.getGeneralThinkingEnabled() }
+    /**
+     * Reasoning strength (OFF/LOW/MEDIUM/HIGH). Replaces the legacy boolean
+     * `general.thinking_enabled`; OFF is the former "thinking off". Adapters translate the
+     * level to their native knob (reasoning effort or token budget). See [ReasoningEffort].
+     */
+    val GENERAL_REASONING_EFFORT = ConfigKey(
+        key = "general.reasoning_effort",
+        parser = ReasoningEffort::parse,
+        default = ReasoningEffort.OFF,
+        serializer = { it.name },
+        validator = { it in ReasoningEffort.entries },
+        yamlAccessor = { it.getGeneralReasoningEffort() }
     )
 
     val GENERAL_NO_EGRESS_ENABLED = ConfigKey(
@@ -321,7 +330,7 @@ object ConfigKeys {
         yamlAccessor = { it.getRagEnabled() }
     )
 
-    // docs/0060: agentic grep/file search is the primary navigation path; vector RAG is an
+    // Agentic grep/file search is the primary navigation path; vector RAG is an
     // opt-in aid (proven 2025–2026: keyword search reaches ~RAG quality on *code* without the
     // indexing tax). Default OFF so a cold start never pays CPU + embedding cost for users who
     // never use rag_search. Enable explicitly to restore the old auto-indexing behaviour.
@@ -540,7 +549,7 @@ object ConfigKeys {
         default = false
     )
 
-    // ==================== CONTEXT (ADR 0017) ====================
+    // ==================== CONTEXT ====================
 
     val RECENT_WORK_FULL_DATA_LIMIT = ConfigKey(
         key = "context.recent_work.full_data_limit",
@@ -699,7 +708,7 @@ object ConfigKeys {
         yamlAccessor = { it.getZAIBaseUrl() }
     )
 
-    // ==================== AGENT FLOW (ADR 0019) ====================
+    // ==================== AGENT FLOW ====================
 
     val TASK_VERIFICATION_ENABLED = ConfigKey(
         key = "agent.task_verification_enabled",
@@ -732,8 +741,8 @@ object ConfigKeys {
 
     /**
      * Per-session hard cost ceiling in USD. `0.0` (default) disables the guard. When > 0, the turn
-     * loop aborts before an iteration once the session's live cost reaches this value
-     * (docs/0063 §6.1). Surfaced via the CLI `--max-cost` flag (sugar over a run-scope override).
+     * loop aborts before an iteration once the session's live cost reaches this value.
+     * Surfaced via the CLI `--max-cost` flag (sugar over a run-scope override).
      */
     val AGENT_MAX_COST_USD = ConfigKey(
         key = "agent.max_cost_usd",
@@ -836,7 +845,7 @@ object ConfigKeys {
             RATE_LIMIT_RPM,
             RETRY_DELAY_MS,
             // General (thinking/no-egress/execution mode moved from ui section)
-            GENERAL_THINKING_ENABLED,
+            GENERAL_REASONING_EFFORT,
             GENERAL_NO_EGRESS_ENABLED,
             GENERAL_EXECUTION_MODE,
             // UI

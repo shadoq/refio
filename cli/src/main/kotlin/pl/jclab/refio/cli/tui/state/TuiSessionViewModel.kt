@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import mu.KotlinLogging
 import pl.jclab.refio.core.api.CoreApiRouter
+import pl.jclab.refio.core.llm.ReasoningEffort
 import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.api.SubtaskResponse
 import pl.jclab.refio.core.api.TurnRequest
@@ -80,12 +81,24 @@ class TuiSessionViewModel(
     private val _totalCost = MutableStateFlow(0.0)
     val totalCost: StateFlow<Double> = _totalCost.asStateFlow()
 
+    // Cumulative cache-read input tokens for the session (absolute, set from the task total).
+    private val _cachedTokens = MutableStateFlow(0L)
+    val cachedTokens: StateFlow<Long> = _cachedTokens.asStateFlow()
+
     private val _totalTokens = MutableStateFlow(0L)
     val totalTokens: StateFlow<Long> = _totalTokens.asStateFlow()
 
     /** Thinking/no-egress flags sourced from core [pl.jclab.refio.core.session.SessionStateManager]. */
     val thinkingEnabled: StateFlow<Boolean> = stateManager.thinkingEnabled
     val noEgressEnabled: StateFlow<Boolean> = stateManager.noEgressEnabled
+
+    /**
+     * Reasoning strength for the status icon and the Ctrl+T cycle. TUI-local because the core
+     * session state only tracks on/off; the authoritative level lives in the
+     * `general.reasoning_effort` config that the turn reads. Kept in sync with [thinkingEnabled].
+     */
+    private val _reasoningEffort = MutableStateFlow(ReasoningEffort.OFF)
+    val reasoningEffort: StateFlow<ReasoningEffort> = _reasoningEffort.asStateFlow()
 
     // --- Callbacks to parent TuiViewModel ---
 
@@ -624,10 +637,23 @@ class TuiSessionViewModel(
         getRouter()?.configRouter?.updateConfig("ui", "app", null, mapOf(key to value))
     }
 
-    fun toggleThinking() {
-        val next = !stateManager.thinkingEnabled.value
-        stateManager.setThinkingEnabled(next)
-        persistUiSetting("thinking_enabled", next.toString())
+    /** Update the reasoning level in memory (status icon + boolean mirror) without persisting. */
+    fun applyReasoningEffort(effort: ReasoningEffort) {
+        _reasoningEffort.value = effort
+        stateManager.setThinkingEnabled(effort.isOn)
+    }
+
+    /** Ctrl+T cycles OFF -> LOW -> MEDIUM -> HIGH -> OFF and persists the new level. */
+    fun cycleReasoningEffort() {
+        val order = listOf(
+            ReasoningEffort.OFF, ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH,
+        )
+        val next = order[(order.indexOf(_reasoningEffort.value) + 1).mod(order.size)]
+        applyReasoningEffort(next)
+        getRouter()?.configRouter?.updateConfig(
+            "general", "app", null,
+            mapOf("reasoning_effort" to next.name),
+        )
     }
 
     fun toggleNoEgress() {
@@ -651,5 +677,9 @@ class TuiSessionViewModel(
 
     fun addCost(amount: Double) {
         _totalCost.update { it + amount }
+    }
+
+    fun setCachedTokens(total: Int) {
+        _cachedTokens.value = total.toLong()
     }
 }

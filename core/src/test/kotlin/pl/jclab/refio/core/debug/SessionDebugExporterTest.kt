@@ -3,6 +3,8 @@ package pl.jclab.refio.core.debug
 import io.mockk.every
 import io.mockk.mockk
 import org.junit.jupiter.api.Test
+import pl.jclab.refio.core.api.MultiAgentInstanceResponse
+import pl.jclab.refio.core.api.MultiAgentSessionResponse
 import pl.jclab.refio.core.db.ApiLog
 import pl.jclab.refio.core.db.ApprovalStatus
 import pl.jclab.refio.core.db.ChatMessage
@@ -166,5 +168,40 @@ class SessionDebugExporterTest {
         stub(messages = listOf(msg(MessageRole.USER, "make it"), msg(MessageRole.ASSISTANT, "created snake.html")))
         val snap = exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.MINIMAL))
         assertEquals("created snake.html", snap.finalOutput)
+    }
+
+    private fun agent(name: String, tokensIn: Int, tokensOut: Int, costUsd: Double, started: Long) =
+        MultiAgentInstanceResponse(
+            agentName = name, status = "COMPLETED", success = true, response = "done",
+            tokensUsed = (tokensIn + tokensOut).toLong(), tokensIn = tokensIn, tokensOut = tokensOut,
+            costUsd = costUsd, durationMs = 100, startedAt = started, completedAt = started + 100,
+        )
+
+    @Test
+    fun `multi-agent snapshot reports the real aggregate token split, not zero`() {
+        // Regression: the multi-agent run.json used to hardcode metrics to 0, so the e2e stats layer
+        // (which reads .metrics.tokensOut) undercounted every multi-agent scenario to nothing. The
+        // rolled-up figure must be the sum of the per-agent OUTPUT tokens - not a combined in+out
+        // number that would inflate tokensOut by the (much larger) prompt tokens.
+        val response = MultiAgentSessionResponse(
+            sessionId = "s1", name = "pipeline", status = "COMPLETED",
+            agents = listOf(
+                agent("analyst", tokensIn = 5000, tokensOut = 300, costUsd = 0.01, started = 2_000),
+                agent("coder", tokensIn = 6000, tokensOut = 500, costUsd = 0.02, started = 1_000),
+            ),
+            totalTokens = 11_800, totalTokensIn = 11_000, totalTokensOut = 800, totalCostUsd = 0.03,
+            durationMs = 4_000, createdAt = 1_000, completedAt = 5_000,
+        )
+        val snap = exporter.exportMultiAgent(response, model = "ollama/qwen3.5:122b", options = SessionDebugOptions.forLevel(DebugLevel.STANDARD))
+
+        assertEquals(800, snap.metrics.tokensOut, "tokensOut must be the summed OUTPUT tokens")
+        assertEquals(11_000, snap.metrics.tokensIn)
+        assertEquals(0.03, snap.metrics.costUsd)
+        assertEquals(2, snap.metrics.apiCallCount, "one API call slot per agent")
+        assertEquals("MULTI_AGENT", snap.session.mode)
+        assertEquals(800, snap.session.tokensOut)
+        // Agents ordered by real start time: coder (started 1000) before analyst (started 2000).
+        assertEquals(listOf("coder", "analyst"), snap.multiAgent?.agents?.map { it.agentName })
+        assertEquals(500, snap.multiAgent?.agents?.first()?.tokensOut, "per-agent split is preserved")
     }
 }

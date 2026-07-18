@@ -181,7 +181,7 @@ class SubtaskRepository {
     }
 
     /**
-     * Update LLM metrics (US-027)
+     * Update LLM metrics
      * Simpler version that only updates tokens, cost, and latency
      */
     fun updateMetrics(

@@ -20,8 +20,6 @@ private val logger = dualLogger("ProjectAnalyzerService")
 /**
  * Service for analyzing project structure, technologies, and code patterns.
  * Results are cached in memory for performance.
- *
- * Based on ADR 0018: Context Building & Visualization System
  */
 class ProjectAnalyzerService(
     private val configService: ConfigService,
@@ -69,7 +67,7 @@ class ProjectAnalyzerService(
             val keyComponents = identifyKeyComponents(fileTree)
             val domainAnalysis = ProjectDomainScorer.analyzeProjectDomain(fileTree, structure)
 
-            // ADR 0017: Detect architectural patterns
+            // Detect architectural patterns
             val architectureInfo = ProjectArchitectureDetector.detectArchitecturalPatterns(fileTree)
 
             // Framework-aware analysis
@@ -736,7 +734,7 @@ data class ProjectAnalysis(
     val domainAnalysis: DomainAnalysis,
     val analyzedAt: Long,
     val richReport: ProjectAnalysisReport? = null,
-    val architectureInfo: ArchitectureInfo? = null,  // ADR 0017: Enhanced architecture analysis
+    val architectureInfo: ArchitectureInfo? = null,  // Enhanced architecture analysis
     val frameworkAnalysis: FrameworkAnalysis? = null
 )
 
@@ -786,7 +784,7 @@ data class DomainAnalysis(
     val domainScores: Map<String, Double>
 )
 
-// ADR 0017: Enhanced architecture analysis
+// Enhanced architecture analysis
 data class ArchitectureInfo(
     val patterns: List<String>,
     val entryPoints: List<EntryPoint>,

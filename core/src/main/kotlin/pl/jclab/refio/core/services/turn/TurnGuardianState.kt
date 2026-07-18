@@ -7,7 +7,7 @@ import pl.jclab.refio.core.llm.LLMResponse
  *
  * Previously three loose loop variables (`guardianReentryCount`, `candidateFinalResponse`,
  * `usedToolsSizeAtLastReentry`) scattered the re-entry decision across the turn loop, making it
- * impossible to log or replay. Gathering them here (docs/0058, Faza 2) is a pure consolidation —
+ * impossible to log or replay. Gathering them here is a pure consolidation -
  * no behaviour change; `toString()` now yields a single replayable snapshot.
  *
  * **Capture-once policy (deliberate trade-off, not a bug).** A guardian re-entry drops the terminal

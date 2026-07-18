@@ -30,6 +30,7 @@ internal object ConfigYamlEmitter {
             general.streamingEnabled?.let { sb.appendLine("  streamingEnabled: $it") }
             general.advancedView?.let { sb.appendLine("  advancedView: $it") }
             general.thinkingEnabled?.let { sb.appendLine("  thinkingEnabled: $it") }
+            general.reasoningEffort?.let { sb.appendLine("  reasoningEffort: \"$it\"") }
             general.noEgressEnabled?.let { sb.appendLine("  noEgressEnabled: $it") }
             general.executionMode?.let { sb.appendLine("  executionMode: \"$it\"") }
             general.nativeToolsMode?.let { sb.appendLine("  nativeToolsMode: \"$it\"") }

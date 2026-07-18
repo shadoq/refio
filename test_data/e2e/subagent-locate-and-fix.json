@@ -1,0 +1,20 @@
+{
+  "id": "subagent-locate-and-fix",
+  "mode": "AGENT",
+  "description": "Delegate a codebase investigation to the code-reviewer subagent, then fix ONLY the file it flags, leaving the distractor files untouched. Checks the parent stays on-task after a read-heavy delegation instead of being derailed by the subagent's exploration.",
+  "category": "orchestration",
+  "max_iterations": 30,
+  "fixture": "fixtures/py-locate",
+  "prompt_file": "prompts/subagent-locate-and-fix.md",
+  "assert": {
+    "tool_invoked": [
+      { "name": "invoke_subagent", "args_regex": "code-reviewer" }
+    ],
+    "file_unchanged": ["src/tax.py", "src/format.py", "main.py"],
+    "build_cmd": "python3 main.py",
+    "no_context_overflow": true
+  },
+  "judge_criteria": [
+    "The code-reviewer subagent was invoked to investigate the code, compute_total now sums every element, and the unrelated files (tax.py, format.py, main.py) were left untouched."
+  ]
+}

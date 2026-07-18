@@ -103,7 +103,7 @@ intellijPlatform {
         ideaVersion {
             // 242 (2024.2) is the first IDE line shipping JBR 21; this module emits Java 21 bytecode.
             sinceBuild.set("242")
-            untilBuild.set("261.*")
+            untilBuild.set("262.*")
         }
     }
 

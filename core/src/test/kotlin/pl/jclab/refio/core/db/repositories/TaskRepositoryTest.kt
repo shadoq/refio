@@ -314,7 +314,8 @@ class TaskRepositoryTest {
                     id = task.id,
                     tokensIn = 100,
                     tokensOut = 50,
-                    costUsd = 0.001
+                    costUsd = 0.001,
+                    cachedTokens = 30
                 )
 
                 // Then
@@ -322,6 +323,8 @@ class TaskRepositoryTest {
                 assertEquals(100, updated.tokensIn)
                 assertEquals(50, updated.tokensOut)
                 assertEquals(0.001, updated.costUsd, 0.0001)
+                // Cache-read tokens accumulate alongside input, so the UI can show them per session.
+                assertEquals(30, updated.cachedTokens)
             }
         }
 

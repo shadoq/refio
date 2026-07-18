@@ -23,7 +23,6 @@ object CoreSessionServiceFactory {
         scope: CoroutineScope,
         stateManager: SessionStateManager = SessionStateManager(),
         uiAdapter: UIAdapter = NoopUIAdapter,
-        executionStateController: ExecutionStateController = NoopExecutionStateController,
     ): CoreSessionService {
         val modeSwitchMutex = Mutex()
 
@@ -31,11 +30,6 @@ object CoreSessionServiceFactory {
             projectRouter = projectRouter,
             stateManager = stateManager,
             scope = scope,
-        )
-
-        val executionMonitor = ExecutionMonitor(
-            stateManager = stateManager,
-            stepExecutionService = executionStateController,
         )
 
         val subtaskTracker = SubtaskTracker(
@@ -53,7 +47,7 @@ object CoreSessionServiceFactory {
             normalizedProjectPath = projectPath.toAbsolutePath().normalize().toString(),
             scope = scope,
         )
-        lifecycleService.initialize(messageDispatcher, subtaskTracker, executionMonitor)
+        lifecycleService.initialize()
 
         return CoreSessionService(
             projectRouter = projectRouter,
@@ -65,12 +59,6 @@ object CoreSessionServiceFactory {
             scope = scope,
             modeSwitchMutex = modeSwitchMutex,
         )
-    }
-
-    object NoopExecutionStateController : ExecutionStateController {
-        override fun startInteractiveExecution(taskId: String) = Unit
-        override fun stopExecution() = Unit
-        override fun markComplete() = Unit
     }
 
     object NoopUIAdapter : UIAdapter {

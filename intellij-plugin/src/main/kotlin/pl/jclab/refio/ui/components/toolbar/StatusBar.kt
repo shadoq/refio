@@ -172,6 +172,7 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
     private val contextPercentLabel: JBLabel
     private val requestsLabel: JBLabel     // "Req: sessionReq/globalReq"
     private val tokensInLabel: JBLabel     // "in sessionIn/globalIn"
+    private val cachedLabel: JBLabel       // "💾 sessionCached" (cache-read input tokens)
     private val tokensOutLabel: JBLabel    // "out sessionOut/globalOut"
     private val costLabel: JBLabel         // "$sessionCost/$globalCost"
 
@@ -184,6 +185,7 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
     private var prevSessionTokensIn = 0
     private var sessionTokensIn = 0
     private var sessionTokensOut = 0
+    private var sessionCachedTokens = 0
     private var sessionCostUsd = 0.0
     private var globalRequests = 0L
     private var globalTokensIn = 0L
@@ -210,6 +212,10 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
             tokensInLabel = JBLabel("↓0/0").apply {
                 toolTipText = "Input tokens: session / global"
             }
+            cachedLabel = JBLabel("").apply {
+                toolTipText = "Cache-read input tokens this session (subset of input)"
+                foreground = LCATheme.neutralColor
+            }
             tokensOutLabel = JBLabel("↑0/0").apply {
                 toolTipText = "Output tokens: session / global"
             }
@@ -229,6 +235,7 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
             add(sep2)
             add(requestsLabel)
             add(tokensInLabel)
+            add(cachedLabel)
             add(tokensOutLabel)
             add(sep3)
             add(costLabel)
@@ -305,13 +312,14 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
             sessionManager.activeSession.collect { session ->
                 SwingUtilities.invokeLater {
                     session?.let {
-                        updateSessionTokens(it.tokensIn, it.tokensOut)
+                        updateSessionTokens(it.tokensIn, it.tokensOut, it.cachedTokens)
                         updateSessionCost(it.costUsd)
                     } ?: run {
                         sessionRequests = 0
                         prevSessionTokensIn = 0
                         sessionTokensIn = 0
                         sessionTokensOut = 0
+                        sessionCachedTokens = 0
                         sessionCostUsd = 0.0
                         contextFillBar.percentage = 0
                         contextFillBar.currentTokens = 0
@@ -437,13 +445,14 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
         refreshCombinedLabels()
     }
 
-    private fun updateSessionTokens(tokensIn: Int, tokensOut: Int) {
+    private fun updateSessionTokens(tokensIn: Int, tokensOut: Int, cachedTokens: Int = 0) {
         if (tokensIn > prevSessionTokensIn) {
             sessionRequests++
             prevSessionTokensIn = tokensIn
         }
         sessionTokensIn = tokensIn
         sessionTokensOut = tokensOut
+        sessionCachedTokens = cachedTokens
         refreshCombinedLabels()
     }
 
@@ -472,6 +481,10 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
 
         tokensInLabel.text = "↓${formatLargeNumber(sessionTokensIn.toLong())}/${formatLargeNumber(globalTokensIn)}"
         tokensInLabel.toolTipText = "Input tokens: $sessionTokensIn session / $globalTokensIn global"
+
+        cachedLabel.text = if (sessionCachedTokens > 0) "💾${formatLargeNumber(sessionCachedTokens.toLong())}" else ""
+        cachedLabel.toolTipText = "Cache-read input tokens this session: $sessionCachedTokens (of $sessionTokensIn input)"
+        cachedLabel.repaint()
 
         tokensOutLabel.text = "↑${formatLargeNumber(sessionTokensOut.toLong())}/${formatLargeNumber(globalTokensOut)}"
         tokensOutLabel.toolTipText = "Output tokens: $sessionTokensOut session / $globalTokensOut global"

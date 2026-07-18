@@ -198,7 +198,12 @@ class NextSpeakerJudgeGuardian(
      * false-INCOMPLETE on completed single-deliverable turns is the far more damaging, frequent case.
      */
     private fun deliverableLikelyProduced(context: GuardianContext): Boolean =
-        TurnDeliverable.produced(context.writeToolsExecutedInTurn, context.mode, context.finalResponse)
+        TurnDeliverable.produced(
+            context.fileWriteToolsExecutedInTurn,
+            context.mode,
+            context.finalResponse,
+            isSubagent = context.runProfile == TurnRunProfile.SUBAGENT,
+        )
 
     /**
      * How many judge-driven re-entries this turn may spend. One (the strict one-shot) by default;

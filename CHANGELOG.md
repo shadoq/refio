@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - E2e gates: `e2e-gate.sh` (N runs per scenario -> pass-rate table), `validate-scenarios.sh` / `validate-analysis-scenarios.sh` (deterministic, no LLM), `tui-smoke.py` (CLI in a pty).
 - E2e suite: +27 scenarios, +22 prompts, +21 fixture trees, +11 golden dirs.
 - TUI Settings Tools tab (per-tool ON/ASK/OFF), plus reset-all / export / reload-config actions and scroll-to-selection.
+- Cached-token cost accounting: input tokens split into fresh / cache-read / cache-write subsets, each billed at its own rate, so a repeated (cache-served) prompt is no longer charged as fresh. Explicit cache-read prices for OpenAI, Anthropic (0.1x input) and Gemini (0.25x input); models without a configured cache price fall back to the full input rate (never a phantom discount).
+- Cached tokens surfaced in the UI: a `cached_tokens` session counter (persisted via a new DB column) with a `💾` indicator in the TUI status line and the IntelliJ StatusBar, so a user sees how much of a turn was served from cache.
+- `general.reasoning_effort` (OFF/LOW/MEDIUM/HIGH) replacing the boolean `general.thinking_enabled`; each level maps per-adapter to the provider-native knob (OpenAI/OpenRouter reasoning effort, Anthropic/Gemini thinking-token budget, Ollama on/off). Selectors added to the TUI settings and the plugin General settings.
+- Subagent history isolation: every subagent turn gets an agent-instance id even when the spawning caller didn't assign one, so a subagent's intermediate steps no longer leak into the parent thread or inflate its token budget.
+- Multi-agent debug export (`SessionDebugExporter.exportMultiAgent`) writes a per-agent snapshot (ordered by start time, aggregate status and token totals) for a multi-agent run.
+- Two orchestration e2e scenarios (`subagent-locate-and-fix`, `subagent-two-file-fix`) with fixtures, prompts and golden trees, checking the parent stays on-task after a read-heavy delegation.
 
 ### Changed
 
@@ -52,6 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Concurrent LLM completions no longer lose metric updates - atomic in-DB increments; task stats via one grouped SQL `SUM`.
 - `MultiAgentRunner` runs its completion path even when agent setup fails, so dependents don't wait forever.
 - Verification still red after all repair rounds ends the turn as a real failure, not fake success.
+- Cost overcharge on cached / repeated context: a cache-read hit was previously billed at the full input rate. Anthropic cache-read was 10x over (now 0.1x), and a real gpt-5.4-nano run now reconciles to the actual OpenAI bill instead of ~5x under.
+- Corrected OpenAI list prices used for cost estimates (`gpt-5.4-nano`, `gpt-5.4-mini`, `gpt-5.5`).
+- OpenRouter model resolution matches the most specific prefix over an ordered map, so `openai/gpt-5.1*` keeps its 400k context window and its own pricing instead of falling back to the 128k `gpt-` family.
 
 ---
 

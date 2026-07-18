@@ -1,14 +1,14 @@
 package pl.jclab.refio.core.debug
 
 /**
- * Current schema version of [SessionDebugSnapshot] / the CLI `run.json` (docs/0059 §5).
+ * Current schema version of [SessionDebugSnapshot] / the CLI `run.json`.
  * Bump when removing or renaming fields; additive fields do not require a bump.
  */
 const val SESSION_DEBUG_SCHEMA_VERSION = 1
 
 /**
  * Stable, serialization-friendly snapshot of one Refio session, produced by [SessionDebugExporter]
- * and emitted as `run.json` for the benchmark/e2e pipeline (docs/0059, docs/0063).
+ * and emitted as `run.json` for the benchmark/e2e pipeline.
  *
  * Decoupled from internal DB entities on purpose: this is the public data contract, so field names
  * here are intentionally stable even if the underlying tables change.
@@ -60,9 +60,9 @@ data class SessionDebugSnapshot(
         val apiCallCount: Int,
         val toolCallCount: Int,
         /**
-         * True if any turn's prompt exceeded the model's context window (docs/0057 Tier 3).
-         * A `true` here means input was silently truncated (Ollama) or rejected — the e2e
-         * harness (docs/0061) treats it as a failed run, not a success. Additive field.
+         * True if any turn's prompt exceeded the model's context window.
+         * A `true` here means input was silently truncated (Ollama) or rejected - the e2e
+         * harness treats it as a failed run, not a success. Additive field.
          */
         val contextOverflow: Boolean = false,
         /**
@@ -134,6 +134,9 @@ data class SessionDebugSnapshot(
         val success: Boolean,
         val startedAt: Long?,
         val completedAt: Long?,
+        val tokensIn: Int = 0,
+        val tokensOut: Int = 0,
+        val costUsd: Double = 0.0,
     )
 
     data class ApiLogInfo(

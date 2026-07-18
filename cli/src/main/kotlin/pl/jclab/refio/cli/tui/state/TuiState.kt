@@ -35,6 +35,7 @@ data class TuiState(
     val model: String? = null,
     val executionMode: String = "AUTO", // AUTO or INTERACTIVE
     val thinkingEnabled: Boolean = false,
+    val reasoningEffort: pl.jclab.refio.core.llm.ReasoningEffort = pl.jclab.refio.core.llm.ReasoningEffort.OFF,
     val noEgressEnabled: Boolean = false,
     val inputBuffer: String = "",
     val totalCostUsd: Double = 0.0,
@@ -57,6 +58,7 @@ data class TuiState(
     val contextMaxTokens: Int = 128000,
     val sessionTokensIn: Long = 0,
     val sessionTokensOut: Long = 0,
+    val sessionCachedTokens: Long = 0,
     val ragIndexingProgress: Double = -1.0, // -1 = not indexing, 0..1 = progress
     val ragIndexingStatus: String = "",
     val agentFilter: String? = null, // null = show all, "agent-name" = filter to specific agent

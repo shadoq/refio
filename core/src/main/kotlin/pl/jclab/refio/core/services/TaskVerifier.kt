@@ -10,7 +10,12 @@ import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
 
 interface TaskVerifier {
-    suspend fun verifyCompletion(taskId: String, userRequest: String, response: String): VerificationResult
+    suspend fun verifyCompletion(
+        taskId: String,
+        userRequest: String,
+        response: String,
+        agentInstanceId: String? = null
+    ): VerificationResult
 }
 
 data class VerificationResult(
@@ -20,7 +25,12 @@ data class VerificationResult(
 )
 
 class NoopTaskVerifier : TaskVerifier {
-    override suspend fun verifyCompletion(taskId: String, userRequest: String, response: String): VerificationResult {
+    override suspend fun verifyCompletion(
+        taskId: String,
+        userRequest: String,
+        response: String,
+        agentInstanceId: String?
+    ): VerificationResult {
         return VerificationResult(isComplete = true, reason = "Task verification disabled")
     }
 }
@@ -32,8 +42,13 @@ class LlmTaskVerifier(
 ) : TaskVerifier {
     private val json = Json { ignoreUnknownKeys = true }
 
-    override suspend fun verifyCompletion(taskId: String, userRequest: String, response: String): VerificationResult {
-        val recentEvidence = buildRecentEvidence(taskId)
+    override suspend fun verifyCompletion(
+        taskId: String,
+        userRequest: String,
+        response: String,
+        agentInstanceId: String?
+    ): VerificationResult {
+        val recentEvidence = buildRecentEvidence(taskId, agentInstanceId)
         val (modelId, providerName) = configService.getModel(ModelOperation.WEAK, taskId)
         val llmResponse = llmClient.complete(
             provider = providerName,
@@ -77,8 +92,10 @@ $recentEvidence
         )
     }
 
-    private fun buildRecentEvidence(taskId: String): String {
-        val messages = chatMessageRepository.findByTaskId(taskId)
+    private fun buildRecentEvidence(taskId: String, agentInstanceId: String?): String {
+        // Judge the thread being completed: the parent run (null id) excludes subagent steps, and a
+        // subagent's evidence excludes the parent conversation.
+        val messages = chatMessageRepository.findHistoryForInvocation(taskId, agentInstanceId)
             .takeLast(8)
 
         if (messages.isEmpty()) {

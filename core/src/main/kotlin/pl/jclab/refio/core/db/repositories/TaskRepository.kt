@@ -152,7 +152,8 @@ class TaskRepository {
         id: String,
         tokensIn: Int,
         tokensOut: Int,
-        costUsd: Double
+        costUsd: Double,
+        cachedTokens: Int = 0
     ): Task? {
         return transaction {
             // Atomic in-database increment - avoids the read-modify-write race
@@ -161,6 +162,7 @@ class TaskRepository {
                 with(SqlExpressionBuilder) {
                     it[TasksTable.tokensIn] = TasksTable.tokensIn + tokensIn
                     it[TasksTable.tokensOut] = TasksTable.tokensOut + tokensOut
+                    it[TasksTable.cachedTokens] = TasksTable.cachedTokens + cachedTokens
                     it[TasksTable.costUsd] = TasksTable.costUsd + costUsd
                 }
                 it[updatedAt] = System.currentTimeMillis()
@@ -252,7 +254,7 @@ class TaskRepository {
 
     /**
      * List tasks with aggregated stats (tokens, cost) from chat_messages
-     * US-204: Required for history panel
+     * Required for history panel
      */
     fun listTasksWithStats(limit: Int = 100): List<TaskWithStats> {
         return transaction {
@@ -393,6 +395,7 @@ class TaskRepository {
             rate = row[TasksTable.rate],
             tokensIn = row[TasksTable.tokensIn],
             tokensOut = row[TasksTable.tokensOut],
+            cachedTokens = row[TasksTable.cachedTokens],
             costUsd = row[TasksTable.costUsd],
             sourcePlanId = row[TasksTable.sourcePlanId],
             planVersion = row[TasksTable.planVersion],
@@ -444,7 +447,7 @@ class TaskRepository {
 
 /**
  * Task with aggregated statistics
- * US-204: Used for history panel with token/cost data
+ * Used for history panel with token/cost data
  */
 data class TaskWithStats(
     val task: Task,

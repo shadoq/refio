@@ -75,7 +75,7 @@ object TuiHelpScreen {
 
         // Toggles
         section("Toggles")
-        key("Ctrl+T", "Toggle thinking mode (extended reasoning)")
+        key("Ctrl+T", "Cycle reasoning effort (OFF / LOW / MEDIUM / HIGH)")
         key("Ctrl+E", "Toggle execution mode (AUTO ↔ INTERACTIVE)")
         key("Ctrl+N", "Toggle no-egress mode (local models only)")
         add()

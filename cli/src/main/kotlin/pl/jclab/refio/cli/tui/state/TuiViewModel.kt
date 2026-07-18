@@ -211,8 +211,10 @@ class TuiViewModel(
         session.modelSelectorCandidates.map { Unit },
         session.modelSelectorIndex.map { Unit },
         session.totalCost.map { Unit },
+        session.cachedTokens.map { Unit },
         session.totalTokens.map { Unit },
         session.thinkingEnabled.map { Unit },
+        session.reasoningEffort.map { Unit },
         session.noEgressEnabled.map { Unit },
         // Observability sub-VM flows
         obs._ragIndexingProgress.map { Unit },
@@ -319,7 +321,9 @@ class TuiViewModel(
         modelSelectorIndex = session.modelSelectorIndex.value,
         totalCostUsd = session.totalCost.value,
         totalTokens = session.totalTokens.value,
+        sessionCachedTokens = session.cachedTokens.value,
         thinkingEnabled = session.thinkingEnabled.value,
+        reasoningEffort = session.reasoningEffort.value,
         noEgressEnabled = session.noEgressEnabled.value,
         // Observability sub-VM
         ragIndexingProgress = obs._ragIndexingProgress.value,
@@ -410,9 +414,10 @@ class TuiViewModel(
                     }
                 }
 
-                // Thinking enabled
-                settings["thinking_enabled"]?.toString()?.toBooleanStrictOrNull()?.let {
-                    session.setThinkingEnabled(it)
+                // Reasoning effort (turn reads general.reasoning_effort); restore the level for the
+                // status icon and Ctrl+T cycle.
+                r.configRouter.getConfig("general", "app").settings["reasoning_effort"]?.toString()?.let {
+                    session.applyReasoningEffort(pl.jclab.refio.core.llm.ReasoningEffort.parse(it) ?: pl.jclab.refio.core.llm.ReasoningEffort.OFF)
                 }
 
                 // No-egress enabled
@@ -496,6 +501,7 @@ class TuiViewModel(
         // Chat -> coordinator/session callbacks
         chat.onUpdateTotalTokens = { count -> session.addTokens(count) }
         chat.onUpdateTotalCost = { amount -> session.addCost(amount) }
+        chat.onUpdateCachedTokens = { total -> session.setCachedTokens(total) }
         chat.onUpdateDebugInfo = { messageCount ->
             obs._debugInfo.update { it.copy(messageCount = messageCount) }
         }
@@ -1206,7 +1212,7 @@ class TuiViewModel(
     fun setSubtasks(subtasks: List<pl.jclab.refio.core.api.SubtaskResponse>) = session.setSubtasks(subtasks)
     fun updateSubtaskStatus(subtaskId: String, status: String, error: String? = null) = session.updateSubtaskStatus(subtaskId, status, error)
     fun cycleMode() = session.cycleMode()
-    fun toggleThinking() = session.toggleThinking()
+    fun cycleReasoningEffort() = session.cycleReasoningEffort()
     fun toggleNoEgress() = session.toggleNoEgress()
     fun toggleExecutionMode() = session.toggleExecutionMode()
     fun showModelSelector() = session.showModelSelector()

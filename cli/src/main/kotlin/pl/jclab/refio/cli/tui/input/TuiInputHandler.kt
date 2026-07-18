@@ -643,7 +643,7 @@ class TuiInputHandler(private val terminal: Terminal) {
                 viewModel.deleteAtCursor()
             }
             is TuiAction.CycleMode -> viewModel.cycleMode()
-            is TuiAction.ToggleThinking -> viewModel.toggleThinking()
+            is TuiAction.ToggleThinking -> viewModel.cycleReasoningEffort()
             is TuiAction.ToggleNoEgress -> viewModel.toggleNoEgress()
             is TuiAction.ToggleExecutionMode -> viewModel.toggleExecutionMode()
             is TuiAction.SelectModel -> viewModel.showModelSelector()

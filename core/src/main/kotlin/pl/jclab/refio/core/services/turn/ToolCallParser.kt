@@ -279,7 +279,7 @@ class ToolCallParser(
      * OUTSIDE this parser — e.g. recovered from Hermes / Qwen-Coder XML by
      * [ToolCallExtractor]. Mirrors the filtering already applied inside
      * [extractToolCalls] so every extraction source converges on identical allow/deny
-     * semantics (docs/0056 — one unified Tool-Call layer).
+     * semantics (one unified Tool-Call layer).
      */
     fun applyProfileFilter(
         toolCalls: List<ToolCallData>,

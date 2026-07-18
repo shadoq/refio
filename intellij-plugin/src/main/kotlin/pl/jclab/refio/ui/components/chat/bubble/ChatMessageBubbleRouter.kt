@@ -14,8 +14,9 @@ internal class ChatMessageBubbleRouter(
     private val toolBubbleRenderer: ToolBubbleRenderer,
     private val otherBubbleRenderer: OtherBubbleRenderer
 ) {
-    /** Track current agent group for collapsible sections */
-    private var lastAgentName: String? = null
+    /** Track current agent group for collapsible sections. Keyed per invocation so two runs of the
+     *  same subagent render as separate groups instead of merging under one header. */
+    private var lastAgentGroupKey: String? = null
 
     fun render(message: Message): JPanel {
         val bubble = when (message.role) {
@@ -33,10 +34,14 @@ internal class ChatMessageBubbleRouter(
             val wrapper = JPanel(BorderLayout())
             wrapper.isOpaque = false
 
-            if (agentName != lastAgentName) {
+            // One header per invocation: sibling runs of the same subagent (same name, distinct
+            // instance id) stay visually separate. Legacy rows without an instance id fall back to
+            // the name so they still group.
+            val groupKey = message.agentInstanceId ?: agentName
+            if (groupKey != lastAgentGroupKey) {
                 val header = createAgentHeader(agentName, message.agentDepth ?: 0)
                 wrapper.add(header, BorderLayout.NORTH)
-                lastAgentName = agentName
+                lastAgentGroupKey = groupKey
             }
 
             wrapper.add(bubble, BorderLayout.CENTER)
@@ -44,14 +49,14 @@ internal class ChatMessageBubbleRouter(
         }
 
         // Message outside any subagent group — reset so the next subagent message re-emits the header.
-        lastAgentName = null
+        lastAgentGroupKey = null
 
         return bubble
     }
 
     /** Reset agent group tracking (e.g., on conversation clear) */
     fun resetAgentTracking() {
-        lastAgentName = null
+        lastAgentGroupKey = null
     }
 
     private fun createAgentHeader(agentName: String, depth: Int): JPanel {

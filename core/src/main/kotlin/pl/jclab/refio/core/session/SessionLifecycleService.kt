@@ -18,6 +18,7 @@ import pl.jclab.refio.core.api.UpdateTaskRequest
 import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.llm.ModelWindow
+import pl.jclab.refio.core.llm.ReasoningEffort
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
 import pl.jclab.refio.core.logging.dualLogger
@@ -35,74 +36,28 @@ class SessionLifecycleService(
     private val logger = dualLogger("SessionLifecycleService")
     private var selectedMode: TaskMode = TaskMode.CHAT
 
-    // Tracks the initial last-session-restore coroutine so that user-driven
-    // lifecycle ops (createSession/switchSession/loadSession) can wait for it
-    // to finish before mutating session state. Without this, restore can race
-    // with a fast "New Session" click and overwrite the freshly-created session
-    // (visible right after plugin startup as the old chat reappearing).
+    // Tracks the startup UI-state load so that user-driven lifecycle ops
+    // (createSession/switchSession/loadSession) wait for it before mutating
+    // session state. Without this, a fast "New Session" click can create a
+    // session before the persisted mode/settings are known.
     private var initializeJob: Job? = null
 
-    private suspend fun awaitInitialization() {
+    suspend fun awaitInitialization() {
         initializeJob?.join()
     }
 
     fun getSelectedMode(): TaskMode = selectedMode
 
-    @Suppress("UNUSED_PARAMETER")
-    fun initialize(
-        messageDispatcher: MessageDispatcher,
-        subtaskTracker: SubtaskTracker,
-        _executionMonitor: ExecutionMonitor
-    ) {
+    /**
+     * Startup only restores persisted UI settings (mode, model, toggles) - never a
+     * previous conversation. Each IDE start begins with an empty chat; the session
+     * itself is created on the first prompt. Earlier conversations stay reachable
+     * from the history panel.
+     */
+    fun initialize() {
         initializeJob = scope.launchSafeJob {
             loadUIState()
-
-            try {
-                val taskResponse = projectRouter.taskRouter.getLastSessionForProject(projectId)
-                if (taskResponse != null) {
-                    logger.info { "Found last session for project: ${taskResponse.id}" }
-
-                    val executionModeStr = withContext(Dispatchers.IO) {
-                        transaction {
-                            configService.get(ConfigKeys.GENERAL_EXECUTION_MODE.key)
-                        }
-                    }
-                    val executionMode = try {
-                        ExecutionMode.valueOf(executionModeStr ?: "INTERACTIVE")
-                    } catch (e: Exception) {
-                        ExecutionMode.INTERACTIVE
-                    }
-
-                    val session = Session(
-                        id = taskResponse.id,
-                        name = taskResponse.name,
-                        mode = TaskMode.valueOf(taskResponse.mode),
-                        status = TaskStatus.valueOf(taskResponse.status),
-                        createdAt = taskResponse.createdAt,
-                        updatedAt = taskResponse.updatedAt,
-                        tokensIn = taskResponse.tokensIn,
-                        tokensOut = taskResponse.tokensOut,
-                        costUsd = taskResponse.costUsd,
-                        executionMode = executionMode,
-                        thinkingEnabled = stateManager.getThinkingEnabled(),
-                        noEgressEnabled = stateManager.getNoEgressEnabled()
-                    )
-
-                    stateManager.setActiveSession(session)
-                    selectedMode = TaskMode.valueOf(taskResponse.mode)
-
-                    messageDispatcher.loadMessages()
-                    subtaskTracker.loadSubtasks()
-
-                    logger.info { "Restored last session: ${taskResponse.id}" }
-                } else {
-                    logger.info { "No previous session for project, will create new session on first prompt" }
-                }
-            } catch (e: Exception) {
-                logger.warn(e) { "Failed to load last session, will create new session on first prompt" }
-            }
-
-            refreshSelectedModelFromDB()
+            logger.info { "Startup UI state loaded, starting with a clean session (mode=$selectedMode)" }
         }
     }
 
@@ -163,6 +118,7 @@ class SessionLifecycleService(
             updatedAt = taskResponse.updatedAt,
             tokensIn = taskResponse.tokensIn,
             tokensOut = taskResponse.tokensOut,
+            cachedTokens = taskResponse.cachedTokens,
             costUsd = taskResponse.costUsd,
             executionMode = effectiveExecutionMode,
             thinkingEnabled = inheritedSettings.thinkingEnabled,
@@ -216,6 +172,7 @@ class SessionLifecycleService(
                 noEgressEnabled = noEgressEnabled,
                 tokensIn = taskResponse.tokensIn,
                 tokensOut = taskResponse.tokensOut,
+                cachedTokens = taskResponse.cachedTokens,
                 costUsd = taskResponse.costUsd,
                 pinned = taskResponse.pinned,
                 rate = taskResponse.rate
@@ -274,6 +231,7 @@ class SessionLifecycleService(
                 noEgressEnabled = noEgressEnabled,
                 tokensIn = taskResponse.tokensIn,
                 tokensOut = taskResponse.tokensOut,
+                cachedTokens = taskResponse.cachedTokens,
                 costUsd = taskResponse.costUsd,
                 pinned = taskResponse.pinned,
                 rate = taskResponse.rate
@@ -463,9 +421,14 @@ class SessionLifecycleService(
         val activeSession = stateManager.getActiveSession()
         if (activeSession != null) {
             stateManager.setActiveSession(activeSession.copy(thinkingEnabled = enabled))
-        } else {
-            setUiSettingDefaults(ConfigKeys.GENERAL_THINKING_ENABLED.key, enabled.toString())
         }
+        // This coarse on/off toggle maps to MEDIUM/OFF. The fine-grained level (LOW/HIGH)
+        // is chosen in Settings and owned by GENERAL_REASONING_EFFORT; session autosave does
+        // not write it back (see persist paths) so it can't downgrade a HIGH selection.
+        setUiSettingDefaults(
+            ConfigKeys.GENERAL_REASONING_EFFORT.key,
+            if (enabled) ReasoningEffort.MEDIUM.name else ReasoningEffort.OFF.name,
+        )
         saveCurrentSessionState()
     }
 
@@ -481,8 +444,14 @@ class SessionLifecycleService(
         saveCurrentSessionState()
     }
 
-    suspend fun getAvailableModels(): List<String> {
-        val models = projectRouter.configRouter.getModelsWithVisibility()
+    /**
+     * @param fetchIfMissing false = answer from the model cache only, never call providers.
+     *        Callers that just redraw the dropdown (e.g. after closing Settings) pass false:
+     *        a provider fetch can block for seconds behind a running turn, and the settings
+     *        screens already refresh the provider they touched.
+     */
+    suspend fun getAvailableModels(fetchIfMissing: Boolean = true): List<String> {
+        val models = projectRouter.configRouter.getModelsWithVisibility(fetchIfMissing = fetchIfMissing)
         val visibleModels = models.filter { it.showInDropdown }
         val modelsForDropdown = if (visibleModels.isNotEmpty() || models.isEmpty()) {
             visibleModels
@@ -577,7 +546,8 @@ class SessionLifecycleService(
             logger.debug { "Persisting session settings: taskId=$taskId" }
             // Caller already dispatches on Dispatchers.IO via scope.launch.
             setUiSettingDefaults(ConfigKeys.UI_SELECTED_MODEL.key, settings.selectedModel ?: "auto")
-            setUiSettingDefaults(ConfigKeys.GENERAL_THINKING_ENABLED.key, settings.thinkingEnabled.toString())
+            // Reasoning effort is owned by GENERAL_REASONING_EFFORT (Settings / coarse toggle),
+            // not autosaved here, so a HIGH selection is never downgraded to the mirror boolean.
             setUiSettingDefaults(ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key, settings.noEgressEnabled.toString())
             setUiSettingDefaults(ConfigKeys.GENERAL_EXECUTION_MODE.key, settings.executionMode.name)
             configService.set(ConfigKeys.UI_SELECTED_MODE.key, selectedMode.name, ConfigScope.APP)
@@ -654,11 +624,11 @@ class SessionLifecycleService(
         )?.also { hasAny = true }
 
         val thinkingEnabled = configService.get(
-            ConfigKeys.GENERAL_THINKING_ENABLED.key,
+            ConfigKeys.GENERAL_REASONING_EFFORT.key,
             scope,
             taskId = taskId,
             projectId = projectId
-        )?.also { hasAny = true }?.toBoolean()
+        )?.also { hasAny = true }?.let { ReasoningEffort.parse(it)?.isOn ?: false }
 
         val noEgressEnabled = configService.get(
             ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key,
@@ -720,10 +690,8 @@ class SessionLifecycleService(
                     ConfigKeys.UI_SELECTED_MODEL.key,
                     settings.selectedModel ?: "auto",
                 )
-                setUiSettingDefaults(
-                    ConfigKeys.GENERAL_THINKING_ENABLED.key,
-                    settings.thinkingEnabled.toString(),
-                )
+                // Reasoning effort is owned by GENERAL_REASONING_EFFORT (Settings / coarse
+                // toggle), not autosaved here, so a HIGH selection is never downgraded.
                 setUiSettingDefaults(
                     ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key,
                     settings.noEgressEnabled.toString(),

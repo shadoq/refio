@@ -66,14 +66,17 @@ class TurnLLMCaller(
 
         val nativeToolsActive = !nativeToolSchemas.isNullOrEmpty()
         val responseFormat = if (nativeToolsActive) null else resolveResponseFormat(mode, providerName)
-        val thinkingRequested = configService.getTyped<Boolean>(ConfigKeys.GENERAL_THINKING_ENABLED, taskId)
-        val thinkingEnabled = resolveThinkingEnabled(providerName, modelId, thinkingRequested)
+        val configuredEffort = configService.getTyped(ConfigKeys.GENERAL_REASONING_EFFORT, taskId)
+        val thinkingEnabled = resolveThinkingEnabled(providerName, modelId, configuredEffort.isOn)
         val noEgressEnabled = configService.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, taskId)
         val decisionTemperature = configService.getTyped<Double>(ConfigKeys.AGENT_DECISION_TEMPERATURE, taskId)
+        // Subagent override (if any) wins over the global level; otherwise the global effort
+        // string flows only when thinking survived the capability gate.
         val reasoningEffortOverride = profileOverrides?.reasoningEffort
-        if (reasoningEffortOverride != null) {
+            ?: configuredEffort.toEffortString()?.takeIf { thinkingEnabled }
+        if (profileOverrides?.reasoningEffort != null) {
             logger.info {
-                "[CALL_LLM] Subagent reasoning_effort override: $reasoningEffortOverride " +
+                "[CALL_LLM] Subagent reasoning_effort override: ${profileOverrides.reasoningEffort} " +
                     "(subagent=${profileOverrides.subagentName ?: "?"})"
             }
         }

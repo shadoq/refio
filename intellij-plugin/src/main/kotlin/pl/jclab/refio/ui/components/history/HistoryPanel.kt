@@ -26,7 +26,7 @@ import javax.swing.event.DocumentListener
 /**
  * History Panel - Slide-in overlay for browsing session history
  *
- * Features (US-101):
+ * Features:
  * - Search by session name
  * - Filter by mode (Chat/Plan/Agent)
  * - Session cards with metadata
@@ -301,7 +301,7 @@ class HistoryPanel(
 
     /**
      * Apply search and filter to session list
-     * US-204: Sort by pinned first, then by recency
+     * Sort by pinned first, then by recency
      */
     private fun applyFilters() {
         val query = searchField.text.lowercase()
@@ -356,7 +356,7 @@ class HistoryPanel(
 
     /**
      * Refresh session list UI
-     * US-204: Group by pinned/recent with section headers
+     * Group by pinned/recent with section headers
      */
     private fun refreshSessionList() {
         logger.debug { "refreshSessionList: rendering ${filteredSessions.size} sessions" }

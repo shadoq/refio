@@ -14,11 +14,13 @@ private val logger = dualLogger("MigrationRunner")
  */
 object MigrationRunner {
     private val migrations: List<Migration> = listOf(
-        // SeedTestDataMigration removed from production runtime (Phase 7 refactor).
+        // SeedTestDataMigration removed from production runtime.
         // Seed data was for UI development only. Existing databases retain v1 data.
         V2DropAgentEventsSessionFk(),
         V3RenameSlashCommandToSlashPrompt(),
         V4SnapshotGroups(),
+        V5RenameThinkingEnabledToReasoningEffort(),
+        V6AddCachedTokensToTasks(),
     )
 
     fun run(database: Database) {

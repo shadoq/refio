@@ -53,7 +53,13 @@ data class LLMMessage(
 data class LLMUsage(
     val inputTokens: Int,
     val outputTokens: Int,
-    val totalTokens: Int
+    val totalTokens: Int,
+    // Prompt-cache subsets of inputTokens (default 0 = no caching, priced as plain input).
+    // cachedInputTokens: input tokens served from cache, billed at the cache-read rate.
+    // cacheWriteInputTokens: input tokens written into the cache, billed at the cache-write rate
+    // (Anthropic-only; other providers leave it 0). Both are subsets of inputTokens, not additions.
+    val cachedInputTokens: Int = 0,
+    val cacheWriteInputTokens: Int = 0
 )
 
 /**
@@ -84,7 +90,7 @@ data class NativeToolCallDelta(
 )
 
 /**
- * Single chunk from streaming LLM response (US-027)
+ * Single chunk from streaming LLM response
  */
 data class StreamChunk(
     val delta: String,                    // Incremental content

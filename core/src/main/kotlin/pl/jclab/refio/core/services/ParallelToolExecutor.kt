@@ -22,8 +22,6 @@ private val logger = dualLogger("ParallelToolExecutor")
  *
  * WRITE tools are always executed sequentially to maintain atomicity.
  * READ_ONLY tools are executed in parallel for better performance.
- *
- * Reference: ADR-0028 - Parallel Tool Execution
  */
 class ParallelToolExecutor(
     private val toolExecutor: ToolExecutor,

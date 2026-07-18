@@ -33,7 +33,7 @@ private val logger = dualLogger("StandaloneCoreBootstrap")
 class StandaloneCoreBootstrap(
     private val projectPath: Path,
     /**
-     * Run-scope config overrides (docs/0063) from `--config` / `--config-file`. Threaded into the
+     * Run-scope config overrides from `--config` / `--config-file`. Threaded into the
      * app router and forwarded to the project router. Highest priority, read-only, never persisted.
      */
     private val runConfigOverrides: Map<String, String> = emptyMap()

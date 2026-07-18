@@ -158,7 +158,7 @@ class GrepSearchTool(
                 logger.warn { "Grep search hit limit: ${results.size} >= $maxResults" }
             }
 
-            // Rank declaration hits above plain usages (docs/0060 Faza 2). Stable sort, so within
+            // Rank declaration hits above plain usages. Stable sort, so within
             // a tier the original file-walk order is preserved. Only collected results are ranked —
             // a maxResults truncation during the walk can still drop a later declaration.
             val ranked = if (results.size > 1) {
@@ -321,7 +321,7 @@ class GrepSearchTool(
     companion object {
         // A line looks like a *declaration* (a type/function being defined) rather than a usage.
         // Such lines rank above plain usages so an agent grepping for a symbol sees its definition
-        // first (docs/0060 Faza 2). `val`/`var` are deliberately EXCLUDED: they overwhelmingly mark
+        // first. `val`/`var` are deliberately EXCLUDED: they overwhelmingly mark
         // local variable declarations — i.e. *usages* of the searched type (`val x = Foo()`) — and
         // would pollute the ranking. Spans Kotlin/Java, Python (`def`), Go/Rust (`func`/`fn`), TS.
         private val DECLARATION_REGEX =

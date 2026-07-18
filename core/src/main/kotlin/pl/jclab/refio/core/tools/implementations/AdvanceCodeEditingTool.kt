@@ -46,8 +46,6 @@ private val logger = dualLogger("AdvanceCodeEditingTool")
  * - Snapshot created before modification
  * - Unified diff generation for review
  * - File size limits enforced
- *
- * Based on: docs/0017-advance-code.md (ADR 0017)
  */
 class AdvanceCodeEditingTool(
     sandbox: PathSandbox,
@@ -88,7 +86,7 @@ class AdvanceCodeEditingTool(
     }
 
     /**
-     * Execute with optional streaming support (RFC 0032).
+     * Execute with optional streaming support.
      *
      * @param params Tool parameters
      * @param stream If true, onChunk callback will be called with progress
@@ -177,7 +175,7 @@ class AdvanceCodeEditingTool(
 
     /**
      * LLM-assisted edit: Intent → Full file regeneration → Diff → Snapshot → Write
-     * (RFC 0032: unified streaming support)
+     * (unified streaming support)
      */
     private suspend fun executeLLMAssistedEdit(
         pathStr: String,
@@ -280,7 +278,7 @@ class AdvanceCodeEditingTool(
             )
             logger.info { "Using coding model for edit (${originalContent.lines().size} lines): $model ($provider), stream=$stream, hasOnChunk=${onChunk != null}" }
 
-            // RFC 0032: Use unified complete() with stream flag
+            // Use unified complete() with stream flag
             var didStream = false
             val streamingCallback: StreamCallback? = if (stream && onChunk != null) { chunk ->
                 didStream = true
@@ -289,7 +287,7 @@ class AdvanceCodeEditingTool(
                 null
             }
 
-            // Extraction-repair loop (docs/0059, Faza 2): a weak editor model sometimes replies
+            // Extraction-repair loop: a weak editor model sometimes replies
             // with prose or an unterminated/unfenced block, so extractCodeBlock yields null. Rather
             // than fail the whole turn on the first such miss, re-prompt the editor with a corrective
             // hint and retry, bounded to MAX_EXTRACTION_ATTEMPTS, then fail loud (Rule 12). There is
@@ -494,7 +492,7 @@ class AdvanceCodeEditingTool(
     }
 
     /**
-     * Corrective re-prompt for the extraction-repair loop (docs/0059, Faza 2): tells a model that
+     * Corrective re-prompt for the extraction-repair loop: tells a model that
      * replied without a clean fenced code block to re-emit the whole file inside a single fence and
      * nothing else. Terse and verbatim — the model still has the file and edit description in context.
      */
@@ -590,7 +588,7 @@ class AdvanceCodeEditingTool(
 
     companion object {
         /**
-         * Bound on the extraction-repair loop (docs/0059, Faza 2): the initial editor call plus
+         * Bound on the extraction-repair loop: the initial editor call plus
          * one corrective re-prompt. A weak model that still cannot emit a clean code block after a
          * reminder will not recover with more — fail loud instead of looping and burning tokens.
          */

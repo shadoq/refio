@@ -42,7 +42,7 @@ object ToolResultCompression {
     }
 
     /**
-     * docs/0063 Faza 2 — when the emitted [body] shows the agent LESS than the full [raw] tool
+     * When the emitted [body] shows the agent LESS than the full [raw] tool
      * output, append a one-line pointer to the full content so the model knows the result was
      * shortened and can pull it back via `memory(get_subtask_output)` instead of hallucinating on a
      * truncated view (the long-turn failure mode). No-ops when nothing was cut, when there is no

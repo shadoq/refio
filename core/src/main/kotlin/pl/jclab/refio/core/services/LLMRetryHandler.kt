@@ -26,8 +26,6 @@ private val logger = dualLogger("LLMRetryHandler")
  * - CancellationException (user cancelled)
  * - Authentication errors
  * - Invalid requests
- *
- * Reference: ADR-0028 - Retry Logic
  */
 class LLMRetryHandler(
     private val llmClient: LLMClient

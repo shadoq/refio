@@ -1,7 +1,7 @@
 package pl.jclab.refio.core.config
 
 /**
- * Parses CLI run-scope config overrides (docs/0063): `--config key=value` pairs plus optional
+ * Parses CLI run-scope config overrides: `--config key=value` pairs plus optional
  * `--config-file` content, into a validated map applied as the highest-priority, read-only config
  * layer (see `ConfigResolver.runOverrides`).
  *

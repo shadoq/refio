@@ -34,7 +34,10 @@ class NextSpeakerJudgeGuardianTest {
         toolsUsedSizeAtPriorReentry: Int = 0,
         completionCondition: String? = null,
         runProfile: TurnRunProfile = TurnRunProfile.DEFAULT,
-        writeToolsExecutedInTurn: Int = 0
+        writeToolsExecutedInTurn: Int = 0,
+        // The tests' writes are code_editing (real file edits), so the strict file-write count
+        // mirrors the loose one unless a test overrides it to model a run_terminal_command-only turn.
+        fileWriteToolsExecutedInTurn: Int = writeToolsExecutedInTurn,
     ) = GuardianContext(
         taskId = "task-1",
         mode = mode,
@@ -45,6 +48,7 @@ class NextSpeakerJudgeGuardianTest {
         finalResponse = response,
         toolsUsed = toolsUsed,
         writeToolsExecutedInTurn = writeToolsExecutedInTurn,
+        fileWriteToolsExecutedInTurn = fileWriteToolsExecutedInTurn,
         verificationToolsExecutedAfterWrite = 0,
         priorReentries = priorReentries,
         toolsUsedSizeAtPriorReentry = toolsUsedSizeAtPriorReentry,
@@ -285,6 +289,26 @@ class NextSpeakerJudgeGuardianTest {
     }
 
     @Test
+    fun `no-progress fallback does NOT finalize SUCCESS when only a mkdir ran and no file landed`() = runBlocking {
+        // e2e regression (build-cli-todo-app, qwen3.5:122b): the turn ran ONLY `mkdir -p tests` (a
+        // run_terminal_command, mode=WRITE but produces no file) then stalled. The loose write count
+        // is 1, but the strict file-write count is 0, so no real deliverable landed - the guardian
+        // must NOT accept the turn as delivered on a mkdir alone.
+        stubJudgeEnabled()
+        val decision = guardian().check(
+            ctx(
+                response = "I've set up the project structure. The implementation is done.",
+                priorReentries = 1,
+                toolsUsed = listOf("run_terminal_command"),
+                toolsUsedSizeAtPriorReentry = 1,
+                writeToolsExecutedInTurn = 1,
+                fileWriteToolsExecutedInTurn = 0
+            )
+        )
+        assertTrue(decision != GuardianDecision.Pass, "a mkdir-only turn must not short-circuit to SUCCESS: $decision")
+    }
+
+    @Test
     fun `no-progress fallback finalizes SUCCESS in PLAN when a substantial plan was produced`() = runBlocking {
         // e2e regression (qwen3.5:4b/9b, plan-validation): in PLAN mode the model produced a FULL
         // step-by-step plan (~2000 chars, the deliverable) but opened with "Let me analyze… and
@@ -307,6 +331,38 @@ class NextSpeakerJudgeGuardianTest {
                 priorReentries = 1,
                 toolsUsed = listOf("read_file"),
                 toolsUsedSizeAtPriorReentry = 1
+            )
+        )
+        assertEquals(GuardianDecision.Pass, decision)
+        coVerify(exactly = 0) {
+            llmClient.complete(provider = any(), model = any(), messages = any())
+        }
+    }
+
+    @Test
+    fun `no-progress fallback finalizes SUCCESS when a read-only subagent delivered a prose review`() = runBlocking {
+        // e2e regression (subagent-locate-and-fix, qwen3.5:35b): a read-only code-reviewer subagent
+        // was handed the files via context and delivered its whole finding AS prose (0 write tools,
+        // 0 new tool calls on re-entry). Marking that INCOMPLETE makes invoke_subagent report failure
+        // even though the review was produced. A substantial subagent reply is the deliverable.
+        stubJudgeEnabled()
+        val review = buildString {
+            append("I reviewed every file under src/. The summation bug is in src/total.py: ")
+            append("compute_total iterates range(len(prices) - 1), so the loop stops one index early ")
+            append("and drops the last price, returning a total that is short by the final element. ")
+            append("tax.py computes tax correctly and format.py only formats the number for display, ")
+            append("so both are unrelated to the missing amount and should stay untouched. ")
+            append("Fix: sum every element, for example replace the manual loop with return sum(prices).")
+        }
+        check(review.length >= TurnDeliverable.PLAN_DELIVERABLE_MIN_CHARS)
+        val decision = guardian().check(
+            ctx(
+                response = review,
+                priorReentries = 1,
+                toolsUsed = listOf("read_file"),
+                toolsUsedSizeAtPriorReentry = 1,
+                runProfile = TurnRunProfile.SUBAGENT,
+                writeToolsExecutedInTurn = 0
             )
         )
         assertEquals(GuardianDecision.Pass, decision)

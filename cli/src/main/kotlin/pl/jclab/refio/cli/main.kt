@@ -23,7 +23,6 @@ import pl.jclab.refio.core.config.ConfigPrintView
 import pl.jclab.refio.core.config.RunConfigOverrides
 import pl.jclab.refio.core.debug.SESSION_DEBUG_SCHEMA_VERSION
 import pl.jclab.refio.core.debug.SessionDebugOptions
-import pl.jclab.refio.core.debug.SessionDebugSnapshot
 import pl.jclab.refio.core.debug.StabilizationGate
 import pl.jclab.refio.core.models.api.ChatRequest
 import pl.jclab.refio.core.models.api.LLMParams
@@ -132,7 +131,7 @@ class RefioCommand : CliktCommand(name = "refio") {
 
     override fun run() {
         // Parse run-scope config overrides up front so a bad key/value fails loud (non-zero exit)
-        // before any heavy initialization. docs/0063.
+        // before any heavy initialization.
         val overrides = try {
             if (config.isEmpty() && configFile == null) emptyMap()
             else RunConfigOverrides.parse(config, configFile?.readText())
@@ -140,7 +139,7 @@ class RefioCommand : CliktCommand(name = "refio") {
             throw UsageError(e.message ?: "Invalid config override")
         }
 
-        // --max-cost is sugar over a run-scope override of agent.max_cost_usd (docs/0063 §6.1).
+        // --max-cost is sugar over a run-scope override of agent.max_cost_usd.
         maxCost?.let { if (it < 0) throw UsageError("--max-cost must be >= 0") }
         val effectiveOverrides = maxCost
             ?.let { overrides + (ConfigKeys.AGENT_MAX_COST_USD.key to it.toString()) }
@@ -232,43 +231,9 @@ class RefioCommand : CliktCommand(name = "refio") {
                 // Unlike runHeadless there is no single task to export; the snapshot is synthesized
                 // from the per-agent session result, with agents sorted into real execution order.
                 if (outputFormat == "json") {
-                    val orderedAgents = result.agents.sortedBy { it.startedAt ?: Long.MAX_VALUE }
-                    val allOk = result.agents.all { it.success == true }
-                    val snapshot = SessionDebugSnapshot(
-                        schemaVersion = SESSION_DEBUG_SCHEMA_VERSION,
-                        run = SessionDebugSnapshot.RunInfo(
-                            debugLevel = debugLevel.uppercase(),
-                            durationMs = result.durationMs,
-                            startedAt = result.createdAt,
-                            endedAt = result.completedAt,
-                        ),
-                        session = SessionDebugSnapshot.SessionInfo(
-                            id = result.sessionId, name = result.name,
-                            mode = "MULTI_AGENT", executionMode = "AUTO",
-                            model = model, provider = null,
-                            status = if (allOk) "SUCCESS" else "FAILED",
-                            tokensIn = 0, tokensOut = 0, costUsd = result.totalCostUsd,
-                        ),
-                        metrics = SessionDebugSnapshot.Metrics(
-                            durationMs = result.durationMs, tokensIn = 0, tokensOut = 0,
-                            costUsd = result.totalCostUsd, apiCallCount = 0, toolCallCount = 0,
-                            contextOverflow = false,
-                        ),
-                        finalOutput = orderedAgents.joinToString("\n\n") {
-                            "--- ${it.agentName} ---\n${it.response ?: ""}"
-                        }.take(8000),
-                        subtasks = emptyList(), conversation = emptyList(), apiLogs = emptyList(),
-                        errors = orderedAgents.mapNotNull { a -> a.error?.let { "agent ${a.agentName}: $it" } },
-                        warnings = emptyList(),
-                        multiAgent = SessionDebugSnapshot.MultiAgentInfo(
-                            agents = orderedAgents.map {
-                                SessionDebugSnapshot.AgentRunInfo(
-                                    agentName = it.agentName, status = it.status,
-                                    success = it.success == true,
-                                    startedAt = it.startedAt, completedAt = it.completedAt,
-                                )
-                            }
-                        ),
+                    val level = SessionDebugOptions.levelFromString(debugLevel)
+                    val snapshot = router.sessionDebugExporter.exportMultiAgent(
+                        result, model, SessionDebugOptions.forLevel(level)
                     )
                     val json = router.sessionDebugExporter.toJson(snapshot)
                     val target = outputFile
@@ -461,7 +426,7 @@ class RefioCommand : CliktCommand(name = "refio") {
                 val router = bootstrap.initialize()
                 routerRef = router
                 if (autoApproveRegex != null) {
-                    // Headless auto-approval so terminal-ASK tools don't hang on the timeout (docs/0063 §6.2).
+                    // Headless auto-approval so terminal-ASK tools don't hang on the timeout.
                     autoApproveListener = AutoApproveListener(router.toolApprovalService, autoApproveRegex, cliScope)
                 }
                 val headlessMode = mode ?: TaskMode.AGENT
