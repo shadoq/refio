@@ -1,7 +1,11 @@
 package pl.jclab.refio.core.llm.adapters
 
+import com.google.gson.JsonParser
 import org.junit.jupiter.api.Test
+import pl.jclab.refio.core.errors.RefioError
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertIsNot
 import kotlin.test.assertTrue
 
 /**
@@ -25,6 +29,10 @@ class OpenRouterAdapterTest {
             kwargs = kwargs,
             requestId = "req-1",
         )
+
+        /** Exposes the protected mid-stream error handler to the test. */
+        fun streamError(json: String) =
+            onStreamRawChunk(JsonParser.parseString(json).asJsonObject)
     }
 
     @Test
@@ -85,5 +93,32 @@ class OpenRouterAdapterTest {
                 "mandatory-reasoning model $model must not receive reasoning.enabled=false"
             )
         }
+    }
+
+    @Test
+    fun `a mid-stream 429 error envelope surfaces as a retryable rate limit`() {
+        // OpenRouter delivers upstream provider errors inside the SSE body (HTTP 200 outer,
+        // {"error":{...}} chunk inner). A 429 there must keep its rate-limit classification so
+        // the retry handler backs off and retries instead of failing the whole turn - the streaming
+        // path previously threw a bare exception, which the classifier treated as non-retryable.
+        val error = assertFailsWith<RefioError.LLMRateLimit> {
+            Testable("tencent/hy3").streamError(
+                """{"error":{"message":"Provider returned error","code":429,"metadata":{"provider_name":"GMICloud"}}}"""
+            )
+        }
+        val detail = error.message.orEmpty() + (error.cause?.message.orEmpty())
+        assertTrue(detail.contains("429"), "429 context must be preserved: $detail")
+    }
+
+    @Test
+    fun `a mid-stream 500 error envelope is not misclassified as a rate limit`() {
+        // Guard the other direction: routing through mapHttpError must not turn every upstream
+        // failure into a rate limit - only 429 is retryable-as-rate-limit.
+        val error = assertFailsWith<RefioError> {
+            Testable("tencent/hy3").streamError(
+                """{"error":{"message":"Provider returned error","code":500,"metadata":{"provider_name":"GMICloud"}}}"""
+            )
+        }
+        assertIsNot<RefioError.LLMRateLimit>(error, "a 500 is not a rate limit")
     }
 }

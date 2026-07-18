@@ -141,6 +141,12 @@ open class OpenRouterAdapter(
     /**
      * Detect OpenRouter's mid-stream `{"error":{...}}` envelope — throwing from here
      * aborts the SSE loop (see `consumeChatCompletionsSSE`).
+     *
+     * Route through `mapHttpError` so the upstream status keeps its retry semantics:
+     * a mid-stream 429 becomes `LLMRateLimit` (retryable with backoff) just like the
+     * non-streaming path in `ensureSuccess`. Throwing a bare exception here previously
+     * stripped that classification, so a provider rate limit failed the whole turn
+     * instead of being retried.
      */
     override fun onStreamRawChunk(chunk: com.google.gson.JsonObject) {
         val error = chunk.get("error") as? com.google.gson.JsonObject ?: return
@@ -148,7 +154,7 @@ open class OpenRouterAdapter(
         val code = error.intField("code") ?: 500
         val metadata = error.get("metadata") as? com.google.gson.JsonObject
         val providerFromMeta = metadata.stringField("provider_name") ?: "OpenRouter"
-        throw IllegalStateException("$providerFromMeta error (HTTP $code): $message")
+        throw mapHttpError(code, "$providerFromMeta error (HTTP $code): $message")
     }
 
     /**
