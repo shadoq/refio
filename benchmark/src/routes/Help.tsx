@@ -10,6 +10,12 @@ const leaderboardMetrics = [
       "Overall quality score for a result group. Each criterion value is normalized by its maximum scale value, then averaged across criteria and attempts.",
   },
   {
+    name: "Judge Score",
+    formula: "average(weighted-normalized judge aggregate per result)",
+    description:
+      "Overall quality as scored by strong-judge agents (Claude Code, Codex), independent of the human Avg Score. Per result the judges' median value per criterion is weighted-normalized like the human score, then averaged over judged attempts. The count shows judged / all attempts.",
+  },
+  {
     name: "Pass Rate",
     formula: "passing attempts / all attempts",
     description:
@@ -146,6 +152,57 @@ export default function Help() {
                     <Text>{field.description}</Text>
                   </div>
                 ))}
+              </Space>
+            ),
+          },
+          {
+            key: "strong-judge",
+            label: "Strong-judge scoring",
+            children: (
+              <Space direction="vertical">
+                <Paragraph>
+                  On top of the manual scores, artifacts can be scored by{" "}
+                  <Text strong>strong-judge agents</Text> - external CLI agents
+                  (Claude Code and Codex) run headless and read-only via{" "}
+                  <Text code>npm run judge</Text>. Each artifact is rendered with
+                  Playwright (two screenshots plus captured console errors), and every
+                  judge scores it blind: it never sees the human scores or the other
+                  judge's scores.
+                </Paragraph>
+                <Paragraph>
+                  <Text strong>Criteria.</Text> Judges score the same criteria as the
+                  human (Compliance, Works out of the box, Look, Code quality) plus two
+                  judge-only criteria: <Text code>code_structure</Text> (structure,
+                  naming, duplication, dead code) and <Text code>logic_correctness</Text>{" "}
+                  (correctness read from the code, not only the screen). The human{" "}
+                  <Text code>agent_logic</Text> criterion is <Text strong>not</Text>{" "}
+                  judged - it rates the coding agent's workflow (check files, edit,
+                  verify, summarize), which cannot be seen in a static artifact.
+                </Paragraph>
+                <Paragraph>
+                  <Text strong>Aggregate and divergence.</Text> Per criterion the
+                  aggregate is the median across judges, computed in the viewer and
+                  never stored. The Results page shows an aggregate{" "}
+                  <Text strong>Auto (judges)</Text> column with a{" "}
+                  <Text strong>divergence badge</Text> when the human and the judge
+                  aggregate differ by at least 0.5 on a shared criterion. The
+                  Leaderboard, Compare and Pareto pages expose the per-model{" "}
+                  <Text strong>Judge Score</Text> summary, and Compare adds a dedicated
+                  judge radar.
+                </Paragraph>
+                <Paragraph>
+                  <Text strong>Stability.</Text> Across repeated attempts of one model
+                  on a task, stability records deterministic metrics -{" "}
+                  <Text code>scoreVariance</Text> (mean absolute deviation of the judge
+                  aggregate between attempts, lower is more stable) and{" "}
+                  <Text code>codeSimilarity</Text> (token-Jaccard over the artifacts) -
+                  plus a judge verdict over all attempts. It shows on the task page.
+                </Paragraph>
+                <Paragraph>
+                  <Text strong>Review.</Text> Judge scores are advisory: they never
+                  overwrite the manual scores, and a human reads them in the result
+                  detail alongside the human ones.
+                </Paragraph>
               </Space>
             ),
           },

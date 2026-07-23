@@ -62,6 +62,9 @@ export default function Landing() {
     rows
       .filter((r) => r.localViabilityScore != null)
       .sort((a, b) => b.localViabilityScore! - a.localViabilityScore!)[0] ?? null;
+  const judgeRows = rows.filter((r) => r.judgeAvgScore != null);
+  const bestJudge =
+    judgeRows.slice().sort((a, b) => b.judgeAvgScore! - a.judgeAvgScore!)[0] ?? null;
 
   if (tasksLoading || resultsLoading) {
     return (
@@ -176,7 +179,20 @@ export default function Landing() {
           />
           <p>How often attempt #1 is already usable.</p>
         </Card>
-        <Card className="metric-card insight-card metric-card-wide">
+        <Card className="metric-card insight-card">
+          <Statistic
+            title="Best judge score"
+            value={bestJudge?.judgeAvgScore == null ? 0 : bestJudge.judgeAvgScore * 100}
+            precision={1}
+            suffix="%"
+          />
+          <p>
+            {bestJudge
+              ? `${bestJudge.model.name}, scored by strong-judge agents.`
+              : "Run npm run judge to add strong-judge scores."}
+          </p>
+        </Card>
+        <Card className="metric-card insight-card">
           <Statistic
             title="Best local viability"
             value={bestLocalViability?.localViabilityScore == null ? 0 : bestLocalViability.localViabilityScore * 100}

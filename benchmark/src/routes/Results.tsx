@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Button,
@@ -12,6 +12,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
 import { ClearOutlined, EyeOutlined } from "@ant-design/icons";
@@ -27,9 +28,21 @@ import {
   formatTokensPerSecond,
 } from "@/lib/format";
 import { getResultCriterionScore, normalizeResult } from "@/lib/stats";
+import {
+  aggregateJudgeScores,
+  maxSharedDivergence,
+  weightedNormalized,
+} from "@/lib/judge/scoring";
 import { estimateResultTokenProcessing } from "@/lib/tokenSpeed";
 import type { Environment, Result } from "@/schema/results";
-import type { Task } from "@/schema/tasks";
+import type { Criterion, Task, TasksFile } from "@/schema/tasks";
+
+const DIVERGENCE_THRESHOLD = 0.5;
+
+// Full criteria set a judge scores: human core + task extra + judge-only.
+function judgeCriteriaFor(tasks: TasksFile, task: Task | undefined): Criterion[] {
+  return [...tasks.coreCriteria, ...(task?.extraCriteria ?? []), ...tasks.judgeCriteria];
+}
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -40,6 +53,9 @@ interface ResultRow {
   modelName: string;
   environment: Environment | undefined;
   score: number;
+  judgeScore: number | null;
+  judgeCount: number;
+  judgeDivergence: number;
 }
 
 export default function Results() {
@@ -101,14 +117,25 @@ export default function Results() {
           .filter(Boolean)
           .some((value) => String(value).toLowerCase().includes(query));
       })
-      .map((result) => ({
-        key: result.id,
-        result,
-        task: taskById.get(result.taskId),
-        modelName: modelById.get(result.modelId)?.name ?? result.modelId,
-        environment: environmentById.get(result.environmentId),
-        score: normalizeResult(result, tasksData),
-      }))
+      .map((result) => {
+        const task = taskById.get(result.taskId);
+        const aggregate = aggregateJudgeScores(result.judgeScores ?? []);
+        const judgeCount = (result.judgeScores ?? []).filter((j) => j.error == null).length;
+        return {
+          key: result.id,
+          result,
+          task,
+          modelName: modelById.get(result.modelId)?.name ?? result.modelId,
+          environment: environmentById.get(result.environmentId),
+          score: normalizeResult(result, tasksData),
+          judgeScore:
+            judgeCount > 0
+              ? weightedNormalized(aggregate, judgeCriteriaFor(tasksData, task))
+              : null,
+          judgeCount,
+          judgeDivergence: maxSharedDivergence(result.scores, aggregate),
+        };
+      })
       .sort((a, b) => b.result.runAt.localeCompare(a.result.runAt));
   }, [
     environmentById,
@@ -210,6 +237,32 @@ export default function Results() {
       width: 110,
       sorter: (a, b) => a.score - b.score,
       render: (_, row) => <Text strong>{formatScore(row.score)}</Text>,
+    },
+    {
+      title: "Auto (judges)",
+      key: "judgeScore",
+      width: 150,
+      sorter: (a: ResultRow, b: ResultRow) => (a.judgeScore ?? -1) - (b.judgeScore ?? -1),
+      render: (_: unknown, row: ResultRow) =>
+        row.judgeScore == null ? (
+          <Text type="secondary">-</Text>
+        ) : (
+          <Space size={4}>
+            <Text strong>{formatScore(row.judgeScore)}</Text>
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              ×{row.judgeCount}
+            </Text>
+            {row.judgeDivergence >= DIVERGENCE_THRESHOLD && (
+              <Tooltip
+                title={`Human and judges differ by ${row.judgeDivergence} on a shared criterion`}
+              >
+                <Tag color="orange" style={{ marginInlineEnd: 0 }}>
+                  Δ
+                </Tag>
+              </Tooltip>
+            )}
+          </Space>
+        ),
     },
     {
       title: "Duration",
@@ -392,9 +445,13 @@ export default function Results() {
       </Card>
 
       <ResultDetailModal
+        key={detailResult?.id ?? "none"}
         detailResult={detailResult}
         selectedRow={selectedRow}
         scoreDetails={scoreDetails}
+        criteria={
+          detailResult ? judgeCriteriaFor(tasksData, taskById.get(detailResult.taskId)) : []
+        }
         onClose={() => setDetailResult(null)}
       />
     </div>
@@ -405,6 +462,7 @@ interface ResultDetailModalProps {
   detailResult: Result | null;
   selectedRow: ResultRow | undefined;
   scoreDetails: Array<{ id: string; name: string; raw: number | undefined; normalized: number | null }>;
+  criteria: Criterion[];
   onClose: () => void;
 }
 
@@ -412,13 +470,11 @@ function ResultDetailModal({
   detailResult,
   selectedRow,
   scoreDetails,
+  criteria,
   onClose,
 }: ResultDetailModalProps) {
+  // previewIdx resets automatically: the parent keys this modal by result id.
   const [previewIdx, setPreviewIdx] = useState<number | null>(null);
-
-  useEffect(() => {
-    setPreviewIdx(null);
-  }, [detailResult?.id]);
 
   const htmlAttachments = useMemo(
     () =>
@@ -497,6 +553,8 @@ function ResultDetailModal({
           },
         ]}
       />
+
+      <JudgeBreakdown detailResult={detailResult} criteria={criteria} />
 
       {!hasHtml && otherAttachments.length === 0 && (
         <Empty description="No attachments for this result." />
@@ -613,5 +671,96 @@ function ResultDetailModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+function avgOf(scores: Array<{ value: number }>): string {
+  if (scores.length === 0) return "n/a";
+  return (scores.reduce((sum, s) => sum + s.value, 0) / scores.length).toFixed(2);
+}
+
+interface JudgeBreakdownProps {
+  detailResult: Result;
+  criteria: Criterion[];
+}
+
+function JudgeBreakdown({ detailResult, criteria }: JudgeBreakdownProps) {
+  const nameById = useMemo(
+    () => new Map(criteria.map((c) => [c.id, c.name])),
+    [criteria],
+  );
+
+  const judgeSets = detailResult.judgeScores ?? [];
+  if (judgeSets.length === 0) return null;
+  const aggregate = aggregateJudgeScores(judgeSets);
+
+  return (
+    <Space direction="vertical" style={{ width: "100%" }} size="small">
+      <Text strong>Strong-judge scores</Text>
+      {judgeSets.map((set) => (
+        <Card
+          key={set.judgeId}
+          size="small"
+          title={
+            <Space wrap>
+              <Text strong>{set.judgeId}</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {set.judgeModel}
+              </Text>
+              {set.error ? (
+                <Tag color="red">error</Tag>
+              ) : (
+                <Tag color="blue">avg {avgOf(set.scores)}</Tag>
+              )}
+            </Space>
+          }
+        >
+          {set.error ? (
+            <Text type="danger">{set.error}</Text>
+          ) : (
+            <Table
+              size="small"
+              pagination={false}
+              rowKey="criterionId"
+              dataSource={set.scores}
+              columns={[
+                {
+                  title: "Criterion",
+                  dataIndex: "criterionId",
+                  key: "criterionId",
+                  render: (id: string) => nameById.get(id) ?? id,
+                },
+                { title: "Value", dataIndex: "value", key: "value", width: 70 },
+                {
+                  title: "Rationale",
+                  dataIndex: "rationale",
+                  key: "rationale",
+                  render: (r?: string) => r ?? "-",
+                },
+              ]}
+            />
+          )}
+          {set.screenshots.length > 0 && (
+            <Space wrap style={{ marginTop: 8 }}>
+              {set.screenshots.map((src) => (
+                <a key={src} href={`/data/${src}`} target="_blank" rel="noreferrer">
+                  <img
+                    src={`/data/${src}`}
+                    alt="judge screenshot"
+                    style={{ width: 160, border: "1px solid rgba(0,0,0,0.15)" }}
+                  />
+                </a>
+              ))}
+            </Space>
+          )}
+        </Card>
+      ))}
+      <Text type="secondary" style={{ fontSize: 12 }}>
+        Aggregate (median):{" "}
+        {Object.entries(aggregate)
+          .map(([id, value]) => `${nameById.get(id) ?? id}=${value}`)
+          .join(", ")}
+      </Text>
+    </Space>
   );
 }

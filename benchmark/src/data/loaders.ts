@@ -62,6 +62,51 @@ export function validateReferentialIntegrity(
         );
       }
     }
+
+    // Judge scores may use judgeCriteria in addition to human criteria.
+    const judgeCriteria = new Map<string, Criterion>([
+      ...allCriteria,
+      ...tasks.judgeCriteria.map((c): [string, Criterion] => [c.id, c]),
+    ]);
+    const seenJudgeIds = new Set<string>();
+    for (const set of r.judgeScores) {
+      if (seenJudgeIds.has(set.judgeId)) {
+        errors.push(`result ${r.id}: duplicate judgeId "${set.judgeId}" in judgeScores`);
+      }
+      seenJudgeIds.add(set.judgeId);
+      if (set.error != null && set.scores.length > 0) {
+        errors.push(
+          `result ${r.id}: judge "${set.judgeId}" has both an error and scores`,
+        );
+      }
+      for (const s of set.scores) {
+        const criterion = judgeCriteria.get(s.criterionId);
+        if (!criterion) {
+          errors.push(
+            `result ${r.id}: judge "${set.judgeId}" unknown criterionId "${s.criterionId}"`,
+          );
+        } else if (!criterion.scale.values.includes(s.value)) {
+          errors.push(
+            `result ${r.id}: judge "${set.judgeId}" value ${s.value} for "${s.criterionId}" is not in scale [${criterion.scale.values.join(", ")}]`,
+          );
+        }
+      }
+    }
+  }
+
+  const knownResultIds = new Set(resultIds);
+  const seenStabilityKeys = new Set<string>();
+  for (const s of results.stability) {
+    const key = `${s.taskId}|${s.modelId}|${s.environmentId}`;
+    if (seenStabilityKeys.has(key)) {
+      errors.push(`stability: duplicate entry for (${key})`);
+    }
+    seenStabilityKeys.add(key);
+    for (const rid of s.resultIds) {
+      if (!knownResultIds.has(rid)) {
+        errors.push(`stability (${key}): unknown resultId "${rid}"`);
+      }
+    }
   }
   return errors;
 }

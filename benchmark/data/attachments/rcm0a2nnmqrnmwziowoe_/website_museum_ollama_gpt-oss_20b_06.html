@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ARTIFACT: Museum Night – Premium Cultural Event</title>
+<meta name="description" content="Experience ARTIFACT: Museum Night, a premium museum event with exclusive ticket tiers, curated artists, and a cinematic atmosphere.">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="https://source.unsplash.com/32x32/?museum" type="image/png">
+<style>
+:root{
+  --bg:#070506;
+  --velvet:#1a0710;
+  --burgundy:#3a0f1d;
+  --midnight:#07111f;
+  --gold:#d6ad60;
+  --softgold:#f3d79b;
+  --ivory:#f8efe2;
+  --muted:#b9a999;
+  --panel:rgba(255,244,220,0.06);
+  --border:rgba(214,173,96,0.28);
+}
+body{margin:0;font-family:Inter,system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--ivory);line-height:1.6;}
+a{color:inherit;text-decoration:none;}
+header{position:sticky;top:0;z-index:1000;background:rgba(0,0,0,0.8);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:space-between;padding:0.5rem 1rem;}
+.logo{font-family:Georgia,Times New Roman,serif;font-size:1.5rem;font-weight:bold;color:var(--gold);}
+nav ul{list-style:none;display:flex;gap:1rem;margin:0;padding:0;}
+nav a{color:var(--ivory);font-weight:500;transition:color .3s;}
+nav a.active{color:var(--softgold);}
+.menu-toggle{display:none;cursor:pointer;}
+.cta-btn{background:var(--gold);color:var(--bg);padding:0.5rem 1rem;border-radius:4px;font-weight:bold;transition:background .3s;}
+.cta-btn:hover{background:var(--softgold);}
+@media(max-width:768px){
+  nav ul{display:none;flex-direction:column;background:var(--velvet);position:absolute;top:100%;right:0;width:200px;box-shadow:0 2px 8px rgba(0,0,0,.5);}
+  nav ul.show{display:flex;}
+  nav a{padding:0.75rem 1rem;}
+  .menu-toggle{display:block;color:var(--ivory);font-size:1.5rem;}
+}
+.hero{position:relative;display:flex;align-items:center;justify-content:center;min-height:100vh;background:url('https://source.unsplash.com/1600x900/?museum,night') center/cover no-repeat;overflow:hidden;}
+.hero::before{content:"";position:absolute;top:0;left:0;width:100%;height:100%;background:linear-gradient(180deg,rgba(0,0,0,.7) 0%,rgba(0,0,0,.9) 100%);}
+.hero-content{position:relative;z-index:1;text-align:center;padding:2rem;}
+.hero h1{font-family:Georgia,Times New Roman,serif;font-size:3rem;margin:0 0 1rem;color:var(--softgold);}
+.hero h2{font-size:2rem;margin:0 0 1.5rem;color:var(--gold);}
+.hero p{font-size:1.25rem;margin:0 0 2rem;color:var(--muted);}
+.hero .btn-group{display:flex;gap:1rem;justify-content:center;flex-wrap:wrap;}
+.hero .btn{background:var(--gold);color:var(--bg);padding:0.75rem 1.5rem;border-radius:4px;font-weight:bold;transition:background .3s;}
+.hero .btn:hover{background:var(--softgold);}
+.hero .btn.secondary{background:transparent;border:2px solid var(--gold);color:var(--gold);}
+.hero .btn.secondary:hover{background:var(--gold);color:var(--bg);}
+.section{padding:4rem 1rem;max-width:1200px;margin:auto;}
+.section h2{font-family:Georgia,Times New Roman,serif;font-size:2.5rem;margin-bottom:1rem;color:var(--gold);}
+.section p{max-width:800px;margin:auto;font-size:1.1rem;color:var(--muted);}
+.program{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:2rem;}
+.program-card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:1.5rem;transition:transform .3s,background .3s;}
+.program-card:hover{transform:translateY(-5px);background:rgba(255,244,220,0.08);}
+.program-card h3{font-family:Georgia,Times New Roman,serif;font-size:1.5rem;margin:0 0 .5rem;color:var(--gold);}
+.program-card p{font-size:1rem;color:var(--muted);}
+.artists{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:2rem;}
+.artist-card{background:var(--panel);border:1px solid var(--border);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;}
+.artist-card img{width:100%;height:200px;object-fit:cover;}
+.artist-card .info{padding:1rem;flex:1;}
+.artist-card h3{font-family:Georgia,Times New Roman,serif;font-size:1.4rem;margin:0 0 .5rem;color:var(--gold);}
+.artist-card p{font-size:.95rem;color:var(--muted);}
+.venue{display:flex;flex-direction:column;align-items:center;gap:1rem;}
+.venue img{width:100%;max-width:800px;height:auto;border-radius:8px;}
+.venue h3{font-family:Georgia,Times New Roman,serif;font-size:1.8rem;margin:0;color:var(--gold);}
+.tickets{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:2rem;}
+.ticket-card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:1.5rem;display:flex;flex-direction:column;justify-content:space-between;}
+.ticket-card h3{font-family:Georgia,Times New Roman,serif;font-size:1.5rem;margin:0 0 .5rem;color:var(--gold);}
+.ticket-card p{font-size:1rem;color:var(--muted);}
+.ticket-card .price{font-size:1.5rem;font-weight:bold;margin:1rem 0;color:var(--gold);}
+.ticket-card button{background:var(--gold);color:var(--bg);padding:.5rem 1rem;border-radius:4px;font-weight:bold;transition:background .3s;}
+.ticket-card button:hover{background:var(--softgold);}
+.faq{display:flex;flex-direction:column;gap:1rem;}
+.faq-item{background:var(--panel);border:1px solid var(--border);border-radius:8px;}
+.faq-question{background:transparent;border:none;width:100%;text-align:left;padding:1rem;font-size:1.2rem;color:var(--gold);cursor:pointer;display:flex;justify-content:space-between;align-items:center;}
+.faq-answer{max-height:0;overflow:hidden;transition:max-height .3s ease,opacity .3s ease;padding:0 1rem;color:var(--muted);}
+.faq-answer.open{max-height:200px;opacity:1;padding:1rem;}
+.faq-answer p{margin:0;}
+.faq-question::after{content:"▾";font-size:1rem;transition:transform .3s;}
+.faq-question.open::after{transform:rotate(180deg);}
+.modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);align-items:center;justify-content:center;padding:1rem;}
+.modal-content{background:var(--panel);border:1px solid var(--border);border-radius:8px;max-width:600px;width:100%;padding:1.5rem;position:relative;}
+.modal-close{position:absolute;top:.5rem;right:.5rem;background:transparent;border:none;color:var(--gold);font-size:1.5rem;cursor:pointer;}
+.toast{position:fixed;bottom:1rem;right:1rem;background:var(--gold);color:var(--bg);padding:.75rem 1.25rem;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.3);animation:fadein .5s,fadeout .5s .8s forwards;}
+@keyframes fadein{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
+@keyframes fadeout{from{opacity:1;}to{opacity:0;}}
+.grain{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;background:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" preserveAspectRatio="none"><rect width="100%" height="100%" fill="black"/><g opacity=".05"><rect width="100%" height="100%" fill="white"/><rect width="100%" height="100%" fill="white" transform="translate(50,50)"/><rect width="100%" height="100%" fill="white" transform="translate(100,100)"/></g></svg>') repeat;background-size:200px 200px;}
+</style>
+</head>
+<body>
+<div class="grain"></div>
+<header>
+<div class="logo">ARTIFACT</div>
+<button class="menu-toggle" aria-label="Toggle menu">&#9776;</button>
+<nav>
+<ul>
+<li><a href="#hero" class="nav-link">Home</a></li>
+<li><a href="#program" class="nav-link">Program</a></li>
+<li><a href="#artists" class="nav-link">Artists</a></li>
+<li><a href="#venue" class="nav-link">Venue</a></li>
+<li><a href="#tickets" class="nav-link">Tickets</a></li>
+<li><a href="#faq" class="nav-link">FAQ</a></li>
+<li><a href="#tickets" class="cta-btn">Get Tickets</a></li>
+</ul>
+</nav>
+</header>
+
+<section id="hero" class="hero">
+<div class="hero-content">
+<h1>Museum Night, Reimagined</h1>
+<h2>ARTIFACT: Museum Night</h2>
+<p>18 October 2026 • 19:00 – 02:00 • The Old Gallery, Warsaw</p>
+<div class="btn-group">
+<a href="#tickets" class="btn">Get Tickets</a>
+<a href="#" class="btn secondary" id="calendarBtn">Save to Calendar</a>
+</div>
+</div>
+</section>
+
+<section id="program" class="section">
+<h2>Program</h2>
+<p>Explore the curated schedule of performances, exhibitions, and talks that bring the museum to life after dark.</p>
+<div class="program">
+<div class="program-card">
+<h3>Opening Night</h3>
+<p>18:00 – 20:00 – Guided tour of the historic wing.</p>
+</div>
+<div class="program-card">
+<h3>Midnight Gallery</h3>
+<p>20:30 – 22:00 – Interactive art installation.</p>
+</div>
+<div class="program-card">
+<h3>Live Music</h3>
+<p>18:30 – 24:00 – Jazz &amp; ambient sounds.</p>
+</div>
+</div>
+</section>
+
+<section id="artists" class="section">
+<h2>Artists</h2>
+<div class="artists">
+<div class="artist-card">
+<img src="https://source.unsplash.com/400x400/?artist" alt="Artist 1">
+<div class="info">
+<h3>Jane Doe</h3>
+<p>Contemporary painter.</p>
+</div>
+</div>
+<div class="artist-card">
+<img src="https://source.unsplash.com/400x400/?sculpture" alt="Artist 2">
+<div class="info">
+<h3>John Smith</h3>
+<p>Modern sculptor.</p>
+</div>
+</div>
+<div class="artist-card">
+<img src="https://source.unsplash.com/400x400/?performance" alt="Artist 3">
+<div class="info">
+<h3>Maria Garcia</h3>
+<p>Performance artist.</p>
+</div>
+</div>
+</div>
+</section>
+
+<section id="venue" class="section">
+<h2>Venue</h2>
+<div class="venue">
+<img src="https://source.unsplash.com/800x600/?museum,gallery" alt="Venue">
+<h3>The Old Gallery</h3>
+<p>Historic museum in Warsaw.</p>
+</div>
+</section>
+
+<section id="tickets" class="section">
+<h2>Tickets</h2>
+<p>Choose your ticket tier and secure your place at the event.</p>
+<div class="tickets">
+<div class="ticket-card">
+<h3>Standard</h3>
+<p>Access to all events.</p>
+<span class="price">$25</span>
+<button class="ticket-btn" data-tier="Standard" data-price="25">Select</button>
+</div>
+<div class="ticket-card">
+<h3>VIP</h3>
+<p>All Standard benefits + exclusive lounge access.</p>
+<span class="price">$50</span>
+<button class="ticket-btn" data-tier="VIP" data-price="50">Select</button>
+</div>
+<div class="ticket-card">
+<h3>Collector</h3>
+<p>VIP + limited edition art print.</p>
+<span class="price">$100</span>
+<button class="ticket-btn" data-tier="Collector" data-price="100">Select</button>
+</div>
+</div>
+</section>
+
+<section id="faq" class="section">
+<h2>FAQ</h2>
+<div class="faq">
+<div class="faq-item">
+<button class="faq-question">What is the dress code?</button>
+<div class="faq-answer"><p>Smart casual. No sportswear or beachwear.</p></div>
+</div>
+<div class="faq-item">
+<button class="faq-question">Can I bring a camera?</button>
+<div class="faq-answer"><p>Photography is allowed with a small tripod. No professional equipment.</p></div>
+</div>
+<div class="faq-item">
+<button class="faq-question">Is there parking?</button>
+<div class="faq-answer"><p>Yes, valet parking is available at the venue entrance.</p></div>
+</div>
+</div>
+</section>
+
+<div id="ticketModal" class="modal" aria-hidden="true" role="dialog" aria-labelledby="ticketModalTitle">
+<div class="modal-content">
+<button class="modal-close" aria-label="Close modal">&times;</button>
+<h3 id="ticketModalTitle">Select Ticket</h3>
+<p id="ticketDetails">Please choose a ticket tier.</p>
+<form id="ticketForm">
+<label for="tierSelect">Ticket Tier:</label>
+<select id="tierSelect" name="tier" required>
+<option value="">--Select--</option>
+<option value="Standard" data-price="25">Standard – $25</option>
+<option value="VIP" data-price="50">VIP – $50</option>
+<option value="Collector" data-price="100">Collector – $100</option>
+</select>
+<br><br>
+<label for="nameInput">Name:</label>
+<input type="text" id="nameInput" name="name" required>
+<br><br>
+<label for="emailInput">Email:</label>
+<input type="email" id="emailInput" name="email" required>
+<br><br>
+<button type="submit" class="cta-btn">Confirm Ticket</button>
+</form>
+</div>
+</div>
+
+<div id="toastContainer"></div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  // Mobile menu toggle
+  const menuToggle = document.querySelector('.menu-toggle');
+  const navUl = document.querySelector('nav ul');
+  menuToggle.addEventListener('click', () => navUl.classList.toggle('show'));
+
+  // Smooth scrolling
+  document.querySelectorAll('a.nav-link').forEach(link => {
+    link.addEventListener('click', e => {
+      e.preventDefault();
+      const target = document.querySelector(link.getAttribute('href'));
+      target.scrollIntoView({ behavior: 'smooth' });
+      if (navUl.classList.contains('show')) navUl.classList.remove('show');
+    });
+  });
+
+  // Active nav on scroll
+  const sections = document.querySelectorAll('section');
+  const navLinks = document.querySelectorAll('nav a.nav-link');
+  window.addEventListener('scroll', () => {
+    let current = '';
+    sections.forEach(sec => {
+      const rect = sec.getBoundingClientRect();
+      if (rect.top <= 80 && rect.bottom >= 80) current = sec.id;
+    });
+    navLinks.forEach(link => {
+      link.classList.toggle('active', link.getAttribute('href') === '#' + current);
+    });
+  });
+
+  // Scroll reveal
+  const revealElements = document.querySelectorAll('.section, .program-card, .artist-card, .ticket-card, .faq-item');
+  const revealObserver = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        revealObserver.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.1 });
+  revealElements.forEach(el => revealObserver.observe(el));
+
+  // FAQ accordion
+  document.querySelectorAll('.faq-question').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const answer = btn.nextElementSibling;
+      const isOpen = answer.classList.contains('open');
+      document.querySelectorAll('.faq-answer').forEach(a => a.classList.remove('open'));
+      document.querySelectorAll('.faq-question').forEach(b => b.classList.remove('open'));
+      if (!isOpen) {
+        answer.classList.add('open');
+        btn.classList.add('open');
+      }
+    });
+  });
+
+  // Ticket modal
+  const ticketModal = document.getElementById('ticketModal');
+  const ticketDetails = document.getElementById('ticketDetails');
+  const tierSelect = document.getElementById('tierSelect');
+  const ticketForm = document.getElementById('ticketForm');
+  document.querySelectorAll('.ticket-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      ticketModal.style.display = 'flex';
+      ticketModal.setAttribute('aria-hidden', 'false');
+    });
+  });
+  document.querySelector('.modal-close').addEventListener('click', () => {
+    ticketModal.style.display = 'none';
+    ticketModal.setAttribute('aria-hidden', 'true');
+  });
+  tierSelect.addEventListener('change', () => {
+    const option = tierSelect.options[tierSelect.selectedIndex];
+    if (option.value) {
+      ticketDetails.textContent = `You selected ${option.textContent}.`;
+    } else {
+      ticketDetails.textContent = 'Please choose a ticket tier.';
+    }
+  });
+  ticketForm.addEventListener('submit', e => {
+    e.preventDefault();
+    const name = document.getElementById('nameInput').value;
+    const email = document.getElementById('emailInput').value;
+    const tier = tierSelect.value;
+    const price = tierSelect.options[tierSelect.selectedIndex].dataset.price;
+    // Simulate ticket confirmation
+    ticketModal.style.display = 'none';
+    ticketModal.setAttribute('aria-hidden', 'true');
+    showToast(`Thank you, ${name}! Your ${tier} ticket ($${price}) has been confirmed. An email has been sent to ${email}.`);
+  });
+
+  // Calendar download
+  document.getElementById('calendarBtn').addEventListener('click', e => {
+    e.preventDefault();
+    const icsContent = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//ARTIFACT//Museum Night//EN',
+      'BEGIN:VEVENT',
+      'UID:artifact-20261018',
+      'DTSTAMP:' + new Date().toISOString().replace(/[-:]/g,'').split('.')[0] + 'Z',
+      'DTSTART:20261018T190000Z',
+      'DTEND:20261019T020000Z',
+      'SUMMARY:ARTIFACT: Museum Night',
+      'LOCATION:The Old Gallery, Warsaw',
+      'DESCRIPTION:Premium museum event with exclusive ticket tiers.',
+      'END:VEVENT',
+      'END:VCALENDAR'
+    ].join('\n');
+    const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'artifact_museum_night.ics';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('Calendar event added.');
+  });
+
+  // Toast notifications
+  function showToast(message) {
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.textContent = message;
+    document.getElementById('toastContainer').appendChild(toast);
+    setTimeout(() => toast.remove(), 2000);
+  }
+});
+</script>
+</body>
+</html>

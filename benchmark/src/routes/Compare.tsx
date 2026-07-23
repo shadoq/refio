@@ -2,6 +2,8 @@ import { useMemo, useEffect } from "react";
 import {
   Typography,
   Card,
+  Col,
+  Row,
   Select,
   Tag,
   Table,
@@ -16,9 +18,11 @@ import { useResults } from "@/data/queries";
 import { useFilters, applyFilters } from "@/store/filters";
 import { useCompareSelection } from "@/store/compareSelection";
 import { RadarCompare } from "@/components/charts/RadarCompare";
+import { JudgeRadarCompare } from "@/components/charts/JudgeRadarCompare";
 import { MetricRadarCompare } from "@/components/charts/MetricRadarCompare";
 import { TaskRadarCompare } from "@/components/charts/TaskRadarCompare";
 import { normalizeScore } from "@/lib/stats";
+import { aggregateJudgeScores, JUDGE_EXCLUDED_CRITERIA } from "@/lib/judge/scoring";
 
 const { Title, Text } = Typography;
 
@@ -112,6 +116,40 @@ export default function Compare() {
     });
   }, [tasksData, filteredResults, compare.modelIds]);
 
+  // Strong-judge score per criterion: mirrors the human table above but uses the
+  // per-result judge aggregate (median across judges). Task-agnostic summary over
+  // core (minus judge-excluded) + global judge-only criteria.
+  const judgeCriteria = useMemo(() => {
+    if (!tasksData) return [];
+    return [...tasksData.coreCriteria, ...tasksData.judgeCriteria].filter(
+      (c) => !JUDGE_EXCLUDED_CRITERIA.includes(c.id),
+    );
+  }, [tasksData]);
+
+  const judgeComparisonRows = useMemo(() => {
+    if (!tasksData || compare.modelIds.length === 0) return [];
+    return judgeCriteria.map((criterion): CompareRow => {
+      const scores: Record<string, number | null> = {};
+      for (const modelId of compare.modelIds) {
+        const modelResults = filteredResults.filter((r) => r.modelId === modelId);
+        const vals: number[] = [];
+        for (const r of modelResults) {
+          const sets = (r.judgeScores ?? []).filter((s) => s.error == null);
+          if (sets.length === 0) continue;
+          const value = aggregateJudgeScores(sets)[criterion.id];
+          if (value !== undefined) vals.push(normalizeScore(value, criterion.scale.values));
+        }
+        scores[modelId] = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+      }
+      return { criterionId: criterion.id, criterionName: criterion.name, scores };
+    });
+  }, [tasksData, judgeCriteria, filteredResults, compare.modelIds]);
+
+  const hasJudgeScores = useMemo(
+    () => judgeComparisonRows.some((row) => Object.values(row.scores).some((v) => v != null)),
+    [judgeComparisonRows],
+  );
+
   // Per-task breakdown: for each task, show scores per model
   const taskBreakdown = useMemo(() => {
     if (!tasksData || compare.modelIds.length === 0) return [];
@@ -149,7 +187,7 @@ export default function Compare() {
       width: 120,
       render: (_: unknown, row: CompareRow) => {
         const score = row.scores[modelId];
-        if (score == null) return "—";
+        if (score == null) return "-";
         // Find the winner for this row
         const values = compare.modelIds.map((mid) => row.scores[mid] ?? -1);
         const maxVal = Math.max(...values);
@@ -194,33 +232,68 @@ export default function Compare() {
         <Empty description="Select at least one model above to start comparing." />
       ) : (
         <>
-          <Card title="Radar: Average Score per Criterion" style={{ marginBottom: 24 }}>
-            <RadarCompare
-              results={filteredResults}
-              selectedModelIds={compare.modelIds}
-              tasksFile={tasksData!}
-              modelNames={modelNames}
-            />
-          </Card>
+          {hasJudgeScores ? (
+            // Human and judge radars side by side for easy comparison on wide screens.
+            <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
+              <Col xs={24} xl={12}>
+                <Card title="Radar: Average Score per Criterion" style={{ height: "100%" }}>
+                  <RadarCompare
+                    results={filteredResults}
+                    selectedModelIds={compare.modelIds}
+                    tasksFile={tasksData!}
+                    modelNames={modelNames}
+                  />
+                </Card>
+              </Col>
+              <Col xs={24} xl={12}>
+                <Card
+                  title="Radar: Judge Score per Criterion"
+                  style={{ height: "100%" }}
+                  extra={<Text type="secondary">strong-judge aggregate (median)</Text>}
+                >
+                  <JudgeRadarCompare
+                    results={filteredResults}
+                    selectedModelIds={compare.modelIds}
+                    tasksFile={tasksData!}
+                    modelNames={modelNames}
+                  />
+                </Card>
+              </Col>
+            </Row>
+          ) : (
+            <Card title="Radar: Average Score per Criterion" style={{ marginBottom: 24 }}>
+              <RadarCompare
+                results={filteredResults}
+                selectedModelIds={compare.modelIds}
+                tasksFile={tasksData!}
+                modelNames={modelNames}
+              />
+            </Card>
+          )}
 
-          <Card title="Radar: Derived Benchmark Metrics" style={{ marginBottom: 24 }}>
-            <MetricRadarCompare
-              results={filteredResults}
-              selectedModelIds={compare.modelIds}
-              tasksFile={tasksData!}
-              resultsFile={resultsData!}
-              modelNames={modelNames}
-            />
-          </Card>
-
-          <Card title="Radar: Model Behavior by Task" style={{ marginBottom: 24 }}>
-            <TaskRadarCompare
-              results={filteredResults}
-              selectedModelIds={compare.modelIds}
-              tasksFile={tasksData!}
-              modelNames={modelNames}
-            />
-          </Card>
+          <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
+            <Col xs={24} xl={12}>
+              <Card title="Radar: Derived Benchmark Metrics" style={{ height: "100%" }}>
+                <MetricRadarCompare
+                  results={filteredResults}
+                  selectedModelIds={compare.modelIds}
+                  tasksFile={tasksData!}
+                  resultsFile={resultsData!}
+                  modelNames={modelNames}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} xl={12}>
+              <Card title="Radar: Model Behavior by Task" style={{ height: "100%" }}>
+                <TaskRadarCompare
+                  results={filteredResults}
+                  selectedModelIds={compare.modelIds}
+                  tasksFile={tasksData!}
+                  modelNames={modelNames}
+                />
+              </Card>
+            </Col>
+          </Row>
 
           <Card title="Score by Criterion" style={{ marginBottom: 24 }}>
             <Table<CompareRow>
@@ -232,6 +305,22 @@ export default function Compare() {
             />
           </Card>
 
+          {hasJudgeScores && (
+            <Card
+              title="Judge Score by Criterion"
+              style={{ marginBottom: 24 }}
+              extra={<Text type="secondary">strong-judge aggregate (median)</Text>}
+            >
+              <Table<CompareRow>
+                columns={comparisonColumns}
+                dataSource={judgeComparisonRows}
+                rowKey="criterionId"
+                pagination={false}
+                size="small"
+              />
+            </Card>
+          )}
+
           {taskBreakdown.length > 0 && (
             <Card title="Per-task Breakdown">
               <Table
@@ -242,7 +331,7 @@ export default function Compare() {
                     key: modelId,
                     render: (_: unknown, row: { modelScores: Record<string, number | null> }) => {
                       const score = row.modelScores[modelId];
-                      if (score == null) return "—";
+                      if (score == null) return "-";
                       const values = compare.modelIds.map((mid) => row.modelScores[mid] ?? -1);
                       const maxVal = Math.max(...values);
                       const isWinner = score === maxVal && score > 0;

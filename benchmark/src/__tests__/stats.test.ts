@@ -1,6 +1,12 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
-import { normalizeScore, normalizeResult, leaderboard } from "@/lib/stats";
+import {
+  normalizeScore,
+  normalizeResult,
+  leaderboard,
+  judgeCriteriaForTask,
+  getResultJudgeScore,
+} from "@/lib/stats";
 import type { TasksFile } from "@/schema/tasks";
 import type { ResultsFile, Result } from "@/schema/results";
 
@@ -41,6 +47,7 @@ const makeTask = (id: string): TasksFile["tasks"][0] => ({
 const tasksFile: TasksFile = {
   version: 1,
   coreCriteria,
+  judgeCriteria: [],
   tasks: [makeTask("snake"), makeTask("todo")],
 };
 
@@ -59,6 +66,7 @@ const makeResult = (
   attemptNumber: 1,
   scores,
   attachments: [],
+  judgeScores: [],
   runAt: "2026-04-15T09:00:00.000Z",
   createdAt: "2026-04-15T09:00:00.000Z",
   ...extra,
@@ -193,6 +201,7 @@ describe("leaderboard", () => {
         { attemptNumber: 2, costUsd: 0.04, durationMs: 17000, tokensIn: 90, tokensOut: 190 },
       ),
     ],
+    stability: [],
   };
 
   it("returns one row per (modelId, environmentId) pair", () => {
@@ -300,5 +309,62 @@ describe("leaderboard", () => {
     expect(qwen.localViabilityScore).not.toBeNull();
     expect(qwen.localQualityRatio).toBeCloseTo(qwen.avgScore / claude.avgScore);
     expect(claude.localViabilityScore).toBeNull();
+  });
+});
+
+describe("judge scoring helpers", () => {
+  const judgeTasks: TasksFile = {
+    version: 1,
+    coreCriteria: [
+      { id: "compliance", name: "Compliance", description: "", scale: { values: [0, 0.5, 1] }, weight: 1 },
+      { id: "agent_logic", name: "Agent logic", description: "", scale: { values: [0, 0.5, 1] }, weight: 1 },
+    ],
+    judgeCriteria: [
+      { id: "logic_correctness", name: "Logic correctness", description: "", scale: { values: [0, 0.5, 1] }, weight: 1 },
+    ],
+    tasks: [
+      {
+        id: "snake",
+        name: "Snake",
+        description: "",
+        systemPrompt: "",
+        extraCriteria: [],
+        createdAt: "2026-04-01T10:00:00.000Z",
+        updatedAt: "2026-04-01T10:00:00.000Z",
+      },
+    ],
+  };
+
+  it("excludes agent_logic from the criteria a judge scores", () => {
+    const ids = judgeCriteriaForTask(judgeTasks, "snake").map((c) => c.id);
+    expect(ids).toContain("compliance");
+    expect(ids).toContain("logic_correctness");
+    expect(ids).not.toContain("agent_logic");
+  });
+
+  it("computes the judge score from the aggregate, ignoring agent_logic", () => {
+    const result = makeResult("r1", "m1", "e1", "snake", [{ criterionId: "compliance", value: 1 }], {
+      judgeScores: [
+        {
+          judgeId: "claude-code",
+          judgeModel: "x",
+          judgedAt: "2026-07-19T12:00:00.000Z",
+          scores: [
+            { criterionId: "compliance", value: 1 },
+            { criterionId: "logic_correctness", value: 0.5 },
+          ],
+          screenshots: [],
+          consoleErrors: [],
+          error: null,
+        },
+      ],
+    });
+    // compliance 1/1 = 1, logic_correctness 0.5/1 = 0.5 -> mean 0.75
+    expect(getResultJudgeScore(result, judgeTasks)).toBeCloseTo(0.75);
+  });
+
+  it("returns null when there are no judge scores", () => {
+    const result = makeResult("r2", "m1", "e1", "snake", [{ criterionId: "compliance", value: 1 }]);
+    expect(getResultJudgeScore(result, judgeTasks)).toBeNull();
   });
 });

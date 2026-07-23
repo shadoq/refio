@@ -22,6 +22,7 @@ const { Title, Text } = Typography;
 
 type MetricId =
   | "quality"
+  | "judgeScore"
   | "cost"
   | "duration"
   | "estimatedLlm"
@@ -47,6 +48,13 @@ const METRICS: Record<MetricId, MetricDefinition> = {
     label: "Avg Quality",
     higherIsBetter: true,
     getValue: (row) => row.avgScore,
+    format: (value) => `${(value * 100).toFixed(1)}%`,
+  },
+  judgeScore: {
+    id: "judgeScore",
+    label: "Judge Score",
+    higherIsBetter: true,
+    getValue: (row) => row.judgeAvgScore,
     format: (value) => `${(value * 100).toFixed(1)}%`,
   },
   cost: {
@@ -261,6 +269,9 @@ export default function Pareto() {
                   )}
                   {r.reliabilityScore != null && (
                     <div>Reliability: {(r.reliabilityScore * 100).toFixed(1)}%</div>
+                  )}
+                  {r.judgeAvgScore != null && (
+                    <div>Judge score: {(r.judgeAvgScore * 100).toFixed(1)}%</div>
                   )}
                   <div>{r.environment.name}</div>
                 </div>

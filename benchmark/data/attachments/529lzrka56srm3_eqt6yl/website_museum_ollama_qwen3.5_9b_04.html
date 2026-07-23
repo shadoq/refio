@@ -1,0 +1,937 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ARTIFACT: Museum Night — Museum Night, Reimagined</title>
+  <meta name="description" content="Experience the magic of after-hours museum visits at ARTIFACT: Museum Night. Live performances, hidden tours, and exclusive access.">
+  <meta property="og:title" content="ARTIFACT: Museum Night">
+  <meta property="og:description" content="A cinematic after-hours museum event with exhibitions, performances, talks, and guided tours.">
+  <meta property="og:image" content="https://source.unsplash.com/featured/1200x900?museum,night">
+  <style>
+    :root {
+      --bg: #070506;
+      --velvet: #1a0710;
+      --burgundy: #3a0f1d;
+      --navy: #07111f;
+      --gold: #d6ad60;
+      --soft-gold: #f3d79b;
+      --ivory: #f8efe2;
+      --muted: #b9a999;
+      --panel: rgba(255, 244, 220, 0.06);
+      --border: rgba(214, 173, 96, 0.28);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--ivory);
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* Noise overlay */
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 200 200"><filter id="noise"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" /></filter><rect width="100%" height="100%" filter="url(%23noise)" opacity="0.05"/></svg>');
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* Typography */
+    h1, h2, h3, h4, h5, h6 {
+      font-family: Georgia, 'Times New Roman', serif;
+      color: var(--ivory);
+      margin-bottom: 1rem;
+    }
+
+    h1 { font-size: clamp(2.5rem, 5vw, 4rem); }
+    h2 { font-size: clamp(2rem, 4vw, 3rem); color: var(--soft-gold); }
+    h3 { font-size: 1.5rem; color: var(--gold); }
+    p { color: var(--muted); }
+
+    /* Utility */
+    .container { max-width: 1200px; margin: 0 auto; padding: 0 1.5rem; }
+    .section { padding: 5rem 0; }
+    .btn {
+      display: inline-block;
+      padding: 0.875rem 2rem;
+      background: transparent;
+      border: 1px solid var(--gold);
+      color: var(--gold);
+      text-decoration: none;
+      font-family: inherit;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      border-radius: 4px;
+    }
+    .btn:hover { background: var(--gold); color: var(--bg); }
+    .btn:focus { outline: 2px solid var(--soft-gold); outline-offset: 2px; }
+    .btn-primary { background: var(--gold); color: var(--bg); }
+    .btn-primary:hover { background: var(--soft-gold); }
+
+    /* Navbar */
+    .navbar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 1000;
+      background: rgba(7, 5, 6, 0.9);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-container { display: flex; justify-content: space-between; align-items: center; padding: 1rem 1.5rem; }
+    .logo { font-family: Georgia, serif; font-size: 1.5rem; font-weight: bold; color: var(--gold); text-decoration: none; }
+    .nav-links { display: flex; gap: 2rem; align-items: center; }
+    .nav-links a {
+      color: var(--ivory);
+      text-decoration: none;
+      font-size: 0.9rem;
+      transition: color 0.3s ease;
+    }
+    .nav-links a:hover, .nav-links a.active { color: var(--gold); }
+    .nav-cta { background: var(--gold); color: var(--bg); padding: 0.5rem 1.5rem; border-radius: 4px; text-decoration: none; font-size: 0.9rem; }
+    .nav-cta:hover { background: var(--soft-gold); }
+    .mobile-menu-btn { display: none; background: none; border: none; color: var(--gold); font-size: 1.5rem; cursor: pointer; }
+
+    /* Hero */
+    .hero {
+      min-height: 100vh;
+      background: linear-gradient(135deg, rgba(7, 5, 6, 0.7), rgba(26, 7, 16, 0.8)), url('https://source.unsplash.com/featured/2400x1400?museum,night') center/cover;
+      display: flex;
+      align-items: center;
+      position: relative;
+    }
+    .hero::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: radial-gradient(circle at 30% 50%, rgba(214, 173, 96, 0.15), transparent 60%);
+      pointer-events: none;
+    }
+    .hero-content { position: relative; z-index: 1; max-width: 800px; }
+    .hero h1 { margin-bottom: 1rem; text-shadow: 0 2px 10px rgba(0,0,0,0.5); }
+    .hero-subtitle { font-size: 1.25rem; color: var(--soft-gold); margin-bottom: 2rem; }
+    .hero-meta { display: flex; gap: 1.5rem; margin-bottom: 2rem; flex-wrap: wrap; }
+    .hero-badge { background: var(--panel); padding: 0.5rem 1rem; border-radius: 4px; border: 1px solid var(--border); font-size: 0.85rem; }
+    .hero-ctas { display: flex; gap: 1rem; flex-wrap: wrap; }
+
+    /* Concept */
+    .concept-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 2rem; margin-top: 3rem; }
+    .concept-card {
+      background: var(--panel);
+      padding: 2rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+    .concept-card:hover { transform: translateY(-5px); box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
+    .concept-card h3 { color: var(--gold); margin-bottom: 1rem; }
+
+    /* Timeline */
+    .timeline { position: relative; max-width: 800px; margin: 3rem auto 0; }
+    .timeline::before {
+      content: '';
+      position: absolute;
+      left: 20px;
+      top: 0; bottom: 0;
+      width: 2px;
+      background: linear-gradient(to bottom, var(--gold), transparent);
+    }
+    .timeline-item { position: relative; padding-left: 60px; margin-bottom: 2.5rem; }
+    .timeline-item::before {
+      content: '';
+      position: absolute;
+      left: 12px;
+      top: 5px;
+      width: 20px;
+      height: 20px;
+      background: var(--gold);
+      border-radius: 50%;
+      box-shadow: 0 0 10px var(--gold);
+    }
+    .timeline-time { color: var(--gold); font-weight: bold; margin-bottom: 0.25rem; }
+    .timeline-title { font-size: 1.25rem; color: var(--ivory); margin-bottom: 0.5rem; }
+    .timeline-desc { color: var(--muted); font-size: 0.95rem; }
+    .timeline-location { display: inline-block; margin-top: 0.5rem; font-size: 0.85rem; color: var(--soft-gold); }
+
+    /* Artists */
+    .artists-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 2rem; }
+    .artist-card {
+      background: var(--panel);
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      transition: transform 0.3s ease;
+    }
+    .artist-card:hover { transform: translateY(-5px); }
+    .artist-img { width: 100%; height: 200px; object-fit: cover; }
+    .artist-info { padding: 1.5rem; }
+    .artist-name { font-size: 1.25rem; color: var(--ivory); margin-bottom: 0.25rem; }
+    .artist-role { color: var(--gold); font-size: 0.9rem; margin-bottom: 0.5rem; }
+    .artist-teaser { font-size: 0.9rem; margin-bottom: 1rem; }
+    .artist-btn { background: none; border: none; color: var(--soft-gold); cursor: pointer; font-size: 0.9rem; text-decoration: underline; }
+
+    /* Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 2000;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal {
+      background: var(--velvet);
+      max-width: 600px;
+      width: 100%;
+      max-height: 90vh;
+      overflow-y: auto;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      position: relative;
+    }
+    .modal-header { padding: 1.5rem; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--velvet); }
+    .modal-body { padding: 1.5rem; }
+    .modal-footer { padding: 1.5rem; border-top: 1px solid var(--border); text-align: right; }
+    .close-modal { background: none; border: none; color: var(--muted); font-size: 1.5rem; cursor: pointer; position: absolute; right: 1.5rem; top: 1rem; }
+    .close-modal:hover { color: var(--ivory); }
+
+    /* Venue */
+    .venue-content { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; align-items: start; }
+    .venue-info h3 { margin-bottom: 1rem; }
+    .venue-info p { margin-bottom: 0.75rem; }
+    .venue-map { background: var(--panel); border-radius: 8px; padding: 1rem; border: 1px solid var(--border); }
+    .venue-map svg { width: 100%; height: auto; }
+
+    /* Tickets */
+    .tickets-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 2rem; }
+    .ticket-card {
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 2rem;
+      border: 1px solid var(--border);
+      text-align: center;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+    .ticket-card:hover { transform: translateY(-5px); box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
+    .ticket-card.selected { border-color: var(--soft-gold); box-shadow: 0 0 30px rgba(214, 173, 96, 0.3); }
+    .ticket-name { font-size: 1.5rem; color: var(--gold); margin-bottom: 0.5rem; }
+    .ticket-price { font-size: 2rem; color: var(--ivory); margin-bottom: 1.5rem; }
+    .ticket-features { list-style: none; text-align: left; margin-bottom: 2rem; }
+    .ticket-features li { padding: 0.5rem 0; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.9rem; }
+    .ticket-features li:last-child { border-bottom: none; }
+    .ticket-select-btn { width: 100%; padding: 1rem; background: transparent; border: 1px solid var(--border); color: var(--ivory); cursor: pointer; border-radius: 4px; transition: all 0.3s ease; }
+    .ticket-select-btn:hover { border-color: var(--gold); }
+    .ticket-select-btn.selected { background: var(--gold); color: var(--bg); border-color: var(--gold); }
+    .recommended-badge { display: inline-block; background: var(--gold); color: var(--bg); padding: 0.25rem 0.75rem; border-radius: 20px; font-size: 0.75rem; margin-bottom: 1rem; }
+
+    /* FAQ */
+    .faq-container { max-width: 800px; margin: 0 auto; }
+    .faq-item { border-bottom: 1px solid var(--border); }
+    .faq-question { width: 100%; text-align: left; background: none; border: none; color: var(--ivory); padding: 1.5rem 0; font-size: 1.1rem; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+    .faq-question::after { content: '+'; color: var(--gold); font-size: 1.5rem; }
+    .faq-item.active .faq-question::after { content: '−'; }
+    .faq-answer { display: none; padding-bottom: 1.5rem; color: var(--muted); }
+    .faq-item.active .faq-answer { display: block; }
+
+    /* Newsletter */
+    .newsletter { max-width: 600px; margin: 3rem auto 0; text-align: center; }
+    .newsletter-form { display: flex; gap: 1rem; margin-top: 1.5rem; }
+    .newsletter-input { flex: 1; padding: 1rem; background: var(--panel); border: 1px solid var(--border); color: var(--ivory); border-radius: 4px; }
+    .newsletter-input:focus { outline: none; border-color: var(--gold); }
+    .newsletter-btn { padding: 1rem 2rem; background: var(--gold); color: var(--bg); border: none; border-radius: 4px; cursor: pointer; }
+
+    /* Footer */
+    .footer { background: var(--navy); padding: 3rem 1.5rem; text-align: center; border-top: 1px solid var(--border); }
+    .footer-logo { font-family: Georgia, serif; font-size: 1.5rem; color: var(--gold); margin-bottom: 1rem; }
+    .footer-links { display: flex; justify-content: center; gap: 2rem; margin: 1.5rem 0; flex-wrap: wrap; }
+    .footer-links a { color: var(--muted); text-decoration: none; }
+    .footer-links a:hover { color: var(--gold); }
+    .footer-note { font-size: 0.8rem; color: var(--muted); margin-top: 1rem; }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      background: var(--velvet);
+      color: var(--ivory);
+      padding: 1rem 1.5rem;
+      border-radius: 4px;
+      border-left: 3px solid var(--gold);
+      box-shadow: 0 5px 20px rgba(0,0,0,0.3);
+      z-index: 3000;
+      transform: translateX(120%);
+      transition: transform 0.3s ease;
+    }
+    .toast.show { transform: translateX(0); }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .nav-links { display: none; }
+      .mobile-menu-btn { display: block; }
+      .venue-content { grid-template-columns: 1fr; }
+      .hero-ctas { flex-direction: column; }
+      .newsletter-form { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Navbar -->
+  <nav class="navbar">
+    <div class="container nav-container">
+      <a href="#" class="logo">ARTIFACT</a>
+      <div class="nav-links">
+        <a href="#program" class="nav-link">Program</a>
+        <a href="#artists" class="nav-link">Artists</a>
+        <a href="#venue" class="nav-link">Venue</a>
+        <a href="#tickets" class="nav-link">Tickets</a>
+        <a href="#faq" class="nav-link">FAQ</a>
+        <a href="#tickets" class="nav-cta">Get Tickets</a>
+      </div>
+      <button class="mobile-menu-btn">☰</button>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container hero-content">
+      <h1>Museum Night, Reimagined</h1>
+      <p class="hero-subtitle">ARTIFACT: Museum Night</p>
+      <div class="hero-meta">
+        <span class="hero-badge">18 October 2026</span>
+        <span class="hero-badge">19:00–02:00</span>
+        <span class="hero-badge">The Old Gallery, Warsaw</span>
+      </div>
+      <div class="hero-ctas">
+        <a href="#tickets" class="btn btn-primary">Get Tickets</a>
+        <button class="btn" id="save-calendar-btn">Save to Calendar</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Concept -->
+  <section class="section container">
+    <h2>The Experience</h2>
+    <p style="max-width: 700px; margin-top: 1rem;">Step into a world of quiet mystery and golden light. ARTIFACT: Museum Night transforms our galleries into an intimate sanctuary of art, performance, and discovery. After hours, the museum becomes yours.</p>
+    <div class="concept-grid">
+      <div class="concept-card">
+        <h3>After-Hours Exhibitions</h3>
+        <p>Experience our collections in a completely different light when the crowds have dispersed.</p>
+      </div>
+      <div class="concept-card">
+        <h3>Live Performances</h3>
+        <p>Immersive soundscapes and ambient performances that blend seamlessly with the art.</p>
+      </div>
+      <div class="concept-card">
+        <h3>Guided Hidden Tours</h3>
+        <p>Discover rooms and artworks you've never seen before with our expert curators.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Program -->
+  <section class="section container" id="program">
+    <h2>Evening Program</h2>
+    <div class="timeline">
+      <div class="timeline-item">
+        <div class="timeline-time">19:00</div>
+        <div class="timeline-title">Doors Open</div>
+        <div class="timeline-desc">Welcome drinks and gallery exploration</div>
+        <div class="timeline-location">Main Gallery</div>
+      </div>
+      <div class="timeline-item">
+        <div class="timeline-time">19:30</div>
+        <div class="timeline-title">Curator Welcome</div>
+        <div class="timeline-desc">Introduction to the evening's highlights</div>
+        <div class="timeline-location">Central Hall</div>
+      </div>
+      <div class="timeline-item">
+        <div class="timeline-time">20:00</div>
+        <div class="timeline-title">Hidden Collection Tour</div>
+        <div class="timeline-desc">Exclusive access to rarely seen works</div>
+        <div class="timeline-location">Wing B</div>
+      </div>
+      <div class="timeline-item">
+        <div class="timeline-time">21:00</div>
+        <div class="timeline-title">Live Ambient Performance</div>
+        <div class="timeline-desc">Immersive soundscape in the sculpture garden</div>
+        <div class="timeline-location">Sculpture Hall</div>
+      </div>
+      <div class="timeline-item">
+        <div class="timeline-time">22:00</div>
+        <div class="timeline-title">Sculpture Hall Projection</div>
+        <div class="timeline-desc">Light and shadow installation</div>
+        <div class="timeline-location">Sculpture Hall</div>
+      </div>
+      <div class="timeline-item">
+        <div class="timeline-time">23:00</div>
+        <div class="timeline-title">Artist Talk</div>
+        <div class="timeline-desc">Q&A with featured artists</div>
+        <div class="timeline-location">Lecture Room</div>
+      </div>
+      <div class="timeline-item">
+        <div class="timeline-time">00:00</div>
+        <div class="timeline-title">Midnight Gallery Walk</div>
+        <div class="timeline-desc">Self-guided exploration continues</div>
+        <div class="timeline-location">All Galleries</div>
+      </div>
+      <div class="timeline-item">
+        <div class="timeline-time">01:00</div>
+        <div class="timeline-title">Closing Sound Session</div>
+        <div class="timeline-desc">Farewell ambient soundscape</div>
+        <div class="timeline-location">Main Atrium</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Artists -->
+  <section class="section container" id="artists">
+    <h2>Featured Artists & Speakers</h2>
+    <div class="artists-grid">
+      <div class="artist-card">
+        <img src="https://source.unsplash.com/featured/1200x900?gallery,art" alt="Artist 1" class="artist-img" onerror="this.src='https://via.placeholder.com/400x300/1a0710/d6ad60?text=Artist+1'">
+        <div class="artist-info">
+          <div class="artist-name">Elena Vostok</div>
+          <div class="artist-role">Contemporary Artist</div>
+          <div class="artist-teaser">Exploring themes of memory and materiality through mixed media installations.</div>
+          <button class="artist-btn" data-artist="elena-vostok">View details</button>
+        </div>
+      </div>
+      <div class="artist-card">
+        <img src="https://source.unsplash.com/featured/1200x900?exhibition,lights" alt="Artist 2" class="artist-img" onerror="this.src='https://via.placeholder.com/400x300/1a0710/d6ad60?text=Artist+2'">
+        <div class="artist-info">
+          <div class="artist-name">Marcus Thorne</div>
+          <div class="artist-role">Sculptor</div>
+          <div class="artist-teaser">Working with light and shadow to create immersive spatial experiences.</div>
+          <button class="artist-btn" data-artist="marcus-thorne">View details</button>
+        </div>
+      </div>
+      <div class="artist-card">
+        <img src="https://source.unsplash.com/featured/1200x900?sculpture,museum" alt="Artist 3" class="artist-img" onerror="this.src='https://via.placeholder.com/400x300/1a0710/d6ad60?text=Artist+3'">
+        <div class="artist-info">
+          <div class="artist-name">Sofia Chen</div>
+          <div class="artist-role">Installation Artist</div>
+          <div class="artist-teaser">Creating ephemeral works that respond to environmental conditions.</div>
+          <button class="artist-btn" data-artist="sofia-chen">View details</button>
+        </div>
+      </div>
+      <div class="artist-card">
+        <img src="https://source.unsplash.com/featured/1200x900?museum,crowd" alt="Artist 4" class="artist-img" onerror="this.src='https://via.placeholder.com/400x300/1a0710/d6ad60?text=Artist+4'">
+        <div class="artist-info">
+          <div class="artist-name">David Kowalski</div>
+          <div class="artist-role">Performance Artist</div>
+          <div class="artist-teaser">Using the museum space as a stage for conceptual performances.</div>
+          <button class="artist-btn" data-artist="david-kowalski">View details</button>
+        </div>
+      </div>
+      <div class="artist-card">
+        <img src="https://source.unsplash.com/featured/1200x900?art,installation" alt="Artist 5" class="artist-img" onerror="this.src='https://via.placeholder.com/400x300/1a0710/d6ad60?text=Artist+5'">
+        <div class="artist-info">
+          <div class="artist-name">Anna Nowak</div>
+          <div class="artist-role">Digital Artist</div>
+          <div class="artist-teaser">Blending traditional techniques with cutting-edge digital media.</div>
+          <button class="artist-btn" data-artist="anna-nowak">View details</button>
+        </div>
+      </div>
+      <div class="artist-card">
+        <img src="https://source.unsplash.com/featured/1200x900?theater,stage" alt="Artist 6" class="artist-img" onerror="this.src='https://via.placeholder.com/400x300/1a0710/d6ad60?text=Artist+6'">
+        <div class="artist-info">
+          <div class="artist-name">James Wright</div>
+          <div class="artist-role">Sound Designer</div>
+          <div class="artist-teaser">Crafting immersive audio experiences that enhance the visual narrative.</div>
+          <button class="artist-btn" data-artist="james-wright">View details</button>
+        </div>
+      </div>
+      <div class="artist-card">
+        <img src="https://source.unsplash.com/featured/1200x900?gallery,art" alt="Artist 7" class="artist-img" onerror="this.src='https://via.placeholder.com/400x300/1a0710/d6ad60?text=Artist+7'">
+        <div class="artist-info">
+          <div class="artist-name">Isabella Rossi</div>
+          <div class="artist-role">Curator</div>
+          <div class="artist-teaser">Leading our evening talks and providing historical context for artworks.</div>
+          <button class="artist-btn" data-artist="isabella-rossi">View details</button>
+        </div>
+      </div>
+      <div class="artist-card">
+        <img src="https://source.unsplash.com/featured/1200x900?exhibition,lights" alt="Artist 8" class="artist-img" onerror="this.src='https://via.placeholder.com/400x300/1a0710/d6ad60?text=Artist+8'">
+        <div class="artist-info">
+          <div class="artist-name">Thomas Müller</div>
+          <div class="artist-role">Photographer</div>
+          <div class="artist-teaser">Capturing the museum's atmosphere through a unique visual lens.</div>
+          <button class="artist-btn" data-artist="thomas-muller">View details</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Artist Modal -->
+  <div class="modal-overlay" id="artist-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-artist-name">Artist Name</h3>
+        <button class="close-modal" id="modal-close">×</button>
+      </div>
+      <div class="modal-body">
+        <img id="modal-artist-img" src="" alt="" style="width: 100%; height: 300px; object-fit: cover; border-radius: 4px; margin-bottom: 1rem;">
+        <div id="modal-artist-role" style="color: var(--gold); margin-bottom: 1rem;"></div>
+        <p id="modal-artist-bio"></p>
+        <p id="modal-artist-session" style="margin-top: 1rem; color: var(--soft-gold);"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="modal-close-btn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Venue -->
+  <section class="section container" id="venue">
+    <h2>The Venue</h2>
+    <div class="venue-content">
+      <div class="venue-info">
+        <h3>The Old Gallery</h3>
+        <p><strong>Address:</strong> ul. Artystyczna 15, 00-001 Warsaw, Poland</p>
+        <p><strong>Travel Tips:</strong> Located in the heart of Warsaw's cultural district, easily accessible by public transport.</p>
+        <p><strong>Accessibility:</strong> Fully wheelchair accessible with elevators to all floors. Assistive listening devices available upon request.</p>
+        <p><strong>Parking:</strong> Limited street parking available. Nearby parking garages within 5 minutes walk.</p>
+        <p><strong>Public Transport:</strong> Metro Station: Centrum (Lines 1 & 2), Bus: 17, 24, 38</p>
+      </div>
+      <div class="venue-map">
+        <svg viewBox="0 0 400 300" xmlns="http://www.w3.org/2000/svg">
+          <!-- Background -->
+          <rect width="400" height="300" fill="rgba(255,244,220,0.05)"/>
+          <!-- Streets -->
+          <line x1="0" y1="150" x2="400" y2="150" stroke="rgba(214,173,96,0.3)" stroke-width="2"/>
+          <line x1="150" y1="0" x2="150" y2="300" stroke="rgba(214,173,96,0.3)" stroke-width="2"/>
+          <line x1="250" y1="0" x2="250" y2="300" stroke="rgba(214,173,96,0.3)" stroke-width="2"/>
+          <!-- Gallery block -->
+          <rect x="80" y="80" width="180" height="140" fill="rgba(214,173,96,0.15)" stroke="var(--gold)" stroke-width="2"/>
+          <text x="170" y="150" text-anchor="middle" fill="var(--gold)" font-size="12">The Old Gallery</text>
+          <!-- Entrance marker -->
+          <circle cx="170" cy="150" r="5" fill="var(--gold)"/>
+          <text x="170" y="165" text-anchor="middle" fill="var(--gold)" font-size="10">Entrance</text>
+          <!-- Metro marker -->
+          <circle cx="150" cy="200" r="4" fill="var(--soft-gold)"/>
+          <text x="150" y="215" text-anchor="middle" fill="var(--soft-gold)" font-size="10">Metro</text>
+          <!-- Route line -->
+          <path d="M 150 200 Q 170 180 170 150" fill="none" stroke="var(--gold)" stroke-width="2" stroke-dasharray="5,5"/>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tickets -->
+  <section class="section container" id="tickets">
+    <h2>Choose Your Pass</h2>
+    <div class="tickets-grid">
+      <div class="ticket-card" id="ticket-night">
+        <h3 class="ticket-name">Night Pass</h3>
+        <div class="ticket-price">€29</div>
+        <ul class="ticket-features">
+          <li>Entry after 19:00</li>
+          <li>Main exhibition access</li>
+          <li>Program access</li>
+          <li>Standard entrance</li>
+        </ul>
+        <button class="ticket-select-btn" data-tier="night">Select Night Pass</button>
+      </div>
+      <div class="ticket-card" id="ticket-curator">
+        <span class="recommended-badge">Recommended</span>
+        <h3 class="ticket-name">Curator Pass</h3>
+        <div class="ticket-price">€59</div>
+        <ul class="ticket-features">
+          <li>Everything in Night Pass</li>
+          <li>Hidden collection tour</li>
+          <li>Reserved artist talk seating</li>
+          <li>Complimentary welcome drink</li>
+        </ul>
+        <button class="ticket-select-btn" data-tier="curator">Select Curator Pass</button>
+      </div>
+      <div class="ticket-card" id="ticket-patron">
+        <h3 class="ticket-name">Patron Pass</h3>
+        <div class="ticket-price">€129</div>
+        <ul class="ticket-features">
+          <li>Everything in Curator Pass</li>
+          <li>VIP lounge access</li>
+          <li>Signed event print</li>
+          <li>Priority entrance</li>
+        </ul>
+        <button class="ticket-select-btn" data-tier="patron">Select Patron Pass</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Ticket Modal -->
+  <div class="modal-overlay" id="ticket-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="ticket-modal-title">Complete Your Reservation</h3>
+        <button class="close-modal" id="ticket-modal-close">×</button>
+      </div>
+      <div class="modal-body">
+        <div id="ticket-summary" style="margin-bottom: 1.5rem; padding: 1rem; background: rgba(255,255,255,0.05); border-radius: 4px;">
+          <p><strong>Tier:</strong> <span id="ticket-summary-tier"></span></p>
+          <p><strong>Price per ticket:</strong> <span id="ticket-summary-price"></span></p>
+          <p><strong>Number of tickets:</strong> <span id="ticket-summary-count">1</span></p>
+          <p><strong>Total:</strong> <span id="ticket-summary-total"></span></p>
+        </div>
+        <form id="ticket-form" style="display: flex; flex-direction: column; gap: 1rem;">
+          <input type="text" id="attendee-name" class="newsletter-input" placeholder="Full Name" required>
+          <input type="email" id="attendee-email" class="newsletter-input" placeholder="Email Address" required>
+          <input type="number" id="ticket-count" class="newsletter-input" min="1" max="8" value="1" placeholder="Number of tickets" required>
+          <label style="display: flex; align-items: center; gap: 0.5rem; color: var(--muted);">
+            <input type="checkbox" id="terms-check" required>
+            I agree to the terms and conditions
+          </label>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="ticket-submit">Confirm Reservation</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Success Toast -->
+  <div class="toast" id="toast">
+    <span id="toast-message">Reservation confirmed!</span>
+  </div>
+
+  <!-- FAQ -->
+  <section class="section container" id="faq">
+    <h2>Frequently Asked Questions</h2>
+    <div class="faq-container">
+      <div class="faq-item">
+        <button class="faq-question">Is payment processed on this page?</button>
+        <div class="faq-answer">No, this is a demo landing page. No real payment is processed. All ticket purchases are simulated for demonstration purposes only.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-question">Can I arrive late?</button>
+        <div class="faq-answer">We recommend arriving at least 30 minutes before your selected time slot. Late arrivals may be subject to entry restrictions depending on current capacity.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-question">Are photos allowed?</button>
+        <div class="faq-answer">Yes, photography is encouraged! However, please respect flash restrictions in certain galleries and avoid using tripods or professional equipment without prior permission.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-question">Is the venue accessible?</button>
+        <div class="faq-answer">Yes, The Old Gallery is fully wheelchair accessible with elevators to all floors. Assistive listening devices and other accessibility accommodations are available upon request.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-question">Can I change my ticket tier?</button>
+        <div class="faq-answer">Ticket upgrades can be requested up to 24 hours before the event. Please contact our guest services team for assistance with modifications.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-question">How do I save the event to my calendar?</button>
+        <div class="faq-answer">Click the "Save to Calendar" button at the top of the page to download an .ics file that will automatically add the event to your calendar application.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Newsletter -->
+  <section class="section container">
+    <h2>Stay Updated</h2>
+    <p>Subscribe to receive updates about future events and exclusive offers.</p>
+    <form class="newsletter-form" id="newsletter-form">
+      <input type="email" class="newsletter-input" placeholder="Your email address" required>
+      <button type="submit" class="newsletter-btn">Subscribe</button>
+    </form>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-logo">ARTIFACT</div>
+    <div class="footer-links">
+      <a href="#program">Program</a>
+      <a href="#artists">Artists</a>
+      <a href="#venue">Venue</a>
+      <a href="#tickets">Tickets</a>
+      <a href="#faq">FAQ</a>
+    </div>
+    <p class="footer-note">© 2026 ARTIFACT. All rights reserved.</p>
+    <p class="footer-note">Demo landing page — no real ticket purchase.</p>
+  </footer>
+
+  <script>
+    // Artist data
+    const artists = {
+      'elena-vostok': {
+        name: 'Elena Vostok',
+        role: 'Contemporary Artist',
+        bio: 'Elena Vostok explores themes of memory and materiality through her mixed media installations. Her work has been exhibited in galleries across Europe and has been featured in numerous international publications.',
+        session: '20:00 — Hidden Collection Tour in Wing B'
+      },
+      'marcus-thorne': {
+        name: 'Marcus Thorne',
+        role: 'Sculptor',
+        bio: 'Marcus Thorne works with light and shadow to create immersive spatial experiences. His sculptures challenge our perception of volume and space, creating dialogue between the physical and ethereal.',
+        session: '21:00 — Sculpture Hall Projection'
+      },
+      'sofia-chen': {
+        name: 'Sofia Chen',
+        role: 'Installation Artist',
+        bio: 'Sofia Chen creates ephemeral works that respond to environmental conditions. Her installations change throughout the evening, responding to light, sound, and viewer interaction.',
+        session: '22:00 — Sculpture Hall Projection'
+      },
+      'david-kowalski': {
+        name: 'David Kowalski',
+        role: 'Performance Artist',
+        bio: 'David Kowalski uses the museum space as a stage for conceptual performances that blur the line between art and everyday life. His work invites unexpected participation from visitors.',
+        session: '21:00 — Live Ambient Performance'
+      },
+      'anna-nowak': {
+        name: 'Anna Nowak',
+        role: 'Digital Artist',
+        bio: 'Anna Nowak blends traditional techniques with cutting-edge digital media. Her work bridges the gap between classical art forms and contemporary technology.',
+        session: '23:00 — Artist Talk'
+      },
+      'james-wright': {
+        name: 'James Wright',
+        role: 'Sound Designer',
+        bio: 'James Wright crafts immersive audio experiences that enhance the visual narrative. His soundscapes are designed to complement and amplify the emotional impact of the artworks.',
+        session: '21:00 — Live Ambient Performance'
+      },
+      'isabella-rossi': {
+        name: 'Isabella Rossi',
+        role: 'Curator',
+        bio: 'Isabella Rossi leads our evening talks and provides historical context for artworks. With over 15 years of curatorial experience, she brings deep knowledge of art history and contemporary practice.',
+        session: '23:00 — Artist Talk'
+      },
+      'thomas-muller': {
+        name: 'Thomas Müller',
+        role: 'Photographer',
+        bio: 'Thomas Müller captures the museum\'s atmosphere through a unique visual lens. His photographs document both the artworks and the ephemeral quality of museum experiences.',
+        session: '01:00 — Closing Sound Session'
+      }
+    };
+
+    // Artist modal
+    const artistModal = document.getElementById('artist-modal');
+    const modalArtistName = document.getElementById('modal-artist-name');
+    const modalArtistImg = document.getElementById('modal-artist-img');
+    const modalArtistRole = document.getElementById('modal-artist-role');
+    const modalArtistBio = document.getElementById('modal-artist-bio');
+    const modalArtistSession = document.getElementById('modal-artist-session');
+    const modalClose = document.getElementById('modal-close');
+    const modalCloseBtn = document.getElementById('modal-close-btn');
+    const artistBtns = document.querySelectorAll('.artist-btn');
+
+    artistBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const artistId = btn.getAttribute('data-artist');
+        const artist = artists[artistId];
+        if (artist) {
+          modalArtistName.textContent = artist.name;
+          modalArtistRole.textContent = artist.role;
+          modalArtistBio.textContent = artist.bio;
+          modalArtistSession.textContent = artist.session;
+          modalArtistImg.src = btn.previousElementSibling.src;
+          artistModal.classList.add('active');
+        }
+      });
+    });
+
+    const closeModal = () => {
+      artistModal.classList.remove('active');
+    };
+
+    modalClose.addEventListener('click', closeModal);
+    modalCloseBtn.addEventListener('click', closeModal);
+    artistModal.addEventListener('click', (e) => {
+      if (e.target === artistModal) closeModal();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeModal();
+    });
+
+    // Save to Calendar
+    const saveCalendarBtn = document.getElementById('save-calendar-btn');
+    saveCalendarBtn.addEventListener('click', () => {
+      const icsContent = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//ARTIFACT//Museum Night//EN
+BEGIN:VEVENT
+UID:artifact-museum-night-${Date.now()}@artifact.com
+DTSTAMP:${new Date().toISOString()}
+DTSTART:20261018T190000Z
+DTEND:20261019T020000Z
+SUMMARY:ARTIFACT: Museum Night
+LOCATION:The Old Gallery, Warsaw
+DESCRIPTION:A cinematic after-hours museum event with exhibitions, performances, talks, and guided tours.
+END:VEVENT
+END:VCALENDAR`;
+
+      const blob = new Blob([icsContent], { type: 'text/calendar' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'artifact-museum-night.ics';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+
+    // Ticket selection
+    const ticketSelectBtns = document.querySelectorAll('.ticket-select-btn');
+    const ticketCards = document.querySelectorAll('.ticket-card');
+    const ticketModal = document.getElementById('ticket-modal');
+    const ticketModalClose = document.getElementById('ticket-modal-close');
+    const ticketModalCloseBtn = document.getElementById('modal-close-btn');
+    const ticketSummaryTier = document.getElementById('ticket-summary-tier');
+    const ticketSummaryPrice = document.getElementById('ticket-summary-price');
+    const ticketSummaryCount = document.getElementById('ticket-summary-count');
+    const ticketSummaryTotal = document.getElementById('ticket-summary-total');
+    const ticketForm = document.getElementById('ticket-form');
+    const ticketSubmit = document.getElementById('ticket-submit');
+    const toast = document.getElementById('toast');
+    const toastMessage = document.getElementById('toast-message');
+
+    let selectedTier = null;
+    let selectedCard = null;
+
+    ticketSelectBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        selectedCard = btn.closest('.ticket-card');
+        selectedTier = btn.getAttribute('data-tier');
+        
+        // Update UI
+        ticketCards.forEach(card => card.classList.remove('selected'));
+        selectedCard.classList.add('selected');
+        
+        ticketSelectBtns.forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        
+        // Open modal
+        ticketModalCloseBtn.textContent = 'Close';
+        ticketModalClose.textContent = '×';
+        ticketModal.classList.add('active');
+        
+        // Populate summary
+        const prices = { night: '€29', curator: '€59', patron: '€129' };
+        const tiers = { night: 'Night Pass', curator: 'Curator Pass', patron: 'Patron Pass' };
+        ticketSummaryTier.textContent = tiers[selectedTier];
+        ticketSummaryPrice.textContent = prices[selectedTier];
+        ticketSummaryCount.textContent = '1';
+        ticketSummaryTotal.textContent = prices[selectedTier];
+      });
+    });
+
+    ticketModalClose.addEventListener('click', () => {
+      ticketModal.classList.remove('active');
+      selectedCard = null;
+      selectedTier = null;
+    });
+
+    ticketModalCloseBtn.addEventListener('click', () => {
+      ticketModal.classList.remove('active');
+      selectedCard = null;
+      selectedTier = null;
+    });
+
+    ticketForm.addEventListener('input', (e) => {
+      if (e.target.id === 'ticket-count') {
+        const count = parseInt(e.target.value) || 1;
+        ticketSummaryCount.textContent = count;
+        const prices = { night: '€29', curator: '€59', patron: '€129' };
+        ticketSummaryTotal.textContent = prices[selectedTier] + ' × ' + count;
+      }
+    });
+
+    ticketSubmit.addEventListener('click', () => {
+      const name = document.getElementById('attendee-name').value;
+      const email = document.getElementById('attendee-email').value;
+      const count = document.getElementById('ticket-count').value;
+      const terms = document.getElementById('terms-check').checked;
+
+      if (!name || !email || !terms) {
+        showToast('Please fill in all required fields and accept the terms.');
+        return;
+      }
+
+      // Simulate reservation
+      ticketModal.classList.remove('active');
+      selectedCard = null;
+      selectedTier = null;
+      ticketCards.forEach(card => card.classList.remove('selected'));
+      ticketSelectBtns.forEach(b => b.classList.remove('selected'));
+
+      showToast(`Reservation confirmed for ${count} ${tiers[selectedTier]} ticket(s) for ${name}!`);
+
+      // Reset form
+      ticketForm.reset();
+      ticketSummaryCount.textContent = '1';
+      ticketSummaryTotal.textContent = prices[selectedTier];
+    });
+
+    const tiers = { night: 'Night Pass', curator: 'Curator Pass', patron: 'Patron Pass' };
+    const prices = { night: '€29', curator: '€59', patron: '€129' };
+
+    function showToast(message) {
+      toastMessage.textContent = message;
+      toast.classList.add('show');
+      setTimeout(() => {
+        toast.classList.remove('show');
+      }, 4000);
+    }
+
+    // Newsletter
+    const newsletterForm = document.getElementById('newsletter-form');
+    newsletterForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const email = newsletterForm.querySelector('input[type="email"]').value;
+      if (email) {
+        showToast('Thank you for subscribing!');
+        newsletterForm.reset();
+      }
+    });
+
+    // FAQ accordion
+    const faqQuestions = document.querySelectorAll('.faq-question');
+    faqQuestions.forEach(question => {
+      question.addEventListener('click', () => {
+        const item = question.parentElement;
+        const isActive = item.classList.contains('active');
+        
+        faqQuestions.forEach(q => {
+          q.parentElement.classList.remove('active');
+        });
+        
+        if (!isActive) {
+          item.classList.add('active');
+        }
+      });
+    });
+
+    // Navbar active state
+    const sections = document.querySelectorAll('section[id]');
+    const navLinks = document.querySelectorAll('.nav-link');
+
+    window.addEventListener('scroll', () => {
+      let current = '';
+      sections.forEach(section => {
+        const sectionTop = section.offsetTop - 100;
+        const sectionHeight = section.offsetHeight;
+        const sectionId = section.getAttribute('id');
+        
+        if (scrollY >= sectionTop && scrollY < sectionTop + sectionHeight) {
+          current = sectionId;
+        }
+      });
+
+      navLinks.forEach(link => {
+        link.classList.remove('active');
+        if (link.getAttribute('href').includes(current)) {
+          link.classList.add('active');
+        }
+      });
+    });
+  </script>
+</body>
+</html>

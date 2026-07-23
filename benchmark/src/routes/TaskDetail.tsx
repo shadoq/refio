@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useParams, Link } from "react-router-dom";
-import { Typography, Card, Collapse, Tag, Empty, Spin } from "antd";
+import { Typography, Card, Collapse, Tag, Empty, Spin, Table, Tooltip } from "antd";
 import { useTasks } from "@/data/queries";
 import { useResults } from "@/data/queries";
 import { useFilters, applyFilters } from "@/store/filters";
@@ -39,6 +39,11 @@ export default function TaskDetail() {
   const environmentNames = useMemo(
     () => Object.fromEntries((resultsData?.environments ?? []).map((e) => [e.id, e.name])),
     [resultsData],
+  );
+
+  const stabilityEntries = useMemo(
+    () => (resultsData?.stability ?? []).filter((s) => s.taskId === taskId),
+    [resultsData, taskId],
   );
 
   if (tasksLoading || resultsLoading) {
@@ -109,7 +114,7 @@ export default function TaskDetail() {
             />
           </Card>
 
-          <Card title="Score by Criterion">
+          <Card title="Score by Criterion" style={{ marginBottom: 24 }}>
             <BarByCriterion
               results={filteredResults}
               criteria={allCriteria}
@@ -118,6 +123,67 @@ export default function TaskDetail() {
             />
           </Card>
         </>
+      )}
+
+      {stabilityEntries.length > 0 && (
+        <Card title="Stability across attempts">
+          <Text type="secondary" style={{ display: "block", marginBottom: 12 }}>
+            Consistency of a model's solutions across repeated attempts. Lower score
+            variance and higher code similarity mean more stable output.
+          </Text>
+          <Table
+            size="small"
+            pagination={false}
+            rowKey={(s) => `${s.modelId}::${s.environmentId}`}
+            dataSource={stabilityEntries}
+            columns={[
+              {
+                title: "Model",
+                key: "model",
+                render: (_, s) => modelNames[s.modelId] ?? s.modelId,
+              },
+              {
+                title: "Environment",
+                key: "environment",
+                render: (_, s) => environmentNames[s.environmentId] ?? s.environmentId,
+              },
+              {
+                title: "Attempts",
+                key: "attempts",
+                width: 90,
+                render: (_, s) => s.resultIds.length,
+              },
+              {
+                title: "Score variance",
+                key: "variance",
+                width: 130,
+                render: (_, s) => s.deterministic.scoreVariance.toFixed(3),
+              },
+              {
+                title: "Code similarity",
+                key: "similarity",
+                width: 130,
+                render: (_, s) => s.deterministic.codeSimilarity.toFixed(3),
+              },
+              {
+                title: "Judges",
+                key: "judges",
+                render: (_, s) =>
+                  s.judges.length === 0 ? (
+                    <Text type="secondary">-</Text>
+                  ) : (
+                    s.judges.map((j) => (
+                      <Tooltip key={j.judgeId} title={j.rationale ?? ""}>
+                        <Tag color="blue">
+                          {j.judgeId}: {j.value}
+                        </Tag>
+                      </Tooltip>
+                    ))
+                  ),
+              },
+            ]}
+          />
+        </Card>
       )}
     </div>
   );

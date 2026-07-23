@@ -128,3 +128,53 @@ counts. The speed data comes from the per-run `durationMs` / `tokensOut` fields 
 already writes to each `results.jsonl` record. `--out <file>` also writes the report to disk;
 `--self-test` checks the aggregation offline. This is the benchmark data prepared for
 `test_data/RESULTS.md`.
+
+## Strong-judge scoring (`npm run judge`)
+
+Optional, additional quality scores produced by strong-judge agents (Claude Code,
+Codex), independent of the e2e harness and of the manual `scores`. The pipeline
+lives in `scripts/judge/` (deterministic orchestration; pure logic in
+`src/lib/judge/`, covered by vitest).
+
+```bash
+npm run judge -- --dry-run --limit 2                 # build evidence + prompts, no CLI, no write
+npm run judge -- --task snake --limit 20             # score a scope with all available judges
+npm run judge -- --result-id <id> --judges codex     # one result, one judge
+npm run judge -- --stability --task snake            # cross-attempt stability for a group
+```
+
+For each result with an HTML artifact the runner renders it headless (Playwright),
+hands a read-only evidence folder to each judge CLI (`claude -p ... --allowedTools
+Read`, `codex exec --sandbox read-only`), validates the returned JSON (values
+snapped to each criterion's `scale.values`), and writes one `judgeScores` entry per
+judge into `data/results.json`. A `results.json.bak` holds the pre-write state.
+
+The evidence folder holds `artifact.html`, `console-errors.json`,
+`interactions.json` and seven screenshots:
+
+- `shot-1/2/3.png` - the 1280x800 viewport at 1s, 6s and 12s after load. The spread
+  is what separates a live animation from a frozen first frame.
+- `shot-full.png` - the whole scrollable page, captured after scrolling through it
+  so reveal-on-scroll sections are in their revealed state.
+- `interact-1/2/3.png` - one interaction each, every one on a freshly loaded page so
+  the shots stay independent. The default scenario clicks the first three controls
+  that pass Playwright's actionability check (real controls before in-page anchors,
+  DOM order, so the choice is reproducible); `snake` and `todo-app` have their own
+  scenarios in `scripts/judge/lib/interactions.ts` because clicking alone proves
+  nothing for a keyboard game or an empty todo list. `interactions.json` records
+  what each step did, including steps that found nothing to click.
+
+- Judges score the same criteria as the human (`coreCriteria` + task `extraCriteria`)
+  plus judge-only `judgeCriteria` (code structure, logic correctness). Blind:
+  a judge never sees the human scores or another judge's scores.
+- The per-criterion aggregate (median across judges) is computed in the viewer,
+  never stored. Toggle "Judges" on the Results page for the aggregate column and a
+  divergence badge when human and judges differ by >= 0.5 on a shared criterion;
+  open a result for the per-judge breakdown.
+- Stability (`--stability`) records deterministic metrics (score variance across
+  attempts + token-Jaccard code similarity) plus a judge verdict over all attempts,
+  keyed by (task, model, environment); it needs >= 2 attempts that already have
+  `judgeScores`.
+- **Cost:** every non-`--dry-run` run calls paid/agentic CLIs. `--limit` (default 20)
+  caps scope; `--re-judge` re-scores. Model overrides: `JUDGE_CLAUDE_MODEL`,
+  `JUDGE_CODEX_MODEL`.

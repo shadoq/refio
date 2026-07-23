@@ -26,6 +26,9 @@ export const TaskSchema = z.object({
 export const TasksFileSchema = z.object({
   version: z.literal(1),
   coreCriteria: z.array(CriterionSchema).min(1),
+  // Criteria scored only by strong-judge agents (global, applied to every task)
+  // on top of coreCriteria and a task's extraCriteria.
+  judgeCriteria: z.array(CriterionSchema).default([]),
   tasks: z.array(TaskSchema),
 });
 

@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARTIFACT: Museum Night | Premium Event</title>
+    <style>
+        /* RESET & BASE */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        :root {
+            --bg-dark: #070506;
+            --velvet: #1a0710;
+            --burgundy: #3a0f1d;
+            --navy: #07111f;
+            --gold: #d6ad60;
+            --soft-gold: #f3d79b;
+            --ivory: #f8efe2;
+            --muted: #b9a999;
+            --panel-bg: rgba(255, 244, 220, 0.06);
+            --border-gold: rgba(214, 173, 96, 0.28);
+            
+            --font-serif: 'Georgia', 'Times New Roman', serif;
+            --font-sans: 'Inter', system-ui, -apple-system, Segoe UI, sans-serif;
+        }
+
+        html { scroll-behavior: smooth; font-size: 16px; }
+        
+        body {
+            background-color: var(--bg-dark);
+            color: var(--ivory);
+            font-family: var(--font-sans);
+            line-height: 1.6;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* GRAIN OVERLAY */
+        .grain-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            z-index: 9998;
+            opacity: 0.05;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='1'/%3E%3C/svg%3E");
+        }
+
+        /* TYPOGRAPHY */
+        h1, h2, h3, h4 { font-family: var(--font-serif); font-weight: 400; line-height: 1.2; margin-bottom: 1rem; color: var(--ivory); letter-spacing: -0.02em; }
+        
+        h1 { font-size: clamp(3rem, 8vw, 6rem); text-align: center; background: linear-gradient(to bottom right, #fff, var(--soft-gold)); -webkit-background-clip: text; color: transparent; margin-bottom: 0.5em; }
+        h2 { font-size: clamp(2rem, 5vw, 3.5rem); position: relative; display: inline-block; padding-bottom: 1rem; border-bottom: 1px solid var(--gold); }
+        
+        .section-title-container { text-align: center; margin-bottom: 4rem; max-width: 800px; margin-left: auto; margin-right: auto; position: relative; z-index: 2;}
+        .subtitle { color: var(--soft-gold); font-family: var(--font-sans); letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.875rem; display: block; margin-bottom: 1rem; }
+
+        p { color: var(--muted); margin-bottom: 1.5rem; max-width: 65ch; }
+        
+        .gold-text { color: var(--soft-gold); font-style: italic; }
+
+        /* UTILITIES */
+        .container { width: 90%; max-width: 1280px; margin: 0 auto; padding: 4rem 0; position: relative; z-index: 2;}
+        
+        button, a.button { cursor: pointer; border: none; outline: none; transition: all 0.3s ease; }
+        
+        .btn-primary {
+            background-color: var(--gold);
+            color: var(--bg-dark);
+            padding: 1rem 2.5rem;
+            font-family: var(--font-sans);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 600;
+            border-radius: 2px;
+        }
+        
+        .btn-primary:hover { background-color: var(--soft-gold); transform: translateY(-2px); box-shadow: 0 10px 30px rgba(214, 173, 96, 0.2); }
+
+        .btn-outline {
+            border: 1px solid var(--gold);
+            color: var(--soft-gold);
+            padding: 1rem 2.5rem;
+            font-family: var(--font-sans);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            background: transparent;
+        }
+
+        .btn-outline:hover { border-color: var(--soft-gold); color: #fff; }
+
+        /* NAVBAR */
+        header { position: fixed; top: 0; left: 0; width: 100%; z-index: 1000; padding: 2rem 5vw; transition: all 0.4s ease; background: linear-gradient(to bottom, rgba(7,5,6,0.9), transparent); }
+        header.scrolled { padding: 1rem 5vw; background-color: var(--bg-dark); box-shadow: 0 2px 20px rgba(0,0,0,0.8); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border-gold); }
+        
+        nav { display: flex; justify-content: space-between; align-items: center; max-width: 1400px; margin: 0 auto; position: relative; z-index: 2;}
+        
+        .logo { font-family: var(--font-serif); font-size: 1.5rem; color: #fff; text-decoration: none; letter-spacing: -0.03em; border-bottom: 2px solid transparent; transition: all 0.3s ease; }
+        .logo:hover { border-color: var(--gold); padding-bottom: 4px; }
+
+        .nav-links { display: flex; gap: 2rem; list-style: none; align-items: center; }
+        
+        .nav-link { color: var(--muted); text-decoration: none; font-size: 0.95rem; transition: color 0.3s ease; position: relative; padding-bottom: 4px; }
+        .nav-link::after { content: ''; position: absolute; bottom: 0; left: 0; width: 0%; height: 1px; background-color: var(--gold); transition: width 0.3s ease; }
+        
+        .nav-link:hover, .nav-link.active { color: #fff; }
+        .nav-link:hover::after, .nav-link.active::after { width: 100%; }
+
+        /* HERO SECTION */
+        .hero { height: 100vh; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; padding-top: 80px; }
+        
+        .hero-bg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: -2; background-color: var(--bg-dark); }
+        .hero-gradient { position: absolute; inset: 0; background: radial-gradient(circle at center, rgba(58, 15, 29, 0.3) 0%, transparent 70%), linear-gradient(to bottom, #070506, var(--velvet)); z-index: -1; }
+        
+        .hero-content { text-align: center; max-width: 900px; padding: 2rem; position: relative; z-index: 3; animation: fadeInUp 1.2s ease-out forwards; opacity: 0; transform: translateY(30px); }
+
+        @keyframes fadeInUp { to { opacity: 1; transform: translateY(0); } }
+        
+        .hero-meta { display: flex; justify-content: center; gap: 2rem; margin-bottom: 3rem; color: var(--muted); font-size: 0.95rem; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 2rem; }
+        .meta-item { display: flex; align-items: center; gap: 0.75rem; }
+
+        /* CONCEPT SECTION */
+        .concept-section { background-color: var(--velvet); position: relative; overflow: hidden; border-bottom: 1px solid rgba(255,255,255,0.03); }
+        
+        .split-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 4rem; align-items: center; max-width: 1280px; margin: 0 auto; padding: 6rem 5vw; position: relative; z-index: 2;}
+        
+        .concept-text h3 { font-size: 2.5rem; color: var(--soft-gold); }
+
+        /* PROGRAM TIMELINE */
+        .timeline-container { max-width: 900px; margin: 0 auto; position: relative; padding-left: 40px; border-left: 1px solid rgba(214, 173, 96, 0.3); }
+
+        .time-slot { position: relative; margin-bottom: 5rem; opacity: 0; transform: translateX(-20px); transition: all 0.8s ease-out; }
+        .time-slot.visible { opacity: 1; transform: translateX(0); }
+
+        .slot-time { font-family: var(--font-serif); color: var(--gold); font-size: 1.5rem; margin-bottom: 0.5rem; display: block; position: relative; z-index: 2;}
+        
+        .time-slot::before { content: ''; position: absolute; left: -47px; top: 6px; width: 13px; height: 13px; background-color: var(--bg-dark); border: 2px solid var(--gold); border-radius: 50%; z-index: 2;}
+        
+        .slot-content { padding-left: 1rem; }
+
+        /* ARTISTS GRID */
+        .artists-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem; margin-top: 4rem;}
+        
+        .artist-card { background-color: var(--panel-bg); border: 1px solid rgba(255,255,255,0.08); padding: 3rem 2rem; text-align: center; transition: all 0.4s ease; position: relative; overflow: hidden; cursor: pointer;}
+        
+        .artist-card:hover { transform: translateY(-10px); border-color: var(--gold); background-color: rgba(255,255,255,0.03);}
+        
+        .artist-img-placeholder { width: 8rem; height: 8rem; margin: -6rem auto 1.5rem; border-radius: 50%; overflow: hidden; position: relative; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        .artist-img-placeholder img { width: 100%; height: 100%; object-fit: cover; filter: grayscale(100%); transition: all 0.5s ease;}
+        
+        .artist-card:hover .artist-img-placeholder img { filter: grayscale(0%) contrast(120%); transform: scale(1.1);}
+
+        /* VENUE */
+        .venue-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 4rem; align-items: center;}
+        
+        .map-container { position: relative; height: 500px; background-color: var(--navy); border-radius: 2px; overflow: hidden; }
+        .venue-details h3 { font-size: 1.8rem; margin-bottom: 1rem; color: #fff;}
+
+        /* TICKETS */
+        .tickets-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem; max-width: 1000px; margin: 4rem auto; }
+        
+        .ticket-card { background-color: var(--panel-bg); border: 1px solid rgba(255,255,255,0.08); padding: 3rem 2rem; text-align: center; position: relative; transition: all 0.4s ease;}
+        .ticket-card.featured { background-color: var(--burgundy); border-color: rgba(214, 173, 96, 0.5); transform: scale(1.05);}
+
+        .price { font-size: 3rem; color: #fff; margin-bottom: 1rem; display: block;}
+        
+        .ticket-features { list-style: none; padding-top: 2rem; border-top: 1px solid rgba(255,255,255,0.1); text-align: left; }
+        .ticket-features li { margin-bottom: 1rem; color: var(--muted); display: flex; align-items: center; gap: 1rem;}
+
+        /* FAQ */
+        .faq-item { border-bottom: 1px solid rgba(255,255,255,0.1); margin-bottom: 1rem; }
+        
+        .faq-question { width: 100%; text-align: left; padding: 1.5rem 0; background: none; color: #fff; font-family: var(--font-serif); font-size: 1.25rem; display: flex; justify-content: space-between; align-items: center;}
+        .faq-question::after { content: '+'; font-size: 1.5rem; transition: transform 0.3s ease; }
+        
+        .faq-item.active .faq-question::after { transform: rotate(45deg); color: var(--gold);}
+        
+        .faq-answer { max-height: 0; overflow: hidden; transition: max-height 0.4s cubic-bezier(0,1,0,1); }
+        .faq-item.active .faq-answer { padding-bottom: 2rem; max-height: 500px;}
+
+        /* FOOTER */
+        footer { background-color: #030203; border-top: 1px solid var(--border-gold); padding: 4rem 5vw 2rem; margin-top: 6rem;}
+        
+        .footer-content { display: flex; justify-content: space-between; align-items: center; max-width: 1280px; margin: 0 auto; }
+
+        /* MODALS */
+        .modal-overlay { position: fixed; inset: 0; background-color: rgba(7,5,6,0.9); z-index: 2000; display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: all 0.3s ease;}
+        .modal-overlay.active { opacity: 1; pointer-events: auto; }
+
+        .modal-container { background-color: var(--bg-dark); border: 1px solid var(--gold); padding: 3rem; max-width: 600px; width: 90%; position: relative; transform: translateY(20px); transition: all 0.4s ease;}
+        .modal-overlay.active .modal-container { transform: translateY(0);}
+
+        .close-modal { position: absolute; top: 1rem; right: 1rem; background: none; color: var(--muted); font-size: 2rem; line-height: 1;}
+        
+        /* TOAST */
+        .toast-container { position: fixed; bottom: 2rem; right: 2rem; z-index: 3000; display: flex; flex-direction: column; gap: 1rem;}
+
+        .toast { background-color: var(--burgundy); border-left: 4px solid var(--gold); color: #fff; padding: 1.5rem 2rem; min-width: 300px; box-shadow: 0 10px 30px rgba(0,0,0,0.8); transform: translateX(120%); transition: all 0.4s cubic-bezier(0.68,-0.55,0.27,1.55);}
+        .toast.show { transform: translateX(0); }
+
+        /* RESPONSIVE */
+        @media (max-width: 900px) {
+            h1 { font-size: 3rem; }
+            .split-layout, .venue-layout { grid-template-columns: 1fr; gap: 2rem;}
+            .nav-links { display: none; position: absolute; top: 80px; left: 0; width: 100%; background-color: var(--bg-dark); flex-direction: column; padding: 2rem; border-bottom: 1px solid var(--gold);}
+            .nav-links.mobile-open { display: flex;}
+            .menu-toggle { display: block; color: #fff; font-size: 1.5rem; background: none;}
+        }
+
+        @media (min-width: 901px) { .menu-toggle { display: none; }}
+    </style>
+</head>
+<body>
+    <div class="grain-overlay"></div>
+
+    <!-- NAVBAR -->
+    <header id="navbar">
+        <nav>
+            <a href="#" class="logo">ARTIFACT</a>
+            <button class="menu-toggle" aria-label="Toggle Menu">&#9776;</button>
+            <ul class="nav-links">
+                <li><a href="#program" class="nav-link active">Program</a></li>
+                <li><a href="#artists" class="nav-link">Artists</a></li>
+                <li><a href="#venue" class="nav-link">Venue</a></li>
+                <li><a href="#tickets" class="nav-link">Tickets</a></li>
+                <li><button onclick="openModal('ticket-modal')" class="btn-primary btn-sm">Get Tickets</button></li>
+            </ul>
+        </nav>
+    </header>
+
+    <!-- HERO -->
+    <section class="hero" id="home">
+        <div class="hero-bg"></div>
+        <div class="hero-gradient"></div>
+        
+        <div class="hero-content">
+            <span class="subtitle">October 18, 2026</span>
+            <h1>Museum Night,<br><i style="font-weight:300; font-style:normal;">Reimagined.</i></h1>
+            
+            <div class="hero-meta">
+                <div class="meta-item"><span>&#9734;</span> 18 October, 2026</div>
+                <div class="meta-item"><span>&#9205;</span> 19:00 – 02:00</div>
+                <div class="meta-item"><span>&#127968;</span> The Old Gallery, Warsaw</div>
+            </div>
+
+            <p style="margin-bottom: 3rem; font-size: 1.25rem;">Experience the city's most prestigious museums after dark. A night of art, music, and mystery in an atmosphere of velvet darkness.</p>
+
+            <div class="hero-actions">
+                <button onclick="openModal('ticket-modal')" class="btn-primary" style="margin-right: 1rem; margin-bottom: 1rem;">Get Tickets</button>
+                <a href="#" id="calendar-btn" class="btn-outline" download="artifact-night.ics">Save to Calendar</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- CONCEPT -->
+    <section class="concept-section">
+        <div class="container split-layout">
+            <div class="concept-text">
+                <span class="subtitle">The Experience</span>
+                <h3>A Cinematic Journey Through Art & Sound</h3>
+                <p>We transform the city's cultural landmarks into a single, immersive stage. As night falls, spotlights replace daylight, and classical music blends with ambient soundscapes.</p>
+                <p>This is not just an exhibition; it is a living narrative where history meets modernity in a dance of shadows and light.</p>
+            </div>
+            <div class="concept-visual">
+                <!-- Placeholder for artistic image -->
+                <div style="width: 100%; height: 400px; background-color: var(--navy); border-radius: 2px; position: relative; overflow: hidden;">
+                    <img src="https://images.unsplash.com/photo-1536924876749-bcbb7dcbfbc6?q=80&w=2000&auto=format&fit=crop" alt="Museum Interior at Night" style="width: 100%; height: 100%; object-fit: cover; filter: brightness(0.6) contrast(1.2);">
+                    <div style="position: absolute; inset: 0; background: linear-gradient(to top, var(--bg-dark), transparent);"></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- PROGRAM -->
+    <section id="program" class="container">
+        <div class="section-title-container">
+            <span class="subtitle">The Night's Flow</span>
+            <h2>The Program</h2>
+        </div>
+        
+        <div class="timeline-container">
+            <div class="time-slot scroll-reveal" data-delay="0.1s">
+                <span class="slot-time">19:00 – 20:30</span>
+                <div class="slot-content">
+                    <h4>Welcome Reception & Opening Keynote</h4>
+                    <p>Guests are welcomed with a signature cocktail. The opening speech by the museum director sets the tone for the evening.</p>
+                </div>
+            </div>
+
+            <div class="time-slot scroll-reveal" data-delay="0.3s">
+                <span class="slot-time">21:00 – 22:30</span>
+                <div class="slot-content">
+                    <h4>The Symphony of Shadows</h4>
+                    <p>A live string quartet performs classical pieces in the main hall, accompanied by a light projection show.</p>
+                </div>
+            </div>
+
+            <div class="time-slot scroll-reveal" data-delay="0.5s">
+                <span class="slot-time">23:00 – 01:00</span>
+                <div class="slot-content">
+                    <h4>Late Night Jazz & Art Talks</h4>
+                    <p>The atmosphere shifts to a lounge setting with jazz music and intimate talks by contemporary artists.</p>
+                </div>
+            </div>
+
+            <div class="time-slot scroll-reveal" data-delay="0.7s">
+                <span class="slot-time">01:30 – 02:00</span>
+                <div class="slot-content">
+                    <h4>Farewell & Midnight Toast</h4>
+                    <p>A final collective moment of reflection before the event concludes.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ARTISTS -->
+    <section id="artists" class="concept-section">
+        <div class="container">
+            <div class="section-title-container">
+                <span class="subtitle">Featured Performers</span>
+                <h2>The Artists & Speakers</h2>
+            </div>
+
+            <div class="artists-grid scroll-reveal" data-delay="0.1s">
+                <!-- Artist 1 -->
+                <div class="artist-card" onclick="openModal('modal-alex')">
+                    <div class="artist-img-placeholder">
+                        <img src="https://images.unsplash.com/photo-1529626455594-4ff0802cfb7e?q=80&w=300&auto=format&fit=crop" alt="Alex Vane">
+                    </div>
+                    <h3>Alex Vane</h3>
+                    <p class="gold-text">Keynote Speaker & Curator</p>
+                </div>
+
+                <!-- Artist 2 -->
+                <div class="artist-card" onclick="openModal('modal-sarah')">
+                    <div class="artist-img-placeholder">
+                        <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?q=80&w=300&auto=format&fit=crop" alt="Sarah Jenkins">
+                    </div>
+                    <h3>Sarah Jenkins</h3>
+                    <p class="gold-text">Contemporary Artist</p>
+                </div>
+
+                <!-- Artist 3 -->
+                <div class="artist-card" onclick="openModal('modal-orchestra')">
+                    <div class="artist-img-placeholder">
+                        <img src="https://images.unsplash.com/photo-1507838153414-b4b713384ebd?q=80&w=300&auto=format&fit=crop" alt="The Night Orchestra">
+                    </div>
+                    <h3>The Night Orchestra</h3>
+                    <p class="gold-text">Live String Quartet</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- VENUE -->
+    <section id="venue" class="container">
+        <div class="split-layout venue-layout scroll-reveal">
+            <div class="map-container">
+                 <!-- Placeholder for map image or iframe -->
+                <img src="https://images.unsplash.com/photo-1569387204950-ee8cfd0aefac?q=80&w=1000&auto=format&fit=crop" alt="Venue Map" style="width: 100%; height: 100%; object-fit: cover; filter: grayscale(1) brightness(0.7);">
+            </div>
+            
+            <div class="venue-details scroll-reveal" data-delay="0.2s">
+                <span class="subtitle">Location</span>
+                <h3>The Old Gallery, Warsaw</h3>
+                <p style="font-size: 1.5rem; color: #fff;">ul. Złota 48<br>00-126 Warszawa</p>
+                
+                <div style="margin-top: 2rem;">
+                    <button class="btn-outline">Get Directions</button>
+                </div>
+
+                <p style="font-size: 0.9rem; margin-top: 3rem;">The venue is fully accessible for guests with mobility impairments. Please contact us in advance to arrange assistance.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- TICKETS -->
+    <section id="tickets" class="container">
+        <div class="section-title-container scroll-reveal">
+            <span class="subtitle">Reserve Your Spot</span>
+            <h2>Ticket Tiers</h2>
+        </div>
+
+        <div class="tickets-container scroll-reveal" data-delay="0.1s">
+            <!-- Standard -->
+            <div class="ticket-card">
+                <h3>Standard Access</h3>
+                <span class="price">$45</span>
+                <ul class="ticket-features">
+                    <li>&#10003; Full event access (all halls)</li>
+                    <li>&#10003; Welcome drink included</li>
+                    <li>&#10003; Live music performances</li>
+                </ul>
+                <button onclick="selectTicket('Standard Access', 45)" class="btn-outline" style="width: 100%; margin-top: 2rem;">Select Ticket</button>
+            </div>
+
+            <!-- VIP -->
+            <div class="ticket-card featured">
+                <span style="position:absolute; top:-10px; left:50%; transform:translateX(-50%); background:var(--gold); color:#000; padding: 4px 12px; font-size:0.8rem; text-transform:uppercase;">Best Value</span>
+                <h3>VIP Experience</h3>
+                <span class="price">$95</span>
+                <ul class="ticket-features">
+                    <li>&#10003; Everything in Standard</li>
+                    <li>&#10003; Priority entry & fast track</li>
+                    <li>&#10003; Exclusive lounge access</li>
+                    <li>&#10003; Private artist talk session</li>
+                </ul>
+                <button onclick="selectTicket('VIP Experience', 95)" class="btn-primary" style="width: 100%; margin-top: 2rem;">Select Ticket</button>
+            </div>
+
+             <!-- Group -->
+             <div class="ticket-card">
+                <h3>Cultural Pass (Group)</h3>
+                <span class="price">$180</span>
+                <ul class="ticket-features">
+                    <li>&#10003; 4 Standard Tickets</li>
+                    <li>&#10003; Group guide for the evening</li>
+                    <li>&&#10003; Commemorative gift bag (per person)</li>
+                </ul>
+                <button onclick="selectTicket('Cultural Pass', 180)" class="btn-outline" style="width: 100%; margin-top: 2rem;">Select Ticket</button>
+            </div>
+        </div>
+
+        <!-- FAQ -->
+        <div id="faq-section" class="scroll-reveal">
+             <h3 style="text-align:center; color:#fff; font-size:1.5rem; margin-bottom: 2rem;">Frequently Asked Questions</h3>
+             
+            <div class="faq-item scroll-reveal">
+                <button class="faq-question" onclick="toggleFAQ(this)">Is the event wheelchair accessible?</button>
+                <div class="faq-answer"><p style="color:#b9a999;">Yes, The Old Gallery is fully equipped with ramps and elevators. Accessible restrooms are available on all floors.</p></div>
+            </div>
+
+            <div class="faq-item scroll-reveal">
+                <button class="faq-question" onclick="toggleFAQ(this)">What should I wear?</button>
+                <div class="faq-answer"><p style="color:#b9a999;">The dress code is "Cultural Chic." We recommend smart casual or semi-formal attire. Evening gowns and suits are welcome but not required.</p></div>
+            </div>
+
+            <div class="faq-item scroll-reveal">
+                <button class="faq-question" onclick="toggleFAQ(this)">Can I cancel my ticket?</button>
+                <div class="faq-answer"><p style="color:#b9a999;">Tickets can be refunded up to 48 hours before the event. After that, they are non-refundable but transferable.</p></div>
+            </div>
+
+             <div class="faq-item scroll-reveal">
+                <button class="faq-question" onclick="toggleFAQ(this)">Are children allowed?</button>
+                <div class="faq-answer"><p style="color:#b9a999;">This is an adult-oriented evening event (18+). We apologize for any inconvenience.</p></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- FOOTER -->
+    <footer>
+        <div class="footer-content">
+            <a href="#" class="logo" style="font-size: 1.25rem;">ARTIFACT</a>
+            
+            <p style="margin-bottom:0; font-size: 0.875rem; color:#666;">&copy; 2026 ARTIFACT Museum Night. All rights reserved.</p>
+
+            <div class="social-links" style="display:flex; gap:1rem;">
+                <!-- Social placeholders -->
+                <a href="#" style="color:#fff; text-decoration:none;">Instagram</a>
+                <a href="#" style="color:#fff; text-decoration:none;">Twitter</a>
+            </div>
+        </div>
+    </footer>
+
+    <!-- MODALS -->
+    
+    <!-- Artist Modal Template (Generic) -->
+    <div id="modal-alex" class="modal-overlay">
+        <div class="modal-container">
+            <button class="close-modal" onclick="closeModal('modal-alex')">&times;</button>
+            <h2>Alex Vane</h2>
+            <p style="color:var(--gold); margin-bottom:1rem;">Keynote Speaker & Curator</p>
+            <img src="https://images.unsplash.com/photo-1529626455594-4ff0802cfb7e?q=80&w=300&auto=format&fit=crop" style="width: 100%; height: 200px; object-fit: cover; margin-bottom: 1.5rem;">
+            <p>Alex Vane is a renowned curator known for bridging the gap between classical art and modern digital installations. His opening speech will set the stage for this unique night.</p>
+        </div>
+    </div>
+
+     <!-- Artist Modal Template (Generic) -->
+     <div id="modal-sarah" class="modal-overlay">
+        <div class="modal-container">
+            <button class="close-modal" onclick="closeModal('modal-sarah')">&times;</button>
+            <h2>Sarah Jenkins</h2>
+            <p style="color:var(--gold); margin-bottom:1rem;">Contemporary Artist</p>
+            <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?q=80&w=300&auto=format&fit=crop" style="width: 100%; height: 200px; object-fit: cover; margin-bottom: 1.5rem;">
+            <p>Sarah's work explores the intersection of memory and place. She will be unveiling a new piece specifically commissioned for ARTIFACT.</p>
+        </div>
+    </div>
+
+     <!-- Artist Modal Template (Generic) -->
+     <div id="modal-orchestra" class="modal-overlay">
+        <div class="modal-container">
+            <button class="close-modal" onclick="closeModal('modal-orchestra')">&times;</button>
+            <h2>The Night Orchestra</h2>
+            <p style="color:var(--gold); margin-bottom:1rem;">Live String Quartet</p>
+             <img src="https://images.unsplash.com/photo-1507838153414-b4b713384ebd?q=80&w=300&auto=format&fit=crop" style="width: 100%; height: 200px; object-fit: cover; margin-bottom: 1.5rem;">
+            <p>A group of classically trained musicians who specialize in atmospheric performances, creating a soundscape that complements the visual art.</p>
+        </div>
+    </div>
+
+    <!-- Ticket Checkout Modal -->
+    <div id="ticket-modal" class="modal-overlay">
+        <div class="modal-container">
+            <button class="close-modal" onclick="closeModal('ticket-modal')">&times;</button>
+            
+            <h2 style="text-align:center; margin-bottom:1.5rem;">Secure Your Ticket</h2>
+            
+            <form id="checkout-form" onsubmit="handleCheckout(event)">
+                <div style="margin-bottom: 1.5rem;">
+                    <label for="ticket-type" class="subtitle">Selected Tier</label><br>
+                    <select id="ticket-type" required style="width:100%; padding:1rem; background:#070506; color:#fff; border:1px solid var(--border-gold); margin-bottom: 2rem;">
+                        <!-- Options populated by JS -->
+                    </select>
+                </div>
+
+                <input type="text" id="name-input" placeholder="Full Name" required style="width:100%; padding:1rem; background:#070506; color:#fff; border:1px solid var(--border-gold); margin-bottom: 2rem;">
+                
+                <button type="submit" class="btn-primary" style="width:100%;">Proceed to Payment (Demo)</button>
+            </form>
+
+            <p style="text-align:center; font-size:0.8rem; color:#666; margin-top:1rem;">This is a demo checkout. No real payment will be processed.</p>
+        </div>
+    </div>
+
+    <!-- TOAST CONTAINER -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script>
+        // --- DATA & STATE ---
+        const tickets = [
+            { name: 'Standard Access', price: 45 },
+            { name: 'VIP Experience', price: 95 },
+            { name: 'Cultural Pass (Group)', price: 180 }
+        ];
+
+        let selectedTicketIndex = -1;
+
+        // --- NAVIGATION & SCROLL EFFECTS ---
+        
+        const navbar = document.getElementById('navbar');
+        window.addEventListener('scroll', () => {
+            if(window.scrollY > 50) {
+                navbar.classList.add('scrolled');
+            } else {
+                navbar.classList.remove('scrolled');
+            }
+
+            // Active Nav Link Logic
+            const sections = document.querySelectorAll('section[id]');
+            let currentId = '';
+            
+            sections.forEach(section => {
+                const sectionTop = section.offsetTop;
+                if(scrollY >= (sectionTop - 150)) {
+                    currentId = section.getAttribute('id');
+                }
+            });
+
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.remove('active');
+                if(link.getAttribute('href') === '#' + currentId) {
+                    link.classList.add('active');
+                }
+            });
+        });
+
+        // Mobile Menu Toggle
+        const menuToggle = document.querySelector('.menu-toggle');
+        const navLinks = document.querySelector('.nav-links');
+        
+        menuToggle.addEventListener('click', () => {
+            navLinks.classList.toggle('mobile-open');
+        });
+
+        // --- SCROLL REVEAL ANIMATION ---
+        
+        function revealOnScroll() {
+            var reveals = document.querySelectorAll(".scroll-reveal");
+            
+            for (var i = 0; i < reveals.length; i++) {
+                var windowHeight = window.innerHeight;
+                var elementTop = reveals[i].getBoundingClientRect().top;
+                var elementVisible = 150;
+
+                if (elementTop < windowHeight - elementVisible) {
+                    const delay = reveals[i].getAttribute('data-delay') || '0s';
+                    
+                    // Trigger animation with CSS transition via timeout to allow re-triggering or just once? 
+                    // For simplicity in this single file, we'll add a class that triggers the transform.
+                    if(!reveals[i].classList.contains('visible')) {
+                        setTimeout(() => {
+                            reveals[i].style.transitionDelay = delay;
+                            reveals[i].classList.add('visible');
+                        }, 10); 
+                        
+                        // Remove listener after first reveal to save resources (optional)
+                        window.removeEventListener('scroll', revealOnScroll);
+                    }
+                }
+            }
+        }
+
+        window.addEventListener('scroll', revealOnScroll);
+        
+        // --- MODAL LOGIC ---
+
+        function openModal(modalId) {
+            document.getElementById(modalId).classList.add('active');
+            if (modalId === 'ticket-modal') populateTicketSelect();
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).classList.remove('active');
+            document.body.style.overflow = '';
+        }
+
+        // Close on outside click
+        window.onclick = function(event) {
+            if (event.target.classList.contains('modal-overlay')) {
+                event.target.classList.remove('active');
+                document.body.style.overflow = '';
+            }
+        }
+
+        // --- TICKET LOGIC & FORMS ---
+
+        function populateTicketSelect() {
+            const select = document.getElementById('ticket-type');
+            if(select.options.length > 0) return; // Already populated
+            
+            tickets.forEach((t, index) => {
+                const option = document.createElement('option');
+                option.value = t.name;
+                option.textContent = `${t.name} - $${t.price}`;
+                select.appendChild(option);
+            });
+
+            if(selectedTicketIndex !== -1) {
+                select.selectedIndex = selectedTicketIndex;
+            } else {
+                 // Default to first or featured (index 1 is VIP, index 0 is Standard). Let's default to standard.
+                 select.value = tickets[0].name; 
+            }
+        }
+
+        function selectTicket(name, price) {
+            selectedTicketIndex = tickets.findIndex(t => t.name === name);
+            
+            // Find the modal and set value before opening if not already done
+            const modal = document.getElementById('ticket-modal');
+            populateTicketSelect();
+            const select = document.getElementById('ticket-type');
+            Array.from(select.options).forEach(opt => {
+                if (opt.value === name) opt.selected = true;
+            });
+
+            openModal('ticket-modal');
+        }
+
+        function handleCheckout(e) {
+            e.preventDefault();
+            
+            // Simulate processing
+            const btn = e.target.querySelector('button[type="submit"]');
+            const originalText = btn.textContent;
+            btn.textContent = 'Processing...';
+            btn.disabled = true;
+
+            setTimeout(() => {
+                closeModal('ticket-modal');
+                
+                showToast(`Success! Your ${document.getElementById('ticket-type').value} ticket has been reserved.`);
+                
+                // Reset form
+                e.target.reset();
+                selectedTicketIndex = -1;
+                btn.textContent = originalText;
+                btn.disabled = false;
+
+            }, 1500);
+        }
+
+        function showToast(message) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.textContent = message;
+            
+            container.appendChild(toast);
+            
+            // Trigger reflow for animation
+            requestAnimationFrame(() => {
+                toast.classList.add('show');
+            });
+
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 400);
+            }, 3000);
+        }
+
+        // --- FAQ ACCORDION ---
+
+        function toggleFAQ(element) {
+            const item = element.parentElement;
+            
+            // Close others (optional, currently allows multiple open. Let's close siblings for cleaner UI)
+            document.querySelectorAll('.faq-item').forEach(i => {
+                if(i !== item && i.classList.contains('active')) {
+                    i.classList.remove('active');
+                }
+            });
+
+            item.classList.toggle('active');
+        }
+
+        // --- CALENDAR GENERATION (.ICS) ---
+
+        function generateIcs() {
+            const event = [
+                'BEGIN:VCALENDAR',
+                'VERSION:2.0',
+                'PRODID:-//ARTIFACT Museum Night//EN',
+                'BEGIN:VEVENT',
+                `UID:${Date.now()}@artifact-museum`,
+                'DTSTAMP:20261018T190000Z', // Current time placeholder logic would go here in real app
+                'DTSTART;TZID=Europe/Warsaw:20261018T190000',
+                'DTEND;TZID=Europe/Warsaw:20261018T020000', // Next day 2am logic simplified for demo
+                'SUMMARY:ARTIFACT: Museum Night, Reimagined',
+                `DESCRIPTION:A cinematic night of art and music at The Old Gallery.\\nVenue:\\nThe Old Gallery, ul. Złota 48, Warsaw`,
+                'LOCATION:The Old Gallery, ul. Złota 48, Warszawa, Poland',
+                'STATUS:CONFIRMED',
+                'END:VEVENT',
+                'END:VCALENDAR'
+            ].join('\n');
+
+            const blob = new Blob([event], { type: 'text/calendar;charset=utf-8' });
+            const link = document.createElement('a');
+            link.href = window.URL.createObjectURL(blob);
+            link.setAttribute('download', 'artifact-night.ics');
+            
+            // Trigger download programmatically or via click simulation if needed, 
+            // but since we have an anchor tag with href in HTML, the JS function is called by onclick?
+            // Actually, let's just trigger it here for consistency.
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // Attach to button
+        const calendarBtn = document.getElementById('calendar-btn');
+        if(calendarBtn) {
+            calendarBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                generateIcs();
+            });
+        }
+
+    </script>
+</body>
+</html>

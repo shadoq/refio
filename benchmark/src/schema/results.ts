@@ -27,6 +27,51 @@ export const AttachmentSchema = z.object({
   caption: z.string().optional(),
 });
 
+// A single criterion score produced by a strong-judge agent, with an optional
+// short rationale (the judge prompt requires one for 0 and 0.5 values).
+export const JudgeScoreSchema = z.object({
+  criterionId: z.string(),
+  value: z.number(),
+  rationale: z.string().optional(),
+});
+
+// One judge's full verdict for a single result. Either `scores` carries a valid
+// verdict, or `error` describes why the judge failed - the two are mutually
+// exclusive. Screenshots are relative paths into the result's `_judge/` folder.
+export const JudgeScoreSetSchema = z.object({
+  judgeId: z.string(),
+  judgeModel: z.string(),
+  judgedAt: z.string().datetime(),
+  scores: z.array(JudgeScoreSchema).default([]),
+  screenshots: z.array(z.string()).default([]),
+  consoleErrors: z.array(z.string()).default([]),
+  error: z.string().nullable().optional(),
+});
+
+// A judge's stability verdict over all attempts of one (task, model, env) group.
+export const StabilityJudgeSchema = z.object({
+  judgeId: z.string(),
+  judgeModel: z.string(),
+  value: z.number(),
+  rationale: z.string().optional(),
+  judgedAt: z.string().datetime(),
+});
+
+// Cross-attempt stability for one (task, model, environment) group. Keyed
+// logically by that triple; requires at least two attempts with an HTML artifact.
+export const StabilityEntrySchema = z.object({
+  taskId: z.string(),
+  modelId: z.string(),
+  environmentId: z.string(),
+  resultIds: z.array(z.string()).min(2),
+  deterministic: z.object({
+    scoreVariance: z.number().nonnegative(),
+    codeSimilarity: z.number().min(0).max(1),
+  }),
+  judges: z.array(StabilityJudgeSchema).default([]),
+  computedAt: z.string().datetime(),
+});
+
 export const ResultSchema = z.object({
   id: z.string(),
   taskId: z.string(),
@@ -39,6 +84,7 @@ export const ResultSchema = z.object({
   tokensOut: z.number().int().nonnegative().optional(),
   costUsd: z.number().nonnegative().optional(),
   attachments: z.array(AttachmentSchema).default([]),
+  judgeScores: z.array(JudgeScoreSetSchema).default([]),
   notes: z.string().optional(),
   runAt: z.string().datetime(),
   createdAt: z.string().datetime(),
@@ -49,11 +95,16 @@ export const ResultsFileSchema = z.object({
   models: z.array(ModelSchema),
   environments: z.array(EnvironmentSchema),
   results: z.array(ResultSchema),
+  stability: z.array(StabilityEntrySchema).default([]),
 });
 
 export type Model = z.infer<typeof ModelSchema>;
 export type Environment = z.infer<typeof EnvironmentSchema>;
 export type Score = z.infer<typeof ScoreSchema>;
 export type Attachment = z.infer<typeof AttachmentSchema>;
+export type JudgeScore = z.infer<typeof JudgeScoreSchema>;
+export type JudgeScoreSet = z.infer<typeof JudgeScoreSetSchema>;
+export type StabilityJudge = z.infer<typeof StabilityJudgeSchema>;
+export type StabilityEntry = z.infer<typeof StabilityEntrySchema>;
 export type Result = z.infer<typeof ResultSchema>;
 export type ResultsFile = z.infer<typeof ResultsFileSchema>;

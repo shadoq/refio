@@ -83,6 +83,26 @@ export function LeaderboardTable() {
       ),
     },
     {
+      title: "Judge Score",
+      key: "judgeScore",
+      width: 128,
+      sorter: (a: LeaderboardRow, b: LeaderboardRow) =>
+        (a.judgeAvgScore ?? -1) - (b.judgeAvgScore ?? -1),
+      render: (_: unknown, row: LeaderboardRow) =>
+        row.judgeAvgScore == null ? (
+          <Text type="secondary">-</Text>
+        ) : (
+          <span>
+            <Text strong style={{ color: scoreColor(row.judgeAvgScore) }}>
+              {formatScore(row.judgeAvgScore)}
+            </Text>
+            <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>
+              {row.judgedAttempts}/{row.attemptCount}
+            </Text>
+          </span>
+        ),
+    },
+    {
       title: "Pass Rate",
       key: "passRate",
       width: 110,
@@ -170,7 +190,7 @@ export function LeaderboardTable() {
       loading={tasksLoading || resultsLoading}
       pagination={false}
       size="middle"
-      scroll={{ x: 1260 }}
+      scroll={{ x: 1388 }}
       onRow={(row, index) => ({
         onClick: () =>
           navigate(`/compare?models=${encodeURIComponent(row.modelId)}`),

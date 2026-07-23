@@ -1,6 +1,11 @@
 import type { TasksFile, Criterion } from "@/schema/tasks";
 import type { Result, ResultsFile, Model, Environment } from "@/schema/results";
 import { estimateTokenProcessing } from "@/lib/tokenSpeed";
+import {
+  aggregateJudgeScores,
+  weightedNormalized,
+  JUDGE_EXCLUDED_CRITERIA,
+} from "@/lib/judge/scoring";
 
 export interface LeaderboardRow {
   modelId: string;
@@ -26,6 +31,8 @@ export interface LeaderboardRow {
   firstShotSuccess: boolean | null;
   localViabilityScore: number | null;
   localQualityRatio: number | null;
+  judgeAvgScore: number | null;
+  judgedAttempts: number;
 }
 
 const PASS_THRESHOLD = 0.7;
@@ -50,6 +57,24 @@ export function getResultCriterionScore(
   const score = result.scores.find((s) => s.criterionId === criterionId);
   if (!criterion || !score) return null;
   return normalizeScore(score.value, criterion.scale.values);
+}
+
+// Criteria a strong judge scores for a task: human core + task extra + judge-only,
+// minus criteria a judge cannot assess from a static artifact.
+export function judgeCriteriaForTask(tasks: TasksFile, taskId: string): Criterion[] {
+  const task = tasks.tasks.find((t) => t.id === taskId);
+  return [...tasks.coreCriteria, ...(task?.extraCriteria ?? []), ...tasks.judgeCriteria].filter(
+    (c) => !JUDGE_EXCLUDED_CRITERIA.includes(c.id),
+  );
+}
+
+// Overall judge score for one result: the judge aggregate (median per criterion),
+// weighted-normalized like the human score. Null when no judge scored it.
+export function getResultJudgeScore(result: Result, tasks: TasksFile): number | null {
+  const sets = (result.judgeScores ?? []).filter((s) => s.error == null);
+  if (sets.length === 0) return null;
+  const aggregate = aggregateJudgeScores(sets);
+  return weightedNormalized(aggregate, judgeCriteriaForTask(tasks, result.taskId));
 }
 
 export function normalizeResult(result: Result, tasks: TasksFile): number {
@@ -134,6 +159,11 @@ export function leaderboard(
 
     const scores = group.map((r) => normalizeResult(r, tasks));
     const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
+    const judgeVals = group
+      .map((r) => getResultJudgeScore(r, tasks))
+      .filter((v): v is number => v != null);
+    const judgeAvgScore =
+      judgeVals.length > 0 ? judgeVals.reduce((a, b) => a + b, 0) / judgeVals.length : null;
     const avgWorksOutOfBoxScore = avgNullable(
       group.map((r) => getResultCriterionScore(r, tasks, FIRST_SHOT_CRITERION_ID)),
     );
@@ -213,6 +243,8 @@ export function leaderboard(
       firstShotSuccess,
       localViabilityScore: null,
       localQualityRatio: null,
+      judgeAvgScore,
+      judgedAttempts: judgeVals.length,
     });
   }
 

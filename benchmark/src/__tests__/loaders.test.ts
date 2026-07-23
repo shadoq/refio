@@ -15,6 +15,15 @@ const baseTasks: TasksFile = {
       weight: 1.0,
     },
   ],
+  judgeCriteria: [
+    {
+      id: "code_structure",
+      name: "Code structure",
+      description: "Test",
+      scale: { values: [0, 0.5, 1] },
+      weight: 0.25,
+    },
+  ],
   tasks: [
     {
       id: "snake",
@@ -41,10 +50,12 @@ const baseResults: ResultsFile = {
       attemptNumber: 1,
       scores: [{ criterionId: "compliance", value: 1 }],
       attachments: [],
+      judgeScores: [],
       runAt: "2026-04-15T09:00:00.000Z",
       createdAt: "2026-04-15T09:00:00.000Z",
     },
   ],
+  stability: [],
 };
 
 describe("validateReferentialIntegrity", () => {
@@ -177,5 +188,93 @@ describe("validateReferentialIntegrity", () => {
       ],
     };
     expect(validateReferentialIntegrity(baseTasks, results)).toEqual([]);
+  });
+
+  it("accepts a judge score set using a human and a judge-only criterion", () => {
+    const results: ResultsFile = {
+      ...baseResults,
+      results: [
+        {
+          ...baseResults.results[0],
+          judgeScores: [
+            {
+              judgeId: "claude-code",
+              judgeModel: "claude-fable-5",
+              judgedAt: "2026-07-19T12:00:00.000Z",
+              scores: [
+                { criterionId: "compliance", value: 1 },
+                { criterionId: "code_structure", value: 0.5, rationale: "mediocre" },
+              ],
+              screenshots: [],
+              consoleErrors: [],
+              error: null,
+            },
+          ],
+        },
+      ],
+    };
+    expect(validateReferentialIntegrity(baseTasks, results)).toEqual([]);
+  });
+
+  it("reports a judge score value outside the criterion scale", () => {
+    const results: ResultsFile = {
+      ...baseResults,
+      results: [
+        {
+          ...baseResults.results[0],
+          judgeScores: [
+            {
+              judgeId: "codex",
+              judgeModel: "gpt-5.1-codex",
+              judgedAt: "2026-07-19T12:00:00.000Z",
+              scores: [{ criterionId: "code_structure", value: 0.75 }],
+              screenshots: [],
+              consoleErrors: [],
+            },
+          ],
+        },
+      ],
+    };
+    const errors = validateReferentialIntegrity(baseTasks, results);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("not in scale");
+  });
+
+  it("reports duplicate judgeId on one result", () => {
+    const set = {
+      judgeId: "claude-code",
+      judgeModel: "claude-fable-5",
+      judgedAt: "2026-07-19T12:00:00.000Z",
+      scores: [{ criterionId: "compliance", value: 1 }],
+      screenshots: [],
+      consoleErrors: [],
+    };
+    const results: ResultsFile = {
+      ...baseResults,
+      results: [{ ...baseResults.results[0], judgeScores: [set, { ...set }] }],
+    };
+    const errors = validateReferentialIntegrity(baseTasks, results);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('duplicate judgeId "claude-code"');
+  });
+
+  it("reports a stability entry referencing an unknown resultId", () => {
+    const results: ResultsFile = {
+      ...baseResults,
+      stability: [
+        {
+          taskId: "snake",
+          modelId: "qwen3.5:9b",
+          environmentId: "dgx-local",
+          resultIds: ["r1", "does-not-exist"],
+          deterministic: { scoreVariance: 0.1, codeSimilarity: 0.8 },
+          judges: [],
+          computedAt: "2026-07-19T12:00:00.000Z",
+        },
+      ],
+    };
+    const errors = validateReferentialIntegrity(baseTasks, results);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('unknown resultId "does-not-exist"');
   });
 });
