@@ -98,8 +98,10 @@ internal object OpenAICompatibleHelpers {
      * and per-model definition cap, all combined. Logs a warning when the requested
      * value exceeds the model's hard limit and is being clamped down.
      *
-     * @param requested caller's [maxTokens] (null/0 means "use config limit").
-     * @param configLimit configured maximum from `ConfigKeys.MAX_OUTPUT_SIZE`.
+     * @param requested caller's [maxTokens] (null/0 means "use the config default"); when set, it is
+     *   honored up to [modelLimit], not clamped down to [configLimit].
+     * @param configLimit default from `ConfigKeys.MAX_OUTPUT_SIZE`, used when [requested] is unset and
+     *   as the safety ceiling when [modelLimit] is unknown.
      * @param modelLimit per-model cap from [pl.jclab.refio.core.llm.ModelDefinitions], or null/0 if unknown.
      */
     /**
@@ -176,12 +178,19 @@ internal object OpenAICompatibleHelpers {
         model: String,
         log: (() -> String) -> Unit
     ): Int {
-        val capped = if (requested != null && requested > 0) minOf(requested, configLimit) else configLimit
-        return if (modelLimit != null && modelLimit > 0 && capped > modelLimit) {
-            log { "[$providerTag] Requested max_tokens=$capped exceeds model limit ($modelLimit) for $model - clamping to safe value" }
-            modelLimit
-        } else {
-            capped
+        // An explicit caller request (e.g. advance_code_editing asking for the model's full output
+        // budget so a large file generates in one shot) is honored up to the MODEL's hard limit.
+        // The configured MAX_OUTPUT_SIZE is only the default for calls that pass no value, and the
+        // safety ceiling when the model's real output limit is unknown.
+        val base = if (requested != null && requested > 0) requested else configLimit
+        return when {
+            modelLimit != null && modelLimit > 0 -> {
+                if (base > modelLimit) {
+                    log { "[$providerTag] Requested max_tokens=$base exceeds model limit ($modelLimit) for $model - clamping to safe value" }
+                }
+                minOf(base, modelLimit)
+            }
+            else -> minOf(base, configLimit)
         }
     }
 }

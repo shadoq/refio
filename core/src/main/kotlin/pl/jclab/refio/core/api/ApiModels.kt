@@ -461,7 +461,10 @@ data class ProjectContextResponse(
     // Auxiliary prompt preview (tool/system/user templates not in active request)
     val auxiliaryPromptsPreview: String? = null,
     // Raw context prompt as produced by ContextService.buildLLMContextPrompt (no system prompt, no messages)
-    val rawContextPrompt: String? = null
+    val rawContextPrompt: String? = null,
+    // Native-vs-JSON tool-call routing decision for the next turn (human-readable reason).
+    // Explains why a run uses native function-calling or the JSON-in-text path.
+    val nativeToolsDecision: String? = null
 )
 
 /**

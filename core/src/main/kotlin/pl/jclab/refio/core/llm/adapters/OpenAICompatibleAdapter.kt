@@ -419,6 +419,11 @@ abstract class OpenAICompatibleAdapter(
                         finalFinishReason = OpenAICompatibleHelpers.consumeChatCompletionsSSE(
                             channel = httpResponse.body(),
                             toolCallAccumulator = toolCallAccumulator,
+                            // Poll the user-cancel flag between SSE chunks so clicking Stop aborts an
+                            // in-flight stream instead of reading it to completion. Without this the
+                            // OpenAI-compatible providers (Z.AI/GLM, LM Studio, OpenRouter, ...) ignored
+                            // cancellation and the turn appeared hung until the stream ended on its own.
+                            checkCancelled = { pl.jclab.refio.core.services.monitoring.GlobalMetrics.isCancelled() },
                             onContent = { delta ->
                                 contentBuilder.append(delta)
                                 onStreamChunk(StreamChunk(delta = delta))

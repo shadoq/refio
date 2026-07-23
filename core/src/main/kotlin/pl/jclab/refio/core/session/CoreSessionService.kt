@@ -469,6 +469,14 @@ class CoreSessionService(
                     streamCallback = streamCallback,
                     listener = turnListener,
                 )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // User pressed Stop: the turn Job was cancelled, propagating here through the
+                // suspending LLM call. Record CANCELED (not FAILED) and rethrow cooperatively so
+                // structured cancellation is not swallowed.
+                runCatching {
+                    projectRouter.taskRepository.update(id = session.id, status = TaskStatus.CANCELED)
+                }.onFailure { logger.warn(it) { "[TURN_LOOP] Failed to mark task CANCELED for ${session.id}" } }
+                throw e
             } catch (e: Exception) {
                 runCatching {
                     projectRouter.taskRepository.update(id = session.id, status = TaskStatus.FAILED)

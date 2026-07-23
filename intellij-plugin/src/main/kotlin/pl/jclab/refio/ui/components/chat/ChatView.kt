@@ -29,9 +29,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import java.awt.BorderLayout
 import java.awt.Color
@@ -53,6 +52,7 @@ import javax.swing.Box
 import javax.swing.BoxLayout
 import javax.swing.JLabel
 import javax.swing.JPanel
+import javax.swing.JScrollPane
 import javax.swing.JViewport
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
@@ -102,7 +102,13 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     private val TOOLBAR_TOP_GAP = 10
     private val SCROLL_BAR_AND_PADDING = 0
 
-    private val cs = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // IO, not Default: these collectors drive the live chat UI (message list, streaming char
+    // counter). During a long tool stream the turn keeps the limited Default pool busy, which
+    // starved the message/sample collectors here - the StateFlow kept emitting per-delta updates
+    // but this scope never got scheduled to observe them, so the counter and bubble refresh froze
+    // for the whole generation. The collector bodies are cheap (they marshal real work to the EDT
+    // via invokeLater), so the elastic IO pool is the right home and cannot be starved by the turn.
+    private val cs = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sessionManager = SessionManager.getInstance(project)
     private val stepExecutionService = StepExecutionService.getInstance(project)
     private val globalMetrics = GlobalMetrics
@@ -343,9 +349,12 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     private var lastRenderedMessageIds = emptyList<String>()
     @Volatile
     private var lastReceivedMessages = emptyList<Message>()
-    private val messageUpdateFlow = MutableSharedFlow<List<Message>>(extraBufferCapacity = 1)
+    // Throttle, not a debounce: the render pipeline draws the first update immediately and then at
+    // most once per this interval. A debounce would wait for the message stream to fall quiet, which
+    // never happens while a tool generates, so the live char counter would stay frozen for the whole
+    // generation - the bug this replaced.
     @Suppress("MagicNumber")
-    private val uiUpdateDebounceMs = 300L
+    private val uiUpdateThrottleMs = 300L
 
     // Debounces componentResized: during a drag-resize the event fires many times
     // per second, and each width change used to invalidate the whole bubble cache
@@ -510,23 +519,23 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
             }
         })
 
+        // Single, non-lossy render pipeline. The previous two-stage hop (StateFlow -> tryEmit into a
+        // MutableSharedFlow(extraBufferCapacity = 1) -> sample) could silently DROP updates: tryEmit
+        // returns false as soon as that one buffer slot is taken, and when the dropped emission was
+        // the last of a burst no sample tick ever followed, so the final state was never rendered -
+        // bubbles stayed invisible until an unrelated event (a tool-window resize, which calls
+        // updateMessages directly) rebuilt them.
+        //
+        // Collecting the StateFlow directly cannot lose the newest value: a StateFlow is inherently
+        // conflated, so a slow collector skips intermediate values but is always resumed with the
+        // latest one. The trailing delay throttles bursts (token streaming) to at most one rebuild per
+        // uiUpdateThrottleMs while that conflation guarantees the final frame still lands - so the live
+        // char counter keeps ticking during a long tool stream and the finished state always renders.
         cs.launch {
-            sessionManager.messages.collect { messages ->
-                scheduleMessagesUpdate(messages)
-            }
-        }
-
-        cs.launch {
-            @OptIn(kotlinx.coroutines.FlowPreview::class)
-            messageUpdateFlow
-                // debounce(): coalesce rapid update bursts (token streaming, footer token counts)
-                // into a single rebuild after the burst settles. This keeps the message list from
-                // rebuilding several times a second, which jumps the layout and scroll position.
-                .debounce(uiUpdateDebounceMs)
-                .collect { _ ->
-                    // Always use latest received snapshot — rapid bursts get coalesced.
-                    // updateMessages' hash check makes this a no-op when nothing changed.
-                    updateMessages(lastReceivedMessages)
+            sessionManager.messages
+                .collect { messages ->
+                    scheduleMessagesUpdate(messages)
+                    delay(uiUpdateThrottleMs)
                 }
         }
 
@@ -548,8 +557,26 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     private fun showEmptyState() {
         messagesPanel.removeAll()
         messagesPanel.layout = GridBagLayout()
-        messagesPanel.revalidate()
-        messagesPanel.repaint()
+        revalidateMessagesArea()
+    }
+
+    /**
+     * Revalidate the whole scroll chain, not just messagesPanel. messagesPanel sits inside the
+     * JViewport of the enclosing JBScrollPane; a plain messagesPanel.revalidate() stops at that
+     * JViewport validate-root, so the scroll pane never re-runs its ScrollPaneLayout - newly added
+     * or grown bubbles stay clipped until an unrelated event (a window resize) validates the scroll
+     * pane. Revalidating the scroll pane itself re-lays-out the viewport view and its scrollbars, so
+     * structural changes and live streaming updates become visible immediately instead of on resize.
+     */
+    private fun revalidateMessagesArea() {
+        val scroll = SwingUtilities.getAncestorOfClass(JScrollPane::class.java, messagesPanel) as? JScrollPane
+        if (scroll != null) {
+            scroll.revalidate()
+            scroll.repaint()
+        } else {
+            messagesPanel.revalidate()
+            messagesPanel.repaint()
+        }
     }
 
     private fun updateBusyIndicator(isRunning: Boolean) {
@@ -674,8 +701,7 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
             streamingCounterLabels.keys.removeAll { it !in currentIds }
             lastRenderedMessageIds = currentMessageIds
 
-            messagesPanel.revalidate()
-            messagesPanel.repaint()
+            revalidateMessagesArea()
 
             firePropertyChange("messagesUpdated", false, true)
         }
@@ -793,10 +819,10 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
      * several times a second while a code-editing tool streams. Returns true when handled.
      */
     private fun tryPatchStreamingCounter(message: Message, cached: CachedMessagePanel, contentHash: Int): Boolean {
-        val counterLabel = streamingCounterLabels[message.id] ?: return false
         val stillStreaming = message.isToolStreaming &&
             message.toolCallInfo?.status == ToolCallStatus.EXECUTING
         if (!stillStreaming) return false
+        val counterLabel = streamingCounterLabels[message.id] ?: return false
         if (cached.nonContentHash != calculateNonContentMessageHash(message)) return false
 
         counterLabel.text = StreamProgressFormat.counterSuffix(message.content.length)
@@ -844,7 +870,7 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
 
     private fun scheduleMessagesUpdate(messages: List<Message>) {
         lastReceivedMessages = messages
-        messageUpdateFlow.tryEmit(messages)
+        updateMessages(messages)
     }
 
     private fun showNotification(

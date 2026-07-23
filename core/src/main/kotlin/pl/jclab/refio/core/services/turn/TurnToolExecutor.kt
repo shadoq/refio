@@ -280,6 +280,30 @@ class TurnToolExecutor(
         )
 
         /**
+         * Whole-file generators: a second call of one of these on the same path is a full
+         * regeneration (the file is rebuilt from scratch), not a targeted edit. Excludes
+         * code_editing/multi_edit/multi_line_editor, which are the targeted alternatives the
+         * repeated-regeneration nudge steers toward.
+         */
+        internal val FULL_FILE_REGEN_TOOL_NAMES = setOf("advance_code_editing", "create_new_file")
+
+        /**
+         * Paths this batch REGENERATED whole-file from scratch ([FULL_FILE_REGEN_TOOL_NAMES]),
+         * excluding no-op regenerations. Feeds the repeated-full-regeneration soft nudge in
+         * TurnExecutor: regenerating a path that already wrote successfully this turn — absent a
+         * concrete build/test error — burns a full multi-minute generation when a targeted edit
+         * would do. Targeted-edit tools (code_editing/multi_edit/multi_line_editor) are NOT
+         * counted: they are exactly what the nudge steers the model toward. Pure.
+         */
+        fun fullRegenerationPaths(
+            toolCalls: List<ToolCallData>,
+            noopCallIds: Set<String> = emptySet()
+        ): List<String> =
+            toolCalls
+                .filter { it.name in FULL_FILE_REGEN_TOOL_NAMES && it.id !in noopCallIds }
+                .mapNotNull { extractEditPath(it.arguments) }
+
+        /**
          * True when a `read_file` of [readPath] should be short-circuited instead of executed: a write
          * tool already wrote that exact path successfully in this task AND nothing has FAILED since.
          * Re-reading a file you just wrote returns nothing the diff didn't already give you and burns

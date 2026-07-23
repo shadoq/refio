@@ -510,7 +510,7 @@ class PromptInputPanel(
 
         logger.info { "[CONTEXT_DEBUG] Sending ${contextToSend.size} context references" }
 
-        cs.launch {
+        val turnJob = cs.launch {
             try {
                 // Check if orchestrator is waiting for response
                 val questionId = sessionManager.userInteraction.currentQuestionId.value
@@ -564,6 +564,9 @@ class PromptInputPanel(
                 // Error handled by SessionManager
             }
         }
+        // Expose the running turn Job to the Stop button so cancellation aborts the in-flight
+        // LLM call, not just the UI state (see StepExecutionService.registerExecutionJob).
+        stepExecutionService.registerExecutionJob(turnJob)
     }
 
     /**

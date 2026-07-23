@@ -99,6 +99,52 @@ class ToolCallParserTest {
     }
 
     @Test
+    fun `should map flat action shape where args are siblings of the tool key`() {
+        // Weaker models on the JSON-in-text path (observed: gemma4:31b) emit tool params
+        // as siblings of `tool` instead of nesting them under `args`. Without recovery the
+        // parser produced empty `{}` args and the tool failed with
+        // "Missing required parameter: 'path'". The flat shape must still map cleanly.
+        val flat = """
+            {
+              "response": "Creating the landing page.",
+              "actions": [
+                {"tool": "advance_code_editing", "path": "website.html", "edit_description": "premium landing page"}
+              ]
+            }
+        """.trimIndent()
+
+        val toolCalls = parser.extractToolCalls(flat, TaskMode.AGENT)
+
+        assertEquals(1, toolCalls.size)
+        assertEquals("advance_code_editing", toolCalls.first().name)
+
+        val arguments = Json.parseToJsonElement(toolCalls.first().arguments).jsonObject
+        assertEquals("website.html", arguments["path"]?.jsonPrimitive?.content)
+        assertEquals("premium landing page", arguments["edit_description"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `should prefer nested args wrapper over stray sibling keys`() {
+        // When a proper `args` wrapper is present, sibling keys must NOT leak into the
+        // arguments — the wrapper stays authoritative (guards the flat-shape fallback).
+        val mixed = """
+            {
+              "actions": [
+                {"tool": "read_file", "note": "ignore me", "args": {"path": "src/App.kt"}}
+              ],
+              "response": "Reading"
+            }
+        """.trimIndent()
+
+        val toolCalls = parser.extractToolCalls(mixed, TaskMode.AGENT)
+
+        assertEquals(1, toolCalls.size)
+        val arguments = Json.parseToJsonElement(toolCalls.first().arguments).jsonObject
+        assertEquals("src/App.kt", arguments["path"]?.jsonPrimitive?.content)
+        assertFalse(arguments.containsKey("note"))
+    }
+
+    @Test
     fun `should recover generic tool calls with malformed quoted strings in arguments`() {
         val malformed = """
             {

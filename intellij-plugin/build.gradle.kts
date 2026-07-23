@@ -86,6 +86,22 @@ dependencies {
         exclude(group = "org.slf4j", module = "slf4j-jul")
     }
 
+    // Keep kotlinx-coroutines OUT of the plugin distribution. Many runtime deps (:core, ktor,
+    // exposed, serialization) pull kotlinx-coroutines-core transitively; the IntelliJ Platform
+    // already provides it at runtime. Bundling a second copy triggers a ServiceLoader clash
+    // (CoroutineExceptionHandlerImpl "not a subtype" -> NoClassDefFoundError) that breaks coroutine
+    // dispatch/exception handling: StateFlow collectors silently stall - chat bubbles fail to render
+    // without a manual resize and streaming counters freeze. Exclude only from runtimeClasspath
+    // (packaging/sandbox), NOT from every configuration: excluding it from the Kotlin compiler's own
+    // classpath breaks the build. Compilation still resolves coroutines from the platform. The
+    // standalone CLI module is unaffected and keeps bundling its own coroutines.
+    configurations.all {
+        if (name.endsWith("untimeClasspath")) {
+            exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-core")
+            exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-core-jvm")
+        }
+    }
+
     // Testing
     testImplementation("io.ktor:ktor-server-tests:2.3.7")
     testImplementation("io.ktor:ktor-client-mock:2.3.7")
@@ -103,7 +119,7 @@ intellijPlatform {
         ideaVersion {
             // 242 (2024.2) is the first IDE line shipping JBR 21; this module emits Java 21 bytecode.
             sinceBuild.set("242")
-            untilBuild.set("262.*")
+            untilBuild.set("263.*")
         }
     }
 

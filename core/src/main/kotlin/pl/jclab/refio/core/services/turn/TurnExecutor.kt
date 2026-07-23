@@ -304,6 +304,14 @@ internal class TurnExecutor(
         // incrementally). Resets on any progress; bounded to MAX_CONSOLIDATION_NUDGES.
         var consecutiveGatheringCalls = 0
         var consolidationNudgeCount = 0
+        // "Regenerate the same file forever" soft guard: how many times each path has been
+        // rebuilt whole-file (advance_code_editing / create_new_file) THIS turn. A successful
+        // write is complete — its diff is authoritative — so a 2nd from-scratch regeneration of a
+        // path, absent a concrete build/test error, wastes a full multi-minute generation when a
+        // targeted edit would do. On the repeat we nudge toward code_editing/deliver. Bounded to
+        // MAX_REGENERATION_NUDGES; per-path counts persist for the whole turn (one user request).
+        val fullRegenCountByPath = mutableMapOf<String, Int>()
+        var regenerationNudgeCount = 0
         // Definitive-loop guard: counts consecutive failures of the SAME (tool + args).
         // Resets whenever arguments change, a different tool is used, or any tool succeeds.
         // Catches true retry loops while allowing the agent to explore with varied calls.
@@ -1361,6 +1369,35 @@ internal class TurnExecutor(
                             }
                         }
 
+                        // "Regenerate the same file forever" soft nudge. Top-level AGENT only
+                        // (same rationale as the consolidation nudge: subagents/PLAN don't hit this
+                        // pathology the same way). When the model rebuilds a path whole-file a 2nd+
+                        // time this turn, remind it that a successful write is complete and a
+                        // targeted edit (or delivering) beats another full regeneration. Non-blocking.
+                        if (mode == TaskMode.AGENT && depth == 0 && iteration < maxIterations &&
+                            regenerationNudgeCount < MAX_REGENERATION_NUDGES
+                        ) {
+                            val regeneratedPath = TurnToolExecutor
+                                .fullRegenerationPaths(toolCalls, noopCallIds)
+                                .map { it to fullRegenCountByPath.merge(it, 1, Int::plus)!! }
+                                .firstOrNull { (_, count) -> count >= REGENERATION_NUDGE_THRESHOLD }
+                                ?.first
+                            if (regeneratedPath != null) {
+                                val regenCount = fullRegenCountByPath[regeneratedPath] ?: 0
+                                logger.info {
+                                    "[REGENERATION_NUDGE] taskId=$taskId, path=$regeneratedPath, " +
+                                        "regenerations=$regenCount, nudge=${regenerationNudgeCount + 1}/$MAX_REGENERATION_NUDGES"
+                                }
+                                turnPersistence.persist(
+                                    role = MessageRole.SYSTEM,
+                                    content = buildRegenerationNudge(regeneratedPath, regenCount),
+                                    metadata = """{"type":"guardian_nudge"}""",
+                                    toolCalls = null,
+                                )
+                                regenerationNudgeCount++
+                            }
+                        }
+
                         if (consecutiveIdenticalFailures >= maxConsecutiveIdenticalFailures) {
                             logger.warn {
                                 "[DEFINITIVE_LOOP] taskId=$taskId, signature=$lastFailureSignature, " +
@@ -1784,7 +1821,18 @@ internal class TurnExecutor(
                                     // picks this up via `useNativeTools = activeNativeToolSchemas != null`.
                                     // This is the prose twin of the JSON-envelope fallback above (~1101);
                                     // no persistent NativeToolsFallbackTracker mark — only this turn switches.
-                                    if (activeNativeToolSchemas != null) {
+                                    //
+                                    // EXCEPTION: skip the drop once a FILE deliverable has already landed
+                                    // this turn. Here the re-entry is a sign-off safety net, not a retry that
+                                    // must produce the first deliverable — there is nothing critical to
+                                    // recover. Switching to the JSON contract would only expose the finished
+                                    // turn to the JSON format-nudge machinery ("Reply with JSON only"), which
+                                    // treats the model's harmless follow-up prose as a broken envelope and
+                                    // burns extra iterations before the deliverable-aware finalize (observed:
+                                    // qwen3.6:27b landed the file, then narrated "Let me verify…" for 3 wasted
+                                    // iterations). Staying on native lets the turn finalize on the clean
+                                    // guardian-Pass path instead.
+                                    if (activeNativeToolSchemas != null && fileWriteToolsExecutedInTurn == 0) {
                                         logger.warn {
                                             "[NATIVE_TOOLS_GUARDIAN_FALLBACK] taskId=$taskId — guardian re-entry " +
                                                 "after a native no-call; retrying on the JSON contract for this turn"
@@ -1921,9 +1969,26 @@ internal class TurnExecutor(
                         val textResponse = toolCallParser.extractTextResponse(effectiveResponse.content)
                         turnResponseProcessor.tryCreatePlanSubtasks(taskId, mode, executionMode, effectiveResponse, runProfile)
 
+                        // Deliverable-aware clean sign-off. When we are restoring a guardian stall-capture
+                        // (a re-entry happened and added no new tool work) AND a real FILE deliverable
+                        // already landed this turn, the restored text is by construction the forward-looking
+                        // intent stub the guardian flagged as not-clearly-done ("Let me now verify the
+                        // file…"). Surfacing it verbatim makes a completed turn read as if it stopped
+                        // mid-check. Replace it with a concise, factual completion note. Scoped to
+                        // file-write turns so the note is always true; a restored answer on a no-write turn
+                        // (a read-only summary the judge misjudged) is left untouched.
+                        val surfacedResponse =
+                            if (fileWriteToolsExecutedInTurn > 0 &&
+                                guardianState.restorableResponse(usedTools.size) != null
+                            ) {
+                                DELIVERABLE_STALL_SIGNOFF
+                            } else {
+                                textResponse.ifEmpty { effectiveResponse.content }
+                            }
+
                         turnPersistence.persist(
                             role = MessageRole.ASSISTANT,
-                            content = textResponse.ifEmpty { effectiveResponse.content },
+                            content = surfacedResponse,
                             thinking = turnResponseProcessor.resolveAssistantThinking(effectiveResponse),
                             toolCalls = null,
                             tokensIn = effectiveResponse.usage.inputTokens,
@@ -1933,7 +1998,7 @@ internal class TurnExecutor(
 
                         val result = TurnResult(
                             success = turnIncompleteReason == null,
-                            response = textResponse.ifEmpty { effectiveResponse.content },
+                            response = surfacedResponse,
                             iterations = iteration,
                             tokensIn = totalTokensIn,
                             tokensOut = totalTokensOut,
@@ -2667,6 +2732,29 @@ internal class TurnExecutor(
         )
     }
 
+    private fun buildRegenerationNudge(path: String, regenerations: Int): String = buildString {
+        appendLine("[⚠ progressive hint — you keep rebuilding the same file from scratch]")
+        appendLine(
+            "You have regenerated `$path` whole-file $regenerations times this turn " +
+                "(advance_code_editing / create_new_file each rebuild the entire file)."
+        )
+        appendLine(
+            "A write that returned a diff / line count SUCCEEDED and is complete — that diff is the " +
+                "authoritative current content. Regenerating a successfully-written file without a " +
+                "concrete build/test/run error pointing at it just burns another full multi-minute " +
+                "generation and usually produces a DIFFERENT file (new bugs), not a better one."
+        )
+        appendLine("Do one of:")
+        appendLine(
+            "  (1) if a SPECIFIC defect remains, fix only that with a targeted edit " +
+                "(`code_editing` / `multi_edit`) — do NOT rewrite the whole file;"
+        )
+        append(
+            "  (2) otherwise the file is done — deliver your final answer now instead of " +
+                "regenerating again."
+        )
+    }
+
     companion object {
         /**
          * After this many consecutive information-gathering calls (reads/searches) with no
@@ -2680,11 +2768,34 @@ internal class TurnExecutor(
         private const val MAX_CONSOLIDATION_NUDGES = 2
 
         /**
+         * Whole-file rebuilds of the SAME path that trigger the repeated-regeneration nudge.
+         * Deliberately lenient: a file is legitimately touched many times per turn, and even a
+         * second from-scratch rebuild can be reasonable. Only at 3 whole-file rebuilds of one path
+         * is it clearly pathological (the reported c71be484 case rebuilt one file 3×). Targeted
+         * edits (code_editing/multi_edit) never count, so ordinary iterative editing is unaffected.
+         */
+        private const val REGENERATION_NUDGE_THRESHOLD = 3
+
+        /** At most one repeated-regeneration nudge per turn — a single soft hint, never spam. */
+        private const val MAX_REGENERATION_NUDGES = 1
+
+        /**
          * R1: how many CONSECUTIVE native-ignored JSON-envelope-in-text responses demote a
          * model off native tool-calling (a persisted `NativeToolsFallbackTracker` mark). A capable model
          * occasionally mirrors the envelope shown as a negative example in the prompt; one slip must not
          * permanently kick it off native, but a repeated streak is a genuine "won't use native here" signal.
          */
         private const val NATIVE_TOOLS_DEMOTE_AFTER_IGNORES = 2
+
+        /**
+         * Completion note surfaced when a turn finalizes SUCCESS with a FILE deliverable already on
+         * disk but the model's last terminal text was only a forward-looking intent stub ("Let me now
+         * verify the file…") that a guardian re-entry discarded. Replacing that dangling prose keeps a
+         * completed turn from reading as if it stopped mid-check. English to match the other
+         * loop-generated turn responses in this file.
+         */
+        private const val DELIVERABLE_STALL_SIGNOFF =
+            "Done - the requested file changes were written this turn. The agent's trailing follow-up " +
+                "produced no further tool call and was skipped; the recorded write is the confirmation."
     }
 }

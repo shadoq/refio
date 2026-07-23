@@ -8,6 +8,7 @@ import pl.jclab.refio.api.models.ToolCallResult
 import pl.jclab.refio.api.models.ToolCallStatus
 import pl.jclab.refio.api.models.ToolDisplayType
 import pl.jclab.refio.core.db.ToolCallData
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * [AbstractToolCallLifecycleListener] implementation backed by [SessionStateManager].
@@ -27,6 +28,17 @@ class CoreMessageToolCallListener(
 
     private val scopeRef = scope
 
+    /**
+     * Length of the text last pushed into the message list, per streaming tool message.
+     *
+     * Adapters emit a steady stream of deltas whose accumulated text has not grown (empty deltas).
+     * Pushing those would launch a coroutine, take the messages mutex and rebuild the whole list only
+     * to produce an identical result that the StateFlow then discards as equal. Skipping them cannot
+     * lose the final frame: the accumulated text only ever grows by appending, so an unchanged length
+     * means unchanged content - there is nothing left to render.
+     */
+    private val lastPushedLength = ConcurrentHashMap<String, Int>()
+
     override fun onCreateTempMessage(taskId: String, toolCall: ToolCallData): String {
         val tempId = "temp-${toolCall.id}"
         val toolInfo = ToolCallDisplayInfo(
@@ -43,6 +55,15 @@ class CoreMessageToolCallListener(
             content = "",
             toolCallInfo = toolInfo,
             createdAt = System.currentTimeMillis(),
+            // Live from creation, not from the first delta. Reconciliation on a mid-turn reload keeps
+            // an in-memory message only while it is streaming; a tool bubble that is still marked
+            // non-streaming is dropped from the list. Every later delta then maps over a list that no
+            // longer holds this id, producing an unchanged list, so the StateFlow (which compares by
+            // equality) stops emitting entirely - the bubble never streams and the char counter never
+            // moves, while the persisted display row shows "Generating..." with empty content.
+            // onFinalizeTempMessage clears both flags when the call ends.
+            isStreaming = true,
+            isToolStreaming = true,
         )
         scopeRef.launch { stateManager.appendMessage(tempMessage) }
         return tempId
@@ -54,6 +75,8 @@ class CoreMessageToolCallListener(
         delta: String,
         accumulated: String,
     ) {
+        if (lastPushedLength.put(messageId, accumulated.length) == accumulated.length) return
+
         scopeRef.launch {
             stateManager.updateMessages { messages ->
                 messages.map { msg ->
@@ -76,6 +99,8 @@ class CoreMessageToolCallListener(
         result: String,
         success: Boolean,
     ) {
+        lastPushedLength.remove(messageId)
+
         val resultSummary = if (result.isNotBlank()) {
             val trimmed = result.trim()
             if (trimmed.length <= 120) trimmed else "${trimmed.take(120)}..."

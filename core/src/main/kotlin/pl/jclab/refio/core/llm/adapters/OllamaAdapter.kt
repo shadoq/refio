@@ -293,10 +293,10 @@ class OllamaAdapter(
 
                 val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)
                     ?: ConfigKeys.MAX_OUTPUT_SIZE.default
-                val requestedMaxTokens = when {
-                    maxTokens != null && maxTokens > 0 -> minOf(maxTokens, maxOutputLimit)
-                    else -> maxOutputLimit
-                }
+                // An explicit caller request (e.g. advance_code_editing) is honored up to the model
+                // limit / context budget below; MAX_OUTPUT_SIZE is only the default when no value is
+                // passed, and the ceiling for unknown models. num_ctx (outputBudget) is the real cap.
+                val requestedMaxTokens = if (maxTokens != null && maxTokens > 0) maxTokens else maxOutputLimit
                 val modelLimit =
                     pl.jclab.refio.core.llm.ModelDefinitions.getDefinition("ollama", model)?.maxOutputTokens
 
@@ -309,7 +309,7 @@ class OllamaAdapter(
                     .coerceAtLeast(OLLAMA_MIN_OUTPUT_TOKENS)
                 val effectiveMaxTokens = when {
                     modelLimit != null && modelLimit > 0 -> minOf(requestedMaxTokens, modelLimit, outputBudget)
-                    else -> minOf(requestedMaxTokens, outputBudget)
+                    else -> minOf(requestedMaxTokens, maxOutputLimit, outputBudget)
                 }
                 if (effectiveMaxTokens < requestedMaxTokens) {
                     logger.warn {

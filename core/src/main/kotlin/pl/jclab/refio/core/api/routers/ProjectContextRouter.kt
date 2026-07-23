@@ -12,6 +12,7 @@ import pl.jclab.refio.core.llm.TokenEstimator
 import pl.jclab.refio.core.models.context.*
 import pl.jclab.refio.core.llm.ModelDefinitions
 import pl.jclab.refio.core.llm.NativeToolsFallbackTracker
+import pl.jclab.refio.core.llm.nativeToolsDecisionReason
 import pl.jclab.refio.core.llm.parseNativeToolsMode
 import pl.jclab.refio.core.llm.shouldUseNativeTools
 import pl.jclab.refio.core.services.ConfigService
@@ -94,6 +95,28 @@ class ProjectContextRouter(
     }
 
     /**
+     * Human-readable native-vs-JSON tool-call routing decision for the debug report, e.g.
+     * "NATIVE: tools.native_tools=auto and ModelDefinition.supportsFunctionCalling=true" or
+     * "JSON: '<model>' is in the session native-tools fallback set (a prior native call failed)".
+     * Mirrors the exact precedence the turn loop uses so an operator can tell WHY a run took the
+     * JSON-in-text path (where weaker models emit flat envelopes) without re-deriving it by hand.
+     * Uses the same model resolution as [isNativeToolsActiveForTask].
+     */
+    private fun nativeToolsDecisionForTask(mode: TaskMode, taskId: String): String? {
+        val cfg = configService ?: return null
+        val operation = when (mode) {
+            TaskMode.PLAN -> ModelOperation.PLAN
+            TaskMode.AGENT -> ModelOperation.CODING
+            TaskMode.CHAT -> return null
+        }
+        val (modelId, providerName) = cfg.getModel(operation, taskId)
+        val nativeToolsMode = parseNativeToolsMode(cfg.getTyped(ConfigKeys.NATIVE_TOOLS_MODE, taskId))
+        val modelDef = ModelDefinitions.getDefinition(providerName, modelId)
+        val reason = nativeToolsDecisionReason(nativeToolsMode, modelDef, modelId, NativeToolsFallbackTracker.getFallbackSet())
+        return "$providerName/$modelId -> $reason"
+    }
+
+    /**
      * Get project context (for UI visualization).
      */
     suspend fun getProjectContext(
@@ -159,7 +182,8 @@ class ProjectContextRouter(
                 auxiliaryPreviewPrompt = auxiliaryPreview.previewText,
                 activeEstimatedTokens = runtimePreview.activeEstimatedTokens,
                 auxiliaryEstimatedTokens = auxiliaryPreview.estimatedTokens,
-                combinedEstimatedTokens = runtimePreview.activeEstimatedTokens + auxiliaryPreview.estimatedTokens
+                combinedEstimatedTokens = runtimePreview.activeEstimatedTokens + auxiliaryPreview.estimatedTokens,
+                nativeToolsDecision = nativeToolsDecisionForTask(task.mode, task.id)
             )
         } catch (e: kotlin.coroutines.cancellation.CancellationException) {
             throw e
@@ -676,7 +700,8 @@ class ProjectContextRouter(
         auxiliaryPreviewPrompt: String,
         activeEstimatedTokens: Int,
         auxiliaryEstimatedTokens: Int,
-        combinedEstimatedTokens: Int
+        combinedEstimatedTokens: Int,
+        nativeToolsDecision: String? = null
     ): ProjectContextResponse {
         val projectAnalysis = projectAnalyzer?.analyzeProject(projectRoot!!, includeContent = false)
 
@@ -745,7 +770,8 @@ class ProjectContextRouter(
             recentWorkPrompt = recentWorkPrompt,
             activeLlmRequestPrompt = activeLlmPreviewPrompt,
             auxiliaryPromptsPreview = auxiliaryPreviewPrompt,
-            rawContextPrompt = llmPrompt
+            rawContextPrompt = llmPrompt,
+            nativeToolsDecision = nativeToolsDecision
         )
     }
 

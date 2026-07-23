@@ -2,6 +2,9 @@ package pl.jclab.refio.core.session
 
 import org.junit.jupiter.api.Test
 import pl.jclab.refio.api.models.Message
+import pl.jclab.refio.api.models.ToolCallDisplayInfo
+import pl.jclab.refio.api.models.ToolCallStatus
+import pl.jclab.refio.api.models.ToolDisplayType
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -92,6 +95,112 @@ class MessageDispatcherReconcileTest {
         val result = MessageDispatcher.reconcileMessages(inMemory, emptyList(), "task-1")
 
         assertTrue(result.none { it.id == "S" }, "A completed transient assistant must not survive (would duplicate)")
+    }
+
+    private fun toolMsg(
+        id: String,
+        toolCallId: String,
+        createdAt: Long,
+        isStreaming: Boolean,
+        status: ToolCallStatus,
+        taskId: String = "task-1",
+    ) = Message(
+        id = id,
+        taskId = taskId,
+        role = "assistant",
+        content = "",
+        createdAt = createdAt,
+        isStreaming = isStreaming,
+        toolCallInfo = ToolCallDisplayInfo(
+            toolName = "advance_code_editing",
+            toolCallId = toolCallId,
+            displayType = ToolDisplayType.CODE_EDIT,
+            parameters = emptyMap(),
+            status = status,
+        ),
+    )
+
+    @Test
+    fun `a tool bubble that has not streamed yet survives a reload before its first delta`() {
+        // This is what killed the live char counter. Between the call starting and its first delta the
+        // bubble is EXECUTING but not yet flagged streaming. Dropping it in that window detaches every
+        // later delta: they map over an id that is no longer in the list, so the list comes back equal
+        // and the StateFlow - which emits on inequality - goes silent for the whole generation.
+        val inMemory = listOf(
+            toolMsg("temp-call-9", toolCallId = "call-9", createdAt = 30, isStreaming = false, status = ToolCallStatus.EXECUTING),
+        )
+
+        val result = MessageDispatcher.reconcileMessages(inMemory, emptyList(), "task-1")
+
+        assertEquals(listOf("temp-call-9"), result.map { it.id },
+            "A running tool call must survive until it finishes, even before its first delta")
+    }
+
+    @Test
+    fun `a live tool bubble wins over its persisted twin so the running counter is not replaced by an empty row`() {
+        // The assistant row carrying a tool call is persisted BEFORE the tool finishes, so the persisted
+        // display copy ("<messageId>:tc0", built with empty content) can show up while the live bubble
+        // ("temp-<toolCallId>") is still streaming. Rendering both is the duplicate the user sees; and
+        // resolving it in favour of the DB row would swap the live char counter for an empty bubble.
+        // While streaming, the transient is the only copy with content, so it must win.
+        val inMemory = listOf(
+            toolMsg("temp-call-9", toolCallId = "call-9", createdAt = 30, isStreaming = true, status = ToolCallStatus.EXECUTING),
+        )
+        val db = listOf(
+            toolMsg("msg-7:tc0", toolCallId = "call-9", createdAt = 31, isStreaming = false, status = ToolCallStatus.EXECUTING),
+        )
+
+        val result = MessageDispatcher.reconcileMessages(inMemory, db, "task-1")
+
+        assertEquals(listOf("temp-call-9"), result.map { it.id },
+            "Exactly one bubble per tool call, and while it streams it must be the live one")
+    }
+
+    @Test
+    fun `once the tool bubble stops streaming the persisted twin takes over`() {
+        // Mirror of the case above: after finalize the transient is no longer streaming, so it is
+        // dropped and the persisted row (which now carries the result) is the single surviving bubble.
+        val inMemory = listOf(
+            toolMsg("temp-call-9", toolCallId = "call-9", createdAt = 30, isStreaming = false, status = ToolCallStatus.COMPLETED),
+        )
+        val db = listOf(
+            toolMsg("msg-7:tc0", toolCallId = "call-9", createdAt = 31, isStreaming = false, status = ToolCallStatus.COMPLETED),
+        )
+
+        val result = MessageDispatcher.reconcileMessages(inMemory, db, "task-1")
+
+        assertEquals(listOf("msg-7:tc0"), result.map { it.id },
+            "A finished tool call must render once, from the persisted row")
+    }
+
+    @Test
+    fun `a live subagent stream never hides earlier persisted turns of the same agent`() {
+        // Guard against keying the hold-back on agentName: an agent can be invoked repeatedly, so its
+        // name maps to many persisted rows. Only toolCallId (unique per call) may hold a DB row back.
+        val inMemory = listOf(
+            msg("uuid-live", "assistant", "partial…", createdAt = 40, isStreaming = true,
+                agentDepth = 1, agentName = "doc-engineer"),
+        )
+        val db = listOf(
+            msg("earlier-1", "assistant", "first answer", createdAt = 10, agentDepth = 1, agentName = "doc-engineer"),
+            msg("earlier-2", "assistant", "second answer", createdAt = 20, agentDepth = 1, agentName = "doc-engineer"),
+        )
+
+        val result = MessageDispatcher.reconcileMessages(inMemory, db, "task-1")
+
+        assertEquals(listOf("earlier-1", "earlier-2", "uuid-live"), result.map { it.id },
+            "Earlier persisted turns of the same agent must stay visible alongside the live stream")
+    }
+
+    @Test
+    fun `a streaming tool bubble survives while the DB has no twin yet`() {
+        val inMemory = listOf(
+            toolMsg("temp-call-9", toolCallId = "call-9", createdAt = 30, isStreaming = true, status = ToolCallStatus.EXECUTING),
+        )
+        val result = MessageDispatcher.reconcileMessages(inMemory, emptyList(), "task-1")
+
+        assertEquals(listOf("temp-call-9"), result.map { it.id },
+            "A live tool stream with no persisted twin must stay visible")
     }
 
     @Test

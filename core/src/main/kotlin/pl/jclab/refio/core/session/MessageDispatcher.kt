@@ -626,8 +626,39 @@ class MessageDispatcher(
             dbMessages: List<Message>,
             sessionId: String,
         ): List<Message> {
-            val dbMessageIds = dbMessages.mapTo(HashSet()) { it.id }
-            val dbTopLevelUserContents = dbMessages
+            // The SAME tool call can be present twice under two different ids: it streams in-memory as
+            // "temp-<toolCallId>", while the assistant row carrying that call is persisted before the
+            // tool finishes and reloads as "<messageId>:tc<index>". Id matching (dbMessageIds) never
+            // relates the two, so a mid-turn reload rendered both - two bubbles for one call. Keep
+            // exactly one, and prefer the copy that actually has content: while the transient is still
+            // streaming it is the only one carrying live output (the persisted display row is built
+            // with empty content), so it wins and its persisted twin is held back for now. Once it
+            // stops streaming the transient is dropped below and the persisted row takes over.
+            // Keyed strictly by toolCallId, which is unique per call - agentName would not be, and
+            // holding back DB rows on it would hide earlier turns of a repeatedly-invoked subagent.
+            fun Message.toolCallKey(): String? = toolCallInfo?.toolCallId?.takeIf { it.isNotBlank() }
+
+            // A tool bubble is live from the moment its call starts, not from its first delta: between
+            // those two points it is still marked non-streaming, and dropping it there detaches every
+            // later delta from the list (the updates then map over an id that is gone, leaving the list
+            // equal and the StateFlow silent). Treat an EXECUTING tool call as live too.
+            fun Message.isLiveTransient(): Boolean =
+                isStreaming || toolCallInfo?.status == ToolCallStatus.EXECUTING
+
+            val liveToolCallIds = currentInMemory
+                .asSequence()
+                .filter { it.taskId == sessionId && it.isLiveTransient() }
+                .mapNotNull { it.toolCallKey() }
+                .toHashSet()
+
+            val effectiveDb = if (liveToolCallIds.isEmpty()) {
+                dbMessages
+            } else {
+                dbMessages.filterNot { db -> db.toolCallKey()?.let { it in liveToolCallIds } == true }
+            }
+
+            val dbMessageIds = effectiveDb.mapTo(HashSet()) { it.id }
+            val dbTopLevelUserContents = effectiveDb
                 .filter { it.role == "user" && (it.agentDepth == null || it.agentDepth == 0) }
                 .mapTo(HashSet()) { it.content.trim() }
 
@@ -638,7 +669,7 @@ class MessageDispatcher(
                 .filter { msg ->
                     when {
                         msg.role == "system" -> true
-                        msg.isStreaming -> true
+                        msg.isLiveTransient() -> true
                         msg.role == "user" && (msg.agentDepth == null || msg.agentDepth == 0) ->
                             msg.content.trim() !in dbTopLevelUserContents
                         else -> false
@@ -647,9 +678,9 @@ class MessageDispatcher(
                 .toList()
 
             return if (preserved.isEmpty()) {
-                dbMessages
+                effectiveDb
             } else {
-                (dbMessages + preserved).sortedBy { it.createdAt }
+                (effectiveDb + preserved).sortedBy { it.createdAt }
             }
         }
     }

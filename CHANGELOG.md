@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.0.1.14] - 2026-07-22
+
 ### Added
 
 - `find_usages` tool - lists every use of a symbol (`file:line` + snippet + count, capped by `max_results`).
@@ -31,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Subagent history isolation: every subagent turn gets an agent-instance id even when the spawning caller didn't assign one, so a subagent's intermediate steps no longer leak into the parent thread or inflate its token budget.
 - Multi-agent debug export (`SessionDebugExporter.exportMultiAgent`) writes a per-agent snapshot (ordered by start time, aggregate status and token totals) for a multi-agent run.
 - Two orchestration e2e scenarios (`subagent-locate-and-fix`, `subagent-two-file-fix`) with fixtures, prompts and golden trees, checking the parent stays on-task after a read-heavy delegation.
+- `TransientErrorClassifier` - one shared definition of "retryable upstream failure" (bare HTTP 500 with an empty body, Cloudflare 520, Anthropic 529 overloaded), used by `LLMRetryHandler` and by `advance_code_editing` (which bypasses the retry handler).
+- `advance_code_editing` salvages a truncated generation: when the stream ends without a closing fence but the body is substantial (2 KB+), the near-complete file is written and flagged instead of the whole edit being lost. A truncated block also short-circuits the extraction-repair loop, which would only truncate again.
+- `advance_code_editing` retries a transient editor-LLM error with a bounded backoff (2 retries, 1 s / 2 s), but only while nothing has streamed to the UI yet, so a partial stream is never duplicated.
+- Repeated-full-regeneration nudge: rebuilding one path whole-file 3x in a turn (`advance_code_editing` / `create_new_file`) injects a single soft SYSTEM hint to make a targeted edit or deliver. Targeted-edit tools never count, so ordinary iterative editing is unaffected.
+- Native-vs-JSON tool-routing decision (`ProjectContextResponse.nativeToolsDecision`) shown in the plugin Debug panel, so an operator can see *why* a run took the JSON-in-text path without re-deriving the precedence by hand.
+- `TaskStatus.CANCELED` recorded when the user presses Stop, instead of the turn being logged as `FAILED`.
 
 ### Changed
 
@@ -47,11 +57,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.aiignore` matcher cached per project root, invalidated by mtime.
 - IntelliJ minimum IDE raised to 2024.2 (`sinceBuild` 242, first line with JBR 21).
 - ChatView resize debounced (300 ms).
+- Chat render pipeline rewritten (IntelliJ): the message `StateFlow` is collected directly and throttled with a trailing delay (leading-edge throttle, one rebuild per 300 ms) instead of being hopped through a `MutableSharedFlow(extraBufferCapacity = 1)` + `sample`. `StateFlow` conflation guarantees the final frame lands, so a burst of streaming deltas can no longer swallow the last update. The field is now named `uiUpdateThrottleMs` - it is not a debounce and must not become one (a debounce waits for the stream to fall quiet, which never happens while a tool generates).
+- ChatView collectors moved to `Dispatchers.IO`: on `Dispatchers.Default` a long tool stream kept the bounded pool busy and starved the UI collectors. The collector bodies only marshal work to the EDT, so the elastic pool is the right home.
+- `kotlinx-coroutines-core` excluded from the plugin's runtime classpath (it is provided by the IntelliJ Platform). A second bundled copy caused a `ServiceLoader` clash that silently stalled `StateFlow` collectors. Compilation and the standalone CLI are unaffected.
+- A tool bubble is marked live (`isStreaming` / `isToolStreaming`) at creation instead of at its first delta, and `MessageDispatcher.reconcileMessages` treats an `EXECUTING` tool call as live.
+- Tool-call bubbles deduplicated by `toolCallId` on reload: while the call streams the in-memory bubble wins (it is the only copy with content) and its persisted twin is held back; once it finishes the persisted row takes over. Keyed strictly by `toolCallId`, never `agentName`, so earlier turns of a repeatedly-invoked subagent stay visible.
+- Streaming deltas whose accumulated text has not grown are skipped instead of rebuilding the whole message list (safe: the text only ever grows by appending).
+- Stop cancels the running turn `Job`, so cancellation propagates into the in-flight LLM HTTP call instead of only flipping UI state.
+- `advance_code_editing` requests the model's full output budget; adapters clamp to the per-model limit. An explicit caller `maxTokens` is now honored up to the *model* limit across all adapters (Anthropic, Gemini, Ollama, OpenAI-compatible); `limits.max_output_size` is the default when no value is passed and the ceiling when the model's real limit is unknown.
+- `RepetitionDetector` threshold raised 4 -> 32 identical adjacent blocks. Legitimate structured output (table cells, list items, data rows) has a small bounded run; a decoder loop is unbounded. Large-block runaway stays covered by the 128 KB size limiter and the 180 s wall-clock deadline.
+- The model chosen in the dropdown is persisted to APP-scope `ui.selected_model` and applied to a new session, so the CODING slot (`advance_code_editing`) stops generating with a stale model while the turn LLM already uses the new one.
+- `system-agent.md`: the "do not validate static content" rule is explicit that writing a static file finishes it - no re-reading, no parsing its inline scripts, no self-authored grep-for-feature checkers. A failing self-authored checker is almost always the checker being wrong, and chasing it is the most common way a turn spirals.
 - CLI/TUI numeric formatting uses `Locale.US`.
 - Hot-path regexes precompiled (`JsonExtractor`, `TokenEstimator`, `ToolResultCompression`, `ToolCallParser`); JSON extraction now single-pass balanced-brace.
 
 ### Fixed
 
+- Chat bubbles appeared only after resizing the tool window or dragging the splitter. Two independent causes: the lossy `tryEmit` render hop dropped the last update of a burst, and `messagesPanel.revalidate()` stopped at the enclosing `JViewport` validate root, so the scroll pane never re-ran its layout. The whole scroll chain is revalidated now.
+- The live char counter in `advance_code_editing` never moved. The tool bubble was created non-streaming, so a mid-turn reload dropped it from the list; every later delta then mapped over an id that was gone, producing an equal list that the `StateFlow` never emitted (observed: 3433 deltas over 62 s with zero UI updates).
+- One tool call rendered as two bubbles after a mid-turn reload (the streaming transient and its persisted display row carry different ids).
+- Stop hung on OpenAI-compatible streaming (Z.AI/GLM, LM Studio, OpenRouter, generic OpenAI): the SSE loop never received the cancel check, so the turn read the stream to completion before reacting.
+- A bare upstream `HTTP 500` / `520` / `529` killed a whole session instead of being retried.
+- Weak models on the JSON-in-text path that emit tool params as siblings of `tool` (flat action shape, observed on gemma4:31b) failed with "Missing required parameter"; the leftover keys are now mapped as arguments.
+- A turn that already wrote its file then narrated "let me verify..." burned extra iterations: the guardian no longer drops native tool-calling after a landed file write, and the dangling intent stub is replaced with a factual completion note.
 - Orphaned background-process hang: `run_terminal_command` force-kills the whole descendant tree and drains stdout on its own thread, so a backgrounded child (`python app.py &`) holding the stdout pipe no longer hangs the turn (`orphan_reaped` in metadata).
 - `ProcessManager` kills the whole descendant tree on stop, reaps children via a JVM shutdown hook, and serves continuously drained output.
 - Code-intelligence/refactor child processes drain output on a daemon thread and force-destroy on timeout instead of deadlocking.

@@ -184,6 +184,49 @@ class OpenAICompatibleBaseTest {
     }
 
     @Test
+    fun `streaming aborts mid-stream when user requests cancellation`() = runTest {
+        // Clicking Stop sets GlobalMetrics.isCancelled(). The OpenAI-compatible streaming path
+        // must poll that flag between SSE chunks and stop reading, otherwise the in-flight
+        // stream runs to completion and the UI Stop button appears to hang (reported for Z.AI/GLM).
+        val config = mockConfig()
+        val sse = buildString {
+            append("data: {\"choices\":[{\"delta\":{\"content\":\"chunk-before\"}}]}\n\n")
+            append("data: {\"choices\":[{\"delta\":{\"content\":\"chunk-after\"},\"finish_reason\":\"stop\"}}]}\n\n")
+            append("data: [DONE]\n\n")
+        }
+
+        val adapter = GenericOpenAIAdapter(
+            model = "gpt-test",
+            providerName = "generic_openai",
+            configService = config,
+            baseUrlOverride = "https://mock.test/v1",
+            httpClientOverride = mockHttpClient(sse, contentType = ContentType.Text.EventStream),
+        )
+
+        pl.jclab.refio.core.services.monitoring.GlobalMetrics.requestCancellation()
+        try {
+            val collected = StringBuilder()
+            val response = adapter.chat(
+                messages = listOf(LLMMessage(role = "user", content = "hi")),
+                systemMessages = emptyList(),
+                maxTokens = 64,
+                temperature = 0.0,
+                streaming = true,
+                onStreamChunk = { chunk -> collected.append(chunk.delta) },
+                kwargs = emptyMap(),
+            )
+
+            assertEquals("cancelled", response.finishReason, "cancelled stream must report finish_reason=cancelled")
+            assertTrue(
+                collected.isEmpty(),
+                "no content should be streamed once cancellation is already requested, was '$collected'",
+            )
+        } finally {
+            pl.jclab.refio.core.services.monitoring.GlobalMetrics.resetCancellation()
+        }
+    }
+
+    @Test
     fun `GenericOpenAI maps 401 to LLMAuthentication`() = runTest {
         val config = mockConfig()
         val adapter = GenericOpenAIAdapter(
@@ -332,12 +375,13 @@ class OpenAICompatibleBaseTest {
     private fun mockHttpClient(
         responseJson: String,
         status: HttpStatusCode = HttpStatusCode.OK,
+        contentType: ContentType = ContentType.Application.Json,
     ): HttpClient {
         return HttpClient(MockEngine { _ ->
             respond(
                 content = responseJson,
                 status = status,
-                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                headers = headersOf(HttpHeaders.ContentType, contentType.toString()),
             )
         }) {
             install(ContentNegotiation) {

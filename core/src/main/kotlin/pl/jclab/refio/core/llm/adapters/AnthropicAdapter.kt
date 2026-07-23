@@ -155,24 +155,26 @@ class AnthropicAdapter(
                 put("stream", true)
             }
 
-            // Use min of provided maxTokens and configured limit (Claude requires max_tokens)
+            // An explicit caller request (e.g. advance_code_editing) is honored up to the MODEL's
+            // hard limit; the configured MAX_OUTPUT_SIZE is only the default for calls that pass no
+            // value, and the safety ceiling when the model's real limit is unknown. (Claude requires max_tokens.)
             val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)
                 ?: ConfigKeys.MAX_OUTPUT_SIZE.default
-            val requestedMax = when {
-                maxTokens != null && maxTokens > 0 -> minOf(maxTokens, maxOutputLimit)
-                else -> maxOutputLimit
-            }
+            val requestedMax = if (maxTokens != null && maxTokens > 0) maxTokens else maxOutputLimit
             val modelLimit = pl.jclab.refio.core.llm.ModelDefinitions
                 .getDefinition("anthropic", model)
                 ?.maxOutputTokens
-            val effectiveMaxTokens = if (modelLimit != null && modelLimit > 0 && requestedMax > modelLimit) {
-                logger.warn {
-                    "[ANTHROPIC] Requested max_tokens=$requestedMax exceeds model limit ($modelLimit) for $model - " +
-                        "clamping to safe value"
+            val effectiveMaxTokens = when {
+                modelLimit != null && modelLimit > 0 -> {
+                    if (requestedMax > modelLimit) {
+                        logger.warn {
+                            "[ANTHROPIC] Requested max_tokens=$requestedMax exceeds model limit ($modelLimit) for $model - " +
+                                "clamping to safe value"
+                        }
+                    }
+                    minOf(requestedMax, modelLimit)
                 }
-                modelLimit
-            } else {
-                requestedMax
+                else -> minOf(requestedMax, maxOutputLimit)
             }
             put("max_tokens", effectiveMaxTokens)
             logger.debug {
