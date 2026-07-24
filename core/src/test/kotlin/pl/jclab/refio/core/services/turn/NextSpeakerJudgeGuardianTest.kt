@@ -38,6 +38,7 @@ class NextSpeakerJudgeGuardianTest {
         // The tests' writes are code_editing (real file edits), so the strict file-write count
         // mirrors the loose one unless a test overrides it to model a run_terminal_command-only turn.
         fileWriteToolsExecutedInTurn: Int = writeToolsExecutedInTurn,
+        subagentHasWriteTools: Boolean = true,
     ) = GuardianContext(
         taskId = "task-1",
         mode = mode,
@@ -52,7 +53,8 @@ class NextSpeakerJudgeGuardianTest {
         verificationToolsExecutedAfterWrite = 0,
         priorReentries = priorReentries,
         toolsUsedSizeAtPriorReentry = toolsUsedSizeAtPriorReentry,
-        completionCondition = completionCondition
+        completionCondition = completionCondition,
+        subagentHasWriteTools = subagentHasWriteTools
     )
 
     private fun stubJudgeEnabled(enabled: Boolean = true, extendedReentry: Boolean = false) {
@@ -163,6 +165,102 @@ class NextSpeakerJudgeGuardianTest {
         coVerify(exactly = 0) {
             llmClient.complete(provider = any(), model = any(), messages = any())
         }
+    }
+
+    @Test
+    fun `read-only subagent that delivered a substantial report is accepted without a judge call`() = runBlocking {
+        // WHY: a read-only subagent (no write/exec tool) can ONLY deliver prose — a tool call can
+        // never "deliver", so re-entering it just pushes it to hallucinate tools it lacks (observed
+        // 2026-07: security-engineer produced a full report, was re-entered, then looped on an
+        // unavailable `think` until the run was cancelled). Its substantial report IS the result.
+        stubJudgeEnabled()
+        val decision = guardian().check(
+            ctx(
+                runProfile = TurnRunProfile.SUBAGENT,
+                subagentHasWriteTools = false,
+                // > SUBAGENT_PROSE_DELIVERABLE_MIN_CHARS
+                response = "Security review finding. ".repeat(40)
+            )
+        )
+        assertEquals(GuardianDecision.Pass, decision)
+        // The shortcut must fire BEFORE the judge — no LLM call at all.
+        coVerify(exactly = 0) {
+            llmClient.complete(provider = any(), model = any(), messages = any())
+        }
+    }
+
+    @Test
+    fun `read-only subagent with only a short intent stub still consults the judge`() = runBlocking {
+        // The carve-out is length-gated so a chatty-but-empty stub is not mistaken for a deliverable
+        // and the judge still catches a genuine "let me analyze…" abandonment.
+        stubJudgeEnabled()
+        stubModel()
+        stubLlmResponse("""{"speaker": "model", "reason": "intent announced, no result"}""")
+        val decision = guardian().check(
+            ctx(
+                runProfile = TurnRunProfile.SUBAGENT,
+                subagentHasWriteTools = false,
+                // 30+ chars (clears the generic short-reply pre-filter) but < the prose-deliverable
+                // bar and clearly a mid-task intent, so the judge is consulted.
+                response = "I will now read each file and analyze the security posture before reporting."
+            )
+        )
+        assertTrue(decision is GuardianDecision.Reenter)
+    }
+
+    @Test
+    fun `a write-capable subagent that only described the change is NOT auto-accepted`() = runBlocking {
+        // Scope guard: the prose-is-delivered shortcut is read-only-only. A subagent that CAN write
+        // and merely narrated the edit keeps the strict "did you actually apply it?" re-entry.
+        stubJudgeEnabled()
+        stubModel()
+        stubLlmResponse("""{"speaker": "model", "reason": "described a change but did not apply it"}""")
+        val decision = guardian().check(
+            ctx(
+                runProfile = TurnRunProfile.SUBAGENT,
+                subagentHasWriteTools = true,
+                response = "I will refactor the module and rename the symbol. ".repeat(20)
+            )
+        )
+        assertTrue(decision is GuardianDecision.Reenter)
+    }
+
+    @Test
+    fun `top-level AGENT that compiled a substantial prose report is accepted without a judge call`() = runBlocking {
+        // Regression (session 621ba604, qwen3.7-plus): a subagent-driven project scan compiled a full
+        // report as the MAIN agent's reply — an analysis task, no file requested, no write tool. The
+        // model buried the finished report behind an intent preamble ("Now I'll compile the report…")
+        // plus fabricated task-progress text; the judge, reading only the opening, said MODEL →
+        // re-entry → the turn finished INCOMPLETE with a spurious "finish the remaining steps" guidance
+        // note even though the report WAS delivered. Meaningful produced content is the deliverable.
+        stubJudgeEnabled()
+        val report = "## Project scan report\n\n" + "Finding: the module is well structured. ".repeat(20)
+        check(report.length >= NextSpeakerJudgeGuardian.AGENT_PROSE_DELIVERABLE_MIN_CHARS)
+        val decision = guardian().check(
+            ctx(
+                response = report,
+                toolsUsed = listOf("read_directory", "invoke_subagent"),
+                writeToolsExecutedInTurn = 0
+            )
+        )
+        assertEquals(GuardianDecision.Pass, decision)
+        // The shortcut must fire BEFORE the judge — no LLM call at all, and thus no re-entry nudge.
+        coVerify(exactly = 0) {
+            llmClient.complete(provider = any(), model = any(), messages = any())
+        }
+    }
+
+    @Test
+    fun `top-level AGENT with only a short intent stub still consults the judge`() = runBlocking {
+        // The carve-out is length-gated: a brief intent announcement is NOT a delivered report, so the
+        // judge still catches a genuine "let me now do X" abandonment on a top-level AGENT turn.
+        stubJudgeEnabled()
+        stubModel()
+        stubLlmResponse("""{"speaker": "model", "reason": "intent announced, no tool called"}""")
+        val decision = guardian().check(
+            ctx(response = "Now I'll compile the findings from all three subagents into a final report.")
+        )
+        assertTrue(decision is GuardianDecision.Reenter)
     }
 
     @Test
@@ -898,5 +996,96 @@ class NextSpeakerJudgeGuardianTest {
             !sys.contains("user-defined completion condition", ignoreCase = true),
             "expected generic prompt, but goal-aware text leaked through: ${sys.take(120)}"
         )
+    }
+
+    // ---- re-entry budget precedence (resolveReentryBudget, pure) -------------------------------
+
+    private val substantial = "x".repeat(TurnDeliverable.PLAN_DELIVERABLE_MIN_CHARS)
+    private val stub = "Now let me check."
+
+    // The bug: a top-level analysis turn whose deliverable is TEXT (no file write) burned two
+    // escalated re-entries, regenerating its full report each time - the user saw the answer
+    // duplicated plus a second "agent guidance" note. A substantial answer already on hand must cap
+    // the budget at a single re-entry even inside the early window.
+    @Test
+    fun `substantial text answer caps the early re-entry budget at one`() {
+        val budget = NextSpeakerJudgeGuardian.resolveReentryBudget(
+            extended = true,
+            deliverableProduced = false,
+            finalResponseLength = substantial.length,
+            iteration = 3,
+            maxIterations = 50,
+        )
+        assertEquals(1, budget)
+    }
+
+    // A bare intent stub (weak model stalled before delivering anything) still gets the second,
+    // schema-carrying nudge the extended budget exists for.
+    @Test
+    fun `bare intent stub keeps the extended early budget of two`() {
+        val budget = NextSpeakerJudgeGuardian.resolveReentryBudget(
+            extended = true,
+            deliverableProduced = false,
+            finalResponseLength = stub.length,
+            iteration = 3,
+            maxIterations = 50,
+        )
+        assertEquals(NextSpeakerJudgeGuardian.MAX_EARLY_JUDGE_REENTRIES, budget)
+    }
+
+    // Past the early window, even a bare stub drops back to a single re-entry (unchanged).
+    @Test
+    fun `late turn caps at one even for a bare stub`() {
+        val budget = NextSpeakerJudgeGuardian.resolveReentryBudget(
+            extended = true,
+            deliverableProduced = false,
+            finalResponseLength = stub.length,
+            iteration = 40,
+            maxIterations = 50,
+        )
+        assertEquals(1, budget)
+    }
+
+    // Extended disabled → strict one-shot regardless of text length (unchanged).
+    @Test
+    fun `non-extended config keeps the strict one-shot`() {
+        val budget = NextSpeakerJudgeGuardian.resolveReentryBudget(
+            extended = false,
+            deliverableProduced = false,
+            finalResponseLength = stub.length,
+            iteration = 3,
+            maxIterations = 50,
+        )
+        assertEquals(1, budget)
+    }
+
+    // A produced deliverable (e.g. a file write landed) is a single re-entry regardless of the rest.
+    @Test
+    fun `produced deliverable caps at one`() {
+        val budget = NextSpeakerJudgeGuardian.resolveReentryBudget(
+            extended = true,
+            deliverableProduced = true,
+            finalResponseLength = stub.length,
+            iteration = 3,
+            maxIterations = 50,
+        )
+        assertEquals(1, budget)
+    }
+
+    // ---- judge input window (boundedResponseForJudge, pure) -----------------------------------
+
+    // A reply that fits the window is shown whole so a completed report is never judged on its
+    // opening lines alone. An oversized reply keeps BOTH ends (opening intent + concluding result)
+    // so the judge sees how it started and how it finished instead of only the buried preamble.
+    @Test
+    fun `judge sees the whole reply when it fits and head plus tail when it is oversized`() {
+        val small = "A".repeat(1000)
+        assertEquals(small, NextSpeakerJudgeGuardian.boundedResponseForJudge(small, maxChars = 4096))
+
+        val big = "H".repeat(3000) + "T".repeat(3000) // 6000 > 4096
+        val bounded = NextSpeakerJudgeGuardian.boundedResponseForJudge(big, maxChars = 4096)
+        assertTrue(bounded.length < big.length, "oversized reply must be folded")
+        assertTrue(bounded.startsWith("H"), "must keep the head (opening)")
+        assertTrue(bounded.endsWith("T"), "must keep the tail (conclusion)")
     }
 }

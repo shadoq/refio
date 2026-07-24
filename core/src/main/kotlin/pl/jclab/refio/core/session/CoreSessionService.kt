@@ -469,6 +469,14 @@ class CoreSessionService(
                     streamCallback = streamCallback,
                     listener = turnListener,
                 )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // User pressed Stop: the turn Job was cancelled, propagating here through the
+                // suspending LLM call. Record CANCELED (not FAILED) and rethrow cooperatively so
+                // structured cancellation is not swallowed.
+                runCatching {
+                    projectRouter.taskRepository.update(id = session.id, status = TaskStatus.CANCELED)
+                }.onFailure { logger.warn(it) { "[TURN_LOOP] Failed to mark task CANCELED for ${session.id}" } }
+                throw e
             } catch (e: Exception) {
                 runCatching {
                     projectRouter.taskRepository.update(id = session.id, status = TaskStatus.FAILED)
@@ -518,7 +526,10 @@ class CoreSessionService(
                 }
             }
 
-            messageDispatcher.loadMessages()
+            // Await the reload so the just-streamed transient is swapped for its DB row inside one
+            // atomic reconcile — a debounced refresh here leaves a ~300 ms window where the finished
+            // answer blinks out before the DB copy loads.
+            messageDispatcher.loadMessagesAndWait()
             turnListener.clearTracking()
             logger.debug { "[TURN_LOOP] Cleared tool call message tracking map after DB reload" }
 
@@ -591,7 +602,9 @@ class CoreSessionService(
         }
         updateSessionCosts(stateManager.getActiveSession() ?: session)
         autoNameSessionIfNeeded(stateManager.getActiveSession() ?: session, input)
-        messageDispatcher.loadMessages()
+        // Terminal reload: await it so the streamed reply is swapped for its DB row without the
+        // ~300 ms debounce gap (same rationale as the turn-loop path).
+        messageDispatcher.loadMessagesAndWait()
 
         return stateManager.messages.value.last()
     }

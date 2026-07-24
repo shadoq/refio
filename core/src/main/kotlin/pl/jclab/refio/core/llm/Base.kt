@@ -59,7 +59,13 @@ data class LLMUsage(
     // cacheWriteInputTokens: input tokens written into the cache, billed at the cache-write rate
     // (Anthropic-only; other providers leave it 0). Both are subsets of inputTokens, not additions.
     val cachedInputTokens: Int = 0,
-    val cacheWriteInputTokens: Int = 0
+    val cacheWriteInputTokens: Int = 0,
+    // Actual amount the provider charged for this call, in USD, when the provider reports it in the
+    // response `usage` object (OpenRouter always does: `usage.cost`, in credits == USD - the same
+    // number its dashboard shows). Null when the provider does not report a cost, in which case the
+    // adapter falls back to a local per-1M estimate. This is authoritative when present: it removes
+    // the reliance on hardcoded per-model price literals that drift out of date.
+    val upstreamCostUsd: Double? = null
 )
 
 /**

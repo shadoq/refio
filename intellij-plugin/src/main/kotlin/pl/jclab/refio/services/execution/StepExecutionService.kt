@@ -50,6 +50,17 @@ class StepExecutionService(private val project: Project) : ExecutionStateControl
     }
 
     /**
+     * Register the coroutine Job that is actually running the current turn so [stopExecution]
+     * can cancel it. Cancelling the turn Job propagates CancellationException down into the LLM
+     * adapter's suspending HTTP call, aborting an in-flight (possibly multi-minute) request
+     * instead of letting it run to completion. Without this the Stop button only flipped UI
+     * state while the turn kept streaming, so the plugin appeared to hang.
+     */
+    fun registerExecutionJob(job: Job?) {
+        executionJob = job
+    }
+
+    /**
      * Stop execution
      */
     override fun stopExecution() {

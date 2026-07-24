@@ -149,7 +149,8 @@ Quick summary of what the engine supports:
 6. **CommandRule security system** — regex-based ALLOW/BLOCK/ASK is the only terminal-command policy engine; the legacy `CommandWhitelist` / `CommandDenylist` classes have been removed.
 7. **Reference model for testing:** `ollama/qwen3.5:9b`
 8. **Turn-loop reliability (v0.0.1.11)** — `INCOMPLETE` task status for turns that stop without delivering, read-spree consolidation nudge, no-op-write streak abort, `ConsecutiveTextRepetitionTracker`, and loop detectors that exempt ASCII diagrams/separators.
-9. **MCP & model resolution (v0.0.1.11)** — global-server tools exposed to the agent as `mcp_<server>_*`; `ModelWindow` as the single context-window resolver; RAG duplicate/overlapping-chunk dedup and batched index writes.
+9. **Chat UI render pipeline (IntelliJ)** - the message `StateFlow` is collected directly by `ChatView` on `Dispatchers.IO` and throttled with a trailing `delay`, replacing a lossy `MutableSharedFlow` + `sample` hop; tool bubbles are live from the moment their call starts and are deduplicated against their persisted twin by `toolCallId`; the scroll chain (not just `messagesPanel`) is revalidated. Fixed "bubbles only render after a resize" and the frozen `advance_code_editing` char counter. See [ARCHITECTURE.md](ARCHITECTURE.md#chat-render-pipeline-intellij).
+10. **MCP & model resolution (v0.0.1.11)** — global-server tools exposed to the agent as `mcp_<server>_*`; `ModelWindow` as the single context-window resolver; RAG duplicate/overlapping-chunk dedup and batched index writes.
 
 ### Key Architectural Patterns
 
@@ -173,6 +174,7 @@ Files that are large, structurally central, or require special care:
 | **ContextService** | `core/services/ContextService.kt` | Delegates to 6 sub-services, token budgeting, pruning |
 | **TuiViewModel** | `cli/tui/state/TuiViewModel.kt` (~1289 LOC) | Coordinator of 20 StateFlows, 3 sub-ViewModels |
 | **TuiRenderer** | `cli/tui/rendering/TuiRenderer.kt` | ANSI rendering, split-pane, cursor management, flicker-free |
+| **ChatView** | `intellij-plugin/ui/components/chat/ChatView.kt` | Swing bubble rendering + the message render pipeline (StateFlow collection, throttling, panel cache, streaming counter patching). Subtle failure modes: a dropped emission or a stalled collector shows up as "the UI only updates when I resize" |
 
 ---
 
@@ -187,7 +189,11 @@ Files that are large, structurally central, or require special care:
 7. **Native tools path vs JSON path** — `AgentTurnLoop` takes the native path when `LLMResponse.nativeToolCalls != null`, skipping `ToolCallParser` entirely. Both paths must stay consistent.
 8. **`LLMClient` writes metrics, callers don't** — every successful `LLMClient.complete(...)` increments `task.tokens_in/out/cost_usd` (and `subtask.*` when `subtaskId` is non-null). New call-sites must NOT call `taskRepository.incrementMetrics(...)` themselves — that path was removed precisely because manual bookkeeping was the source of double-count and stale-stats bugs. Pass `taskId` / `subtaskId` and let the client handle it.
 9. **EDT must not read SQLite** — `SessionManager.maxContextWindow` is a `StateFlow` cached off-EDT specifically because `lifecycleService.getMaxContextWindow()` hits the DB. Settings panels, Status bar, Context panel: read `.value`. After mutating `MAX_CONTEXT_SIZE`, call `refreshMaxContextWindow()` to push a new value through the flow.
-10. **`updateSession(persistSettings = false)` for token-only refreshes** — the default `persistSettings = true` triggers `saveCurrentSessionState()` which emits ~5 `ConfigRepository` writes. Use `false` from auto-name, post-turn token refresh, and any path that only changes denormalized stats — not from settings save.
+10. **Never bundle `kotlinx-coroutines` with the plugin** - the IntelliJ Platform provides it, and a second copy on the runtime classpath causes a `ServiceLoader` clash that silently stalls `StateFlow` collectors (chat stops updating until you resize the panel). `intellij-plugin/build.gradle.kts` excludes it from every `*untimeClasspath`; do not remove that block, and do not widen it to all configurations (that breaks the Kotlin compiler classpath). `:cli` is unaffected and keeps its own copy.
+11. **The chat render path must not be "optimized" into a debounce** - `ChatView` collects the message `StateFlow` directly and throttles with a trailing `delay` (`uiUpdateThrottleMs`). A `debounce` waits for the upstream to fall quiet, which never happens while a tool streams, so the live char counter freezes for the whole generation. Re-emitting into a `MutableSharedFlow(extraBufferCapacity = 1)` is also wrong: `tryEmit` silently drops values when the slot is full.
+12. **Swing validate roots** - a `JViewport` is a validate root, so `messagesPanel.revalidate()` never reaches the enclosing `JBScrollPane`. Use `revalidateMessagesArea()` when the bubble list changes structurally, otherwise the new content stays clipped until an unrelated resize.
+13. **A tool bubble must be live from creation** - `CoreMessageToolCallListener.onCreateTempMessage` sets `isStreaming` / `isToolStreaming` immediately, and `MessageDispatcher.reconcileMessages` treats an `EXECUTING` tool call as live. If a running bubble is ever absent from the list, later deltas map over a missing id, the list comes back equal and the `StateFlow` stops emitting entirely. Regression tests: `CoreMessageToolCallListenerTest`, `MessageDispatcherReconcileTest`.
+14. **`updateSession(persistSettings = false)` for token-only refreshes** — the default `persistSettings = true` triggers `saveCurrentSessionState()` which emits ~5 `ConfigRepository` writes. Use `false` from auto-name, post-turn token refresh, and any path that only changes denormalized stats — not from settings save.
 
 ---
 

@@ -777,6 +777,177 @@ class AdvanceCodeEditingToolTest {
     }
 
     @Nested
+    inner class TruncationAndTransientRetryTests {
+
+        @Test
+        fun `salvages a large unterminated block instead of losing the whole generation`() = runBlocking {
+            // The reported waste case: the editor streamed a big file but the stream ended without a
+            // closing ``` fence, so strict extraction found "no usable code block" and the ~65KB
+            // deliverable was thrown away. Salvage recovers the content after the opening fence when
+            // it is substantial, so a near-complete file is written (marked truncated) rather than lost.
+            val bigBody = "<!DOCTYPE html>\n<html>\n<body>\n" + "  <div class=\"row\">content</div>\n".repeat(120)
+            val unterminated = "```html\n$bigBody" // NOTE: no closing fence — the stream was cut off
+
+            coEvery {
+                mockLLMClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    temperature = any(), maxTokens = any(), stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null, subtaskId = null, source = "AdvCodeEditor"
+                )
+            } returns LLMResponse(
+                content = unterminated,
+                usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
+                cost = 0.001, model = "test-model", provider = "test-provider"
+            )
+
+            val result = tool.execute(mapOf(
+                "path" to "page.html",
+                "edit_description" to "Build the landing page"
+            ))
+
+            assertTrue(result.success, "salvage should write the recovered content, got error=${result.error}")
+            val written = Files.readString(tempDir.resolve("page.html"))
+            assertTrue(written.startsWith("<!DOCTYPE html>"), "recovered content should be the file body, not the fence")
+            assertFalse(written.contains("```"), "the opening fence must be stripped from the written file")
+            assertTrue(result.output!!.contains("SALVAGED"), "the agent must be warned the file may be truncated")
+        }
+
+        @Test
+        fun `does not re-generate on a truncated block - salvages after a single editor call`() = runBlocking {
+            // A large unterminated block means the generation was cut off (output cap / upstream
+            // truncation), not that the model refused — re-prompting would produce the same truncation
+            // and burn another full multi-minute generation. The tool must salvage the first reply and
+            // NOT run the extraction-repair re-generation.
+            val bigBody = "<!DOCTYPE html>\n<html>\n<body>\n" + "  <div class=\"row\">content</div>\n".repeat(120)
+            val unterminated = "```html\n$bigBody" // no closing fence — cut off mid-file
+
+            coEvery {
+                mockLLMClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    temperature = any(), maxTokens = any(), stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null, subtaskId = null, source = "AdvCodeEditor"
+                )
+            } returns LLMResponse(
+                content = unterminated,
+                usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
+                cost = 0.001, model = "test-model", provider = "test-provider"
+            )
+
+            val result = tool.execute(mapOf(
+                "path" to "page.html",
+                "edit_description" to "Build the landing page"
+            ))
+
+            assertTrue(result.success, "salvage should write the recovered content, got error=${result.error}")
+            coVerify(exactly = 1) {
+                mockLLMClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    temperature = any(), maxTokens = any(), stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null, subtaskId = null, source = "AdvCodeEditor"
+                )
+            }
+        }
+
+        @Test
+        fun `does not salvage a short unterminated reply that is really prose`() = runBlocking {
+            // A tiny opening-fence reply is far more likely a refusal than a truncated file — writing
+            // it would corrupt the file. Below the salvage threshold we must still fail loud.
+            Files.writeString(tempDir.resolve("test.kt"), "original content")
+            val shortUnterminated = "```kotlin\nfun x() = 1 // sorry, I cannot complete this"
+
+            coEvery {
+                mockLLMClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    temperature = any(), maxTokens = any(), stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null, subtaskId = null, source = "AdvCodeEditor"
+                )
+            } returns LLMResponse(
+                content = shortUnterminated,
+                usage = LLMUsage(inputTokens = 10, outputTokens = 5, totalTokens = 15),
+                cost = 0.0, model = "test-model", provider = "test-provider"
+            )
+
+            val result = tool.execute(mapOf(
+                "path" to "test.kt",
+                "edit_description" to "Edit"
+            ))
+
+            assertFalse(result.success, "a short unterminated reply must not be salvaged")
+            assertEquals("original content", Files.readString(tempDir.resolve("test.kt")))
+        }
+
+        @Test
+        fun `retries the editor call on a transient upstream error and then succeeds`() = runBlocking {
+            // The editor call bypasses LLMRetryHandler; a single Anthropic HTTP 500 used to fail the
+            // whole edit. It must now ride out one transient blip and write the retry's clean output.
+            Files.writeString(tempDir.resolve("test.kt"), "original content")
+
+            coEvery {
+                mockLLMClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    temperature = any(), maxTokens = any(), stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null, subtaskId = null, source = "AdvCodeEditor"
+                )
+            } throws RuntimeException("Anthropic API error (HTTP 500): ") andThen LLMResponse(
+                content = "```kotlin\nrecovered after retry\n```",
+                usage = LLMUsage(inputTokens = 100, outputTokens = 50, totalTokens = 150),
+                cost = 0.002, model = "test-model", provider = "test-provider"
+            )
+
+            val result = tool.execute(mapOf(
+                "path" to "test.kt",
+                "edit_description" to "Edit"
+            ))
+
+            assertTrue(result.success, "expected recovery after a transient 500, got error=${result.error}")
+            assertEquals("recovered after retry", Files.readString(tempDir.resolve("test.kt")))
+            coVerify(exactly = 2) {
+                mockLLMClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    temperature = any(), maxTokens = any(), stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null, subtaskId = null, source = "AdvCodeEditor"
+                )
+            }
+        }
+
+        @Test
+        fun `does not retry a genuine client error`() = runBlocking {
+            // A 400 is not transient — retrying wastes time and money. Fail fast on the first attempt.
+            Files.writeString(tempDir.resolve("test.kt"), "original content")
+
+            coEvery {
+                mockLLMClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    temperature = any(), maxTokens = any(), stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null, subtaskId = null, source = "AdvCodeEditor"
+                )
+            } throws RuntimeException("Anthropic API error (HTTP 400): invalid request")
+
+            val result = tool.execute(mapOf(
+                "path" to "test.kt",
+                "edit_description" to "Edit"
+            ))
+
+            assertFalse(result.success)
+            coVerify(exactly = 1) {
+                mockLLMClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    temperature = any(), maxTokens = any(), stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null, subtaskId = null, source = "AdvCodeEditor"
+                )
+            }
+        }
+    }
+
+    @Nested
     inner class LanguageDetectionTests {
 
         @Test

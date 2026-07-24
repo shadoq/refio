@@ -20,9 +20,27 @@ package pl.jclab.refio.core.llm.streaming
  * NOT align to round numbers, which is the common case (a streamed Python block
  * is rarely a multiple of 50/100/200 chars).
  *
- * The "back-to-back at the tail" shape is specific enough to avoid false positives
- * on normal output. Natural language and code rarely contain four exact-byte copies
- * of the same block immediately after each other.
+ * The "back-to-back at the tail" shape alone is NOT specific enough: generated
+ * structured content (HTML table cells, repeated list items, uniform data rows)
+ * routinely contains a handful of byte-identical adjacent blocks. A comparison
+ * table with N feature columns ends a row with N identical `<td>` cells, so a low
+ * threshold fires on perfectly valid markup. The count is therefore set high
+ * ([repeatThreshold] = 32): a genuine decoder loop repeats a block unbounded (the
+ * founding incident hit 40+ copies), while legitimate structure has a small,
+ * bounded run. This is the only signal that separates the two - block shape and
+ * entropy do not.
+ *
+ * ## Detection range vs the tail buffer
+ *
+ * The guardrail only sees the last `tailSize` chars of the stream (default 4096,
+ * owned by [StreamGuardrails]). Detecting [repeatThreshold] copies of a period-`k`
+ * block needs `k * repeatThreshold` chars in the tail, so with a 4096 tail and
+ * threshold 32 only blocks up to ~128 chars can ever be caught. That is deliberate:
+ * this detector is a *fail-fast optimization* for small-block chanting, not the
+ * safety net. Large-block runaway (e.g. a 500-char code block repeated forever) is
+ * bounded by the [OutputSizeLimiter] (128 KB) and [WallClockDeadline] (180 s) that
+ * sit alongside this guardrail - they unwind such a stream on their own, just a bit
+ * later than an early repetition abort would.
  *
  * ## Cost
  *
@@ -37,16 +55,20 @@ package pl.jclab.refio.core.llm.streaming
  * @param checkEveryNDeltas How often to run the actual period scan. Default 20 —
  *                          means every 20th non-empty delta runs the heuristic.
  * @param repeatThreshold Number of consecutive back-to-back block repetitions
- *                        required to fire the abort. Default 4 — three repetitions
- *                        can happen in legitimate lists/code; four almost never.
+ *                        required to fire the abort. Default 32 — legitimate
+ *                        structured content (table cells, list items, data rows)
+ *                        has a small bounded run of identical adjacent blocks; a
+ *                        genuine decoder loop is unbounded (40+), so a high
+ *                        threshold separates them without false positives on markup.
  * @param minPeriod Smallest period length tested. Default 20 — periods shorter than
  *                  this tend to be legitimate ASCII patterns (separators, indent).
- * @param maxPeriod Largest period length tested. Default 1500 — covers large
- *                  hallucinated code blocks while keeping scan cost bounded.
+ * @param maxPeriod Largest period length tested. Default 1500. Note the tail buffer
+ *                  (default 4096) caps the effective period at `tail / repeatThreshold`
+ *                  (~128 at threshold 32), so this bound only bites with a larger tail.
  */
 class RepetitionDetector(
     private val checkEveryNDeltas: Int = 20,
-    private val repeatThreshold: Int = 4,
+    private val repeatThreshold: Int = 32,
     private val minPeriod: Int = 20,
     private val maxPeriod: Int = 1500
 ) : StreamGuardrail {

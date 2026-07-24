@@ -35,6 +35,10 @@ class ToolCallParser(
 ) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
     private val toolArgumentKeys = listOf("arguments", "args", "tool_args", "toolArgs", "parameters", "params")
+    private val toolNameKeys = listOf("tool", "name", "kind")
+    // Keys that identify the tool or wrap its arguments - excluded when recovering a flat
+    // action shape whose params sit as siblings of `tool` (see [buildFlatArguments]).
+    private val reservedActionKeys = (toolNameKeys + toolArgumentKeys).toSet()
 
     companion object {
         // Constant regexes hoisted so they are compiled once, not per call.
@@ -448,7 +452,28 @@ class ToolCallParser(
     }
 
     private fun extractArgumentsFromAction(actionElement: JsonObject): String {
-        return extractArgumentsFromKeys(actionElement, toolArgumentKeys)
+        val wrapped = toolArgumentKeys.firstNotNullOfOrNull { key -> actionElement[key] }
+        if (wrapped != null) {
+            return normalizeArguments(wrapped)
+        }
+        // Flat action shape: weaker models on the JSON-in-text path (observed: gemma4:31b)
+        // emit tool params as SIBLINGS of `tool` instead of nesting them under `args`, e.g.
+        //   {"tool": "advance_code_editing", "path": "x.html", "edit_description": "..."}
+        // With no wrapper key present the old behavior returned empty `{}` and the tool
+        // failed with "Missing required parameter: 'path'". Treat every leftover key as an
+        // argument so the flat shape maps cleanly.
+        return buildFlatArguments(actionElement) ?: normalizeArguments(null)
+    }
+
+    /**
+     * Build an arguments object from an action's leftover keys (everything that is neither a
+     * tool-name key nor an arguments-wrapper key). Returns null when nothing remains, so the
+     * caller can fall back to the canonical empty `{}`.
+     */
+    private fun buildFlatArguments(actionElement: JsonObject): String? {
+        val flat = actionElement.filterKeys { it !in reservedActionKeys }
+        if (flat.isEmpty()) return null
+        return JsonObject(flat).toString()
     }
 
     private fun extractArgumentsFromKeys(element: JsonObject, keys: List<String>): String {
@@ -795,17 +820,10 @@ class ToolCallParser(
         return "Tool '$toolName' is not available to the $scope. $details"
     }
 
-    private fun isToolAllowedByProfile(toolName: String, profileOverrides: TurnProfileOverrides): Boolean {
-        val normalizedName = toolName.lowercase()
-        val allowed = profileOverrides.allowedTools?.map { it.lowercase() }?.toSet()
-        val disallowed = profileOverrides.disallowedTools?.map { it.lowercase() }?.toSet()
-
-        if (allowed != null) {
-            return normalizedName in allowed
-        }
-        if (disallowed != null) {
-            return normalizedName !in disallowed
-        }
-        return true
-    }
+    // Validates a parsed JSON tool call against the profile. Delegates to the single source of truth
+    // (incl. the SYSTEM_TOOLS carve-out) so it never rejects a call the executor would accept.
+    private fun isToolAllowedByProfile(toolName: String, profileOverrides: TurnProfileOverrides): Boolean =
+        pl.jclab.refio.core.subagents.SubagentToolFilter.isToolAllowedUnderProfile(
+            toolName, profileOverrides.allowedTools, profileOverrides.disallowedTools
+        )
 }

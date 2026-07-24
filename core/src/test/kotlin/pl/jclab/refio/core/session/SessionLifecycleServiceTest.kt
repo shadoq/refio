@@ -6,6 +6,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
+import io.mockk.verify
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -22,6 +23,7 @@ import pl.jclab.refio.api.models.TaskStatus
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.api.ModelInfo
 import pl.jclab.refio.core.api.TaskResponse
+import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.services.ConfigService
 import kotlin.test.assertEquals
 import kotlin.test.assertContentEquals
@@ -213,6 +215,85 @@ class SessionLifecycleServiceTest {
             listOf("Ollama/qwen2.5:7b", "Openai/gpt-4o-mini"),
             models
         )
+    }
+
+    /**
+     * The business rule: a concrete model picked in the dropdown must drive EVERY model slot for
+     * the next session - including the CODING slot that `advance_code_editing` reads from
+     * `ui.selected_model`. The old code inherited the model from config / the last session and pushed
+     * that back over the live selection, so file generation silently ran on the stale provider.
+     */
+    @Test
+    fun `a concrete dropdown model overrides the inherited config model for a new session`() = runBlocking {
+        mockkStatic("org.jetbrains.exposed.sql.transactions.ThreadLocalTransactionManagerKt")
+        every { transaction(any(), any<Function1<Transaction, Any>>()) } answers {
+            val block = arg<Transaction.() -> Any>(1)
+            block(mockk())
+        }
+        try {
+            val projectRouter = mockk<CoreApiRouter>(relaxed = true)
+            val configService = mockk<ConfigService>(relaxed = true)
+            val stateManager = SessionStateManager()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+
+            every { configService.get(ConfigKeys.UI_SELECTED_MODE.key) } returns TaskMode.AGENT.name
+            // Startup and last-session inheritance both resolve the stale persisted model.
+            every {
+                configService.get(ConfigKeys.UI_SELECTED_MODEL.key, ConfigScope.APP, taskId = null, projectId = null)
+            } returns "Zai/glm-5.2"
+            every { projectRouter.taskRouter.getLastSessionForProject("project-1") } returns null
+            every { configService.getTyped(ConfigKeys.READ_ONLY_MODE) } returns false
+            every { projectRouter.taskRouter.createTask(any()) } returns TaskResponse(
+                id = "session-new",
+                name = "Session (AGENT)",
+                mode = TaskMode.AGENT.name,
+                status = TaskStatus.PENDING.name,
+                readOnly = false,
+                pinned = false,
+                executionMode = ExecutionMode.AUTO.name,
+                uiState = null,
+                createdAt = 1L,
+                updatedAt = 2L
+            )
+
+            val service = SessionLifecycleService(
+                projectRouter = projectRouter,
+                configService = configService,
+                stateManager = stateManager,
+                modeSwitchMutex = Mutex(),
+                projectId = "project-1",
+                normalizedProjectPath = "C:\\\\project",
+                scope = scope
+            )
+
+            service.initialize()
+            service.awaitInitialization()
+            // Startup loaded the stale persisted model into memory.
+            assertEquals("Zai/glm-5.2", stateManager.getSelectedModel())
+
+            // User picks a concrete model in the dropdown before the first session exists.
+            stateManager.setSelectedModel("Openai/gpt-5.6-sol")
+
+            service.createSession(name = "Session (AGENT)", mode = TaskMode.AGENT)
+
+            // The new session - and thus the CODING slot resolved from ui.selected_model - must use
+            // the dropdown model, not the inherited glm-5.2.
+            assertEquals("Openai/gpt-5.6-sol", stateManager.getSelectedModel())
+
+            // The CODING slot (advance_code_editing) resolves its model from the ui.selected_model
+            // APP config, never from the task uiState blob. Creating the session must flush the
+            // dropdown model there, otherwise file generation runs on the stale provider while the
+            // turn LLM already uses the new one.
+            verify {
+                configService.set(
+                    ConfigKeys.UI_SELECTED_MODEL.key,
+                    "Openai/gpt-5.6-sol",
+                    ConfigScope.APP
+                )
+            }
+        } finally {
+            unmockkStatic("org.jetbrains.exposed.sql.transactions.ThreadLocalTransactionManagerKt")
+        }
     }
 
     private fun modelInfo(id: String, provider: String, showInDropdown: Boolean) = ModelInfo(

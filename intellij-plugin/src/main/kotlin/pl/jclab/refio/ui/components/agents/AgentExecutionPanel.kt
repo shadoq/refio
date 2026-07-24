@@ -155,6 +155,14 @@ class AgentExecutionPanel : JPanel(BorderLayout()), Disposable {
                 }
                 is AgentEvent.TurnEnded -> {
                     graphPanel.addDuration(nodeId, event.durationMs)
+                    // The final TurnEnded of a run flips its node off RUNNING. Single-session and
+                    // Task-tool subagent runs never emit AgentCompleted/AgentFailed (only
+                    // MultiAgentRunner does), so without this their nodes stay "[RUNNING]" forever.
+                    if (event.isFinal) {
+                        val name = agentNames[nodeId] ?: nodeId.take(8)
+                        val status = if (event.success) AgentNodeStatus.COMPLETED else AgentNodeStatus.FAILED
+                        graphPanel.addOrUpdateAgent(nodeId, name, depth, status)
+                    }
                 }
                 is AgentEvent.LLMCallCompleted -> {
                     graphPanel.addTokens(nodeId, (event.tokensIn + event.tokensOut).toLong())

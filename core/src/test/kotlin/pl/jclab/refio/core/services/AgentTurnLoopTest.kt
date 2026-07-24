@@ -133,7 +133,8 @@ class AgentTurnLoopTest {
     private fun buildAgentTurnLoop(
         taskVerifier: TaskVerifier,
         completionGuardians: GuardianRegistry = GuardianRegistry(),
-        turnVerifier: pl.jclab.refio.core.services.turn.TurnVerifier? = null
+        turnVerifier: pl.jclab.refio.core.services.turn.TurnVerifier? = null,
+        agentEventBus: pl.jclab.refio.core.agents.events.AgentEventBus? = null
     ): AgentTurnLoop {
         val tokenEstimator = pl.jclab.refio.core.services.PromptTokenEstimator()
 
@@ -204,7 +205,8 @@ class AgentTurnLoopTest {
             llmRetryHandler = null,
             workingMemoryIntegration = null,
             completionGuardians = completionGuardians,
-            turnVerifier = turnVerifier
+            turnVerifier = turnVerifier,
+            agentEventBus = agentEventBus
         )
     }
 
@@ -1436,6 +1438,25 @@ class AgentTurnLoopTest {
                 subtasks[subtask.id] = subtask
                 subtask
             }
+            // Tool subtasks are now created via createNext (collision-safe order_index allocation).
+            every {
+                subtaskRepository.createNext(
+                    taskId = any(), kind = any(), description = any(), paramsJson = any(),
+                    stepPlanJson = any(), requiresApproval = any(), status = any(),
+                    llmModel = any(), llmProvider = any(), maxAttempts = any()
+                )
+            } answers {
+                val subtask = createMockSubtask(
+                    id = "subtask-${++subtaskCounter}",
+                    orderIndex = (subtasks.values.maxOfOrNull { it.orderIndex } ?: -1) + 1,
+                    kind = secondArg(),
+                    status = arg(6),
+                    description = thirdArg(),
+                    paramsJson = arg(3)
+                )
+                subtasks[subtask.id] = subtask
+                subtask
+            }
             every { subtaskRepository.findById(any()) } answers { subtasks[firstArg()] }
             every { subtaskRepository.updateStatus(any(), any()) } answers {
                 val id = firstArg<String>()
@@ -1874,6 +1895,18 @@ class AgentTurnLoopTest {
                     status = arg(7), description = arg(3), paramsJson = arg(4)
                 )
             }
+            every {
+                subtaskRepository.createNext(
+                    taskId = any(), kind = any(), description = any(), paramsJson = any(),
+                    stepPlanJson = any(), requiresApproval = any(), status = any(),
+                    llmModel = any(), llmProvider = any(), maxAttempts = any()
+                )
+            } answers {
+                createMockSubtask(
+                    id = "subtask-1", orderIndex = 0, kind = secondArg(),
+                    status = arg(6), description = thirdArg(), paramsJson = arg(3)
+                )
+            }
             coEvery { toolExecutor.executeTool(any(), any()) } returns
                 ToolResult(success = true, output = "file contents: evidence here")
             coEvery { toolResultSummarizer.summarizeToolResult(any(), any(), any()) } answers {
@@ -1907,6 +1940,91 @@ class AgentTurnLoopTest {
                 "COMPLETE WITH EVIDENCE",
                 result.response,
                 "when the re-entry produced real tool work, its later answer must win — not the stale pre-re-entry candidate"
+            )
+        }
+
+        @Test
+        fun `deliverable + native no-call stall keeps native on re-entry and finalizes with a clean sign-off`() = runTest {
+            // Reproduces the qwen3.6:27b museum-page run: a native WRITE landed the file (iter 1), then
+            // the model only emitted forward-looking "let me verify the file" prose with no tool_calls.
+            // The guardian re-enters once (its single sign-off safety net). Two regressions are fixed:
+            //  - Fix B: the re-entry must NOT drop native tools when a FILE deliverable already landed.
+            //    Dropping them pushed the finished turn onto the JSON-in-text contract, where plain prose
+            //    tripped the "Reply with JSON only" format-nudge loop and burned extra iterations.
+            //  - Fix A: the finalized answer must be a concise completion note, not the restored dangling
+            //    "let me verify…" stub that makes a completed turn read as if it stopped mid-check.
+            val writeTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "advance_code_editing"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.WRITE
+            }
+            every { toolRegistry.getTool("advance_code_editing") } returns writeTool
+            every { toolRegistry.hasTool("advance_code_editing") } returns true
+            every { toolRegistry.getToolSchemas(any(), any(), any()) } returns listOf(
+                pl.jclab.refio.core.tools.base.ToolSchema("advance_code_editing", "Edit a file", mapOf("type" to "object")),
+            )
+            coEvery { toolExecutor.executeTool(any(), any()) } returns
+                ToolResult(success = true, output = "Created page.html (+884/-0)")
+
+            fun nativeProse(text: String) = LLMResponse(
+                content = text,
+                usage = LLMUsage(100, 20, 120),
+                model = "gpt-5.5", provider = "openai", cost = 0.0, finishReason = "stop",
+                nativeToolCalls = emptyList(),
+            )
+
+            val kwargsPerCall = mutableListOf<Map<String, Any>>()
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = capture(kwargsPerCall),
+                )
+            } returnsMany listOf(
+                // iter 1 — a real native WRITE call → the file deliverable lands.
+                LLMResponse(
+                    content = "",
+                    usage = LLMUsage(100, 30, 130),
+                    model = "gpt-5.5", provider = "openai", cost = 0.0, finishReason = "tool_calls",
+                    nativeToolCalls = listOf(
+                        pl.jclab.refio.core.llm.NativeToolCall(
+                            id = "call_1", name = "advance_code_editing",
+                            argumentsJson = """{"path":"page.html","edit_description":"build the page"}""",
+                        ),
+                    ),
+                ),
+                // iter 2 — forward-looking prose, no tool_calls → guardian re-enters once.
+                nativeProse("Let me read the generated file to verify all sections are present."),
+                // iter 3 — still only prose → guardian passes (deliverable already landed).
+                nativeProse("Let me now scan the file to double-check the ticket modal."),
+            )
+
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), reenterOnceRegistry())
+
+            val result = loop.runTurn(
+                taskId = testTaskId, userInput = "Build the museum landing page in page.html",
+                mode = TaskMode.AGENT, model = "gpt-5.5", provider = "openai",
+            )
+
+            assertTrue(result.success, "a landed file + a verify-intent stall must finalize SUCCESS: ${result.response}")
+            assertFalse(result.incomplete, "the file deliverable landed; the turn must not be INCOMPLETE")
+            assertEquals(
+                3, result.iterations,
+                "the single guardian re-entry must finalize the turn - no JSON format-nudge loop",
+            )
+            // Fix B: native tools stay offered on the post-re-entry iteration (deliverable already landed).
+            assertTrue(
+                kwargsPerCall[2].containsKey("native_tools"),
+                "a deliverable-landed re-entry must keep native tools, not drop to the JSON contract",
+            )
+            // Fix A: the finalized answer is a clean completion note, not the dangling verify stub.
+            assertFalse(
+                result.response.contains("Let me", ignoreCase = true),
+                "the dangling forward-looking stub must not be the final answer: ${result.response}",
+            )
+            assertTrue(
+                result.response.contains("written this turn", ignoreCase = true),
+                "the finalized answer should be the deterministic completion note: ${result.response}",
             )
         }
     }
@@ -2129,6 +2247,39 @@ class AgentTurnLoopTest {
                 pl.jclab.refio.core.debug.TurnFailureMarkerTracker.markerFor(testTaskId)
             )
         }
+    }
+
+    @Test
+    fun `an uncaught mid-turn exception still emits a terminal TurnEnded so the graph node closes`() = runTest {
+        // Reproduces the production crash: a DB write (subtask order_index collision) threw out of
+        // the turn. Before the backstop catch, that exception escaped runTurn WITHOUT a final
+        // TurnEnded, so the subagent's Agents-Graph node stayed [RUNNING] forever. The throw is
+        // modeled via the LLM call - a plain RuntimeException that the inner native-tools catches
+        // (ToolsNotSupportedException / RefioError.LLMError) deliberately do not handle.
+        val emitted = mutableListOf<pl.jclab.refio.core.agents.events.AgentEvent>()
+        val bus = mockk<pl.jclab.refio.core.agents.events.AgentEventBus>(relaxed = true)
+        coEvery { bus.emit(capture(emitted)) } just Runs
+
+        coEvery {
+            llmClient.complete(
+                provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                subtaskId = any(), source = any(), kwargs = any()
+            )
+        } throws RuntimeException("simulated mid-turn DB crash")
+
+        val loop = buildAgentTurnLoop(NoopTaskVerifier(), agentEventBus = bus)
+
+        assertThrows<RuntimeException> {
+            loop.runTurn(taskId = testTaskId, userInput = "do something", mode = TaskMode.AGENT)
+        }
+
+        val terminal = emitted
+            .filterIsInstance<pl.jclab.refio.core.agents.events.AgentEvent.TurnEnded>()
+            .filter { it.isFinal }
+        assertEquals(1, terminal.size, "exactly one terminal TurnEnded must close the run even on an uncaught exception")
+        assertFalse(terminal.single().success, "a crashed turn must report the node as FAILED, not COMPLETED")
     }
 }
 

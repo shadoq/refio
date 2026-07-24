@@ -218,6 +218,81 @@ class LLMRetryHandlerTest {
 
             assertEquals(1, retryHandler.getStats().totalRetries)
         }
+
+        @Test
+        fun `should retry on bare HTTP 500 with empty body`() = runTest {
+            // Anthropic returns a 500 with an empty body — the message has no "server error" prose,
+            // only the status code, so the text patterns miss it. It is still transient.
+            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } throws
+                RuntimeException("LLM error from anthropic/claude-sonnet-4-6: Anthropic API error (HTTP 500): ") andThen successResponse()
+
+            retryHandler.callWithRetry(
+                provider = "anthropic",
+                model = "claude-sonnet-4-6",
+                messages = testMessages,
+                taskId = "task-1",
+                source = "test",
+                baseDelayMs = 1
+            )
+
+            assertEquals(1, retryHandler.getStats().totalRetries)
+        }
+
+        @Test
+        fun `should retry on Cloudflare 520 edge error`() = runTest {
+            // Cloudflare fronts the Anthropic API and returns "error code: 520" on an origin hiccup.
+            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } throws
+                RuntimeException("Anthropic API error (HTTP 520): error code: 520") andThen successResponse()
+
+            retryHandler.callWithRetry(
+                provider = "anthropic",
+                model = "claude-sonnet-4-6",
+                messages = testMessages,
+                taskId = "task-1",
+                source = "test",
+                baseDelayMs = 1
+            )
+
+            assertEquals(1, retryHandler.getStats().totalRetries)
+        }
+
+        @Test
+        fun `should retry on 529 overloaded status`() = runTest {
+            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } throws
+                RuntimeException("Anthropic API error (HTTP 529): ") andThen successResponse()
+
+            retryHandler.callWithRetry(
+                provider = "anthropic",
+                model = "claude-sonnet-4-6",
+                messages = testMessages,
+                taskId = "task-1",
+                source = "test",
+                baseDelayMs = 1
+            )
+
+            assertEquals(1, retryHandler.getStats().totalRetries)
+        }
+
+        @Test
+        fun `does not retry a non-transient 4xx status`() = runTest {
+            // A 400/404 is a client error a retry cannot fix — the status-code matcher must not
+            // widen retryability to every HTTP code, only the transient upstream set.
+            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } throws
+                RuntimeException("Anthropic API error (HTTP 400): invalid request")
+
+            assertFailsWith<RuntimeException> {
+                retryHandler.callWithRetry(
+                    provider = "anthropic",
+                    model = "claude-sonnet-4-6",
+                    messages = testMessages,
+                    taskId = "task-1",
+                    source = "test",
+                    baseDelayMs = 1
+                )
+            }
+
+            assertEquals(0, retryHandler.getStats().totalRetries)
+        }
     }
 
     @Nested

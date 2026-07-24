@@ -96,16 +96,28 @@ class AgentPlanService {
     }
 
     /**
-     * Build a context section showing all plans for a given task.
-     * Returns empty string if no plans exist.
+     * Build a context section showing plans for a given task.
+     *
+     * When [agentId] is null (the top-level orchestrator), every agent's plan for the task is
+     * shown so the orchestrator can see how far each subagent got. When [agentId] is set (a
+     * subagent), only that agent's own plan is shown: a subagent has no use for its parent's or
+     * siblings' plans, and seeing their steps can trick a weak model into calling `tasks(update)`
+     * on a step it never created (its own plan is empty), which fails with "Step N not found".
+     * Returns empty string if there is no plan to show.
      */
-    fun buildPlanSection(taskId: String): String {
+    fun buildPlanSection(taskId: String, agentId: String? = null): String {
         val allPlans = getAllPlansForTask(taskId)
-        if (allPlans.isEmpty()) return ""
+        val scoped = if (agentId != null) {
+            val ownKey = planKey(taskId, agentId)
+            allPlans.filterKeys { it == ownKey }
+        } else {
+            allPlans
+        }
+        if (scoped.isEmpty()) return ""
 
         return buildString {
             appendLine("<agent_plans>")
-            allPlans.forEach { (key, steps) ->
+            scoped.forEach { (key, steps) ->
                 val agentName = if (key.contains(":")) key.substringAfter(":") else "main"
                 appendLine("## Agent: $agentName")
                 steps.forEach { step ->

@@ -123,6 +123,47 @@ class NextSpeakerJudgeGuardian(
         val response = context.finalResponse.trim()
         if (response.isEmpty()) return GuardianDecision.Pass
 
+        // A read-only subagent's deliverable can ONLY be prose — it has no write/exec tool, so there
+        // is no tool call that would "deliver". Once it produced a substantial reply it has done its
+        // job; re-entering it just demands a tool call it cannot make and pushes it to hallucinate
+        // tools it lacks (observed 2026-07: security-engineer produced a full report, was re-entered,
+        // then looped on an unavailable `think` until the run was cancelled). A short reply is still
+        // a bare stub and falls through to the normal re-entry path below.
+        if (context.runProfile == TurnRunProfile.SUBAGENT &&
+            !context.subagentHasWriteTools &&
+            response.length >= SUBAGENT_PROSE_DELIVERABLE_MIN_CHARS
+        ) {
+            logger.info {
+                "[JUDGE] taskId=${context.taskId} read-only subagent produced substantial prose " +
+                    "(len=${response.length}) — its deliverable is text, not a tool call; Pass without re-entry"
+            }
+            return GuardianDecision.Pass
+        }
+
+        // A top-level AGENT turn whose deliverable is prose — an analysis / report / answer the task
+        // never asked to be written to a file — is done once it produced a substantial reply. The
+        // rule: meaningful produced content (a report, data, an answer) counts as the work being done,
+        // even if the turn also hit tool errors, and regardless of whether a file was requested.
+        // Re-entering such a turn only regenerates the same answer and surfaces a spurious "finish the
+        // remaining steps" guidance note, then finalizes it INCOMPLETE (observed 2026-07: a
+        // subagent-driven project scan compiled a full report, was re-entered on a MODEL verdict, and
+        // ended INCOMPLETE even though the report was delivered — the judge had read only the opening
+        // intent preamble the model buried it behind). A bare intent stub stays below the bar and
+        // falls through to the judge. Trade-off (accepted): a top-level agent asked to WRITE a file
+        // that only describes it in >= the bar of prose is now taken as delivered rather than nagged.
+        if (context.runProfile != TurnRunProfile.SUBAGENT &&
+            context.mode == TaskMode.AGENT &&
+            context.fileWriteToolsExecutedInTurn == 0 &&
+            response.length >= AGENT_PROSE_DELIVERABLE_MIN_CHARS
+        ) {
+            logger.info {
+                "[JUDGE] taskId=${context.taskId} top-level AGENT produced substantial prose " +
+                    "(len=${response.length}) with no file write — its deliverable is the answer text; " +
+                    "Pass without re-entry"
+            }
+            return GuardianDecision.Pass
+        }
+
         if (looksClearlyDone(response, hasGoal = context.completionCondition != null)) {
             logger.debug { "[JUDGE] pre-filter says clearly done — skipping LLM call" }
             return GuardianDecision.Pass
@@ -218,11 +259,13 @@ class NextSpeakerJudgeGuardian(
             ConfigKeys.GENERAL_JUDGE_EXTENDED_REENTRY_ENABLED,
             context.taskId
         )
-        if (!extended || deliverableLikelyProduced(context)) {
-            return 1
-        }
-        val earlyLimit = (context.maxIterations * EARLY_REENTRY_ITERATION_FRACTION).toInt()
-        return if (context.iteration <= earlyLimit) MAX_EARLY_JUDGE_REENTRIES else 1
+        return resolveReentryBudget(
+            extended = extended,
+            deliverableProduced = deliverableLikelyProduced(context),
+            finalResponseLength = context.finalResponse.trim().length,
+            iteration = context.iteration,
+            maxIterations = context.maxIterations,
+        )
     }
 
     /**
@@ -308,7 +351,7 @@ class NextSpeakerJudgeGuardian(
             append("User request:\n")
             append(context.userRequest?.take(800) ?: "(unknown)")
             append("\n\nAgent's last reply (no tool calls were issued):\n")
-            append(response.take(2000))
+            append(boundedResponseForJudge(response))
             append("\n\nTools used so far in this turn: ")
             append(renderToolsUsed(context.toolsUsed))
             append("\nIteration: ${context.iteration}/${context.maxIterations}")
@@ -445,6 +488,52 @@ class NextSpeakerJudgeGuardian(
         const val MAX_JUDGE_REENTRIES = 3
 
         /**
+         * Minimum reply length (chars) for a read-only subagent's prose to count as a delivered
+         * result and skip judge re-entry entirely. Well above [TurnDeliverable.PLAN_DELIVERABLE_MIN_CHARS]
+         * (100) so a chatty-but-empty intent stub ("Let me now analyze all these files carefully…")
+         * still falls through to the normal re-entry, while a real report (hundreds–thousands of
+         * chars) is accepted. A read-only subagent has no write/exec tool, so a tool call can never
+         * "deliver" — re-entering only pushes it to hallucinate tools it lacks.
+         */
+        const val SUBAGENT_PROSE_DELIVERABLE_MIN_CHARS = 400
+
+        /**
+         * Minimum reply length (chars) for a top-level AGENT's prose to count as a delivered answer
+         * and skip judge re-entry. Set above [SUBAGENT_PROSE_DELIVERABLE_MIN_CHARS] (400) because a
+         * top-level agent HAS write/exec tools and a larger surface for long intent announcements
+         * ("Now I'll read every file and compile a full report…"), so only a clearly substantial
+         * answer - not a chatty announcement - is accepted as the deliverable when the turn wrote no
+         * file. A report/analysis answer is typically far longer; a genuine intent stub is short.
+         */
+        const val AGENT_PROSE_DELIVERABLE_MIN_CHARS = 600
+
+        /**
+         * Ceiling on how much of the agent's reply the judge sees. The judge must read the WHOLE
+         * answer so a completed report is never judged on its opening lines alone - a weak model can
+         * bury the finished result behind an intent preamble ("Now I'll compile the report…") or
+         * fabricated progress text, and a first-N-chars window then reads it as an unfinished intent
+         * announcement. Only an oversized reply is folded to head+tail so the judge still sees how it
+         * opened AND how it concluded without blowing the judge's token budget.
+         */
+        const val JUDGE_RESPONSE_MAX_CHARS = 4096
+
+        /**
+         * The agent reply the judge is shown: the whole thing when it fits within
+         * [JUDGE_RESPONSE_MAX_CHARS], otherwise the head and the tail joined by a marker so both the
+         * opening and the conclusion survive. Pure so the folding is unit-testable without the LLM.
+         */
+        internal fun boundedResponseForJudge(
+            response: String,
+            maxChars: Int = JUDGE_RESPONSE_MAX_CHARS
+        ): String {
+            if (response.length <= maxChars) return response
+            val half = maxChars / 2
+            return response.take(half) +
+                "\n\n...[middle of the reply omitted]...\n\n" +
+                response.takeLast(half)
+        }
+
+        /**
          * Max re-entries the extended budget grants while a turn is early and undelivered. Two
          * (the strict one-shot plus one schema-carrying escalation) - kept below
          * [MAX_JUDGE_REENTRIES] so the registry cap stays a backstop, never the primary limit.
@@ -457,6 +546,34 @@ class NextSpeakerJudgeGuardian(
          * its iterations without delivering is stuck, not merely slow to start.
          */
         const val EARLY_REENTRY_ITERATION_FRACTION = 0.30
+
+        /**
+         * How many judge re-entries a turn may spend, as a pure function of the inputs (extracted so
+         * the precedence is unit-testable without mocking the LLM/config).
+         *
+         *  - Not extended, or a deliverable already landed → strict one-shot (1).
+         *  - **A substantial text answer already on hand → capped at 1** even in the early window. The
+         *    extended (2-re-entry) budget exists to give a weak local model a SECOND, schema-carrying
+         *    nudge after it stalled on a bare intent stub with a malformed/absent tool call. Granting
+         *    it to a turn that already produced a real text answer only makes the model REGENERATE
+         *    that answer — which the user sees as a duplicated reply plus an extra guidance note for a
+         *    text deliverable the judge keeps re-asking for (observed: a top-level analysis turn that
+         *    re-emitted its full report across two escalated re-entries). Bare intent stubs (below the
+         *    threshold) still get the second nudge — the exact stall the extended budget recovers.
+         *  - Otherwise, the early window grants [MAX_EARLY_JUDGE_REENTRIES]; past it, back to 1.
+         */
+        internal fun resolveReentryBudget(
+            extended: Boolean,
+            deliverableProduced: Boolean,
+            finalResponseLength: Int,
+            iteration: Int,
+            maxIterations: Int,
+        ): Int {
+            if (!extended || deliverableProduced) return 1
+            if (finalResponseLength >= TurnDeliverable.PLAN_DELIVERABLE_MIN_CHARS) return 1
+            val earlyLimit = (maxIterations * EARLY_REENTRY_ITERATION_FRACTION).toInt()
+            return if (iteration <= earlyLimit) MAX_EARLY_JUDGE_REENTRIES else 1
+        }
 
         private val EXPLICIT_DONE_MARKERS = listOf(
             "task complete",

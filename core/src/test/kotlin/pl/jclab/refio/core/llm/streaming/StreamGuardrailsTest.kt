@@ -136,15 +136,14 @@ class StreamGuardrailsTest {
 
     @Test
     fun `integration — qwen style repetition loop is caught by defaults`() {
-        // Simulate the domatowo failure: 50+ identical 300-char blocks streamed
-        // as separate deltas. Defaults should fire within the first few rounds
-        // after crossing the threshold.
+        // Simulate the domatowo failure as it presents to this detector: a short line
+        // chanted over and over. With the 32-copy threshold and the 4096-char tail the
+        // detector catches small-block loops like this; larger blocks are left to the
+        // size/wall-clock limiters (see RepetitionDetectorTest). ~62-char block × 32 =
+        // 1984 chars, within the tail.
         val guardrails = StreamGuardrails.defaults()
-        val loopBlock = "Let me execute this Python code to move the transporter to D8:\n" +
-            "```python\nimport requests\nAPI_KEY = \"e14b59fb-57e9-475c-8b1a-c64c6ed1660f\"\n" +
-            "result = requests.post(BASE_URL, json={\"action\": \"move\", \"where\": \"D8\"})\n" +
-            "print(result.json())\n```\n"
-        // Gate default is 20 — feed 200 rounds to guarantee a check runs.
+        val loopBlock = "Let me execute this Python code to move the transporter to D8:\n"
+        // Gate default is 20 — feed 200 rounds to guarantee a check runs past 32 copies.
         var aborted = false
         var abortCode: String? = null
         repeat(200) {

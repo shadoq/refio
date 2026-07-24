@@ -151,20 +151,23 @@ class GeminiAdapter(
 
         val maxOutputLimit = configService?.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, taskId)
             ?: ConfigKeys.MAX_OUTPUT_SIZE.default
-        val requestedMax = when {
-            maxTokens != null && maxTokens > 0 -> minOf(maxTokens, maxOutputLimit)
-            else -> maxOutputLimit
-        }
+        // An explicit caller request (e.g. advance_code_editing) is honored up to the MODEL's hard
+        // limit; the configured MAX_OUTPUT_SIZE is only the default when no value is passed, and the
+        // safety ceiling when the model's real limit is unknown.
+        val requestedMax = if (maxTokens != null && maxTokens > 0) maxTokens else maxOutputLimit
         val modelLimit = pl.jclab.refio.core.llm.ModelDefinitions
             .getDefinition("gemini", model)
             ?.maxOutputTokens
-        val effectiveMax = if (modelLimit != null && modelLimit > 0 && requestedMax > modelLimit) {
-            logger.warn {
-                "[GEMINI] Requested maxOutputTokens=$requestedMax exceeds model limit ($modelLimit) for $model - clamping to safe value"
+        val effectiveMax = when {
+            modelLimit != null && modelLimit > 0 -> {
+                if (requestedMax > modelLimit) {
+                    logger.warn {
+                        "[GEMINI] Requested maxOutputTokens=$requestedMax exceeds model limit ($modelLimit) for $model - clamping to safe value"
+                    }
+                }
+                minOf(requestedMax, modelLimit)
             }
-            modelLimit
-        } else {
-            requestedMax
+            else -> minOf(requestedMax, maxOutputLimit)
         }
         generationConfig["maxOutputTokens"] = effectiveMax
         generationConfig["temperature"] = temperature

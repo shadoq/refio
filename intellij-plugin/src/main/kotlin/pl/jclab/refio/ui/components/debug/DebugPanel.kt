@@ -600,6 +600,19 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
             try {
                 val contextResponse = sessionManager.apiRouter.projectContextRouter.getProjectContext(session.id)
 
+                contextResponse.nativeToolsDecision?.let { decision ->
+                    if (decision.isNotBlank()) {
+                        appendLine("### Native Tools Decision")
+                        appendLine()
+                        appendLine("Next-turn tool-call routing (native function-calling vs JSON-in-text):")
+                        appendLine()
+                        appendLine("```")
+                        appendLine(decision)
+                        appendLine("```")
+                        appendLine()
+                    }
+                }
+
                 contextResponse.activeLlmRequestPrompt?.let { prompt ->
                     if (prompt.isNotBlank()) {
                         appendLine("### Active LLM Request Prompt")

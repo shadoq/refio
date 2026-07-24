@@ -167,6 +167,8 @@ sealed interface AgentEvent {
         val iteration: Int,
         val durationMs: Long,
         val isFinal: Boolean,
+        /** On the final TurnEnded, whether the run succeeded — lets the graph pick COMPLETED vs FAILED. */
+        val success: Boolean = true,
         val runId: String? = null,
         val parentRunId: String? = null,
         val depth: Int = 0

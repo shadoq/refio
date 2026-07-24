@@ -190,7 +190,14 @@ class DelegateToStrongModelTool(
                 maxIterationsOverride = MAX_ITERATIONS_TOOL_MODE,
                 parentRunId = parentRunId,
                 depth = childDepth,
-                subagentChain = parentChain + "strong-model"
+                // Ancestor chain ONLY — must NOT include "strong-model" (self). The turn-loop's
+                // TurnSubagentValidator checks the child's own name against this chain, so pre-adding
+                // "strong-model" here made every first tool-enabled delegation trip a false
+                // "Subagent recursion detected for 'strong-model'". The current agent's name is added
+                // to the chain by TurnToolExecutor.injectNestedSubagentMetadata when THIS agent was
+                // spawned, exactly as InvokeSubagentTool relies on. A genuine strong-model→strong-model
+                // recursion is still caught because parentChain will already contain "strong-model".
+                subagentChain = parentChain
             )
         )
 

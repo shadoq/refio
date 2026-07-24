@@ -1074,6 +1074,51 @@ when (session.mode) {
 - `totalEstimatedTokens`: Token count
 - And more...
 
+### Message Reconciliation
+
+`MessageDispatcher.reconcileMessages(currentInMemory, dbMessages, sessionId)` runs on every
+mid-turn reload. During a turn several writers push transient bubbles into the in-memory list
+(the user's prompt, the streaming assistant, per-subagent streams, per-tool-call bubbles)
+**before** they exist in the DB, and the persisted copies come back under different ids. The
+reconciler keeps a transient only until its DB counterpart exists, and never renders both.
+
+| In-memory message | Kept after reload? |
+|---|---|
+| `role == "system"` (in-memory notices, guardian nudges) | Always |
+| Live transient (`isStreaming`, or a tool call with `status == EXECUTING`) | Yes |
+| Top-level user prompt whose text is not yet in the DB | Yes |
+| Anything else (finished assistant / tool transients) | Dropped, the DB copy takes over |
+
+One tool call appears under two ids: `temp-<toolCallId>` in memory and
+`<messageId>:tc<index>` once the assistant row is persisted. Id matching never relates the
+two, so both used to render. They are now deduplicated by `toolCallId`: while the call is
+live the transient wins (it is the only copy carrying streamed content, the persisted display
+row is built empty) and its DB twin is held back; once it stops streaming the transient is
+dropped and the DB row takes over. `agentName` is deliberately not a dedup key - an agent can
+be invoked many times, and holding rows back by name would hide its earlier turns.
+
+### Live Tool-Call Bubble (`CoreMessageToolCallListener`)
+
+| Hook | Behavior |
+|---|---|
+| `onCreateTempMessage` | Appends `temp-<toolCallId>` marked `isStreaming` / `isToolStreaming` **from creation**. Marking it live only at the first delta left a window where a reload dropped it; every later delta then mapped over a missing id, the list came back equal, and the `StateFlow` stopped emitting for the whole generation (the frozen char-counter bug). |
+| `onUpdateTempMessage` | Pushes the accumulated text, skipping deltas that did not grow it (adapters emit many empty deltas; the text only ever grows by appending, so equal length means equal content). |
+| `onFinalizeTempMessage` | Clears both live flags and attaches the result summary, so the persisted row can take over on the next reload. |
+
+Regression coverage: `MessageDispatcherReconcileTest`, `CoreMessageToolCallListenerTest`.
+
+### Chat Rendering (IntelliJ `ChatView`)
+
+`ChatView` collects `SessionStateManager.messages` **directly** on `Dispatchers.IO`, renders
+immediately, then applies a trailing `delay(300 ms)` - a leading-edge throttle, not a
+debounce. `StateFlow` conflation guarantees the newest value still lands after the throttle,
+so the final frame always renders while a burst of streaming deltas costs at most one rebuild
+per interval. Layout changes revalidate the enclosing `JBScrollPane`, because
+`messagesPanel.revalidate()` stops at the `JViewport` validate root. See
+[ARCHITECTURE.md - Chat Render Pipeline](ARCHITECTURE.md#chat-render-pipeline-intellij) for
+the full rationale and the packaging constraint (`kotlinx-coroutines` must not be bundled
+with the plugin).
+
 ---
 
 ## 12. Database Schema
@@ -1084,7 +1129,8 @@ when (session.mode) {
 -- Sessions (Chat/Plan/Agent) — also the canonical row for live token/cost stats
 TasksTable (id, project_id, name, mode, description, status, ui_state_json,
             tokens_in, tokens_out, cost_usd, created_at, updated_at)
-    -- status: NEW, RUNNING, SUCCESS, FAILED, INCOMPLETE  (AGENT turns now flip RUNNING/SUCCESS/FAILED/INCOMPLETE)
+    -- status: NEW, RUNNING, SUCCESS, FAILED, INCOMPLETE, CANCELED
+    --         (AGENT turns flip RUNNING on entry; CANCELED when the user presses Stop)
 
 -- Execution steps — also carry per-subtask LLM cost (sub-LLM tools like
 -- advance_code_editing, multi_line_editor, fetch_webpage)

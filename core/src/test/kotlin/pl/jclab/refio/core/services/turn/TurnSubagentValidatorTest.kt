@@ -60,4 +60,33 @@ class TurnSubagentValidatorTest {
             )
         )
     }
+
+    @Test
+    fun `validateRecursion allows a subagent with an empty ancestor chain`() {
+        // Contract: subagentChain holds ANCESTORS ONLY, never self. The first tool-enabled
+        // delegate_to_strong_model from a top-level agent produces exactly this shape
+        // (name="strong-model", chain=[]). It broke because the tool pre-added its own name,
+        // making the chain [strong-model] and tripping a false recursion here. With an empty
+        // ancestor chain the agent is a fresh child and must be allowed.
+        validator.validateRecursion(
+            runProfile = TurnRunProfile.SUBAGENT,
+            profileOverrides = TurnProfileOverrides(
+                subagentName = "strong-model",
+                subagentChain = emptyList()
+            )
+        )
+    }
+
+    @Test
+    fun `validateRecursion ignores the top-level DEFAULT profile`() {
+        // A non-subagent turn (main agent) must never be subject to the recursion check, regardless
+        // of what chain data is attached — the guard is scoped to SUBAGENT runs only.
+        validator.validateRecursion(
+            runProfile = TurnRunProfile.DEFAULT,
+            profileOverrides = TurnProfileOverrides(
+                subagentName = "strong-model",
+                subagentChain = listOf("strong-model")
+            )
+        )
+    }
 }

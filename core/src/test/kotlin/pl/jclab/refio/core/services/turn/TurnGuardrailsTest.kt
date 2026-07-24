@@ -62,10 +62,60 @@ class TurnGuardrailsTest {
         @Test
         fun `should support custom threshold`() {
             val tracker = TurnGuardrails.ToolErrorTracker(windowSize = 10)
-            repeat(5) { tracker.recordResult(false) }
+            // Order matters since the recovery guard also checks the LAST result: end on a failure so
+            // this test exercises the threshold comparison, not the recovery clause. Rate stays 0.5.
             repeat(5) { tracker.recordResult(true) }
+            repeat(5) { tracker.recordResult(false) }
             assertFalse(tracker.shouldAbort(threshold = 0.7))
             assertTrue(tracker.shouldAbort(threshold = 0.4))
+        }
+
+        // ─── Recovery guard (Fix #3) ───────────────────────────────────────
+        // The error guard used to abort purely on rate + sample count, ignoring whether the agent
+        // had just recovered. In a real run (2026-07) three subagent failures + one delegate failure
+        // + one SUCCESSFUL `tasks` plan gave 4/5 = 80% and the turn was killed WITHOUT ever executing
+        // the plan — "the process never reached the end". shouldAbort now additionally requires the
+        // most recent call to be a failure.
+
+        @Test
+        fun `does not abort right after a recovery even with a high stale error rate`() {
+            // Exact reproduction of the observed window: F F F F S. Rate 80% > 70%, 5 samples — but the
+            // last call SUCCEEDED, so the agent is making progress and must be allowed to continue.
+            val tracker = TurnGuardrails.ToolErrorTracker(windowSize = 10)
+            repeat(4) { tracker.recordResult(false) }
+            tracker.recordResult(true)
+            assertFalse(
+                tracker.shouldAbort(),
+                "a burst of failures followed by a success must NOT abort — the agent just recovered"
+            )
+        }
+
+        @Test
+        fun `still aborts if the agent fails again after a recovery`() {
+            // The recovery grace is a single reprieve, not immunity: F F F F S F re-crosses the
+            // threshold with a failing last call, so a genuinely-stuck agent is still stopped.
+            val tracker = TurnGuardrails.ToolErrorTracker(windowSize = 10)
+            repeat(4) { tracker.recordResult(false) }
+            tracker.recordResult(true)
+            tracker.recordResult(false)
+            assertTrue(
+                tracker.shouldAbort(),
+                "if the agent fails again immediately after recovering, the guard must fire"
+            )
+        }
+
+        @Test
+        fun `weird case - alternating fail-success never reaches the abort threshold anyway`() {
+            // Adversarial probe of whether the recovery clause weakens the guard: it does not, because
+            // steady thrash (F S F S …) sits at ~50% error rate, below the 70% bar. The guard's teeth
+            // are for sustained failure bursts; the recovery clause only touches the burst-then-recover
+            // edge. Documents WHY adding the clause is safe.
+            val tracker = TurnGuardrails.ToolErrorTracker(windowSize = 10)
+            repeat(5) {
+                tracker.recordResult(false)
+                tracker.recordResult(true)
+            }
+            assertFalse(tracker.shouldAbort())
         }
 
         @Test
@@ -75,6 +125,63 @@ class TurnGuardrailsTest {
             repeat(7) { tracker.recordResult(true) }
             val stats = tracker.getStats()
             assertTrue(stats.contains("3/10"))
+        }
+    }
+
+    @Nested
+    inner class ConsecutiveBlockedToolTrackerTest {
+
+        @Test
+        fun `two blocked calls in a row abort the turn`() {
+            // The reported failure mode: a subagent whose persona instructs a tool its whitelist
+            // forbids keeps calling it. errorTracker dilutes and the definitive-loop signature resets
+            // on varying args, so this arg-independent counter is the only backstop.
+            val tracker = TurnGuardrails.ConsecutiveBlockedToolTracker()
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record(blocked = true))
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(tracker.record(blocked = true))
+        }
+
+        @Test
+        fun `abort is INCOMPLETE and names the recovery path`() {
+            val tracker = TurnGuardrails.ConsecutiveBlockedToolTracker()
+            tracker.record(blocked = true)
+            val status = tracker.record(blocked = true)
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(status)
+            assertTrue(status.incomplete, "a wrong-toolset loop delivered nothing → INCOMPLETE, not a hard error")
+            assertTrue(
+                status.reason.contains("available", ignoreCase = true),
+                "the message must point the model back to its actual tools / plain text",
+            )
+        }
+
+        @Test
+        fun `a successful non-blocked call between blocks resets the streak`() {
+            // WHY: one real tool interaction means the model is no longer stuck asking for a tool it
+            // does not have — a single stray blocked call must not creep toward an abort across a
+            // long, otherwise-healthy turn.
+            val tracker = TurnGuardrails.ConsecutiveBlockedToolTracker()
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record(blocked = true))
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record(blocked = false))
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record(blocked = true))
+        }
+
+        @Test
+        fun `varying the blocked call arguments does NOT protect it - the streak is arg-independent`() {
+            // The exact hole this guard closes: the definitive-loop signature (name+argHash) resets
+            // when the persona emits a different `think` "thought" each time, so a same-tool loop with
+            // changing args would otherwise never abort. Here the tracker is fed only the boolean, so
+            // two blocked calls abort regardless of how the arguments differed.
+            val tracker = TurnGuardrails.ConsecutiveBlockedToolTracker()
+            tracker.record(blocked = true)
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(tracker.record(blocked = true))
+        }
+
+        @Test
+        fun `only executed non-blocked failures do not count as blocked`() {
+            // A normally-failing tool (e.g. read_file on a missing path) is the error-tracker's job,
+            // not this guard's — it must not push toward a blocked-tool abort.
+            val tracker = TurnGuardrails.ConsecutiveBlockedToolTracker()
+            repeat(5) { assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record(blocked = false)) }
         }
     }
 
@@ -201,6 +308,82 @@ class TurnGuardrailsTest {
                 val args = mapOf<String, Any?>("path" to "src/File$i.kt")
                 val status = tracker.record("read_file", args, "content $i")
                 assertIs<TurnGuardrails.LoopStatus.OK>(status)
+            }
+        }
+
+        // ─── Read-only floor for subagents (Fix #2) ─────────────────────────
+        // Subagents run identicalOutputAbortThreshold=2 to cut WRITE/EXEC loops early. Applying 2 to
+        // read_file too false-killed real review subagents: reading a large file partially, then in
+        // full, then re-reading in full to double-check yields byte-identical output twice → abort
+        // mid-analysis. In one run (2026-07) all THREE review subagents died on read_file@ChatService.kt.
+        // Read-only tools now use readOnlyIdenticalOutputAbortThreshold (default 4) instead.
+
+        @Test
+        fun `subagent threshold does not kill a read_file re-read at 2`() {
+            // Subagent-shaped tracker: write threshold 2, read-only default 4.
+            val tracker = TurnGuardrails.TurnRepetitionTracker(identicalOutputAbortThreshold = 2)
+            val args = mapOf<String, Any?>("path" to "core/services/ChatService.kt")
+            val fullFile = "package x\n// ...603 lines of identical content...\n"
+            // A partial read then two full reads = two identical outputs. Under the old code this
+            // aborted here (threshold 2); now it must stay OK.
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("read_file", args, "package x\n// lines 1-200\n"))
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("read_file", args, fullFile))
+            assertIs<TurnGuardrails.LoopStatus.OK>(
+                tracker.record("read_file", args, fullFile),
+                "two identical full re-reads must NOT abort a subagent — re-reading a file is benign"
+            )
+        }
+
+        @Test
+        fun `subagent read_file still aborts on a genuine read loop at the read-only floor`() {
+            // The floor is leniency, not disablement: 4 byte-identical reads of the same file is a real
+            // no-progress loop and must still stop, exactly the runaway the tighter threshold targeted.
+            val tracker = TurnGuardrails.TurnRepetitionTracker(identicalOutputAbortThreshold = 2)
+            val args = mapOf<String, Any?>("path" to "core/services/ChatService.kt")
+            val out = "identical content"
+            val statuses = (1..4).map { tracker.record("read_file", args, out) }
+            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[0])
+            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[1])
+            assertIs<TurnGuardrails.LoopStatus.OK>(statuses[2])
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(statuses[3])
+        }
+
+        @Test
+        fun `subagent WRITE tool keeps the tight threshold of 2`() {
+            // The lenient floor is READ-only. A write/exec loop (identical run_terminal_command output
+            // twice) is still a strong no-progress signal for a subagent and must abort at 2.
+            val tracker = TurnGuardrails.TurnRepetitionTracker(identicalOutputAbortThreshold = 2)
+            val args = mapOf<String, Any?>("command" to "./gradlew build")
+            val out = "BUILD FAILED\n> compilation error: unresolved reference foo"
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("run_terminal_command", args, out))
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(tracker.record("run_terminal_command", args, out))
+        }
+
+        @Test
+        fun `read-only floor is independently configurable`() {
+            val tracker = TurnGuardrails.TurnRepetitionTracker(
+                identicalOutputAbortThreshold = 2,
+                readOnlyIdenticalOutputAbortThreshold = 3
+            )
+            val args = mapOf<String, Any?>("pattern" to "TODO", "path" to "src")
+            val out = "no matches"
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("grep_search", args, out))
+            assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("grep_search", args, out))
+            assertIs<TurnGuardrails.LoopStatus.ABORT>(tracker.record("grep_search", args, out))
+        }
+
+        @Test
+        fun `weird case - subagent cross-referencing the same file three times stays OK`() {
+            // Adversarial probe of whether the read-loop guard is worth its false-positive risk:
+            // a legitimate analysis pattern is "read file, read another, come back and re-read the
+            // first to confirm" — up to 3 identical reads. This must be allowed; only the 4th (pure
+            // no-progress) trips. If review keeps finding false positives here, consider dropping the
+            // read_file output-hash guard entirely (grep/search loops are the real target).
+            val tracker = TurnGuardrails.TurnRepetitionTracker(identicalOutputAbortThreshold = 2)
+            val args = mapOf<String, Any?>("path" to "core/api/CoreApiRouter.kt")
+            val out = "class CoreApiRouter(...) { /* stable */ }"
+            repeat(3) {
+                assertIs<TurnGuardrails.LoopStatus.OK>(tracker.record("read_file", args, out))
             }
         }
 

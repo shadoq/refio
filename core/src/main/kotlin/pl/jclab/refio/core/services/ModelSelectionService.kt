@@ -272,7 +272,9 @@ internal class ModelSelectionService(private val configService: ConfigService) {
     fun parseModelString(modelString: String): Pair<String, String> {
         if (modelString.contains("/")) {
             val parts = modelString.split("/", limit = 2)
-            return Pair(parts[0], parts[1])
+            // Provider is canonicalized to lowercase so the same model isn't split across
+            // casings in metrics/logs/filters; the model id keeps its original casing.
+            return Pair(parts[0].lowercase(), parts[1])
         }
 
         val provider = when {

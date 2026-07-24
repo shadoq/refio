@@ -3,6 +3,8 @@
 > For contributors and advanced users. See [README.md](../README.md) for product overview.
 
 > **Recent notable changes** (see [CHANGELOG.md](../CHANGELOG.md) `[Unreleased]`):
+> - **Chat render pipeline rewritten (IntelliJ UI)** - the message `StateFlow` is collected directly and throttled with a trailing `delay`, replacing a lossy `MutableSharedFlow(extraBufferCapacity = 1)` + `sample` hop; collectors run on `Dispatchers.IO`; the whole scroll chain is revalidated instead of just `messagesPanel`; `kotlinx-coroutines` is excluded from the plugin's runtime classpath. Together these fixed "bubbles only appear after a resize" and the frozen `advance_code_editing` char counter. See [Chat Render Pipeline](#chat-render-pipeline-intellij).
+> - **Live tool-bubble lifecycle** - a tool bubble is live from the moment its call starts (not from its first delta), and `MessageDispatcher.reconcileMessages` deduplicates a call's streaming transient against its persisted twin by `toolCallId`.
 > - **`/goal` autonomous workflow** — `/goal <condition>` sets an explicit completion condition on the active task. `NextSpeakerJudgeGuardian` switches from generic "is the turn finished?" to strict goal-aware evaluation that verifies the transcript shows demonstrable evidence the condition is met. AGENT-only. Available in TUI and IntelliJ. Condition persisted on the `tasks` table, survives session restart.
 > - **LLM judge `checkNextSpeaker` (Gemini CLI pattern)** — at the terminal of every AGENT turn, `NextSpeakerJudgeGuardian` runs a cheap `ModelOperation.WEAK` call to decide whether the agent really finished or just paused mid-task. "model" verdict → `GuardianDecision.Reenter` with a SYSTEM nudge; "user" / "uncertain" / parse-fail → `Pass`. Capped at 3 re-entries per turn (`MAX_JUDGE_REENTRIES`). Pre-filter skips the LLM call for clarifying questions (`?`) and — in generic mode only — short / explicitly-finished replies.
 > - **Content-chanting loop detection** — `TurnGuardrails.ContentChantingDetector` hard-aborts the turn when the assistant message contains the same word phrase repeated 10+ times consecutively. Catches the runaway-generation pathology common with weak local models.
@@ -121,6 +123,66 @@ MessageDispatcher.loadMessages()
     |
 UI Update via StateFlow
 ```
+
+### Chat Render Pipeline (IntelliJ)
+
+Everything the user sees in the chat comes from a single `StateFlow<List<Message>>`
+(`SessionStateManager.messages`). `ChatView` collects it directly:
+
+```
+SessionStateManager.messages : StateFlow<List<Message>>   (conflated by definition)
+    |
+    | collected on Dispatchers.IO by ChatView
+    v
+scheduleMessagesUpdate(messages) -> updateMessages(...)   [render immediately]
+    |
+delay(uiUpdateThrottleMs = 300)                            [then throttle the burst]
+    |
+revalidateMessagesArea()  -> revalidate the enclosing JBScrollPane, not messagesPanel
+```
+
+Four properties this design depends on:
+
+| Property | Why it matters |
+|---|---|
+| **Collect the `StateFlow` directly** | A `StateFlow` is inherently conflated: a slow collector skips intermediate values but is always resumed with the latest one, so the final frame always renders. The previous pipeline re-emitted into a `MutableSharedFlow(extraBufferCapacity = 1)` with `tryEmit`, which returns `false` and silently DROPS a value when the single slot is taken. When the dropped emission was the last of a burst no `sample` tick followed and the final state was never drawn - bubbles stayed invisible until an unrelated event (a resize, which calls `updateMessages` directly) rebuilt them. |
+| **Throttle, never debounce** | The pipeline draws the first update immediately, then waits `uiUpdateThrottleMs`. A `debounce` waits for the upstream to fall quiet, and a streaming tool never falls quiet, so the live char counter would stay frozen for the whole generation. |
+| **`Dispatchers.IO`, not `Default`** | A long tool stream keeps the bounded `Default` pool busy; the UI collectors were starved and observed no emissions. The collector bodies only marshal work to the EDT, so the elastic pool is correct. |
+| **Revalidate the scroll chain** | `messagesPanel` sits inside a `JViewport`, which is a Swing validate root: `messagesPanel.revalidate()` stops there and the enclosing `JBScrollPane` never re-runs `ScrollPaneLayout`, so new or grown bubbles stay clipped until an unrelated resize. |
+
+Packaging note: `kotlinx-coroutines-core` is excluded from the plugin's **runtime**
+classpath (`intellij-plugin/build.gradle.kts`) because the IntelliJ Platform already
+provides it. A second bundled copy triggers a `ServiceLoader` clash
+(`CoroutineExceptionHandlerImpl` "not a subtype") that breaks coroutine dispatch, and
+every symptom above reappears. Compilation still resolves coroutines from the platform;
+the standalone CLI keeps bundling its own.
+
+### Live Tool-Bubble Lifecycle
+
+A running tool call exists twice under two different ids: in memory as
+`temp-<toolCallId>` (created by `CoreMessageToolCallListener`, carries the streamed
+content) and, once the assistant row is persisted, as `<messageId>:tc<index>` (built with
+empty content). `MessageDispatcher.reconcileMessages` keeps exactly one:
+
+```
+in-memory transient (temp-<toolCallId>)      DB row (<messageId>:tc<index>)
+        |  isStreaming || status == EXECUTING          |
+        +----------- live? ----yes----> transient wins, DB twin held back
+                             |
+                             no ------> transient dropped, DB row takes over
+```
+
+Rules that make this work, each covered by a regression test:
+
+- The bubble is marked `isStreaming` / `isToolStreaming` **at creation**, not at its first
+  delta. In the window between the two it would otherwise be dropped by a mid-turn reload,
+  and every later delta would then map over a list that no longer holds that id - producing
+  an equal list, so the `StateFlow` (which emits on inequality) goes silent for the entire
+  generation. This was the frozen-char-counter bug.
+- Deduplication is keyed strictly on `toolCallId`, never `agentName`: an agent can be
+  invoked repeatedly, and holding DB rows back by name would hide its earlier turns.
+- `onUpdateTempMessage` skips a delta whose accumulated length has not grown. Safe because
+  the text only ever grows by appending, so an unchanged length means unchanged content.
 
 ---
 

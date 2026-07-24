@@ -7,7 +7,6 @@ import pl.jclab.refio.core.db.Subtask
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
 import pl.jclab.refio.core.llm.LLMMessage
-import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.db.repositories.TaskRepository
@@ -280,8 +279,15 @@ class AdvanceCodeEditingTool(
 
             // Use unified complete() with stream flag
             var didStream = false
+            // Tracks whether any streamed chunk already reached the UI. A transient error is only
+            // safe to retry when nothing has streamed yet: the live consumer appends deltas, so a
+            // second stream after a partial first one would duplicate output. Transient HTTP 5xx
+            // errors are thrown at the status check BEFORE any SSE body is read, so this stays false
+            // and the retry fires — exactly the reported "editor got a 500" case.
+            var streamedAnyChunk = false
             val streamingCallback: StreamCallback? = if (stream && onChunk != null) { chunk ->
                 didStream = true
+                if (chunk.delta.isNotEmpty()) streamedAnyChunk = true
                 onChunk(chunk)
             } else {
                 null
@@ -301,19 +307,42 @@ class AdvanceCodeEditingTool(
             while (attempt < MAX_EXTRACTION_ATTEMPTS) {
                 attempt++
                 val attemptResponse = try {
-                    llmClient.complete(
-                        provider = provider,
-                        model = model,
-                        messages = attemptMessages,
-                        systemPrompt = systemPrompt,
-                        temperature = 0.2, // Low temperature for deterministic output
-                        maxTokens = configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE) * 2, // From limits settings
-                        stream = stream,
-                        onChunk = streamingCallback,
-                        taskId = taskId,
-                        subtaskId = subtaskId,
-                        source = "AdvCodeEditor"  // Request source for tracking
-                    )
+                    // The editor call bypasses LLMRetryHandler, so a transient upstream hiccup
+                    // (Anthropic HTTP 500, Cloudflare 520, 529 overloaded) would otherwise fail the
+                    // whole edit on a single blip. Retry those here with a bounded backoff, but only
+                    // while nothing has streamed to the UI yet (see streamedAnyChunk).
+                    var transientAttempt = 0
+                    var completed: pl.jclab.refio.core.llm.LLMResponse? = null
+                    while (completed == null) {
+                        try {
+                            completed = llmClient.complete(
+                                provider = provider,
+                                model = model,
+                                messages = attemptMessages,
+                                systemPrompt = systemPrompt,
+                                temperature = 0.2, // Low temperature for deterministic output
+                                maxTokens = EDITOR_MAX_OUTPUT_REQUEST, // full model output budget; adapters clamp to per-model limit
+                                stream = stream,
+                                onChunk = streamingCallback,
+                                taskId = taskId,
+                                subtaskId = subtaskId,
+                                source = "AdvCodeEditor"  // Request source for tracking
+                            )
+                        } catch (e: Exception) {
+                            val canRetry = transientAttempt < MAX_TRANSIENT_RETRIES &&
+                                !streamedAnyChunk &&
+                                pl.jclab.refio.core.errors.TransientErrorClassifier.isTransient(e)
+                            if (!canRetry) throw e
+                            transientAttempt++
+                            val backoffMs = 1000L * (1L shl (transientAttempt - 1)) // 1s, 2s
+                            logger.warn {
+                                "[ACE_RETRY] transient editor error (attempt $transientAttempt/$MAX_TRANSIENT_RETRIES) " +
+                                    "for $pathStr: ${e.message}. Retrying in ${backoffMs}ms"
+                            }
+                            kotlinx.coroutines.delay(backoffMs)
+                        }
+                    }
+                    completed
                 } catch (e: Exception) {
                     logger.error(e) { "LLM request failed" }
                     return@withLockedFile ToolResult.error("LLM request failed: ${e.message}. Try again or use simple search-replace mode.")
@@ -330,9 +359,40 @@ class AdvanceCodeEditingTool(
                     "[EDITOR] code-block extraction failed (attempt=$attempt/$MAX_EXTRACTION_ATTEMPTS) for $pathStr — " +
                             "editor model returned no usable fenced code block"
                 }
+
+                // A large unterminated block means the generation was cut off (hit the output cap or
+                // an upstream truncation), NOT that the model refused. Re-prompting would just produce
+                // the same truncation and burn another full multi-minute generation. Break out and let
+                // the salvage path below recover the near-complete content instead of regenerating.
+                if (salvageTruncatedCodeBlock(attemptResponse.content, language) != null) {
+                    logger.warn {
+                        "[EDITOR] attempt=$attempt for $pathStr returned a truncated/unterminated block — " +
+                                "skipping repair re-generation (would truncate again) and salvaging instead"
+                    }
+                    break
+                }
+
                 if (attempt < MAX_EXTRACTION_ATTEMPTS) {
                     attemptMessages.add(LLMMessage(role = "assistant", content = attemptResponse.content))
                     attemptMessages.add(LLMMessage(role = "user", content = extractionRepairHint(language)))
+                }
+            }
+
+            // Last-resort salvage: strict extraction requires a CLOSED fence, so a large generation
+            // whose stream ended without the trailing ``` (truncation, upstream cut-off) is dropped
+            // even though most of the file arrived intact. Rather than lose a near-complete 65KB
+            // deliverable and burn the whole turn, recover the content after the opening fence and
+            // write it, marked loudly as possibly-truncated so the agent verifies/continues.
+            var salvaged = false
+            if (newContent == null && response != null) {
+                val rescued = salvageTruncatedCodeBlock(response.content, language)
+                if (rescued != null) {
+                    newContent = rescued
+                    salvaged = true
+                    logger.warn {
+                        "[EDITOR] salvaged ${rescued.length} chars from a truncated/unterminated code block " +
+                            "for $pathStr (strict extraction found no closing fence)"
+                    }
                 }
             }
 
@@ -412,6 +472,16 @@ class AdvanceCodeEditingTool(
             ToolResult(
                 success = true,
                 output = buildString {
+                    if (salvaged) {
+                        // Loud, non-negotiable notice: the file was written from an UNTERMINATED
+                        // model reply, so the tail may be missing. Steer the agent to verify the end
+                        // and append the remainder with a targeted edit instead of regenerating.
+                        appendLine("⚠ SALVAGED (possibly truncated): the editor model's reply had no closing code fence, so the")
+                        appendLine("stream likely got cut off. The recovered content was written to $pathStr, but the END of the")
+                        appendLine("file may be missing. VERIFY the last lines are complete; if truncated, append the remainder with")
+                        appendLine("code_editing / multi_line_editor — do NOT regenerate the whole file from scratch.")
+                        appendLine()
+                    }
                     if (changeSummary.noop) {
                         // LLM returned content identical to the existing file — no change applied.
                         // Surface this explicitly so the agent notices (instead of seeing a bland
@@ -489,6 +559,27 @@ class AdvanceCodeEditingTool(
         }
 
         return null
+    }
+
+    /**
+     * Last-resort recovery of an unterminated fenced block (opening ``` present, closing ``` never
+     * arrived because the stream was truncated). Returns the content after the opening fence, minus
+     * any dangling partial closing fence, but only when it is substantial ([SALVAGE_MIN_CHARS]) — a
+     * short unterminated reply is more likely a prose apology than a real file, and must not be
+     * written. Returns null when there is no opening fence or the body is too small to trust.
+     */
+    private fun salvageTruncatedCodeBlock(response: String, expectedLanguage: String): String? {
+        val openFence = Regex("```(?:$expectedLanguage)?[^\\n]*\\n", RegexOption.IGNORE_CASE).find(response)
+            ?: return null
+        var body = response.substring(openFence.range.last + 1)
+        // Drop a trailing closing fence if one happens to be present (defensive; strict extraction
+        // would have handled a well-formed block before we reach salvage).
+        val closeIdx = body.lastIndexOf("\n```")
+        if (closeIdx >= 0) {
+            body = body.substring(0, closeIdx)
+        }
+        body = body.trimEnd()
+        return if (body.length >= SALVAGE_MIN_CHARS) body else null
     }
 
     /**
@@ -593,6 +684,29 @@ class AdvanceCodeEditingTool(
          * reminder will not recover with more — fail loud instead of looping and burning tokens.
          */
         private const val MAX_EXTRACTION_ATTEMPTS = 2
+
+        /**
+         * Bounded transient-error retries for the editor LLM call (this tool bypasses
+         * LLMRetryHandler). Two retries = up to three attempts with 1s/2s backoff — enough to ride
+         * out a brief upstream 5xx/overload without stalling on a genuinely down provider.
+         */
+        private const val MAX_TRANSIENT_RETRIES = 2
+
+        /**
+         * Output-token budget requested for the editor call. Deliberately far above any model's real
+         * output cap: the adapters clamp it down to the per-model limit (e.g. 64000 for Claude sonnet),
+         * so the editor gets the model's FULL budget to generate a large file in one shot instead of
+         * being throttled by the global `limits.max_output_size` default. For models with no known
+         * limit the adapter falls back to that config value as a safety ceiling.
+         */
+        private const val EDITOR_MAX_OUTPUT_REQUEST = 1_000_000
+
+        /**
+         * Minimum salvage size. Below this, an unterminated reply is treated as prose/refusal, not a
+         * truncated file, and is NOT written. ~2 KB is comfortably larger than any apology yet small
+         * enough to rescue a partially-generated real file.
+         */
+        private const val SALVAGE_MIN_CHARS = 2000
     }
 
 }

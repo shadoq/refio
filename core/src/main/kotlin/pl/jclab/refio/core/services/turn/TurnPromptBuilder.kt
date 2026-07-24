@@ -131,6 +131,8 @@ class TurnPromptBuilder(
         sessionId: String? = null,
         /** Resolved model id for model-aware token estimation. Null = flat-base ratio. */
         modelId: String? = null,
+        /** This turn's run id, used to scope the agent-plans section to a subagent's own plan. */
+        runId: String? = null,
     ): TurnPrompt {
         // Build system prompt based on mode/profile
         val baseSystemPrompt = resolveSystemPrompt(
@@ -186,13 +188,18 @@ $stickyRequirements
 
         // Append sections from providers
         if (sectionProviders.isNotEmpty()) {
+            // Mirror the `tasks` tool's plan key: a subagent (profile override or A2A agent name)
+            // keys its plan by run id; the top-level agent uses no agent id. Passing the same id
+            // lets the plans section show a subagent only its own plan.
+            val planAgentId = if (profileOverrides != null || agentName != null) runId else null
             val buildContext = PromptBuildContext(
                 taskId = taskId,
                 mode = mode,
                 iteration = currentIteration,
                 maxIterations = maxIterations,
                 writeToolsExecutedInTurn = writeToolsExecutedInTurn,
-                profileOverrides = profileOverrides
+                profileOverrides = profileOverrides,
+                agentId = planAgentId
             )
             for (provider in sectionProviders) {
                 val section = provider.build(buildContext)
@@ -891,19 +898,12 @@ ${warning}
         return schemas.filter { isToolAllowedByProfile(it.name, profileOverrides) }
     }
 
-    private fun isToolAllowedByProfile(toolName: String, profileOverrides: TurnProfileOverrides): Boolean {
-        val normalizedName = toolName.lowercase()
-        val allowed = profileOverrides.allowedTools?.map { it.lowercase() }?.toSet()
-        val disallowed = profileOverrides.disallowedTools?.map { it.lowercase() }?.toSet()
-
-        if (allowed != null) {
-            return normalizedName in allowed
-        }
-        if (disallowed != null) {
-            return normalizedName !in disallowed
-        }
-        return true
-    }
+    // Gates the system-prompt tool matrix + native tool schemas. Delegates to the single source of
+    // truth so the prompt, JSON validation, and execution agree (incl. the SYSTEM_TOOLS carve-out).
+    private fun isToolAllowedByProfile(toolName: String, profileOverrides: TurnProfileOverrides): Boolean =
+        pl.jclab.refio.core.subagents.SubagentToolFilter.isToolAllowedUnderProfile(
+            toolName, profileOverrides.allowedTools, profileOverrides.disallowedTools
+        )
 
     /**
      * Applies context profile filtering to project context prompt.

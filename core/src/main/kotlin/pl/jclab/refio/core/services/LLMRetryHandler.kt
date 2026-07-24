@@ -187,6 +187,11 @@ class LLMRetryHandler(
             // safe to retry from scratch since no tool side-effects ran on this turn yet.
             message.contains("stream ended before") -> true
             message.contains("unexpected end of stream") -> true
+            // Bare upstream status codes the text patterns above miss: a plain "HTTP 500" (empty
+            // body), Anthropic's 529 overloaded, or a Cloudflare edge error ("error code: 520").
+            // These are server-side and transient, so a bounded backoff-retry is correct instead of
+            // aborting the whole turn. Without this a single 500/520 hiccup killed a long session.
+            pl.jclab.refio.core.errors.TransientErrorClassifier.hasTransientHttpStatus(message) -> true
             else -> false
         }
     }

@@ -35,27 +35,53 @@ data class ModelPricing(
  * getModelPricing("ollama", "qwen2.5:7b")  // ModelPricing(0.00, 0.00)
  * ```
  */
-fun getModelPricing(provider: String, model: String): ModelPricing {
-    // 1. First check ModelDefinitions (single source of truth, per 1M tokens).
-    val definition = ModelDefinitions.getDefinition(provider, model)
-    if (definition != null && (definition.costPer1MInput > 0.0 || definition.costPer1MOutput > 0.0)) {
-        return pricingOf(definition.costPer1MInput, definition.costPer1MOutput, definition.costPer1MCachedInput)
-    }
+fun getModelPricing(provider: String, model: String): ModelPricing =
+    resolveModelPricing(
+        provider = provider,
+        // ModelDefinitions: the coarse, family-level literal baseline (per 1M tokens).
+        definition = ModelDefinitions.getDefinition(provider, model),
+        // Live ModelRegistry cache, populated by adapter listModels(). OpenRouter's /models
+        // endpoint reports accurate per-model prices.
+        cached = getModelConfigFromCache(model),
+    )
 
-    // 2. Fall back to live ModelRegistry cache (populated by adapter listModels()).
-    // OpenRouter's /models endpoint reports accurate per-model prices; this lets
-    // specific models (e.g. anthropic/claude-haiku-4.5) override the family-level
-    // baseline configured in ModelDefinitions.
-    val cached = getModelConfigFromCache(model)
-    if (cached != null && (cached.costPer1mInput > 0.0 || cached.costPer1mOutput > 0.0)) {
-        return pricingOf(cached.costPer1mInput, cached.costPer1mOutput, null)
-    }
+/**
+ * Choose the effective pricing from the static [definition] baseline and the [cached] live price.
+ *
+ * Precedence:
+ *  - **OpenRouter**: the live per-model `/models` price WINS over the literal baseline when present.
+ *    The baseline is a coarse family-level fallback that ran ~10x low for some models (the Kimi
+ *    family), and OpenRouter's own per-model price is authoritative - so a populated live price must
+ *    not be shadowed by the literal. (The `usage.cost` returned per response is still the ultimate
+ *    source of truth for BILLED cost; this precedence only governs pre-flight ESTIMATES, where no
+ *    per-response cost exists yet.)
+ *  - **Other providers**: unchanged - the literal baseline wins, live only fills a 0/0 baseline
+ *    (this is how e.g. `anthropic/claude-haiku-4.5` overrides a family baseline).
+ *  - A definition that exists but is priced 0/0 is an explicit "free" baseline and is returned last.
+ *
+ * Pure function of its inputs so the precedence is unit-testable without seeding the global cache.
+ */
+internal fun resolveModelPricing(
+    provider: String,
+    definition: ModelDefinition?,
+    cached: ModelConfig?,
+): ModelPricing {
+    val liveHasPrice = cached != null && (cached.costPer1mInput > 0.0 || cached.costPer1mOutput > 0.0)
+    val definitionHasPrice = definition != null &&
+        (definition.costPer1MInput > 0.0 || definition.costPer1MOutput > 0.0)
 
-    // 3. If ModelDefinitions had a hit (even with 0/0), return it — explicit "free" baseline.
+    if (provider.equals("openrouter", ignoreCase = true) && liveHasPrice) {
+        return pricingOf(cached!!.costPer1mInput, cached.costPer1mOutput, null)
+    }
+    if (definitionHasPrice) {
+        return pricingOf(definition!!.costPer1MInput, definition.costPer1MOutput, definition.costPer1MCachedInput)
+    }
+    if (liveHasPrice) {
+        return pricingOf(cached!!.costPer1mInput, cached.costPer1mOutput, null)
+    }
     if (definition != null) {
         return pricingOf(definition.costPer1MInput, definition.costPer1MOutput, definition.costPer1MCachedInput)
     }
-
     return ModelPricing(0.00, 0.00)
 }
 

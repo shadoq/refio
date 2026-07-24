@@ -80,8 +80,11 @@ class StreamGuardrails(
          * Default guardrail set used by `LLMClient.complete()`.
          *
          * Current composition:
-         * - [RepetitionDetector] with conservative defaults (fires on 4×
-         *   consecutive block repetitions, any block size 50–800 chars).
+         * - [RepetitionDetector] with conservative defaults (fires on 32×
+         *   consecutive byte-identical block repetitions of a small block; a high
+         *   threshold so legitimate repeated markup - table cells, list items - is
+         *   not mistaken for a decoder loop). Large-block runaway is left to the
+         *   size/wall-clock limiters below.
          * - [OutputSizeLimiter] at 128 KB — prevents runaway continuations.
          * - [WallClockDeadline] at 180 s — independent of Ktor's request
          *   timeout, so a stuck stream unwinds cleanly without waiting for

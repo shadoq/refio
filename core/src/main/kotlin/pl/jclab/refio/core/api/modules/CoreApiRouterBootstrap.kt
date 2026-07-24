@@ -57,6 +57,13 @@ internal object CoreApiRouterBootstrap {
         logger.info { "CoreApiRouter: Ollama maxConcurrent=$value" }
     }
 
+    fun applyProviderConcurrency(configService: ConfigService) {
+        val value = configService.get(ConfigKeys.PROVIDER_MAX_CONCURRENT.key)?.toIntOrNull()
+            ?.takeIf { it > 0 } ?: return
+        pl.jclab.refio.core.services.ProviderRequestGate.maxConcurrentPerProvider = value
+        logger.info { "CoreApiRouter: per-provider maxConcurrent=$value" }
+    }
+
     fun initializeCore(router: CoreApiRouter, dbPath: String) {
         logger.info { "Initializing core with dbPath=$dbPath" }
         DatabaseFactory.init(dbPath)

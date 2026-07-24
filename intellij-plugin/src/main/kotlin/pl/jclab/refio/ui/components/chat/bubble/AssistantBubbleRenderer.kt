@@ -1,5 +1,6 @@
 package pl.jclab.refio.ui.components.chat.bubble
 
+import pl.jclab.refio.api.StreamProgressFormat
 import pl.jclab.refio.api.models.Message
 import pl.jclab.refio.api.models.ToolCallStatus
 import pl.jclab.refio.api.models.ToolDisplayType
@@ -219,10 +220,20 @@ internal class AssistantBubbleRenderer(
         }
 
         if (message.isStreaming) {
+            // Show a live "· N chars" counter next to "Generating..." (mirrors the code-editing tool
+            // bubble). During a long generation - especially a slow local model on the native-tool
+            // channel - a bare "Generating..." reads as a hang; the growing counter is the signal
+            // that tokens are actually arriving. The row re-renders each throttled chunk, so the
+            // count refreshes from the current content length without a dedicated patch path. Null
+            // count (nothing streamed yet) keeps the plain label.
+            val streamingLabel = StreamProgressFormat.withCharCount(
+                "Generating...",
+                message.content.length.takeIf { it > 0 }
+            )
             addRow(
                 JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
                     isOpaque = false
-                    add(JLabel("Generating...").apply {
+                    add(JLabel(streamingLabel).apply {
                         font = LCATheme.smallFont.deriveFont(Font.ITALIC)
                         foreground = LCATheme.mutedForeground
                     })
@@ -474,6 +485,22 @@ internal class AssistantBubbleRenderer(
                     topInset = context.bubbleCompactGap
                 )
             }
+        }
+
+        // For read_file, offer the full read output expandably (the compact summary above is just
+        // "N lines read"). This is the content exactly as it went into the conversation - line-number
+        // prefixes, "[Lines X-Y of Z]" markers and all - so the user can see what the model actually saw.
+        info.result?.fullOutput?.takeIf { it.isNotBlank() }?.let { readOutput ->
+            addRow(
+                factory.createCollapsibleToolContentPanel(
+                    messageId = "readfile:${message.id}",
+                    liveContent = readOutput,
+                    parameters = info.parameters,
+                    title = "Read content",
+                    contentLabel = "read"
+                ),
+                topInset = context.bubbleCompactGap
+            )
         }
 
         addToolCallNarrative(::addRow, message, background)

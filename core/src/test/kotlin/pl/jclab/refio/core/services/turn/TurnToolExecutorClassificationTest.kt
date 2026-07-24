@@ -4,6 +4,7 @@ import pl.jclab.refio.core.db.ApprovalStatus
 import pl.jclab.refio.core.db.Subtask
 import pl.jclab.refio.core.db.SubtaskKind
 import pl.jclab.refio.core.db.TaskStatus
+import pl.jclab.refio.core.db.ToolCallData
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import kotlin.test.Test
@@ -352,5 +353,46 @@ class TurnToolExecutorClassificationTest {
                 "delegate_to_strong_model", ToolMode.WRITE, ToolCategory.SYSTEM, isNoopWrite = true
             )
         )
+    }
+
+    // ---- fullRegenerationPaths: what feeds the repeated-full-regeneration nudge ----
+
+    private fun call(name: String, path: String? = null, id: String = name): ToolCallData =
+        ToolCallData(id = id, name = name, arguments = path?.let { """{"path":"$it"}""" } ?: "{}")
+
+    @Test
+    fun `whole-file generators contribute their path, targeted edits do not`() {
+        // WHY: session c71be484 rebuilt one HTML file from scratch 3x in a single turn (~30 min,
+        // half the wall-clock). Only the from-scratch generators (advance_code_editing/create_new_file)
+        // count toward the regeneration nudge; code_editing/multi_edit are the targeted alternatives
+        // the nudge steers toward and must never inflate the counter.
+        val batch = listOf(
+            call("advance_code_editing", "page.html"),
+            call("create_new_file", "notes.txt"),
+            call("code_editing", "page.html"),
+            call("multi_edit", "page.html"),
+            call("read_file", "page.html"),
+        )
+        assertEquals(listOf("page.html", "notes.txt"), TurnToolExecutor.fullRegenerationPaths(batch))
+    }
+
+    @Test
+    fun `a no-op regeneration is excluded so a correct identical rewrite is never nagged`() {
+        // A regeneration whose content was identical (noop) is the model correctly discovering the
+        // file is already done — it must not count as a wasteful rebuild.
+        val batch = listOf(
+            call("advance_code_editing", "page.html", id = "noop-call"),
+            call("advance_code_editing", "other.html", id = "real-call"),
+        )
+        assertEquals(
+            listOf("other.html"),
+            TurnToolExecutor.fullRegenerationPaths(batch, noopCallIds = setOf("noop-call"))
+        )
+    }
+
+    @Test
+    fun `a batch with no whole-file generators yields no paths`() {
+        val batch = listOf(call("code_editing", "page.html"), call("grep_search"))
+        assertTrue(TurnToolExecutor.fullRegenerationPaths(batch).isEmpty())
     }
 }

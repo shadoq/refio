@@ -10,8 +10,8 @@ import pl.jclab.refio.core.services.ConfigService
  * Before this existed, the same question was answered four different ways:
  *  - [ContextBudgetResolver.resolveContextSize] (Ollama-aware, used by context budget math)
  *  - [TokenEstimator.getMaxContextForModel] (ModelDefinitions-only, used by LLMClient validation)
- *  - [pl.jclab.refio.core.services.PromptTokenEstimator.getSafeTokenLimit] (hardcoded per-model table,
- *    used by AgentTurnLoop compaction)
+ *  - a hardcoded per-model table in PromptTokenEstimator (since removed) that fell back to 128k for
+ *    any model not listed, which false-flagged context overflow on newer OpenRouter models
  *  - direct [ConfigKeys.PROVIDER_OLLAMA_CONTEXT_SIZE] reads (OllamaAdapter `num_ctx`)
  *
  * These often disagreed (e.g. user override = 16 384 but compaction saw 32 768), which is

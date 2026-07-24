@@ -176,7 +176,15 @@ abstract class OpenAICompatibleAdapter(
         val totalTokens = (usageMap["total_tokens"] as? Number)?.toInt() ?: (promptTokens + completionTokens)
         val cachedTokens = ((usageMap["prompt_tokens_details"] as? Map<*, *>)
             ?.get("cached_tokens") as? Number)?.toInt() ?: 0
-        return LLMUsage(promptTokens, completionTokens, totalTokens, cachedInputTokens = cachedTokens)
+        // Actual amount charged, when the provider reports it (OpenRouter: `usage.cost`, in
+        // credits == USD). Absent for OpenAI/Z.AI/LM Studio, so this stays null and those keep
+        // using the local per-1M estimate - no behaviour change for them.
+        val upstreamCost = (usageMap["cost"] as? Number)?.toDouble()
+        return LLMUsage(
+            promptTokens, completionTokens, totalTokens,
+            cachedInputTokens = cachedTokens,
+            upstreamCostUsd = upstreamCost,
+        )
     }
 
     /**
@@ -419,6 +427,11 @@ abstract class OpenAICompatibleAdapter(
                         finalFinishReason = OpenAICompatibleHelpers.consumeChatCompletionsSSE(
                             channel = httpResponse.body(),
                             toolCallAccumulator = toolCallAccumulator,
+                            // Poll the user-cancel flag between SSE chunks so clicking Stop aborts an
+                            // in-flight stream instead of reading it to completion. Without this the
+                            // OpenAI-compatible providers (Z.AI/GLM, LM Studio, OpenRouter, ...) ignored
+                            // cancellation and the turn appeared hung until the stream ended on its own.
+                            checkCancelled = { pl.jclab.refio.core.services.monitoring.GlobalMetrics.isCancelled() },
                             onContent = { delta ->
                                 contentBuilder.append(delta)
                                 onStreamChunk(StreamChunk(delta = delta))
@@ -434,11 +447,16 @@ abstract class OpenAICompatibleAdapter(
                                         ?: (promptTokens + completionTokens)
                                     val cachedTokens = (usageObj.get("prompt_tokens_details")
                                         as? com.google.gson.JsonObject).intField("cached_tokens") ?: 0
+                                    // OpenRouter reports the actual charged amount in the final
+                                    // usage chunk (`usage.cost`, credits == USD). Absent for other
+                                    // OpenAI-compatible providers -> null -> local estimate.
+                                    val upstreamCost = usageObj.doubleField("cost")
                                     streamUsage = LLMUsage(
                                         inputTokens = promptTokens,
                                         outputTokens = completionTokens,
                                         totalTokens = totalTokens,
                                         cachedInputTokens = cachedTokens,
+                                        upstreamCostUsd = upstreamCost,
                                     )
                                     val details = usageObj.get("completion_tokens_details") as? com.google.gson.JsonObject
                                     val reasoning = details.intField("reasoning_tokens")

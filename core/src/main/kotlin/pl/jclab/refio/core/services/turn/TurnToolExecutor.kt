@@ -280,6 +280,30 @@ class TurnToolExecutor(
         )
 
         /**
+         * Whole-file generators: a second call of one of these on the same path is a full
+         * regeneration (the file is rebuilt from scratch), not a targeted edit. Excludes
+         * code_editing/multi_edit/multi_line_editor, which are the targeted alternatives the
+         * repeated-regeneration nudge steers toward.
+         */
+        internal val FULL_FILE_REGEN_TOOL_NAMES = setOf("advance_code_editing", "create_new_file")
+
+        /**
+         * Paths this batch REGENERATED whole-file from scratch ([FULL_FILE_REGEN_TOOL_NAMES]),
+         * excluding no-op regenerations. Feeds the repeated-full-regeneration soft nudge in
+         * TurnExecutor: regenerating a path that already wrote successfully this turn — absent a
+         * concrete build/test error — burns a full multi-minute generation when a targeted edit
+         * would do. Targeted-edit tools (code_editing/multi_edit/multi_line_editor) are NOT
+         * counted: they are exactly what the nudge steers the model toward. Pure.
+         */
+        fun fullRegenerationPaths(
+            toolCalls: List<ToolCallData>,
+            noopCallIds: Set<String> = emptySet()
+        ): List<String> =
+            toolCalls
+                .filter { it.name in FULL_FILE_REGEN_TOOL_NAMES && it.id !in noopCallIds }
+                .mapNotNull { extractEditPath(it.arguments) }
+
+        /**
          * True when a `read_file` of [readPath] should be short-circuited instead of executed: a write
          * tool already wrote that exact path successfully in this task AND nothing has FAILED since.
          * Re-reading a file you just wrote returns nothing the diff didn't already give you and burns
@@ -435,17 +459,17 @@ class TurnToolExecutor(
         /** Multi-agent session id used by send_message / answer_message + inbox lookups. Defaults to taskId. */
         sessionId: String? = null,
     ): List<Pair<ToolCallData, ToolResultData>> = coroutineScope {
-        val maxOrderIndex = subtaskRepository.getMaxOrderIndex(taskId) ?: -1
-
-        // Create subtasks for all tool calls (PENDING status)
+        // Create subtasks for all tool calls (PENDING status).
+        // Allocate each order_index via createNext: parallel subagents share this parent taskId,
+        // so a plain getMaxOrderIndex+create races and hits the uk_task_order UNIQUE constraint
+        // (which used to throw out of the turn and leave the subagent's graph node stuck RUNNING).
         val subtaskIds = mutableMapOf<String, String>()
-        toolCalls.forEachIndexed { index, toolCall ->
+        toolCalls.forEach { toolCall ->
             val kind = toolRegistry.toSubtaskKind(toolCall.name)
             val description = buildToolDescription(toolCall)
 
-            val subtask = subtaskRepository.create(
+            val subtask = subtaskRepository.createNext(
                 taskId = taskId,
-                orderIndex = maxOrderIndex + index + 1,
                 kind = kind,
                 description = description,
                 paramsJson = toolCall.arguments,
@@ -485,7 +509,8 @@ class TurnToolExecutor(
                     isSummarized = false,
                     success = false,
                     rawOutput = null,
-                    metadata = null
+                    metadata = null,
+                    blocked = true
                 )
             )
         }
@@ -910,7 +935,9 @@ class TurnToolExecutor(
             }
 
             val execMs = System.currentTimeMillis() - tExecStart
-            if (execMs >= slowToolWarnMs) {
+            // Delegation tools (invoke_subagent, delegate_to_strong_model) run a whole nested turn
+            // loop, so multi-minute durations are expected, not a contention symptom - skip the warning.
+            if (execMs >= slowToolWarnMs && !isDelegationTool(toolCall.name)) {
                 logger.warn {
                     "[SLOW_TOOL] tool=${toolCall.name} iteration=$iteration execMs=$execMs — tool " +
                         "execution phase exceeded ${slowToolWarnMs}ms. Read-only tool (no LLM call) => " +
@@ -1225,20 +1252,13 @@ class TurnToolExecutor(
     /**
      * Check if tool is allowed by profile.
      */
+    // Execution gate. Delegates to the single source of truth (incl. the SYSTEM_TOOLS carve-out) so
+    // a persona that instructs `think(...)` under a whitelist is not falsely blocked.
     fun isToolAllowedByProfile(toolName: String, profileOverrides: TurnProfileOverrides?): Boolean {
         if (profileOverrides == null) return true
-
-        val normalizedName = toolName.lowercase()
-        val allowed = profileOverrides.allowedTools?.map { it.lowercase() }?.toSet()
-        val disallowed = profileOverrides.disallowedTools?.map { it.lowercase() }?.toSet()
-
-        if (allowed != null) {
-            return normalizedName in allowed
-        }
-        if (disallowed != null) {
-            return normalizedName !in disallowed
-        }
-        return true
+        return pl.jclab.refio.core.subagents.SubagentToolFilter.isToolAllowedUnderProfile(
+            toolName, profileOverrides.allowedTools, profileOverrides.disallowedTools
+        )
     }
 
     /**
