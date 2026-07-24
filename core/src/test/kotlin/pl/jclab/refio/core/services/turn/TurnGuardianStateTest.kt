@@ -95,6 +95,68 @@ class TurnGuardianStateTest {
         assertNull(state.preReentryResponse)
     }
 
+    // ---- capture persistence: the streamed report must survive a re-entry, not vanish ----
+
+    @Test
+    fun `captureIfFirst signals only the first meaningful capture so it is persisted once`() {
+        val state = TurnGuardianState()
+        // First meaningful answer → true: the caller persists this report as its own row.
+        assertTrue(state.captureIfFirst(resp("A — the report the user saw"), hasVisibleText = true))
+        // A later re-entry must NOT persist again (capture-once).
+        assertFalse(state.captureIfFirst(resp("B — later"), hasVisibleText = true))
+        // A blank answer is never persisted.
+        val fresh = TurnGuardianState()
+        assertFalse(fresh.captureIfFirst(resp(""), hasVisibleText = false))
+    }
+
+    @Test
+    fun `finalize skips re-persisting the report when the re-entry added no tool work`() {
+        // The report was already written as its own row at re-entry (usedTools == 2). The re-entry
+        // then produced only a degraded re-phrasing and called no tool → finalize must not write the
+        // same report a second time.
+        val state = TurnGuardianState()
+        state.captureIfFirst(resp("A — the report"), hasVisibleText = true)
+        state.onReentry(usedToolsSize = 2)
+        state.capturePersisted = true
+
+        assertTrue(state.captureAlreadyFinalized(usedToolsSize = 2))
+    }
+
+    @Test
+    fun `finalize still persists the terminal answer when the re-entry did real work`() {
+        // Report persisted at re-entry (size 2), then the re-entry called a tool (size 3). The new
+        // terminal answer incorporates that work and must be persisted AFTER the earlier report.
+        val state = TurnGuardianState()
+        state.captureIfFirst(resp("A — the report"), hasVisibleText = true)
+        state.onReentry(usedToolsSize = 2)
+        state.capturePersisted = true
+
+        assertFalse(state.captureAlreadyFinalized(usedToolsSize = 3))
+    }
+
+    @Test
+    fun `finalize persists normally when the report was not written at re-entry`() {
+        // File-deliverable turns skip the re-entry persist (the capture is an intent stub the
+        // sign-off replaces), so capturePersisted stays false and finalize must persist as usual.
+        val state = TurnGuardianState()
+        state.captureIfFirst(resp("Let me verify the file…"), hasVisibleText = true)
+        state.onReentry(usedToolsSize = 2)
+
+        assertFalse(state.captureAlreadyFinalized(usedToolsSize = 2))
+    }
+
+    @Test
+    fun `replenish clears the capture-persisted flag for the next episode`() {
+        val state = TurnGuardianState()
+        state.captureIfFirst(resp("early report"), hasVisibleText = true)
+        state.onReentry(usedToolsSize = 4)
+        state.capturePersisted = true
+
+        state.replenishIfSustainedProgress(usedToolsSize = 12, progressThreshold = 3)
+
+        assertFalse(state.capturePersisted)
+    }
+
     // ---- replenishIfSustainedProgress: per-episode re-entry budget, not per-whole-turn ----
 
     @Test

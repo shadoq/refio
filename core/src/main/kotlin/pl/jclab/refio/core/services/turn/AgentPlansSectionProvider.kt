@@ -5,15 +5,17 @@ import pl.jclab.refio.core.services.AgentPlanService
 /**
  * Injects agent execution plans into the LLM prompt context.
  *
- * Shows all plans for the current task, including subagent plans.
- * This allows the orchestrator to see what each agent planned and how far they got.
+ * The top-level orchestrator (context.agentId == null) sees every agent's plan for the task, so it
+ * can track how far each subagent got. A subagent (context.agentId set) sees only its own plan -
+ * its parent's and siblings' plans are noise and can mislead a weak model into updating a step it
+ * never created.
  */
 class AgentPlansSectionProvider(
     private val agentPlanService: AgentPlanService
 ) : PromptSectionProvider {
 
     override suspend fun build(context: PromptBuildContext): String? {
-        val section = agentPlanService.buildPlanSection(context.taskId)
+        val section = agentPlanService.buildPlanSection(context.taskId, context.agentId)
         return section.ifBlank { null }
     }
 }

@@ -133,7 +133,8 @@ class AgentTurnLoopTest {
     private fun buildAgentTurnLoop(
         taskVerifier: TaskVerifier,
         completionGuardians: GuardianRegistry = GuardianRegistry(),
-        turnVerifier: pl.jclab.refio.core.services.turn.TurnVerifier? = null
+        turnVerifier: pl.jclab.refio.core.services.turn.TurnVerifier? = null,
+        agentEventBus: pl.jclab.refio.core.agents.events.AgentEventBus? = null
     ): AgentTurnLoop {
         val tokenEstimator = pl.jclab.refio.core.services.PromptTokenEstimator()
 
@@ -204,7 +205,8 @@ class AgentTurnLoopTest {
             llmRetryHandler = null,
             workingMemoryIntegration = null,
             completionGuardians = completionGuardians,
-            turnVerifier = turnVerifier
+            turnVerifier = turnVerifier,
+            agentEventBus = agentEventBus
         )
     }
 
@@ -1436,6 +1438,25 @@ class AgentTurnLoopTest {
                 subtasks[subtask.id] = subtask
                 subtask
             }
+            // Tool subtasks are now created via createNext (collision-safe order_index allocation).
+            every {
+                subtaskRepository.createNext(
+                    taskId = any(), kind = any(), description = any(), paramsJson = any(),
+                    stepPlanJson = any(), requiresApproval = any(), status = any(),
+                    llmModel = any(), llmProvider = any(), maxAttempts = any()
+                )
+            } answers {
+                val subtask = createMockSubtask(
+                    id = "subtask-${++subtaskCounter}",
+                    orderIndex = (subtasks.values.maxOfOrNull { it.orderIndex } ?: -1) + 1,
+                    kind = secondArg(),
+                    status = arg(6),
+                    description = thirdArg(),
+                    paramsJson = arg(3)
+                )
+                subtasks[subtask.id] = subtask
+                subtask
+            }
             every { subtaskRepository.findById(any()) } answers { subtasks[firstArg()] }
             every { subtaskRepository.updateStatus(any(), any()) } answers {
                 val id = firstArg<String>()
@@ -1874,6 +1895,18 @@ class AgentTurnLoopTest {
                     status = arg(7), description = arg(3), paramsJson = arg(4)
                 )
             }
+            every {
+                subtaskRepository.createNext(
+                    taskId = any(), kind = any(), description = any(), paramsJson = any(),
+                    stepPlanJson = any(), requiresApproval = any(), status = any(),
+                    llmModel = any(), llmProvider = any(), maxAttempts = any()
+                )
+            } answers {
+                createMockSubtask(
+                    id = "subtask-1", orderIndex = 0, kind = secondArg(),
+                    status = arg(6), description = thirdArg(), paramsJson = arg(3)
+                )
+            }
             coEvery { toolExecutor.executeTool(any(), any()) } returns
                 ToolResult(success = true, output = "file contents: evidence here")
             coEvery { toolResultSummarizer.summarizeToolResult(any(), any(), any()) } answers {
@@ -2214,6 +2247,39 @@ class AgentTurnLoopTest {
                 pl.jclab.refio.core.debug.TurnFailureMarkerTracker.markerFor(testTaskId)
             )
         }
+    }
+
+    @Test
+    fun `an uncaught mid-turn exception still emits a terminal TurnEnded so the graph node closes`() = runTest {
+        // Reproduces the production crash: a DB write (subtask order_index collision) threw out of
+        // the turn. Before the backstop catch, that exception escaped runTurn WITHOUT a final
+        // TurnEnded, so the subagent's Agents-Graph node stayed [RUNNING] forever. The throw is
+        // modeled via the LLM call - a plain RuntimeException that the inner native-tools catches
+        // (ToolsNotSupportedException / RefioError.LLMError) deliberately do not handle.
+        val emitted = mutableListOf<pl.jclab.refio.core.agents.events.AgentEvent>()
+        val bus = mockk<pl.jclab.refio.core.agents.events.AgentEventBus>(relaxed = true)
+        coEvery { bus.emit(capture(emitted)) } just Runs
+
+        coEvery {
+            llmClient.complete(
+                provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                subtaskId = any(), source = any(), kwargs = any()
+            )
+        } throws RuntimeException("simulated mid-turn DB crash")
+
+        val loop = buildAgentTurnLoop(NoopTaskVerifier(), agentEventBus = bus)
+
+        assertThrows<RuntimeException> {
+            loop.runTurn(taskId = testTaskId, userInput = "do something", mode = TaskMode.AGENT)
+        }
+
+        val terminal = emitted
+            .filterIsInstance<pl.jclab.refio.core.agents.events.AgentEvent.TurnEnded>()
+            .filter { it.isFinal }
+        assertEquals(1, terminal.size, "exactly one terminal TurnEnded must close the run even on an uncaught exception")
+        assertFalse(terminal.single().success, "a crashed turn must report the node as FAILED, not COMPLETED")
     }
 }
 

@@ -7,7 +7,9 @@ import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBPanel
 import pl.jclab.refio.api.StreamProgressFormat
 import pl.jclab.refio.api.models.ExecutionMode
+import pl.jclab.refio.api.models.AgentGrouping
 import pl.jclab.refio.api.models.Message
+import pl.jclab.refio.api.models.MessageRenderHash
 import pl.jclab.refio.api.models.ToolCallStatus
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
@@ -57,7 +59,6 @@ import javax.swing.JViewport
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
 import javax.swing.Timer
-import java.util.Objects
 
 /**
  * Custom JLabel with rounded corners for mode badge
@@ -342,10 +343,21 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     private data class CachedMessagePanel(
         val contentHash: Int,
         val panel: JPanel,
-        val nonContentHash: Int = 0
+        val nonContentHash: Int = 0,
+        // Whether the message carried non-blank content when this panel was built. A code-editing
+        // tool bubble only adds its "Generated content" affordance on a full render where content is
+        // already present; if it was first rendered blank, the streaming counter fast-path must force
+        // one more full render on the first non-blank chunk so that affordance appears (otherwise it
+        // shows up only after a manual resize). See tryPatchStreamingCounter.
+        val renderedWithContent: Boolean = false
     )
 
     private val messagePanelCache = mutableMapOf<String, CachedMessagePanel>()
+    // Per-message "show the Agent: <name> header" decision for the CURRENT render, derived as a pure
+    // function of the whole transcript (AgentGrouping) and refreshed at the top of updateMessages.
+    // Folded into the render hash so a message whose header status flips (because a neighbour changed)
+    // has its cached bubble rebuilt. EDT-confined: written and read only inside the render pipeline.
+    private var agentHeaderById: Map<String, Boolean> = emptyMap()
     private var lastRenderedMessageIds = emptyList<String>()
     @Volatile
     private var lastReceivedMessages = emptyList<Message>()
@@ -622,37 +634,21 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
         toolCallProgressPanel.repaint()
     }
 
-    private fun calculateMessageHash(message: Message): Int {
-        return Objects.hash(
-            message.id,
-            message.role,
-            message.content,
-            message.thinking,
-            message.metadata,
-            message.toolCallInfo,
-            message.toolStreamContent,
-            message.isToolStreaming,
-            message.pendingApprovalSubtaskId,
-            message.metrics
-        )
-    }
+    // Render hashing lives in :core (MessageRenderHash) so it is unit-testable without a sandbox
+    // IDE. It covers isStreaming + agent identity on top of the visible fields: without isStreaming
+    // a finished stream (same content, isStreaming flipped false) kept a stale "Generating..." bubble.
+    // The neighbour-derived agent-header decision is folded in here so a header flip rebuilds the bubble.
+    private fun calculateMessageHash(message: Message): Int =
+        withAgentHeader(MessageRenderHash.content(message), message)
 
     // Same as [calculateMessageHash] but without `content`. When this is unchanged between two
     // snapshots of a streaming tool message, the only difference is the growing generated content,
     // so the bubble can be left intact and only its char counter patched in place.
-    private fun calculateNonContentMessageHash(message: Message): Int {
-        return Objects.hash(
-            message.id,
-            message.role,
-            message.thinking,
-            message.metadata,
-            message.toolCallInfo,
-            message.toolStreamContent,
-            message.isToolStreaming,
-            message.pendingApprovalSubtaskId,
-            message.metrics
-        )
-    }
+    private fun calculateNonContentMessageHash(message: Message): Int =
+        withAgentHeader(MessageRenderHash.nonContent(message), message)
+
+    private fun withAgentHeader(base: Int, message: Message): Int =
+        31 * base + (agentHeaderById[message.id] == true).hashCode()
 
     private fun updateMessages(messages: List<Message>) {
         SwingUtilities.invokeLater {
@@ -662,6 +658,10 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
 
             val uniqueMessages = messages.distinctBy { it.id }
             val currentMessageIds = uniqueMessages.map { it.id }
+
+            // Recompute the agent-header decisions for this exact ordering before any hashing, so the
+            // hash (and thus the cache) reflects each bubble's current header status.
+            agentHeaderById = currentMessageIds.zip(AgentGrouping.showHeaderFlags(uniqueMessages)).toMap()
 
             val hasStructuralChange = currentMessageIds != lastRenderedMessageIds
             val hasContentChange = uniqueMessages.any { msg ->
@@ -824,6 +824,10 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
         if (!stillStreaming) return false
         val counterLabel = streamingCounterLabels[message.id] ?: return false
         if (cached.nonContentHash != calculateNonContentMessageHash(message)) return false
+        // First non-blank chunk after a blank first render: fall back to a full render so the
+        // "Generated content" affordance is actually added (patching only the counter would leave it
+        // missing until a resize forced a relayout).
+        if (!cached.renderedWithContent && message.content.isNotBlank()) return false
 
         counterLabel.text = StreamProgressFormat.counterSuffix(message.content.length)
         messagePanelCache[message.id] = cached.copy(contentHash = contentHash)
@@ -846,11 +850,12 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     // still streaming (via [BubbleComponentDependencies.registerToolStreamCounter]).
     private fun renderAndCache(message: Message): JPanel {
         streamingCounterLabels.remove(message.id)
-        val panel = messageBubbleRouter.render(message)
+        val panel = messageBubbleRouter.render(message, agentHeaderById[message.id] == true)
         messagePanelCache[message.id] = CachedMessagePanel(
             contentHash = calculateMessageHash(message),
             panel = panel,
-            nonContentHash = calculateNonContentMessageHash(message)
+            nonContentHash = calculateNonContentMessageHash(message),
+            renderedWithContent = message.content.isNotBlank()
         )
         return panel
     }

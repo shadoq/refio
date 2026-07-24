@@ -45,8 +45,20 @@ class TurnGuardrails {
             return recentResults.count { !it }.toDouble() / recentResults.size
         }
 
+        /**
+         * Abort only while the agent is *actively* failing: enough data in the window, recent error
+         * rate over [threshold], AND the most recent call failed. That last clause is the recovery
+         * guard — a burst of failures followed by a successful call means the agent has pivoted to
+         * something that works, so the stale failures still in the window must not kill it (observed
+         * 2026-07: 3 subagent + 1 delegate failures, then a successful `tasks` plan, yet the turn was
+         * aborted at 4/5 = 80% and never executed the plan). A still-stuck agent that fails again on
+         * the next call re-crosses the threshold immediately, so this spares only the single iteration
+         * right after a genuine recovery — not sustained thrashing.
+         */
         fun shouldAbort(threshold: Double = 0.7): Boolean {
-            return recentResults.size >= 5 && getErrorRate() > threshold
+            return recentResults.size >= 5 &&
+                getErrorRate() > threshold &&
+                recentResults.last() == false
         }
 
         fun getStats(): String {
@@ -54,6 +66,51 @@ class TurnGuardrails {
             val totalCount = recentResults.size
             val rate = if (totalCount > 0) (errorCount * 100 / totalCount) else 0
             return "$errorCount/$totalCount ($rate%)"
+        }
+    }
+
+    /**
+     * Aborts a turn that keeps calling tools it does not have (profile-blocked calls — the model
+     * asked for a tool outside its allow/deny list). This is a DIFFERENT signal from a normal tool
+     * failure and needs its own guard:
+     *
+     * - No tool ran, and the rejection reason is byte-identical every time REGARDLESS of arguments,
+     *   so [TurnRepetitionTracker] (keyed on output, and fed null output on failure) never sees it
+     *   and [ToolErrorTracker.shouldAbort] can be diluted below threshold by the successful reads
+     *   earlier in the turn (observed 2026-07: `security-engineer` looped 7× on a `think` tool it
+     *   lacked; the 10-slot error window sat at exactly 70% — not `> 0.70` — and only a manual
+     *   cancel stopped it, after ~$0.5 burned).
+     * - Varying the arguments must therefore NOT reset the streak (unlike the definitive-loop
+     *   signature counter): the "wrong toolset" is the same mistake however the args change.
+     *
+     * Any successful/executed non-blocked call resets the streak — one real tool interaction means
+     * the model is no longer stuck asking for a tool it doesn't have. The blocked-tool error text
+     * already lists the available tools, so the model has what it needs to recover; this guard is
+     * the backstop for when it ignores that and keeps asking.
+     */
+    class ConsecutiveBlockedToolTracker(private val abortThreshold: Int = 2) {
+        private var streak = 0
+
+        /**
+         * @param blocked true when the call was rejected by the profile gate (tool not available).
+         * @return [LoopStatus.ABORT] once [abortThreshold] blocked calls occur with no non-blocked
+         *   call in between; [LoopStatus.OK] otherwise.
+         */
+        fun record(blocked: Boolean): LoopStatus {
+            if (!blocked) {
+                streak = 0
+                return LoopStatus.OK
+            }
+            streak++
+            return if (streak >= abortThreshold) {
+                LoopStatus.ABORT(
+                    reason = "Called unavailable tools $streak times in a row. " +
+                        "Use one of the tools listed as available, or deliver your answer as plain text.",
+                    incomplete = true,
+                )
+            } else {
+                LoopStatus.OK
+            }
         }
     }
 
@@ -197,8 +254,27 @@ class TurnGuardrails {
         private val identicalOutputAbortThreshold: Int = 4,
         private val tailBytesForHash: Int = 800,
         private val maxHistory: Int = 200,
-        private val noopWriteAbortThreshold: Int = 3
+        private val noopWriteAbortThreshold: Int = 3,
+        /**
+         * Separate, deliberately-more-lenient identical-output threshold for READ-ONLY tools
+         * (read_file, grep_search, …). Subagents run [identicalOutputAbortThreshold] at 2 to cut
+         * write/exec loops early, but that same 2 killed legitimate analysis subagents: an agent that
+         * reads a large file partially, then in full, then re-reads it in full to double-check produces
+         * byte-identical output twice and was aborted mid-analysis (observed 2026-07: three read-only
+         * review subagents all died on the SAME file, `read_file@ChatService.kt`). Re-reading a file
+         * is benign; the runaway pathology is still bounded (4 identical reads, not unbounded). Defaults
+         * to 4 for every tracker, so top-level behaviour is unchanged (its write threshold is also 4).
+         */
+        private val readOnlyIdenticalOutputAbortThreshold: Int = 4
     ) {
+        private companion object {
+            // Tools whose repeated identical output is benign re-inspection, not a no-progress loop.
+            // Kept in sync with the read-only branches of [effectKey].
+            val READ_ONLY_TOOLS = setOf(
+                "read_file", "read_directory", "grep_search",
+                "file_search", "rag_search", "code_intelligence"
+            )
+        }
         private class State {
             var callCount: Int = 0
             val outputHashes: ArrayDeque<Int> = ArrayDeque()
@@ -268,7 +344,10 @@ class TurnGuardrails {
                 for (h in state.outputHashes.reversed()) {
                     if (h == hash) identical++ else break
                 }
-                if (identical >= identicalOutputAbortThreshold) {
+                val effectiveThreshold =
+                    if (toolName in READ_ONLY_TOOLS) readOnlyIdenticalOutputAbortThreshold
+                    else identicalOutputAbortThreshold
+                if (identical >= effectiveThreshold) {
                     return LoopStatus.ABORT(
                         "Tool $toolName produced byte-identical output $identical times " +
                             "in a row on the same target ($key). Edits are not changing runtime behaviour."

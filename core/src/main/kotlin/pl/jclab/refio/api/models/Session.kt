@@ -226,7 +226,11 @@ enum class ToolCallStatus {
 data class ToolCallResult(
     val success: Boolean,
     val summary: String,
-    val codeChanges: ToolCallCodeChanges? = null
+    val codeChanges: ToolCallCodeChanges? = null,
+    // Full, untruncated tool output as it went into the conversation, kept for tools whose output IS
+    // the thing worth seeing (read_file). Populated at display-build time from the tool result message
+    // (transient, not persisted); null when there is nothing extra to expand beyond [summary].
+    val fullOutput: String? = null
 )
 
 data class ToolCallCodeChanges(

@@ -169,7 +169,11 @@ data class SubagentDefinition(
     private fun parseModelString(modelString: String): Pair<String, String> {
         if (modelString.contains("/")) {
             val parts = modelString.split("/", limit = 2)
-            return Pair(parts[1], parts[0])
+            // Canonicalize the provider to lowercase. A subagent frontmatter value like
+            // "Openrouter/qwen/..." must resolve to the same provider as "openrouter/..." so
+            // metrics grouping, api-log filters and logs don't split one model into two.
+            // Only the provider is normalized; model ids keep their original casing.
+            return Pair(parts[1], parts[0].lowercase())
         }
 
         // Infer provider from model name patterns

@@ -14,11 +14,15 @@ internal class ChatMessageBubbleRouter(
     private val toolBubbleRenderer: ToolBubbleRenderer,
     private val otherBubbleRenderer: OtherBubbleRenderer
 ) {
-    /** Track current agent group for collapsible sections. Keyed per invocation so two runs of the
-     *  same subagent render as separate groups instead of merging under one header. */
-    private var lastAgentGroupKey: String? = null
-
-    fun render(message: Message): JPanel {
+    /**
+     * Render one message's bubble.
+     *
+     * [showAgentHeader] is decided by the caller as a pure function of the whole transcript
+     * ([pl.jclab.refio.api.models.AgentGrouping]) and folded into the render cache key, so the
+     * header decision no longer depends on renderer-internal mutable state that drifted out of sync
+     * when cached bubbles skipped the renderer.
+     */
+    fun render(message: Message, showAgentHeader: Boolean): JPanel {
         val bubble = when (message.role) {
             "user" -> userBubbleRenderer.render(message)
             "assistant" -> assistantBubbleRenderer.render(message)
@@ -26,37 +30,19 @@ internal class ChatMessageBubbleRouter(
             else -> otherBubbleRenderer.render(message)
         }
 
-        // Wrap with agent header if message comes from a subagent. Applies to every role so
-        // tool calls, user injections (subagent prompts), and assistant replies all end up under
-        // the same visible group for the agent that produced them.
+        // Wrap with an agent header when this message opens a subagent run. Applies to every role so
+        // tool calls, user injections (subagent prompts), and assistant replies all end up under the
+        // same visible group for the agent that produced them.
         val agentName = message.agentName
-        if (agentName != null) {
+        if (agentName != null && showAgentHeader) {
             val wrapper = JPanel(BorderLayout())
             wrapper.isOpaque = false
-
-            // One header per invocation: sibling runs of the same subagent (same name, distinct
-            // instance id) stay visually separate. Legacy rows without an instance id fall back to
-            // the name so they still group.
-            val groupKey = message.agentInstanceId ?: agentName
-            if (groupKey != lastAgentGroupKey) {
-                val header = createAgentHeader(agentName, message.agentDepth ?: 0)
-                wrapper.add(header, BorderLayout.NORTH)
-                lastAgentGroupKey = groupKey
-            }
-
+            wrapper.add(createAgentHeader(agentName, message.agentDepth ?: 0), BorderLayout.NORTH)
             wrapper.add(bubble, BorderLayout.CENTER)
             return wrapper
         }
 
-        // Message outside any subagent group — reset so the next subagent message re-emits the header.
-        lastAgentGroupKey = null
-
         return bubble
-    }
-
-    /** Reset agent group tracking (e.g., on conversation clear) */
-    fun resetAgentTracking() {
-        lastAgentGroupKey = null
     }
 
     private fun createAgentHeader(agentName: String, depth: Int): JPanel {

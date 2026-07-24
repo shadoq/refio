@@ -343,7 +343,14 @@ internal class BubbleComponentFactory(
     fun createCollapsibleToolContentPanel(
         messageId: String,
         liveContent: String,
-        parameters: Map<String, String>
+        parameters: Map<String, String>,
+        // Header title. Defaults to "Generated content" for a code-editing tool's streamed output (the
+        // panel's original use). Reused to preview large tool PARAMETERS (e.g. edit_description) - there
+        // the caller passes the parameter's own name so the header does not mislabel an instruction
+        // parameter as generated code.
+        title: String = "Generated content",
+        // Kind label passed to the expanded preview's metadata bar (see createLLMEditPreviewPanel).
+        contentLabel: String = "diff"
     ): JPanel {
         val panel = JBPanel<JBPanel<*>>().apply {
             layout = BorderLayout()
@@ -357,7 +364,7 @@ internal class BubbleComponentFactory(
             isOpaque = false
         }
         headerPanel.add(JLabel("📝").apply { font = LCATheme.smallFont })
-        headerPanel.add(JLabel("Generated content").apply {
+        headerPanel.add(JLabel(title).apply {
             font = LCATheme.smallBoldFont
             foreground = LCATheme.descriptionForeground
         })
@@ -383,7 +390,7 @@ internal class BubbleComponentFactory(
         val initialExpanded = deps.isToolContentExpanded(messageId)
         if (initialExpanded) {
             val snapshot = deps.getToolContentSnapshot(messageId) ?: liveContent
-            contentHolder.add(createLLMEditPreviewPanel(snapshot, parameters), BorderLayout.CENTER)
+            contentHolder.add(createLLMEditPreviewPanel(snapshot, parameters, contentLabel), BorderLayout.CENTER)
             contentHolder.isVisible = true
             toggleButton.text = "Hide"
         } else {
@@ -395,7 +402,7 @@ internal class BubbleComponentFactory(
             contentHolder.removeAll()
             if (nowExpanded) {
                 deps.setToolContentExpanded(messageId, liveContent)
-                contentHolder.add(createLLMEditPreviewPanel(liveContent, parameters), BorderLayout.CENTER)
+                contentHolder.add(createLLMEditPreviewPanel(liveContent, parameters, contentLabel), BorderLayout.CENTER)
                 contentHolder.isVisible = true
                 toggleButton.text = "Hide"
             } else {
@@ -427,7 +434,14 @@ internal class BubbleComponentFactory(
         }
     }
 
-    fun createLLMEditPreviewPanel(content: String, parameters: Map<String, String>): JPanel {
+    fun createLLMEditPreviewPanel(
+        content: String,
+        parameters: Map<String, String>,
+        // Kind label in the metadata bar. "diff" for a code-editing tool's generated content (the
+        // original use); callers previewing other content (e.g. read_file output) pass their own so
+        // the bar is not mislabeled as a diff.
+        metadataLabel: String = "diff"
+    ): JPanel {
         val filePath = parameters["path"] ?: parameters["file"]
         val language = inferLanguageFromPath(filePath)
         val totalLines = content.lines().size
@@ -439,7 +453,7 @@ internal class BubbleComponentFactory(
             isOpaque = true
 
             add(JLabel("\uD83D\uDCDD").apply { font = LCATheme.smallFont })
-            add(JLabel("diff").apply {
+            add(JLabel(metadataLabel).apply {
                 foreground = LCATheme.accentColor
                 font = LCATheme.smallBoldFont
             })
@@ -1114,24 +1128,32 @@ internal class BubbleComponentFactory(
                     maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
                 }
 
-                row.add(JLabel("$key:").apply {
-                    foreground = LCATheme.mutedForeground
-                    font = labelFont
-                    alignmentX = Component.LEFT_ALIGNMENT
-                })
+                val useCollapsible = !isPathKey(key) &&
+                    isLargeParamKey(key) && value.length > LARGE_PARAM_PREVIEW_LIMIT
 
-                row.add(Box.createVerticalStrut(2))
+                // The collapsible panel already carries the parameter's name in its own header, so the
+                // separate "key:" label above it would just duplicate it. Skip the label in that case.
+                if (!useCollapsible) {
+                    row.add(JLabel("$key:").apply {
+                        foreground = LCATheme.mutedForeground
+                        font = labelFont
+                        alignmentX = Component.LEFT_ALIGNMENT
+                    })
+                    row.add(Box.createVerticalStrut(2))
+                }
 
                 val valueComponent = if (isPathKey(key)) {
                     createFileReferencePanel(value)
-                } else if (isLargeParamKey(key) && value.length > LARGE_PARAM_PREVIEW_LIMIT) {
-                    // Large parameter values (file content, diffs, old/new strings) are otherwise
-                    // truncated to a flat, unreadable preview. Reuse the collapsible tool-content
-                    // panel so the user can expand the full value on demand.
+                } else if (useCollapsible) {
+                    // Large parameter values (file content, diffs, old/new strings, edit_description)
+                    // are otherwise truncated to a flat, unreadable preview. Reuse the collapsible
+                    // tool-content panel - titled with the parameter's own name so it is not mislabeled
+                    // as "Generated content" - so the user can expand the full value on demand.
                     createCollapsibleToolContentPanel(
                         messageId = "toolparam:$key:${value.hashCode()}",
                         liveContent = value,
-                        parameters = params
+                        parameters = params,
+                        title = key
                     )
                 } else {
                     JBPanel<JBPanel<*>>(BorderLayout()).apply {

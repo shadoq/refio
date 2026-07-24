@@ -206,3 +206,9 @@ internal fun JsonObject?.intField(name: String): Int? {
     val element = this?.get(name) ?: return null
     return if (element.isJsonPrimitive && element.asJsonPrimitive.isNumber) element.asInt else null
 }
+
+/** Read a numeric field from a nullable [JsonObject] as Double, tolerating absent and JSON-null values. */
+internal fun JsonObject?.doubleField(name: String): Double? {
+    val element = this?.get(name) ?: return null
+    return if (element.isJsonPrimitive && element.asJsonPrimitive.isNumber) element.asDouble else null
+}

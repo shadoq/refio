@@ -321,6 +321,17 @@ object ConfigKeys {
         default = 1
     )
 
+    /**
+     * Max simultaneous outbound LLM requests to a single cloud provider (OpenRouter, OpenAI, ...).
+     * Bounds the burst when many subagents call the same provider at once so we don't overrun its
+     * rate limit. Does not apply to `ollama` (self-throttled per endpoint via [OLLAMA_MAX_CONCURRENT]).
+     */
+    val PROVIDER_MAX_CONCURRENT = ConfigKey(
+        key = "providers.max_concurrent",
+        parser = String::toIntOrNull,
+        default = 4
+    )
+
     // ==================== RAG ====================
 
     val RAG_ENABLED = ConfigKey(

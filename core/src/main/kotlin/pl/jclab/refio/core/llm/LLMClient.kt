@@ -398,17 +398,22 @@ class LLMClient(
                 }
             } else null
 
-            // Call adapter (streaming or non-streaming based on flag)
+            // Call adapter (streaming or non-streaming based on flag).
+            // Gate on a per-provider semaphore so a parallel-subagent fan-out can't open an
+            // unbounded number of simultaneous streams to one provider and trip its rate limit.
+            // Ollama is bypassed here (it self-throttles per endpoint inside its adapter).
             logger.info { "[LLM_CLIENT] Calling adapter.chat with streaming=$stream, hasStreamCallback=${streamCallback != null}, systemMessages=${allSystemMessages.size}, messages=${finalMessages.size}" }
-            val response = adapter.chat(
-                messages = finalMessages,
-                systemMessages = allSystemMessages,
-                maxTokens = maxTokens,
-                temperature = temperature,
-                streaming = stream,
-                onStreamChunk = streamCallback,
-                kwargs = adapterKwargs
-            )
+            val response = pl.jclab.refio.core.services.ProviderRequestGate.withPermit(provider) {
+                adapter.chat(
+                    messages = finalMessages,
+                    systemMessages = allSystemMessages,
+                    maxTokens = maxTokens,
+                    temperature = temperature,
+                    streaming = stream,
+                    onStreamChunk = streamCallback,
+                    kwargs = adapterKwargs
+                )
+            }
 
             // For streaming mode, build response from accumulated data while preserving
             // adapter-supplied fields (nativeToolCalls, thinking, rawResponse). Dropping

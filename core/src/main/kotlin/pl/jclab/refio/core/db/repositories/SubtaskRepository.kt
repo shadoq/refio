@@ -51,6 +51,79 @@ class SubtaskRepository {
     }
 
     /**
+     * Create a subtask at the next free order_index for the task, allocating the index
+     * collision-safely.
+     *
+     * Parallel subagents share the parent's taskId, so the naive "read getMaxOrderIndex, then
+     * create at max+1" pattern races: two turns read the same max and both insert at max+1,
+     * violating the uk_task_order UNIQUE constraint - which used to crash the whole subagent turn.
+     * Here each attempt re-reads the (now committed) max and retries on that specific collision
+     * (or a transient SQLite lock), so concurrent creates always land on distinct indices.
+     */
+    fun createNext(
+        taskId: String,
+        kind: SubtaskKind,
+        description: String,
+        paramsJson: String? = null,
+        stepPlanJson: String? = null,
+        requiresApproval: Boolean = false,
+        status: TaskStatus = TaskStatus.PENDING,
+        llmModel: String? = null,
+        llmProvider: String? = null,
+        maxAttempts: Int = 25
+    ): Subtask {
+        var lastError: Exception? = null
+        repeat(maxAttempts) { attempt ->
+            val nextIndex = (getMaxOrderIndex(taskId) ?: -1) + 1
+            try {
+                return create(
+                    taskId = taskId,
+                    orderIndex = nextIndex,
+                    kind = kind,
+                    description = description,
+                    paramsJson = paramsJson,
+                    stepPlanJson = stepPlanJson,
+                    requiresApproval = requiresApproval,
+                    status = status,
+                    llmModel = llmModel,
+                    llmProvider = llmProvider
+                )
+            } catch (e: Exception) {
+                if (!isOrderIndexConflict(e)) throw e
+                lastError = e
+                logger.warn {
+                    "[SUBTASK_ORDER_RETRY] taskId=$taskId order_index=$nextIndex collided " +
+                        "(attempt ${attempt + 1}/$maxAttempts) - parallel turns share the parent task; " +
+                        "retrying with a fresh index"
+                }
+            }
+        }
+        throw IllegalStateException(
+            "Failed to allocate a free order_index for taskId=$taskId after $maxAttempts attempts",
+            lastError
+        )
+    }
+
+    /**
+     * True when the throwable (or one of its causes) is the order_index UNIQUE collision or a
+     * transient SQLite write-lock - the two ways concurrent createNext calls interfere. Anything
+     * else must propagate unchanged so real errors are never silently retried.
+     */
+    private fun isOrderIndexConflict(e: Throwable): Boolean {
+        var cur: Throwable? = e
+        while (cur != null) {
+            val msg = cur.message?.lowercase() ?: ""
+            if ("order_index" in msg || "uk_task_order" in msg ||
+                "sqlite_busy" in msg || "database is locked" in msg || "database is busy" in msg
+            ) {
+                return true
+            }
+            cur = cur.cause
+        }
+        return false
+    }
+
+    /**
      * Find subtask by ID
      */
     fun findById(id: String): Subtask? {

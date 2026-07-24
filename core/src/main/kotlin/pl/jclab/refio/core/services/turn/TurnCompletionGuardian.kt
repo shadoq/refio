@@ -86,7 +86,18 @@ data class GuardianContext(
      * "is the turn finished?" judging to goal-aware "has THIS condition been met?" judging.
      * `null` (default) preserves the pre-`/goal` behavior verbatim.
      */
-    val completionCondition: String? = null
+    val completionCondition: String? = null,
+    /**
+     * False when this is a SUBAGENT run whose profile grants NO file-write / exec tools — its
+     * deliverable can ONLY be prose. A read-only subagent that produced a substantial reply HAS
+     * delivered; the judge must not re-enter it, because there is no tool call that would "deliver"
+     * and re-entry only pushes it to hallucinate tools it does not have (observed 2026-07:
+     * security-engineer produced a full report, was re-entered, then looped on an unavailable
+     * `think`). True (the safe default) for top-level runs and any subagent that CAN write — those
+     * keep the strict "did you actually do something?" re-entry. Safe internal tools
+     * (think/tasks/memory) do NOT count as write capability here.
+     */
+    val subagentHasWriteTools: Boolean = true
 )
 
 /**

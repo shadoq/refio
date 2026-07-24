@@ -268,6 +268,30 @@ internal class TurnExecutor(
         var iteration = 0
         val config = TurnLoopConfigs.forMode(mode)
         val maxIterations = turnLLMCaller.resolveMaxIterations(config, profileOverrides)
+
+        // Marks this run terminal for the Agents Graph. The per-iteration TurnEnded only closes an
+        // iteration span (isFinal=false); without a final one, the graph node - keyed by runId for
+        // subagents and by the session for the top level - is never flipped off RUNNING and lingers
+        // as "[RUNNING]" long after the turn finished. Emitted at every turn exit below.
+        // durationMs=0 so it doesn't double-count the iteration duration already reported.
+        suspend fun emitTurnFinal(success: Boolean) {
+            emitTurnEvent(taskId) {
+                pl.jclab.refio.core.agents.events.AgentEvent.TurnEnded(
+                    id = UUID.randomUUID().toString(),
+                    sessionId = evSessionId,
+                    sourceAgentId = evSourceAgentId,
+                    timestamp = System.currentTimeMillis(),
+                    correlationId = runId,
+                    iteration = iteration,
+                    durationMs = 0,
+                    isFinal = true,
+                    success = success,
+                    runId = runId,
+                    parentRunId = parentRunId,
+                    depth = depth,
+                )
+            }
+        }
         val errorTracker = ToolErrorTracker(windowSize = config.errorWindowSize)
         // Unified repetition tracker — catches two overlapping "stuck on same object"
         // failure modes with a single state: (a) the same (tool, target) pair invoked
@@ -275,12 +299,12 @@ internal class TurnExecutor(
         // successive successful runs. See TurnGuardrails.TurnRepetitionTracker.
         //
         // Subagent budget control: when depth >= 1 we tighten the byte-identical abort
-        // threshold from 4 → 2. Subagents have narrower goals than top-level turns and
-        // smaller token budgets — a second byte-identical read of the same large file
-        // (observed 2026-05 with qwen3.5:9b reading AgentTurnLoop.kt 4× = ~500K input
-        // tokens before abort) is already a strong "no progress" signal worth cutting
-        // on. Top-level turns keep the default of 4 because user-driven exploration
-        // legitimately re-reads the same file across user-driven sub-tasks.
+        // threshold from 4 → 2 for WRITE/EXEC tools (edits, run_terminal_command, run_code,
+        // http_request). Subagents have narrower goals and smaller token budgets, so a
+        // write/poll loop repeating identical output twice is a strong "no progress" signal.
+        // READ-ONLY tools keep the lenient default of 4 (readOnlyIdenticalOutputAbortThreshold):
+        // a subagent re-reading the same file to double-check is benign, and threshold 2 was
+        // false-killing legitimate review subagents (all three died on read_file@ChatService.kt).
         val repetitionTracker = TurnRepetitionTracker(
             identicalOutputAbortThreshold = if (depth >= 1) 2 else 4
         )
@@ -289,6 +313,23 @@ internal class TurnExecutor(
         // nudge re-entry) — invisible to [repetitionTracker] (records only on tool execution)
         // and to ContentChantingDetector (intra-response only). See TurnGuardrails.
         val textRepetitionTracker = TurnGuardrails.ConsecutiveTextRepetitionTracker()
+        // Hard backstop for a model that keeps calling tools it does not have (profile-blocked).
+        // The error-rate window dilutes and the definitive-loop signature resets on varying args,
+        // so a runaway "wrong toolset" loop needs its own arg-independent counter. See TurnGuardrails.
+        val blockedTracker = TurnGuardrails.ConsecutiveBlockedToolTracker()
+        // Whether this subagent can produce a file/exec deliverable at all. A read-only subagent
+        // (no write/exec tool in its profile) can only deliver prose, so the completion judge must
+        // not re-enter it once it produced a substantial reply — there is no "delivering" tool call
+        // to demand. Safe internal tools (think/tasks/memory) do NOT count as write capability.
+        // Computed once (the profile is static); true for top-level runs (guardian ignores it there).
+        val subagentHasWriteTools = if (runProfile == TurnRunProfile.SUBAGENT && profileOverrides != null) {
+            turnPromptBuilder.resolveToolsForProfile(mode, taskId, profileOverrides).any {
+                it.mode == pl.jclab.refio.core.tools.base.ToolMode.WRITE &&
+                    it.name.lowercase() !in pl.jclab.refio.core.subagents.SubagentToolFilter.SYSTEM_TOOLS
+            }
+        } else {
+            true
+        }
         // Counter for write tools executed in the current turn — still tracked because
         // buildPrompt and the completion guardians both want to know.
         var writeToolsExecutedInTurn = 0
@@ -346,6 +387,11 @@ internal class TurnExecutor(
         var totalTokensOut = 0
         var totalCost = 0.0
         val usedTools = mutableListOf<String>()
+        // Last substantial assistant prose seen this turn. Streamed text has no DB twin until the
+        // turn finalizes cleanly, so an abort/cancel exit that persists a generic string would make
+        // the report the user was watching vanish (0115 left this gap on the abort paths). Captured
+        // each iteration; used by the cancel / max-iterations exits to persist what was on screen.
+        var lastStreamedAssistantText: String? = null
         val maxConsecutiveIdenticalFailures = configService.getTyped(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS, taskId)
         val subagentMetadata: String? = if (runProfile == TurnRunProfile.SUBAGENT) {
             val name = profileOverrides?.subagentName ?: "subagent"
@@ -528,7 +574,7 @@ internal class TurnExecutor(
                             userContextRefs, runProfile, profileOverrides,
                             writeToolsExecutedInTurn, useNativeTools,
                             nativeToolSchemas = iterationNativeToolSchemas,
-                            agentName = agentName, sessionId = evSessionId, modelId = effectiveModel
+                            agentName = agentName, sessionId = evSessionId, modelId = effectiveModel, runId = runId
                         )
                         val (fits, estimated) = tokenEstimator.checkFits(tempPrompt, maxTokens, provider = effectiveProvider)
 
@@ -547,7 +593,7 @@ internal class TurnExecutor(
                         userContextRefs, runProfile, profileOverrides,
                         writeToolsExecutedInTurn, useNativeTools,
                         nativeToolSchemas = iterationNativeToolSchemas,
-                        agentName = agentName, sessionId = evSessionId, modelId = effectiveModel
+                        agentName = agentName, sessionId = evSessionId, modelId = effectiveModel, runId = runId
                     )
 
                     // Call LLM
@@ -632,7 +678,7 @@ internal class TurnExecutor(
                                     taskId, mode, iteration, maxIterations,
                                     userContextRefs, runProfile, profileOverrides,
                                     writeToolsExecutedInTurn, false,
-                                    agentName = agentName, sessionId = evSessionId, modelId = effectiveModel
+                                    agentName = agentName, sessionId = evSessionId, modelId = effectiveModel, runId = runId
                                 )
                                 continue
                             }
@@ -652,7 +698,7 @@ internal class TurnExecutor(
                                 taskId, mode, iteration, maxIterations,
                                 userContextRefs, runProfile, profileOverrides,
                                 writeToolsExecutedInTurn, false,
-                                agentName = agentName, sessionId = evSessionId, modelId = effectiveModel
+                                agentName = agentName, sessionId = evSessionId, modelId = effectiveModel, runId = runId
                             )
                         } catch (e: RefioError.LLMError) {
                             // Ollama's qwen tool-call template can 500 server-side on malformed
@@ -676,11 +722,19 @@ internal class TurnExecutor(
                                 taskId, mode, iteration, maxIterations,
                                 userContextRefs, runProfile, profileOverrides,
                                 writeToolsExecutedInTurn, false,
-                                agentName = agentName, sessionId = evSessionId, modelId = effectiveModel
+                                agentName = agentName, sessionId = evSessionId, modelId = effectiveModel, runId = runId
                             )
                         }
                     }
                     val llmDurationMs = (System.nanoTime() - llmCallStartNanos) / 1_000_000
+
+                    // Preserve the last substantial assistant PROSE (not a tool-call envelope) so an
+                    // abort/cancel exit can persist what the user was watching instead of a generic
+                    // string. Extract the text response so a JSON envelope isn't stored raw.
+                    val iterationAssistantText = toolCallParser.extractTextResponse(llmResponse.content)
+                    if (iterationAssistantText.length >= TurnDeliverable.PLAN_DELIVERABLE_MIN_CHARS) {
+                        lastStreamedAssistantText = iterationAssistantText
+                    }
 
                     // Closed-loop chars/token calibration: feed the real
                     // input-token count back so the next turn's budget math self-corrects per model.
@@ -693,7 +747,17 @@ internal class TurnExecutor(
                     // covered separately by its pre-send estimate (its returned usage is already
                     // post-truncation, so it can't trip this). Never let a too-large prompt pass as
                     // a silent success — warn loudly and flag the run.
-                    val contextWindow = tokenEstimator.getSafeTokenLimit(effectiveProvider, effectiveModel)
+                    // Resolve the window via ModelWindow (the single window resolver, same as the
+                    // context budget and auto-compaction above). getSafeTokenLimit used a hardcoded
+                    // per-model table that fell back to 128k for any model not listed (every newer
+                    // OpenRouter model), so it false-flagged overflow on prompts the provider actually
+                    // accepted while the budget math sized the window correctly.
+                    val contextWindow = pl.jclab.refio.core.llm.ModelWindow.resolve(
+                        provider = effectiveProvider,
+                        model = effectiveModel,
+                        configService = configService,
+                        taskId = taskId,
+                    )
                     if (llmResponse.usage.inputTokens > contextWindow) {
                         logger.warn {
                             "[CTX] overflow: input=${llmResponse.usage.inputTokens} > window=$contextWindow " +
@@ -1259,7 +1323,7 @@ internal class TurnExecutor(
                         listener?.onToolBatchCompleted(taskId, batchSummary)
 
                         val tracking = trackToolBatch(
-                            toolResults, errorTracker, repetitionTracker,
+                            toolResults, errorTracker, repetitionTracker, blockedTracker,
                             consecutiveIdenticalFailures, lastFailureSignature
                         )
                         consecutiveIdenticalFailures = tracking.consecutiveIdenticalFailures
@@ -1324,6 +1388,30 @@ internal class TurnExecutor(
                                 // Futile-edit aborts (no-op-write streak, P2) are INCOMPLETE: the
                                 // deliverable was never produced, but it is abandonment, not a hard error.
                                 incomplete = repetitionAbort.incomplete
+                            )
+                            return turnPersistence.finish(result, persistAssistantMessage = true)
+                        }
+
+                        // Hard backstop: the model repeatedly asked for tools it does not have.
+                        // Abort INCOMPLETE (the deliverable was never produced) rather than let it
+                        // burn iterations on a tool the harness keeps rejecting. Independent of the
+                        // error-rate window and the definitive-loop signature, both of which miss
+                        // this pattern (see TurnGuardrails.ConsecutiveBlockedToolTracker).
+                        val blockedAbort = tracking.blockedAbort
+                        if (blockedAbort != null) {
+                            logger.warn {
+                                "[BLOCKED_TOOL_ABORT] taskId=$taskId, depth=$depth, " +
+                                    "subagent=${profileOverrides?.subagentName ?: "-"}, reason=${blockedAbort.reason}"
+                            }
+                            val result = TurnResult(
+                                success = false,
+                                response = blockedAbort.reason,
+                                iterations = iteration,
+                                tokensIn = totalTokensIn,
+                                tokensOut = totalTokensOut,
+                                cost = totalCost,
+                                toolsUsed = usedTools.distinct(),
+                                incomplete = true
                             )
                             return turnPersistence.finish(result, persistAssistantMessage = true)
                         }
@@ -1798,7 +1886,8 @@ internal class TurnExecutor(
                                 verificationToolsExecutedAfterWrite = verificationToolsExecutedAfterWrite,
                                 priorReentries = guardianState.reentryCount,
                                 toolsUsedSizeAtPriorReentry = guardianState.usedToolsAtLastReentry,
-                                completionCondition = taskRepository.getCompletionCondition(taskId)
+                                completionCondition = taskRepository.getCompletionCondition(taskId),
+                                subagentHasWriteTools = subagentHasWriteTools
                             )
                             when (val decision = completionGuardians.runChecks(guardianContext)) {
                                 is GuardianDecision.Reenter -> {
@@ -1806,11 +1895,35 @@ internal class TurnExecutor(
                                     // by re-entering. Keep only the FIRST one — later re-entries
                                     // tend to degrade. Restored at finalize if the re-entry adds
                                     // no tool work (see [TurnGuardianState]).
-                                    guardianState.captureIfFirst(
+                                    val reportText = guardianTextResponse.ifEmpty { llmResponse.content }
+                                    val capturedReport = guardianState.captureIfFirst(
                                         llmResponse,
-                                        hasVisibleText = guardianTextResponse.ifEmpty { llmResponse.content }.isNotBlank(),
+                                        hasVisibleText = reportText.isNotBlank(),
                                     )
                                     guardianState.onReentry(usedTools.size)
+                                    // Persist the report the user watched stream as its own ASSISTANT
+                                    // row, chronologically before the nudge, so a re-entry that goes on
+                                    // to do more work does not make that report vanish from history
+                                    // (it used to be dropped: only the SYSTEM nudge was persisted here,
+                                    // and finalize restored the capture only when the re-entry added no
+                                    // tool). Skipped once a FILE deliverable already landed this turn:
+                                    // there the captured text is the forward-looking intent stub the
+                                    // deliverable-aware sign-off below intentionally replaces, so
+                                    // persisting it verbatim would resurrect exactly that stub. When the
+                                    // re-entry adds no new tool, [captureAlreadyFinalized] makes finalize
+                                    // skip re-persisting this same row.
+                                    if (capturedReport && fileWriteToolsExecutedInTurn == 0) {
+                                        turnPersistence.persist(
+                                            role = MessageRole.ASSISTANT,
+                                            content = reportText,
+                                            thinking = turnResponseProcessor.resolveAssistantThinking(llmResponse),
+                                            toolCalls = null,
+                                            tokensIn = llmResponse.usage.inputTokens,
+                                            tokensOut = llmResponse.usage.outputTokens,
+                                            cost = llmResponse.cost,
+                                        )
+                                        guardianState.capturePersisted = true
+                                    }
                                     // Soft fallback native→JSON on a stalled re-entry. The model
                                     // reached this terminal point by emitting prose with no tool call. If it
                                     // was on the native channel, re-entering on that SAME channel tends to
@@ -1986,15 +2099,22 @@ internal class TurnExecutor(
                                 textResponse.ifEmpty { effectiveResponse.content }
                             }
 
-                        turnPersistence.persist(
-                            role = MessageRole.ASSISTANT,
-                            content = surfacedResponse,
-                            thinking = turnResponseProcessor.resolveAssistantThinking(effectiveResponse),
-                            toolCalls = null,
-                            tokensIn = effectiveResponse.usage.inputTokens,
-                            tokensOut = effectiveResponse.usage.outputTokens,
-                            cost = effectiveResponse.cost,
-                        )
+                        // Skip the terminal persist when this exact answer was already written as its
+                        // own ASSISTANT row at re-entry AND the re-entry added no new tool work — the
+                        // restored capture would be a byte-for-byte duplicate of that row. When the
+                        // re-entry DID add work, captureAlreadyFinalized is false so the new terminal
+                        // response is still persisted after the earlier report.
+                        if (!guardianState.captureAlreadyFinalized(usedTools.size)) {
+                            turnPersistence.persist(
+                                role = MessageRole.ASSISTANT,
+                                content = surfacedResponse,
+                                thinking = turnResponseProcessor.resolveAssistantThinking(effectiveResponse),
+                                toolCalls = null,
+                                tokensIn = effectiveResponse.usage.inputTokens,
+                                tokensOut = effectiveResponse.usage.outputTokens,
+                                cost = effectiveResponse.cost,
+                            )
+                        }
 
                         val result = TurnResult(
                             success = turnIncompleteReason == null,
@@ -2017,6 +2137,7 @@ internal class TurnExecutor(
                         ))
                         val finalResult = turnPersistence.finish(result, persistAssistantMessage = false)
                         updateTurnState { TurnStateSnapshot() }
+                        emitTurnFinal(result.success)
                         return finalResult
                     }
                 } finally {
@@ -2091,6 +2212,7 @@ internal class TurnExecutor(
             )
             val finalResult = turnPersistence.finish(result, persistAssistantMessage = true)
             updateTurnState { TurnStateSnapshot() }
+            emitTurnFinal(success = false)
             return finalResult
         } catch (e: CancellationException) {
             updateTurnState { copy(phase = TurnPhase.FAILED) }
@@ -2102,7 +2224,12 @@ internal class TurnExecutor(
             ))
             val result = TurnResult(
                 success = false,
-                response = "Operation cancelled by user.",
+                // Keep the report the user was watching. Streamed prose has no DB row until a clean
+                // finalize; on cancel the transient is dropped, so without this it vanishes and is
+                // replaced by the generic string. Fall back to the generic string when nothing
+                // substantial was streamed.
+                response = lastStreamedAssistantText?.takeIf { it.isNotBlank() }
+                    ?: "Operation cancelled by user.",
                 iterations = iteration,
                 tokensIn = totalTokensIn,
                 tokensOut = totalTokensOut,
@@ -2111,7 +2238,17 @@ internal class TurnExecutor(
             )
             val finalResult = turnPersistence.finish(result, persistAssistantMessage = true)
             updateTurnState { TurnStateSnapshot() }
+            emitTurnFinal(success = false)
             return finalResult
+        } catch (e: Exception) {
+            // Backstop for every other failure (e.g. a DB write throwing mid-turn). The specific
+            // catches above emit the terminal TurnEnded on their paths; without this one an
+            // uncaught exception escapes and the agent's graph node is never flipped off RUNNING.
+            // Best-effort emit (emitTurnEvent swallows), then rethrow so the caller still sees and
+            // reports the real error unchanged.
+            updateTurnState { copy(phase = TurnPhase.FAILED) }
+            emitTurnFinal(success = false)
+            throw e
         }
 
         // Max iterations exceeded
@@ -2125,7 +2262,10 @@ internal class TurnExecutor(
         ))
         val result = TurnResult(
             success = false,
-            response = "Error: Maximum iterations exceeded. The agent may be stuck in a loop.",
+            // Preserve the last substantial streamed report (see cancel path) rather than drop it for
+            // a generic max-iterations string — the user was watching real output.
+            response = lastStreamedAssistantText?.takeIf { it.isNotBlank() }
+                ?: "Error: Maximum iterations exceeded. The agent may be stuck in a loop.",
             iterations = iteration,
             tokensIn = totalTokensIn,
             tokensOut = totalTokensOut,
@@ -2134,6 +2274,7 @@ internal class TurnExecutor(
         )
         val finalResult = turnPersistence.finish(result, persistAssistantMessage = true)
         updateTurnState { TurnStateSnapshot() }
+        emitTurnFinal(success = false)
         return finalResult
     }
 
@@ -2322,6 +2463,8 @@ internal class TurnExecutor(
         val noopCallIds: Set<String>,
         val consecutiveIdenticalFailures: Int,
         val lastFailureSignature: String?,
+        // Set when the model called unavailable (profile-blocked) tools too many times in a row.
+        val blockedAbort: TurnGuardrails.LoopStatus.ABORT? = null,
     )
 
     // Track error rate + definitive-loop detection + unified repetition tracker.
@@ -2331,6 +2474,7 @@ internal class TurnExecutor(
         toolResults: List<Pair<ToolCallData, ToolResultData>>,
         errorTracker: ToolErrorTracker,
         repetitionTracker: TurnRepetitionTracker,
+        blockedTracker: TurnGuardrails.ConsecutiveBlockedToolTracker,
         consecutiveIdenticalFailures: Int,
         lastFailureSignature: String?,
     ): ToolBatchTracking {
@@ -2339,6 +2483,8 @@ internal class TurnExecutor(
         @Suppress("NAME_SHADOWING")
         var lastFailureSignature = lastFailureSignature
         var repetitionAbort: TurnGuardrails.LoopStatus.ABORT? = null
+        // Set once the model has called unavailable (profile-blocked) tools too many times in a row.
+        var blockedAbort: TurnGuardrails.LoopStatus.ABORT? = null
         // Name of the tool that triggered the repetition abort (for deliverable-aware
         // handling: a loop on an optional VERIFICATION tool after the work is done is not
         // the same as a loop that never produced the deliverable).
@@ -2351,6 +2497,13 @@ internal class TurnExecutor(
             if (result.noop) noopCallIds.add(toolCall.id)
             val success = result.success
             errorTracker.recordResult(success)
+            // Arg-independent "wrong toolset" backstop: a run of profile-blocked calls aborts even
+            // when varying args keep the definitive-loop signature resetting and the error window
+            // stays diluted. First ABORT in the batch wins.
+            when (val blockedStatus = blockedTracker.record(result.blocked)) {
+                is TurnGuardrails.LoopStatus.ABORT -> if (blockedAbort == null) blockedAbort = blockedStatus
+                TurnGuardrails.LoopStatus.OK -> Unit
+            }
             if (success) {
                 consecutiveIdenticalFailures = 0
                 lastFailureSignature = null
@@ -2394,6 +2547,7 @@ internal class TurnExecutor(
             noopCallIds = noopCallIds,
             consecutiveIdenticalFailures = consecutiveIdenticalFailures,
             lastFailureSignature = lastFailureSignature,
+            blockedAbort = blockedAbort,
         )
     }
 
@@ -2425,7 +2579,8 @@ internal class TurnExecutor(
         nativeToolSchemas: List<ToolSchema>? = null,
         agentName: String? = null,
         sessionId: String? = null,
-        modelId: String? = null
+        modelId: String? = null,
+        runId: String? = null
     ): TurnPrompt {
         val turnPrompt = turnPromptBuilder.buildPrompt(
             taskId = taskId,
@@ -2440,7 +2595,8 @@ internal class TurnExecutor(
             nativeToolSchemas = nativeToolSchemas,
             agentName = agentName,
             sessionId = sessionId,
-            modelId = modelId
+            modelId = modelId,
+            runId = runId
         )
 
         // Build PromptSnapshot for UI inspection

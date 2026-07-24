@@ -26,15 +26,26 @@ data class TurnGuardianState(
     var preReentryResponse: LLMResponse? = null,
     /** Snapshot of usedTools.size at the moment of the most recent guardian re-entry. */
     var usedToolsAtLastReentry: Int = 0,
+    /**
+     * True once the captured pre-re-entry answer has been persisted to the transcript as its own
+     * ASSISTANT row (so the report the user saw while streaming survives the re-entry instead of
+     * vanishing). Guards against persisting it a second time at finalize. See [captureAlreadyFinalized].
+     */
+    var capturePersisted: Boolean = false,
 ) {
     /**
      * Stash the answer the user already saw before a re-entry drops it. Keeps only the FIRST one
      * ([preReentryResponse] already set → no-op) and only when it carried visible text worth saving.
+     *
+     * @return true when THIS call stored a new capture (so the caller can persist it once); false
+     *   when there was already a capture or the answer had no visible text.
      */
-    fun captureIfFirst(response: LLMResponse, hasVisibleText: Boolean) {
+    fun captureIfFirst(response: LLMResponse, hasVisibleText: Boolean): Boolean {
         if (preReentryResponse == null && hasVisibleText) {
             preReentryResponse = response
+            return true
         }
+        return false
     }
 
     /** Record that a guardian re-entered: bump the counter and snapshot the tool-usage size. */
@@ -53,6 +64,18 @@ data class TurnGuardianState(
     /** The response to finalize: the restored pre-re-entry answer if applicable, else [current]. */
     fun effectiveResponse(current: LLMResponse, usedToolsSize: Int): LLMResponse =
         restorableResponse(usedToolsSize) ?: current
+
+    /**
+     * True when the captured answer was already persisted at re-entry AND it is the one finalize
+     * would restore (re-entry added no new tool work). In that case finalize must NOT persist it a
+     * second time — the row already exists in the transcript, chronologically before the nudge.
+     *
+     * When the re-entry DID add tool work ([restorableResponse] is null) this returns false so the
+     * new terminal response is still persisted; the already-persisted capture then stands as the
+     * earlier report the user saw, followed by the response that incorporates the extra work.
+     */
+    fun captureAlreadyFinalized(usedToolsSize: Int): Boolean =
+        capturePersisted && restorableResponse(usedToolsSize) != null
 
     /**
      * Replenish the bounded re-entry budget once the agent has made sustained progress since the
@@ -79,6 +102,8 @@ data class TurnGuardianState(
         reentryCount = 0
         preReentryResponse = null
         usedToolsAtLastReentry = 0
+        // A new stall episode may capture and persist a fresh report of its own.
+        capturePersisted = false
         return true
     }
 

@@ -103,6 +103,42 @@ class AgentPlanServiceTest {
     }
 
     @Test
+    fun `buildPlanSection scoped to an agent shows only that agent's own plan`() {
+        // Parent + two subagents share the same task. A subagent must not see the others' plans -
+        // those are noise and can trick a weak model into updating a step it never created.
+        service.setPlan("task-1", null, listOf(AgentPlanStep(0, "Orchestrate everything")))
+        service.setPlan("task-1", "run-a", listOf(AgentPlanStep(0, "Agent A step")))
+        service.setPlan("task-1", "run-b", listOf(AgentPlanStep(0, "Agent B step")))
+
+        val section = service.buildPlanSection("task-1", agentId = "run-a")
+
+        assertTrue(section.contains("Agent A step"), "a subagent must see its own plan")
+        assertTrue(!section.contains("Orchestrate everything"), "a subagent must not see the parent's plan")
+        assertTrue(!section.contains("Agent B step"), "a subagent must not see a sibling's plan")
+    }
+
+    @Test
+    fun `buildPlanSection scoped to an agent with no plan yet is empty even when others have plans`() {
+        // The exact confusion the scoping prevents: a fresh subagent that has not called plan yet
+        // sees NO plan section, so it cannot try to update step 0 of a plan it never created.
+        service.setPlan("task-1", null, listOf(AgentPlanStep(0, "Orchestrate")))
+        service.setPlan("task-1", "sibling", listOf(AgentPlanStep(0, "Sibling step")))
+
+        assertEquals("", service.buildPlanSection("task-1", agentId = "fresh-agent"))
+    }
+
+    @Test
+    fun `buildPlanSection without an agent id keeps the full orchestrator view`() {
+        service.setPlan("task-1", null, listOf(AgentPlanStep(0, "Orchestrate")))
+        service.setPlan("task-1", "run-a", listOf(AgentPlanStep(0, "Agent A step")))
+
+        val section = service.buildPlanSection("task-1")
+
+        assertTrue(section.contains("Orchestrate"), "the orchestrator sees its own plan")
+        assertTrue(section.contains("Agent A step"), "the orchestrator sees each subagent's plan")
+    }
+
+    @Test
     fun `clear removes all plans`() {
         service.setPlan("task-1", null, listOf(AgentPlanStep(0, "Step")))
         service.clear()

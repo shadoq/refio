@@ -191,49 +191,4 @@ class PromptTokenEstimator {
         val available = maxTokens - reserveForOutput
         return (estimated <= available) to estimated
     }
-
-    /**
-     * Get safe token limit for a provider.
-     *
-     * Returns conservative context window size for the given provider.
-     *
-     * @param provider LLM provider name
-     * @param model Model name (optional, for model-specific limits)
-     * @return Safe token limit
-     */
-    fun getSafeTokenLimit(provider: String, model: String? = null): Int {
-        // Model-specific limits
-        if (model != null) {
-            return when {
-                // GPT-4o and GPT-4o-mini
-                model.startsWith("gpt-4o") && !model.contains("mini") -> 128000
-                model.contains("mini") -> 128000
-                // GPT-4-turbo
-                model.startsWith("gpt-4-turbo") -> 128000
-                // o1, o3 models
-                model.startsWith("o1") || model.startsWith("o3") -> 200000
-                // Claude 3.5/3.7 Sonnet
-                model.contains("claude-3.5") || model.contains("claude-3.7") -> 200000
-                model.contains("sonnet") -> 200000
-                // Claude Opus
-                model.contains("opus") -> 200000
-                // Gemini
-                model.contains("gemini-2.5") -> 1000000
-                model.contains("gemini-2.0") -> 1000000
-                model.contains("flash") -> 1000000
-                // Default for known models
-                else -> 128000
-            }
-        }
-
-        // Provider defaults
-        return when (provider) {
-            "anthropic" -> 200000
-            "openai" -> 128000
-            "gemini" -> 1000000
-            "zai" -> 128000
-            "ollama", "lmstudio", "openrouter", "generic_openai" -> 32768
-            else -> 128000
-        }
-    }
 }

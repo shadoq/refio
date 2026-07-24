@@ -225,6 +225,71 @@ class MessageDispatcherReconcileTest {
         assertEquals(listOf("B"), result.map { it.id }, "Cross-session leftovers must not leak into the active list")
     }
 
+    private fun editMsg(
+        id: String,
+        toolCallId: String,
+        content: String,
+        createdAt: Long,
+        isStreaming: Boolean,
+        status: ToolCallStatus,
+    ) = Message(
+        id = id,
+        taskId = "task-1",
+        role = "assistant",
+        content = content,
+        createdAt = createdAt,
+        isStreaming = isStreaming,
+        toolCallInfo = ToolCallDisplayInfo(
+            toolName = "advance_code_editing",
+            toolCallId = toolCallId,
+            displayType = ToolDisplayType.LLM_EDIT,
+            parameters = mapOf("edit_description" to "make a game"),
+            status = status,
+        ),
+    )
+
+    @Test
+    fun `a finished code-editing transient with content is kept over its empty persisted twin`() {
+        // advance_code_editing streams the FULL generated file into the transient's content, but the
+        // persisted display twin ("<messageId>:tc0") is stored EMPTY. Dropping the finished transient for
+        // that empty twin makes the completed "Generated content" preview show nothing - only the
+        // edit_description parameter remains, reading as if the tool surfaced its instructions instead of
+        // the code. The richer transient must be kept so the final bubble shows the generated code.
+        val inMemory = listOf(
+            editMsg("temp-call-9", toolCallId = "call-9", content = "<!DOCTYPE html>… full file",
+                createdAt = 30, isStreaming = false, status = ToolCallStatus.COMPLETED),
+        )
+        val db = listOf(
+            editMsg("msg-7:tc0", toolCallId = "call-9", content = "",
+                createdAt = 31, isStreaming = false, status = ToolCallStatus.COMPLETED),
+        )
+
+        val result = MessageDispatcher.reconcileMessages(inMemory, db, "task-1")
+
+        assertEquals(listOf("temp-call-9"), result.map { it.id },
+            "The finished code-editing transient (holding the generated code) wins over its empty twin")
+    }
+
+    @Test
+    fun `a finished code-editing transient is dropped when its persisted twin already carries content`() {
+        // The keep-the-transient rule is scoped to the EMPTY-twin case. If the persisted row already has
+        // content (nothing to lose), the normal rule applies: a finished transient is dropped so the tool
+        // call renders once, from the DB row.
+        val inMemory = listOf(
+            editMsg("temp-call-9", toolCallId = "call-9", content = "<!DOCTYPE html>… full file",
+                createdAt = 30, isStreaming = false, status = ToolCallStatus.COMPLETED),
+        )
+        val db = listOf(
+            editMsg("msg-7:tc0", toolCallId = "call-9", content = "<!DOCTYPE html>… full file",
+                createdAt = 31, isStreaming = false, status = ToolCallStatus.COMPLETED),
+        )
+
+        val result = MessageDispatcher.reconcileMessages(inMemory, db, "task-1")
+
+        assertEquals(listOf("msg-7:tc0"), result.map { it.id },
+            "With a non-empty persisted twin the finished transient is dropped (single bubble, from DB)")
+    }
+
     @Test
     fun `with nothing to preserve the DB list passes through unchanged`() {
         val db = listOf(

@@ -43,12 +43,25 @@ class SubagentToolFilter(
         )
 
         /**
-         * SYSTEM tools automatically available to all subagents
-         * (unless explicitly in disallowedTools).
-         * These manage internal agent state, not user files.
+         * SAFE internal tools automatically available to every subagent, even under a `tools:`
+         * whitelist that does not list them (unless explicitly in disallowedTools).
+         *
+         * These have NO side effects on user files and NO network egress — they only manage the
+         * agent's own reasoning/state (`think` records a reasoning step; `tasks`/`memory` manage
+         * plan and working memory). Keeping them always-available closes a recurring class of bug:
+         * a persona body that instructs the model to `think(...)` while the whitelist forbids it,
+         * so the model loops on a tool the harness then rejects (observed 2026-07 with
+         * `security-engineer`; the code comment in TurnPromptBuilder already noted the same for
+         * `api-documenter`). Egress tools (web_search, http_request, fetch_webpage) are deliberately
+         * NOT here — they are only granted when a definition whitelists them. `run_terminal_command`
+         * stays in [ALWAYS_BLOCKED_TOOLS].
+         *
+         * Single source of truth: the three `isToolAllowedByProfile` copies in the turn package
+         * (TurnPromptBuilder / ToolCallParser / TurnToolExecutor) reference this set so the system
+         * prompt, native tool schemas, JSON-parse validation, and execution all agree.
          */
         val SYSTEM_TOOLS = setOf(
-            "tasks", "memory"
+            "tasks", "memory", "think"
         )
 
         /**
@@ -68,6 +81,32 @@ class SubagentToolFilter(
          * Mapowanie nazw Refio -> Claude Code.
          */
         private val REFIO_TO_CLAUDE = CLAUDE_TO_REFIO.entries.associate { (k, v) -> v to k }
+
+        /**
+         * Whether [toolName] is available under a profile with the given allow/deny lists. The single
+         * source of truth for the three `isToolAllowedByProfile` copies in the turn package
+         * (TurnPromptBuilder / ToolCallParser / TurnToolExecutor), which gate the system-prompt tool
+         * matrix + native schemas, the JSON-parse validation, and execution respectively. Keeping
+         * them delegating here means all four sites (this + [filterTools]) agree.
+         *
+         * Whitelist: the tool is listed OR it is a safe [SYSTEM_TOOLS] (think/tasks/memory) — a
+         * whitelist that omits `think` must not make the model loop on a persona-instructed tool the
+         * harness rejects. Blacklist: allowed unless explicitly denied. Neither: allowed.
+         */
+        fun isToolAllowedUnderProfile(
+            toolName: String,
+            allowedTools: List<String>?,
+            disallowedTools: List<String>?,
+        ): Boolean {
+            val normalized = toolName.lowercase()
+            val allowed = allowedTools?.map { it.lowercase() }?.toSet()
+            val disallowed = disallowedTools?.map { it.lowercase() }?.toSet()
+            return when {
+                allowed != null -> normalized in allowed || normalized in SYSTEM_TOOLS
+                disallowed != null -> normalized !in disallowed
+                else -> true
+            }
+        }
     }
 
     /**

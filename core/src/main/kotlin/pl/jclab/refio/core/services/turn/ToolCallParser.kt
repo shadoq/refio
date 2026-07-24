@@ -820,17 +820,10 @@ class ToolCallParser(
         return "Tool '$toolName' is not available to the $scope. $details"
     }
 
-    private fun isToolAllowedByProfile(toolName: String, profileOverrides: TurnProfileOverrides): Boolean {
-        val normalizedName = toolName.lowercase()
-        val allowed = profileOverrides.allowedTools?.map { it.lowercase() }?.toSet()
-        val disallowed = profileOverrides.disallowedTools?.map { it.lowercase() }?.toSet()
-
-        if (allowed != null) {
-            return normalizedName in allowed
-        }
-        if (disallowed != null) {
-            return normalizedName !in disallowed
-        }
-        return true
-    }
+    // Validates a parsed JSON tool call against the profile. Delegates to the single source of truth
+    // (incl. the SYSTEM_TOOLS carve-out) so it never rejects a call the executor would accept.
+    private fun isToolAllowedByProfile(toolName: String, profileOverrides: TurnProfileOverrides): Boolean =
+        pl.jclab.refio.core.subagents.SubagentToolFilter.isToolAllowedUnderProfile(
+            toolName, profileOverrides.allowedTools, profileOverrides.disallowedTools
+        )
 }

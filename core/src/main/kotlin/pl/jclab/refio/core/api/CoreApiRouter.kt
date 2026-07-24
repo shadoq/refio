@@ -267,6 +267,7 @@ class CoreApiRouter(
     init {
         pl.jclab.refio.core.api.modules.CoreApiRouterBootstrap.registerSystemTools(this)
         pl.jclab.refio.core.api.modules.CoreApiRouterBootstrap.applyOllamaConcurrency(configService)
+        pl.jclab.refio.core.api.modules.CoreApiRouterBootstrap.applyProviderConcurrency(configService)
         pl.jclab.refio.core.llm.NativeToolsFallbackTracker.bind(configService)
         logger.info {
             "CoreApiRouter init: projectRoot=$projectRoot, contextService=${contextService != null}, " +

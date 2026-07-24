@@ -47,6 +47,20 @@ class MessageDispatcher(
         refreshTrigger.tryEmit(Unit)
     }
 
+    /**
+     * Reload now, awaiting the DB read + reconcile, instead of scheduling a debounced refresh.
+     *
+     * Used at the single terminal point of a turn: the debounced path leaves a ~300 ms window in
+     * which the just-streamed transient bubble has been cleaned up but the DB-backed row has not
+     * loaded yet, so the finished answer briefly blinks out and back. Reloading inline swaps the
+     * transient for its DB row inside one atomic [SessionStateManager.updateMessages] (reconcile
+     * runs under the messages lock), closing that window. Mid-turn refreshes stay debounced via
+     * [loadMessages] so a tool-heavy turn still coalesces its bursts.
+     */
+    suspend fun loadMessagesAndWait() {
+        loadMessagesImpl()
+    }
+
     private suspend fun loadMessagesImpl() {
         val currentSession = stateManager.getActiveSession() ?: return
         try {
@@ -537,7 +551,12 @@ class MessageDispatcher(
                     status = updatedStatus,
                     result = ToolCallResult(
                         success = !isError,
-                        summary = summary
+                        summary = summary,
+                        // For read_file the output IS the deliverable the model saw; keep it in full so
+                        // the bubble can offer it expandably ("what was read, as it sits in the
+                        // conversation") instead of only the "N lines read" summary. Other tools keep the
+                        // compact summary only.
+                        fullOutput = if (info.toolName == "read_file") toolResult.content else null
                     )
                 )
                 inlinedToolCallIds.add(info.toolCallId)
@@ -645,16 +664,43 @@ class MessageDispatcher(
             fun Message.isLiveTransient(): Boolean =
                 isStreaming || toolCallInfo?.status == ToolCallStatus.EXECUTING
 
+            // A code-editing tool (advance_code_editing / multi_line_editor) streams the FULL generated
+            // file into its in-memory transient's content, but the persisted display twin is stored with
+            // empty content (createToolCallDisplayMessage). Once the transient stops streaming, dropping
+            // it for that empty twin makes the completed "Generated content" preview show nothing - only
+            // the edit_description PARAMETER remains, which reads as if the tool surfaced its instructions
+            // instead of the code. Keep the finished transient (it still holds the generated code) and
+            // hold its blank twin back, so the final bubble shows the code. In-memory only: a full session
+            // reload has no transient and falls back to the diff summary the persisted twin still carries.
+            fun Message.isCodeEditBubble(): Boolean = toolCallInfo?.displayType == ToolDisplayType.LLM_EDIT
+            val dbBlankEditTwinCallIds = dbMessages
+                .asSequence()
+                .filter { it.isCodeEditBubble() && it.content.isBlank() }
+                .mapNotNull { it.toolCallKey() }
+                .toHashSet()
+            fun Message.isRicherCompletedEditTransient(): Boolean =
+                !isLiveTransient() &&
+                    isCodeEditBubble() &&
+                    content.isNotBlank() &&
+                    (toolCallKey()?.let { it in dbBlankEditTwinCallIds } == true)
+
             val liveToolCallIds = currentInMemory
                 .asSequence()
                 .filter { it.taskId == sessionId && it.isLiveTransient() }
                 .mapNotNull { it.toolCallKey() }
                 .toHashSet()
 
-            val effectiveDb = if (liveToolCallIds.isEmpty()) {
+            val keptEditTransientCallIds = currentInMemory
+                .asSequence()
+                .filter { it.taskId == sessionId && it.isRicherCompletedEditTransient() }
+                .mapNotNull { it.toolCallKey() }
+                .toHashSet()
+
+            val heldBackToolCallIds = liveToolCallIds + keptEditTransientCallIds
+            val effectiveDb = if (heldBackToolCallIds.isEmpty()) {
                 dbMessages
             } else {
-                dbMessages.filterNot { db -> db.toolCallKey()?.let { it in liveToolCallIds } == true }
+                dbMessages.filterNot { db -> db.toolCallKey()?.let { it in heldBackToolCallIds } == true }
             }
 
             val dbMessageIds = effectiveDb.mapTo(HashSet()) { it.id }
@@ -670,6 +716,7 @@ class MessageDispatcher(
                     when {
                         msg.role == "system" -> true
                         msg.isLiveTransient() -> true
+                        msg.isRicherCompletedEditTransient() -> true
                         msg.role == "user" && (msg.agentDepth == null || msg.agentDepth == 0) ->
                             msg.content.trim() !in dbTopLevelUserContents
                         else -> false

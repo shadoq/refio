@@ -41,6 +41,12 @@ data class ToolResultData(
     // subTokens* are pulled from tool metadata below) so the turn loop can treat a futile edit as
     // "no progress" without re-parsing the metadata JSON. See TurnGuardrails.TurnRepetitionTracker.
     val noop: Boolean = false,
+    // True when the call was rejected by the profile gate because the tool is not on the
+    // subagent's allow/deny list (the model asked for a tool it does not have). Distinct from a
+    // normal failure: no tool ran, and the "reason" is identical every time regardless of args, so
+    // the turn loop treats a run of these as a definitive "wrong toolset" loop and aborts fast
+    // instead of letting the error-rate window dilute the signal. See TurnGuardrails.
+    val blocked: Boolean = false,
     // Sub-LLM usage from tools that internally call an LLM (advance_code_editing,
     // multi_line_editor). Persisted on the TOOL ChatMessage so SessionStatsBar
     // and per-message stats include these tokens — they are real LLM cost.

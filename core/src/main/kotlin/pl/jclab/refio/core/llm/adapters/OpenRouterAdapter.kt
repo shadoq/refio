@@ -217,7 +217,14 @@ open class OpenRouterAdapter(
         }
     }
 
-    override fun estimateCost(usage: LLMUsage): Double = calculateCost(
+    /**
+     * Prefer the actual amount OpenRouter charged (`usage.cost`, in credits == USD - the same
+     * number its dashboard shows), parsed from the response `usage` object by the shared adapter.
+     * This makes the reported cost match the OpenRouter dashboard by construction and stops the
+     * hardcoded family-baseline price literals (which ran ~10x low for the Kimi models) from being
+     * the source of truth. Fall back to the local per-1M estimate only when OpenRouter omits a cost.
+     */
+    override fun estimateCost(usage: LLMUsage): Double = usage.upstreamCostUsd ?: calculateCost(
         provider = provider,
         model = model,
         inputTokens = usage.inputTokens,
