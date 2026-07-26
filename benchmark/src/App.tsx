@@ -11,6 +11,7 @@ import Compare from "@/routes/Compare";
 import Pareto from "@/routes/Pareto";
 import Results from "@/routes/Results";
 import Help from "@/routes/Help";
+import Queue from "@/routes/Queue";
 import ResultEditor from "@/routes/admin/ResultEditor";
 import TaskEditor from "@/routes/admin/TaskEditor";
 import ModelEditor from "@/routes/admin/ModelEditor";
@@ -85,6 +86,14 @@ export default function App() {
                 <Route path="/compare" element={<Compare />} />
                 <Route path="/pareto" element={<Pareto />} />
                 <Route path="/help" element={<Help />} />
+                <Route
+                  path="/admin/queue"
+                  element={
+                    <DevOnly>
+                      <Queue />
+                    </DevOnly>
+                  }
+                />
                 <Route
                   path="/admin/results"
                   element={

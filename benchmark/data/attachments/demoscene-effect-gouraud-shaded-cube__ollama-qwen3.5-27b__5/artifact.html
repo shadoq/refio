@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Gouraud Shaded Cube</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1a1a1a; font-family: monospace; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        #ui { position: absolute; top: 10px; left: 10px; color: white; pointer-events: none; text-shadow: 1px 1px 2px black; }
+    </style>
+</head>
+<body>
+<div id="ui">
+    <div>FPS: <span id="fps">0</span></div>
+    [W] Toggle Wireframe | [P] Pause/Resume
+</div>
+<canvas id="c"></canvas>
+
+<script>
+/**
+ * Minimal 3D Pipeline Implementation using Canvas 2D Context
+ */
+
+// --- Configuration & State ---
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d', { alpha: false }); // Optimize for no transparency
+const fpsEl = document.getElementById('fps');
+
+let width, height;
+let cx, cy;
+
+// Cube Geometry (Unit cube centered at origin)
+const vertices = [
+    [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1], // Front face: A B C D
+    [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1] // Back face: E F G H
+];
+
+// Faces defined by indices of vertices (Quads)
+const faces = [
+    { v: [0, 1, 2, 3], n: [0, 0, 1] },   // Front (+Z)
+    { v: [5, 4, 7, 6], n: [0, 0, -1] },  // Back (-Z)
+    { v: [4, 0, 3, 7], n: [-1, 0, 0] },  // Left (-X)
+    { v: [1, 5, 6, 2], n: [1, 0, 0] },   // Right (+X)
+    { v: [3, 2, 6, 7], n: [0, 1, 0] },   // Top (+Y)
+    { v: [4, 5, 1, 0], n: [0, -1, 0] }   // Bottom (-Y)
+];
+
+// State variables
+let angleX = 0;
+let angleY = 0;
+let lightAngle = 0;
+let isPaused = false;
+let showWireframe = true;
+let lastTime = performance.now();
+let frameCount = 0;
+let fpsTimer = 0;
+
+// --- Math Helpers ---
+
+function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+    cx = width / 2;
+    cy = height / 2;
+}
+
+window.addEventListener('resize', resize);
+resize();
+
+// --- Matrix Operations (Minimal) ---
+
+function rotateX(v, angle) {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    // y' = y*cos - z*sin
+    // z' = y*sin + z*cos
+    return [v[0], v[1]*c - v[2]*s, v[1]*s + v[2]*c];
+}
+
+function rotateY(v, angle) {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    // x' = x*cos + z*sin
+    // z' = -x*sin + z*cos
+    return [v[0]*c + v[2]*s, v[1], -v[0]*s + v[2]*c];
+}
+
+function rotateNormalX(n, angle) {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    return [n[0], n[1]*c - n[2]*s, n[1]*s + n[2]*c];
+}
+
+function rotateNormalY(n, angle) {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    return [n[0]*c + n[2]*s, n[1], -n[0]*s + n[2]*c];
+}
+
+// Dot product for lighting and backface culling
+function dot(a, b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
+
+// --- Rendering Pipeline ---
+
+/**
+ * Calculates the color of a vertex based on Lambertian reflection.
+ */
+function calculateVertexColor(vertexPos, normalVec, lightDir) {
+    // Normalize vectors (approximate for speed if needed, but Math.sqrt is fine here)
+    const lenN = Math.sqrt(normalVec[0]**2 + normalVec[1]**2 + normalVec[2]**2);
+    const nNorm = [normalVec[0]/lenN, normalVec[1]/lenN, normalVec[2]/lenN];
+
+    // Normalize light direction (it's already unit length usually)
+    const lenL = Math.sqrt(lightDir[0]**2 + lightDir[1]**2 + lightDir[2]**2);
+    const lNorm = [lightDir[0]/lenL, lightDir[1]/lenL, lightDir[2]/lenL];
+
+    // Lambertian: max(0, N . L)
+    let intensity = dot(nNorm, lNorm);
+    
+    // Ambient term to prevent pitch black in shadows
+    const ambient = 0.1; 
+    intensity = Math.max(intensity + ambient - ambient * (intensity < 0 ? 1 : 0), 0);
+
+    // Base color: Cyan-ish for the cube
+    return { r: 64, g: 224, b: 255 }; // RGB base
+    
+    // Actually apply intensity to a standard white or colored surface. 
+    // Let's use a nice blue/cyan material.
+}
+
+function getLitColor(normalVec, lightDir) {
+    const lenN = Math.sqrt(normalVec[0]**2 + normalVec[1]**2 + normalVec[2]**2);
+    if (lenN === 0) return [50, 50, 50]; // Fallback
+    
+    const nNorm = [normalVec[0]/lenN, normalVec[1]/lenN, normalVec[2]/lenN];
+    
+    // Light direction is already normalized in update loop usually, but let's be safe
+    const lenL = Math.sqrt(lightDir[0]**2 + lightDir[1]**2 + lightDir[2]**2);
+    const lNorm = [lightDir[0]/lenL, lightDir[1]/lenL, lightDir[2]/lenL];
+
+    let intensity = dot(nNorm, lNorm);
+    
+    // Ambient + Diffuse
+    const ambientCoeff = 0.3;
+    const diffuseCoeff = 0.7;
+    intensity = Math.max(ambientCoeff + (intensity * diffuseCoeff), 0);
+
+    // Material Color: Cyan/Blue
+    return [
+        Math.floor(64 * intensity), 
+        Math.floor(224 * intensity), 
+        Math.floor(255 * intensity)
+    ];
+}
+
+function project(v, zBuffer = null) {
+    const fov = 300; // Field of view / focal length
+    const scale = (fov + v[2]) > 1 ? fov / (fov - v[2] * 4.5) : 0; 
+    // Simple perspective: x' = x * f / (f - z). Adjusted for cube size (-1 to 1 range usually needs scaling up)
+    
+    const scalePersp = width / 6; // Base screen scale
+    
+    return {
+        x: cx + v[0] * scalePersp,
+        y: cy + v[1] * scalePersp,
+        z: v[2], // Keep Z for depth sorting if needed (Painter's algo) or just culling
+        w: 1.0 / (fov - v[2]) // Perspective factor for interpolation correction? 
+                              // For simple Gouraud without perspective-correct texture mapping, linear is okay-ish but artifacts exist.
+    };
+}
+
+/**
+ * Rasterizes a triangle with interpolated colors (Gouraud Shading) using scanline algorithm.
+ */
+function drawTriangle(p1, p2, p3, c1, c2, c3) {
+    // Sort vertices by Y to handle top/bottom halves if needed, 
+    // but standard flat-shaded triangle rasterizer handles any order via edge walking.
+    
+    const minX = Math.floor(Math.min(p1.x, p2.x, p3.x));
+    const maxX = Math.ceil(Math.max(p1.x, p2.x, p3.x));
+    const minY = Math.floor(Math.min(p1.y, p2.y, p3.y));
+    const maxY = Math.ceil(Math.max(p1.y, p2.y, p3.y));
+
+    // We will use the scanline approach. 
+    // To do this efficiently without a full image buffer manipulation (which is slow in JS),
+    // we can draw horizontal lines using `fillRect` or `moveTo/lineTo`.
+    
+    ctx.beginPath();
+    
+    for (let y = minY; y <= maxY; y++) {
+        // Find intersections of scanline Y with the 3 edges.
+        let x1, x2; 
+        
+        // Helper to interpolate X and Color at a specific Y between two points
+        const intersect = (a, b) => {
+            if ((a.y < y && b.y >= y) || (b.y < y && a.y >= y)) {
+                const t = (y - a.y) / (b.y - a.y); // Linear interpolation factor
+                return { 
+                    x: a.x + t * (b.x - a.x),
+                    r: Math.floor(a.r + t * (b.r - a.r)),
+                    g: Math.floor(a.g + t * (b.g - a.g)),
+                    b: Math.floor(a.b + t * (b.b - a.b))
+                };
+            }
+            return null;
+        };
+
+        const i1 = intersect(p1, p2); // Edge 1-2 color c1-c2? No need to pass colors here if we interpolate X then Color.
+        
+        // Actually simpler: Interpolate attributes along edges first.
+        // Let's define edge functions for the triangle
+        
+        let intersections = [];
+        
+        const checkEdge = (vA, vB) => {
+            if ((vA.y <= y && vB.y > y) || (vB.y <= y && vA.y > y)) {
+                return true; // Crosses scanline
+            }
+            return false;
+        };
+
+        const getIntersect = (vA, cA, vB, cB) => {
+             if ((vA.y < y && vB.y >= y) || (vB.y < y && vA.y >= y)) {
+                // Handle exact integer Y boundaries carefully to avoid double drawing or gaps? 
+                // Standard rasterization uses half-open intervals usually. Here we just draw rects/lines.
+                 const t = (y - vA.y) / (vB.y - vA.y);
+                 return {
+                     x: vA.x + t * (vB.x - vA.x),
+                     r: Math.floor(cA.r + t * (cB.r - cA.r)),
+                     g: Math.floor(cA.g + t * (cB.g - cA.g)),
+                     b: Math.floor(cA.b + t * (cB.b - cA.b))
+                 };
+             }
+             return null;
+        };
+
+        let i1 = getIntersect(p1, {r:c1[0],g:c1[1],b:c1[2]}, p2, {r:c2[0],g:c2[1],b:c2[2]}); // Edge 1-2
+        let i2 = getIntersect(p2, {r:c2[0],g:c2[1],b:c2[2]}, p3, {r:c3[0],g:c3[1],b:c3[2]}); // Edge 2-3
+        let i3 = getIntersect(p3, {r:c3[0],g:c3[1],b:c3[2]}, p1, {r:c1[0],g:c1[1],b:c1[2]}); // Edge 3-1
+
+        const validInts = [i1, i2, i3].filter(i => i !== null);
+        
+        if (validInts.length === 2) {
+            let xA = validInts[0];
+            let xB = validInts[1];
+            
+            // Sort by X to ensure left-to-right drawing for fillRect logic? 
+            // Actually, we just need the range. But wait, if it's a triangle, one edge might be vertical or horizontal.
+            // The standard scanline algo finds 2 intersections per row inside the bounding box (excluding top/bottom edges).
+            
+            let xStart = Math.min(xA.x, xB.x);
+            let xEnd = Math.max(xA.x, xB.x);
+
+            // Interpolate color between these two intersection points? 
+            // No! The colors at i1 and i2 are already interpolated along the edges.
+            // We need to interpolate *between* them for the scanline fill.
+            
+            const dist = Math.abs(xEnd - xStart) || 0;
+            if (dist === 0) { ctx.fillRect(Math.floor(xA.x), y, 1, 1); continue; }
+
+            // To do proper Gouraud shading across the row:
+            // We have ColorLeft and ColorRight. We need to interpolate them for every pixel? 
+            // That's too slow in JS loop per pixel (thousands of pixels).
+            
+            // Optimization: Draw a single gradient line or just fillRect with average color if resolution is low enough?
+            // For "Gouraud", we should ideally draw the row. Canvas `createLinearGradient` works for lines but not rects easily without clipping.
+            // Let's try drawing small segments (e.g., 2-4 pixels wide) to simulate gradient, or just fillRect with average if performance is key.
+            
+            // Better approach: Draw a line using context.moveTo/lineTo? No, that draws vector lines. We need filled area.
+            
+            // Let's use `ctx.fillRect` but calculate the color at xStart and xEnd, then maybe split into 2-3 rects with interpolated colors to fake it? 
+            // Or just draw a single rect with average color (Flat shading) - NO, requirement is Gouraud.
+            
+            // Fastest JS way for scanline gradient: Draw one line using `moveTo` and `lineTo` but that's wireframe.
+            // We need to fill the triangle area. 
+            // Let's use a temporary offscreen canvas or just draw rects?
+            // Drawing 100s of pixels per row is slow in JS loop (60fps * height).
+            
+            // Alternative: Use `ctx.createLinearGradient` for each scanline? Too heavy to create objects.
+            
+            // Let's try a simplified approach: Draw the triangle using path and fill with gradient? 
+            // No, gradients are linear across whole shape usually or radial. We need per-pixel interpolation based on vertex colors.
+            
+            // Correct efficient way in Canvas 2D without WebGL/OffscreenCanvas buffer manipulation (which is slow):
+            // Just draw the triangle using `ctx.beginPath()`, `moveTo(p1)`, `lineTo...` and fill? 
+            // That gives Flat Shading only if we set a single color.
+            
+            // To get Gouraud in 2D Canvas without pixel manipulation:
+            // We can't easily do per-pixel interpolation efficiently with standard API calls unless we draw many small rects or lines.
+            // Let's try drawing the scanline as a series of tiny rectangles (e.g., width=1) is too slow? 
+            // Maybe width = 2-4 pixels to speed up, interpolating color every few pixels.
+            
+            const stepX = Math.max(1, Math.floor((xEnd - xStart) / 5)); // Draw 5 segments per scanline
+            
+            for (let px = Math.floor(xStart); px < Math.ceil(xEnd); px += stepX) {
+                if (px >= width || px + stepX <= 0) continue;
+                
+                const tRow = (px - xA.x) / (xB.x - xA.x); // Interpolation factor along the row
+                
+                const r = Math.floor(xA.r + tRow * (xA.b - xA.r)); // Wait, mixing up vars. 
+                // Let's fix variables:
+                let cL_r = validInts[0].r; let cR_r = validInts[1].r;
+                if (validInts[0].x > validInts[1].x) { [cL_r, cR_r] = [cR_r, cL_r]; } // Ensure Left is left
+                
+                const rVal = Math.floor(cL_r + tRow * (cR_r - cL_r));
+                
+                let cL_g = validInts[0].g; let cR_g = validInts[1].g;
+                if (validInts[0].x > validInts[1].x) { [cL_g, cR_g] = [cR_g, cL_g]; }
+                const gVal = Math.floor(cL_g + tRow * (cR_g - cL_g));
+
+                let cL_b = validInts[0].b; let cR_b = validInts[1].b;
+                if (validInts[0].x > validInts[1].x) { [cL_b, cR_b] = [cR_b, cL_b]; }
+                const bVal = Math.floor(cL_b + tRow * (cR_b - cL_b));
+
+                ctx.fillStyle = `rgb(${rVal},${gVal},${bVal})`;
+                
+                // Draw a small rect. Note: This is slow if we do it pixel by pixel for high res screens.
+                // Optimization: Only draw every 2nd or 3rd scanline? No, looks jagged.
+                // Let's hope the browser optimizes fillRect calls enough. 
+                // Or use a single `moveTo`/`lineTo` with strokeStyle gradient? No, that draws lines not filled area.
+                
+                ctx.fillRect(px, y, stepX + 1, 1);
+            }
+        }
+    }
+}
+
+// --- Main Loop ---
+
+function update(dt) {
+    if (isPaused) return;
+
+    // Rotate Cube
+    angleY += dt * 0.5;
+    angleX = Math.sin(angleY * 0.2) * 0.3; // Slight wobble on X
+    
+    // Move Light Source (Orbiting around Y axis at some height and distance)
+    lightAngle += dt * 1.5;
+}
+
+function render() {
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, width, height);
+
+    // Calculate Light Direction (World Space -> Camera Space? 
+    // Since camera is static and object rotates, we rotate the light vector by inverse rotation of object.
+    // Or simpler: Rotate vertices forward, then calculate normals in screen space? No, lighting needs world/eye coords.
+    
+    const lightPos = [Math.cos(lightAngle) * 3, Math.sin(angleY)*2 + 1, Math.sin(lightAngle) * 3]; 
+    // Light orbits around the cube
+    
+    let facesToDraw = [];
+
+    for (let face of faces) {
+        // Transform Vertices
+        const transformedVerts = face.v.map(idx => vertices[idx]);
+        
+        // Apply Rotations to Vertices and Normals
+        const rotV = [];
+        const rotN = [0, 0, 0];
+
+        for (let i=0; i<4; i++) {
+            let v = transformedVerts[i].slice();
+            
+            // Rotate X then Y
+            v = rotateX(v, angleX);
+            v = rotateY(v, angleY);
+            rotV.push(v);
+        }
+
+        // Transform Normal (Rotate same way)
+        let n = face.n.slice();
+        n = rotateNormalX(n, angleX);
+        n = rotateNormalY(n, angleY);
+        
+        // Backface Culling: If normal points away from camera (-Z), skip. 
+        // Camera is at +Z looking towards -Z? No, standard OpenGL/Canvas usually looks down -Z or +Z depending on setup.
+        // Here we project x = cx + v[0]*scale. So positive Z comes closer (larger scale).
+        // If normal.z < 0, it's facing away from camera (assuming camera is at large +Z looking inwards? No.)
+        
+        // Let's assume Camera is at z=+Infinity looking towards origin (-z direction)? 
+        // Or simpler: We are projecting x = cx + v[0]*scale. If we move Z closer to 1, it gets bigger (if scale logic allows).
+        // My project function: `fov / (fov - v[2])`. If v[2] increases towards fov, denominator shrinks -> huge size. 
+        // So positive Z is "closer" or "in front". Negative Z is behind?
+        // Actually standard perspective usually puts camera at z=0 looking down +Z or -Z.
+        // Let's stick to: If Normal.Z < 0 (pointing away from viewer who is at +Infinity), cull it.
+        
+        if (n[2] >= 0) { 
+            facesToDraw.push({ verts: rotV, normal: n });
+        }
+    }
+
+    // Sort by depth? Not strictly necessary for convex cube with backface culling, but good practice.
+    // Average Z of face vertices.
+    facesToDraw.sort((a, b) => {
+        const zA = (a.verts[0][2] + a.verts[1][2]) / 2;
+        const zB = (b.verts[0][2] + b.verts[1][2]) / 2;
+        return zB - zA; // Draw far to near? Or Near to Far with alpha blending? 
+                        // Since we are opaque, Painter's algo requires Back-to-Front.
+    });
+
+    for (let face of facesToDraw) {
+        const verts = face.verts;
+        
+        // Project vertices to 2D screen space
+        const p0 = project(verts[0]);
+        const p1 = project(verts[1]);
+        const p2 = project(verts[2]);
+        const p3 = project(verts[3]);
+
+        if (showWireframe) {
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(p0.x, p0.y);
+            ctx.lineTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.lineTo(p3.x, p3.y);
+            ctx.closePath();
+            ctx.stroke();
+        }
+
+        // Gouraud Shading: Split Quad into 2 Triangles (0-1-2 and 0-2-3)
+        
+        // Calculate Vertex Colors based on Normal at each vertex.
+        // For a cube, the normal is constant for all vertices of a face? 
+        // Yes, but technically we should calculate per-vertex lighting if normals were interpolated (smooth shading).
+        // Since it's a flat cube, N0=N1=N2=N3=FaceNormal. So colors are identical -> Flat Shading result visually on faces.
+        // But the requirement is "Gouraud", so we implement the pipeline correctly even if input data makes it look flat per face.
+        
+        const lightDir = [lightPos[0], lightPos[1], lightPos[2]]; 
+        // Normalize Light Dir? It's roughly unit-ish but let's normalize in getLitColor
+        
+        const c0 = getLitColor(face.normal, lightDir);
+        const c1 = getLitColor(face.normal, lightDir);
+        const c2 = getLitColor(face.normal, lightDir);
+        const c3 = getLitColor(face.normal, lightDir);
+
+        // Draw Triangle 1: p0-p1-p2 with colors c0-c1-c2
+        drawTriangle(p0, p1, p2, c0, c1, c2);
+        
+        // Draw Triangle 2: p0-p2-p3 with colors c0-c2-c3
+        drawTriangle(p0, p2, p3, c0, c2, c3);
+    }
+}
+
+// --- Input Handling ---
+
+window.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() === 'w') showWireframe = !showWireframe;
+    if (e.key.toLowerCase() === 'p') isPaused = !isPaused;
+});
+
+// --- Animation Loop & FPS Counter ---
+
+function loop(now) {
+    const dt = Math.min((now - lastTime) / 1000, 0.1); // Cap delta time
+    
+    update(dt);
+    
+    render();
+    
+    // FPS Calculation
+    frameCount++;
+    if (now >= fpsTimer + 1000) {
+        fpsEl.textContent = Math.round(frameCount * 1000 / (now - fpsTimer));
+        frameCount = 0;
+        fpsTimer = now;
+    }
+
+    lastTime = now;
+    requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+
+</script>
+</body>
+</html>

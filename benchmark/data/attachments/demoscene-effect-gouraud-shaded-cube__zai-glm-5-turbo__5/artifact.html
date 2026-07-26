@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Shaded Cube</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0a;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+    font-family: 'Courier New', monospace;
+  }
+  canvas { display: block; }
+  #hud {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    color: #00ff88;
+    font-size: 13px;
+    line-height: 1.7;
+    text-shadow: 0 0 6px rgba(0,255,136,0.4);
+    pointer-events: none;
+    user-select: none;
+  }
+  #hud .dim { color: #006633; }
+  #hud .state { color: #ffcc00; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <div id="fps">FPS: --</div>
+  <div id="mode">Mode: Filled</div>
+  <div id="status">Status: Running</div>
+  <div class="dim">[W] Wireframe  [P] Pause</div>
+</div>
+<canvas id="c"></canvas>
+<script>
+(function() {
+  'use strict';
+
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var W = 600, H = 600;
+  canvas.width = W;
+  canvas.height = H;
+  var cx = W * 0.5, cy = H * 0.5;
+
+  /* ── Cube Geometry ─────────────────────────────── */
+
+  var vertices = [
+    [-1, -1, -1], // 0
+    [ 1, -1, -1], // 1
+    [ 1,  1, -1], // 2
+    [-1,  1, -1], // 3
+    [-1, -1,  1], // 4
+    [ 1, -1,  1], // 5
+    [ 1,  1,  1], // 6
+    [-1,  1,  1]  // 7
+  ];
+
+  var faces = [
+    { verts: [4, 5, 6, 7], color: [220, 50, 50]  },
+    { verts: [1, 0, 3, 2], color: [50, 200, 50]  },
+    { verts: [3, 7, 6, 2], color: [50, 80, 220]  },
+    { verts: [0, 1, 5, 4], color: [220, 200, 40] },
+    { verts: [1, 2, 6, 5], color: [200, 50, 200] },
+    { verts: [0, 4, 7, 3], color: [50, 200, 200] }
+  ];
+
+  // Pre-compute face normals (unrotated)
+  var faceNormals = [];
+  for (var fi = 0; fi < faces.length; fi++) {
+    var fv = faces[fi].verts;
+    var a = vertices[fv[0]], b = vertices[fv[1]], c = vertices[fv[2]];
+    var e1 = [b[0]-a[0], b[1]-a[1], b[2]-a[2]];
+    var e2 = [c[0]-a[0], c[1]-a[1], c[2]-a[2]];
+    faceNormals.push(vecNormalize(vecCross(e1, e2)));
+  }
+
+  // Compute smooth vertex normals (average of adjacent face normals)
+  var vertexFaceList = [[],[],[],[],[],[],[],[]];
+  for (var fi = 0; fi < faces.length; fi++) {
+    var fv = faces[fi].verts;
+    for (var j = 0; j < 4; j++) {
+      vertexFaceList[fv[j]].push(fi);
+    }
+  }
+  var vertexNormals = [];
+  for (var vi = 0; vi < 8; vi++) {
+    var nx = 0, ny = 0, nz = 0;
+    var adj = vertexFaceList[vi];
+    for (var k = 0; k < adj.length; k++) {
+      var fn = faceNormals[adj[k]];
+      nx += fn[0]; ny += fn[1]; nz += fn[2];
+    }
+    vertexNormals.push(vecNormalize([nx, ny, nz]));
+  }
+
+  // Build triangle list: each quad face -> 2 triangles
+  var triangles = [];
+  for (var fi = 0; fi < faces.length; fi++) {
+    var fv = faces[fi].verts;
+    triangles.push({ vi: [fv[0], fv[1], fv[2]], fi: fi });
+    triangles.push({ vi: [fv[0], fv[2], fv[3]], fi: fi });
+  }
+
+  /* ── Math Helpers ──────────────────────────────── */
+
+  function vecCross(a, b) {
+    return [
+      a[1]*b[2] - a[2]*b[1],
+      a[2]*b[0] - a[0]*b[2],
+      a[0]*b[1] - a[1]*b[0]
+    ];
+  }
+
+  function vecNormalize(v) {
+    var l = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+    if (l < 1e-10) return [0, 0, 0];
+    return [v[0]/l, v[1]/l, v[2]/l];
+  }
+
+  function vecDot(a, b) {
+    return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+  }
+
+  function rotateX(v, a) {
+    var c = Math.cos(a), s = Math.sin(a);
+    return [v[0], v[1]*c - v[2]*s, v[1]*s + v[2]*c];
+  }
+
+  function rotateY(v, a) {
+    var c = Math.cos(a), s = Math.sin(a);
+    return [v[0]*c + v[2]*s, v[1], -v[0]*s + v[2]*c];
+  }
+
+  function transformVec(v, ax, ay) {
+    return rotateY(rotateX(v, ax), ay);
+  }
+
+  /* ── Projection ────────────────────────────────── */
+
+  var SCALE = 150;
+  var VIEW_DIST = 5;
+
+  function project(v) {
+    var z = v[2] + VIEW_DIST;
+    var f = SCALE / z;
+    return [v[0] * f + cx, -v[1] * f + cy, v[2]];
+  }
+
+  /* ── Per-Vertex Lighting (Lambert) ─────────────── */
+
+  var AMBIENT = 0.15;
+
+  function computeVertexColor(worldPos, worldNormal, lightPos, baseColor) {
+    var toLight = [lightPos[0] - worldPos[0], lightPos[1] - worldPos[1], lightPos[2] - worldPos[2]];
+    var ld = vecNormalize(toLight);
+    var diff = Math.max(0, vecDot(worldNormal, ld));
+    var intensity = AMBIENT + (1 - AMBIENT) * diff;
+    return [
+      Math.min(255, (baseColor[0] * intensity) | 0),
+      Math.min(255, (baseColor[1] * intensity) | 0),
+      Math.min(255, (baseColor[2] * intensity) | 0)
+    ];
+  }
+
+  /* ── Scanline Triangle Rasterizer (Gouraud) ────── */
+
+  function rasterizeTriangle(p0, p1, p2, c0, c1, c2, imgData) {
+    var pts = [
+      { x: p0[0], y: p0[1], r: c0[0], g: c0[1], b: c0[2] },
+      { x: p1[0], y: p1[1], r: c1[0], g: c1[1], b: c1[2] },
+      { x: p2[0], y: p2[1], r: c2[0], g: c2[1], b: c2[2] }
+    ];
+    pts.sort(function(a, b) { return a.y - b.y; });
+    var top = pts[0], mid = pts[1], bot = pts[2];
+
+    var data = imgData.data;
+
+    function edgeInterp(x0, y0, r0, g0, b0, x1, y1, r1, g1, b1, y) {
+      var dy = y1 - y0;
+      if (dy < 0.001) {
+        return { x: x0, r: r0, g: g0, b: b0 };
+      }
+      var t = (y - y0) / dy;
+      return {
+        x: x0 + (x1 - x0) * t,
+        r: r0 + (r1 - r0) * t,
+        g: g0 + (g1 - g0) * t,
+        b: b0 + (b1 - b0) * t
+      };
+    }
+
+    function drawSpan(y, left, right) {
+      var xStart = Math.max(0, Math.ceil(left.x));
+      var xEnd = Math.min(W - 1, Math.floor(right.x));
+      if (xStart > xEnd) return;
+
+      var spanDx = right.x - left.x;
+      var rowOff = y * W;
+
+      if (spanDx < 0.001) {
+        var idx = (rowOff + xStart) << 2;
+        data[idx]     = (left.r) | 0;
+        data[idx + 1] = (left.g) | 0;
+        data[idx + 2] = (left.b) | 0;
+        data[idx + 3] = 255;
+        return;
+      }
+
+      var invSpanDx = 1.0 / spanDx;
+      for (var x = xStart; x <= xEnd; x++) {
+        var t = (x - left.x) * invSpanDx;
+        var idx = (rowOff + x) << 2;
+        data[idx]     = (left.r + (right.r - left.r) * t) | 0;
+        data[idx + 1] = (left.g + (right.g - left.g) * t) | 0;
+        data[idx + 2] = (left.b + (right.b - left.b) * t) | 0;
+        data[idx + 3] = 255;
+      }
+    }
+
+    var yStart = Math.max(0, Math.ceil(top.y));
+    var yEnd = Math.min(H - 1, Math.floor(bot.y));
+
+    // Top half: top.y -> mid.y
+    var yMidFloor = Math.min(yEnd, Math.floor(mid.y));
+    for (var y = yStart; y <= yMidFloor; y++) {
+      var leftEdge = edgeInterp(top.x, top.y, top.r, top.g, top.b,
+                                mid.x, mid.y, mid.r, mid.g, mid.b, y + 0.5);
+      var rightEdge = edgeInterp(top.x, top.y, top.r, top.g, top.b,
+                                 bot.x, bot.y, bot.r, bot.g, bot.b, y + 0.5);
+      if (leftEdge.x > rightEdge.x) {
+        var tmp = leftEdge; leftEdge = rightEdge; rightEdge = tmp;
+      }
+      drawSpan(y, leftEdge, rightEdge);
+    }
+
+    // Bottom half: mid.y -> bot.y
+    var yBotStart = Math.max(yStart, Math.ceil(mid.y));
+    for (var y = yBotStart; y <= yEnd; y++) {
+      var leftEdge = edgeInterp(mid.x, mid.y, mid.r, mid.g, mid.b,
+                                bot.x, bot.y, bot.r, bot.g, bot.b, y + 0.5);
+      var rightEdge = edgeInterp(top.x, top.y, top.r, top.g, top.b,
+                                 bot.x, bot.y, bot.r, bot.g, bot.b, y + 0.5);
+      if (leftEdge.x > rightEdge.x) {
+        var tmp = leftEdge; leftEdge = rightEdge; rightEdge = tmp;
+      }
+      drawSpan(y, leftEdge, rightEdge);
+    }
+  }
+
+  /* ── Wireframe Drawing ─────────────────────────── */
+
+  function drawWireTriangle(p0, p1, p2, c0, c1, c2) {
+    ctx.beginPath();
+    ctx.moveTo(p0[0], p0[1]);
+    ctx.lineTo(p1[0], p1[1]);
+    ctx.lineTo(p2[0], p2[1]);
+    ctx.closePath();
+    var mr = ((c0[0]+c1[0]+c2[0])/3)|0;
+    var mg = ((c0[1]+c1[1]+c2[1])/3)|0;
+    var mb = ((c0[2]+c1[2]+c2[2])/3)|0;
+    ctx.strokeStyle = 'rgb(' + mr + ',' + mg + ',' + mb + ')';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  /* ── State ─────────────────────────────────────── */
+
+  var paused = false;
+  var wireframe = false;
+  var angleX = 0, angleY = 0;
+  var lastTime = 0, frameCount = 0, fpsAccum = 0, currentFps = 0;
+  var fpsEl = document.getElementById('fps');
+  var modeEl = document.getElementById('mode');
+  var statusEl = document.getElementById('status');
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'w' || e.key === 'W') {
+      wireframe = !wireframe;
+      modeEl.textContent = 'Mode: ' + (wireframe ? 'Wireframe' : 'Filled');
+    }
+    if (e.key === 'p' || e.key === 'P') {
+      paused = !paused;
+      statusEl.textContent = 'Status: ' + (paused ? 'Paused' : 'Running');
+    }
+  });
+
+  /* ── Main Loop ─────────────────────────────────── */
+
+  function frame(time) {
+    requestAnimationFrame(frame);
+
+    var dt = lastTime ? (time - lastTime) * 0.001 : 0.016;
+    lastTime = time;
+
+    // FPS tracking
+    frameCount++;
+    fpsAccum += dt;
+    if (fpsAccum >= 0.5) {
+      currentFps = Math.round(frameCount / fpsAccum);
+      frameCount = 0;
+      fpsAccum = 0;
+      fpsEl.textContent = 'FPS: ' + currentFps;
+    }
+
+    // Update rotation angles
+    if (!paused) {
+      angleX += 0.6 * dt;
+      angleY += 0.9 * dt;
+    }
+
+    // Moving point light source orbiting the cube
+    var t = time * 0.001;
+    var lightPos = [
+      3.5 * Math.sin(t * 0.7),
+      2.0 + 1.5 * Math.sin(t * 0.5),
+      3.5 * Math.cos(t * 0.7)
+    ];
+
+    // Transform all vertices to world space
+    var transformedVerts = new Array(8);
+    for (var i = 0; i < 8; i++) {
+      transformedVerts[i] = transformVec(vertices[i], angleX, angleY);
+    }
+
+    // Transform vertex normals (same rotation, no translation)
+    var transformedVertNormals = new Array(8);
+    for (var i = 0; i < 8; i++) {
+      transformedVertNormals[i] = transformVec(vertexNormals[i], angleX, angleY);
+    }
+
+    // Project all vertices to screen space
+    var projectedVerts = new Array(8);
+    for (var i = 0; i < 8; i++) {
+      projectedVerts[i] = project(transformedVerts[i]);
+    }
+
+    // Build visible triangle list with backface culling
+    var renderList = [];
+    for (var ti = 0; ti < triangles.length; ti++) {
+      var tri = triangles[ti];
+      var i0 = tri.vi[0], i1 = tri.vi[1], i2 = tri.vi[2];
+
+      // Backface culling: screen-space cross product of two edges
+      var sp0 = projectedVerts[i0], sp1 = projectedVerts[i1], sp2 = projectedVerts[i2];
+      var edge1x = sp1[0] - sp0[0], edge1y = sp1[1] - sp0[1];
+      var edge2x = sp2[0] - sp0[0], edge2y = sp2[1] - sp0[1];
+      var crossZ = edge1x * edge2y - edge1y * edge2x;
+      if (crossZ >= 0) continue; // back-facing, skip
+
+      // Average depth for painter's algorithm sort
+      var avgZ = (transformedVerts[i0][2] + transformedVerts[i1][2] + transformedVerts[i2][2]) / 3;
+
+      // Per-vertex Gouraud colors using smooth vertex normals + Lambert lighting
+      var faceColor = faces[tri.fi].color;
+      var c0 = computeVertexColor(transformedVerts[i0], transformedVertNormals[i0], lightPos, faceColor);
+      var c1 = computeVertexColor(transformedVerts[i1], transformedVertNormals[i1], lightPos, faceColor);
+      var c2 = computeVertexColor(transformedVerts[i2], transformedVertNormals[i2], lightPos, faceColor);
+
+      renderList.push({
+        p0: sp0, p1: sp1, p2: sp2,
+        c0: c0, c1: c1, c2: c2,
+        z: avgZ
+      });
+    }
+
+    // Sort back-to-front (painter's algorithm)
+    renderList.sort(function(a, b) { return b.z - a.z; });
+
+    // Render
+    if (wireframe) {
+      ctx.clearRect(0, 0, W, H);
+      for (var i = 0; i < renderList.length; i++) {
+        var r = renderList[i];
+        drawWireTriangle(r.p0, r.p1, r.p2, r.c0, r.c1, r.c2);
+      }
+    } else {
+      var imgData = ctx.createImageData(W, H);
+      for (var i = 0; i < renderList.length; i++) {
+        var r = renderList[i];
+        rasterizeTriangle(r.p0, r.p1, r.p2, r.c0, r.c1, r.c2, imgData);
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+
+    // Draw light source indicator
+    var lp = project(lightPos);
+    if (lp[0] > 0 && lp[0] < W && lp[1] > 0 && lp[1] < H) {
+      ctx.beginPath();
+      ctx.arc(lp[0], lp[1], 6, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffaa';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(lp[0], lp[1], 14, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,255,170,0.35)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

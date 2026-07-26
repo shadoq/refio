@@ -202,6 +202,7 @@ describe("leaderboard", () => {
       ),
     ],
     stability: [],
+    inbox: [],
   };
 
   it("returns one row per (modelId, environmentId) pair", () => {

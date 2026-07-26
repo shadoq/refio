@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { saveResults, saveTasks } from "./saver";
+import { saveResults, saveTasks, mutateResults } from "./saver";
 import { RESULTS_KEY, TASKS_KEY } from "./queries";
-import type { Result, ResultsFile, Model, Environment } from "@/schema/results";
+import type { Result, ResultsFile, Model, Environment, Score } from "@/schema/results";
 import type { Task, TasksFile } from "@/schema/tasks";
 
 // ─── Results ────────────────────────────────────────────────────────────────
@@ -137,6 +137,28 @@ export function useDeleteTask() {
       return file;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: TASKS_KEY }),
+  });
+}
+
+// ─── Inbox (review queue) ─────────────────────────────────────────────────────
+
+// Promote/discard go through the server-side merge endpoint (see mutateResults): the
+// operation is applied to the latest results.json on disk, never a stale client snapshot,
+// so a concurrent writer (import-runs) can't be clobbered.
+export function usePromoteInboxEntry() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { entryId: string; scores: Score[] }) =>
+      mutateResults("promote", input.entryId, input.scores),
+    onSuccess: () => qc.invalidateQueries({ queryKey: RESULTS_KEY }),
+  });
+}
+
+export function useDiscardInboxEntry() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { entryId: string }) => mutateResults("discard", input.entryId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: RESULTS_KEY }),
   });
 }
 

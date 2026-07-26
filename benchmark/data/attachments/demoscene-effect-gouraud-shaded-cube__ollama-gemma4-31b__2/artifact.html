@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gouraud Shaded Cube - Canvas 2D</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #111;
+            color: #eee;
+            font-family: monospace;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            pointer-events: none;
+            text-shadow: 1px 1px 2px black;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        FPS: <span id="fps">0</span><br>
+        [W] Toggle Wireframe<br>
+        [P] Pause/Resume
+    </div>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d', { alpha: false });
+        const fpsDisplay = document.getElementById('fps');
+
+        let width, height;
+        let isPaused = false;
+        let wireframeMode = false;
+        let angleX = 0, angleY = 0, angleZ = 0;
+        let lastTime = 0;
+        let frameCount = 0;
+        let fpsLastUpdate = 0;
+
+        // Cube definition
+        const size = 100;
+        const vertices = [
+            { x: -size, y: -size, z:  size }, { x:  size, y: -size, z:  size },
+            { x:  size, y:  size, z:  size }, { x: -size, y:  size, z:  size },
+            { x: -size, y: -size, z: -size }, { x:  size, y: -size, z: -size },
+            { x:  size, y:  size, z: -size }, { x: -size, y:  size, z: -size }
+        ];
+
+        // Each face is 2 triangles. Each triangle has 3 vertex indices.
+        const faces = [
+            [0, 1, 2], [0, 2, 3], // Front
+            [1, 5, 6], [1, 6, 2], // Right
+            [5, 4, 7], [5, 7, 6], // Back
+            [4, 0, 3], [4, 3, 7], // Left
+            [3, 2, 6], [3, 6, 7], // Top
+            [4, 5, 1], [4, 1, 0]  // Bottom
+        ];
+
+        // Vertex normals for lighting (simplified: average of face normals)
+        const vertexNormals = vertices.map(() => ({ x: 0, y: 0, z: 0 }));
+        const faceNormals = [];
+        
+        // Precompute face normals and accumulate into vertex normals
+        const rawFaces = [
+            [0,1,2,3], [1,5,6,2], [5,4,7,6], [4,0,3,7], [3,2,6,7], [4,5,1,0]
+        ];
+
+        rawFaces.forEach(f => {
+            const v0 = vertices[f[0]], v1 = vertices[f[1]], v2 = vertices[f[2]];
+            const ax = v1.x - v0.x, ay = v1.y - v0.y, az = v1.z - v0.z;
+            const bx = v2.x - v0.x, by = v2.y - v0.y, bz = v2.z - v0.z;
+            const nx = ay * bz - az * by;
+            const ny = az * bx - ax * bz;
+            const nz = ax * by - ay * bx;
+            const len = Math.sqrt(nx*nx + ny*ny + nz*nz);
+            const norm = { x: nx/len, y: ny/len, z: nz/len };
+            f.forEach(idx => {
+                vertexNormals[idx].x += norm.x;
+                vertexNormals[idx].y += norm.y;
+                vertexNormals[idx].z += norm.z;
+            });
+        });
+
+        vertexNormals.forEach(n => {
+            const len = Math.sqrt(n.x*n.x + n.y*n.y + n.z*n.z);
+            n.x /= len; n.y /= len; n.z /= len;
+        });
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key.toLowerCase() === 'w') wireframeMode = !wireframeMode;
+            if (e.key.toLowerCase() === 'p') isPaused = !isPaused;
+        });
+
+        function rotate(v, ax, ay, az) {
+            let { x, y, z } = v;
+            // X axis
+            let ty = y * Math.cos(ax) - z * Math.sin(ax);
+            let tz = y * Math.sin(ax) + z * Math.cos(ax);
+            y = ty; z = tz;
+            // Y axis
+            let tx = x * Math.cos(ay) + z * Math.sin(ay);
+            tz = -x * Math.sin(ay) + z * Math.cos(ay);
+            x = tx; z = tz;
+            // Z axis
+            tx = x * Math.cos(az) - y * Math.sin(az);
+            ty = x * Math.sin(az) + y * Math.cos(az);
+            x = tx; y = ty;
+            return { x, y, z };
+        }
+
+        function project(v) {
+            const perspective = 600 / (600 + v.z);
+            return {
+                x: v.x * perspective + width / 2,
+                y: v.y * perspective + height / 2,
+                z: v.z
+            };
+        }
+
+        function render() {
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, width, height);
+
+            const time = performance.now() * 0.001;
+            const lightPos = {
+                x: Math.sin(time) * 300,
+                y: Math.cos(time * 0.5) * 300,
+                z: Math.cos(time) * 300
+            };
+
+            if (!isPaused) {
+                angleX += 0.01;
+                angleY += 0.015;
+                angleZ += 0.005;
+            }
+
+            const transformed = vertices.map(v => rotate(v, angleX, angleY, angleZ));
+            const projected = transformed.map(v => project(v));
+            const rotatedNormals = vertexNormals.map(n => rotate(n, angleX, angleY, angleZ));
+
+            // Calculate per-vertex intensity (Lambert)
+            const intensities = rotatedNormals.map((n, i) => {
+                const v = transformed[i];
+                const lx = lightPos.x - v.x;
+                const ly = lightPos.y - v.y;
+                const lz = lightPos.z - v.z;
+                const len = Math.sqrt(lx*lx + ly*ly + lz*lz);
+                const dot = (n.x * lx/len + n.y * ly/len + n.z * lz/len);
+                return Math.max(0.1, dot); // Ambient base 0.1
+            });
+
+            const imgData = ctx.createImageData(width, height);
+            const data = imgData.data;
+
+            faces.forEach(face => {
+                const p0 = projected[face[0]], p1 = projected[face[1]], p2 = projected[face[2]];
+                
+                // Backface culling (cross product of edges in screen space)
+                const area = (p1.x - p0.x) * (p2.y - p0.y) - (p1.y - p0.y) * (p2.x - p0.x);
+                if (area <= 0) return;
+
+                if (wireframeMode) {
+                    ctx.strokeStyle = '#0ff';
+                    ctx.beginPath();
+                    ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y);
+                    ctx.lineTo(p2.x, p2.y); ctx.closePath();
+                    ctx.stroke();
+                } else {
+                    // Software rasterization for Gouraud shading
+                    const i0 = intensities[face[0]], i1 = intensities[face[1]], i2 = intensities[face[2]];
+                    
+                    // Bounding box of triangle
+                    const minX = Math.max(0, Math.floor(Math.min(p0.x, p1.x, p2.x)));
+                    const maxX = Math.min(width - 1, Math.ceil(Math.max(p0.x, p1.x, p2.x)));
+                    const minY = Math.max(0, Math.floor(Math.min(p0.y, p1.y, p2.y)));
+                    const maxY = Math.min(height - 1, Math.ceil(Math.max(p0.y, p1.y, p2.y)));
+
+                    for (let y = minY; y <= maxY; y++) {
+                        for (let x = minX; x <= maxX; x++) {
+                            // Barycentric coordinates
+                            const w0 = ((p1.x - p0.x) * (y - p0.y) - (p1.y - p0.y) * (x - p0.x)) / area;
+                            const w1 = ((p2.x - p1.x) * (y - p1.y) - (p2.y - p1.y) * (x - p1.x)) / area;
+                            const w2 = 1 - w0 - w1;
+
+                            if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+                                const intensity = i0 * w0 + i1 * w1 + i2 * w2;
+                                const color = Math.floor(intensity * 255);
+                                const idx = (y * width + x) * 4;
+                                data[idx] = color * 0.5;     // R
+                                data[idx+1] = color * 0.8;   // G
+                                data[idx+2] = color;         // B
+                                data[idx+3] = 255;           // A
+                            }
+                        }
+                    }
+                }
+            });
+
+            if (!wireframeMode) {
+                ctx.putImageData(imgData, 0, 0);
+            } else {
+                // If wireframe, we still need to clear the background or draw something
+                // Since putImageData overwrites everything, we only call it when not in wireframe
+                // But for consistency with "wireframe toggle", let's just use stroke.
+            }
+        }
+
+        function loop(now) {
+            const dt = now - lastTime;
+            lastTime = now;
+            frameCount++;
+
+            if (now - fpsLastUpdate > 1000) {
+                fpsDisplay.innerText = frameCount;
+                frameCount = 0;
+                fpsLastUpdate = now;
+            }
+
+            render();
+            requestAnimationFrame(loop);
+        }
+
+        requestAnimationFrame(loop);
+    </script>
+</body>
+</html>

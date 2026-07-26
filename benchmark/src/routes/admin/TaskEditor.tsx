@@ -7,6 +7,8 @@ import {
   Input,
   InputNumber,
   Space,
+  Switch,
+  Tag,
   Popconfirm,
   Typography,
   Divider,
@@ -310,14 +312,43 @@ export default function TaskEditor() {
     await remove.mutateAsync({ current: tasksData, taskId });
   }
 
+  async function handleToggleHidden(task: Task, hidden: boolean) {
+    if (!tasksData) return;
+    await upsert.mutateAsync({
+      current: tasksData,
+      task: { ...task, hidden, updatedAt: new Date().toISOString() },
+    });
+  }
+
   const columns = [
     { title: "ID", dataIndex: "id", key: "id", width: 160 },
-    { title: "Name", dataIndex: "name", key: "name" },
+    {
+      title: "Name",
+      key: "name",
+      render: (_: unknown, record: Task) => (
+        <Space>
+          <span>{record.name}</span>
+          {record.hidden && <Tag>hidden</Tag>}
+        </Space>
+      ),
+    },
     {
       title: "Extra Criteria",
       key: "extra",
       width: 120,
       render: (_: unknown, record: Task) => record.extraCriteria.length,
+    },
+    {
+      title: "Visible",
+      key: "visible",
+      width: 90,
+      render: (_: unknown, record: Task) => (
+        <Switch
+          size="small"
+          checked={!record.hidden}
+          onChange={(checked) => handleToggleHidden(record, !checked)}
+        />
+      ),
     },
     {
       title: "Actions",
@@ -424,6 +455,16 @@ export default function TaskEditor() {
                   rows={3}
                   placeholder="What the model must do"
                 />
+              )}
+            />
+          </Form.Item>
+
+          <Form.Item label="Hidden (excluded from results and measurements)">
+            <Controller
+              name="hidden"
+              control={control}
+              render={({ field }) => (
+                <Switch checked={!!field.value} onChange={field.onChange} />
               )}
             />
           </Form.Item>

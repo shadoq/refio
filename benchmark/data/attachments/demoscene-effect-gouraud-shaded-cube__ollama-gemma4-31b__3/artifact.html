@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Gouraud Shaded Cube - Canvas 2D</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #111; color: #eee; font-family: monospace; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        #ui { position: absolute; top: 10px; left: 10px; pointer-events: none; text-shadow: 1px 1px 2px black; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        FPS: <span id="fps">0</span><br>
+        [W] Toggle Wireframe<br>
+        [P] Pause/Resume
+    </div>
+    <canvas id="canvas"></canvas>
+
+<script>
+class Vec3 {
+    constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
+    add(v) { return new Vec3(this.x + v.x, this.y + v.y, this.z + v.z); }
+    sub(v) { return new Vec3(this.x - v.x, this.y - v.y, this.z - v.z); }
+    mul(s) { return new Vec3(this.x * s, this.y * s, this.z * s); }
+    dot(v) { return this.x * v.x + this.y * v.y + this.z * v.z; }
+    cross(v) {
+        return new Vec3(
+            this.y * v.z - this.z * v.y,
+            this.z * v.x - this.x * v.z,
+            this.x * v.y - this.y * v.x
+        );
+    }
+    length() { return Math.sqrt(this.dot(this)); }
+    normalize() {
+        const len = this.length();
+        return len > 0 ? this.mul(1 / len) : new Vec3();
+    }
+}
+
+class Color {
+    constructor(r, g, b) { this.r = r; this.g = g; this.b = b; }
+    lerp(c2, t) {
+        return new Color(
+            this.r + (c2.r - this.r) * t,
+            this.g + (c2.g - this.g) * t,
+            this.b + (c2.b - this.b) * t
+        );
+    }
+}
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const fpsEl = document.getElementById('fps');
+
+let width, height;
+let paused = false;
+let wireframe = false;
+let angleX = 0, angleY = 0;
+
+function resize() {
+    width = canvas.width = window.innerWidth;
+    height = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+window.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() === 'w') wireframe = !wireframe;
+    if (e.key.toLowerCase() === 'p') paused = !paused;
+});
+
+// Cube Geometry
+const vertices = [
+    new Vec3(-1, -1,  1), new Vec3( 1, -1,  1), new Vec3( 1,  1,  1), new Vec3(-1,  1,  1),
+    new Vec3(-1, -1, -1), new Vec3( 1, -1, -1), new Vec3( 1,  1, -1), new Vec3(-1,  1, -1)
+];
+
+const faces = [
+    { indices: [0, 1, 2], normal: new Vec3(0, 0, 1) }, { indices: [0, 2, 3], normal: new Vec3(0, 0, 1) }, // Front
+    { indices: [1, 5, 6], normal: new Vec3(1, 0, 0) }, { indices: [1, 6, 2], normal: new Vec3(1, 0, 0) }, // Right
+    { indices: [5, 4, 7], normal: new Vec3(0, 0, -1) }, { indices: [5, 7, 6], normal: new Vec3(0, 0, -1) }, // Back
+    { indices: [4, 0, 3], normal: new Vec3(-1, 0, 0) }, { indices: [4, 3, 7], normal: new Vec3(-1, 0, 0) }, // Left
+    { indices: [3, 2, 6], normal: new Vec3(0, 1, 0) }, { indices: [3, 6, 7], normal: new Vec3(0, 1, 0) }, // Top
+    { indices: [4, 5, 1], normal: new Vec3(0, -1, 0) }, { indices: [4, 1, 0], normal: new Vec3(0, -1, 0) }  // Bottom
+];
+
+function rotateX(v, a) {
+    const cos = Math.cos(a), sin = Math.sin(a);
+    return new Vec3(v.x, v.y * cos - v.z * sin, v.y * sin + v.z * cos);
+}
+
+function rotateY(v, a) {
+    const cos = Math.cos(a), sin = Math.sin(a);
+    return new Vec3(v.x * cos + v.z * sin, v.y, -v.x * sin + v.z * cos);
+}
+
+function project(v) {
+    const perspective = 400;
+    const z = v.z + 5;
+    const scale = perspective / z;
+    return {
+        x: (v.x * scale) + width / 2,
+        y: (v.y * scale) + height / 2,
+        z: z
+    };
+}
+
+function getBarycentric(px, py, ax, ay, bx, by, cx, cy) {
+    const v0x = bx - ax, v0y = by - ay;
+    const v1x = cx - ax, v1y = cy - ay;
+    const v2x = px - ax, v2y = py - ay;
+    const den = v0x * v1y - v0y * v1x;
+    if (Math.abs(den) < 0.0001) return null;
+    const v = (v2x * v1y - v2y * v1x) / den;
+    const w = (v0x * v2y - v0y * v2x) / den;
+    const u = 1.0 - v - w;
+    return { u, v, w };
+}
+
+function drawTriangle(p1, p2, p3, c1, c2, c3) {
+    if (wireframe) {
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y);
+        ctx.lineTo(p3.x, p3.y); ctx.closePath();
+        ctx.strokeStyle = '#fff';
+        ctx.stroke();
+        return;
+    }
+
+    // Bounding box for rasterization
+    const minX = Math.floor(Math.min(p1.x, p2.x, p3.x));
+    const maxX = Math.ceil(Math.max(p1.x, p2.x, p3.x));
+    const minY = Math.floor(Math.min(p1.y, p2.y, p3.y));
+    const maxY = Math.ceil(Math.max(p1.y, p2.y, p3.y));
+
+    const imageData = ctx.createImageData(maxX - minX + 1, maxY - minY + 1);
+    const data = imageData.data;
+
+    for (let y = 0; y < imageData.height; y++) {
+        for (let x = 0; x < imageData.width; x++) {
+            const bary = getBarycentric(minX + x, minY + y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
+            if (bary && bary.u >= 0 && bary.v >= 0 && bary.w >= 0) {
+                const idx = (y * imageData.width + x) * 4;
+                data[idx]     = c1.r * bary.u + c2.r * bary.v + c3.r * bary.w;
+                data[idx + 1] = c1.g * bary.u + c2.g * bary.v + c3.g * bary.w;
+                data[idx + 2] = c1.b * bary.u + c2.b * bary.v + c3.b * bary.w;
+                data[idx + 3] = 255;
+            }
+        }
+    }
+    ctx.putImageData(imageData, minX, minY);
+}
+
+let lastTime = 0;
+function loop(time) {
+    const dt = time - lastTime;
+    lastTime = time;
+    fpsEl.innerText = Math.round(1000 / dt);
+
+    if (!paused) {
+        angleX += 0.01;
+        angleY += 0.015;
+    }
+
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, width, height);
+
+    const lightPos = new Vec3(Math.sin(time * 0.001) * 3, 2, Math.cos(time * 0.001) * 3);
+    const baseColor = new Color(50, 150, 255);
+
+    // Transform vertices
+    const transformed = vertices.map(v => {
+        let p = rotateX(v, angleX);
+        p = rotateY(p, angleY);
+        return p;
+    });
+
+    // Calculate per-vertex lighting (Gouraud)
+    const vertexColors = transformed.map((v, i) => {
+        // Simple approach: average normals of faces sharing this vertex
+        let avgNormal = new Vec3();
+        let count = 0;
+        faces.forEach(f => {
+            if (f.indices.includes(i)) {
+                avgNormal = avgNormal.add(f.normal);
+                count++;
+            }
+        });
+        const normal = avgNormal.normalize();
+        const lightDir = lightPos.sub(v).normalize();
+        const diff = Math.max(0.2, normal.dot(lightDir)); // Ambient + Diffuse
+        return new Color(baseColor.r * diff, baseColor.g * diff, baseColor.b * diff);
+    });
+
+    // Render faces
+    faces.forEach(face => {
+        const v1 = transformed[face.indices[0]];
+        const v2 = transformed[face.indices[1]];
+        const v3 = transformed[face.indices[2]];
+
+        // Backface culling: normal dot view vector (view is roughly [0,0,-1] in local space)
+        // Since we are projecting from origin to +Z, the view vector is -v1
+        const faceNormal = face.normal; 
+        // We need the rotated normal for accurate culling
+        let rotNorm = rotateX(faceNormal, angleX);
+        rotNorm = rotateY(rotNorm, angleY);
+
+        if (rotNorm.dot(v1) < 0) { // Simple cull: if normal points away from origin/camera
+            const p1 = project(v1);
+            const p2 = project(v2);
+            const p3 = project(v3);
+            const c1 = vertexColors[face.indices[0]];
+            const c2 = vertexColors[face.indices[1]];
+            const c3 = vertexColors[face.indices[2]];
+            drawTriangle(p1, p2, p3, c1, c2, c3);
+        }
+    });
+
+    requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

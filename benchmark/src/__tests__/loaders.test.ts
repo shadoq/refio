@@ -56,6 +56,7 @@ const baseResults: ResultsFile = {
     },
   ],
   stability: [],
+  inbox: [],
 };
 
 describe("validateReferentialIntegrity", () => {

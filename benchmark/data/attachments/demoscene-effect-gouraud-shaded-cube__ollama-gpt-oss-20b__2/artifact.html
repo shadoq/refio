@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+  body { margin:0; background:#222; display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; color:white; font-family:sans-serif;}
+  canvas{border:1px solid #555;background:#111;}
+  #fps{margin-top:10px;font-size:14px;}
+</style>
+</head>
+<body>
+<canvas id="canvas" width="600" height="600"></canvas>
+<div id="fps">FPS: </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const fpsEl = document.getElementById('fps');
+
+  // Cube definition
+  const vertices = [
+    [-1,-1,-1], [1,-1,-1], [1,1,-1], [-1,1,-1],
+    [-1,-1, 1], [1,-1, 1], [1,1, 1], [-1,1, 1]
+  ];
+  const faces = [
+    [0,1,2],[0,2,3], // back
+    [4,5,6],[4,6,7], // front
+    [0,1,5],[0,5,4], // bottom
+    [2,3,7],[2,7,6], // top
+    [1,2,6],[1,6,5], // right
+    [0,3,7],[0,7,4]  // left
+  ];
+
+  // Precompute face normals (local space)
+  const faceNormals = faces.map(f => {
+    const v0 = vertices[f[0]];
+    const v1 = vertices[f[1]];
+    const v2 = vertices[f[2]];
+    const e1 = [v1[0]-v0[0], v1[1]-v0[1], v1[2]-v0[2]];
+    const e2 = [v2[0]-v0[0], v2[1]-v0[1], v2[2]-v0[2]];
+    const n = cross(e1, e2);
+    return normalize(n);
+  });
+
+  // Vertex adjacency for normals
+  const vertexAdj = Array.from({length:8}, () => []);
+  faces.forEach((f,i)=>{ f.forEach(v=>vertexAdj[v].push(i)); });
+
+  let angleX = 0, angleY = 0;
+  let paused = false, wireframe = false;
+  const fpsHistory = [];
+  const baseColor = [200,200,200];
+  const radius = 3; // light orbit radius
+  const fov = 500;
+  const zOffset = 5;
+
+  function cross(a,b){ return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+  function dot(a,b){ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+  function normalize(v){ const l=Math.hypot(...v); return [v[0]/l,v[1]/l,v[2]/l]; }
+  function subtract(a,b){ return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+
+  // Rotation matrix
+  function rotationMatrix(ax,ay){
+    const cx=Math.cos(ax), sx=Math.sin(ax);
+    const cy=Math.cos(ay), sy=Math.sin(ay);
+    return [
+      [cy,0,-sy],
+      [sx*sy,cx,sx*cy],
+      [cx*sy,-sx,cy*cx]
+    ];
+  }
+  function applyMatrix(v,m){
+    return [
+      v[0]*m[0][0]+v[1]*m[0][1]+v[2]*m[0][2],
+      v[0]*m[1][0]+v[1]*m[1][1]+v[2]*m[1][2],
+      v[0]*m[2][0]+v[1]*m[2][1]+v[2]*m[2][2]
+    ];
+  }
+
+  function project(v){
+    const z = v[2] + zOffset;
+    const x = (fov * v[0]) / z;
+    const y = (fov * v[1]) / z;
+    return {x: canvas.width/2 + x, y: canvas.height/2 - y};
+  }
+
+  function render(){
+    const now = performance.now();
+    if(fpsHistory.length>60) fpsHistory.shift();
+    fpsHistory.push(now);
+    if(fpsHistory.length>1){
+      const dt = (now-fpsHistory[0])/(fpsHistory.length-1);
+      fpsEl.textContent = 'FPS: '+(1000/dt).toFixed(1);
+    }
+
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    if(!paused){ angleX += 0.01; angleY += 0.008; }
+    const rot = rotationMatrix(angleX,angleY);
+
+    // Rotate face normals
+    const worldFaceNormals = faceNormals.map(n=>applyMatrix(n,rot));
+
+    // Light position
+    const lightPos = [Math.cos(now*0.001)*radius, Math.sin(now*0.001)*radius, 2];
+
+    // Transform vertices to world space and project
+    const projVerts = [];
+    const vertexColors = [];
+    for(let i=0;i<vertices.length;i++){
+      const local = vertices[i];
+      const world = applyMatrix(local,rot);
+      const lightDir = normalize(subtract(lightPos,world));
+      let normalSum=[0,0,0];
+      vertexAdj[i].forEach(fi=>{ normalSum[0]+=worldFaceNormals[fi][0]; normalSum[1]+=worldFaceNormals[fi][1]; normalSum[2]+=worldFaceNormals[fi][2]; });
+      const normal = normalize(normalSum);
+      const intensity = Math.max(0, dot(normal, lightDir));
+      const color = baseColor.map(c=>Math.floor(c*intensity));
+      vertexColors.push(color);
+      projVerts.push(project(world));
+    }
+
+    // Draw faces
+    for(let f=0;f<faces.length;f++){
+      const fnorm = worldFaceNormals[f];
+      if(dot(fnorm,[0,0,1]) < 0) continue; // backface culling
+
+      const idx = faces[f];
+      const p0=projVerts[idx[0]], p1=projVerts[idx[1]], p2=projVerts[idx[2]];
+      const c0=vertexColors[idx[0]], c1=vertexColors[idx[1]], c2=vertexColors[idx[2]];
+
+      if(wireframe){
+        ctx.strokeStyle='black';
+        ctx.beginPath();
+        ctx.moveTo(p0.x,p0.y);
+        ctx.lineTo(p1.x,p1.y);
+        ctx.lineTo(p2.x,p2.y);
+        ctx.closePath();
+        ctx.stroke();
+      }else{
+        // Rasterize triangle
+        const minX=Math.max(0,Math.floor(Math.min(p0.x,p1.x,p2.x)));
+        const maxX=Math.min(canvas.width-1,Math.ceil(Math.max(p0.x,p1.x,p2.x)));
+        const minY=Math.max(0,Math.floor(Math.min(p0.y,p1.y,p2.y)));
+        const maxY=Math.min(canvas.height-1,Math.ceil(Math.max(p0.y,p1.y,p2.y)));
+
+        const denom = ((p1.y - p2.y)*(p0.x - p2.x) + (p2.x - p1.x)*(p0.y - p2.y));
+        for(let y=minY;y<=maxY;y++){
+          for(let x=minX;x<=maxX;x++){
+            const w1 = ((p1.y - p2.y)*(x - p2.x) + (p2.x - p1.x)*(y - p2.y)) / denom;
+            const w2 = ((p2.y - p0.y)*(x - p2.x) + (p0.x - p2.x)*(y - p2.y)) / denom;
+            const w3 = 1 - w1 - w2;
+            if(w1>=-0.001 && w2>=-0.001 && w3>=-0.001){
+              const r = Math.floor(w1*c0[0]+w2*c1[0]+w3*c2[0]);
+              const g = Math.floor(w1*c0[1]+w2*c1[1]+w3*c2[1]);
+              const b = Math.floor(w1*c0[2]+w2*c1[2]+w3*c2[2]);
+              ctx.fillStyle=`rgb(${r},${g},${b})`;
+              ctx.fillRect(x,y,1,1);
+            }
+          }
+        }
+      }
+    }
+
+    requestAnimationFrame(render);
+  }
+
+  // Input handling
+  window.addEventListener('keydown',e=>{
+    if(e.key==='w'||e.key==='W') wireframe=!wireframe;
+    if(e.key==='p'||e.key==='P') paused=!paused;
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

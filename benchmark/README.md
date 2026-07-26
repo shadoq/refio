@@ -129,6 +129,64 @@ already writes to each `results.jsonl` record. `--out <file>` also writes the re
 `--self-test` checks the aggregation offline. This is the benchmark data prepared for
 `test_data/RESULTS.md`.
 
+## Generating result data (catalog -> queue -> results)
+
+Result rows come from the case catalog, not from hand-edited JSON. A case lives under
+`catalog/<category>/<id>/` as a `<id>.case.json` + `<id>.prompt.md` pair and is the single
+source for both an e2e scenario and an admin review task, so the prompt never drifts between
+them. The two `npm` tools below turn a case into a reviewable result; both need the CLI dist
+built first (`sh gradlew :cli:installDist`).
+
+### 1. Emit the scenario and task from a case (no LLM call)
+
+```bash
+npm run gen-catalog -- --all          # or: npm run gen-catalog -- <id> ...
+```
+
+For each case it writes the e2e scenario (`test_data/e2e/<id>.json` + prompt + fixture stub)
+and upserts the admin task in `data/tasks.json`, substituting the deliverable's `{{MODEL_ID}}`
+token. Idempotent - an unchanged case produces no diff. `--check` reports drift (for CI),
+`--dry-run` writes nothing.
+
+### 2. Run a case on the model(s) and fill the review inbox (spends tokens / GPU)
+
+`import-runs` invokes the headless CLI for a case, copies the produced artifact, renders a
+screenshot, computes the deterministic judge (compliance / works_out_of_box / agent_logic)
+and appends a schema-valid entry to `inbox[]` in `data/results.json`. It never writes
+`results[]` or manual scores. It needs `refio.bat` reachable, or `REFIO_CLI` pointing at the
+CLI launcher, and the target provider up (e.g. Ollama).
+
+```bash
+# one model, one attempt
+npm run import-runs -- demoscene-effect-gouraud-shaded-cube \
+  --model ollama/qwen3.5:9b --attempts 1 --max-cost 0.5
+```
+
+`import-runs` takes one `--model` per call, so run several selected models in a loop
+(PowerShell on Windows):
+
+```powershell
+$env:REFIO_CLI = "D:\_work\Saas\refio\refio.bat"
+foreach ($m in @("ollama/qwen3.5:9b", "ollama/qwen3.6:27b")) {
+  npm run import-runs -- demoscene-effect-gouraud-shaded-cube --model $m --attempts 1 --max-cost 0.5
+}
+```
+
+Flags: `--all | <id>...`, `--attempts N` (repeat the same model for stability), `--env <id>`
+(default `local`), `--max-cost <usd>`, `--no-render` (skip the screenshot). To score an
+existing run without calling a model, use `--from-run <run.json> --artifact <html>`;
+`--dry-run` builds and validates the entries and prints them without writing.
+
+`import-runs` has no `--config` flag - the headless CLI it spawns reads `~/.refio/config.yaml`,
+so target a remote Ollama box (e.g. a DGX Spark) by setting `providers.ollama.ollama_endpoint`
+there.
+
+### 3. Promote an inbox entry to a visible result
+
+Open `/admin/queue` in the dev server (`npm run dev`), add the human look/code scores and
+promote the entry into `results[]` (or discard it). Only a promoted entry becomes a visible
+result. Optional strong-judge scores can be added afterwards (see below).
+
 ## Strong-judge scoring (`npm run judge`)
 
 Optional, additional quality scores produced by strong-judge agents (Claude Code,

@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gouraud Shaded Rotating Cube</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            display: flex; justify-content: center; align-items: center;
+            min-height: 100vh; background: #1a1a2e; color: #eee;
+            font-family: monospace; overflow: hidden;
+        }
+        .container { text-align: center; }
+        canvas { border: 2px solid #444; display: block; margin: 0 auto; background: #0f0f1e; }
+        .info { margin-top: 10px; font-size: 14px; color: #aaa; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <canvas id="cubeCanvas" width="600" height="600"></canvas>
+        <div class="info">
+            FPS: <span id="fpsDisplay">0</span> | 
+            Press W to toggle wireframe | P to pause
+        </div>
+    </div>
+
+<script>
+(function() {
+    const canvas = document.getElementById('cubeCanvas');
+    const ctx = canvas.getContext('2d');
+    const fpsDisplay = document.getElementById('fpsDisplay');
+    
+    // State
+    let paused = false;
+    let wireframeMode = false;
+    let rotationX = 0, rotationY = 0;
+    let lightTime = 0;
+    
+    // Timing for FPS counter
+    const frameTimes = [];
+    let lastFrameTime = performance.now();
+    
+    // Cube vertices (8 corners of a unit cube centered at origin)
+    const baseVertices = [
+        { x: -1, y: -1, z: -1 },  // 0
+        { x:  1, y: -1, z: -1 },  // 1
+        { x:  1, y:  1, z: -1 },  // 2
+        { x: -1, y:  1, z: -1 },  // 3
+        { x: -1, y: -1, z:  1 },  // 4
+        { x:  1, y: -1, z:  1 },  // 5
+        { x:  1, y:  1, z:  1 },  // 6
+        { x: -1, y:  1, z:  1 }   // 7
+    ];
+    
+    // Face definitions (each face split into 2 triangles)
+    const faces = [
+        // Front (-z): vertices 0,3,2,1
+        [[0, 3, 2], [0, 2, 1]],
+        // Back (+z): vertices 4,5,6,7
+        [[4, 5, 7], [5, 6, 7]],
+        // Left (-x): vertices 0,4,7,3
+        [[0, 4, 7], [0, 7, 3]],
+        // Right (+x): vertices 1,2,6,5
+        [[1, 2, 6], [1, 6, 5]],
+        // Top (+y): vertices 3,7,6,2
+        [[3, 7, 6], [3, 6, 2]],
+        // Bottom (-y): vertices 0,1,5,4
+        [[0, 1, 5], [0, 5, 4]]
+    ];
+    
+    // Face colors (base RGB values)
+    const faceColors = [
+        { r: 255, g: 87, b: 89 },   // Front - coral
+        { r: 33, g: 150, b: 243 },  // Back - blue
+        { r: 76, g: 175, b: 80 },   // Left - green
+        { r: 255, g: 193, b: 7 },   // Right - orange
+        { r: 156, g: 39, b: 176 },  // Top - purple
+        { r: 0, g: 188, b: 212 }    // Bottom - cyan
+    ];
+
+    function rotateX(v, angle) {
+        const cos = Math.cos(angle), sin = Math.sin(angle);
+        return { x: v.x, y: v.y * cos - v.z * sin, z: v.y * sin + v.z * cos };
+    }
+    
+    function rotateY(v, angle) {
+        const cos = Math.cos(angle), sin = Math.sin(angle);
+        return { x: v.x * cos + v.z * sin, y: v.y, z: -v.x * sin + v.z * cos };
+    }
+    
+    function project(v) {
+        const fov = 800; // focal length in pixels
+        const distance = 4; // camera distance
+        
+        const scale = fov / (distance - v.z);
+        return {
+            x: canvas.width/2 + v.x * scale,
+            y: canvas.height/2 + v.y * scale,
+            z: v.z
+        };
+    }
+
+    function normalize(v) {
+        const len = Math.sqrt(v.x*v.x + v.y*v.y + v.z*v.z);
+        return len > 0 ? { x: v.x/len, y: v.y/len, z: v.z/len } : { x: 0, y: 0, z: 0 };
+    }
+
+    function dot(a, b) {
+        return a.x*b.x + a.y*b.y + a.z*b.z;
+    }
+
+    // Calculate per-vertex lighting using Lambert shading
+    function calculateVertexLighting(vertexIndex, rotatedVertices, faceColor) {
+        const v = rotatedVertices[vertexIndex];
+        
+        // Get vertex normal (for cube faces, normals are axis-aligned in local space)
+        let normal;
+        if (Math.abs(v.z - 1) < 0.5) normal = { x: 0, y: 0, z: 1 };   // Back face (+z direction after rotation)
+        else if (Math.abs(v.z + 1) < 0.5) normal = { x: 0, y: 0, z: -1 }; // Front face (-z direction)
+        
+        // For rotated normals, we need to track original positions and apply same rotations
+        const origV = baseVertices[vertexIndex];
+        let rotNormal;
+        if (Math.abs(origV.x + 1) < 0.5) { normal = { x: -1, y: 0, z: 0 }; }   // Left face
+        else if (Math.abs(origV.x - 1) < 0.5) { normal = { x: 1, y: 0, z: 0 }; }    // Right face
+        else if (Math.abs(origV.y + 1) < 0.5) { normal = { x: 0, y: -1, z: 0 }; }   // Bottom face
+        else if (Math.abs(origV.y - 1) < 0.5) { normal = { x: 0, y: 1, z: 0 }; }    // Top face
+        
+        rotNormal = rotateX(normal, rotationX);
+        rotNormal = rotateY(rotNormal, rotationY);
+        
+        // Light position (moving in a circle around the cube)
+        const lightRadius = 2.5;
+        const lx = Math.sin(lightTime * 0.7) * lightRadius;
+        const ly = Math.cos(lightTime * 1.3) * 1.5;
+        const lz = Math.cos(lightTime * 0.9) * lightRadius;
+        
+        // Light direction (from vertex to light, normalized)
+        let lightDir = { 
+            x: lx - v.x, 
+            y: ly - v.y, 
+            z: lz - v.z 
+        };
+        lightDir = normalize(lightDir);
+        
+        // Lambertian diffuse lighting
+        const intensity = Math.max(0.15, dot(normalize(rotNormal), lightDir)); // Ambient + Diffuse
+        
+        return {
+            r: Math.floor(faceColor.r * 255/256 * intensity),
+            g: Math.floor(faceColor.g * 255/256 * intensity), 
+            b: Math.floor(faceColor.b * 255/256 * intensity)
+        };
+    }
+
+    // Gouraud shading - interpolate colors across triangle using scanline algorithm
+    function drawGouraudTriangle(p0, c0, p1, c1, p2, c2) {
+        ctx.beginPath();
+        
+        const minMaxY = sortVerticesByY([p0, p1, p2]);
+        let top = minMaxY[0];
+        let mid = minMaxY[1].vertex;
+        let bottom = minMaxY[2].vertex;
+        
+        // Find corresponding colors
+        const getColorAndPos = (idx) => {
+            if (p0.x === idx.vertex.x && p0.y === idx.vertex.y) return [c0, 0];
+            if (p1.x === idx.vertex.x && p1.y === idx.vertex.y) return [c1, 1];
+            return [c2, 2];
+        };
+        
+        const cTop = minMaxY[0].color;
+        const cMid = minMaxY[1].color;
+        const cBottom = minMaxY[2].color;
+
+        // Draw triangle outline for wireframe mode or just fill
+        if (wireframeMode) {
+            ctx.moveTo(top.x, top.y);
+            ctx.lineTo(mid.vertex.x, mid.vertex.y);
+            ctx.lineTo(bottom.x, bottom.y);
+            ctx.closePath();
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 0.5;
+            ctx.stroke();
+        }
+
+        // Gouraud shading scanline fill using gradient approximation for performance
+        const minY = Math.min(top.y, mid.vertex.y, bottom.y);
+        const maxY = Math.max(top.y, mid.vertex.y, bottom.y);
+        
+        if (maxY - minY < 1) return;
+        
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.closePath();
+
+        // Create a gradient-based Gouraud approximation using canvas patterns
+        const imgData = ctx.createImageData(4, 3);
+        drawTriangleToPattern(imgData.data, 
+            {x: (p0.x - top.x) / ((bottom.x + mid.vertex.x)/2 - top.x), y: p0.y}, cTop.r, cTop.g, cTop.b,
+            {x: (p1.x - top.x) / ((bottom.x + mid.vertex.x)/2 - top.x), y: p1.y}, cMid.r, cMid.g, cMid.b, 
+            {x: (p2.x - top.x) / ((bottom.x + mid.vertex.x)/2 - top.x), y: p2.y}, cBottom.r, cBottom.g, cBottom.b
+        );
+
+        // Use proper Gouraud shading with scanline rasterization
+        ctx.clip();
+        
+        const width = canvas.width;
+        const imageData = new ImageData(width, 4);
+        const data = imageData.data;
+        
+        for (let yScan = Math.floor(Math.min(p0.y, p1.y, p2.y)); 
+             yScan <= Math.ceil(Math.max(p0.y, p1.y, p2.y)) + 1 && yScan < height; yScan++) {
+            
+            // Find scanline intersection with edges - using barycentric interpolation approach
+            const xLeft = interpolateX(yScan, [p0,p1][wireframeMode ? 0 : Math.random() > 0.5], 
+                wireframeMode ? p2 : (Math.min(p0.y,p1.y) <= yScan && Math.max(p0.y,p1.y)+1 >= yScan ? p1 :
+                    Math.abs(yScan - mid.vertex.x * width % height < 4 ? top : bottom)));
+
+            const colorAtY = interpolateColor(cTop, cBottom, (yScan-top.y)/(bottom.y-top.y));
+            
+            for(let x=0; x<width && x<xLeft+16; x+=2) {
+                if(isPointInTriangle({x,y:yScan}, p0,p1,p2)) {
+                    const idx = ((height-1-y)*width+x)*4;
+                    data[idx]     = colorAtY.r & 0xff;
+                    data[idx+1]   = colorAtY.g & 0xff;  
+                    data[idx+2]   = colorAtY.b & 0xff;
+                    data[idx+3]   = 0xFF; // fully opaque alpha for Gouraud shading triangle fill
+                } else if (x > width * 1.4 || x < -width*0.6) break; 
+            }
+        }
+
+        ctx.putImageData(imageData, p0.x-256, height-3-p0.y);
+        
+        // Restore clip and draw the triangle outline for Gouraud-shaded faces (optional edge highlighting)  
+        if (!wireframeMode && false /*edgeHighlight*/) { 
+            ctx.beginPath();
+            ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.closePath();
+            ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.lineWidth=1; ctx.stroke(); 
+        }
+    }
+
+    // Helper for Gouraud shading: sort vertices by Y coordinate while preserving color mapping  
+    function sortVerticesByY(verticesWithColors) {
+        const sorted = [...verticesWithColors].sort((a,b) => a.vertex.y - b.vertex.y);
+        
+        return [sorted[0], sorted[1], sorted[2]]; 
+    }
+
+    // Interpolate X coordinate along an edge at given Y (for scanline fill in Gouraud shading)  
+    function interpolateX(y, vStart, vEnd) {
+        if(Math.abs(vEnd.y - vStart.y)< 0.5) return vStart.x;
+        
+        const t = (y - vStart.y)/(vEnd.y-vStart.y);
+
+        // Clamp interpolation parameter to avoid overshooting at triangle edges during Gouraud shading scanlines 
+        return vStart.x + Math.max(0,Math.min(1,t)) * (vEnd.x- vStart.x);
+    }  
+
+    // Interpolate color between two vertex colors for Gouraud-shaded triangles  
+    function interpolateColor(cA,cB,t) {
+       t =  Math.max(0.05,Math.min(0.95,t)); 
+        return{r: cA.r+(cB.r-cA.r)*t,g:cA.g+(cB.g-cA.g)*t,b:cA.b+(cB.b-cA.b)*t };
+    }
+
+    // Barycentric coordinate test for Gouraud shading scanline fill (is point inside triangle?)  
+    function isPointInTriangle(pt, a, b,c){ 
+        const v0_x= c.x- a.x,v0_y=c.y-a.y;const  v1_x=b.x-a.x,v1_y=b.y-a.y;
+        const   v2_x = pt.x -a.x ,v2_ y =pt .y -a.

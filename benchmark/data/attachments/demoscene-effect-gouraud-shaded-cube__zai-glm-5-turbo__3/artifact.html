@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Shaded Cube</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; top: 14px; left: 14px;
+    color: #0f0; font: 13px/1.8 monospace;
+    pointer-events: none; user-select: none;
+    text-shadow: 0 0 8px #000;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<script>
+(() => {
+  const cvs = document.getElementById('c');
+  const ctx = cvs.getContext('2d');
+  const hud = document.getElementById('hud');
+
+  let width, height, imageData, pixels;
+
+  function onResize() {
+    width = cvs.width = window.innerWidth;
+    height = cvs.height = window.innerHeight;
+    imageData = ctx.createImageData(width, height);
+    pixels = imageData.data;
+  }
+  onResize();
+  window.addEventListener('resize', onResize);
+
+  /* ---- Unit cube: 8 vertices ---- */
+  const vertices = [
+    [-1, -1, -1], // 0
+    [ 1, -1, -1], // 1
+    [ 1,  1, -1], // 2
+    [-1,  1, -1], // 3
+    [-1, -1,  1], // 4
+    [ 1, -1,  1], // 5
+    [ 1,  1,  1], // 6
+    [-1,  1,  1]  // 7
+  ];
+
+  /* Smooth vertex normals: for a centered unit cube, normalizing the
+     position vector gives the correct averaged face normal at each corner */
+  const vertexNormals = vertices.map(v => {
+    const len = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    return [v[0] / len, v[1] / len, v[2] / len];
+  });
+
+  /* 6 quad faces, each with 4 vertex indices (CCW from outside) and a base color */
+  const faces = [
+    { idx: [4, 5, 6, 7], rgb: [0.25, 0.55, 1.00] }, // front  - blue
+    { idx: [1, 0, 3, 2], rgb: [1.00, 0.28, 0.28] }, // back   - red
+    { idx: [3, 7, 6, 2], rgb: [0.22, 0.92, 0.40] }, // top    - green
+    { idx: [0, 1, 5, 4], rgb: [1.00, 0.92, 0.22] }, // bottom - yellow
+    { idx: [1, 2, 6, 5], rgb: [0.90, 0.28, 0.90] }, // right  - magenta
+    { idx: [0, 4, 7, 3], rgb: [0.22, 0.92, 0.92] }, // left   - cyan
+  ];
+
+  /* ---- State ---- */
+  let isPaused = false;
+  let showWireframe = false;
+  let angleX = 0.4, angleY = 0.0, angleZ = 0.0;
+  let elapsed = 0.0;
+  let fpsCount = 0, fpsValue = 0, fpsTimestamp = 0, prevTimestamp = 0;
+
+  window.addEventListener('keydown', e => {
+    const key = e.key.toLowerCase();
+    if (key === 'w') showWireframe = !showWireframe;
+    if (key === 'p') isPaused = !isPaused;
+  });
+
+  /* ---- Vector math ---- */
+  function rotateVertex(v, rx, ry, rz) {
+    let x = v[0], y = v[1], z = v[2];
+    let c, s, t;
+
+    // Rotate around X
+    c = Math.cos(rx); s = Math.sin(rx);
+    t = y * c - z * s; z = y * s + z * c; y = t;
+
+    // Rotate around Y
+    c = Math.cos(ry); s = Math.sin(ry);
+    t = x * c + z * s; z = -x * s + z * c; x = t;
+
+    // Rotate around Z
+    c = Math.cos(rz); s = Math.sin(rz);
+    t = x * c - y * s; y = x * s + y * c; x = t;
+
+    return [x, y, z];
+  }
+
+  function vec3Dot(a, b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  }
+
+  function vec3Normalize(v) {
+    const len = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    if (len < 1e-12) return [0, 0, 0];
+    return [v[0] / len, v[1] / len, v[2] / len];
+  }
+
+  function vec3Sub(a, b) {
+    return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  }
+
+  /* ---- Gouraud scanline triangle rasterizer ---- */
+  function rasterizeTriangle(sx0, sy0, sx1, sy1, sx2, sy2, r0, g0, b0, r1, g1, b1, r2, g2, b2) {
+    // Sort vertices by screen Y (ascending)
+    let ax = sx0, ay = sy0, ar = r0, ag = g0, ab = b0;
+    let bx = sx1, by = sy1, br = r1, bg_ = g1, bb = b1;
+    let cx = sx2, cy = sy2, cr = r2, cg = g2, cb = b2;
+
+    let tmp;
+    if (ay > by) {
+      tmp = ax; ax = bx; bx = tmp; tmp = ay; ay = by; by = tmp;
+      tmp = ar; ar = br; br = tmp; tmp = ag; ag = bg_; bg_ = tmp; tmp = ab; ab = bb; bb = tmp;
+    }
+    if (ay > cy) {
+      tmp = ax; ax = cx; cx = tmp; tmp = ay; ay = cy; cy = tmp;
+      tmp = ar; ar = cr; cr = tmp; tmp = ag; ag = cg; cg = tmp; tmp = ab; ab = cb; cb = tmp;
+    }
+    if (by > cy) {
+      tmp = bx; bx = cx; cx = tmp; tmp = by; by = cy; cy = tmp;
+      tmp = br; br = cr; cr = tmp; tmp = bg_; bg_ = cg; cg = tmp; tmp = bb; bb = cb; cb = tmp;
+    }
+
+    const yMin = Math.max(0, (ay + 0.5) | 0);
+    const yMax = Math.min(height - 1, (cy - 0.5) | 0);
+    if (yMin > yMax) return;
+
+    const totalH = cy - ay;
+    if (totalH < 0.5) return;
+
+    const halfH_AB = by - ay;
+    const halfH_BC = cy - by;
+    const buf = pixels;
+
+    for (let y = yMin; y <= yMax; y++) {
+      let leftX, rightX, leftR, leftG, leftB, rightR, rightG, rightB;
+
+      if (y <= by) {
+        // Upper half: interpolate A->B (left edge) and A->C (right edge)
+        const tLeft = halfH_AB > 0.5 ? (y - ay) / halfH_AB : 0;
+        const tRight = (y - ay) / totalH;
+
+        leftX = ax + tLeft * (bx - ax);
+        rightX = ax + tRight * (cx - ax);
+        leftR = ar + tLeft * (br - ar);
+        leftG = ag + tLeft * (bg_ - ag);
+        leftB = ab + tLeft * (bb - ab);
+        rightR = ar + tRight * (cr - ar);
+        rightG = ag + tRight * (cg - ag);
+        rightB = ab + tRight * (cb - ab);
+      } else {
+        // Lower half: interpolate B->C (left edge) and A->C (right edge)
+        const tLeft = halfH_BC > 0.5 ? (y - by) / halfH_BC : 0;
+        const tRight = (y - ay) / totalH;
+
+        leftX = bx + tLeft * (cx - bx);
+        rightX = ax + tRight * (cx - ax);
+        leftR = br + tLeft * (cr - br);
+        leftG = bg_ + tLeft * (cg - bg_);
+        leftB = bb + tLeft * (cb - bb);
+        rightR = ar + tRight * (cr - ar);
+        rightG = ag + tRight * (cg - ag);
+        rightB = ab + tRight * (cb - ab);
+      }
+
+      // Ensure left < right
+      if (leftX > rightX) {
+        tmp = leftX; leftX = rightX; rightX = tmp;
+        tmp = leftR; leftR = rightR; rightR = tmp;
+        tmp = leftG; leftG = rightG; rightG = tmp;
+        tmp = leftB; leftB = rightB; rightB = tmp;
+      }
+
+      const xStart = Math.max(0, (leftX + 0.5) | 0);
+      const xEnd = Math.min(width - 1, (rightX - 0.5) | 0);
+      if (xStart > xEnd) continue;
+
+      const spanW = rightX - leftX;
+      const invSpan = spanW > 0.5 ? 1.0 / spanW : 0;
+      const dR = rightR - leftR;
+      const dG = rightG - leftG;
+      const dB = rightB - leftB;
+
+      for (let x = xStart; x <= xEnd; x++) {
+        const frac = (x - leftX) * invSpan;
+        const offset = (y * width + x) << 2;
+        buf[offset]     = leftR + frac * dR;
+        buf[offset + 1] = leftG + frac * dG;
+        buf[offset + 2] = leftB + frac * dB;
+        buf[offset + 3] = 255;
+      }
+    }
+  }
+
+  /* ---- Render frame ---- */
+  function renderFrame(timestamp) {
+    requestAnimationFrame(renderFrame);
+
+    const dt = prevTimestamp ? Math.min((timestamp - prevTimestamp) / 1000, 0.05) : 0.016;
+    prevTimestamp = timestamp;
+
+    // FPS counting
+    fpsCount++;
+    if (timestamp - fpsTimestamp >= 1000) {
+      fpsValue = fpsCount;
+      fpsCount = 0;
+      fpsTimestamp = timestamp;
+    }
+
+    // Update rotation angles
+    if (!isPaused) {
+      elapsed += dt;
+      angleY += dt * 0.7;
+      angleX += dt * 0.4;
+    }
+
+    const centerX = width * 0.5;
+    const centerY = height * 0.5;
+    const fov = Math.min(width, height) * 0.85;
+    const viewDist = 4.5;
+
+    // Orbiting point light
+    const lightPos = [
+      Math.cos(elapsed * 1.1) * 3.5,
+      Math.sin(elapsed * 0.7) * 2.0 + 0.5,
+      Math.sin(elapsed * 1.1) * 3.5
+    ];
+
+    // Transform all vertices and normals by rotation
+    const transformedVerts = vertices.map(v => rotateVertex(v, angleX, angleY, angleZ));
+    const transformedNormals = vertexNormals.map(n => rotateVertex(n, angleX, angleY, angleZ));
+
+    // Perspective projection: screenX = x * fov / (z + dist) + cx, screenY = -y * fov / (z + dist) + cy
+    const projectedVerts = transformedVerts.map(v => {
+      const scale = fov / (v[2] + viewDist);
+      return [
+        v[0] * scale + centerX,
+        -v[1] * scale + centerY,
+        v[2]
+      ];
+    });
+
+    // Build renderable face list with backface culling
+    const renderList = [];
+
+    for (let fi = 0; fi < faces.length; fi++) {
+      const face = faces[fi];
+      const vi = face.idx;
+
+      // Backface culling via screen-space cross product of two edges
+      // For Y-down canvas, keep faces with negative cross product (CW in screen = CCW in world)
+      const edge1X = projectedVerts[vi[1]][0] - projectedVerts[vi[0]][0];
+      const edge1Y = projectedVerts[vi[1]][1] - projectedVerts[vi[0]][1];
+      const edge2X = projectedVerts[vi[2]][0] - projectedVerts[vi[0]][0];
+      const edge2Y = projectedVerts[vi[2]][1] - projectedVerts[vi[0]][1];
+      const cross = edge1X * edge2Y - edge1Y * edge2X;
+      if (cross >= 0) continue;
+
+      // Average Z for painter's sort
+      const avgZ = (transformedVerts[vi[0]][2] + transformedVerts[vi[1]][2] +
+                    transformedVerts[vi[2]][2] + transformedVerts[vi[3]][2]) * 0.25;
+
+      // Per-vertex Lambert lighting: I = ambient + max(0, dot(normal, lightDir)) * diffuse
+      const ambient = 0.10;
+      const diffuse = 0.90;
+      const vertColors = vi.map(idx => {
+        const lightDir = vec3Normalize(vec3Sub(lightPos, transformedVerts[idx]));
+        const ndotl = Math.max(0, vec3Dot(transformedNormals[idx], lightDir));
+        const intensity = ambient + ndotl * diffuse;
+        return [
+          Math.min(255, (face.rgb[0] * intensity * 255) | 0),
+          Math.min(255, (face.rgb[1] * intensity * 255) | 0),
+          Math.min(255, (face.rgb[2] * intensity * 255) | 0)
+        ];
+      });
+
+      // Split quad into 2 triangles: [0,1,2] and [0,2,3]
+      renderList.push({
+        depth: avgZ,
+        triangles: [
+          {
+            sx: [projectedVerts[vi[0]][0], projectedVerts[vi[1]][0], projectedVerts[vi[2]][0]],
+            sy: [projectedVerts[vi[0]][1], projectedVerts[vi[1]][1], projectedVerts[vi[2]][1]],
+            cr: [vertColors[0][0], vertColors[1][0], vertColors[2][0]],
+            cg: [vertColors[0][1], vertColors[1][1], vertColors[2][1]],
+            cb: [vertColors[0][2], vertColors[1][2], vertColors[2][2]]
+          },
+          {
+            sx: [projectedVerts[vi[0]][0], projectedVerts[vi[2]][0], projectedVerts[vi[3]][0]],
+            sy: [projectedVerts[vi[0]][1], projectedVerts[vi[2]][1], projectedVerts[vi[3]][1]],
+            cr: [vertColors[0][0], vertColors[2][0], vertColors[3][0]],
+            cg: [vertColors[0][1], vertColors[2][1], vertColors[3][1]],
+            cb: [vertColors[0][2], vertColors[2][2], vertColors[3][2]]
+          }
+        ]
+      });
+    }
+
+    // Painter's algorithm: sort far to near
+    renderList.sort((a, b) => a.depth - b.depth);
+
+    // Clear to dark background
+    const bgR = 0x11, bgG = 0x11, bgB = 0x11;
+    for (let i = 0, len = pixels.length; i < len; i += 4) {
+      pixels[i] = bgR;
+      pixels[i + 1] = bgG;
+      pixels[i + 2] = bgB;
+      pixels[i + 3] = 255;
+    }
+
+    if (showWireframe) {
+      // Wireframe mode: draw triangle edges in green
+      ctx.putImageData(imageData, 0, 0);
+      ctx.strokeStyle = '#00ff00';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (const entry of renderList) {
+        for (const tri of entry.triangles) {
+          ctx.moveTo(tri.sx[0], tri.sy[0]);
+          ctx.lineTo(tri.sx[1], tri.sy[1]);
+          ctx.lineTo(tri.sx[2], tri.sy[2]);
+          ctx.closePath();
+        }
+      }
+      ctx.stroke();
+    } else {
+      // Gouraud-shaded fill
+      for (const entry of renderList) {
+        for (const tri of entry.triangles) {
+          rasterizeTriangle(
+            tri.sx[0], tri.sy[0],
+            tri.sx[1], tri.sy[1],
+            tri.sx[2], tri.sy[2],
+            tri.cr[0], tri.cg[0], tri.cb[0],
+            tri.cr[1], tri.cg[1], tri.cb[1],
+            tri.cr[2], tri.cg[2], tri.cb[2]
+          );
+        }
+      }
+      ctx.putImageData(imageData, 0, 0);
+    }
+
+    // Draw light source indicator: white dot with yellow ring
+    const lScale = fov / (lightPos[2] + viewDist);
+    const lsx = lightPos[0] * lScale + centerX;
+    const lsy = -lightPos[1] * lScale + centerY;
+
+    ctx.beginPath();
+    ctx.arc(lsx, lsy, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(lsx, lsy, 9, 0, Math.PI * 2);
+    ctx.strokeStyle = '#ffff00';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // HUD overlay
+    hud.innerHTML =
+      'FPS: ' + fpsValue +
+      '<br>[W] Wireframe: ' + (showWireframe ? 'ON' : 'OFF') +
+      '<br>[P] Pause: ' + (isPaused ? 'ON' : 'OFF');
+  }
+
+  requestAnimationFrame(renderFrame);
+})();
+</script>
+</body>
+</html>

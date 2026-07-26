@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud-Shaded Rotating Cube</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a1a; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }
+canvas { display: block; }
+#hud { position: fixed; top: 12px; left: 12px; color: #aaffaa; font: bold 14px/1.6 monospace; text-shadow: 0 0 4px #000; pointer-events: none; z-index: 10; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<script>
+// ─── Canvas setup ────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const hud = document.getElementById('hud');
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ─── Math helpers ────────────────────────────────────────────────
+function vec3(x, y, z) { return { x, y, z }; }
+function vAdd(a, b) { return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }; }
+function vSub(a, b) { return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }; }
+function vScale(a, s) { return { x: a.x * s, y: a.y * s, z: a.z * s }; }
+function vDot(a, b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+function vCross(a, b) { return { x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x }; }
+function vLen(a) { return Math.sqrt(vDot(a, a)); }
+function vNorm(a) { const l = vLen(a) || 1e-9; return { x: a.x / l, y: a.y / l, z: a.z / l }; }
+
+function rotX(angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return [[1,0,0],[0,c,-s],[0,s,c]];
+}
+function rotY(angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return [[c,0,s],[0,1,0],[-s,0,c]];
+}
+function rotZ(angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return [[c,-s,0],[s,c,0],[0,0,1]];
+}
+
+function mulMatrixVector(m, v) {
+  return {
+    x: m[0][0]*v.x + m[0][1]*v.y + m[0][2]*v.z,
+    y: m[1][0]*v.x + m[1][1]*v.y + m[1][2]*v.z,
+    z: m[2][0]*v.x + m[2][1]*v.y + m[2][2]*v.z,
+  };
+}
+
+function mulMatrices(a, b) {
+  const r = [[0,0,0],[0,0,0],[0,0,0]];
+  for (let i = 0; i < 3; i++)
+    for (let j = 0; j < 3; j++)
+      for (let k = 0; k < 3; k++)
+        r[i][j] += a[i][k] * b[k][j];
+  return r;
+}
+
+// ─── Cube geometry ──────────────────────────────────────────────
+const S = 1; // half-size of cube
+const vertices = [
+  vec3(-S,-S,-S), vec3( S,-S,-S), vec3( S, S,-S), vec3(-S, S,-S), // front  (z-)
+  vec3(-S,-S, S), vec3( S,-S, S), vec3( S, S, S), vec3(-S, S, S), // back   (z+)
+];
+
+// Each face is a quad defined by 4 vertex indices; we split into 2 triangles
+const faces = [
+  { verts: [0,1,2,3], normal: vec3(0,0,-1) },  // front
+  { verts: [5,4,7,6], normal: vec3(0,0, 1) },  // back
+  { verts: [4,0,3,7], normal: vec3(-1,0, 0) }, // left
+  { verts: [1,5,6,2], normal: vec3( 1,0, 0) }, // right
+  { verts: [3,2,6,7], normal: vec3( 0,1, 0) }, // top
+  { verts: [4,5,1,0], normal: vec3( 0,-1, 0) },// bottom
+];
+
+// ─── Camera / projection ────────────────────────────────────────
+const FOV = 600;
+const CAM_Z = 5; // camera distance
+
+function project(p) {
+  const z = p.z + CAM_Z;
+  if (z < 0.1) return null; // behind camera
+  const scale = FOV / z;
+  return {
+    x: canvas.width / 2 + p.x * scale,
+    y: canvas.height / 2 - p.y * scale,
+    z: p.z,
+    scale,
+  };
+}
+
+// ─── Transform cube each frame ──────────────────────────────────
+function transformCube(rotYAngle, rotXAngle) {
+  const ry = rotY(rotYAngle);
+  const rx = rotX(rotXAngle);
+  const m = mulMatrices(rx, ry); // Y then X
+
+  return vertices.map(v => mulMatrixVector(m, v));
+}
+
+// ─── Light source (moving) ──────────────────────────────────────
+function getLightPos(t) {
+  const r = 4;
+  return vec3(
+    Math.cos(t * 0.7) * r,
+    Math.sin(t * 1.1) * 2.5 + 1,
+    Math.sin(t * 0.7) * r
+  );
+}
+
+// ─── Lambert shading ────────────────────────────────────────────
+function shade(vertexWorldPos, faceNormal, lightPos, camDir) {
+  // Normalise face normal (already unit but just in case)
+  const fn = vNorm(faceNormal);
+
+  // Light direction (from vertex to light)
+  const L = vNorm(vSub(lightPos, vertexWorldPos));
+
+  // View direction
+  const V = vNorm(vSub(camDir, vertexWorldPos));
+
+  // Diffuse Lambert: max(0, cos(theta))
+  const diff = Math.max(0, vDot(fn, L));
+
+  // Ambient
+  const ambient = 0.15;
+
+  // Specular (Blinn-Phong hint)
+  const H = vNorm(vAdd(L, V));
+  const spec = Math.pow(Math.max(0, vDot(fn, H)), 32) * 0.4;
+
+  return ambient + diff * 0.75 + spec;
+}
+
+// ─── Color helpers ──────────────────────────────────────────────
+function hslToRgb(h, s, l) {
+  // h in [0,1), s/l in [0,1]
+  const a = s * Math.min(l, 1 - l);
+  const f = (i) => {
+    const p = h + i / 3;
+    return l - a * Math.max(-1, Math.min(p % 2 - 1, 1));
+  };
+  return [f(0), f(1/3), f(2/3)];
+}
+
+function rgbStr(r, g, b) {
+  const cl = (v) => Math.max(0, Math.min(255, Math.round(v * 255)));
+  return `rgb(${cl(r)},${cl(g)},${cl(b)})`;
+}
+
+// Face base colors (HSL hue per face)
+const faceHues = [0.6, 0.0, 0.38, 0.15, 0.72, 0.5]; // blue, red, purple, orange, teal, green
+const faceSat = 0.85;
+
+// ─── Triangle rasterization with barycentric Gouraud shading ────
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function drawTriangleGouraud(p0, p1, p2, shade0, shade1, shade2, rgb0, rgb1, rgb2) {
+  // Sort vertices by y
+  const tri = [{x:p0.x,y:p0.y},{x:p1.x,y:p1.y},{x:p2.x,y:p2.y}];
+  tri.sort((a, b) => a.y - b.y);
+
+  // Shade values in original order — we need to re-index after sort
+  const orig = [p0,p1,p2];
+  const shades = [shade0, shade1, shade2];
+  const rgbs = [[rgb0],[rgb1],[rgb2]];
+
+  // Map sorted indices back to shade/RGB
+  const idx = [0,1,2].sort((a,b) => orig[a].y - orig[b].y); // wrong approach
+
+  // Let's redo properly: sort both vertices and their data together
+  const data = [
+    { x:p0.x, y:p0.y, shade: shade0, r:rgb0[0], g:rgb0[1], b:rgb0[2] },
+    { x:p1.x, y:p1.y, shade: shade1, r:rgb1[0], g:rgb1[1], b:rgb1[2] },
+    { x:p2.x, y:p2.y, shade: shade2, r:rgb2[0], g:rgb2[1], b:rgb2[2] },
+  ];
+  data.sort((a, b) => a.y - b.y);
+  const [v0, v1, v2] = data;
+
+  // Clamp scanline range
+  const yMin = Math.max(0, Math.ceil(v0.y));
+  const yMax = Math.min(canvas.height - 1, Math.floor(v2.y));
+
+  for (let y = yMin; y <= yMax; y++) {
+    // Edge function t values along each edge at this y
+    let t01 = v1.y !== v0.y ? (y - v0.y) / (v1.y - v0.y) : 0;
+    let t02 = v2.y !== v0.y ? (y - v0.y) / (v2.y - v0.y) : 0;
+    let t12 = v2.y !== v1.y ? (y - v1.y) / (v2.y - v1.y) : 0;
+
+    const xLeft  = lerp(v0.x, v1.x, clamp(t01, 0, 1));
+    const xRight = lerp(v0.x, v2.x, clamp(t02, 0, 1));
+
+    let xStart, xEnd;
+    if (y < v1.y) {
+      xStart = xLeft; xEnd = xRight;
+    } else {
+      xStart = lerp(v1.x, v2.x, clamp(t12, 0, 1));
+      xEnd   = xRight;
+    }
+
+    const sL = lerp(v0.shade, v1.shade, clamp(t01, 0, 1));
+    const sR = lerp(v0.shade, v2.shade, clamp(t02, 0, 1));
+    let shadeStart, shadeEnd;
+    if (y < v1.y) {
+      shadeStart = sL; shadeEnd = sR;
+    } else {
+      const s12 = lerp(v1.shade, v2.shade, clamp(t12, 0, 1));
+      shadeStart = s12; shadeEnd = sR;
+    }
+
+    const startX = Math.max(0, Math.ceil(xStart));
+    const endX   = Math.min(canvas.width - 1, Math.floor(xEnd));
+
+    for (let x = startX; x <= endX; x++) {
+      const t = (x - xStart) / (xEnd - xStart || 1);
+      const shade = lerp(shadeStart, shadeEnd, clamp(t, 0, 1));
+
+      const r = lerp(v0.r, v2.r, clamp(t, 0, 1)) * shade;
+      const g = lerp(v0.g, v2.g, clamp(t, 0, 1)) * shade;
+      const b_ = lerp(v0.b, v2.b, clamp(t, 0, 1)) * shade;
+
+      ctx.fillStyle = rgbStr(r, g, b_);
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+}
+
+// ─── Backface culling ───────────────────────────────────────────
+function isBackfacing(v0, v1, v2) {
+  const e1 = vSub(v1, v0);
+  const e2 = vSub(v2, v0);
+  const n = vCross(e1, e2);
+  // Camera is at origin in view space looking along +Z
+  const viewDir = vec3(0, 0, 1);
+  return vDot(n, viewDir) < 0; // backface if normal points away from camera
+}
+
+// ─── Main render loop ───────────────────────────────────────────
+let rotYAngle = 0;
+let rotXAngle = 0.4;
+let paused = false;
+let wireframe = false;
+let time = 0;
+
+// FPS tracking
+let frameCount = 0;
+let lastFpsTime = performance.now();
+let currentFPS = 0;
+
+function render(timestamp) {
+  requestAnimationFrame(render);
+
+  // FPS calc
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFpsTime >= 500) {
+    currentFPS = Math.round(frameCount / ((now - lastFpsTime) / 1000));
+    frameCount = 0;
+    lastFpsTime = now;
+  }
+
+  if (!paused) {
+    time += 0.016; // ~60fps step
+    rotYAngle += 0.012;
+    rotXAngle += 0.007;
+  }
+
+  const lightPos = getLightPos(time);
+  const camDir = vec3(0, 0, CAM_Z);
+
+  // Transform vertices
+  const transformed = transformCube(rotYAngle, rotXAngle);
+
+  // Project all vertices
+  const projected = transformed.map(v => project(v));
+
+  // Build faces with depth sorting (painter's algorithm)
+  const faceList = [];
+  for (let fi = 0; fi < faces.length; fi++) {
+    const f = faces[fi];
+    const vi = f.verts;
+    const wv0 = transformed[vi[0]];
+    const wv1 = transformed[vi[1]];
+
+    // Backface culling in world space (use original face normal rotated)
+    const fn = mulMatrixVector(rotX(rotXAngle), mulMatrixVector(rotY(rotYAngle), f.normal));
+    if (isBackfacing(wv0, wv1, transformed[vi[2]])) continue;
+
+    // Average depth for painter's sort (closer = higher z in our coords)
+    const avgZ = (wv0.z + mulMatrixVector(rotX(rotXAngle), mulMatrixVector(rotY(rotYAngle), vec3(0,0,0))).z) / 2;
+    faceList.push({ fi, wi: vi, wv: [wv0, wv1, transformed[vi[2]], transformed[vi[3]]], fn, avgZ });
+  }
+
+  // Sort far to near (painter's algorithm — draw far faces first)
+  faceList.sort((a, b) => a.avgZ - b.avgZ);
+
+  // Clear
+  ctx.fillStyle = '#0a0a1a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Draw each face
+  for (const face of faceList) {
+    const { wi, wv, fn } = face;
+
+    // Compute shade per vertex
+    const shades = wi.map(i => shade(wv[i], fn, lightPos, camDir));
+
+    // Base color per face
+    const [r0, g0, b0] = hslToRgb(faceHues[face.fi], faceSat, 0.5);
+
+    // Draw either filled or wireframe
+    if (wireframe) {
+      ctx.strokeStyle = rgbStr(r0 * shades[0], g0 * shades[0], b0 * shades[0]);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(projected[wi[0]].x, projected[wi[0]].y);
+      ctx.lineTo(projected[wi[1]].x, projected[wi[1]].y);
+      ctx.lineTo(projected[wi[2]].x, projected[wi[2]].y);
+      ctx.lineTo(projected[wi[3]].x, projected[wi[3]].y);
+      ctx.closePath();
+      ctx.stroke();
+
+      // Edges
+      const edges = [[0,1],[1,2],[2,3],[3,0]];
+      for (const [a, b] of edges) {
+        ctx.strokeStyle = `rgba(255,255,255,${0.3 * Math.min(shades[a], shades[b])})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(projected[wi[a]].x, projected[wi[a]].y);
+        ctx.lineTo(projected[wi[b]].x, projected[wi[b]].y);
+        ctx.stroke();
+      }
+    } else {
+      // Split quad into 2 triangles for Gouraud shading
+      const tri0 = [wi[0], wi[1], wi[2]];
+      const tri1 = [wi[0], wi[3], wi[1]];
+
+      for (const tri of [tri0, tri1]) {
+        const p0 = projected[tri[0]], p1 = projected[tri[1]], p2 = projected[tri[2]];
+        if (!p0 || !p1 || !p2) continue; // behind camera
+
+        const s0 = shades[wi.indexOf(tri[0])];
+        const s1 = shades[wi.indexOf(tri[1])];
+        const s2 = shades[wi.indexOf(tri[2])];
+
+        // Compute correct shade indices for the tri vertices
+        const si = tri.map(v => wi.indexOf(v));
+
+        drawTriangleGouraud(p0, p1, p2, s0, s1, s2,
+          [r0,g0,b0], [r0,g0,b0], [r0,g0,b0]
+        );
+      }
+    }
+  }
+
+  // Wireframe overlay: draw edges on top of filled faces
+  if (!wireframe) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = 0.8;
+    const edgePairs = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+    for (const [a, b] of edgePairs) {
+      if (projected[a] && projected[b]) {
+        ctx.beginPath();
+        ctx.moveTo(projected[a].x, projected[a].y);
+        ctx.lineTo(projected[b].x, projected[b].y);
+        ctx.stroke();
+      }
+    }
+  }
+
+  // HUD
+  const state = paused ? '⏸ PAUSED' : '▶ RUNNING';
+  const mode = wireframe ? '[WIREFRAME]' : '[SHADED]';
+  hud.innerHTML = `FPS: ${currentFPS}<br>${state} ${mode}<br><span style="opacity:.6">W=wireframe  P=pause</span>`;
+}
+
+// ─── Keyboard controls ──────────────────────────────────────────
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'p' || e.key === 'P') paused = !paused;
+  if (e.key === 'w' || e.key === 'W') wireframe = !wireframe;
+});
+
+// ─── Start ──────────────────────────────────────────────────────
+requestAnimationFrame(render);
+</script>
+</body>
+</html>

@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud-Shaded Rotating Cube</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a12; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }
+canvas { display: block; }
+#hud { position: fixed; top: 12px; left: 12px; font: 14px/1.6 monospace; color: #8cf; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<script>
+// ── Canvas setup ──────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const hud = document.getElementById('hud');
+let W, H;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ── Math helpers ──────────────────────────────────────────────
+const PI = Math.PI, TAU = 2 * PI;
+function vec3(x,y,z){ return {x,y,z}; }
+function sub(a,b){ return vec3(a.x-b.x, a.y-b.y, a.z-b.z); }
+function add(a,b){ return vec3(a.x+b.x, a.y+b.y, a.z+b.z); }
+function scale(v,s){ return vec3(v.x*s, v.y*s, v.z*s); }
+function dot(a,b){ return a.x*b.x + a.y*b.y + a.z*b.z; }
+function cross(a,b){ return vec3(a.y*b.z-a.z*b.y, a.z*b.x-a.x*b.z, a.x*b.y-a.y*b.x); }
+function len(v){ return Math.sqrt(dot(v,v)); }
+function norm(v){ const l=len(v)||1e-9; return vec3(v.x/l, v.y/l, v.z/l); }
+
+// ── Rotation matrices ────────────────────────────────────────
+function rotX(a){
+  const c=Math.cos(a), s=Math.sin(a);
+  return [[1,0,0],[0,c,-s],[0,s,c]];
+}
+function rotY(a){
+  const c=Math.cos(a), s=Math.sin(a);
+  return [[c,0,s],[0,1,0],[-s,0,c]];
+}
+function rotZ(a){
+  const c=Math.cos(a), s=Math.sin(a);
+  return [[c,-s,0],[s,c,0],[0,0,1]];
+}
+function matMulVec(m,v){
+  return vec3(
+    m[0][0]*v.x+m[0][1]*v.y+m[0][2]*v.z,
+    m[1][0]*v.x+m[1][1]*v.y+m[1][2]*v.z,
+    m[2][0]*v.x+m[2][1]*v.y+m[2][2]*v.z
+  );
+}
+
+// ── Cube geometry (unit cube centered at origin) ─────────────
+const S = 1.5; // scale
+const half = S / 2;
+const verts = [
+  vec3(-half,-half,-half), vec3( half,-half,-half),
+  vec3( half, half,-half), vec3(-half, half,-half),
+  vec3(-half,-half, half), vec3( half,-half, half),
+  vec3( half, half, half), vec3(-half, half, half)
+];
+
+// Each face: [v0,v1,v2,v3] in counter-clockorder when viewed from outside
+const faces = [
+  { idx:[0,1,2,3], normal:[0,0,-1], color:[.65,.35,.90] },   // back
+  { idx:[4,6,5,4], normal:[0,0, 1], color:[.35,.85,.70] },   // front
+  { idx:[0,4,5,1], normal:[-1,0, 0], color:[.90,.55,.30] },  // left
+  { idx:[2,6,7,3], normal:[ 1,0, 0], color:[.55,.30,.85] },  // right
+  { idx:[4,0,3,7], normal:[ 0,-1,0], color:[.30,.55,.90] },  // bottom
+  { idx:[1,5,6,2], normal:[ 0, 1,0], color:[.85,.45,.55] }   // top
+];
+
+// Triangulate each quad face into two triangles (consistent winding)
+const triFaces = [];
+for (const f of faces) {
+  const [a,b,c,d] = f.idx;
+  triFaces.push({ verts:[a,b,c], normal:f.normal, color:f.color });
+  triFaces.push({ verts:[a,c,d], normal:f.normal, color:f.color });
+}
+
+// ── Perspective projection ───────────────────────────────────
+const FOV = 500;
+function project(v){
+  const z = v.z + 4; // camera distance
+  const s = FOV / (z || 1);
+  return { x: W/2 + v.x * s, y: H/2 - v.y * s, z };
+}
+
+// ── Lambert lighting ─────────────────────────────────────────
+function lambert(lightDir, normal){
+  let d = dot(norm(lightDir), norm(normal));
+  return Math.max(0, d);
+}
+
+// ── State ────────────────────────────────────────────────────
+let angleX = 0.4, angleY = 0.3, angleZ = 0;
+let wireframe = false, paused = false;
+const lightPos = vec3(2, 3, 4);
+
+// ── Triangle rasterizer with Gouraud interpolation ───────────
+function sortVertices(p0, p1, p2) {
+  // Sort top-to-bottom by Y (largest first)
+  if (p0.y < p1.y) [p0,p1]=[p1,p0];
+  if (p1.y < p2.y) [p1,p2]=[p2,p1];
+  if (p0.y < p1.y) [p0,p1]=[p1,p0];
+}
+
+function lerpColor(c1,c2,t){
+  return [
+    c1[0]+(c2[0]-c1[0])*t,
+    c1[1]+(c2[1]-c1[1])*t,
+    c1[2]+(c2[2]-c1[2])*t
+  ];
+}
+
+function interpolate(c1,c2,t){
+  return { r:c1.r+(c2.r-c1.r)*t, g:c1.g+(c2.g-c1.g)*t, b:c1.b-c1.b*t };
+}
+
+// Clamp value
+function clamp(v,lo,hi){ return v<lo?lo:v>hi?hi:v; }
+
+function drawTriangle(p0,p1,p2,c0,c1,c2){
+  sortVertices(p0,p1,p2);
+  
+  // Triangle bounds
+  const minY = Math.max(0, Math.floor(Math.min(p0.y,p1.y,p2.y)));
+  const maxY = Math.min(H-1, Math.ceil(Math.max(p0.y,p1.y,p2.y)));
+  
+  if (minY > maxY) return;
+  
+  // Edges as (dx/dy, x-intercept) or vertical marker
+  function edgeInfo(vA,vB){
+    const dy = vB.y - vA.y;
+    if (dy === 0) return { dx: 0, sx: Math.min(vA.x,vB.x), inf: true };
+    return { dx: (vB.x - vA.x) / dy, sx: vA.x, inf: false };
+  }
+  
+  const e1 = edgeInfo(p0,p1);
+  const e2 = edgeInfo(p0,p2);
+  const e3 = edgeInfo(p1,p2);
+  
+  for (let y = minY; y <= maxY; y++) {
+    const fy = y + 0.5; // center of pixel
+    
+    let xStart, xEnd, rStart, gStart, bStart, rEnd, gEnd, bEnd;
+    
+    if (y < p1.y) {
+      // Upper part: edges 1 and 2
+      const t1 = (fy - p0.y) / (p1.y - p0.y);
+      const t2 = (fy - p0.y) / (p2.y - p0.y);
+      xStart = p0.x + e1.dx * (fy - p0.y);
+      xEnd   = p0.x + e2.dx * (fy - p0.y);
+      rStart = c0.r + (c1.r-c0.r) * clamp(t1,0,1);
+      gStart = c0.g + (c1.g-c0.g) * clamp(t1,0,1);
+      bStart = c0.b + (c1.b-c0.b) * clamp(t1,0,1);
+      rEnd   = c0.r + (c2.r-c0.r) * clamp(t2,0,1);
+      gEnd   = c0.g + (c2.g-c0.g) * clamp(t2,0,1);
+      bEnd   = c0.b + (c2.b-c0.b) * clamp(t2,0,1);
+    } else {
+      // Lower part: edges 3 and 2
+      const t3 = (fy - p1.y) / (p2.y - p1.y);
+      xStart = p1.x + e3.dx * (fy - p1.y);
+      xEnd   = p0.x + e2.dx * (fy - p0.y);
+      rStart = c1.r + (c2.r-c1.r) * clamp(t3,0,1);
+      gStart = c1.g + (c2.g-c1.g) * clamp(t3,0,1);
+      bStart = c1.b + (c2.b-c1.b) * clamp(t3,0,1);
+      rEnd   = c1.r + (c2.r-c1.r) * clamp(t3,0,1);
+      gEnd   = c1.g + (c2.g-c1.g) * clamp(t3,0,1);
+      bEnd   = c1.b + (c2.b-c1.b) * clamp(t3,0,1);
+    }
+    
+    if (xStart > xEnd) { [xStart,xEnd]=[xEnd,xStart]; [rStart,rEnd]=[rEnd,rStart]; [gStart,gEnd]=[gEnd,gStart]; [bStart,bEnd]=[bEnd,bStart]; }
+    
+    const xS = Math.max(0, Math.ceil(xStart));
+    const xE = Math.min(W-1, Math.floor(xEnd));
+    
+    for (let x = xS; x <= xE; x++) {
+      const t = (x - xStart) / (xEnd - xStart + 1e-6);
+      const r = clamp(rStart + (rEnd-rStart)*t, 0, 1);
+      const g = clamp(gStart + (gEnd-gStart)*t, 0, 1);
+      const b = clamp(bStart + (bEnd-bStart)*t, 0, 1);
+      ctx.fillStyle = `rgb(${r*255|0},${g*255|0},${b*255|0})`;
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+}
+
+// ── Main render loop ─────────────────────────────────────────
+let lastTime = 0;
+let frameCount = 0;
+let fps = 0;
+let fpsTime = 0;
+
+function render(time){
+  requestAnimationFrame(render);
+  
+  const dt = Math.min((time - lastTime) / 1000, 0.05);
+  lastTime = time;
+  
+  // FPS counter
+  frameCount++;
+  if (time - fpsTime >= 1000){
+    fps = frameCount;
+    frameCount = 0;
+    fpsTime = time;
+  }
+  
+  if (!paused){
+    angleX += dt * 0.5;
+    angleY += dt * 0.7;
+    angleZ += dt * 0.3;
+  }
+  
+  // Light orbit
+  const lt = time / 2000;
+  const light = vec3(
+    Math.cos(lt) * 5,
+    Math.sin(lt * 0.7) * 4 + 2,
+    Math.sin(lt) * 5 + 3
+  );
+  
+  // Clear
+  ctx.fillStyle = '#0a0a12';
+  ctx.fillRect(0, 0, W, H);
+  
+  // Build transformed vertices
+  const mX = rotX(angleX);
+  const mY = rotY(angleY);
+  const mZ = rotZ(angleZ);
+  const mTotal = matMul(mY, mX);
+  const mRot = matMul(mZ, mTotal);
+  
+  function transform(v){
+    return matMulVec(mRot, v);
+  }
+  
+  // Project all vertices
+  const projected = verts.map(v => {
+    const t = transform(v);
+    return project(t);
+  });
+  
+  // Build triangle list with lighting
+  const triangles = [];
+  for (const tf of triFaces) {
+    const tv0 = transform(verts[tf.verts[0]]);
+    const tv1 = transform(verts[tf.verts[1]]);
+    const tv2 = transform(verts[tf.verts[2]]);
+    
+    // Backface culling using transformed normal
+    const edge1 = sub(tv1, tv0);
+    const edge2 = sub(tv2, tv0);
+    const faceNormal = norm(cross(edge1, edge2));
+    
+    // View direction (camera is at z = -4 looking toward +z)
+    const viewDir = vec3(0, 0, -1);
+    if (dot(faceNormal, viewDir) > 0) continue; // facing away
+    
+    // Light direction for each vertex
+    const lv0 = sub(light, tv0);
+    const lv1 = sub(light, tv1);
+    const lv2 = sub(light, tv2);
+    
+    const diff0 = lambert(lv0, faceNormal);
+    const diff1 = lambert(lv1, faceNormal);
+    const diff2 = lambert(lv2, faceNormal);
+    
+    // Gouraud: mix base color with diffuse lighting
+    const [cr,cg,cb] = tf.color;
+    const c0 = { r: cr*diff0, g: cg*diff0, b: cb*diff0 };
+    const c1 = { r: cr*diff1, g: cg*diff1, b: cb*diff1 };
+    const c2 = { r: cr*diff2, g: cg*diff2, b: cb*diff2 };
+    
+    const p0 = projected[tf.verts[0]];
+    const p1 = projected[tf.verts[1]];
+    const p2 = projected[tf.verts[2]];
+    
+    // Sort by z for painter's algorithm (optional — we use winding)
+    triangles.push({ p:[p0,p1,p2], c:[c0,c1,c2] });
+  }
+  
+  // Sort triangles by average Z (far first) for correct overlap
+  triangles.sort((a,b) => {
+    const za = (a.p[0].z+a.p[1].z+a.p[2].z)/3;
+    const zb = (b.p[0].z+b.p[1].z+b.p[2].z)/3;
+    return zb - za; // far first
+  });
+  
+  // Rasterize
+  for (const tri of triangles) {
+    drawTriangle(tri.p[0], tri.p[1], tri.p[2], tri.c[0], tri.c[1], tri.c[2]);
+  }
+  
+  // Wireframe overlay
+  if (wireframe){
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 1;
+    const lineEdges = [
+      [0,1],[1,2],[2,3],[3,0], // back face
+      [4,5],[5,6],[6,7],[7,4], // front face
+      [0,4],[1,5],[2,6],[3,7]  // connecting edges
+    ];
+    for (const [a,b] of lineEdges) {
+      ctx.beginPath();
+      ctx.moveTo(projected[a].x, projected[a].y);
+      ctx.lineTo(projected[b].x, projected[b].y);
+      ctx.stroke();
+    }
+  }
+  
+  // HUD
+  const status = paused ? '⏸ PAUSED' : '▶ RUNNING';
+  hud.innerHTML = `FPS: ${fps}<br>${status}<br>Wireframe: ${wireframe?'ON':'OFF'}<br><span style="opacity:.5">W=toggle wireframe | P=pause</span>`;
+}
+
+// ── Input handling ───────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key === 'w' || e.key === 'W') wireframe = !wireframe;
+  if (e.key === 'p' || e.key === 'P') paused = !paused;
+});
+
+// ── Matrix multiply helper ───────────────────────────────────
+function matMul(a,b){
+  const r = [[0,0,0],[0,0,0],[0,0,0]];
+  for(let i=0;i<3;i++) for(let j=0;j<3;j++) for(let k=0;k<3;k++){
+    r[i][j] += a[i][k]*b[k][j];
+  }
+  return r;
+}
+
+// ── Start ────────────────────────────────────────────────────
+requestAnimationFrame(render);
+</script>
+</body>
+</html>

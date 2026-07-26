@@ -1,7 +1,9 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve, dirname, join, basename } from "node:path";
+import { promoteInboxEntry, discardInboxEntry } from "./src/lib/catalog/inbox";
+import type { Score } from "./src/schema/results";
 
 const ALLOWED_FILES = {
   results: "data/results.json",
@@ -72,17 +74,6 @@ function sanitizePathSegment(value: string, fallback: string): string {
 
   const safe = sanitized || fallback;
   return WINDOWS_RESERVED_NAMES.has(safe) ? `${safe}-file` : safe;
-}
-
-function sanitizeFilename(filename: string): string {
-  const nameOnly = basename(filename.replace(/\\/g, "/"));
-  const dotIndex = nameOnly.lastIndexOf(".");
-  const rawBase = dotIndex > 0 ? nameOnly.slice(0, dotIndex) : nameOnly;
-  const rawExt = dotIndex > 0 ? nameOnly.slice(dotIndex + 1) : "";
-  const base = sanitizePathSegment(rawBase, "attachment");
-  const ext = sanitizePathSegment(rawExt, "");
-
-  return ext ? `${base}.${ext}` : base;
 }
 
 function getFileExtension(filename: string): string {
@@ -293,9 +284,70 @@ function uploadPlugin(): Plugin {
   };
 }
 
+// Apply an inbox promote/discard to the CURRENT results.json server-side, instead of
+// letting the client POST a whole-file snapshot built from its (possibly stale) cache.
+// That snapshot clobbers entries another writer (e.g. the import-runs catalog importer)
+// appended after the client loaded - the observed lost-update. Read-mutate-write here
+// shrinks the race window to this handler and reuses the same tested pure helpers.
+function mutateResultsPlugin(): Plugin {
+  return {
+    name: "mutate-results",
+    apply: "serve",
+    configureServer(server) {
+      server.middlewares.use("/__mutate-results", async (req, res) => {
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.end("Method Not Allowed");
+          return;
+        }
+        try {
+          let raw = "";
+          for await (const chunk of req) raw += chunk;
+          const body = JSON.parse(raw) as {
+            op?: "promote" | "discard";
+            entryId?: string;
+            scores?: unknown;
+          };
+          if (!body.entryId || (body.op !== "promote" && body.op !== "discard")) {
+            res.statusCode = 400;
+            res.setHeader("content-type", "application/json");
+            res.end(JSON.stringify({ error: "expected { op: 'promote'|'discard', entryId }" }));
+            return;
+          }
+
+          const filePath = resolve(process.cwd(), ALLOWED_FILES.results);
+          const current = JSON.parse(await readFile(filePath, "utf8"));
+          const now = new Date().toISOString();
+          const next =
+            body.op === "promote"
+              ? promoteInboxEntry(current, body.entryId, (body.scores ?? []) as Score[], now)
+              : discardInboxEntry(current, body.entryId);
+
+          await mkdir(dirname(filePath), { recursive: true });
+          await writeFile(filePath, JSON.stringify(next, null, 2) + "\n", "utf8");
+
+          res.statusCode = 200;
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ ok: true, data: next }));
+        } catch (err) {
+          res.statusCode = 500;
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ error: String(err) }));
+        }
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), saveDataPlugin(), uploadPlugin()],
+  plugins: [react(), saveDataPlugin(), uploadPlugin(), mutateResultsPlugin()],
   resolve: {
     alias: { "@": resolve(__dirname, "src") },
+  },
+  // Absolute path of the data dir on this dev machine, so the review UI can build
+  // idea:// links that open an artifact file in IntelliJ. Dev-only (the admin pages
+  // that use it are gated behind import.meta.env.DEV).
+  define: {
+    "import.meta.env.VITE_DATA_ROOT": JSON.stringify(resolve(__dirname, "data")),
   },
 });

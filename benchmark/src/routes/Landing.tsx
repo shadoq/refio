@@ -5,7 +5,7 @@ import { LeaderboardTable } from "@/components/tables/LeaderboardTable";
 import { ParetoScatter } from "@/components/charts/ParetoScatter";
 import { useTasks } from "@/data/queries";
 import { useResults } from "@/data/queries";
-import { leaderboard } from "@/lib/stats";
+import { leaderboard, visibleTasks } from "@/lib/stats";
 import { formatDuration } from "@/lib/format";
 import { applyFilters, useFilters } from "@/store/filters";
 
@@ -250,10 +250,10 @@ export default function Landing() {
         )}
       </Row>
 
-      {tasksData && tasksData.tasks.length > 0 && (
+      {tasksData && visibleTasks(tasksData.tasks).length > 0 && (
         <Card className="glass-card" title="Tasks">
           <div className="task-link-grid">
-            {tasksData.tasks.map((task) => (
+            {visibleTasks(tasksData.tasks).map((task) => (
               <Link className="task-link-card" key={task.id} to={`/tasks/${task.id}`}>
                 <span>{task.name}</span>
                 <small>{task.id}</small>

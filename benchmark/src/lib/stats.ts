@@ -45,6 +45,26 @@ export function normalizeScore(value: number, scaleValues: number[]): number {
   return value / max;
 }
 
+// A task flagged `hidden` is dropped from the public results view and from every
+// measurement. Admin views keep the raw list so the flag stays toggleable.
+export function visibleTasks<T extends { hidden?: boolean }>(tasks: T[]): T[] {
+  return tasks.filter((task) => task.hidden !== true);
+}
+
+// Drop results whose task is hidden so leaderboards and charts never count them.
+// A result whose taskId is unknown is kept - only known-hidden tasks are excluded.
+export function excludeHiddenResults(results: Result[], tasks: TasksFile): Result[] {
+  const hidden = new Set(tasks.tasks.filter((t) => t.hidden === true).map((t) => t.id));
+  if (hidden.size === 0) return results;
+  return results.filter((r) => !hidden.has(r.taskId));
+}
+
+// Drop results a human flagged as "no result could be established" (a failed run kept
+// only as evidence the model was tested). They must never affect any computed metric.
+export function excludeUncountedResults(results: Result[]): Result[] {
+  return results.filter((r) => r.excludeFromStats !== true);
+}
+
 export function getResultCriterionScore(
   result: Result,
   tasks: TasksFile,
@@ -138,12 +158,13 @@ export function leaderboard(
   resultsFile: Pick<ResultsFile, "models" | "environments">,
   tasks: TasksFile,
 ): LeaderboardRow[] {
+  const measured = excludeUncountedResults(excludeHiddenResults(results, tasks));
   const modelById = new Map(resultsFile.models.map((m) => [m.id, m]));
   const envById = new Map(resultsFile.environments.map((e) => [e.id, e]));
 
   // Group by (modelId, environmentId)
   const groups = new Map<string, Result[]>();
-  for (const r of results) {
+  for (const r of measured) {
     const key = `${r.modelId}::${r.environmentId}`;
     const group = groups.get(key) ?? [];
     group.push(r);

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gouraud-Shaded Rotating Cube</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #1a1a2e; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        #ui { position: absolute; top: 10px; left: 10px; color: white; font-family: monospace; background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; pointer-events: none; }
+    </style>
+</head>
+<body>
+<canvas id="cubeCanvas"></canvas>
+<div id="ui">FPS: <span id="fpsCounter">0</span><br>Press W for wireframe, P to pause</div>
+
+<script>
+(function() {
+    'use strict';
+
+    const canvas = document.getElementById('cubeCanvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    const fpsEl = document.getElementById('fpsCounter');
+
+    let width = window.innerWidth;
+    let height = window.innerHeight;
+    
+    // 3D constants and state
+    const perspectiveFactor = 400;
+    const cameraZ = -500;
+    let isPaused = false;
+    let lightX, lightY, lightZ;
+
+    // Cube vertices (8 corners)
+    class Vertex {
+        constructor(x, y, z) { this.x = x; this.y = y; this.z = z; }
+    }
+
+    const cubeVertices = [
+        new Vertex(-100, -100, 100), // 0: front-top-left
+        new Vertex(100, -100, 100),   // 1: front-top-right
+        new Vertex(100, 100, 100),    // 2: front-bottom-right
+        new Vertex(-100, 100, 100),   // 3: front-bottom-left
+        new Vertex(-100, -100, -100), // 4: back-top-left
+        new Vertex(100, -100, -100),  // 5: back-top-right
+        new Vertex(100, 100, -100),   // 6: back-bottom-right
+        new Vertex(-100, 100, -100)   // 7: back-bottom-left
+    ];
+
+    const cubeIndices = [
+        [4,5,3], [5,2,3], // Front face (indices inverted for correct winding after rotation)
+        [6,2,1], [2,7,1], // Right face
+        [0,1,5], [0,5,4], // Top face
+        [0,3,7], [3,7,4], // Bottom face (inverted for backface culling)
+        [6,7,4], [6,4,2]  // Left and Back faces (will be culled when facing away)
+    ];
+
+    function rotateX(v, angle) {
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        return new Vertex(
+            v.x * cos - v.z * sin,
+            v.y,
+            v.x * sin + v.z * cos
+        );
+    }
+
+    function rotateY(v, angle) {
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        return new Vertex(
+            v.x * cos + v.z * sin,
+            -v.y * cos + v.z * sin, // y becomes negative because of coordinate system
+            v.y * sin + v.z * cos
+        );
+    }
+
+    function rotateZ(v, angle) {
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        return new Vertex(
+            v.x * cos - v.y * sin,
+            v.x * sin + v.y * cos,
+            v.z
+        );
+    }
+
+    function project(v) {
+        // Translate to camera position and apply perspective projection
+        const scale = perspectiveFactor / (cameraZ - v.z);
+        return { x: v.x * scale, y: v.y * scale, w: scale };
+    }
+
+    function computeLambert(vertex, lightPos) {
+        // Normalized normal vector for each face corner based on adjacent edges
+        const normals = [
+            new Vertex(1, 0, 0),   // Front (+x)
+            new Vertex(-1, 0, 0),  // Back (-x)
+            new Vertex(0, 1, 0),   // Top (+y)
+            new Vertex(0, -1, 0),  // Bottom (-y)
+            new Vertex(0, 0, 1),   // Front +z (assuming z is depth)
+            new Vertex(0, 0, -1)   // Back -z
+        ];
+
+        const normal = normals[3]; // For cube center origin at 0,0,0 with positive y up, front face has normal in +y direction
+
+        let normalDotLight;
+        
+        if (normal.z !== 0 && Math.abs(normal.x) < 0.1 && Math.abs(normal.y) < 0.1) {
+            // Point is on side faces where we need to compute actual vertex normals from edges
+            const edgeIndex = getEdgeIndices(vertex, cubeVertices);
+            
+        }
+
+    }
+
+</script>
+</body>
+</html>

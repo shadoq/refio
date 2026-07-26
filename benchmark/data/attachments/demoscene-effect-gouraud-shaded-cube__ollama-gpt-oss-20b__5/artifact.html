@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+  body{margin:0;overflow:hidden;background:#000;color:#fff;font-family:sans-serif;}
+  #fps{position:absolute;top:5px;left:5px;font-size:14px;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="fps">FPS: 0</div>
+<script>
+(() => {
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+let w, h;
+function resize(){w=canvas.width=window.innerWidth;h=canvas.height=window.innerHeight;}
+resize(); window.addEventListener('resize',resize);
+
+// 3D math helpers
+class Vec3{constructor(x,y,z){this.x=x;this.y=y;this.z=z;}add(v){return new Vec3(this.x+v.x,this.y+v.y,this.z+v.z);}sub(v){return new Vec3(this.x-v.x,this.y-v.y,this.z-v.z);}mul(s){return new Vec3(this.x*s,this.y*s,this.z*s);}dot(v){return this.x*v.x+this.y*v.y+this.z*v.z;}cross(v){return new Vec3(this.y*v.z-this.z*v.y,this.z*v.x-this.x*v.z,this.x*v.y-this.y*v.x);}} 
+class Mat4{constructor(m){this.m=m||[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1];}
+static identity(){return new Mat4();}
+static rotationX(a){const c=Math.cos(a),s=Math.sin(a);return new Mat4([1,0,0,0,0,c,-s,0,0,s,c,0,0,0,0,1]);}
+static rotationY(a){const c=Math.cos(a),s=Math.sin(a);return new Mat4([c,0,s,0,0,1,0,0,-s,0,c,0,0,0,0,1]);}
+static rotationZ(a){const c=Math.cos(a),s=Math.sin(a);return new Mat4([c,-s,0,0,s,c,0,0,0,0,1,0,0,0,0,1]);}
+mulVec(v){
+  const m=this.m; return new Vec3(
+    v.x*m[0]+v.y*m[1]+v.z*m[2]+m[3],
+    v.x*m[4]+v.y*m[5]+v.z*m[6]+m[7],
+    v.x*m[8]+v.y*m[9]+v.z*m[10]+m[11]
+  );}
+static multiply(a,b){
+  const m=[]; for(let i=0;i<4;i++)for(let j=0;j<4;j++){
+    let sum=0; for(let k=0;k<4;k++)sum+=a.m[i*4+k]*b.m[k*4+j]; m[i*4+j]=sum;
+  } return new Mat4(m);
+}
+}
+
+// Cube definition
+const cubeVertices=[
+  new Vec3(-1,-1,1),new Vec3(1,-1,1),new Vec3(1,1,1),new Vec3(-1,1,1),
+  new Vec3(-1,-1,-1),new Vec3(1,-1,-1),new Vec3(1,1,-1),new Vec3(-1,1,-1)
+];
+const cubeFaces=[
+  [0,1,2,3],[4,5,6,7],
+  [0,1,5,4],[2,3,7,6],
+  [0,3,7,4],[1,2,6,5]
+];
+
+// Lighting
+let lightPos=new Vec3(5,5,5);
+const lightColor=[255,255,255];
+const ambient=0.2;
+
+// Animation state
+let angleX=0,angleY=0;
+let paused=false;
+let wireframe=false;
+
+// FPS calculation
+let lastTime=performance.now(),frames=0,fps=0;
+function updateFPS(){
+  const now=performance.now(); frames++;
+  if(now-lastTime>=1000){fps=Math.round(frames*1000/(now-lastTime));frames=0;lastTime=now;}
+}
+document.getElementById('fps').textContent=`FPS: ${fps}`;
+
+// Input
+window.addEventListener('keydown',e=>{
+  if(e.key==='w'||e.key==='W')wireframe=!wireframe;
+  if(e.key==='p'||e.key==='P')paused=!paused;
+});
+
+// Main loop
+function render(){
+  updateFPS(); document.getElementById('fps').textContent=`FPS: ${fps}`;
+  ctx.clearRect(0,0,w,h);
+  const scale=200; // projection scale
+
+  // Build rotation matrix
+  let rot=Mat4.multiply(Mat4.rotationY(angleY),Mat4.rotationX(angleX));
+
+  // Transform vertices
+  const transformed=cubeVertices.map(v=>rot.mulVec(v));
+  
+  // Project to screen
+  const projected=transformed.map(v=>{
+    const z=v.z+5; // camera distance
+    return new Vec3(
+      (v.x/z)*scale + w/2,
+      (-v.y/z)*scale + h/2,
+      z
+    );
+  });
+
+  // For each face, backface culling and shading
+  cubeFaces.forEach(face=>{
+    const [i0,i1,i2,i3]=face;
+    const v0=transformed[i0],v1=transformed[i1],v2=transformed[i2];
+    const normal=v1.sub(v0).cross(v2.sub(v0));
+    if(normal.z>=0) return; // backface
+
+    // Compute per-vertex colors
+    const faceVerts=[i0,i1,i2,i3];
+    const colors=[];
+    faceVerts.forEach(idx=>{
+      const v=transformed[idx];
+      const n=v.mul(1/Math.hypot(v.x,v.y,v.z)); // approximate normal as vertex position normalized
+      const lightDir=lightPos.sub(v);
+      const l=lightDir.dot(n)/ (Math.hypot(lightDir.x,lightDir.y,lightDir.z)*Math.hypot(n.x,n.y,n.z));
+      const intensity=Math.max(l,0)+ambient;
+      colors.push([
+        Math.min(255,intensity*lightColor[0]),
+        Math.min(255,intensity*lightColor[1]),
+        Math.min(255,intensity*lightColor[2])
+      ]);
+    });
+
+    // Split into two triangles: (i0,i1,i2) and (i0,i2,i3)
+    const tris=[[i0,i1,i2],[i0,i2,i3]];
+    tris.forEach(tri=>{
+      const pts=tri.map(i=>projected[i]);
+      const cols=tri.map(i=>colors[faceVerts.indexOf(i)]);
+      if(wireframe){
+        ctx.strokeStyle='#fff';
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x,pts[0].y);
+        ctx.lineTo(pts[1].x,pts[1].y);
+        ctx.lineTo(pts[2].x,pts[2].y);
+        ctx.closePath();ctx.stroke();
+      }else{
+        // Gouraud shading via barycentric interpolation
+        const [p0,p1,p2]=pts;
+        const [c0,c1,c2]=cols;
+
+        // Compute bounding box
+        const minX=Math.floor(Math.min(p0.x,p1.x,p2.x));
+        const maxX=Math.ceil(Math.max(p0.x,p1.x,p2.x));
+        const minY=Math.floor(Math.min(p0.y,p1.y,p2.y));
+        const maxY=Math.ceil(Math.max(p0.y,p1.y,p2.y));
+
+        // Edge functions
+        const area=((p1.x-p0.x)*(p2.y-p0.y)-(p1.y-p0.y)*(p2.x-p0.x))/2;
+        for(let y=minY;y<=maxY;y++){
+          for(let x=minX;x<=maxX;x++){
+            const w0=((p1.x-x)*(p2.y-y)-(p1.y-y)*(p2.x-x))/area;
+            const w1=((p2.x-x)*(p0.y-y)-(p2.y-y)*(p0.x-x))/area;
+            const w2=1-w0-w1;
+            if(w0>=0&&w1>=0&&w2>=0){
+              const r=w0*c0[0]+w1*c1[0]+w2*c2[0];
+              const g=w0*c0[1]+w1*c1[1]+w2*c2[1];
+              const b=w0*c0[2]+w1*c1[2]+w2*c2[2];
+              ctx.fillStyle=`rgb(${r|0},${g|0},${b|0})`;
+              ctx.fillRect(x,y,1,1);
+            }
+          }
+        }
+      }
+    });
+  });
+
+  if(!paused){
+    angleX+=0.01;angleY+=0.008;
+    lightPos=new Vec3(Math.sin(performance.now()*0.001)*5,Math.cos(performance.now()*0.001)*5,5);
+  }
+
+  requestAnimationFrame(render);
+}
+render();
+})();
+</script>
+</body>
+</html>

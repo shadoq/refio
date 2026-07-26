@@ -19,6 +19,9 @@ export const TaskSchema = z.object({
   description: z.string(),
   systemPrompt: z.string(),
   extraCriteria: z.array(CriterionSchema).default([]),
+  // When true, the task and its results are hidden from the public results view
+  // and excluded from all measurements. Admin editors still see it. Absent = visible.
+  hidden: z.boolean().optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });

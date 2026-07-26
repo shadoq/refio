@@ -86,9 +86,45 @@ export const ResultSchema = z.object({
   attachments: z.array(AttachmentSchema).default([]),
   judgeScores: z.array(JudgeScoreSetSchema).default([]),
   notes: z.string().optional(),
+  // Marks a run whose result could not be established (a technical failure that
+  // produced no usable artifact). Such a result is kept as evidence the model was
+  // tested on the task, but is excluded from every computed metric. Absent = counted.
+  excludeFromStats: z.boolean().optional(),
   runAt: z.string().datetime(),
   createdAt: z.string().datetime(),
 });
+
+// The advisory PASS/FAIL verdict of the e2e soft judge, carried on an inbox
+// entry until a human promotes it. Never affects statistics on its own.
+export const AutoVerdictSchema = z.object({
+  verdict: z.enum(["PASS", "FAIL"]),
+  confidence: z.number().optional(),
+  reasons: z.array(z.string()).default([]),
+});
+
+// A completed automated run awaiting human scoring. It is a Result without the
+// manual `scores` (a human adds those on promotion, in results[]), plus the
+// artifact, metrics, deterministic judgeScores and the advisory autoVerdict.
+// Strict so a stray `scores` key cannot leak manual scoring into the queue.
+export const InboxEntrySchema = z
+  .object({
+    id: z.string(),
+    taskId: z.string(),
+    modelId: z.string(),
+    environmentId: z.string(),
+    attemptNumber: z.number().int().positive(),
+    durationMs: z.number().int().nonnegative().optional(),
+    tokensIn: z.number().int().nonnegative().optional(),
+    tokensOut: z.number().int().nonnegative().optional(),
+    costUsd: z.number().nonnegative().optional(),
+    attachments: z.array(AttachmentSchema).default([]),
+    judgeScores: z.array(JudgeScoreSetSchema).default([]),
+    autoVerdict: AutoVerdictSchema.optional(),
+    notes: z.string().optional(),
+    runAt: z.string().datetime(),
+    createdAt: z.string().datetime(),
+  })
+  .strict();
 
 export const ResultsFileSchema = z.object({
   version: z.literal(1),
@@ -96,6 +132,7 @@ export const ResultsFileSchema = z.object({
   environments: z.array(EnvironmentSchema),
   results: z.array(ResultSchema),
   stability: z.array(StabilityEntrySchema).default([]),
+  inbox: z.array(InboxEntrySchema).default([]),
 });
 
 export type Model = z.infer<typeof ModelSchema>;
@@ -107,4 +144,6 @@ export type JudgeScoreSet = z.infer<typeof JudgeScoreSetSchema>;
 export type StabilityJudge = z.infer<typeof StabilityJudgeSchema>;
 export type StabilityEntry = z.infer<typeof StabilityEntrySchema>;
 export type Result = z.infer<typeof ResultSchema>;
+export type AutoVerdict = z.infer<typeof AutoVerdictSchema>;
+export type InboxEntry = z.infer<typeof InboxEntrySchema>;
 export type ResultsFile = z.infer<typeof ResultsFileSchema>;

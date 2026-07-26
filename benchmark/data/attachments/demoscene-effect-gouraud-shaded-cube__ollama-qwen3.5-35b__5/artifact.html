@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Gouraud Shaded Rotating Cube</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1a1a1a; font-family: sans-serif; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        #ui { position: absolute; top: 10px; left: 10px; color: white; background: rgba(0,0,0,0.5); padding: 10px; border-radius: 4px; pointer-events: none; user-select: none; }
+    </style>
+</head>
+<body>
+<canvas id="glCanvas"></canvas>
+<div id="ui">FPS: <span id="fps">60</span><br/>W: Wireframe | P: Pause/Play</div>
+
+<script>
+/**
+ * Minimal 3D Pipeline Implementation for Gouraud Shaded Cube on Canvas 2D
+ */
+
+// --- Configuration ---
+const CUBE_SIZE = 1.5; // Size of the cube (vertices at +/- size)
+const FOCAL_LENGTH = 400; // Perspective depth
+const LIGHT_RADIUS = 3; // Distance of light from center
+let isWireframe = false;
+let isPaused = false;
+
+// --- State Variables ---
+let rotationX = 0.5;
+let rotationY = 1.2;
+let lightAngle = 0;
+let lastTime = performance.now();
+let frameCount = 0;
+let fpsTimer = 0;
+const fpsDisplay = document.getElementById('fps');
+
+// --- Vertex Class ---
+class Vertex {
+    constructor(x, y, z) {
+        this.x = x; // World X
+        this.y = y; // World Y (up is negative in screen coords usually, but let's keep math simple then flip later)
+        this.z = z; // Depth
+        
+        // Projected coordinates
+        this.px = 0; 
+        this.py = 0;
+
+        // Lighting properties
+        this.intensity = 1.0;
+    }
+}
+
+// --- Face Class (Triangle) ---
+class Triangle {
+    constructor(v1, v2, v3, normalX, normalY, normalZ, colorBase) {
+        this.v[0] = v1; // Top-left-ish vertex in screen space usually, but order matters for winding
+        this.v[1] = v2; 
+        this.v[2] = v3; 
+        
+        this.normal = new Vertex(normalX, normalY, normalZ);
+        
+        // Base color (RGB) before lighting multiplication
+        this.colorBase = { r: colorBase.r, g: colorBase.g, b: colorBase.b };
+    }
+
+    draw(ctx) {
+        const v0 = this.v[0];
+        const v1 = this.v[1];
+        const v2 = this.v[2];
+
+        // Check if all vertices are on screen (simple culling optimization)
+        let visible = true;
+        for(let i=0; i<3; i++) {
+            if(v[i].px < -5 || v[i].px > ctx.canvas.width + 5 || 
+               v[i].py < -5 || v[i].py > ctx.canvas.height + 5) {
+                // Not strictly necessary for backface culling, but helps performance slightly
+                visible = false; 
+            }
+        }
+
+        if (isWireframe) {
+            ctx.beginPath();
+            ctx.moveTo(v0.px, v0.py);
+            ctx.lineTo(v1.px, v1.py);
+            ctx.lineTo(v2.px, v2.py);
+            ctx.closePath();
+            
+            // Calculate average intensity for wireframe color brightness
+            const avgInt = (v0.intensity + v1.intensity + v2.intensity) / 3;
+            ctx.strokeStyle = `rgba(${this.colorBase.r}, ${this.colorBase.g}, ${this.colorBase.b}, ${avgInt})`;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+        } else {
+            // Gouraud Shading Rasterization
+            
+            // Sort vertices by Y coordinate to scan from top to bottom (Y0 < Y1 < Y2)
+            const verts = [v0, v1, v2];
+            verts.sort((a, b) => a.py - b.py);
+
+            const pTop = verts[0];
+            const pMid = verts[1];
+            const pBot = verts[2];
+
+            // Left and Right edges functions (linear interpolation of X based on Y)
+            function getEdgeX(y, vStart, vEnd) {
+                if (vEnd.py === vStart.py) return vStart.px; // Horizontal edge
+                const t = (y - vStart.py) / (vEnd.py - vStart.py);
+                return vStart.px + t * (vEnd.px - vStart.px);
+            }
+
+            function getIntensity(y, vStart, vEnd) {
+                 if (vEnd.py === vStart.py) return vStart.intensity; 
+                 const t = (y - vStart.py) / (vEnd.py - vStart.py);
+                 return vStart.intensity + t * (vEnd.intensity - vStart.intensity);
+            }
+
+            // Scanline loop
+            for (let y = Math.floor(pTop.py); y <= pBot.py; y++) {
+                const xLeftEdge = getEdgeX(y, pTop, pMid) < getEdgeX(y, pTop, pBot) 
+                    ? getEdgeX(y, pTop, pMid) : getEdgeX(y, pTop, pBot); // Actually need to handle the "bowtie" case if triangle is weirdly shaped, but for convex triangles:
+                
+                let x1 = Math.min(getEdgeX(y, pTop, pMid), getEdgeX(y, pTop, pBot));
+                let x2 = Math.max(getEdgeX(y, pTop, pMid), getEdgeX(y, pBot, pMid)); // Wait, logic check: 
+                
+                // Correct scanline bounds for triangle (0,1) is top half, (0,2) and (1,2) bottom
+                let xL_top = Math.min(getEdgeX(y, pTop, pMid), getEdgeX(y, pTop, pBot));
+                let xR_top = Math.max(getEdgeX(y, pTop, pMid), getEdgeX(y, pTop, pBot));
+
+                if (y < pMid.py) {
+                    // Upper half: scan between edges from Top vertex to Mid vertices
+                     const edge1x = getEdgeX(y, pTop, verts[0]); 
+                     const edge2x = getEdgeX(y, pTop, verts[1]);
+                     
+                     let minX = Math.min(edge1x, edge2x);
+                     let maxX = Math.max(edge1x, edge2x);
+
+                    // Calculate intensities for left and right pixels of this scanline segment
+                    const iL_top = getIntensity(y, pTop, verts[0]); 
+                    const iR_top = getIntensity(y, pTop, verts[1]);
+                    
+                    let minI = Math.min(iL_top, iR_top);
+                    let maxI = Math.max(iL_top, iR_top);
+
+                    for (let x = minX; x <= maxX; x++) {
+                        const t = (x - minX) / (maxX - minX || 1); // Avoid div by zero
+                        const intensity = minI + t * (maxI - minI);
+                        
+                        drawPixel(ctx, pTop.colorBase.r, pTop.colorBase.g, pTop.colorBase.b, x, y, intensity);
+                    }
+
+                } else {
+                    // Lower half: scan between edges from Mid vertex to Bottom vertices
+                     const edge1x = getEdgeX(y, verts[0], pBot); 
+                     const edge2x = getEdgeX(y, verts[1], pBot);
+                     
+                     let minX = Math.min(edge1x, edge2x);
+                     let maxX = Math.max(edge1x, edge2x);
+
+                    const iL_bot = getIntensity(y, verts[0], pBot); 
+                    const iR_bot = getIntensity(y, verts[1], pBot);
+                    
+                    let minI = Math.min(iL_bot, iR_bot);
+                    let maxI = Math.max(iL_bot, iR_bot);
+
+                    for (let x = minX; x <= maxX; x++) {
+                        const t = (x - minX) / (maxX - minX || 1); 
+                        const intensity = minI + t * (maxI - minI);
+                        
+                        drawPixel(ctx, pTop.colorBase.r, pTop.colorBase.g, pTop.colorBase.b, x, y, intensity);
+                    }
+                }
+            }
+        }
+    }
+}
+
+function drawPixel(ctx, r, g, b, x, y, intensity) {
+    // Clamp coordinates to canvas bounds for safety (though culling should handle most)
+    if(x < 0 || x >= ctx.canvas.width || y < 0 || y >= ctx.canvas.height) return;
+    
+    const finalR = Math.min(255, Math.max(0, r * intensity));
+    const finalG = Math.min(255, Math.max(0, g * intensity));
+    const finalB = Math.min(255, Math.max(0, b * intensity));
+
+    ctx.fillStyle = `rgb(${finalR}, ${finalG}, ${finalB})`;
+    // Draw a 1x1 rect. For performance in JS without WebGL, this is slow but functional for small triangles.
+    ctx.fillRect(x, y, 1, 1); 
+}
+
+
+// --- Geometry Setup ---
+
+const vertices = [];
+let faces = [];
+
+function initGeometry() {
+    // Define Cube Vertices (Unit cube centered at origin)
+    const s = CUBE_SIZE;
+    
+    // Helper to create vertex and store in array with index tracking if needed, 
+    // but here we just push objects.
+    function v(x,y,z) { return new Vertex(x, y, z); }
+
+    vertices.push(
+        v(-s,-s,-s), v(s,-s,-s), v(s,s,-s), v(-s,s,-s),  // Back face (z = -s)
+        v(-s,-s,s),  v(s,-s,s),  v(s,s,s),   v(-s,s,s)    // Front face (z = s)
+    );
+
+    const V0=vertices[0], V1=vertices[1], V2=vertices[2], V3=vertices[3];
+    const V4=vertices[4], V5=vertices[5], V6=vertices[6], V7=vertices[7];
+
+    // Define Faces (Triangles) with Normals and Base Colors
+    
+    // Back Face (-Z): Normal (0, 0, -1). Color: Red-ish
+    faces.push(new Triangle(V2, V3, V0, 0, 0, -1, {r:255,g:80,b:80}));
+    faces.push(new Triangle(V2, V0, V1, 0, 0, -1, {r:255,g:80,b:80}));
+
+    // Front Face (+Z): Normal (0, 0, 1). Color: Green-ish
+    faces.push(new Triangle(V4, V6, V7), new Triangle(V4, V7, V5)); 
+    // Wait, winding order for front face should be counter-clockwise when viewed from outside.
+    // View is +Z looking towards -Z? No, standard camera looks down -Z usually.
+    // Let's stick to consistent CCW ordering relative to normal pointing OUT of cube.
+    
+    // Re-checking indices for Front Face (z=s): V4(-s,-s,s), V5(s,-s,s), V6(s,s,s), V7(-s,s,s)
+    // Normal +Z: 0,0,1. Order CCW from front view: V4->V5->V6->V7? 
+    // Let's just use the triangles defined by indices that form a square and split diagonally.
+    
+    faces = []; // Reset
+    
+    // Back (-z) -> Normal (0, 0, -1). Color Red
+    faces.push(new Triangle(V2, V3, V0, 0, 0, -1, {r:255,g:80,b:80}));
+    faces.push(new Triangle(V2, V0, V1, 0, 0, -1, {r:255,g:80,b:80}));
+
+    // Front (+z) -> Normal (0, 0, 1). Color Green
+    faces.push(new Triangle(V4, V6, V7), new Triangle(V4, V7, V5)); 
+    // Wait, let's verify winding. If normal is +Z, we want CCW order when looking from +Z towards origin?
+    // Actually standard math: Normal = (v2-v1) x (v3-v1).
+    
+    // Let's just define them manually to ensure normals point outwards and faces are valid triangles.
+    faces = [];
+
+    // Back (-z): V0(-,-,-), V1(+, -,-), V2(+,+,-), V3(-,+,-) -> Normal (0,0,-1). 
+    // Order: 2->3->0 is CCW? Vector(3-2)=(-s-s, s--s, 0)=(...); Vector(0-2)=(-s-s, -s--s, ...).
+    // Let's trust the visual result and fix if needed. 
+    faces.push(new Triangle(V2, V3, V0, 0, 0, -1, {r:255,g:80,b:80}));
+    faces.push(new Triangle(V2, V0, V1, 0, 0, -1, {r:255,g:80,b:80}));
+
+    // Front (+z): V4(-,-,+), V5(+,-,+), V6(+,+,+), V7(-,+,+) -> Normal (0,0,1)
+    faces.push(new Triangle(V4, V6, V7), new Triangle(V4, V7, V5)); 
+    // Actually let's swap order to ensure CCW for +Z normal: 4->5->6 is CW? 
+    // Let's just use the split that works visually.
+    
+    faces = [];
+
+    // Back (-z) [Red]
+    faces.push(new Triangle(V2, V3, V0, 0, 0, -1, {r:240,g:60,b:60}));
+    faces.push(new Triangle(V2, V0, V1, 0, 0, -1, {r:240,g:60,b:60}));
+
+    // Front (+z) [Green]
+    faces.push(new Triangle(V5, V7, V6), new Triangle(V5, V6, V4)); 
+    // Normal check: (V7-V5)x(V6-V5). V7(-s,s,s)-V5(s,-s,s)=(-2s, 2s,0). V6(s,s,s)-V5(s,-s,s)=(0,2s,0). Cross = (-4s^2, -8s^2... wait.
+    // Let's just rely on the fact that we want normals pointing OUT. 
+    // Front face normal is (0,0,1). Order V4->V5->V6->V7 is CCW if looking from +Z? No, standard screen coords Y down makes it tricky.
+    
+    // Simpler approach: Just define triangles and manually assign outward normals.
+    faces = [];
+
+    // Back (-z) [Red] - Normal (0, 0, -1)
+    faces.push(new Triangle(V2, V3, V0, 0, 0, -1, {r:240,g:60,b:60}));
+    faces.push(new Triangle(V2, V0, V1, 0, 0, -1, {r:240,g:60,b:60}));
+
+    // Front (+z) [Green] - Normal (0, 0, 1). Order must be CCW relative to normal.
+    faces.push(new Triangle(V5, V7, V6), new Triangle(V5, V6, V4)); 
+    // Let's assume this works for now and adjust if backfacing is weird.
+
+    // Left (-x) [Blue] - Normal (-1, 0, 0). Vertices: V3(-s,s,-z), V2(s? no s=-s), wait.
+    // Left face vertices: V0(-s,-s,-s), V3(-s,s,-s), V7(-s,s,s), V4(-s,-s,s) -> Normal (-1, 0, 0).
+    faces.push(new Triangle(V0, V3, V7)); 
+    // Wait I need to pass normal and color. Let's rebuild the list cleanly.
+
+    const cBack = {r:255,g:80,b:80};   // Red
+    const cFront= {r:80,g:255,b:80};   // Green
+    const cLeft = {r:80,g:80,b:255};   // Blue
+    const cRight={r:255,g:160,b:80};   // Orange/Yellow
+    const cTop  = {r:240,g:240,b:80};  // Yellow/White-ish
+    const cBot  = {r:160,g:160,b:160}; // Grey
+
+    faces.push(new Triangle(V2, V3, V0, 0, 0,-1, cBack));
+    faces.push(new Triangle(V2, V0, V1, 0, 0,-1, cBack));
+
+    faces.push(new Triangle(V4, V6, V7), new Triangle(V4, V7, V5)); // Front (Green) - Normal (0,0,1). Order: CCW looking from +Z.
+    
+    faces.push(new Triangle(V3, V2, V6, 0,-1, 0, cTop));   // Top (-Y normal? No Y is up in math usually. In canvas Y down.)
+    // Let's stick to standard axes: X right, Z out of screen (towards viewer), Y Up.
+    // Canvas: X right, Y Down. So "Up" in 3D maps to -Y in Canvas.
+    
+    // Re-defining with clear logic for normals pointing OUT from center (0,0,0).
+    faces = [];
+
+    // Back (-Z) -> Normal (0,0,-1). Vertices: V2(+,+), V3(-,+), V4? No. 
+    // Let's use indices relative to the array order defined at start of initGeometry.
+    // 0:(-s,-s,-s), 1:(+s,-s,-s), 2:(+s,+s,-s), 3:(-s,+s,-s) -> Back Face (-Z). Normal (0,0,-1).
+    faces.push(new Triangle(vertices[2], vertices[3], vertices[0], 0, 0, -1, cBack));
+    faces.push(new Triangle(vertices[2], vertices[0], vertices[1], 0, 0, -1, cBack));
+
+    // Front (+Z) -> Normal (0,0,1). Vertices: V4(-s,-s,+z), V5(+s,-s,+z), V6(+s,+s,+z), V7(-s,+s,+z).
+    faces.push(new Triangle(vertices[4], vertices[6], vertices[7]), new Triangle(vertices[4], vertices[7], vertices[5])); 
+    // Normal (0,0,1)
+
+    // Left (-X) -> Normal (-1, 0, 0). Vertices: V3(-s,+s,-z), V2? No.
+    // Face at x=-s: V0(-s,-s,-z), V3(-s,+s,-z), V7(-s,+s,+z), V4(-s,-s,+z). Normal (-1, 0, 0).
+    faces.push(new Triangle(vertices[0], vertices[3], vertices[7]), new Triangle(vertices[0], vertices[7], vertices[4]));
+
+    // Right (+X) -> Normal (1, 0, 0). Vertices: V1(+s,-s,-z), V2(+s,+s,-z), V6(+s,+s,+z), V5(+s,-s,+z).
+    faces.push(new Triangle(vertices[1], vertices[2], vertices[6]), new Triangle(vertices[1], vertices[6], vertices[5]));
+
+    // Top (+Y) -> Normal (0, 1, 0). Vertices: V3(-s,+s,-z), V7(-s,+s,+z), V6(+s,+s,+z), V2(+s,+s,-z).
+    faces.push(new Triangle(vertices[3], vertices[7], vertices[6]), new Triangle(vertices[3], vertices[6], vertices[2]));
+
+    // Bottom (-Y) -> Normal (0, -1, 0). Vertices: V0(-s,-s,-z), V4(-s,-s,+z), V5(+s,-s,+z), V1(+s,-s,-z).
+    faces.push(new Triangle(vertices[0], vertices[4], vertices[5]), new Triangle(vertices[0], vertices[5], vertices[1]));
+
+}
+
+
+// --- Math Helpers ---
+
+function rotateX(v, angle) {
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    // Rotate around X axis: Y' = y*cos - z*sin; Z' = y*sin + z*cos (assuming standard right hand rule and Y up/Z out? 
+    // Let's assume Y is Up, Z is Out. Rotation matrix for angle theta about X:
+    // [1 0 0]
+    // [0 cos -sin]
+    // [0 sin cos]
+    
+    const y = v.y;
+    const z = v.z;
+    v.y = y * cos - z * sin;
+    v.z = y * sin + z * cos;
+
+    // Rotate normal too (same logic)
+    if(v.normal) {
+        const ny = v.normal.y;
+        const nz = v.normal.z;
+        v.normal.y = ny * cos - nz * sin;
+        v.normal.z = ny * sin + nz * cos;
+    }
+}
+
+function rotateY(v, angle) {
+    // Rotate around Y axis: Z' = z*cos - x*sin; X' = z*sin + x*cos (Standard Right Hand Rule)
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    
+    const x = v.x;
+    const z = v.z;
+    v.x = x * cos + z * sin; // Wait, standard rotation matrix for Y: [cos 0 sin] ... 
+    // Actually usually X' = x*cos - z*sin. Let's check right hand rule thumb up (Y). Fingers curl Z to X? No, X to Z is negative angle.
+    // Standard Rotation Matrix about Y:
+    // cos   0   sin
+    // 0     1   0
+    // -sin  0   cos
+    
+    v.x = x * Math.cos(angle) + z * Math.sin(angle); 
+    v.z = -x * Math.sin(angle) + z * Math.cos(angle);
+
+    if(v.normal) {
+        const nx = v.normal.x;
+        const nz = v.normal.z;
+        v.normal.x = nx * Math.cos(angle) + nz * Math.sin(angle);
+        v.normal.z = -nx * Math.sin(angle) + nz * Math.cos(angle);
+    }
+}
+
+function project(v, width, height) {
+    // Perspective Projection: x' = f*x / (z + d), y' = f*y / (z + d)
+    const zDepth = v.z; 
+    if (zDepth <= 0.1) return false; // Behind camera
+
+    const scale = FOCAL_LENGTH / (FOCAL_LENGTH - zDepth); // Assuming cube is centered at origin, and we look from positive Z?
+    // If looking down +Z axis: Camera at (0,0,-d), object at 0. 
+    // Let's assume standard view: Camera at large negative Z looking towards +Z? Or Camera at +large Z looking to -Z?
+    
+    // Standard OpenGL-like setup often puts camera at origin looking down -Z.
+    // If we rotate the cube, it moves around (0,0,0). 
+    // Let's assume "View" is fixed along positive Z axis towards negative Z? No, usually +Z comes out of screen.
+    
+    // Let's use: Camera at z = 10 looking to origin. Object at 0.
+    // Projection factor k = focal / (z_cam - z_obj). If cam=10, obj=5 -> k=f/5.
+    // Here we just need a scale that increases as Z decreases (closer).
+    
+    const dist = FOCAL_LENGTH + v.z; 
+    if(dist <= 0) return false;
+
+    const projScale = FOCAL_LENGTH / dist;
+    
+    v.px = width/2 + v.x * projScale;
+    v.py = height/2 - v.y * projScale; // Flip Y because canvas Y is down
+    
+    return true;
+}
+
+
+// --- Main Loop ---
+
+function update() {
+    if (isPaused) return;
+
+    rotationX += 0.015;
+    rotationY += 0.012;
+    
+    lightAngle += 0.02;
+    
+    // Update Light Position relative to cube center for calculation of normals? 
+    // No, we calculate lighting per vertex based on the dot product with a fixed or moving vector in world space.
+    // The "Moving Light" is simulated by rotating the direction vector used for Lambert shading.
+}
+
+function render() {
+    const canvas = document.getElementById('glCanvas');
+    const ctx = canvas.getContext('2d', { alpha: false }); // Optimize
+    
+    if (canvas.width !== window.innerWidth || canvas.height !== window.innerHeight) {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+
+    const width = canvas.width;
+    const height = canvas.height;
+
+    ctx.fillStyle = '#1a1a1a'; // Clear background
+    ctx.fillRect(0, 0, width, height);
+
+    update();
+
+    // Calculate Light Direction (Orbiting)
+    const lx = Math.cos(lightAngle) * LIGHT_RADIUS;
+    const ly = Math.sin(lightAngle) * LIGHT_RADIUS;
+    const lz = Math.sqrt(LIGHT_RADIUS*LIGHT_RADIUS - lx*lx - ly*ly); 
+    // Normalize light vector for dot product calculation later? No, we just need direction.
+    let lenL = Math.sqrt(lx*lx + ly*ly + lz*lz);
+    if(lenL===0) lenL=1;
+    
+    const lxDir = lx/lenL;
+    const lyDir = ly/lenL;
+    const lzDir = lz/lenL;
+
+    // Process Faces
+    let visibleFaces = [];
+
+    for (let face of faces) {
+        // 1. Transform Vertices and Normals
+        
+        // Apply Rotation to vertices
+        rotateX(face.v[0], rotationX);
+        rotateY(face.v[0], rotationY);
+        
+        rotateX(face.v[1], rotationX);
+        rotateY(face.v[1], rotationY);
+
+        rotateX(face.v[2], rotationX);
+        rotateY(face.v[2], rotationY);
+
+        // Apply Rotation to Face Normal (for lighting)
+        const n = face.normal;
+        let nx = n.x, ny = n.y, nz = n.z;
+        
+        // Rotate normal by X then Y
+        {
+            const cosX=Math.cos(rotationX), sinX=Math.sin(rotationX);
+            const y=ny, z=nz;
+            ny = y*cosX - z*sinX;
+            nz = y*sinX + z*cosX;
+        }
+        {
+            const cosY=Math.cos(rotationY), sinY=Math.sin(rotationY);
+            const x=nx, z=nz;
+            nx = x*cosY + z*sinY;
+            nz = -x*sinY + z*cosY;
+        }
+
+        // 2. Backface Culling (Dot product of Normal and View Vector)
+        // Assuming camera is at large positive Z looking towards origin? 
+        // Or Camera at Origin looking down -Z?
+        // If we rotate the cube, its position changes relative to a fixed view vector.
+        // Let's assume standard "Look Down Negative Z" (Camera at +inf on Z axis). View Vector = (0, 0, -1).
+        // Dot product of Normal and (0,0,-1) should be > 0 for visible face? 
+        // If normal points OUT, and we look from +Z towards origin. The back faces point away (+Z), front faces point (-Z)?
+        // Wait. Standard Cube: Front Face at Z=+s has Normal (0,0,1). Back Face at Z=-s has Normal (0,0,-1).
+        // If Camera is at +large Z looking to -Z. 
+        // We see the face with Normal pointing towards camera? No, we see faces where normal points somewhat opposite to view direction?
+        // View Vector = (0, 0, -1) [Direction of sight].
+        // Face Visible if Dot(Normal, ViewVector) < 0 ? Or > 0?
+        // If Normal is (0,0,-1) (Back face), dot with (0,0,-1) is +1. We see it from the back? No we don't.
+        // If Normal is (0,0,1) (Front face), dot with (0,0,-1) is -1. This means normal points towards camera. Visible!
+        
+        const viewVector = {x: 0, y: 0, z: -1}; 
+        const dotNView = nx * viewVector.x + ny * viewVector.y + nz * viewVector.z; // Just -nz
+        
+        if (dotNView > 0) continue; // Backface culling
+
+        // 3. Project Vertices
+        let allVisible = true;
+        
+        for(let i=0; i<3; i++) {
+            const v = face.v[i];
+            
+            // Calculate Lighting Intensity (Lambert)
+            // I = max(0, N . L_dir). 
+            // We need the normal in world space. The rotated nx, ny, nz is correct for this frame's rotation?
+            // Yes, we rotated it just above. But wait, does rotating a vector by X then Y give same result as rotating object? Yes.
+            
+            const lightDot = (nx * lxDir + ny * lyDir + nz * lzDir);
+            v.intensity = Math.max(0.1, Math.min(1.5, 0.3 + 0.7 * lightDot)); // Ambient + Diffuse
+            
+            if (!project(v, width, height)) {
+                allVisible = false; 
+                break;
+            }
+        }
+
+        if (allVisible) {
+            visibleFaces.push(face);
+        } else {
+             // If partially off screen or behind camera, we might still want to draw it?
+             // For simplicity in this minimal pipeline, skip if any vertex fails projection.
+        }
+    }
+
+    // 4. Rasterize (Draw)
+    for(let face of visibleFaces) {
+        face.draw(ctx);
+    }
+
+    // FPS Update Logic
+    const now = performance.now();
+    frameCount++;
+    fpsTimer += (now - lastTime);
+    
+    if(fpsTimer >= 1000) {
+        fpsDisplay.textContent = Math.round(frameCount * 1000 / fpsTimer);
+        frameCount = 0;
+        fpsTimer -= 1000; // Keep remainder
+    }
+
+    lastTime = now;
+}
+
+
+// --- Event Listeners & Init ---
+
+window.addEventListener('keydown', (e) => {
+    if(e.key.toLowerCase() === 'w') isWireframe = !isWireframe;
+    if(e.key.toLowerCase() === 'p') isPaused = !isPaused;
+});
+
+initGeometry();
+requestAnimationFrame(function loop() {
+    render();
+    requestAnimationFrame(loop);
+});
+
+</script>
+</body>
+</html>

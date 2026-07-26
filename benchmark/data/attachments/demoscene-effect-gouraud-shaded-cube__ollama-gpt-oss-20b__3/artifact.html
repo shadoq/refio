@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+  body{margin:0;overflow:hidden;background:#111;color:#fff;font-family:sans-serif;}
+  canvas{display:block;width:100vw;height:100vh;}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  let width, height;
+  function resize() {
+    width = canvas.clientWidth;
+    height = canvas.clientHeight;
+    canvas.width = width;
+    canvas.height = height;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Cube data
+  const vertices = [
+    {pos: [-1, -1, -1], normal: null},
+    {pos: [ 1, -1, -1], normal: null},
+    {pos: [ 1,  1, -1], normal: null},
+    {pos: [-1,  1, -1], normal: null},
+    {pos: [-1, -1,  1], normal: null},
+    {pos: [ 1, -1,  1], normal: null},
+    {pos: [ 1,  1,  1], normal: null},
+    {pos: [-1,  1,  1], normal: null}
+  ];
+  // Precompute vertex normals (normalized position)
+  for (const v of vertices) {
+    const n = normalize(v.pos);
+    v.normal = n;
+  }
+
+  const faces = [
+    [0,1,2,3], // back
+    [4,5,6,7], // front
+    [0,1,5,4], // bottom
+    [2,3,7,6], // top
+    [0,3,7,4], // left
+    [1,2,6,5]  // right
+  ];
+
+  const baseColor = {r:200,g:120,b:80};
+
+  let angleX=0, angleY=0, angleZ=0;
+  let paused=false, wireframe=false;
+  let lastTime=performance.now();
+  let fps=0;
+
+  function normalize(v) {
+    const len = Math.hypot(...v);
+    return v.map(x=>x/len);
+  }
+
+  function rotateX(v, a){const c=Math.cos(a),s=Math.sin(a);return [v[0],c*v[1]-s*v[2],s*v[1]+c*v[2]];}
+  function rotateY(v, a){const c=Math.cos(a),s=Math.sin(a);return [c*v[0]+s*v[2],v[1],-s*v[0]+c*v[2]];}
+  function rotateZ(v, a){const c=Math.cos(a),s=Math.sin(a);return [c*v[0]-s*v[1],s*v[0]+c*v[1],v[2]];}
+
+  function transform(v, aX,aY,aZ){
+    let r = rotateX(v,aX);
+    r = rotateY(r,aY);
+    r = rotateZ(r,aZ);
+    return r;
+  }
+
+  // Light parameters
+  const lightRadius=3;
+  const camPos=[0,0,5];
+  const viewDir=[0,0,-1];
+
+  function render(now){
+    if(!paused) {
+      const dt=(now-lastTime)/1000;
+      angleX+=dt*0.6;
+      angleY+=dt*0.4;
+      angleZ+=dt*0.8;
+    }
+    lastTime=now;
+
+    // Create image data
+    const imgData = ctx.createImageData(width,height);
+    const data = imgData.data;
+    // Clear background
+    for(let i=0;i<data.length;i+=4){data[i]=30;data[i+1]=30;data[i+2]=30;data[i+3]=255;}
+
+    // Light position orbiting
+    const t=now/1000;
+    const lightPos=[lightRadius*Math.cos(t), lightRadius*Math.sin(t), lightRadius*Math.sin(t*0.5)];
+
+    // Transform vertices
+    const transformed = vertices.map(v=>{
+      const posW = transform(v.pos,angleX,angleY,angleZ);
+      const normalW = transform(v.normal,angleX,angleY,angleZ);
+      const worldPos=[posW[0]+camPos[0],posW[1]+camPos[1],posW[2]+camPos[2]];
+      // Perspective projection
+      const f=width/2;
+      const z=worldPos[2];
+      const x=(worldPos[0]*f)/z + width/2;
+      const y=(-worldPos[1]*f)/z + height/2;
+      return {x,y,z,normal:normalW,worldPos};
+    });
+
+    // For each face
+    for(const f of faces){
+      const triIndices = [
+        [f[0],f[1],f[2]],
+        [f[0],f[2],f[3]]
+      ];
+      for(const ti of triIndices){
+        const v0=transformed[ti[0]];
+        const v1=transformed[ti[1]];
+        const v2=transformed[ti[2]];
+
+        // Backface culling
+        const edge1=[v1.x-v0.x,v1.y-v0.y];
+        const edge2=[v2.x-v0.x,v2.y-v0.y];
+        const normalZ = edge1[0]*edge2[1]-edge1[1]*edge2[0];
+        if(normalZ<=0) continue;
+
+        // Lighting per vertex
+        function vertexColor(v){
+          const L=normalize([lightPos[0]-v.worldPos[0], lightPos[1]-v.worldPos[1], lightPos[2]-v.worldPos[2]]);
+          const N=v.normal;
+          let intensity = Math.max(0, N[0]*L[0]+N[1]*L[1]+N[2]*L[2]);
+          return {
+            r:Math.min(255, baseColor.r*intensity),
+            g:Math.min(255, baseColor.g*intensity),
+            b:Math.min(255, baseColor.b*intensity)
+          };
+        }
+        const c0=vertexColor(v0);
+        const c1=vertexColor(v1);
+        const c2=vertexColor(v2);
+
+        if(wireframe){
+          ctx.strokeStyle='rgba(200,200,200,0.8)';
+          ctx.beginPath();
+          ctx.moveTo(v0.x,v0.y);ctx.lineTo(v1.x,v1.y);
+          ctx.lineTo(v2.x,v2.y);ctx.closePath();ctx.stroke();
+        }else{
+          // Rasterize triangle with Gouraud shading
+          const minX=Math.max(0,Math.floor(Math.min(v0.x,v1.x,v2.x)));
+          const maxX=Math.min(width-1,Math.ceil(Math.max(v0.x,v1.x,v2.x)));
+          const minY=Math.max(0,Math.floor(Math.min(v0.y,v1.y,v2.y)));
+          const maxY=Math.min(height-1,Math.ceil(Math.max(v0.y,v1.y,v2.y)));
+
+          const area = (v1.x-v0.x)*(v2.y-v0.y)-(v1.y-v0.y)*(v2.x-v0.x);
+          if(area===0) continue;
+          for(let y=minY;y<=maxY;y++){
+            for(let x=minX;x<=maxX;x++){
+              const w0 = ((x - v1.x)*(y - v2.y) - (y - v1.y)*(x - v2.x))/area;
+              const w1 = ((x - v2.x)*(y - v0.y) - (y - v2.y)*(x - v0.x))/area;
+              const w2 = 1 - w0 - w1;
+              if(w0>=0 && w1>=0 && w2>=0){
+                const r = Math.round(c0.r*w0 + c1.r*w1 + c2.r*w2);
+                const g = Math.round(c0.g*w0 + c1.g*w1 + c2.g*w2);
+                const b = Math.round(c0.b*w0 + c1.b*w1 + c2.b*w2);
+                const idx=(y*width+x)*4;
+                data[idx]=r;data[idx+1]=g;data[idx+2]=b;data[idx+3]=255;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    ctx.putImageData(imgData,0,0);
+
+    // FPS display
+    const nowTime=performance.now();
+    fps = 1000/(nowTime-lastTime);
+    ctx.fillStyle='rgba(255,255,255,0.8)';
+    ctx.font='16px monospace';
+    ctx.fillText(`FPS: ${fps.toFixed(1)}`,10,20);
+
+    requestAnimationFrame(render);
+  }
+  requestAnimationFrame(render);
+
+  window.addEventListener('keydown',e=>{
+    if(e.key==='w'||e.key==='W') wireframe=!wireframe;
+    if(e.key==='p'||e.key==='P') paused=!paused;
+  });
+})();
+</script>
+</body>
+</html>

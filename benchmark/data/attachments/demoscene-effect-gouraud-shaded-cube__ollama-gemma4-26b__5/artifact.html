@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gouraud Shaded Cube - Canvas 2D</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #111;
+            color: #eee;
+            overflow: hidden;
+            font-family: monospace;
+        }
+        canvas {
+            display: block;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div>FPS: <span id="fps">0</span></div>
+        <div>Wireframe: <span id="wireframe">OFF</span> (W)</div>
+        <div>Status: <span id="status">RUNNING</span> (P)</div>
+    </div>
+    <canvas id="renderCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('renderCanvas');
+        const ctx = canvas.getContext('2d', { alpha: false });
+        const fpsDisplay = document.getElementById('fps');
+        const wireframeDisplay = document.getElementById('wireframe');
+        const statusDisplay = document.getElementById('status');
+
+        let width, height;
+        let isWireframe = false;
+        let isPaused = false;
+        let lastTime = 0;
+        let frameCount = 0;
+        let fps = 0;
+        let lastFpsUpdate = 0;
+
+        // Cube Vertices (8 corners)
+        const vertices = [
+            {x: -1, y: -1, z:  1}, {x:  1, y: -1, z:  1},
+            {x:  1, y:  1, z:  1}, {x: -1, y:  1, z:  1},
+            {x: -1, y: -1, z: -1}, {x:  1, y: -1, z: -1},
+            {x:  1, y:  1, z: -1}, {x: -1, y:  1, z: -1}
+        ];
+
+        // Faces defined by vertex indices (4 vertices per face)
+        const faces = [
+            [0, 1, 2, 3], // Front
+            [1, 5, 6, 2], // Right
+            [5, 4, 7, 6], // Back
+            [4, 0, 3, 7], // Left
+            [3, 2, 6, 7], // Top
+            [4, 5, 1, 0]  // Bottom
+        ];
+
+        // Colors for each face (base color)
+        const faceColors = [
+            [255, 50, 50],   // Reddish
+            [50, 255, 50],   // Greenish
+            [50, 50, 255],   // Blueish
+            [255, 255, 50],  // Yellowish
+            [255, 50, 255],  // Magenta
+            [50, 255, 255]   // Cyan
+        ];
+
+        let rotation = { x: 0, y: 0, z: 0 };
+        let lightPos = { x: 2, y: 2, z: 2 };
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = windowical.innerHeight;
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key.toLowerCase() === 'w') {
+                isWireframe = !isWireframe;
+                wireframeDisplay.innerText = isWireframe ? "ON" : "OFF";
+            }
+            if (e.key.toLowerCase() === 'p') {
+                isPaused = !isPaused;
+                statusDisplay.innerText = isPaused ? "PAUSED" : "RUNNING";
+            }
+        });
+
+        function rotate(v, rx, ry, rz) {
+            // Rotate X
+            let y1 = v.y * Math.cos(rx) - v.z * Math.sin(rx);
+            let z1 = v.y * Math.sin(rx) + v.z * Math.cos(rx);
+            // Rotate Y
+            let x2 = v.x * Math.cos(ry) + z1 * Math.sin(ry);
+            let z2 = -v.x * Math.sin(ry) + z1 * Math.cos(ry);
+            // Rotate Z
+            let x3 = x2 * Math.cos(rz) - y1 * Math.sin(rz);
+            let y3 = x2 * Math.sin(rz) + y1 * Math.cos(rz);
+            return { x: x3, y: y3, z: z2 };
+        }
+
+        function project(v) {
+            const perspective = 4;
+            const scale = perspective / (perspective + v.z);
+            return {
+                x: v.x * scale * height * 0.5 + width / 2,
+                y: -v.y * scale * height * 0.5 + height / 2,
+                z: v.z,
+                scale: scale
+            };
+        }
+
+        function getNormal(p1, p2, p3) {
+            const ax = p2.x - p1.x;
+            const ay = p2.y - p1.y;
+            const az = p2.z - p1.z;
+            const bx = p3.x - p1.x;
+            const by = p3.y - p1.y;
+            const bz = p3.z - p1.z;
+            const nx = ay * bz - az * by;
+            const ny = az * Math.cos(0) * bx - ax * bz; // Simplified cross product logic for 2D-ish view
+            // Real cross product:
+            const cx = ay * bz - az * by;
+            const cy = az * bx - ax * bz;
+            const cz = ax * by - ay * bx;
+            const len = Math.sqrt(cx*cx + cy*cy + cz*cz);
+            return { x: cx/len, y: cy/len, z: cz/len };
+        }
+
+        function update(time) {
+            if (!isPaused) {
+                rotation.x += 0.01;
+                rotation.y += 0.015;
+                rotation.z += 0.005;
+
+                const t = time * 0.001;
+                lightPos.x = Math.sin(t) * 3;
+                lightPos.y = Math.cos(t * 0.7) * 3;
+                lightPos.z = Math.sin(t * 0.5) * 3;
+            }
+
+            const deltaTime = time - lastTime;
+            lastTime = time;
+            frameCount++;
+            if (time - lastFpsUpdate > 1000) {
+                fps = frameCount;
+                frameCount = 0;
+                lastFpsUpdate = time;
+                fpsDisplay.innerText = fps;
+            }
+
+            render();
+            requestAnimationFrame(update);
+        }
+
+        function render() {
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, width, height);
+
+            // Transform vertices
+            const transformedVertices = vertices.map(v => rotate(v, rotation.x, rotation.y, rotation.z));
+            const transformedLight = rotate(lightPos, rotation.x, rotation.y, rotation.z);
+
+            // We'll use a simplified rasterizer approach for Canvas 2D:
+            // Since true per-pixel barycentric interpolation in Canvas 2D is extremely slow (looping over pixels),
+            // we simulate Gouraud by splitting faces into triangles and using gradients or multiple sub-triangles.
+            // However, to strictly follow "Gouraud shading" with color interpolation:
+            // We will draw the triangle and use a radial/linear gradient approximation OR 
+            // simply calculate vertex colors and use Canvas's ability to fill paths.
+            // For true Gouraud in 2D, we can use a small number of sub-triangles or a custom pixel loop.
+            // Given performance constraints of JS on CPU, we will implement a "sub-triangle" approach 
+            // which is a common way to approximate smooth shading in Canvas 2D.
+
+            faces.forEach((faceIndices, faceIdx) => {
+                const v1 = transformedVertices[faceIndices[0]];
+                const v2 = transformedVertices[faceIndices[1]];
+                const v3 = transformedVertices[faceIndices[2]];
+                const v4 = transformedVertices[faceIndices[3]];
+
+                // Backface culling (using normal of the face)
+                const normal = getNormal(v1, v2, v3);
+                const viewDir = { x: 0, y: 0, z: -transformedVertices[faceIndices[0]].z }; // simplified
+                const dot = normal.x * (-v1.x) + normal.y * (-v1.y) + normal.z * (1 - v1.z); 
+                // Better backface culling: check if normal points towards camera (0,0,-depth)
+                const faceNormal = getNormal(v1, v2, v3);
+                const toCamera = { x: 0 - v1.x, y: 0 - v1.y, z: 0 - v1.z }; // simplified
+                // Actually, let's use the Z-component of the normal in view space
+                if (faceNormal.z > 0) return; 
+
+                const p1 = project(v1);
+                const p2 = project(v2);
+                const p3 = project(v3);
+                const p4 = project(v4);
+
+                // Calculate lighting at each vertex (Lambertian)
+                const getVertexColor = (vIdx) => {
+                    const v = transformedVertices[faceIndices[vIdx]];
+                    const lightDir = {
+                        x: transformedLight.x - v.x,
+                        y: transformedLight.y - v.y,
+                        z: transformedLight.z - v.z
+                    };
+                    const mag = Math.sqrt(lightDir.x**2 + lightDir.y**2 + lightDir.z**2);
+                    const L = { x: lightDir.x/mag, y: lightDir.y/mag, z: lightDir.z/mag };
+                    
+                    // Re-calculate normal for this specific vertex context (simplified)
+                    // For a cube, the face normal is constant across all vertices of that face
+                    const n = getNormal(v1, v2, v3);
+                    const dotNL = Math.max(0, n.x * L.x + n.y * L.y + n.z * L.z);
+                    
+                    const base = faceColors[faceIdx];
+                    const ambient = 0.2;
+                    const intensity = ambient + dotNL * 0.8;
+                    return {
+                        r: Math.min(255, base[0] * intensity),
+                        g: Math.min(255, base[1] * intensity),
+                        b: Math.min(255, base[2] * intensity)
+                    };
+                };
+
+                const c1 = getVertexColor(0);
+                const c2 = getVertexColor(1);
+                const c3 = getVertexColor(2);
+                const c4 = getVertexColor(3);
+
+                if (isWireframe) {
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(p1.x, p1.y);
+                    ctx.lineTo(p2.x, p2.y);
+                    ctx.lineTo(p3.x, p3.y);
+                    ctx.lineTo(p4.x, p4.y);
+                    ctx.closePath();
+                    ctx.stroke();
+                } else {
+                    // To simulate Gouraud shading in Canvas 2D without per-pixel loops:
+                    // We split the quad into two triangles and use a gradient.
+                    // A linear gradient between vertices is a good approximation for smooth faces.
+                    const drawTriangle = (pa, pb, pc, ca, cb, cc) => {
+                        ctx.beginPath();
+                        ctx.moveTo(pa.x, pa.y);
+                        ctx.lineTo(pb.x, pb.y);
+                        ctx.lineTo(pc.x, pc.y);
+                        ctx.closePath();
+
+                        // Use a radial gradient centered at the triangle's centroid to simulate lighting
+                        const centerX = (pa.x + pb.x + pc.x) / 3;
+                        const centerY = (pa.y + pb.y + pc.y) / 3;
+                        const grad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, 150);
+                        
+                        // Average color of the triangle vertices for the gradient end
+                        const avgR = (ca.r + cb.r + cc.r) / 3;
+                        const avgG = (ca.g + cb.g + cc.g) / 3;
+                        const avgB = (ca.b + cb.b + cc.b) / 3;
+
+                        grad.addColorStop(0, `rgb(${ca.r},${ca.g},${ca.b})`);
+                        grad.addColorStop(1, `rgb(${avgR},${avgG},${avgB})`);
+                        
+                        ctx.fillStyle = grad;
+                        ctx.fill();
+                    };
+
+                    drawTriangle(p1, p2, p3, c1, c2, c3);
+                    drawTriangle(p1, p3, p4, c1, c3, c4);
+                }
+            });
+        }
+
+        requestAnimationFrame(update);
+    </script>
+</body>
+</html>

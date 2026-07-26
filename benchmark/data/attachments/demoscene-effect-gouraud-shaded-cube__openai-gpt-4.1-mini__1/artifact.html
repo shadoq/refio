@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gouraud Shaded Rotating Cube - Canvas 2D</title>
+<style>
+  body, html { margin: 0; height: 100%; background: #111; color: #eee; font-family: monospace; user-select: none; overflow: hidden; }
+  canvas { display: block; background: #222; margin: auto; position: absolute; top: 0; bottom: 0; left: 0; right: 0; }
+  #fps { position: absolute; top: 5px; left: 5px; font-size: 14px; }
+  #instructions { position: absolute; bottom: 5px; left: 5px; font-size: 12px; color: #aaa; user-select: none; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="fps">FPS: 0</div>
+<div id="instructions">W: Toggle Wireframe | P: Pause/Resume</div>
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  let width, height, cx, cy;
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+    cx = width / 2;
+    cy = height / 2;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  // 3D Vector and Matrix utilities
+  function vec3(x,y,z){return {x:x,y:y,z:z};}
+
+  function mat3_identity(){
+    return [
+      [1,0,0],
+      [0,1,0],
+      [0,0,1]
+    ];
+  }
+
+  function mat3_multiply(a,b){
+    let r = [];
+    for(let i=0;i<3;i++){
+      r[i] = [];
+      for(let j=0;j<3;j++){
+        r[i][j] = 0;
+        for(let k=0;k<3;k++){
+          r[i][j]+=a[i][k]*b[k][j];
+        }
+      }
+    }
+    return r;
+  }
+
+  function mat3_rotX(a){
+    let c = Math.cos(a), s = Math.sin(a);
+    return [
+      [1,0,0],
+      [0,c,-s],
+      [0,s,c]
+    ];
+  }
+
+  function mat3_rotY(a){
+    let c = Math.cos(a), s = Math.sin(a);
+    return [
+      [c,0,s],
+      [0,1,0],
+      [-s,0,c]
+    ];
+  }
+
+  function mat3_rotZ(a){
+    let c = Math.cos(a), s = Math.sin(a);
+    return [
+      [c,-s,0],
+      [s,c,0],
+      [0,0,1]
+    ];
+  }
+
+  function vec3_transformMat3(v,m){
+    return {
+      x: v.x*m[0][0] + v.y*m[0][1] + v.z*m[0][2],
+      y: v.x*m[1][0] + v.y*m[1][1] + v.z*m[1][2],
+      z: v.x*m[2][0] + v.y*m[2][1] + v.z*m[2][2],
+    };
+  }
+
+  function vec3_sub(a,b){return {x:a.x-b.x,y:a.y-b.y,z:a.z-b.z};}
+  function vec3_cross(a,b){
+    return {
+      x: a.y*b.z - a.z*b.y,
+      y: a.z*b.x - a.x*b.z,
+      z: a.x*b.y - a.y*b.x
+    };
+  }
+  function vec3_dot(a,b){return a.x*b.x + a.y*b.y + a.z*b.z;}
+  function vec3_length(v){return Math.sqrt(v.x*v.x+v.y*v.y+v.z*v.z);}
+  function vec3_normalize(v){
+    let len = vec3_length(v);
+    if(len === 0) return {x:0,y:0,z:0};
+    return {x:v.x/len,y:v.y/len,z:v.z/len};
+  }
+
+  // Perspective projection params
+  const fov = Math.PI/4;
+  const near = 0.1;
+  const far = 1000;
+  const aspect = width/height;
+
+  // Project 3D point to 2D screen space
+  function project(v) {
+    // Simple perspective projection
+    const scale = 1 / Math.tan(fov / 2);
+    let z = v.z + 3; // move cube away from camera
+    if(z === 0) z = 0.0001; // prevent div by zero
+    return {
+      x: cx + (v.x * scale * aspect) / z * cx,
+      y: cy - (v.y * scale) / z * cy
+    };
+  }
+
+  // Cube vertices
+  const vertices = [
+    vec3(-1,-1,-1),
+    vec3(1,-1,-1),
+    vec3(1,1,-1),
+    vec3(-1,1,-1),
+    vec3(-1,-1,1),
+    vec3(1,-1,1),
+    vec3(1,1,1),
+    vec3(-1,1,1)
+  ];
+
+  // Cube faces as quads (4 vertex indices)
+  // We'll split into triangles later
+  const faces = [
+    [0,1,2,3], // back
+    [5,4,7,6], // front
+    [4,0,3,7], // left
+    [1,5,6,2], // right
+    [3,2,6,7], // top
+    [4,5,1,0]  // bottom
+  ];
+
+  // Split quads into two triangles each
+  const triangles = [];
+  faces.forEach(face => {
+    triangles.push([face[0], face[1], face[2]]);
+    triangles.push([face[0], face[2], face[3]]);
+  });
+
+  // Lambertian light calculation per vertex
+  function lambertLight(normal, lightDir) {
+    let dp = vec3_dot(normal, lightDir);
+    return Math.max(dp, 0);
+  }
+
+  // Per-vertex normals for cube (normals per vertex for Gouraud shading)
+  // We'll compute average of adjacent face normals for each vertex
+  const vertexNormals = new Array(vertices.length).fill(0).map(() => ({x:0,y:0,z:0}));
+
+  // Compute face normals
+  function computeFaceNormal(v0,v1,v2) {
+    const a = vec3_sub(v1,v0);
+    const b = vec3_sub(v2,v0);
+    return vec3_normalize(vec3_cross(a,b));
+  }
+
+  faces.forEach(face => {
+    const normal = computeFaceNormal(vertices[face[0]], vertices[face[1]], vertices[face[2]]);
+    face.forEach(idx => {
+      vertexNormals[idx].x += normal.x;
+      vertexNormals[idx].y += normal.y;
+      vertexNormals[idx].z += normal.z;
+    });
+  });
+
+  for(let i=0; i<vertexNormals.length; i++) {
+    vertexNormals[i] = vec3_normalize(vertexNormals[i]);
+  }
+
+  // State
+  let angleX = 0;
+  let angleY = 0;
+  let wireframe = false;
+  let paused = false;
+
+  // Light source position and movement
+  let lightAngle = 0;
+
+  // FPS calculation
+  let fpsElem = document.getElementById('fps');
+  let lastTime = performance.now();
+  let frameCount = 0;
+  let fps = 0;
+
+  // Interpolate color between two colors
+  function lerpColor(c0, c1, t) {
+    return {
+      r: c0.r + (c1.r - c0.r)*t,
+      g: c0.g + (c1.g - c0.g)*t,
+      b: c0.b + (c1.b - c0.b)*t
+    };
+  }
+
+  // Convert color object to CSS rgb string
+  function colorToCSS(c) {
+    return `rgb(${(c.r*255)|0}, ${(c.g*255)|0}, ${(c.b*255)|0})`;
+  }
+
+  // Rasterize a triangle with Gouraud shading using a scanline algorithm
+  // v0,v1,v2: vertices with .x,.y screen coords and .light intensity
+  function rasterizeTriangle(v0, v1, v2) {
+    // Sort vertices by y
+    let verts = [v0,v1,v2].sort((a,b)=>a.y - b.y);
+    let [a,b,c] = verts;
+
+    // Calculate inverse slopes and light slopes
+    function edgeInterpolate(y, y0, x0, y1, x1, light0, light1) {
+      if(y1===y0) return {x: x0, light: light0};
+      let t = (y - y0) / (y1 - y0);
+      return { x: x0 + (x1 - x0)*t, light: light0 + (light1 - light0)*t };
+    }
+
+    // Draw scanline
+    function drawScanline(y, xStart, lightStart, xEnd, lightEnd) {
+      let xs = Math.ceil(xStart);
+      let xe = Math.floor(xEnd);
+      if(xs > xe) return;
+      for(let x=xs; x<=xe; x++) {
+        let t = (xe === xs) ? 0 : (x - xs) / (xe - xs);
+        let light = lightStart + (lightEnd - lightStart) * t;
+        // Clamp light
+        light = Math.min(Math.max(light, 0), 1);
+        // Base color white * light
+        let c = (light*255)|0;
+        ctx.fillStyle = `rgb(${c},${c},${c})`;
+        ctx.fillRect(x,y,1,1);
+      }
+    }
+
+    // Rasterize from a.y to c.y
+    for(let y = Math.ceil(a.y); y<=Math.floor(c.y); y++) {
+      if(y < b.y) {
+        // upper part
+        let left = edgeInterpolate(y, a.y, a.x, b.y, b.x, a.light, b.light);
+        let right = edgeInterpolate(y, a.y, a.x, c.y, c.x, a.light, c.light);
+        if(left.x > right.x) [left, right] = [right, left];
+        drawScanline(y, left.x, left.light, right.x, right.light);
+      } else {
+        // lower part
+        let left = edgeInterpolate(y, b.y, b.x, c.y, c.x, b.light, c.light);
+        let right = edgeInterpolate(y, a.y, a.x, c.y, c.x, a.light, c.light);
+        if(left.x > right.x) [left, right] = [right, left];
+        drawScanline(y, left.x, left.light, right.x, right.light);
+      }
+    }
+  }
+
+  // Backface culling
+  // If face normal points away from camera, cull
+  function isBackface(v0,v1,v2) {
+    // Screen space cross product z-component
+    let ax = v1.x - v0.x;
+    let ay = v1.y - v0.y;
+    let bx = v2.x - v0.x;
+    let by = v2.y - v0.y;
+    return (ax*by - ay*bx) < 0;
+  }
+
+  // Main animation loop
+  function animate() {
+    if(!paused) {
+      angleX += 0.01;
+      angleY += 0.013;
+      lightAngle += 0.02;
+    }
+
+    ctx.clearRect(0,0,width,height);
+
+    // Build rotation matrix
+    let rotX = mat3_rotX(angleX);
+    let rotY = mat3_rotY(angleY);
+    let rot = mat3_multiply(rotY, rotX);
+
+    // Light direction moving around Y axis
+    let lightDir = vec3(Math.cos(lightAngle), 0.5, Math.sin(lightAngle));
+    lightDir = vec3_normalize(lightDir);
+
+    // Transform and project vertices
+    let tVertices = vertices.map(v => vec3_transformMat3(v, rot));
+    let projVertices = tVertices.map(v => project(v));
+
+    // Calculate per-vertex lighting
+    let vertexLight = tVertices.map((v,i) => {
+      // Use precomputed normal per vertex also rotated
+      let n = vec3_transformMat3(vertexNormals[i], rot);
+      n = vec3_normalize(n);
+      return lambertLight(n, lightDir);
+    });
+
+    // Draw faces
+    triangles.forEach(tri => {
+      let v0 = projVertices[tri[0]];
+      let v1 = projVertices[tri[1]];
+      let v2 = projVertices[tri[2]];
+
+      if(isBackface(v0,v1,v2)) return;
+
+      let lv0 = vertexLight[tri[0]];
+      let lv1 = vertexLight[tri[1]];
+      let lv2 = vertexLight[tri[2]];
+
+      if(wireframe) {
+        ctx.strokeStyle = 'white';
+        ctx.beginPath();
+        ctx.moveTo(v0.x,v0.y);
+        ctx.lineTo(v1.x,v1.y);
+        ctx.lineTo(v2.x,v2.y);
+        ctx.closePath();
+        ctx.stroke();
+      } else {
+        rasterizeTriangle(
+          {x:v0.x,y:v0.y,light:lv0},
+          {x:v1.x,y:v1.y,light:lv1},
+          {x:v2.x,y:v2.y,light:lv2}
+        );
+      }
+    });
+
+    // FPS update
+    frameCount++;
+    let now = performance.now();
+    if(now - lastTime > 1000) {
+      fps = frameCount / ((now - lastTime) / 1000);
+      frameCount = 0;
+      lastTime = now;
+      fpsElem.textContent = 'FPS: ' + fps.toFixed(1);
+    }
+
+    requestAnimationFrame(animate);
+  }
+
+  // Keyboard controls
+  window.addEventListener('keydown', e => {
+    if(e.key === 'w' || e.key === 'W') {
+      wireframe = !wireframe;
+    } else if(e.key === 'p' || e.key === 'P') {
+      paused = !paused;
+    }
+  });
+
+  animate();
+})();
+</script>
+</body>
+</html>

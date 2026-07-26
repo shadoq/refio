@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+const W = canvas.width;
+const H = canvas.height;
+
+let wireframe = false;
+let paused = false;
+let lastTime = 0;
+let fps = 0;
+let frameCount = 0;
+let fpsTimer = 0;
+
+let angleX = 0.4;
+let angleY = 0.4;
+let angleZ = 0.0;
+let lightAngle = 0;
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'w' || e.key === 'W') wireframe = !wireframe;
+  if (e.key === 'p' || e.key === 'P') paused = !paused;
+});
+
+// Cube vertices (unit cube centered at origin)
+const vertices = [
+  [-1, -1, -1],
+  [ 1, -1, -1],
+  [ 1,  1, -1],
+  [-1,  1, -1],
+  [-1, -1,  1],
+  [ 1, -1,  1],
+  [ 1,  1,  1],
+  [-1,  1,  1],
+];
+
+// Faces: each face = [v0, v1, v2, v3] (quad), split into 2 triangles
+// Defined so normals point outward
+const faces = [
+  [0, 1, 2, 3], // back   -Z
+  [5, 4, 7, 6], // front  +Z
+  [4, 0, 3, 7], // left   -X
+  [1, 5, 6, 2], // right  +X
+  [4, 5, 1, 0], // bottom -Y
+  [3, 2, 6, 7], // top    +Y
+];
+
+// Face base colors (RGB 0-255)
+const faceColors = [
+  [220,  60,  60],
+  [ 60, 180,  60],
+  [ 60,  60, 220],
+  [220, 180,  60],
+  [180,  60, 220],
+  [ 60, 200, 220],
+];
+
+// Math helpers
+function vec3(x, y, z) { return [x, y, z]; }
+
+function dot(a, b) {
+  return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+}
+
+function sub(a, b) {
+  return [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+}
+
+function add(a, b) {
+  return [a[0]+b[0], a[1]+b[1], a[2]+b[2]];
+}
+
+function scale(a, s) {
+  return [a[0]*s, a[1]*s, a[2]*s];
+}
+
+function normalize(v) {
+  const len = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+  if (len < 1e-10) return [0, 0, 0];
+  return [v[0]/len, v[1]/len, v[2]/len];
+}
+
+function cross(a, b) {
+  return [
+    a[1]*b[2] - a[2]*b[1],
+    a[2]*b[0] - a[0]*b[2],
+    a[0]*b[1] - a[1]*b[0],
+  ];
+}
+
+// Rotation matrices
+function rotX(v, a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [v[0], v[1]*c - v[2]*s, v[1]*s + v[2]*c];
+}
+
+function rotY(v, a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [v[0]*c + v[2]*s, v[1], -v[0]*s + v[2]*c];
+}
+
+function rotZ(v, a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [v[0]*c - v[1]*s, v[0]*s + v[1]*c, v[2]];
+}
+
+function rotate(v, ax, ay, az) {
+  let r = rotX(v, ax);
+  r = rotY(r, ay);
+  r = rotZ(r, az);
+  return r;
+}
+
+// Perspective projection
+const FOV = 500;
+const CAM_Z = 5;
+
+function project(v) {
+  const z = v[2] + CAM_Z;
+  if (z <= 0.001) return null;
+  const px = (v[0] / z) * FOV + W / 2;
+  const py = (v[1] / z) * FOV + H / 2;
+  return [px, py, z];
+}
+
+// Gouraud shading: rasterize a triangle with per-vertex colors
+// v0, v1, v2: [x, y] screen coords
+// c0, c1, c2: [r, g, b] colors (0-255)
+function drawGouraudTriangle(v0, v1, v2, c0, c1, c2) {
+  // Sort vertices by y
+  let pts = [[v0, c0], [v1, c1], [v2, c2]];
+  pts.sort((a, b) => a[0][1] - b[0][1]);
+
+  const [[x0, y0], col0] = pts[0];
+  const [[x1, y1], col1] = pts[1];
+  const [[x2, y2], col2] = pts[2];
+
+  const totalH = y2 - y0;
+  if (totalH < 1) return;
+
+  // Scanline rasterization
+  for (let y = Math.ceil(y0); y <= Math.floor(y2); y++) {
+    const isUpperHalf = y < y1;
+    const segH = isUpperHalf ? (y1 - y0) : (y2 - y1);
+
+    // Alpha: progress along full triangle height
+    const alpha = (y - y0) / totalH;
+    // Beta: progress along current segment
+    const beta = segH < 1 ? 0 : (isUpperHalf ? (y - y0) / segH : (y - y1) / segH);
+
+    // Left and right x and color
+    let xA = x0 + (x2 - x0) * alpha;
+    let xB = isUpperHalf ? x0 + (x1 - x0) * beta : x1 + (x2 - x1) * beta;
+
+    let cA = [
+      col0[0] + (col2[0] - col0[0]) * alpha,
+      col0[1] + (col2[1] - col0[1]) * alpha,
+      col0[2] + (col2[2] - col0[2]) * alpha,
+    ];
+    let cB = isUpperHalf ? [
+      col0[0] + (col1[0] - col0[0]) * beta,
+      col0[1] + (col1[1] - col0[1]) * beta,
+      col0[2] + (col1[2] - col0[2]) * beta,
+    ] : [
+      col1[0] + (col2[0] - col1[0]) * beta,
+      col1[1] + (col2[1] - col1[1]) * beta,
+      col1[2] + (col2[2] - col1[2]) * beta,
+    ];
+
+    if (xA > xB) {
+      [xA, xB] = [xB, xA];
+      [cA, cB] = [cB, cA];
+    }
+
+    const xStart = Math.ceil(xA);
+    const xEnd = Math.floor(xB);
+    const spanW = xB - xA;
+
+    if (spanW < 1) {
+      // Draw single pixel
+      ctx.fillStyle = `rgb(${cA[0]|0},${cA[1]|0},${cA[2]|0})`;
+      ctx.fillRect(xStart, y, 1, 1);
+      continue;
+    }
+
+    // Use ImageData for fast pixel drawing per scanline
+    const lineLen = xEnd - xStart + 1;
+    if (lineLen <= 0) continue;
+
+    const imgData = ctx.createImageData(lineLen, 1);
+    const data = imgData.data;
+
+    for (let x = xStart; x <= xEnd; x++) {
+      const t = (x - xA) / spanW;
+      const r = (cA[0] + (cB[0] - cA[0]) * t) | 0;
+      const g = (cA[1] + (cB[1] - cA[1]) * t) | 0;
+      const b = (cA[2] + (cB[2] - cA[2]) * t) | 0;
+      const idx = (x - xStart) * 4;
+      data[idx]     = r < 0 ? 0 : r > 255 ? 255 : r;
+      data[idx + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
+      data[idx + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
+      data[idx + 3] = 255;
+    }
+
+    ctx.putImageData(imgData, xStart, y);
+  }
+}
+
+// Compute vertex normals (for a cube, each vertex normal = average of adjacent face normals)
+// We'll compute per-face normals and use them for lighting per triangle vertex
+function computeFaceNormal(v0, v1, v2) {
+  const e1 = sub(v1, v0);
+  const e2 = sub(v2, v0);
+  return normalize(cross(e1, e2));
+}
+
+// Ambient + diffuse lighting
+const AMBIENT = 0.15;
+
+function lambertIntensity(normal, lightDir) {
+  const d = dot(normal, lightDir);
+  return Math.max(0, d);
+}
+
+function applyLighting(baseColor, intensity) {
+  const lit = AMBIENT + (1 - AMBIENT) * intensity;
+  return [
+    baseColor[0] * lit,
+    baseColor[1] * lit,
+    baseColor[2] * lit,
+  ];
+}
+
+// Main render loop
+function render(timestamp) {
+  const dt = lastTime ? (timestamp - lastTime) / 1000 : 0.016;
+  lastTime = timestamp;
+
+  // FPS
+  frameCount++;
+  fpsTimer += dt;
+  if (fpsTimer >= 0.5) {
+    fps = Math.round(frameCount / fpsTimer);
+    frameCount = 0;
+    fpsTimer = 0;
+  }
+
+  if (!paused) {
+    angleX += 0.4 * dt;
+    angleY += 0.6 * dt;
+    angleZ += 0.2 * dt;
+    lightAngle += 0.8 * dt;
+  }
+
+  // Clear
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, W, H);
+
+  // Light position (orbiting)
+  const lightRadius = 4;
+  const lightPos = [
+    Math.cos(lightAngle) * lightRadius,
+    Math.sin(lightAngle * 0.7) * 2,
+    Math.sin(lightAngle) * lightRadius,
+  ];
+
+  // Transform vertices
+  const transformed = vertices.map(v => rotate(v, angleX, angleY, angleZ));
+  const projected = transformed.map(v => project(v));
+
+  // Compute vertex normals: for a cube, vertex normal = normalize(vertex position)
+  // (works perfectly for a unit cube centered at origin)
+  const vertexNormals = transformed.map(v => normalize(v));
+
+  // Compute per-vertex lighting intensities
+  const vertexIntensities = transformed.map((v, i) => {
+    const lightDir = normalize(sub(lightPos, v));
+    return lambertIntensity(vertexNormals[i], lightDir);
+  });
+
+  // Collect triangles with depth for sorting
+  const triangles = [];
+
+  faces.forEach((face, fi) => {
+    const [a, b, c, d] = face;
+    const baseColor = faceColors[fi];
+
+    // Two triangles per face: [a,b,c] and [a,c,d]
+    const triPairs = [[a, b, c], [a, c, d]];
+
+    triPairs.forEach(tri => {
+      const [i0, i1, i2] = tri;
+
+      const p0 = projected[i0];
+      const p1 = projected[i1];
+      const p2 = projected[i2];
+
+      if (!p0 || !p1 || !p2) return;
+
+      // Backface culling using 2D cross product of screen-space edges
+      const ex1 = p1[0] - p0[0], ey1 = p1[1] - p0[1];
+      const ex2 = p2[0] - p0[0], ey2 = p2[1] - p0[1];
+      const cross2d = ex1 * ey2 - ey1 * ex2;
+      if (cross2d >= 0) return; // backface
+
+      // Average depth for painter's algorithm
+      const avgZ = (p0[2] + p1[2] + p2[2]) / 3;
+
+      // Per-vertex colors with lighting
+      const col0 = applyLighting(baseColor, vertexIntensities[i0]);
+      const col1 = applyLighting(baseColor, vertexIntensities[i1]);
+      const col2 = applyLighting(baseColor, vertexIntensities[i2]);
+
+      triangles.push({
+        v0: [p0[0], p0[1]],
+        v1: [p1[0], p1[1]],
+        v2: [p2[0], p2[1]],
+        c0: col0, c1: col1, c2: col2,
+        depth: avgZ,
+        indices: [i0, i1, i2],
+      });
+    });
+  });
+
+  // Painter's algorithm: sort back to front
+  triangles.sort((a, b) => b.depth - a.depth);
+
+  // Draw triangles
+  triangles.forEach(tri => {
+    if (!wireframe) {
+      drawGouraudTriangle(tri.v0, tri.v1, tri.v2, tri.c0, tri.c1, tri.c2);
+    }
+
+    // Wireframe overlay
+    if (wireframe) {
+      ctx.strokeStyle = 'rgba(0,255,180,0.9)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(tri.v0[0], tri.v0[1]);
+      ctx.lineTo(tri.v1[0], tri.v1[1]);
+      ctx.lineTo(tri.v2[0], tri.v2[1]);
+      ctx.closePath();
+      ctx.stroke();
+    }
+  });
+
+  // Draw light source indicator
+  const litProj = project([lightPos[0], lightPos[1], lightPos[2] - CAM_Z + CAM_Z]);
+  if (litProj) {
+    ctx.beginPath();
+    ctx.arc(litProj[0], litProj[1], 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffaa';
+    ctx.fill();
+    ctx.strokeStyle = '#ffff00';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  // HUD
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(8, 8, 200, 80);
+
+  ctx.fillStyle = '#0f0';
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText(`FPS: ${fps}`, 16, 28);
+  ctx.fillStyle = '#aaa';
+  ctx.font = '12px monospace';
+  ctx.fillText(`[W] Wireframe: ${wireframe ? 'ON' : 'OFF'}`, 16, 48);
+  ctx.fillText(`[P] Paused:    ${paused ? 'YES' : 'NO'}`, 16, 66);
+  ctx.fillText('Gouraud Shaded Cube', 16, 82);
+
+  requestAnimationFrame(render);
+}
+
+requestAnimationFrame(render);
+
+window.addEventListener('resize', () => {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+});
+</script>
+</body>
+</html>

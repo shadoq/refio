@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+  body,html{margin:0;padding:0;overflow:hidden;background:#222;}
+  canvas{display:block;width:100vw;height:100vh;}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Geometry
+    const vertices = [
+        [-0.5,-0.5,-0.5],
+        [ 0.5,-0.5,-0.5],
+        [ 0.5, 0.5,-0.5],
+        [-0.5, 0.5,-0.5],
+        [-0.5,-0.5, 0.5],
+        [ 0.5,-0.5, 0.5],
+        [ 0.5, 0.5, 0.5],
+        [-0.5, 0.5, 0.5]
+    ];
+    const faces = [
+        [0,1,2,3], // back
+        [4,5,6,7], // front
+        [0,1,5,4], // bottom
+        [2,3,7,6], // top
+        [0,3,7,4], // left
+        [1,2,6,5]  // right
+    ];
+
+    // Compute per‑vertex normals (average of adjacent face normals)
+    const vertexNormals = Array(8).fill(0).map(() => [0,0,0]);
+    faces.forEach(face => {
+        const i0 = face[0], i1 = face[1], i2 = face[2];
+        const v0 = vertices[i0], v1 = vertices[i1], v2 = vertices[i2];
+        const AB = [v1[0]-v0[0], v1[1]-v0[1], v1[2]-v0[2]];
+        const AC = [v2[0]-v0[0], v2[1]-v0[1], v2[2]-v0[2]];
+        const n = [
+            AB[1]*AC[2] - AB[2]*AC[1],
+            AB[2]*AC[0] - AB[0]*AC[2],
+            AB[0]*AC[1] - AB[1]*AC[0]
+        ];
+        const len = Math.hypot(...n);
+        if (len !== 0) { n[0]/=len; n[1]/=len; n[2]/=len; }
+        face.forEach(idx => {
+            vertexNormals[idx][0] += n[0];
+            vertexNormals[idx][1] += n[1];
+            vertexNormals[idx][2] += n[2];
+        });
+    });
+    vertexNormals.forEach(n => {
+        const len = Math.hypot(...n);
+        if (len !== 0) { n[0]/=len; n[1]/=len; n[2]/=len; }
+    });
+
+    // Utility functions
+    function edgeFunction(a,b,c){
+        return (c[0]-a[0])*(b[1]-a[1]) - (c[1]-a[1])*(b[0]-a[0]);
+    }
+
+    function drawGouraudTriangle(v0,v1,v2,c0,c1,c2){
+        const minX = Math.max(0, Math.floor(Math.min(v0[0],v1[0],v2[0])));
+        const maxX = Math.min(canvas.width-1, Math.ceil(Math.max(v0[0],v1[0],v2[0])));
+        const minY = Math.max(0, Math.floor(Math.min(v0[1],v1[1],v2[1])));
+        const maxY = Math.min(canvas.height-1, Math.ceil(Math.max(v0[1],v1[1],v2[1])));
+
+        const area = edgeFunction(v0,v1,v2);
+        if (area === 0) return;
+
+        const imgData = ctx.getImageData(minX, minY, maxX-minX+1, maxY-minY+1);
+        const data = imgData.data;
+        const w = imgData.width;
+
+        for(let y=minY; y<=maxY; ++y){
+            for(let x=minX; x<=maxX; ++x){
+                const p = [x+0.5, y+0.5];
+                const w0 = edgeFunction(v1,v2,p);
+                const w1 = edgeFunction(v2,v0,p);
+                const w2 = edgeFunction(v0,v1,p);
+                if (w0>=0 && w1>=0 && w2>=0){
+                    const a = w0/area, b = w1/area, c = w2/area;
+                    const r = a*c0[0] + b*c1[0] + c*c2[0];
+                    const g = a*c0[1] + b*c1[1] + c*c2[1];
+                    const bcol = a*c0[2] + b*c1[2] + c*c2[2];
+                    const idx = ((y-minY)*w + (x-minX))*4;
+                    data[idx]   = r;
+                    data[idx+1] = g;
+                    data[idx+2] = bcol;
+                    data[idx+3] = 255;
+                }
+            }
+        }
+        ctx.putImageData(imgData, minX, minY);
+    }
+
+    // Interaction state
+    let wireframe = false;
+    let paused = false;
+
+    document.addEventListener('keydown', e => {
+        if (e.key === 'w' || e.key === 'W') wireframe = !wireframe;
+        if (e.key === 'p' || e.key === 'P') paused = !paused;
+    });
+
+    // Animation loop
+    let lastTime = performance.now();
+    let fps = 0, lastFpsTime = performance.now();
+
+    function animate(time){
+        const dt = time - lastTime;
+        if (!paused){
+            // Rotation angles (radians)
+            const angleX = time * 0.0005;
+            const angleY = time * 0.0003;
+            const angleZ = time * 0.0002;
+
+            // Light moves on a circle around the cube
+            const lightPos = [
+                Math.cos(time*0.001)*2,
+                Math.sin(time*0.001)*2,
+                Math.sin(time*0.001)*2
+            ];
+
+            // Transform vertices
+            const transformed = vertices.map(v => {
+                let [x,y,z] = v;
+
+                // X rotation
+                let cos = Math.cos(angleX), sin = Math.sin(angleX);
+                let y1 = y*cos - z*sin;
+                let z1 = y*sin + z*cos;
+                y = y1; z = z1;
+
+                // Y rotation
+                cos = Math.cos(angleY); sin = Math.sin(angleY);
+                let x2 = x*cos + z*sin;
+                let z2 = -x*sin + z*cos;
+                x = x2; z = z2;
+
+                // Z rotation
+                cos = Math.cos(angleZ); sin = Math.sin(angleZ);
+                let x3 = x*cos - y*sin;
+                let y3 = x*sin + y*cos;
+                x = x3; y = y3;
+
+                return [x,y,z];
+            });
+
+            // Perspective projection parameters
+            const fov = 400;
+            const projected = transformed.map(p => {
+                const [x,y,z] = p;
+                const scale = fov / (fov + z);
+                return [
+                    x*scale + canvas.width/2,
+                    -y*scale + canvas.height/2,
+                    scale
+                ];
+            });
+
+            // Build triangle list with back‑face culling
+            const triangles = [];
+
+            faces.forEach(face => {
+                const [i0,i1,i2,i3] = face;
+                const quadTris = [
+                    [i0,i1,i2],
+                    [i0,i2,i3]
+                ];
+                quadTris.forEach(idx => {
+                    const vA = transformed[idx[0]];
+                    const vB = transformed[idx[1]];
+                    const vC = transformed[idx[2]];
+
+                    // Normal in view space
+                    const AB = [vB[0]-vA[0], vB[1]-vA[1], vB[2]-vA[2]];
+                    const AC = [vC[0]-vA[0], vC[1]-vA[1], vC[2]-vA[2]];
+                    const n = [
+                        AB[1]*AC[2] - AB[2]*AC[1],
+                        AB[2]*AC[0] - AB[0]*AC[2],
+                        AB[0]*AC[1] - AB[1]*AC[0]
+                    ];
+                    // Simple back‑face test (camera looks toward +Z)
+                    if (n[2] >= 0) return;
+
+                    const pA = projected[idx[0]];
+                    const pB = projected[idx[1]];
+                    const pC = projected[idx[2]];
+
+                    // Per‑vertex lighting
+                    const baseColor = [200,120,60];
+                    function vertexColor(i){
+                        const pos = transformed[i];
+                        const nrm = vertexNormals[i];
+                        const lx = lightPos[0] - pos[0];
+                        const ly = lightPos[1] - pos[1];
+                        const lz = lightPos[2] - pos[2];
+                        const lenL = Math.hypot(lx,ly,lz);
+                        const ld = [lx/lenL, ly/lenL, lz/lenL];
+                        let ndotl = nrm[0]*ld[0] + nrm[1]*ld[1] + nrm[2]*ld[2];
+                        ndotl = Math.max(0, ndotl);
+                        const intensity = 0.3 + 0.7*ndotl; // ambient + diffuse
+                        return baseColor.map(c=>Math.min(255,c*intensity));
+                    }
+                    const colA = vertexColor(idx[0]);
+                    const colB = vertexColor(idx[1]);
+                    const colC = vertexColor(idx[2]);
+
+                    triangles.push({
+                        screen:[pA,pB,pC],
+                        colors:[colA,colB,colC],
+                        depth:(vA[2]+vB[2]+vC[2])/3
+                    });
+                });
+            });
+
+            // Painter's algorithm (far to near)
+            triangles.sort((a,b)=>b.depth - a.depth);
+
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+
+            triangles.forEach(tri=>{
+                drawGouraudTriangle(
+                    tri.screen[0],tri.screen[1],tri.screen[2],
+                    tri.colors[0],tri.colors[1],tri.colors[2]
+                );
+                if (wireframe){
+                    ctx.strokeStyle='black';
+                    ctx.lineWidth=1;
+                    ctx.beginPath();
+                    ctx.moveTo(tri.screen[0][0],tri.screen[0][1]);
+                    ctx.lineTo(tri.screen[1][0],tri.screen[1][1]);
+                    ctx.lineTo(tri.screen[2][0],tri.screen[2][1]);
+                    ctx.closePath();
+                    ctx.stroke();
+                }
+            });
+
+            // FPS display
+            const now = performance.now();
+            fps = 1000 / (now - lastFpsTime);
+            lastFpsTime = now;
+            ctx.fillStyle='white';
+            ctx.font='16px monospace';
+            ctx.fillText('FPS: '+fps.toFixed(1),10,20);
+        }
+
+        lastTime = time;
+        requestAnimationFrame(animate);
+    }
+    requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

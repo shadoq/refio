@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #05070c;
+  color: #e8eefc;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+}
+canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+#hud {
+  position: fixed;
+  left: 12px;
+  top: 10px;
+  font-size: 14px;
+  line-height: 1.4;
+  text-shadow: 0 1px 2px rgba(0,0,0,.65);
+  user-select: none;
+  pointer-events: none;
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">FPS: <span id="fps">0</span><br>W: wireframe | P: pause</div>
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const fpsEl = document.getElementById('fps');
+
+  let W = 0, H = 0, DPR = 1;
+  function resize() {
+    DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    W = canvas.clientWidth = window.innerWidth;
+    H = canvas.clientHeight = window.innerHeight;
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener('resize', resize, { passive: true });
+  resize();
+
+  const verts = [
+    [-1,-1,-1],[ 1,-1,-1],[ 1, 1,-1],[-1, 1,-1],
+    [-1,-1, 1],[ 1,-1, 1],[ 1, 1, 1],[-1, 1, 1]
+  ];
+
+  const faces = [
+    [0,1,2,3], [4,5,6,7], [0,4,7,3],
+    [1,5,6,2], [3,2,6,7], [0,1,5,4]
+  ];
+
+  const faceBase = [
+    [0.9,0.3,0.3], [0.3,0.8,1.0], [0.3,1.0,0.5],
+    [1.0,0.8,0.3], [0.8,0.4,1.0], [1.0,0.6,0.4]
+  ];
+
+  const faceNormals = [
+    [0,0,-1],[0,0,1],[-1,0,0],[1,0,0],[0,1,0],[0,-1,0]
+  ];
+
+  let paused = false;
+  let wire = false;
+  window.addEventListener('keydown', e => {
+    if (e.code === 'KeyW') wire = !wire;
+    if (e.code === 'KeyP') paused = !paused;
+  });
+
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const add = (a,b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]];
+  const sub = (a,b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+  const dot = (a,b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+  const cross = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+  const normalize = v => {
+    const l = Math.hypot(v[0], v[1], v[2]) || 1;
+    return [v[0]/l, v[1]/l, v[2]/l];
+  };
+
+  function rotX(v, a) {
+    const s = Math.sin(a), c = Math.cos(a);
+    return [v[0], v[1]*c - v[2]*s, v[1]*s + v[2]*c];
+  }
+  function rotY(v, a) {
+    const s = Math.sin(a), c = Math.cos(a);
+    return [v[0]*c + v[2]*s, v[1], -v[0]*s + v[2]*c];
+  }
+  function rotZ(v, a) {
+    const s = Math.sin(a), c = Math.cos(a);
+    return [v[0]*c - v[1]*s, v[0]*s + v[1]*c, v[2]];
+  }
+
+  function project(v) {
+    const fov = 520;
+    const z = v[2] + 4.5;
+    return [W * 0.5 + v[0] * fov / z, H * 0.5 - v[1] * fov / z, z];
+  }
+
+  function shadeColor(base, intensity) {
+    const a = 0.18 + 0.82 * intensity;
+    const r = clamp(Math.round(base[0] * 255 * a), 0, 255);
+    const g = clamp(Math.round(base[1] * 255 * a), 0, 255);
+    const b = clamp(Math.round(base[2] * 255 * a), 0, 255);
+    return `rgb(${r},${g},${b})`;
+  }
+
+  function drawTriangle(p0, p1, p2, c0, c1, c2) {
+    const minX = Math.max(0, Math.floor(Math.min(p0[0], p1[0], p2[0])));
+    const maxX = Math.min(W - 1, Math.ceil(Math.max(p0[0], p1[0], p2[0])));
+    const minY = Math.max(0, Math.floor(Math.min(p0[1], p1[1], p2[1])));
+    const maxY = Math.min(H - 1, Math.ceil(Math.max(p0[1], p1[1], p2[1])));
+
+    const denom = (p1[1] - p2[1]) * (p0[0] - p2[0]) + (p2[0] - p1[0]) * (p0[1] - p2[1]);
+    if (denom === 0) return;
+
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        const px = x + 0.5, py = y + 0.5;
+        const w1 = ((p1[1] - p2[1]) * (px - p2[0]) + (p2[0] - p1[0]) * (py - p2[1])) / denom;
+        const w2 = ((p2[1] - p0[1]) * (px - p2[0]) + (p0[0] - p2[0]) * (py - p2[1])) / denom;
+        const w3 = 1 - w1 - w2;
+        if (w1 >= 0 && w2 >= 0 && w3 >= 0) {
+          const r = c0[0] * w1 + c1[0] * w2 + c2[0] * w3;
+          const g = c0[1] * w1 + c1[1] * w2 + c2[1] * w3;
+          const b = c0[2] * w1 + c1[2] * w2 + c2[2] * w3;
+          ctx.fillStyle = `rgb(${r|0},${g|0},${b|0})`;
+          ctx.fillRect(x, y, 1, 1);
+        }
+      }
+    }
+  }
+
+  function line(a, b) {
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+    ctx.stroke();
+  }
+
+  let last = performance.now();
+  let fpsAcc = 0, fpsCount = 0, fpsTime = 0;
+  let t = 0;
+
+  function frame(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+    if (!paused) t += dt;
+
+    fpsAcc += 1 / Math.max(dt, 1e-6);
+    fpsCount++;
+    fpsTime += dt;
+    if (fpsTime >= 0.5) {
+      fpsEl.textContent = Math.round(fpsAcc / fpsCount).toString();
+      fpsAcc = 0; fpsCount = 0; fpsTime = 0;
+    }
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#05070c';
+    ctx.fillRect(0, 0, W, H);
+
+    const angY = t * 0.9;
+    const angX = t * 0.7;
+    const angZ = t * 0.3;
+
+    const light = normalize([Math.sin(t * 1.7) * 1.2, Math.cos(t * 1.3) * 0.9, 1.2 + Math.sin(t * 0.9) * 0.5]);
+
+    const transformed = verts.map(v => {
+      let p = v.slice();
+      p = rotX(p, angX);
+      p = rotY(p, angY);
+      p = rotZ(p, angZ);
+      p[0] *= 1.2; p[1] *= 1.2; p[2] *= 1.2;
+      return p;
+    });
+
+    const projected = transformed.map(project);
+
+    const tris = [];
+    for (let fi = 0; fi < faces.length; fi++) {
+      const f = faces[fi];
+      const p0 = transformed[f[0]], p1 = transformed[f[1]], p2 = transformed[f[2]], p3 = transformed[f[3]];
+      const n = normalize(cross(sub(p1, p0), sub(p2, p0)));
+      const view = [0, 0, 1];
+      if (dot(n, view) <= 0) continue;
+
+      const shade = (v) => clamp(dot(normalize(v), light), 0, 1);
+      const base = faceBase[fi];
+      const cols = f.map(idx => {
+        const vn = normalize(add(normalize(transformed[idx]), n));
+        const i = 0.18 + 0.82 * clamp(dot(vn, light), 0, 1);
+        return [
+          Math.round(base[0] * 255 * i),
+          Math.round(base[1] * 255 * i),
+          Math.round(base[2] * 255 * i)
+        ];
+      });
+
+      tris.push({
+        z: (projected[f[0]][2] + projected[f[1]][2] + projected[f[2]][2] + projected[f[3]][2]) * 0.25,
+        pts: [f[0], f[1], f[2], f[3]],
+        cols
+      });
+    }
+
+    tris.sort((a, b) => b.z - a.z);
+
+    for (const tri of tris) {
+      const ids = tri.pts;
+      const p0 = projected[ids[0]], p1 = projected[ids[1]], p2 = projected[ids[2]], p3 = projected[ids[3]];
+      const c0 = tri.cols[0], c1 = tri.cols[1], c2 = tri.cols[2], c3 = tri.cols[3];
+
+      drawTriangle(p0, p1, p2, c0, c1, c2);
+      drawTriangle(p0, p2, p3, c0, c2, c3);
+
+      if (wire) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+        ctx.lineWidth = 1;
+        line(p0, p1); line(p1, p2); line(p2, p3); line(p3, p0);
+      }
+    }
+
+    const lx = W * 0.5 + light[0] * 120;
+    const ly = H * 0.5 - light[1] * 120;
+    ctx.beginPath();
+    ctx.arc(lx, ly, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff4b0';
+    ctx.fill();
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

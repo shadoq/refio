@@ -16,6 +16,11 @@ import {
   Upload,
   message,
   Card,
+  Segmented,
+  Pagination,
+  Empty,
+  Switch,
+  Tooltip,
 } from "antd";
 import {
   PlusOutlined,
@@ -24,6 +29,7 @@ import {
   UploadOutlined,
   ClearOutlined,
   CopyOutlined,
+  EyeOutlined,
 } from "@ant-design/icons";
 import { useForm, Controller, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -32,12 +38,16 @@ import { ResultSchema, type Result, type Attachment } from "@/schema/results";
 import { useTasks, useResults } from "@/data/queries";
 import { useUpsertResult, useDeleteResult } from "@/data/mutations";
 import { uploadAttachment } from "@/data/saver";
+import { ResultPreviewModal } from "./ResultPreviewModal";
+import { ResultCard } from "@/components/results/ResultCard";
 import { generateId } from "@/lib/ids";
 import { formatDuration, formatCost } from "@/lib/format";
 import type { Criterion } from "@/schema/tasks";
 import { type input as ZodInput } from "zod";
 
 const { Title, Text } = Typography;
+
+const CARD_PAGE_SIZE = 6;
 
 type FormData = ZodInput<typeof ResultSchema>;
 
@@ -95,6 +105,7 @@ function ScoreRow({
 export default function ResultEditor() {
   const [modalMode, setModalMode] = useState<"new" | "edit" | "duplicate">("new");
   const [open, setOpen] = useState(false);
+  const [previewResult, setPreviewResult] = useState<Result | null>(null);
   const [uploading, setUploading] = useState(false);
   const [modelFilter, setModelFilter] = useState<string[]>([]);
   const [taskFilter, setTaskFilter] = useState<string[]>([]);
@@ -103,6 +114,8 @@ export default function ResultEditor() {
     Array<"local" | "cloud">
   >([]);
   const [searchText, setSearchText] = useState("");
+  const [viewMode, setViewMode] = useState<"table" | "cards">("table");
+  const [cardPage, setCardPage] = useState(1);
 
   const { data: tasksData } = useTasks();
   const { data: resultsData } = useResults();
@@ -202,9 +215,12 @@ export default function ResultEditor() {
   async function onSubmit(data: FormData) {
     if (!resultsData) return;
     // Cast because zodResolver gives us z.input, mutation expects z.output (same structure at runtime)
+    const result = data as unknown as Result;
+    // Keep the persisted JSON clean: only carry the flag when it is actually set.
+    if (!result.excludeFromStats) delete result.excludeFromStats;
     await upsert.mutateAsync({
       current: resultsData,
-      result: data as unknown as Result,
+      result,
     });
     handleClose();
   }
@@ -212,6 +228,15 @@ export default function ResultEditor() {
   async function handleDelete(resultId: string) {
     if (!resultsData) return;
     await remove.mutateAsync({ current: resultsData, resultId });
+  }
+
+  // Quick inline toggle of the "exclude from stats" flag, without opening the editor.
+  async function toggleExclude(record: Result, excluded: boolean) {
+    if (!resultsData) return;
+    const result: Result = { ...record };
+    if (excluded) result.excludeFromStats = true;
+    else delete result.excludeFromStats;
+    await upsert.mutateAsync({ current: resultsData, result });
   }
 
   async function handleFileUpload(file: File) {
@@ -351,6 +376,10 @@ export default function ResultEditor() {
     setSearchText("");
   }
 
+  // Keep the cards page within range as filtering or deleting shrinks the result set.
+  const cardPageCount = Math.max(1, Math.ceil(filteredResults.length / CARD_PAGE_SIZE));
+  const currentCardPage = Math.min(cardPage, cardPageCount);
+
   const columns = [
     {
       title: "Task",
@@ -408,11 +437,33 @@ export default function ResultEditor() {
       render: (_: unknown, record: Result) => record.attachments.length || "—",
     },
     {
+      title: (
+        <Tooltip title="Exclude this run from all computed metrics (kept as evidence the model was tested)">
+          <span>Excluded</span>
+        </Tooltip>
+      ),
+      key: "excluded",
+      width: 90,
+      render: (_: unknown, record: Result) => (
+        <Switch
+          size="small"
+          checked={record.excludeFromStats === true}
+          onChange={(checked) => toggleExclude(record, checked)}
+        />
+      ),
+    },
+    {
       title: "Actions",
       key: "actions",
-      width: 150,
+      width: 190,
       render: (_: unknown, record: Result) => (
         <Space>
+          <Button
+            aria-label="Preview result"
+            icon={<EyeOutlined />}
+            size="small"
+            onClick={() => setPreviewResult(record)}
+          />
           <Button
             icon={<EditOutlined />}
             size="small"
@@ -438,13 +489,21 @@ export default function ResultEditor() {
 
   return (
     <div>
-      <Space style={{ marginBottom: 16 }}>
+      <Space style={{ marginBottom: 16 }} wrap>
         <Title level={3} style={{ margin: 0 }}>
           Results
         </Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={openNew}>
           New Result
         </Button>
+        <Segmented
+          options={[
+            { label: "Table", value: "table" },
+            { label: "Cards", value: "cards" },
+          ]}
+          value={viewMode}
+          onChange={(v) => setViewMode(v as "table" | "cards")}
+        />
       </Space>
 
       <Card size="small" style={{ marginBottom: 16 }}>
@@ -513,13 +572,45 @@ export default function ResultEditor() {
         </Space>
       </Card>
 
-      <Table
-        columns={columns}
-        dataSource={filteredResults}
-        rowKey="id"
-        size="middle"
-        pagination={{ pageSize: 20 }}
-      />
+      {viewMode === "table" ? (
+        <Table
+          columns={columns}
+          dataSource={filteredResults}
+          rowKey="id"
+          size="middle"
+          pagination={{ pageSize: 20 }}
+        />
+      ) : filteredResults.length === 0 ? (
+        <Empty description="No results match the current filters" />
+      ) : (
+        <>
+          {filteredResults
+            .slice((currentCardPage - 1) * CARD_PAGE_SIZE, currentCardPage * CARD_PAGE_SIZE)
+            .map((result) => (
+              <ResultCard
+                key={result.id}
+                result={result}
+                tasksData={tasksData}
+                resultsData={resultsData}
+                onPreview={setPreviewResult}
+                onEdit={openEdit}
+                onDuplicate={openDuplicate}
+                onDelete={handleDelete}
+              />
+            ))}
+          {filteredResults.length > CARD_PAGE_SIZE && (
+            <div style={{ display: "flex", justifyContent: "center", marginTop: 8 }}>
+              <Pagination
+                current={currentCardPage}
+                pageSize={CARD_PAGE_SIZE}
+                total={filteredResults.length}
+                onChange={setCardPage}
+                showSizeChanger={false}
+              />
+            </div>
+          )}
+        </>
+      )}
 
       <Modal
         title={
@@ -720,6 +811,21 @@ export default function ResultEditor() {
             />
           </Form.Item>
 
+          <Form.Item label="Exclude from stats">
+            <Controller
+              name="excludeFromStats"
+              control={control}
+              render={({ field }) => (
+                <Space>
+                  <Switch checked={!!field.value} onChange={field.onChange} />
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    Run kept as evidence the model was tested, but dropped from every computed metric.
+                  </Text>
+                </Space>
+              )}
+            />
+          </Form.Item>
+
           <Divider>Attachments</Divider>
 
           <Form.Item label="Upload result file (image / html / video / zip)">
@@ -767,6 +873,13 @@ export default function ResultEditor() {
           />
         </Form>
       </Modal>
+
+      <ResultPreviewModal
+        result={previewResult}
+        tasksData={tasksData}
+        resultsData={resultsData}
+        onClose={() => setPreviewResult(null)}
+      />
     </div>
   );
 }

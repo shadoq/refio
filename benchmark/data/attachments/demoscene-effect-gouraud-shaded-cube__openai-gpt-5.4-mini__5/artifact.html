@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+  html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #05070c;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .hud {
+    position: fixed;
+    left: 12px;
+    top: 12px;
+    color: #e8eefc;
+    font-size: 14px;
+    line-height: 1.5;
+    text-shadow: 0 1px 2px rgba(0,0,0,.8);
+    user-select: none;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="hud" id="hud"></div>
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const hud = document.getElementById('hud');
+
+  let width = 0, height = 0, dpr = 1;
+  let wireframe = false;
+  let paused = false;
+  let t = 0;
+
+  const vertices = [
+    [-1, -1, -1],
+    [ 1, -1, -1],
+    [ 1,  1, -1],
+    [-1,  1, -1],
+    [-1, -1,  1],
+    [ 1, -1,  1],
+    [ 1,  1,  1],
+    [-1,  1,  1]
+  ];
+
+  const faces = [
+    [0, 1, 2, 3],
+    [5, 4, 7, 6],
+    [4, 0, 3, 7],
+    [1, 5, 6, 2],
+    [3, 2, 6, 7],
+    [4, 5, 1, 0]
+  ];
+
+  const faceColors = [
+    [255, 90, 90],
+    [90, 180, 255],
+    [120, 255, 140],
+    [255, 220, 90],
+    [210, 120, 255],
+    [90, 240, 220]
+  ];
+
+  function resize() {
+    dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    width = Math.floor(window.innerWidth);
+    height = Math.floor(window.innerHeight);
+    canvas.width = Math.floor(width * dpr);
+    canvas.height = Math.floor(height * dpr);
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function matMulVec(m, v) {
+    return [
+      m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+      m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+      m[6] * v[0] + m[7] * v[1] + m[8] * v[2]
+    ];
+  }
+
+  function rotX(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [1, 0, 0, 0, c, -s, 0, s, c];
+  }
+
+  function rotY(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [c, 0, s, 0, 1, 0, -s, 0, c];
+  }
+
+  function rotZ(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [c, -s, 0, s, c, 0, 0, 0, 1];
+  }
+
+  function mul3(a, b) {
+    return [
+      a[0]*b[0] + a[1]*b[3] + a[2]*b[6],
+      a[0]*b[1] + a[1]*b[4] + a[2]*b[7],
+      a[0]*b[2] + a[1]*b[5] + a[2]*b[8],
+      a[3]*b[0] + a[4]*b[3] + a[5]*b[6],
+      a[3]*b[1] + a[4]*b[4] + a[5]*b[7],
+      a[3]*b[2] + a[4]*b[5] + a[5]*b[8],
+      a[6]*b[0] + a[7]*b[3] + a[8]*b[6],
+      a[6]*b[1] + a[7]*b[4] + a[8]*b[7],
+      a[6]*b[2] + a[7]*b[5] + a[8]*b[8]
+    ];
+  }
+
+  function normalize(v) {
+    const l = Math.hypot(v[0], v[1], v[2]) || 1;
+    return [v[0]/l, v[1]/l, v[2]/l];
+  }
+
+  function sub(a, b) {
+    return [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+  }
+
+  function cross(a, b) {
+    return [
+      a[1]*b[2] - a[2]*b[1],
+      a[2]*b[0] - a[0]*b[2],
+      a[0]*b[1] - a[1]*b[0]
+    ];
+  }
+
+  function dot(a, b) {
+    return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+  }
+
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  function clamp(x, a, b) {
+    return Math.max(a, Math.min(b, x));
+  }
+
+  function project(v) {
+    const fov = 420;
+    const z = v[2] + 5.2;
+    const s = fov / z;
+    return {
+      x: width * 0.5 + v[0] * s,
+      y: height * 0.5 - v[1] * s,
+      s,
+      z
+    };
+  }
+
+  function drawTriangle(p0, p1, p2, c0, c1, c2) {
+    const minX = Math.max(0, Math.floor(Math.min(p0.x, p1.x, p2.x)));
+    const maxX = Math.min(width - 1, Math.ceil(Math.max(p0.x, p1.x, p2.x)));
+    const minY = Math.max(0, Math.floor(Math.min(p0.y, p1.y, p2.y)));
+    const maxY = Math.min(height - 1, Math.ceil(Math.max(p0.y, p1.y, p2.y)));
+
+    const denom = (p1.y - p2.y) * (p0.x - p2.x) + (p2.x - p1.x) * (p0.y - p2.y);
+    if (denom === 0) return;
+
+    const img = ctx.createImageData(maxX - minX + 1, maxY - minY + 1);
+    const data = img.data;
+
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        const w0 = ((p1.y - p2.y) * (x - p2.x) + (p2.x - p1.x) * (y - p2.y)) / denom;
+        const w1 = ((p2.y - p0.y) * (x - p2.x) + (p0.x - p2.x) * (y - p2.y)) / denom;
+        const w2 = 1 - w0 - w1;
+        if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+          const r = clamp(w0 * c0[0] + w1 * c1[0] + w2 * c2[0], 0, 255);
+          const g = clamp(w0 * c0[1] + w1 * c1[1] + w2 * c2[1], 0, 255);
+          const b = clamp(w0 * c0[2] + w1 * c1[2] + w2 * c2[2], 0, 255);
+          const i = ((y - minY) * (maxX - minX + 1) + (x - minX)) * 4;
+          data[i] = r | 0;
+          data[i + 1] = g | 0;
+          data[i + 2] = b | 0;
+          data[i + 3] = 255;
+        }
+      }
+    }
+    ctx.putImageData(img, minX, minY);
+  }
+
+  function render(dt) {
+    if (!paused) t += dt;
+
+    ctx.fillStyle = '#05070c';
+    ctx.fillRect(0, 0, width, height);
+
+    const mx = Math.cos(t * 0.9) * 2.6;
+    const my = Math.sin(t * 1.2) * 1.4;
+    const mz = Math.sin(t * 0.7) * 2.0 + 4.8;
+    const light = normalize([mx, my, mz]);
+
+    const model = mul3(mul3(rotY(t * 0.8), rotX(t * 0.55)), rotZ(t * 0.25));
+    const transformed = vertices.map(v => {
+      const tv = matMulVec(model, v);
+      return [tv[0], tv[1], tv[2]];
+    });
+
+    const proj = transformed.map(project);
+    const tris = [];
+
+    for (let fi = 0; fi < faces.length; fi++) {
+      const face = faces[fi];
+      const v0 = transformed[face[0]];
+      const v1 = transformed[face[1]];
+      const v2 = transformed[face[2]];
+      const v3 = transformed[face[3]];
+
+      const normal = normalize(cross(sub(v1, v0), sub(v2, v0)));
+      if (dot(normal, [0, 0, 1]) >= 0) continue;
+
+      const indices = [[face[0], face[1], face[2]], [face[0], face[2], face[3]]];
+      for (const tri of indices) {
+        const a = transformed[tri[0]];
+        const b = transformed[tri[1]];
+        const c = transformed[tri[2]];
+        const pa = proj[tri[0]];
+        const pb = proj[tri[1]];
+        const pc = proj[tri[2]];
+
+        const n = normalize(cross(sub(b, a), sub(c, a)));
+        const base = faceColors[fi];
+        const va = clamp(dot(n, light) * 0.9 + 0.15, 0, 1);
+        const vb = clamp(dot(n, normalize([light[0]*0.98 + 0.12, light[1]*1.02 - 0.08, light[2]])) * 0.9 + 0.15, 0, 1);
+        const vc = clamp(dot(n, normalize([light[0]*1.02 - 0.05, light[1]*0.96 + 0.1, light[2]])) * 0.9 + 0.15, 0, 1);
+
+        tris.push({
+          z: (pa.z + pb.z + pc.z) / 3,
+          p: [pa, pb, pc],
+          c: [
+            [base[0] * va, base[1] * va, base[2] * va],
+            [base[0] * vb, base[1] * vb, base[2] * vb],
+            [base[0] * vc, base[1] * vc, base[2] * vc]
+          ]
+        });
+      }
+    }
+
+    tris.sort((a, b) => b.z - a.z);
+
+    for (const tri of tris) {
+      drawTriangle(tri.p[0], tri.p[1], tri.p[2], tri.c[0], tri.c[1], tri.c[2]);
+      if (wireframe) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(tri.p[0].x, tri.p[0].y);
+        ctx.lineTo(tri.p[1].x, tri.p[1].y);
+        ctx.lineTo(tri.p[2].x, tri.p[2].y);
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
+
+    const fps = dt > 0 ? (1 / dt) : 0;
+    hud.textContent = `FPS: ${fps.toFixed(1)}\nW: wireframe ${wireframe ? 'on' : 'off'}\nP: ${paused ? 'paused' : 'running'}`;
+  }
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    render(dt);
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener('resize', resize);
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'KeyW') wireframe = !wireframe;
+    if (e.code === 'KeyP') paused = !paused;
+  });
+
+  resize();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

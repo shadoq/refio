@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+  body { margin: 0; overflow: hidden; background: #222; color: #eee; font-family: monospace; }
+  #fps { position: fixed; top: 0; left: 0; padding: 5px 10px; background: rgba(0,0,0,0.7); font-size: 14px; }
+  canvas { display: block; margin: 0 auto; background: #111; }
+</style>
+</head>
+<body>
+<div id="fps">FPS: 0</div>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  let width, height;
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  // 3D vector operations
+  function vec3(x, y, z) { return {x, y, z}; }
+  function add(a, b) { return {x: a.x+b.x, y: a.y+b.y, z: a.z+b.z}; }
+  function sub(a,b) { return {x: a.x-b.x, y: a.y-b.y, z: a.z-b.z}; }
+  function dot(a,b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
+  function cross(a,b) {
+    return {
+      x: a.y*b.z - a.z*b.y,
+      y: a.z*b.x - a.x*b.z,
+      z: a.x*b.y - a.y*b.x
+    };
+  }
+  function length(v) { return Math.sqrt(v.x*v.x + v.y*v.y + v.z*v.z); }
+  function normalize(v) {
+    const len = length(v);
+    return len === 0 ? {x:0,y:0,z:0} : {x:v.x/len, y:v.y/len, z:v.z/len};
+  }
+
+  // Rotation matrices
+  function rotationX(angle) {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    return [
+      [1,0,0],
+      [0,c,-s],
+      [0,s,c]
+    ];
+  }
+  function rotationY(angle) {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    return [
+      [c,0,s],
+      [0,1,0],
+      [-s,0,c]
+    ];
+  }
+  function rotationZ(angle) {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    return [
+      [c,-s,0],
+      [s,c,0],
+      [0,0,1]
+    ];
+  }
+
+  function mat3mulVec3(m, v) {
+    return {
+      x: m[0][0]*v.x + m[0][1]*v.y + m[0][2]*v.z,
+      y: m[1][0]*v.x + m[1][1]*v.y + m[1][2]*v.z,
+      z: m[2][0]*v.x + m[2][1]*v.y + m[2][2]*v.z
+    };
+  }
+
+  // Perspective projection
+  function project(v) {
+    const fov = 400;
+    const viewerDistance = 3;
+    const z = v.z + viewerDistance;
+    if (z === 0) return {x: 0, y: 0};
+    return {
+      x: (v.x * fov) / z + width / 2,
+      y: (v.y * fov) / z + height / 2
+    };
+  }
+
+  // Cube vertices
+  const vertices = [
+    vec3(-1, -1, -1), vec3(1, -1, -1), vec3(1, 1, -1), vec3(-1, 1, -1),
+    vec3(-1, -1, 1), vec3(1, -1, 1), vec3(1, 1, 1), vec3(-1, 1, 1)
+  ];
+
+  // Cube faces defined as quads (4 vertices each)
+  const faces = [
+    [0,1,2,3], // back
+    [4,5,6,7], // front
+    [0,1,5,4], // bottom
+    [3,2,6,7], // top
+    [1,2,6,5], // right
+    [0,3,7,4], // left
+  ];
+
+  // Split faces into triangles (2 per face)
+  const triangles = [];
+  for (const f of faces) {
+    triangles.push([f[0], f[1], f[2]]);
+    triangles.push([f[0], f[2], f[3]]);
+  }
+
+  // Light parameters
+  let lightAngle = 0;
+  const lightRadius = 5;
+
+  // Wireframe toggle and pause
+  let wireframe = false;
+  let paused = false;
+
+  // FPS calculation
+  let fpsElem = document.getElementById('fps');
+  let lastTime = performance.now();
+  let frameCount = 0;
+  let fps = 0;
+
+  // Lambert lighting at vertex (normal and light direction both normalized)
+  function lambert(normal, lightDir) {
+    return Math.max(0, dot(normal, lightDir));
+  }
+
+  // Backface culling: triangle normal and view vector
+  function backfaceCull(v0, v1, v2) {
+    const edge1 = sub(v1, v0);
+    const edge2 = sub(v2, v0);
+    const normal = cross(edge1, edge2);
+    // View vector points towards camera at origin (0,0,0)
+    const viewVec = sub(vec3(0,0,0), v0);
+    return dot(normal, viewVec) > 0; // true means visible
+  }
+
+  // Per-vertex normals for cube (average of adjacent faces normals)
+  // Precompute face normals
+  const faceNormals = faces.map(f => {
+    const v0 = vertices[f[0]], v1 = vertices[f[1]], v2 = vertices[f[2]];
+    const edge1 = sub(v1, v0);
+    const edge2 = sub(v2, v0);
+    return normalize(cross(edge1, edge2));
+  });
+
+  // For each vertex, find all faces that include it and average their normals
+  const vertexNormals = vertices.map((v,i) => {
+    const normals = [];
+    faces.forEach((f, idx) => {
+      if (f.includes(i)) normals.push(faceNormals[idx]);
+    });
+    let avg = {x:0,y:0,z:0};
+    normals.forEach(n => { avg.x += n.x; avg.y += n.y; avg.z += n.z; });
+    return normalize(avg);
+  });
+
+  // Interpolate colors for Gouraud shading
+  // We will interpolate RGB linearly in screen space
+  // Helper: interpolate between 2 values
+  function lerp(a,b,t) { return a + (b - a)*t; }
+
+  // Draw filled triangle with Gouraud shading
+  function drawTriangleGouraud(p0, p1, p2, c0, c1, c2) {
+    // Sort by y ascending
+    if (p1.y < p0.y) { [p0,p1] = [p1,p0]; [c0,c1] = [c1,c0]; }
+    if (p2.y < p0.y) { [p0,p2] = [p2,p0]; [c0,c2] = [c2,c0]; }
+    if (p2.y < p1.y) { [p1,p2] = [p2,p1]; [c1,c2] = [c2,c1]; }
+
+    const y0 = Math.round(p0.y), y1 = Math.round(p1.y), y2 = Math.round(p2.y);
+
+    function edgeInterp(y, y0, y1, x0, x1, c0, c1) {
+      const t = (y1===y0) ? 0 : (y - y0) / (y1 - y0);
+      const x = lerp(x0,x1,t);
+      const c = {
+        r: lerp(c0.r,c1.r,t),
+        g: lerp(c0.g,c1.g,t),
+        b: lerp(c0.b,c1.b,t)
+      };
+      return {x,c};
+    }
+
+    for (let y = y0; y <= y2; y++) {
+      if (y < y1) {
+        const left = edgeInterp(y, y0, y1, p0.x, p1.x, c0, c1);
+        const right = edgeInterp(y, y0, y2, p0.x, p2.x, c0, c2);
+        if (left.x > right.x) [left,right] = [right,left];
+        for (let x = Math.round(left.x); x <= Math.round(right.x); x++) {
+          const t = (right.x === left.x) ? 0 : (x - left.x)/(right.x - left.x);
+          const r = lerp(left.c.r,right.c.r,t);
+          const g = lerp(left.c.g,right.c.g,t);
+          const b = lerp(left.c.b,right.c.b,t);
+          ctx.fillStyle = `rgb(${r|0},${g|0},${b|0})`;
+          ctx.fillRect(x,y,1,1);
+        }
+      } else {
+        const left = edgeInterp(y, y1, y2, p1.x, p2.x, c1, c2);
+        const right = edgeInterp(y, y0, y2, p0.x, p2.x, c0, c2);
+        if (left.x > right.x) [left,right] = [right,left];
+        for (let x = Math.round(left.x); x <= Math.round(right.x); x++) {
+          const t = (right.x === left.x) ? 0 : (x - left.x)/(right.x - left.x);
+          const r = lerp(left.c.r,right.c.r,t);
+          const g = lerp(left.c.g,right.c.g,t);
+          const b = lerp(left.c.b,right.c.b,t);
+          ctx.fillStyle = `rgb(${r|0},${g|0},${b|0})`;
+          ctx.fillRect(x,y,1,1);
+        }
+      }
+    }
+  }
+
+  // Convert light intensity to color (simple white light scaled)
+  function intensityToColor(intensity) {
+    const c = Math.min(255, Math.max(0, intensity*255));
+    return {r:c, g:c, b:c};
+  }
+
+  // Main animation loop
+  let angle = 0;
+  function animate(time) {
+    if (!paused) {
+      angle += 0.01;
+      lightAngle += 0.02;
+    }
+
+    ctx.clearRect(0, 0, width, height);
+
+    // Compute rotated vertices
+    const rotX = rotationX(angle);
+    const rotY = rotationY(angle*0.7);
+    const rotZ = rotationZ(angle*0.4);
+
+    let transformedVertices = vertices.map(v => {
+      let r = mat3mulVec3(rotX, v);
+      r = mat3mulVec3(rotY, r);
+      r = mat3mulVec3(rotZ, r);
+      return r;
+    });
+
+    // Compute light position
+    const lightPos = vec3(
+      lightRadius * Math.cos(lightAngle),
+      2,
+      lightRadius * Math.sin(lightAngle)
+    );
+
+    // For each vertex, compute lighting
+    const vertexColors = transformedVertices.map((v,i) => {
+      const normal = vertexNormals[i];
+      // Rotate normal same as vertex
+      let rn = mat3mulVec3(rotX, normal);
+      rn = mat3mulVec3(rotY, rn);
+      rn = mat3mulVec3(rotZ, rn);
+      rn = normalize(rn);
+
+      const lightDir = normalize(sub(lightPos, v));
+      const intensity = lambert(rn, lightDir);
+      return intensityToColor(intensity);
+    });
+
+    // Draw triangles
+    for (const tri of triangles) {
+      const v0 = transformedVertices[tri[0]];
+      const v1 = transformedVertices[tri[1]];
+      const v2 = transformedVertices[tri[2]];
+
+      if (!backfaceCull(v0, v1, v2)) continue;
+
+      const p0 = project(v0);
+      const p1 = project(v1);
+      const p2 = project(v2);
+
+      const c0 = vertexColors[tri[0]];
+      const c1 = vertexColors[tri[1]];
+      const c2 = vertexColors[tri[2]];
+
+      drawTriangleGouraud(p0, p1, p2, c0, c1, c2);
+
+      if (wireframe) {
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
+
+    // Calculate FPS
+    frameCount++;
+    const now = performance.now();
+    if (now - lastTime >= 1000) {
+      fps = frameCount;
+      frameCount = 0;
+      lastTime = now;
+      fpsElem.textContent = `FPS: ${fps}`;
+    }
+
+    requestAnimationFrame(animate);
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'w' || e.key === 'W') {
+      wireframe = !wireframe;
+    } else if (e.key === 'p' || e.key === 'P') {
+      paused = !paused;
+    }
+  });
+
+  requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud Shaded Cube</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+    font-family: 'Courier New', monospace;
+  }
+  canvas { display: block; }
+  #hud {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    color: #555;
+    font-size: 13px;
+    line-height: 1.8;
+    user-select: none;
+    pointer-events: none;
+  }
+  #hud span { color: #aaa; }
+  #hud .hint { color: #333; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <div>FPS: <span id="fps">--</span></div>
+  <div>Render: <span id="mode">Solid</span></div>
+  <div>State: <span id="state">Running</span></div>
+  <div class="hint">[W] Wireframe  [P] Pause</div>
+</div>
+<canvas id="c"></canvas>
+<script>
+(function() {
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var W = 720, H = 540;
+  canvas.width = W;
+  canvas.height = H;
+  var halfW = W * 0.5, halfH = H * 0.5;
+
+  var paused = false;
+  var wireframe = false;
+  var rotY = 0.6, rotX = 0.4;
+  var lightTheta = 0;
+  var fpsCount = 0, fpsLast = 0, fpsDisplay = 0;
+
+  document.addEventListener('keydown', function(e) {
+    var k = e.key.toLowerCase();
+    if (k === 'w') {
+      wireframe = !wireframe;
+      document.getElementById('mode').textContent = wireframe ? 'Wireframe' : 'Solid';
+    } else if (k === 'p') {
+      paused = !paused;
+      document.getElementById('state').textContent = paused ? 'Paused' : 'Running';
+    }
+  });
+
+  // Unit cube vertices centered at origin
+  var cubeVerts = [
+    [-1, -1, -1],
+    [ 1, -1, -1],
+    [ 1,  1, -1],
+    [-1,  1, -1],
+    [-1, -1,  1],
+    [ 1, -1,  1],
+    [ 1,  1,  1],
+    [-1,  1,  1]
+  ];
+
+  // Smooth vertex normals (normalized positions give sphere-like normals)
+  var vertNormals = [];
+  for (var i = 0; i < 8; i++) {
+    var v = cubeVerts[i];
+    var len = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    vertNormals.push([v[0] / len, v[1] / len, v[2] / len]);
+  }
+
+  // Face definitions: CCW vertex winding when viewed from outside
+  var cubeFaces = [
+    { idx: [0, 3, 2, 1], base: [210, 55, 55]  },
+    { idx: [4, 5, 6, 7], base: [55, 190, 55]  },
+    { idx: [0, 4, 7, 3], base: [55, 85, 225]  },
+    { idx: [1, 2, 6, 5], base: [225, 200, 35] },
+    { idx: [3, 7, 6, 2], base: [195, 55, 195] },
+    { idx: [0, 1, 5, 4], base: [55, 195, 195] }
+  ];
+
+  var fovScale = 280;
+  var viewDist = 5.5;
+
+  // --- Vector / matrix math ---
+
+  function mulMatVec(m, p) {
+    return [
+      m[0] * p[0] + m[1] * p[1] + m[2] * p[2],
+      m[3] * p[0] + m[4] * p[1] + m[5] * p[2],
+      m[6] * p[0] + m[7] * p[1] + m[8] * p[2]
+    ];
+  }
+
+  function rotationMatrix(ay, ax) {
+    var cy = Math.cos(ay), sy = Math.sin(ay);
+    var cx = Math.cos(ax), sx = Math.sin(ax);
+    return [
+       cy,       sx * sy,   cx * sy,
+       0,        cx,       -sx,
+      -sy,       sx * cy,   cx * cy
+    ];
+  }
+
+  function project(p) {
+    var s = fovScale / (p[2] + viewDist);
+    return [halfW + p[0] * s, halfH - p[1] * s, p[2]];
+  }
+
+  function normalize(v) {
+    var len = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    return len < 1e-12 ? [0, 0, 0] : [v[0] / len, v[1] / len, v[2] / len];
+  }
+
+  function dot(a, b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  }
+
+  // Lambert diffuse + ambient per-vertex lighting
+  function litColor(normal, pos, lightPos, base) {
+    var lx = lightPos[0] - pos[0];
+    var ly = lightPos[1] - pos[1];
+    var lz = lightPos[2] - pos[2];
+    var lDir = normalize([lx, ly, lz]);
+    var NdotL = Math.max(0, dot(normal, lDir));
+    var intensity = 0.1 + 0.9 * NdotL;
+    return [
+      Math.min(255, (base[0] * intensity) | 0),
+      Math.min(255, (base[1] * intensity) | 0),
+      Math.min(255, (base[2] * intensity) | 0)
+    ];
+  }
+
+  // --- Scanline triangle rasterizer with Gouraud color interpolation ---
+
+  function rasterTri(px, imgW, imgH, p0, p1, p2, c0, c1, c2) {
+    var minX = Math.max(0, (Math.min(p0[0], p1[0], p2[0])) | 0);
+    var maxX = Math.min(imgW - 1, (Math.max(p0[0], p1[0], p2[0]) + 0.5) | 0);
+    var minY = Math.max(0, (Math.min(p0[1], p1[1], p2[1])) | 0);
+    var maxY = Math.min(imgH - 1, (Math.max(p0[1], p1[1], p2[1]) + 0.5) | 0);
+    if (minX > maxX || minY > maxY) return;
+
+    var area = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p1[1] - p0[1]) * (p2[0] - p0[0]);
+    if (area >= 0) return;
+    var invArea = 1.0 / area;
+
+    var dw0dx = (p1[1] - p2[1]) * invArea;
+    var dw0dy = (p2[0] - p1[0]) * invArea;
+    var dw1dx = (p2[1] - p0[1]) * invArea;
+    var dw1dy = (p0[0] - p2[0]) * invArea;
+
+    var rowW0 = ((p1[1] - p2[1]) * (minX - p1[0]) + (p2[0] - p1[0]) * (minY - p1[1])) * invArea;
+    var rowW1 = ((p2[1] - p0[1]) * (minX - p2[0]) + (p0[0] - p2[0]) * (minY - p2[1])) * invArea;
+
+    var r0 = c0[0], g0 = c0[1], b0 = c0[2];
+    var r1 = c1[0], g1 = c1[1], b1 = c1[2];
+    var r2 = c2[0], g2 = c2[1], b2 = c2[2];
+
+    for (var y = minY; y <= maxY; y++) {
+      var w0 = rowW0, w1 = rowW1;
+      var rowOff = y * imgW;
+      for (var x = minX; x <= maxX; x++) {
+        var w2 = 1.0 - w0 - w1;
+        if (w0 > -0.0005 && w1 > -0.0005 && w2 > -0.0005) {
+          var idx = (rowOff + x) << 2;
+          px[idx]     = (w0 * r0 + w1 * r1 + w2 * r2) | 0;
+          px[idx + 1] = (w0 * g0 + w1 * g1 + w2 * g2) | 0;
+          px[idx + 2] = (w0 * b0 + w1 * b1 + w2 * b2) | 0;
+          px[idx + 3] = 255;
+        }
+        w0 += dw0dx;
+        w1 += dw1dx;
+      }
+      rowW0 += dw0dy;
+      rowW1 += dw1dy;
+    }
+  }
+
+  // --- Render loop ---
+
+  function frame(ts) {
+    requestAnimationFrame(frame);
+
+    fpsCount++;
+    if (ts - fpsLast >= 1000) {
+      fpsDisplay = fpsCount;
+      fpsCount = 0;
+      fpsLast = ts;
+      document.getElementById('fps').textContent = fpsDisplay;
+    }
+
+    if (!paused) {
+      rotY += 0.014;
+      rotX += 0.006;
+      lightTheta += 0.018;
+    }
+
+    // Orbiting point light
+    var lightPos = [
+      3.2 * Math.cos(lightTheta),
+      2.0 + 1.5 * Math.sin(lightTheta * 0.73),
+      3.2 * Math.sin(lightTheta)
+    ];
+
+    // Transform all vertices
+    var mat = rotationMatrix(rotY, rotX);
+    var wVerts = new Array(8);
+    var wNorms = new Array(8);
+    var sVerts = new Array(8);
+    for (var i = 0; i < 8; i++) {
+      wVerts[i] = mulMatVec(mat, cubeVerts[i]);
+      wNorms[i] = mulMatVec(mat, vertNormals[i]);
+      sVerts[i] = project(wVerts[i]);
+    }
+
+    // Build visible triangle list (backface culling + quad split)
+    var tris = [];
+    for (var fi = 0; fi < 6; fi++) {
+      var face = cubeFaces[fi];
+      var vi = face.idx;
+      var bc = face.base;
+      var avgZ = (wVerts[vi[0]][2] + wVerts[vi[1]][2] +
+                  wVerts[vi[2]][2] + wVerts[vi[3]][2]) * 0.25;
+
+      // Gouraud: compute color at each vertex of the quad
+      var vc = new Array(4);
+      for (var j = 0; j < 4; j++) {
+        vc[j] = litColor(wNorms[vi[j]], wVerts[vi[j]], lightPos, bc);
+      }
+
+      // Split quad [0,1,2,3] into two triangles: [0,1,2] [0,2,3]
+      var splits = [[0, 1, 2], [0, 2, 3]];
+      for (var t = 0; t < 2; t++) {
+        var a = splits[t][0], b = splits[t][1], c = splits[t][2];
+        var s0 = sVerts[vi[a]], s1 = sVerts[vi[b]], s2 = sVerts[vi[c]];
+
+        // Backface cull via 2D screen-space cross product
+        var crossZ = (s1[0] - s0[0]) * (s2[1] - s0[1]) -
+                     (s1[1] - s0[1]) * (s2[0] - s0[0]);
+        if (crossZ >= 0) continue;
+
+        tris.push({
+          p: [s0, s1, s2],
+          c: [vc[a], vc[b], vc[c]],
+          z: avgZ
+        });
+      }
+    }
+
+    // Painter's sort: draw far triangles first
+    tris.sort(function(a, b) { return b.z - a.z; });
+
+    // Clear pixel buffer to black
+    var imgData = ctx.createImageData(W, H);
+    var px = imgData.data;
+    var buf32 = new Uint32Array(px.buffer);
+    buf32.fill(0xFF000000);
+
+    // Rasterize filled triangles with Gouraud shading
+    if (!wireframe) {
+      for (var ti = 0; ti < tris.length; ti++) {
+        var tri = tris[ti];
+        rasterTri(px, W, H, tri.p[0], tri.p[1], tri.p[2],
+                  tri.c[0], tri.c[1], tri.c[2]);
+      }
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+
+    // Wireframe overlay
+    if (wireframe) {
+      ctx.strokeStyle = 'rgba(160, 180, 210, 0.85)';
+      ctx.lineWidth = 1.5;
+      for (var ti = 0; ti < tris.length; ti++) {
+        var tri = tris[ti];
+        ctx.beginPath();
+        ctx.moveTo(tri.p[0][0], tri.p[0][1]);
+        ctx.lineTo(tri.p[1][0], tri.p[1][1]);
+        ctx.lineTo(tri.p[2][0], tri.p[2][1]);
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
+
+    // Light source indicator glow
+    var lp = project(lightPos);
+    var grd = ctx.createRadialGradient(lp[0], lp[1], 0, lp[0], lp[1], 16);
+    grd.addColorStop(0, 'rgba(255,255,220,0.95)');
+    grd.addColorStop(0.35, 'rgba(255,240,120,0.4)');
+    grd.addColorStop(1, 'rgba(255,220,50,0)');
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(lp[0], lp[1], 16, 0, 6.2832);
+    ctx.fill();
+    ctx.fillStyle = '#ffffcc';
+    ctx.beginPath();
+    ctx.arc(lp[0], lp[1], 2.5, 0, 6.2832);
+    ctx.fill();
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

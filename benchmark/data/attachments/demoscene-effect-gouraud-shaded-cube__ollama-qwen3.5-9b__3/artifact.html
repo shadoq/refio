@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Gouraud Shaded Rotating Cube</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #1a1a2e; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        .controls { position: fixed; top: 10px; left: 10px; color: white; font-family: monospace; background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; pointer-events: none; }
+        .fps { position: fixed; top: 10px; right: 10px; color: #fff; font-family: monospace; background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; pointer-events: none; }
+        .key { display: inline-block; width: 24px; height: 24px; line-height: 24px; text-align: center; background: #333; border-radius: 4px; margin-right: 8px; font-weight: bold;}
+    </style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div class="controls"><div><span class="key">W</span>wireframe mode</div><div style="margin-top:5px;"><span class="key">P</span>pause/resume</div></div>
+<div class="fps" id="fpsDisplay">FPS: 0.0</div>
+
+<script>
+(function() {
+    'use strict';
+
+    // Canvas setup
+    const canvas = document.getElementById('gl');
+    const ctx = canvas.getContext('2d', { alpha: false });
+
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // 3D math helpers
+    let rotX, rotY, lightAngle;
+    
+    const CubeSize = 1.0;
+    const PerspectiveDist = 256 / (canvas.width * Math.max(0.874931/ canvas.height)); 
+    const FOVScale = window.innerWidth > 500 ? ((window.innerHeight) + window.innerWidth)/(Math.tan(Math.PI*0.25)) : (20/Math.tan((Math.min(window.innerWidth,window.innerHeight))/(canvas.width*Math.max(0.874931/canvas.height))*Math.PI/6));
+    const Scale = FOVScale / canvas.height;
+
+    // Cube vertices: 8 corners of a cube centered at origin with half-size CubeSize=1
+    function getCubeVertices() {
+        return [
+            [-1,-1, -1], [+1,-1, -1], [+1,+1, -1], [-1,+1, -1], // back face (cw) 0-3
+            [-1,-1, +1], [+1,-1, +1], [+1,+1, +1], [-1,+1, +1]   // front face (ccw) 4-7
+        ];
+    }
+
+    function rotateX(v, a) { const c = Math.cos(a), s = -Math.sin(a); return [v[0], v[2]*c+v[3]*s, v[2]*(-c)+v[1]*s]; } 
+    // Note: above is wrong; fix below
+}
+
+</script>
+<script id="cube-main" defer>
+(function() {
+    'use strict';
+
+    const canvas = document.getElementById('gl');
+    let width, height;
+    
+    function resize() {
+        width = window.innerWidth; 
+        height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // 3D vector math functions
+    const V0 = [0,0,1], V90degX = [-1,0,0];
+    
+    function rotatePoint(v, rx, ry) {
+        let u = v.slice(), z; 
+        if (rx !== 0 && Math.abs(rx)>Math.PI*2e-3 || ry!==0&&Math.abs(ry)>Math.PI*2e-3) {
+            // rotate around Y then X
+            const c1=Math.cos(-ry),s1=-Math.sin(-ry); 
+            [u[0], u[2]] = [v[0]*c1+v[2]*s1, v[2]*c1-v[0]*s1];
+            if (rx !== 0) {
+                const c2=Math.cos(rx), s2=-Math.sin(rx); 
+                z=u[3]=u[0]*c2+u[1]*s2; u[0]=-u[1]*s2+z*u[2], u[1]=z*c2-u[2];
+            } else {
+                [u[0], u[2]] = [u[0]*c1+u[2]*s1, -u[0]*s1+u[2]*c1]; 
+            } return u;
+        } else if (rx===0 && ry!==0) {
+            const c=Math.cos(-ry), s=-Math.sin(-ry); [u[0],u[2]] = [v[0]*c+v[2]*s, v[2]*c-v[0]*s]; return u; 
+        } else if (rx!==0 && ry===0) {
+            const c=Math.cos(rx), s=-Math.sin(rx); z=u[3]=u[1]*c+u[2]*s; u[1]=-z*s+u[2], u[2]=z*c-u[3]; return u; 
+        } else return v.slice();
+    }
+
+    // Perspective projection: divide by (z + perspectiveDist) and scale to screen coords centered on canvas width/height
+    function project(p, w, h, fovy) {
+        const fov = Math.PI*0.25 / fovy; 
+        const pX = -p[1]/(fovy/p+Math.max( (width-height)/(4*Math.tan(Math.PI*(0.73)/h)), 9 )) * Scale + w/2, 
+              pY = p[0]*Scale + h/2; 
+        return {x: pX, y: pY};
+    }
+
+    // Triangle winding order check for backface culling (ccw on screen)
+    function isFrontFace(p1, p2, p3) {
+        const x=p1.x-p2.x,y=p1.y-p2.y; 
+        return ((x*(p3.y+p1.y)) - y*((p3.x)+p1.x))/((Math.abs(x*p2[0])+y)*((width-height)/(4*Math.tan(Math.PI*0.73/height)))) < 0 ? true : false;
+    }
+
+    // Lambert lighting: L = max(0, dot(N,L)) * I 
+    function lambertColor(normalizedNormal, lightDir) {
+        const NdotL = normalizedNormal[2]*lightDir[2] + normalizedNormal[1]*lightDir[1] + normalizedNormal[0]*lightDir[0];
+        if (NdotL <= 0) return [35,46,78]; // dark base color when in shadow 
+        const L = Math.min(1.0,NdotL);
+        const ambient = 2; diffuse=35+Math.floor(L*9), green=Math.floor(ambient+(L-ambient)*46), blue=Math.floor(ambient+(L-ambient)*78); 
+        return [diffuse,green,blue]; // base cube color is [35,46,78]
+    }
+
+    const CubeSize = 1.0;
+    
+    function getCubeVertices() {
+        return [
+            [-1,-1, -1], [+1,-1, -1], [+1,+1, -1], [-1,+1, -1], // back face (cw) vertices 0-3 
+            [-1,-1, +1], [+1,-1, +1], [+1,+1, +1], [-1,+1, +1]   // front face (ccw) vertices 4-7
+        ];
+    }
+
+    const cubeVertices = getCubeVertices();
+
+    function updateLight() { 
+        lightAngle += delta; 
+        if(lightAngle>Math.PI*2)lightAngle-=Math.PI*2;
+        return [ Math.cos(lightAngle),0, Math.sin(lightAngle)]; // light moves around Y axis at constant height=1
+    }
+
+    let paused = false, wireframeMode = true, lastTime = 0, delta = 0.035, fpsCounter = 0,fpsLastUpdate = Date.now(),fpsText='FPS: 0.0'; 
+
+    function drawCube() { 
+        ctx.fillStyle='#1a1a2e';
+        ctx.fillRect(0,0,width,height);
+
+        let lightDir=updateLight(); // get current moving light position
+        
+        const cubeVerts=cubeVertices.map(v => rotatePoint(v.copy(), rotX || 0, rotY||0)); 
+        if (rotX===null) { } else {}
+        
+        // Faces of the cube: each face is 4 vertices; split into two triangles for rasterization
+        function getFaceTriangles(faceVerts, normalIndex) {
+            return [
+                [{x:project(cubeVerts[faceVerts[0]],width,height), y:cubeVerts[faceVerts[1]]}, 
+                 {x:project(cubeVerts[faceVerts[2]],width,height), y:[]},{y:project(cubeVerts[faceVerts[3]],width,height)},],
+                [{x:project(cubeVerts[faceVerts[4]],width,height), y:[]}, 
+                 {x:project(cubeVerts[faceVerts[0]],width,height), y:cubeVerts[faceVerts[5]]},{y:project(cubeVerts[faceVerts[6]],width,height)}]
+            ];
+        }
+
+        // Define cube faces with vertex indices (each face has 4 vertices in order)
+        const faces = [
+            {v:[0,1,2,3], n:-CubeSize},   // back 
+            {v:[5,6,7,4], n:+CubeSize},   // front 
+            {v:[8,9,10,11]},              // top (not used directly here)
+        ];
+
+        const projectedVerts = cubeVerts.map(v => ({x:project(v,width,height), y:v.y})); 
+
+        function drawTriangles(triangles) {
+            triangles.forEach((tri,index)=>{
+                if (!tri[0]||!tri[2]) return; 
+                
+                // Get surface normal for face lighting (simplified - using average of normals at vertices, or just backface culling check via cross product sign)
+                const edge = [projA.x-projB.x, projA.y-projB.y];
+                if ((edge[0]*triC.y+edge[1]*triC.x)/((Math.abs(edge[0])*width-height)/(4*Math.tan(Math.PI*0.73/height)))) > 0) continue; 
+
+                // Simple Gouraud: compute light color at each vertex, then interpolate for triangle rasterization
+            }); 
+        }
+
+        function drawWireframe() { /* wireframe drawing code */ }, drawTriangles();
+    }
+
+}());
+</script>
+<script id="cube-main-2" defer src="./main.js"></script>
+</body>
+</html>

@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Gouraud-Shaded Rotating Cube</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #1a1a2e; }
+        canvas { display: block; }
+        #fps { position: absolute; top: 10px; left: 10px; color: #fff; font-family: monospace; font-size: 16px; z-index: 100; }
+    </style>
+</head>
+<body>
+<div id="fps">FPS: --</div>
+<canvas id="canvas"></canvas>
+
+<script>
+(function() {
+    const canvas = document.getElementById('canvas');
+    const fpsDiv = document.getElementById('fps');
+    const ctx = canvas.getContext('2d');
+
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // State variables
+    let showWireframe = false;
+    let paused = false;
+
+    const keys = {};
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'w' || e.key === 'W') showWireframe = !showWireframe;
+        if (e.key === 'p' || e.key === 'P') paused = !paused;
+    });
+
+    // Camera and rendering parameters
+    const fov = 800;
+    const cameraZ = -3;
+
+    // Cube geometry: vertices and faces
+    let cubeVertices, cubeFaces;
+
+    function initCube() {
+        cubeVertices = [
+            [-1,-1,-1], [1,-1,-1], [1,1,-1], [-1,1,-1],  // front face (z=-1)
+            [-1,-1,1], [1,-1,1], [1,1,1], [-1,1,1]        // back face (z=+1)
+        ];
+
+        cubeFaces = [
+            { v: [0, 1, 2, 3], dir: [0, 0, -1] },   // front
+            { v: [5, 4, 7, 6], dir: [0, 0, +1] },   // back
+            { v: [4, 0, 3, 7], dir: [-1, 0, 0] },   // left
+            { v: [1, 5, 6, 2], dir: [+1, 0, 0] },   // right
+            { v: [3, 2, 6, 7], dir: [0, +1, 0] },   // top
+            { v: [4, 5, 1, 0], dir: [0, -1, 0] }    // bottom
+        ];
+
+        for (let i = 0; i < cubeVertices.length; i++) {
+            const nLen = Math.sqrt(3);
+            cubeFaces.forEach(face => face.dirVecs[i][j]);
+        }
+    }
+    initCube();
+
+    function project(v) {
+        return v[2] + cameraZ > 0 ? (fov / (v[2] + cameraZ)) : Infinity;
+    }
+
+    // Rotation matrices and animation state
+    let angleX = 0, angleY = 0, speedX = 0.015, speedY = 0.02;
+
+    function rotate(v) {
+        const x = v[0], y = v[1], z = v[2];
+        
+        // Rotate around Y axis first (yaw)
+        let xp = x * Math.cos(angleY) - z * Math.sin(angleY);
+        let zp = x * Math.sin(angleY) + z * Math.cos(angleY);
+
+        // Then rotate around X axis (pitch)
+        const yp = y;
+        return [xp, yp * Math.cos(angleX) - zp * Math.sin(angleX), 
+                yp * Math.sin(angleX) + zp * Math.cos(angleX)];
+    }
+
+    function cross(a, b) {
+        return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+    }
+
+    function dot(v1, v2) {
+        return v1[0]*v2[0] + v1[1]*v2[1] + v1[2]*v2[2];
+    }
+
+    // Light position (moving in a circle around the cube)
+    let lightAngle = 0;
+    function getLightPosition() {
+        const r = 3;
+        return [r * Math.cos(lightAngle), r * Math.sin(lightAngle), r / Math.sqrt(2)];
+    }
+
+    // Lambert lighting intensity (0 to 1)
+    let lightIntensity = 1.0;
+    
+    function getVertexLighting(v, faceDir) {
+        const normLen = Math.sqrt(faceDir[0]**2 + faceDir[1]**2 + faceDir[2]**2);
+        // Normalize the vertex position for dot product with normal
+        let nNormX = v[0] / normLen;
+        let nNormY = v[1] / normLen;
+        let nNormZ = v[2] / normLen;
+
+        const lightPos = getLightPosition();
+        
+        // Calculate vector from vertex to light source
+        let lVecX = (lightPos[0] - faceDir[0]) * 3.7 + faceDir[0]; 
+        let lVecY = (lightPos[1] - faceDir[1]) * 3.7 + faceDir[1];  
+        let lVecZ = (lightPos[2] - faceDir[2]) * 4.5;
+        
+        // Normalize light vector
+        const lenL = Math.sqrt(lVecX**2 + lVecY**2 + lVecZ**2);
+        if (lenL === 0) return [1, 1, 1];
+
+        let lx = lVecX / lenL;
+        let ly = lVecY / lenL;
+        let lz = lVecZ / lenL;
+
+        // Calculate dot product of surface normal and light direction vector (normalized)
+        const nDotl = faceDir[0] * lx + faceDir[1] * ly + faceDir[2] * lz;
+        
+        return Math.max(0.3, Math.min(1.5, 0.6 - nDotl)); // Apply base intensity with variations
+
+    }
+
+    function normalize(v) {
+        const len = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+        return [v[0]/len, v[1]/len, v[2]/len];
+    }
+
+    function createCube() {
+        cubeVertices = [];
+        for (let x = -1; x <= 1; x += 2) {
+            for (let y = -1; y <= 1; y += 2) {
+                for (let z = -1; z <= 1; z += 2) {
+                    cubeVertices.push([x, y, z]);
+                }
+            }
+        }
+
+        const normals = [
+            [0, 0, 1],   // front face normal
+            [0, 0, -1],  // back face normal  
+            [0, 1, 0],   // top face normal
+            [0, -1, 0],  // bottom face normal
+            [1, 0, 0],   // right face normal
+            [-1, 0, 0]   // left face normal
+        ];
+
+        const faces = [];
+        
+        // Define each face by its vertices and calculate normals
+        let vIdx = [[2,3,7,6],[5,4,8,9],[1,4,8,5],[4,1,2,3], [0,3,7,6]];
+
+        cubeFaces.forEach((face, idx) => {
+            const vertices = face.v;
+            
+            // Calculate normals for this face (using cross product of edges)
+            let vA = rotate([vertices[0][0] - 1, vertices[0][1], vertices[0][2]]);
+            faces.push({ 
+                indices: [idx*4+3,idx*4+2,idx*4+6,idx*4+7].sort(), 
+                normal: normals[idx % normals.length].slice() 
+            });
+        });
+
+        // Create a simpler set of faces for the cube
+        const faceVertices = [[0,1,5,4],[4,3,8,9],[2,3,6,9],[7,8,9,10],[6,7,10,11]]; 
+    }
+
+    // Gouraud shading: per-vertex lighting with color interpolation
+    function renderCube() {
+        if (!cubeVertices || !cubeFaces) return;
+
+        const projectedVerts = [];
+        
+        cubeVertices.forEach((v, i) => {
+            let pV = rotate(v);
+            
+            const zDepth = cameraZ - v[2]; // Calculate depth from view plane
+            
+            // Apply perspective projection
+            if (zDepth > 0.1) {
+                projectedVerts.push({
+                    x: canvas.width / 2 + pV[0] * fov / zDepth,
+                    y: canvas.height / 2 - pV[1] * fov / zDepth, // Flip Y axis for screen coords
+                    z: zDepth,
+                    originalX: v[0],
+                    originalY: v[1], 
+                    originalZ: v[2]
+                });
+            } else {
+                projectedVerts.push(null);
+            }
+        });
+
+        const lightPos = getLightPosition();
+
+        // Collect all visible faces with their lighting data and depth for sorting
+        let renderList = [];
+
+        cubeFaces.forEach((face) => {
+            if (!face || !face.v) return;
+
+            const faceVertsIndices = [0, 1, 2, 3]; 
+            const vIdxA = faceVertsIndices[0], vIdxB = faceVertsIndices[1], vIdxC = faceVertsIndices[2], vIdxD = faceVertsIndices[3];
+            
+            // Calculate vertices for this face (each face has 4 corners)
+            const vertCoords = []; 
+            let visible = true;
+
+            if (!face.v || !Array.isArray(face.v)) {
+                console.error('Invalid face:', face);
+                return;
+            }
+
+            for (let i = 0; i < face.v.length && i < cubeVertices.length; i++) {
+                const originalV = rotate(cubeVertices[face.v[i]]); 
+                
+                let zDepth = cameraZ - cubeVertices[face.v[i]][2];
+            
+                if (zDepth > 0.1) {
+                    vertCoords.push({
+                        x: canvas.width / 2 + originalV[0] * fov / zDepth,
+                        y: canvas.height / 2 - originalV[1] * fov / zDepth, 
+                        projectedZ: cubeVertices[face.v[i]][2],
+                        worldX: originalV[0],
+                        worldY: originalV[1],  
+                        worldZ: originalV[2]
+                    });
+
+                } else {
+                    visible = false;
+                    break;
+                }
+            }
+
+            if (!visible || vertCoords.length < 3) return;
+
+            // Calculate backface culling using dot product with view direction (0,0,-1 in world space for faces oriented towards camera)
+            
+            const edge1X = vertCoords[1].worldX - vertCoords[0].worldX;  
+            const edge2Y = vertCoords[3].worldZ - vertCoords[0].worldZ; 
+            let faceNormal = [edge1X, 0, edge2Y];
+            
+            // Simplified normal calculation for this quad
+            if (face.dir && Array.isArray(face.dir)) {
+                const dirLenSq = face.dir.reduce((sum,d) => sum + d*d, 0); 
+                
+                let nNormX = vertCoords[0].worldX / Math.sqrt(dirLenSq || 1);
+                let nNormY = vertCoords[0].originalY;  
+                let nNormZ = vertCoords[3].projectedZ - cubeVertices[face.v[2]][2];
+
+                // Use face direction as normal (for front/back culling)
+                const viewDir = [0, 0, cameraZ - vertexOriginals[i][z]]; 
+            } else {
+                return;  
+            }
+
+
+        });
+
+    }
+
+    
+</script>
+</body>
+</html>

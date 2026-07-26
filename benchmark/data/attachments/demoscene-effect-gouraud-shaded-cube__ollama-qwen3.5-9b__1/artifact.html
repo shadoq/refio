@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gouraud-Shaded Rotating Cube</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #1a1a2e; color: #eee; font-family: sans-serif; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    .overlay { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); padding: 8px 12px; border-radius: 4px; font-size: 13px; pointer-events: none; }
+    .key { color: #ff79c6; font-weight: bold; }
+  </style>
+</head>
+<body>
+<div class="overlay">
+  <div><span class="key">W</span>: toggle wireframe | <span class="key">P</span>: pause/resume</div>
+  <div id="fpsDisplay" style="margin-top:4px;">FPS: --</div>
+</div>
+
+<canvas id="glc"></canvas>
+
+<script>
+(function() {
+'use strict';
+
+// --- constants & state ----------------------------------------------
+const canvas = document.getElementById('glc');
+const ctx = canvas.getContext('2d', { alpha: true });
+let paused = false;
+let wireframeMode = false;
+
+function resize(e) { canvas.width = e.target.clientWidth; canvas.height = e.target.clientHeight; }
+window.addEventListener('resize', resize);
+resize(window);
+
+// light position (moves over time), camera is at z=10 looking toward origin
+const camDist = 10.0, fovY = Math.PI / 4, aspectRatio = () => canvas.width / canvas.height || 1;
+let t = 0; // animation timer for moving light
+
+// cube radius (half diagonal of face) and thickness
+const R = 500, H = 600;
+
+// rotation matrices: x-axis first then y-axis
+function rotMx(xa, ya) { return createMat4(); }
+
+let modelRotX = 0.1, modelRotY = -0.08; // radians per frame (rotate each render)
+
+const lightPosVec3 = [Math.cos(t)*650+(-275), Math.sin(t)*650-900,-400];
+// define a cube by its 1x1 faces centered at origin. 
+// x in [-R,R], z in [-H,H] (thick slab). 
+const cubeVerts = [ -R, R , H, // front-top-left (z=+H)
+                     +R, R , H, // front-bottom-right
+                    -R,-R , H,  // back-bottom-left
+                     R,-R , H,  // back-top-right
+                    -R,R ,-H,    // back-top-left (z=-H)
+                     R,R ,-H,   // back-bottom-right 
+                    -R,-R ,-H,   // front-bottom-left
+                     R,-R ,-H,];
+
+// cube center at origin. We'll rotate the vertices in model space and then project them to screen.
+
+function createMat4() { return [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]; }
+const mat = createMat4();
+
+// rotation matrices: x-axis then y-axis (in model space) 
+let rotXmat, rotYmat; // will be recomputed each frame using current angles.
+
+function computeRotMats() { const a=modelRotX*2*Math.PI+rotAngleX; }
+const rotAngleX = 0.18;   radian per frame for x rotation) 
+let rotAngleY = -0.09; // radians per frame (y-axis rotation).
+
+// precompute the model matrices each render loop? Actually we'll reapply them in project function below so they can be dynamic.)

@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Gouraud Shaded Cube - Canvas 2D</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #111; color: #eee; font-family: monospace; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        #ui { position: absolute; top: 10px; left: 10px; pointer-events: none; text-shadow: 1px 1px 2px black; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        FPS: <span id="fps">0</span><br>
+        [W] Toggle Wireframe<br>
+        [P] Pause/Resume
+    </div>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d', { alpha: false });
+        const fpsEl = document.getElementById('fps');
+
+        let width, height;
+        let paused = false;
+        let wireframe = false;
+        let angleX = 0, angleY = 0, angleZ = 0;
+        let lightPos = { x: 0, y: 0, z: -5 };
+
+        // Cube definition
+        const vertices = [
+            {x: -1, y: -1, z:  1}, {x:  1, y: -1, z:  1}, {x:  1, y:  1, z:  1}, {x: -1, y:  1, z:  1},
+            {x: -1, y: -1, z: -1}, {x:  1, y: -1, z: -1}, {x:  1, y:  1, z: -1}, {x: -1, y:  1, z: -1}
+        ];
+
+        // Faces defined as two triangles each (indices into vertices)
+        const faces = [
+            [[0, 1, 2], [0, 2, 3]], // Front
+            [[1, 5, 6], [1, 6, 2]], // Right
+            [[5, 4, 7], [5, 7, 6]], // Back
+            [[4, 0, 3], [4, 3, 7]], // Left
+            [[3, 2, 6], [3, 6, 7]], // Top
+            [[4, 5, 1], [4, 1, 0]]  // Bottom
+        ];
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key.toLowerCase() === 'w') wireframe = !wireframe;
+            if (e.key.toLowerCase() === 'p') paused = !paused;
+        });
+
+        function rotate(v, ax, ay, az) {
+            let {x, y, z} = v;
+            // X rotation
+            let ty = y * Math.cos(ax) - z * Math.sin(ax);
+            let tz = y * Math.sin(ax) + z * Math.cos(ax);
+            y = ty; z = tz;
+            // Y rotation
+            let tx = x * Math.cos(ay) + z * Math.sin(ay);
+            tz = -x * Math.sin(ay) + z * Math.cos(ay);
+            x = tx; z = tz;
+            // Z rotation
+            tx = x * Math.cos(az) - y * Math.sin(az);
+            ty = x * Math.sin(az) + y * Math.cos(az);
+            x = tx; y = ty;
+            return {x, y, z};
+        }
+
+        function project(v) {
+            const perspective = 400 / (4 + v.z);
+            return {
+                x: width / 2 + v.x * perspective,
+                y: height / 2 + v.y * perspective,
+                z: v.z
+            };
+        }
+
+        function getNormal(v1, v2, v3) {
+            const a = { x: v2.x - v1.x, y: v2.y - v1.y, z: v2.z - v1.z };
+            const b = { x: v3.x - v1.x, y: v3.y - v1.y, z: v3.z - v1.z };
+            const n = {
+                x: a.y * b.z - a.z * b.y,
+                y: a.z * b.x - a.x * b.z,
+                z: a.x * b.y - a.y * b.x
+            };
+            const len = Math.sqrt(n.x*n.x + n.y*n.y + n.z*n.z);
+            return { x: n.x/len, y: n.y/len, z: n.z/len };
+        }
+
+        function calculateLighting(v, normal) {
+            const lightDir = { x: lightPos.x - v.x, y: lightPos.y - v.y, z: lightPos.z - v.z };
+            const len = Math.sqrt(lightDir.x**2 + lightDir.y**2 + lightDir.z**2);
+            const dot = normal.x * (lightDir.x/len) + normal.y * (lightDir.y/len) + normal.z * (lightDir.z/len);
+            const intensity = Math.max(0.1, dot); 
+            return intensity;
+        }
+
+        // Software Rasterizer for Gouraud Shading
+        function drawGouraudTriangle(p1, p2, p3, c1, c2, c3) {
+            // Sort vertices by Y
+            let pts = [p1, p2, p3].sort((a, b) => a.y - b.y);
+            let cols = [c1, c2, c3]; // Need to map colors to sorted points
+            // Re-map colors based on original point indices
+            const originalPts = [p1, p2, p3];
+            const sortedCols = pts.map(p => {
+                if (p === p1) return c1;
+                if (p === p2) return c2;
+                return c3;
+            });
+
+            const v0 = sortedCols[0], v1 = sortedCols[1], v2 = sortedCols[2];
+            const y0 = pts[0].y, y1 = pts[1].y, y2 = pts[2].y;
+            const x0 = pts[0].x, x1 = pts[1].x, x2 = pts[2].x;
+
+            for (let y = Math.ceil(y0); y <= Math.floor(y2); y++) {
+                let t = (y - y0) / (y2 - y0);
+                let alpha1 = (y <= y1) ? (y - y0) / (y1 - y0) : 1;
+                
+                // Interpolate X coordinates
+                let lx1 = x0 + (x1 - x0) * alpha1;
+                let lx2 = x0 + (x2 - x0) * t;
+                if (lx1 > lx2) [lx1, lx2] = [lx2, lx1];
+
+                // Interpolate Colors for the scanline endpoints
+                let colL = {
+                    r: v0.r + (v1.r - v0.r) * alpha1,
+                    g: v0.g + (v1.g - v0.g) * alpha1,
+                    b: v0.b + (v1.b - v0.b) * alpha1
+                };
+                let colR = {
+                    r: v0.r + (v2.r - v0.r) * t,
+                    g: v0.g + (v2.g - v0.g) * t,
+                    b: v0.b + (v2.b - v0.b) * t
+                };
+
+                // Draw the horizontal line with color interpolation
+                const dist = lx2 - lx1;
+                for (let x = Math.ceil(lx1); x <= Math.floor(lx2); x++) {
+                    let weight = (x - lx1) / dist;
+                    const r = Math.round(colL.r + (colR.r - colL.r) * weight);
+                    const g = Math.round(colL.g + (colR.g - colL.g) * weight);
+                    const b = Math.round(colL.b + (colR.b - colL.b) * weight);
+                    ctx.fillStyle = `rgb(${r},${g},${b})`;
+                    ctx.fillRect(x, y, 1, 1);
+                }
+            }
+        }
+
+        let lastTime = 0;
+        function loop(time) {
+            const dt = time - lastTime;
+            lastTime = time;
+            fpsEl.innerText = Math.round(1000 / dt);
+
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, width, height);
+
+            if (!paused) {
+                angleX += 0.01;
+                angleY += 0.015;
+                angleZ += 0.005;
+                lightPos.x = Math.sin(time * 0.001) * 3;
+                lightPos.y = Math.cos(time * 0.001) * 3;
+            }
+
+            const transformed = vertices.map(v => rotate(v, angleX, angleY, angleZ));
+            const projected = transformed.map(v => project(v));
+
+            faces.forEach(facePair => {
+                facePair.forEach(triIdx => {
+                    const v1 = transformed[triIdx[0]];
+                    const v2 = transformed[triIdx[1]];
+                    const v3 = transformed[triIdx[2]];
+                    
+                    // Backface Culling (World Space)
+                    const normal = getNormal(v1, v2, v3);
+                    const viewDir = { x: 0 - v1.x, y: 0 - v1.y, z: 0 - v1.z }; // Camera at origin
+                    if (normal.x * viewDir.x + normal.y * viewDir.y + normal.z * viewDir.z < 0) return;
+
+                    const p1 = projected[triIdx[0]];
+                    const p2 = projected[triIdx[1]];
+                    const p3 = projected[triIdx[2]];
+
+                    if (wireframe) {
+                        ctx.strokeStyle = '#0ff';
+                        ctx.beginPath();
+                        ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y);
+                        ctx.lineTo(p3.x, p3.y); ctx.closePath();
+                        ctx.stroke();
+                    } else {
+                        const l1 = calculateLighting(v1, normal);
+                        const l2 = calculateLighting(v2, normal);
+                        const l3 = calculateLighting(v3, normal);
+
+                        const color = (l) => ({
+                            r: Math.floor(50 + l * 150),
+                            g: Math.floor(100 + l * 100),
+                            b: Math.floor(200 + l * 55)
+                        });
+
+                        drawGouraudTriangle(p1, p2, p3, color(l1), color(l2), color(l3));
+                    }
+                });
+            });
+
+            requestAnimationFrame(loop);
+        }
+
+        requestAnimationFrame(loop);
+    </script>
+</body>
+</html>

@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Shaded Cube</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0a; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+  canvas { display: block; }
+  #hud { position: fixed; top: 16px; left: 16px; color: #aaa; font-family: monospace; font-size: 14px; line-height: 1.8; pointer-events: none; }
+  #light-indicator { position: fixed; top: 16px; right: 16px; color: #ffcc44; font-family: monospace; font-size: 13px; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div id="fps">FPS: 0</div>
+  <div>W: wireframe | P: pause</div>
+</div>
+<div id="light-indicator">● light</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const fpsEl = document.getElementById('fps');
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+const cubeVertices = [
+  [-1, -1, -1],
+  [ 1, -1, -1],
+  [ 1,  1, -1],
+  [-1,  1, -1],
+  [-1, -1,  1],
+  [ 1, -1,  1],
+  [ 1,  1,  1],
+  [-1,  1,  1],
+];
+
+const cubeFaces = [
+  { verts: [4, 5, 6, 7], normal: [0, 0, 1],  color: [0.90, 0.20, 0.20] },
+  { verts: [1, 0, 3, 2], normal: [0, 0,-1],  color: [0.20, 0.85, 0.20] },
+  { verts: [0, 4, 7, 3], normal: [-1, 0, 0], color: [0.25, 0.25, 0.90] },
+  { verts: [5, 1, 2, 6], normal: [1, 0, 0],  color: [0.90, 0.85, 0.15] },
+  { verts: [7, 6, 2, 3], normal: [0, 1, 0],  color: [0.85, 0.20, 0.85] },
+  { verts: [0, 1, 5, 4], normal: [0,-1, 0],  color: [0.15, 0.85, 0.85] },
+];
+
+const smoothNormals = cubeVertices.map(() => [0, 0, 0]);
+for (const face of cubeFaces) {
+  for (const vi of face.verts) {
+    smoothNormals[vi][0] += face.normal[0];
+    smoothNormals[vi][1] += face.normal[1];
+    smoothNormals[vi][2] += face.normal[2];
+  }
+}
+for (const n of smoothNormals) {
+  const len = Math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+  n[0] /= len; n[1] /= len; n[2] /= len;
+}
+
+function rotateX(p, a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [p[0], p[1] * c - p[2] * s, p[1] * s + p[2] * c];
+}
+function rotateY(p, a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [p[0] * c + p[2] * s, p[1], -p[0] * s + p[2] * c];
+}
+function rotateZ(p, a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [p[0] * c - p[1] * s, p[0] * s + p[1] * c, p[2]];
+}
+
+const focalLength = 4;
+function project(p) {
+  const z = p[2] + 5;
+  const f = focalLength / Math.max(z, 0.1);
+  return [p[0] * f, p[1] * f, z];
+}
+
+function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+function normalize(v) {
+  const len = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+  if (len < 1e-10) return [0, 0, 0];
+  return [v[0] / len, v[1] / len, v[2] / len];
+}
+
+let wireframe = false;
+let paused = false;
+let angleX = 0.4, angleY = 0.6, angleZ = 0;
+let lightAngle = 0;
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'w' || e.key === 'W') wireframe = !wireframe;
+  if (e.key === 'p' || e.key === 'P') paused = !paused;
+});
+
+let frameCount = 0;
+let lastFpsTime = performance.now();
+let currentFps = 0;
+
+function toScreen(p, w, h) {
+  return [
+    p[0] * w * 0.3 + w * 0.5,
+    -p[1] * h * 0.3 + h * 0.5
+  ];
+}
+
+function rasterizeTriangle(imgData, w, h, pv0, pv1, pv2, c0, c1, c2) {
+  const s0 = toScreen(pv0, w, h);
+  const s1 = toScreen(pv1, w, h);
+  const s2 = toScreen(pv2, w, h);
+
+  const minX = Math.max(0, Math.floor(Math.min(s0[0], s1[0], s2[0])));
+  const maxX = Math.min(w - 1, Math.ceil(Math.max(s0[0], s1[0], s2[0])));
+  const minY = Math.max(0, Math.floor(Math.min(s0[1], s1[1], s2[1])));
+  const maxY = Math.min(h - 1, Math.ceil(Math.max(s0[1], s1[1], s2[1])));
+
+  if (minX > maxX || minY > maxY) return;
+
+  const denom = (s1[1] - s2[1]) * (s0[0] - s2[0]) + (s2[0] - s1[0]) * (s0[1] - s2[1]);
+  if (Math.abs(denom) < 0.001) return;
+  const invDenom = 1.0 / denom;
+
+  const data = imgData.data;
+
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const px = x + 0.5;
+      const py = y + 0.5;
+
+      const w0 = ((s1[1] - s2[1]) * (px - s2[0]) + (s2[0] - s1[0]) * (py - s2[1])) * invDenom;
+      const w1 = ((s2[1] - s0[1]) * (px - s2[0]) + (s0[0] - s2[0]) * (py - s2[1])) * invDenom;
+      const w2 = 1.0 - w0 - w1;
+
+      if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+        const idx = (y * w + x) * 4;
+        data[idx]     = Math.min(255, (w0 * c0[0] + w1 * c1[0] + w2 * c2[0])) | 0;
+        data[idx + 1] = Math.min(255, (w0 * c0[1] + w1 * c1[1] + w2 * c2[1])) | 0;
+        data[idx + 2] = Math.min(255, (w0 * c0[2] + w1 * c1[2] + w2 * c2[2])) | 0;
+        data[idx + 3] = 255;
+      }
+    }
+  }
+}
+
+function render() {
+  const w = canvas.width;
+  const h = canvas.height;
+
+  if (!paused) {
+    angleX += 0.008;
+    angleY += 0.012;
+    angleZ += 0.004;
+    lightAngle += 0.02;
+  }
+
+  const lightPos = [
+    3.5 * Math.cos(lightAngle),
+    2.0 * Math.sin(lightAngle * 0.7),
+    3.5 * Math.sin(lightAngle)
+  ];
+
+  const transformed = cubeVertices.map(v => {
+    let p = rotateX(v, angleX);
+    p = rotateY(p, angleY);
+    p = rotateZ(p, angleZ);
+    return p;
+  });
+
+  const transformedNormals = smoothNormals.map(n => {
+    let p = rotateX(n, angleX);
+    p = rotateY(p, angleY);
+    p = rotateZ(p, angleZ);
+    return p;
+  });
+
+  const projected = transformed.map(p => project(p));
+
+  const triangles = [];
+  const ambient = 0.12;
+
+  for (const face of cubeFaces) {
+    const vi = face.verts;
+
+    const v0 = transformed[vi[0]];
+    const v1 = transformed[vi[1]];
+    const v2 = transformed[vi[2]];
+    const v3 = transformed[vi[3]];
+
+    const edge1 = sub(v1, v0);
+    const edge2 = sub(v2, v0);
+    const faceNormal = normalize([
+      edge1[1] * edge2[2] - edge1[2] * edge2[1],
+      edge1[2] * edge2[0] - edge1[0] * edge2[2],
+      edge1[0] * edge2[1] - edge1[1] * edge2[0]
+    ]);
+
+    const faceCenter = [
+      (v0[0] + v1[0] + v2[0] + v3[0]) * 0.25,
+      (v0[1] + v1[1] + v2[1] + v3[1]) * 0.25,
+      (v0[2] + v1[2] + v2[2] + v3[2]) * 0.25
+    ];
+    const viewDir = normalize([0 - faceCenter[0], 0 - faceCenter[1], -5 - faceCenter[2]]);
+
+    if (dot(faceNormal, viewDir) >= 0) continue;
+
+    const baseColor = face.color;
+
+    const vertexColors = vi.map((vIdx) => {
+      const normal = normalize(transformedNormals[vIdx]);
+      const toLight = normalize(sub(lightPos, transformed[vIdx]));
+      const diff = Math.max(0, dot(normal, toLight));
+      const intensity = ambient + (1 - ambient) * diff;
+
+      const halfVec = normalize([
+        toLight[0] + viewDir[0],
+        toLight[1] + viewDir[1],
+        toLight[2] + viewDir[2]
+      ]);
+      const spec = Math.pow(Math.max(0, dot(normal, halfVec)), 48) * 0.4;
+
+      const r = Math.min(255, baseColor[0] * intensity * 255 + spec * 255);
+      const g = Math.min(255, baseColor[1] * intensity * 255 + spec * 255);
+      const b = Math.min(255, baseColor[2] * intensity * 255 + spec * 255);
+      return [r | 0, g | 0, b | 0];
+    });
+
+    const triSplits = [[0, 1, 2], [0, 2, 3]];
+    for (const ti of triSplits) {
+      const avgDepth = (projected[vi[ti[0]]][2] + projected[vi[ti[1]]][2] + projected[vi[ti[2]]][2]) / 3;
+      triangles.push({
+        v: [vi[ti[0]], vi[ti[1]], vi[ti[2]]],
+        c: [vertexColors[ti[0]], vertexColors[ti[1]], vertexColors[ti[2]]],
+        depth: avgDepth
+      });
+    }
+  }
+
+  triangles.sort((a, b) => b.depth - a.depth);
+
+  if (wireframe) {
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    for (const tri of triangles) {
+      const s0 = toScreen(projected[tri.v[0]], w, h);
+      const s1 = toScreen(projected[tri.v[1]], w, h);
+      const s2 = toScreen(projected[tri.v[2]], w, h);
+      ctx.beginPath();
+      ctx.moveTo(s0[0], s0[1]);
+      ctx.lineTo(s1[0], s1[1]);
+      ctx.lineTo(s2[0], s2[1]);
+      ctx.closePath();
+      ctx.stroke();
+    }
+
+    const cubeEdges = [
+      [0,1],[1,2],[2,3],[3,0],
+      [4,5],[5,6],[6,7],[7,4],
+      [0,4],[1,5],[2,6],[3,7]
+    ];
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 1;
+    for (const [a, b] of cubeEdges) {
+      const sa = toScreen(projected[a], w, h);
+      const sb = toScreen(projected[b], w, h);
+      ctx.beginPath();
+      ctx.moveTo(sa[0], sa[1]);
+      ctx.lineTo(sb[0], sb[1]);
+      ctx.stroke();
+    }
+  } else {
+    const imgData = ctx.createImageData(w, h);
+    for (const tri of triangles) {
+      rasterizeTriangle(
+        imgData, w, h,
+        projected[tri.v[0]],
+        projected[tri.v[1]],
+        projected[tri.v[2]],
+        tri.c[0],
+        tri.c[1],
+        tri.c[2]
+      );
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  const lp = project(lightPos);
+  const ls = toScreen(lp, w, h);
+  ctx.beginPath();
+  ctx.arc(ls[0], ls[1], 6, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffee66';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(ls[0], ls[1], 14, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255,238,102,0.3)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFpsTime >= 1000) {
+    currentFps = frameCount;
+    frameCount = 0;
+    lastFpsTime = now;
+    fpsEl.textContent = 'FPS: ' + currentFps;
+  }
+
+  requestAnimationFrame(render);
+}
+
+requestAnimationFrame(render);
+</script>
+</body>
+</html>

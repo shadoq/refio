@@ -1,0 +1,44 @@
+{
+  "id": "single-file-app-signal-forge",
+  "mode": "AGENT",
+  "description": "Web Audio modular synth + 16-step sequencer: oscillators/ADSR/filters/FX, 8 tracks, keyboard, oscilloscope + spectrum, presets, save/load. Audio on user gesture. Stress case.",
+  "category": "single-file-app",
+  "max_iterations": 40,
+  "fixture": "fixtures/signal-forge",
+  "prompt_file": "prompts/single-file-app-signal-forge.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "website_app_signal_forge_model_01.html",
+        "regex": "AudioContext"
+      },
+      {
+        "path": "website_app_signal_forge_model_01.html",
+        "regex": "[Oo]scillator"
+      },
+      {
+        "path": "website_app_signal_forge_model_01.html",
+        "regex": "<canvas"
+      },
+      {
+        "path": "website_app_signal_forge_model_01.html",
+        "regex": "[Ss]equencer|step"
+      }
+    ],
+    "smoke": {
+      "entry": "website_app_signal_forge_model_01.html",
+      "dom_present": [
+        "canvas"
+      ]
+    }
+  },
+  "judge": {
+    "criteria": [
+      "signal-forge.html is one self-contained Web Audio modular synth and 16-step sequencer (no libraries, no audio samples): multiple oscillators (sine/square/triangle/saw/noise), ADSR envelopes, filters, an LFO, delay/distortion/reverb and polyphony; an 8-track step sequencer with per-step controls, tempo and swing; a piano keyboard; live oscilloscope and spectrum visualizers on canvas; presets and save/load. Audio starts only after a user gesture and avoids clicks."
+    ]
+  }
+}

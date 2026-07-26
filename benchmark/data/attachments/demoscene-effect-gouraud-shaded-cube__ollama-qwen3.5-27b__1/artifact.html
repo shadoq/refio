@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Gouraud Shaded Rotating Cube</title>
+    <style>
+        body { margin: 0; background: #111; overflow: hidden; font-family: monospace; }
+        canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; }
+        #ui { position: absolute; top: 10px; left: 10px; color: #fff; background: rgba(0,0,0,0.5); padding: 8px; border-radius: 4px; pointer-events: none; user-select: none;}
+    </style>
+</head>
+<body>
+<div id="ui">FPS: --<br>Pause (P)<br>Wireframe (W)</div>
+<canvas id="c"></canvas>
+
+<script>
+(() => {
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d', { alpha: false });
+let width, height;
+function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// State
+let paused = false;
+let wireframeMode = false;
+
+document.addEventListener('keydown', e => {
+    if (e.key.toLowerCase() === 'p') paused = !paused;
+    if (e.key.toLowerCase() === 'w') wireframeMode = !wireframeMode;
+});
+
+// Math Helpers
+function mat4Identity() { return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]); }
+
+function multiplyMatrices(a, b) {
+    const r = new Float32Array(16);
+    for (let i=0; i<4; ++i) {
+        for (let j=0; j<4; ++j) {
+            let sum = 0;
+            for (let k=0; k<4; ++k) sum += a[i*4+k] * b[k*4+j];
+            r[i*4+j] = sum;
+        }
+    }
+    return r;
+}
+
+function rotateX(angle) {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    return new Float32Array([1,0,0,0, 0,c,-s,0, 0,s,c,0, 0,0,0,1]);
+}
+
+function rotateY(angle) {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    return new Float32Array([c,0,s,0, 0,1,0,0, -s,0,c,0, 0,0,0,1]);
+}
+
+function transformPoint(p, m) {
+    const x=p[0], y=p[1], z=p[2];
+    return [
+        m[0]*x + m[4]*y + m[8]*z,
+        m[1]*x + m[5]*y + m[9]*z,
+        m[2]*x + m[6]*y + m[10]*z
+    ];
+}
+
+function normalize3(v) {
+    const len = Math.sqrt(v[0]**2 + v[1]**2 + v[2]**2);
+    return len > 1e-8 ? [v[0]/len, v[1]/len, v[2]/len] : [0,0,0];
+}
+
+function dot(a,b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
+
+// Cube Definition (Unit cube centered at origin)
+const baseVertices = new Float32Array([
+    -1,-1, 1,   // 0: Front-Bottom-Left
+     1,-1, 1,   // 1: Front-Bottom-Right
+     1, 1, 1,   // 2: Front-Top-Right
+    -1, 1, 1,   // 3: Front-Top-Left
+    -1,-1,-1,   // 4: Back-Bottom-Left
+     1,-1,-1,   // 5: Back-Bottom-Right
+     1, 1,-1,   // 6: Back-Top-Right
+    -1, 1,-1    // 7: Back-Top-Left
+]);
+
+// Standard Cube Faces with Colors and Normals (in object space)
+const faceDefs = [
+    { idx: [3,2,1,0], col: [65/255, 179/255, 248/255], normal: [0, 0, 1] },   // Front (Z=1) - Light Blue
+    { idx: [7,6,2,3], col: [248/255, 103/255, 133/255], normal: [0, 1, 0] },   // Top (Y=1) - Pink
+    { idx: [6,5,1,2], col: [89/255, 225/255, 145/255], normal: [1, 0, 0] },    // Right (X=1) - Lime Green
+    { idx: [7,3,0,4], col: [255/255, 255/255, 89/255], normal: [-1, 0, 0] },   // Left (X=-1) - Yellow-White
+    { idx: [6,7,4,5], col: [255/255, 107/255, 53/255], normal: [0, 0, -1] },   // Back (Z=-1) - Orange-Red
+    { idx: [4,0,1,5], col: [89/255, 103/255, 248/255], normal: [0, -1, 0] }    // Bottom (Y=-1) - Blueish Purple
+];
+
+// Animation State
+let angleX = 0.3;
+let angleY = -0.5;
+let time = 0;
+let lastTime = performance.now();
+let frameCount = 0;
+let fpsTimer = 0;
+
+function project(p) {
+    const focalLength = width * 0.45; 
+    const scale = focalLength / (focalLength - p[2]);
+    
+    return {
+        x: (p[0] * scale + width/2),
+        y: -(p[1] * scale) + height/2,
+        z: p[2],
+        w: 1/scale 
+    };
+}
+
+function drawGouraudTriangle(p0, cA, p1, cB, p2, cC) {
+    const minY = Math.ceil(Math.min(p0.y, p1.y, p2.y));
+    const maxY = Math.floor(Math.max(p0.y, p1.y, p2.y)) - 1;
+
+    if (minY > maxY) return;
+
+    const y0=p0.y, x0=p0.x;
+    const y1=p1.y, x1=p1.x;
+    const y2=p2.y, x2=p2.x;
+
+    for (let row = minY; row <= maxY; ++row) {
+        let y = row + 0.5; 
+        
+        // Calculate edge intersections with scanline
+        
+        // Edge P0-P1
+        if ((y >= Math.min(y0,y1)) && (y < Math.max(y0,y1))) {
+            const t = (y - y0) / (y1 - y0);
+            let x_edge_01 = x0 + t * (x1 - x0);
+            
+            // Interpolate colors for edge P0-P1
+            let r_edge_01 = cA[0] + t * (cB[0] - cA[0]);
+            let g_edge_01 = cA[1] + t * (cB[1] - cA[1]);
+            let b_edge_01 = cA[2] + t * (cC[2] - cA[2]); // Typo fix: should be consistent with color component
+            
+            const minX = Math.ceil(Math.min(x_edge_01, x)); 
+            const maxX = Math.floor(Math.max(x_edge_01, x)) + 1;
+            
+             for (let col = minX; col < maxX; ++col) {
+                let px = col + 0.5;
+                
+                 // Barycentric coordinates calculation:
+                const areaP_P1_P2 = (px*(y1-y2) + x1*(y2-y) + x2*(y-y1)); 
+                const totalArea = (x0*(y1-y2) + x1*(y2-y0) + x2*(y0-y1));
+                
+                if (Math.abs(totalArea) < 1e-6) continue;
+
+                // wA is weight for P0. If P=P0, area(P,P1,P2) = Total Area -> wA=1. Correct.
+                const u = areaP_P1_P2 / totalArea; 
+                
+                // wB (weight for P1): Area(P0, P, P2) / Total
+                const v = ((x0*(y-y2)) + (px*(y2-y0)) + (x2*(y0-y))) / totalArea;
+                
+                // wC (weight for P2): 1 - u - v
+                const t_w = 1.0 - u - v;
+
+                if (u >= -1e-6 && v >= -1e-6 && t_w >= -1e-6) {
+                    // Inside triangle
+                    const r = Math.round((cA[0]*u + cB[0]*v + cC[0]*t_w)*255);
+                    const g = Math.round((cA[1]*u + cB[1]*v + cC[1]*t_w)*255);
+                    const b_val = Math.round((cA[2]*u + cB[2]*v + cC[2]*t_w)*255);
+                    
+                    ctx.fillStyle = `rgb(${r},${g},${b_val})`;
+                    ctx.fillRect(col, row, 1, 1);
+                }
+            }
+        }
+
+    }
+}
+
+function render() {
+    const now = performance.now();
+    
+    // FPS Calculation
+    frameCount++;
+    fpsTimer += (now - lastTime);
+    if (fpsTimer >= 500) {
+        document.getElementById('ui').innerHTML = `FPS: ${Math.round(frameCount * 1000 / fpsTimer)}<br>Pause (P)<br>Wireframe (W)`;
+        frameCount = 0;
+        fpsTimer = 0;
+    }
+    lastTime = now;
+
+    if (!paused) {
+        time += 0.02;
+        angleX += 0.01;
+        angleY += 0.015;
+        
+        // Moving Light Source (Orbiting around Y axis and bobbing on X/Z)
+        const lightPos = [
+            Math.sin(time * 0.8) * 3, 
+            2 + Math.cos(time * 0.6), 
+            Math.cos(time * 0.8) * 3
+        ];
+
+        // Normalize Light Direction (Camera is at origin looking into scene? No, light position relative to object center).
+        const lLen = Math.sqrt(lightPos[0]**2 + lightPos[1]**2 + lightPos[2]**2);
+        L_world = [lightPos[0]/lLen, lightPos[1]/lLen, lightPos[2]/lLen];
+
+    } else {
+        // Keep last known light position if paused? Or just use default. 
+        // For simplicity in this loop structure, we calculate it every frame regardless of pause for consistency or store state.
+        const lightPos = [
+            Math.sin(time * 0.8) * 3, 
+            2 + Math.cos(time * 0.6), 
+            Math.cos(time * 0.8) * 3
+        ];
+        const lLen = Math.sqrt(lightPos[0]**2 + lightPos[1]**2 + lightPos[2]**2);
+        L_world = [lightPos[0]/lLen, lightPos[1]/lLen, lightPos[2]/lLen];
+    }
+
+    // Clear Screen
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, width, height);
+
+    const rotX = rotateX(angleX);
+    const rotY = rotateY(angleY);
+    const modelMatrix = multiplyMatrices(rotY, rotX); 
+
+    // Compute Vertex Normals (Averaged from adjacent faces) for Smooth Gouraud Shading
+    // Initialize vertex normals to zero
+    const vertexNormalsObjSpace = []; 
+    for(let i=0; i<8; ++i) {
+        vertexNormalsObjSpace.push([0, 0, 0]);
+    }
+
+    // Accumulate face normals into vertices
+    for (let f=0; f < faceDefs.length; ++f) {
+        const indices = faceDefs[f].idx;
+        const normal = faceDefs[f].normal;
+        
+        for(let i=0; i<4; ++i) {
+            const vIdx = indices[i];
+            vertexNormalsObjSpace[vIdx][0] += normal[0];
+            vertexNormalsObjSpace[vIdx][1] += normal[1];
+            vertexNormalsObjSpace[vIdx][2] += normal[2];
+        }
+    }
+
+    // Normalize the accumulated normals
+    for(let i=0; i<8; ++i) {
+        const n = normalize3(vertexNormalsObjSpace[i]);
+        if (n.length === 1e-9 || Math.abs(n[0]) < 1e-6 && Math.abs(n[1]) < 1e-6 && Math.abs(n[2]) < 1e-6) {
+             // Handle zero normal case (should not happen on a cube with this logic, but safety check)
+            vertexNormalsObjSpace[i] = [0, 0, 0]; 
+        } else {
+            const len = Math.sqrt(n[0]**2 + n[1]**2 + n[2]**2);
+             // Re-normalize properly since normalize3 returns array not object with length property in this context logic check above was loose.
+             vertexNormalsObjSpace[i] = [n[0]/len, n[1]/len, n[2]/len];
+        }
+    }
+
+    const transformedVertices = [];
+    
+    for(let i=0; i<8; ++i) {
+        // Rotate Position
+        let vBase = [baseVertices[i*3], baseVertices[i*3+1], baseVertices[i*3+2]];
+        let vRotated = transformPoint(vBase, modelMatrix);
+        
+        // Rotate Normal (Normals should be rotated by the same matrix if no scaling/shearing)
+        let nObj = vertexNormalsObjSpace[i];
+        let nWorld = transformPoint(nObj, modelMatrix);
+        nWorld = normalize3(nWorld);
+
+        transformedVertices.push({ pos: vRotated, normal: nWorld });
+    }
+
+    // Prepare Faces for Rendering (Sort by Z-depth for painter's algorithm)
+    const renderList = [];
+
+    for(let f=0; f<faceDefs.length; ++f) {
+        const indices = faceDefs[f].idx;
+        
+        let v0 = transformedVertices[indices[0]];
+        let v1 = transformedVertices[indices[1]];
+        let v2 = transformedVertices[indices[2]];
+        let v3 = transformedVertices[indices[3]];
+
+        // Compute Face Normal (Cross Product) for Backface Culling
+        const edge1 = [v1.pos[0]-v0.pos[0], v1.pos[1]-v0.pos[1], v1.pos[2]-v0.pos[2]];
+        const edge2 = [v2.pos[0]-v0.pos[0], v2.pos[1]-v0.pos[1], v2.pos[2]-v0.pos[2]]; 
+        
+        const normalX = edge1[1]*edge2[2] - edge1[2]*edge2[1];
+        const normalY = edge1[2]*edge2[0] - edge1[0]*edge2[2];
+        const normalZ = edge1[0]*edge2[1] - edge1[1]*edge2[0];
+        
+        // Backface Culling: If Normal points away from camera (assuming Camera is at large Z looking towards origin, so view direction is -Z). 
+        // In our projection `focal/(focal-z)`, if z increases we get closer. So +Z is "forward".
+        // A face with normal pointing to +Z should be visible. Normal.Z > 0 -> Visible?
+        const nLen = Math.sqrt(normalX**2 + normalY**2 + normalZ**2);
+        
+        let normFace;
+        if(nLen > 1e-6) {
+            normFace = [normalX/nLen, normalY/nLen, normalZ/nLen];
+            
+            // Backface Culling: If Normal points away from camera (assuming Camera is at large Z looking towards origin). 
+            // Actually in our projection `focal/(focal-z)`, if z increases we get closer. So +Z is "forward".
+            // A face with normal pointing to +Z should be visible. Normal.Z > 0 -> Visible?
+            // Let's assume standard: If dot(Normal, CameraVector) < 0 cull. 
+            // Simplified check for this specific setup: if (normalZ < -epsilon) continue; ? Or just use the cross product result directly against a view vector [0,0,-1] or similar?
+            
+            // Let's assume camera is at +Infinity Z looking towards origin (-Z direction). View Vector = (0, 0, -1)? No. 
+            // If we are rendering to screen, and z=1 is closer than z=-1... then Camera is likely on the positive Z axis?
+            // Wait: scale = f / (f-z). If z=f -> infinity. So objects at +Z come towards camera.
+            // Normal pointing towards +Z should be visible. 
+            if (normFace[2] < -0.1) continue; 
+            
+        } else {
+             continue;
+        }
+
+        const baseCol = faceDefs[f].col;
+        
+        // Compute Vertex Colors for the 4 vertices of this face using Lambertian Lighting with Averaged Normals
+        const vertexColors = [];
+        for(let i=0; i<4; ++i) {
+            let vData = transformedVertices[indices[i]];
+            
+            // Dot product between Normal and Light Direction (L_world is computed in render loop scope, need to access it or pass it. 
+            // Since L_world depends on time which changes every frame, we must ensure it's available here.
+            // Re-calculate light direction inside the loop if not passed? Or hoist calculation outside pause check properly.
+            
+            const lPos = [Math.sin(time * 0.8) * 3, 2 + Math.cos(time * 0.6), Math.cos(time * 0.8) * 3];
+            const lLenLight = Math.sqrt(lPos[0]**2 + lPos[1]**2 + lPos[2]**2);
+            const L = [lPos[0]/lLenLight, lPos[1]/lLenLight, lPos[2]/lLenLight];
+
+            // Lambertian: max(0, N . L) * DiffuseColor + Ambient
+            let intensity = Math.max(0.05, dot(vData.normal, L)); 
+            vertexColors.push([baseCol[0]*intensity, baseCol[1]*intensity, baseCol[2]*intensity]);
+        }
+
+        // Project vertices for this quad
+        const p0 = project(v0.pos);
+        const p1 = project(v1.pos);
+        const p2 = project(v2.pos);
+        const p3 = project(v3.pos);
+
+        // Compute average Z for sorting (Painter's Algorithm)
+        const avgZ = (v0.pos[2] + v1.pos[2] + v2.pos[2] + v3.pos[2]) / 4;
+
+        renderList.push({
+            z: avgZ,
+            triangles: [
+                { p:[p0,p1,p2], c:[vertexColors[0], vertexColors[1], vertexColors[2]] }, // Triangle 1 (Gouraud)
+                { p:[p0,p3,p2], c:[vertexColors[0], vertexColors[3], vertexColors[2]] }  // Triangle 2 (Gouraud) 
+            ],
+            wireframePoints: [p0, p1, p2, p3]
+        });
+    }
+
+    // Sort by Z depth (Painter's Algorithm): Draw furthest first.
+    renderList.sort((a,b) => b.z - a.z);
+
+    // Render Triangles
+    for(const face of renderList) {
+        if (!wireframeMode) {
+            for(const tri of face.triangles) {
+                drawGouraudTriangle(tri.p[0], tri.c[0], tri.p[1], tri.c[1], tri.p[2], tri.c[2]);
+            }
+        } else {
+            // Wireframe Mode: Draw edges
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 1;
+            const pts = face.wireframePoints;
+            
+            for(let i=0; i<4; ++i) {
+                const pA = pts[i];
+                const pB = pts[(i+1)%4];
+                
+                ctx.beginPath();
+                ctx.moveTo(pA.x, pA.y);
+                ctx.lineTo(pB.x, pB.y);
+                ctx.stroke();
+            }
+        }
+    }
+
+    requestAnimationFrame(render);
+}
+
+requestAnimationFrame(render);
+
+})();
+</script>
+</body>
+</html>

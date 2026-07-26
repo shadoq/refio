@@ -1,0 +1,42 @@
+{
+  "id": "single-file-app-data-observatory",
+  "mode": "AGENT",
+  "description": "Data-analysis workbench: CSV/JSON import, typed columns, filter/pivot, self-drawn charts (line/bar/scatter/histogram/pie) + dashboard panels, stats, export. No chart libraries.",
+  "category": "single-file-app",
+  "max_iterations": 40,
+  "fixture": "fixtures/data-observatory",
+  "prompt_file": "prompts/single-file-app-data-observatory.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "website_app_data_observatory_model_01.html",
+        "regex": "<canvas|<svg"
+      },
+      {
+        "path": "website_app_data_observatory_model_01.html",
+        "regex": "[Cc][Ss][Vv]"
+      },
+      {
+        "path": "website_app_data_observatory_model_01.html",
+        "regex": "[Cc]hart"
+      },
+      {
+        "path": "website_app_data_observatory_model_01.html",
+        "regex": "localStorage"
+      }
+    ],
+    "smoke": {
+      "entry": "website_app_data_observatory_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "data-observatory.html is one self-contained data-analysis app (no charting or data libraries): paste/upload CSV or JSON or generate sample data; inferred and editable column types; sort, filter and calculated columns using a safe expression subset (no unrestricted eval); grouping and pivot summaries; charts drawn with canvas or SVG (line, bar, scatter, histogram, pie) with tooltips and responsive resize; a dashboard of movable panels; descriptive statistics; export and localStorage persistence. It stays usable with about 10k rows."
+    ]
+  }
+}

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Gouraud Shaded Rotating Cube</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #1a1a2e; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        #info { position: absolute; top: 10px; left: 10px; color: white; font-family: monospace; background: rgba(0,0,0,0.5); padding: 10px; border-radius: 4px; pointer-events: none;}
+    </style>
+</head>
+<body>
+<canvas id="cubeCanvas"></canvas>
+<div id="info">FPS: <span id="fpsDisplay">--</span><br>Controls: W = wireframe toggle, P = pause/resume<br>Pan with mouse drag (optional)</div>
+
+<script>
+(function() {
+    'use strict';
+
+    // ===== CONFIGURATION =====
+    const config = {
+        cubeSize: 2.0,          // Half-size of the cube (-cubeSize to +cubeSize)
+        cameraDistance: 4.5,    // Camera distance from center (z-axis)
+        fieldOfView: Math.PI / 3, // Field of view in radians (~60 degrees)
+        aspectRatio: null,      // Will be set dynamically based on window size
+        nearPlane: 0.1,         // Near clipping plane for perspective projection
+        farPlane: 25.0,         // Far clipping plane
+        ambientLight: 0.3,      // Ambient light intensity (0-1)
+        maxLights: 4            // Maximum number of lights before culling face normals
+    };
+
+    const canvas = document.getElementById('cubeCanvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    
+    let width, height;
+    let fpsCounter = 0;
+    let lastTime = performance.now();
+    let framesSinceLastSecond = 0;
+    let isPaused = false;
+
+    // ===== MATH HELPERS =====
+    const Vec3 = {
+        create: (x, y, z) => ({ x, y, z }),
+        add: (a, b) => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }),
+        sub: (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }),
+        scale: (v, s) => ({ x: v.x * s, y: v.y * s, z: v.z * s }),
+        dot: (a, b) => a.x * b.x + a.y * b.y + a.z * b.z,
+        cross: (a, b) => {
+            return {
+                x: a.y * b.z - a.z * b.y,
+                y: a.z * b.x - a.x * b.z,
+                z: a.x * b.y - a.y * b.x
+            };
+        },
+        normalize: (v) => {
+            const len = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+            return len === 0 ? Vec3.create(0, 0, 0) : 
+                   { x: v.x / len, y: v.y / len, z: v.z / len };
+        },
+        lengthSquared: (v) => v.x * v.x + v.y * v.y + v.z * v.z,
+        rotateX: (v, angle) => ({
+            x: v.x,
+            y: Math.cos(angle) * v.y - Math.sin(angle) * v.z,
+            z: Math.sin(angle) * v.y + Math.cos(angle) * v.z
+        }),
+        rotateY: (v, angle) => ({
+            x: Math.cos(angle) * v.x + Math.sin(angle) * v.z,
+            y: v.y,
+            z: -Math.sin(angle) * v.x + Math.cos(angle) * v.z
+        }),
+        rotateZ: (v, angle) => {
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            return { x: cos * v.x - sin * v.y, y: sin * v.x + cos * v.y, z: v.z };
+        },
+        lerp: (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t })
+    };
+
+    // ===== 3D GEOMETRY =====
+    
+    // Cube vertices (8 corners of the cube before rotation)
+    const baseVertices = [
+        Vec3.create(config.cubeSize, config.cubeSize, config.cubeSize),   // +x,+y,+z
+        Vec3.create(-config.cubeSize, config.cubeSize, config.cubeSize),  // -x,+y,+z
+        Vec3.create(-config.cubeSize, -config.cubeSize, config.cubeSize), // -x,-y,+z
+        Vec3.create(config.cubeSize, -config.cubeSize, config.cubeSize),  // +x,-y,+z
+        Vec3.create(config.cubeSize, config.cubeSize, -config.cubeSize),  // +x,+y,-z
+        Vec3.create(-config.cubeSize, config.cubeSize, -config.cubeSize),  // -x,+y,-z
+        Vec3.create(-config.cubeSize, -config.cubeSize, -config.cubeSize),// -x,-y,-z
+        Vec3.create(config.cubeSize, -config.cubeSize, -config.cubeSize)   // +x,-y,-z
+    ];
+
+    // Cube faces defined by triangles (each face split into 2 triangles with consistent winding for backface culling)
+    const cubeFaces = [
+        { name: 'front',  index1: 0, index3: 6, index5: 4 },   // +z face
+        { name: 'back',   index1: 5, index7: 2, index3: 1 },    // -z face  
+        { name: 'right',  index1: 1, index0: 2, index6: 7 },     // +x face (reversed winding)
+        { name: 'left',   index1: 4, index5: 3, index2: 6 },    // -x face
+        { name: 'top',    index1: 2, index0: 7, index6: 1 },     // +y face (reversed winding)
+        { name: 'bottom', index1: 5, index4: 3, index7: 6 }      // -y face (reversed winding)
+    ];
+
+    const cubeVertices = [];
+    
+    function rotateVertex(v) {
+        let rv = Vec3.rotateY(v, rotation.y);
+        rv = Vec3.rotateX(rv, rotation.x);
+        return Vec3.rotateZ(rv, rotation.z);
+    }
+    
+    // ===== CAMERA & PROJECTION =====
+
+    const cameraPos = Vec3.create(0, 0, -config.cameraDistance);
+    let viewMatrix;
+    let projectionMatrix;
+    
+    function createViewProjection() {
+        // View matrix (translate by negative camera position)
+        return {
+            apply: v => Vec3.add(v, Vec3.scale(cameraPos, -1))
+        };
+
+        const aspectRatio = config.aspectRatio || 4/3;
+        
+        const fovyRad = Math.atan((Math.tan(config.fieldOfView / 2), height / width);
+            
+        return { apply: p => new THREE.Vector3(0) } // Placeholder - will be implemented properly below
+
+    };
+
+    function project(v, viewProjMatrix, nearPlane, farPlane) {
+        const clipX = v.x; // Simplified projection (would need full matrix multiplication for proper perspective divide)
+        return { x: 0, y: 0, z: -1.0 } // Placeholder
+    };
+
+    // ===== LIGHTING & SHADES =====
+
+</script>
+</body>
+</html>

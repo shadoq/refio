@@ -1,0 +1,52 @@
+{
+  "id": "games-snake4cpu",
+  "mode": "AGENT",
+  "description": "Classic 30x30 Snake with a 4-CPU-players mode: continuous movement, growth, wall/self collision, arrow keys, CPU search-for-food, three modes (human vs human, cpu vs human, 4 cpu), live score, start + game-over screens, restart.",
+  "category": "games",
+  "max_iterations": 40,
+  "fixture": "fixtures/snake4cpu",
+  "prompt_file": "prompts/games-snake4cpu.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "create_new_file"
+    ],
+    "needles_in_file": [
+      {
+        "path": "snake4cpu_model.html",
+        "regex": "<canvas"
+      },
+      {
+        "path": "snake4cpu_model.html",
+        "regex": "addEventListener\\([[:space:]]*['\"]keydown"
+      },
+      {
+        "path": "snake4cpu_model.html",
+        "regex": "[Ss]core"
+      },
+      {
+        "path": "snake4cpu_model.html",
+        "regex": "[Gg]ame[[:space:]]*[Oo]ver"
+      },
+      {
+        "path": "snake4cpu_model.html",
+        "regex": "requestAnimationFrame|setInterval"
+      },
+      {
+        "path": "snake4cpu_model.html",
+        "regex": "[Cc][Pp][Uu]"
+      }
+    ],
+    "smoke": {
+      "entry": "snake4cpu_model.html",
+      "dom_present": [
+        "canvas"
+      ]
+    }
+  },
+  "judge": {
+    "criteria": [
+      "snake4cpu is one self-contained file with a playable 30x30 snake: continuous movement, growth on eating, wall/self collision ends the game, arrow-key controls, a CPU mode that automatically searches for food, the three game modes (human vs human, cpu vs human, and 4 CPU players), a live score, a start menu and a game-over screen, and restart on a keypress."
+    ]
+  }
+}

@@ -21,7 +21,7 @@ import { RadarCompare } from "@/components/charts/RadarCompare";
 import { JudgeRadarCompare } from "@/components/charts/JudgeRadarCompare";
 import { MetricRadarCompare } from "@/components/charts/MetricRadarCompare";
 import { TaskRadarCompare } from "@/components/charts/TaskRadarCompare";
-import { normalizeScore } from "@/lib/stats";
+import { normalizeScore, visibleTasks } from "@/lib/stats";
 import { aggregateJudgeScores, JUDGE_EXCLUDED_CRITERIA } from "@/lib/judge/scoring";
 
 const { Title, Text } = Typography;
@@ -153,7 +153,7 @@ export default function Compare() {
   // Per-task breakdown: for each task, show scores per model
   const taskBreakdown = useMemo(() => {
     if (!tasksData || compare.modelIds.length === 0) return [];
-    return tasksData.tasks.map((task) => {
+    return visibleTasks(tasksData.tasks).map((task) => {
       const taskResults = filteredResults.filter((r) => r.taskId === task.id);
       const modelScores: Record<string, number | null> = {};
       for (const modelId of compare.modelIds) {

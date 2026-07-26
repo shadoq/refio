@@ -11,6 +11,7 @@ const publicItems = [
 
 const adminItems = import.meta.env.DEV
   ? [
+      { key: "/admin/queue", label: "Queue" },
       { key: "/admin/results", label: "Results" },
       { key: "/admin/tasks", label: "Tasks" },
       { key: "/admin/models", label: "Models" },

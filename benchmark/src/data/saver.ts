@@ -1,5 +1,5 @@
 import { TasksFileSchema, type TasksFile } from "@/schema/tasks";
-import { ResultsFileSchema, type ResultsFile } from "@/schema/results";
+import { ResultsFileSchema, type ResultsFile, type Score } from "@/schema/results";
 
 async function save(fileKey: "tasks" | "results", data: unknown): Promise<void> {
   if (!import.meta.env.DEV) {
@@ -23,6 +23,29 @@ export async function saveTasks(file: TasksFile): Promise<void> {
 export async function saveResults(file: ResultsFile): Promise<void> {
   ResultsFileSchema.parse(file);
   await save("results", file);
+}
+
+// Apply a single inbox promote/discard on the server against the latest results.json,
+// instead of overwriting the whole file from the client's (possibly stale) cache. The
+// server returns the updated file so the caller can refresh its cache.
+export async function mutateResults(
+  op: "promote" | "discard",
+  entryId: string,
+  scores?: Score[],
+): Promise<ResultsFile> {
+  if (!import.meta.env.DEV) {
+    throw new Error("Saving is only available in dev mode");
+  }
+  const res = await fetch("/__mutate-results", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ op, entryId, scores }),
+  });
+  if (!res.ok) {
+    throw new Error(`Mutate failed: ${res.status} ${await res.text()}`);
+  }
+  const json = (await res.json()) as { ok: boolean; data: ResultsFile };
+  return json.data;
 }
 
 export async function uploadAttachment(

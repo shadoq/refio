@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Gouraud Shaded Rotating Cube (Canvas 2D)</title>
+<style>
+    body { margin:0; overflow:hidden; background:#111; color:#eee; font-family:sans-serif; }
+    #fps { position:absolute; top:5px; left:5px; background:rgba(0,0,0,0.5); padding:4px 8px; border-radius:4px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="fps">FPS: ––</div>
+<script>
+// ---------- Utility ----------
+function vec3(x, y, z) { return {x, y, z}; }
+function add(a,b){return vec3(a.x+b.x,a.y+b.y,a.z+b.z);} 
+function sub(a,b){return vec3(a.x-b.x,a.y-b.y,a.z-b.z);} 
+function mul(v,s){return vec3(v.x*s,v.y*s,v.z*s);} 
+function dot(a,b){return a.x*b.x + a.y*b.y + a.z*b.z;}
+function cross(a,b){return vec3(
+    a.y*b.z - a.z*b.y,
+    a.z*b.x - a.x*b.z,
+    a.x*b.y - a.y*b.x);
+}
+function normalize(v){
+  const len = Math.hypot(v.x, v.y, v.z);
+  return len===0?vec3(0,0,0):vec3(v.x/len,v.y/len,v.z/len);
+}
+// ---------- Canvas setup ----------
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+function resize(){canvas.width = window.innerWidth; canvas.height = window.innerHeight;}
+window.addEventListener('resize', resize); resize();
+// ---------- Cube definition ----------
+const size = 1;
+const vertices = [
+  vec3(-size, -size, -size), //0
+  vec3( size, -size, -size), //1
+  vec3( size,  size, -size), //2
+  vec3(-size,  size, -size), //3
+  vec3(-size, -size,  size), //4
+  vec3( size, -size,  size), //5
+  vec3( size,  size,  size), //6
+  vec3(-size,  size,  size)  //7
+];
+// each face split into two triangles (indices)
+const faces = [
+  // front (+z)
+  [4,5,6],[4,6,7],
+  // back (-z)
+  [0,2,1],[0,3,2],
+  // top (+y)
+  [3,7,6],[3,6,2],
+  // bottom (-y)
+  [0,1,5],[0,5,4],
+  // right (+x)
+  [1,2,6],[1,6,5],
+  // left (-x)
+  [0,7,3],[0,4,7]
+];
+// ---------- Transformations ----------
+function rotateX(p, a){
+  const cos = Math.cos(a), sin = Math.sin(a);
+  return vec3(p.x, p.y*cos - p.z*sin, p.y*sin + p.z*cos);
+}
+function rotateY(p, a){
+  const cos = Math.cos(a), sin = Math.sin(a);
+  return vec3(p.x*cos + p.z*sin, p.y, -p.x*sin + p.z*cos);
+}
+function project(v){ // simple perspective
+  const fov = 1.5; // focal length
+  const scale = fov / (fov + v.z);
+  return {x: v.x * scale, y: v.y * scale};
+}
+// ---------- Lighting ----------
+const ambient = 0.2;
+function computeLighting(vNormal, lightDir){
+  const ndotl = Math.max(0, dot(vNormal, lightDir));
+  return ambient + (1-ambient)*ndotl; // simple lambert with ambient
+}
+// ---------- Rasterizer ----------
+function drawTriangle(p0,p1,p2,c0,c1,c2){
+  // bounding box in screen space
+  const minX = Math.max(0, Math.floor(Math.min(p0.x,p1.x,p2.x)));
+  const maxX = Math.min(canvas.width-1, Math.ceil(Math.max(p0.x,p1.x,p2.x)));
+  const minY = Math.max(0, Math.floor(Math.min(p0.y,p1.y,p2.y)));
+  const maxY = Math.min(canvas.height-1, Math.ceil(Math.max(p0.y,p1.y,p2.y)));
+
+  // edge functions
+  const edge = (a,b,c)=> (c.x - a.x)*(b.y - a.y) - (c.y - a.y)*(b.x - a.x);
+  const area = edge(p0,p1,p2);
+  if(area===0) return; // degenerate
+
+  for(let y=minY; y<=maxY; ++y){
+    for(let x=minX; x<=maxX; ++x){
+      const p = {x,y};
+      const w0 = edge(p1,p2,p);
+      const w1 = edge(p2,p0,p);
+      const w2 = edge(p0,p1,p);
+      if(w0>=0 && w1>=0 && w2>=0){ // inside (assuming CCW)
+        const alpha = w0/area, beta = w1/area, gamma = w2/area;
+        const r = Math.round(alpha*c0.r + beta*c1.r + gamma*c2.r);
+        const g = Math.round(alpha*c0.g + beta*c1.g + gamma*c2.g);
+        const b = Math.round(alpha*c0.b + beta*c1.b + gamma*c2.b);
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        ctx.fillRect(x, y, 1, 1);
+      }
+    }
+  }
+}
+function drawWireframe(p0,p1,p2){
+  ctx.strokeStyle='black'; ctx.lineWidth=1;
+  ctx.beginPath();
+  ctx.moveTo(p0.x,p0.y); ctx.lineTo(p1.x,p1.y);
+  ctx.lineTo(p2.x,p2.y); ctx.closePath();
+  ctx.stroke();
+}
+// ---------- Main loop ----------
+let angleX = 0, angleY = 0;
+let paused = false;
+let showWireframe = false;
+let lastTime = performance.now();
+let fpsElem = document.getElementById('fps');
+
+window.addEventListener('keydown', e=>{
+  if(e.key==='p' || e.key==='P') paused=!paused;
+  if(e.key==='w' || e.key==='W') showWireframe=!showWireframe;
+});
+
+function animate(time){
+  const dt = (time - lastTime)/1000; // seconds
+  lastTime = time;
+  if(!paused){
+    angleX += dt*0.6; // rad/s
+    angleY += dt*0.9;
+  }
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // compute transformed vertices
+  const transformed = vertices.map(v=>{
+    let r = rotateX(v, angleX);
+    r = rotateY(r, angleY);
+    // translate cube a bit forward so it is in front of camera
+    r.z += 5; // move away from camera
+    return r;
+  });
+
+  // moving light source (orbiting around Y)
+  const lightRadius = 4;
+  const lightPos = vec3(
+    Math.cos(time*0.001)*lightRadius,
+    2,
+    Math.sin(time*0.001)*lightRadius + 5 // keep roughly same depth as cube
+  );
+
+  // draw each triangle
+  for(let i=0;i<faces.length;i+=1){
+    const idx = faces[i];
+    const vA = transformed[idx[0]];
+    const vB = transformed[idx[1]];
+    const vC = transformed[idx[2]];
+    // back‑face culling (view direction is -Z in camera space)
+    const edge1 = sub(vB, vA);
+    const edge2 = sub(vC, vA);
+    const normal = normalize(cross(edge1, edge2));
+    if(dot(normal, vec3(0,0,-1)) <= 0) continue; // facing away
+
+    // per‑vertex lighting
+    const lightDirA = normalize(sub(lightPos, vA));
+    const lightDirB = normalize(sub(lightPos, vB));
+    const lightDirC = normalize(sub(lightPos, vC));
+    const intensityA = computeLighting(normal, lightDirA);
+    const intensityB = computeLighting(normal, lightDirB);
+    const intensityC = computeLighting(normal, lightDirC);
+    // base color of the cube (soft teal)
+    const base = {r:70,g:180,b:200};
+    const colA = {r:base.r*intensityA, g:base.g*intensityA, b:base.b*intensityA};
+    const colB = {r:base.r*intensityB, g:base.g*intensityB, b:base.b*intensityB};
+    const colC = {r:base.r*intensityC, g:base.g*intensityC, b:base.b*intensityC};
+
+    // project to 2D screen space (centered)
+    const projA = project(vA);
+    const projB = project(vB);
+    const projC = project(vC);
+    const sx = canvas.width/2, sy = canvas.height/2;
+    const pA = {x: projA.x*sx + sx, y: -projA.y*sy + sy};
+    const pB = {x: projB.x*sx + sx, y: -projB.y*sy + sy};
+    const pC = {x: projC.x*sx + sx, y: -projC.y*sy + sy};
+
+    drawTriangle(pA,pB,pC,colA,colB,colC);
+    if(showWireframe) drawWireframe(pA,pB,pC);
+  }
+
+  // FPS display
+  const fps = (1/dt).toFixed(1);
+  fpsElem.textContent = `FPS: ${fps}`;
+
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>

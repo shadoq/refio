@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Gouraud Shaded Cube - Canvas 2D</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #1a1a2e; }
+        canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; }
+        #overlay { position: absolute; top: 10px; left: 10px; color: #fff; font-family: monospace; text-shadow: 1px 1px 2px black; pointer-events: none; user-select: none; }
+    </style>
+</head>
+<body>
+<canvas id="glCanvas"></canvas>
+<div id="overlay">FPS: <span id="fpsDisplay">0</span><br/>Press W for wireframe, P to pause/deactivate</div>
+
+<script>
+(() => {
+    'use strict';
+
+    // Canvas setup
+    const canvas = document.getElementById('glCanvas');
+    const fpsEl = document.getElementById('fpsDisplay');
+    const ctx = canvas.getContext('2d', { alpha: true });
+
+    let width, height;
+    
+    function resize() {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+        // Clear on first draw or when dimensions change significantly to avoid clearing during animation
+        if (width === 800 && height === 600) ctx.clearRect(0, 0, width, height);
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Constants
+    const FOCAL_LENGTH = 4.5;
+    const CUBE_SIZE = 1.5;
+    const LIGHT_SPEED = 3.0;
+    
+    // Cube vertices (unit cube, centered at origin)
+    // Order: +X -Y +Z, -X +Y +Z, +X -Y -Z, -X +Y -Z (+X face), etc.
+    // Using a consistent winding order for backface culling
+    
+    const CUBE_HALF = 0.5;
+
+    function getVertices() {
+        return [
+            [+CUBE_HALF, -CUBE_HALF,+CUBE_HALF], [-CUBE_HALF,+CUBE_HALF,+CUBE_HALF],[+CUBE_HALF,-CUBE_HALF,-CUBE_HALF],[-CUBE HALF,+CUBE_HALF,-CUBE_HALF], // +X face (CCW when viewed from +X)
+            [+CUBE_HALF,+CUBE_HALF,+CUBE_HALF],[+CUBE_HALF,+CUBE_HALF,-CUBE_HALF],[-CUBE_HALF,+CUBE_HALF,-CUBE_HALF],[-CUBE HALF,+CUBE_HALF,+CUBE_HALF], // -Y face (CCW when viewed from -Y)
+            [-CUBE_HALF, +CUBE_HALF, +CUBE_HALF],[+CUBE_HALF, +CUBE_HALF,-CUBE_HALF],[-CUBE_HALF,-CUBE_HALF,-CUBE_HALF][-CUBE HALF,-CUBE_HALF,+CUBE_HALF], // +Z face (CCW when viewed from +Z)
+            [-CUBE_HALF,-CUBE_HALF,+CUBE_HALF],[+CUBE_HALF,-CUBE_HALF,+CUBE_HALF],[-CUBE_HALF,+CUBE_HALF,-CUBE_HALF][-CUBE HALF,+CUBE_HALF,-CUBE_HALF], // -X face (CCW when viewed from -X)
+            [-CUBE_HALF, +CUBE_HALF, +CUBE_HALF],[+CUBE_HALF,+CUBE_HALF,+CUBE_HALF],[-CUBE_HALF,-CUBE_HALF,-CUBE_HALF][-CUBE HALF,-CUBE_HALF,-CUBE_HALF], // +Y face (CCW when viewed from +Y)
+            [-CUBE_HALF,-CUBE_HALF,-CUBE_HALF],[+CUBE_HALF, -CUBE_HALF,+CUBE_HALF],[-CUBE_HALF,+CUBE_HALF,-CUBE_HALF][-CUBE HALF,+CUBE_HALF,-CUBE_HALF] // -Z face (CCW when viewed from -Z)
+        ].flat();
+    }
+
+    const vertices = getVertices();
+
+    function matrixMultiply(a, b) {
+        let c = new Array(16).fill(0);
+        for (let i=0; i<4; i++)
+            for (let j=0; j<4; j++)
+                for (let k=0; k<4; k++)
+                    c[i*4+j] += a[i*4+k]*b[k*4+j];
+        return c;
+    }
+
+    function matrixInverse(m) {
+        // 3x3 inverse extended to 4x4 with translation and perspective preserved
+        let det = m[0]*(m[5]*m[10]-m[9]*m[6]) - m[1]*(m[4]*m[10]-m[8]*m[6]) + m[2]*(m[4]*m[9]-m[8]*m[5]);
+        det = 1/det;
+        let inv = new Array(16).fill(0);
+        // Inverse of affine transform: invert the rotation/translation part, keep w=identity for z/persp handling in modelView matrix only
+        inv[0] = (m[5]*m[10]-m[9]*m[6])*det;          inv[4] = -(m[1]*m[10]-m[2]*m[9])*det;          inv[8]  = (m[1]*m[9]-m[5]*m[2])*det;
+        inv[1] = -(m[3]*m[10]-m[7]*m[6])*det;         inv[5]  = (m[4]*m[10]-m[2]*m[8])*det;          inv[9]  = -(m[4]*m[9]-m[3]*m[8])*det;
+        inv[2] = (m[7]*m[6]-m[5]*m[3]) * det;         inv[6]  = -(m[1]*m[6]-m[0]*m[9])*det;          inv[10] = (m[4]*m[8]-m[0]*m[7])*det;
+        // Translation and perspective preserved by not inverting last row/col elements here, handled separately when needed
+
+        return { m: matrixMultiply(m, new Array(16).fill(0)).map((_,i)=>{ if(i<4||i==4*3) return i%4===0?m[4]:(i>=8)?m[i]:0; else return 0;}), // placeholder
+                inv }; // Simplified - proper inverse calculation needed for full pipeline
+    }
+
+    function createModelViewMatrix(angleX, angleY, lightPos) {
+        let cos = Math.cos(angleX); let sin = Math.sin(angleX);
+        let cy = Math.cos(-angleY), sy = Math.sin(-angleY);
+        
+        // Rotation matrices combined with view position for simple modelview-like transform
+        return [cos*cy, 0, -sin*sy*cos, 0, cos*y+sin*sin,y], [-sin*xsiny,sin*, cy*c-y,-sin*z*sx), sin*-y-cos-2,cys);
+    }
+
+    // Simpler approach: apply rotation to vertices directly with proper matrix application
+    function rotateAndProject(vertex3D) {
+        let x = vertex3D[0], y = vertex3D[1], z = vertex3D[2];
+        
+        // Rotation around X axis (angleX), then Y axis (angleY) - order matters!
+        // First: Rotate around X, then Y
+        
+        // Actually we need a proper rotation sequence. Let's do Z->Y->X or similar for nice cube animation
+        let angle = Math.min(0.5*Math.PI, Math.max(-0.5*Math.PI*2, (performance.now()/16)));
+        
+        return [x,y,z]; // Placeholder - will implement in draw loop with proper transforms
+    }
+
+    function applyTransform(vertices, lightPos) {
+        let t = performance.now() / 100;
+        let angleX = Math.sin(t * 0.3);
+        let angleY = Math.cos(t * 0.25 + 1);
+        
+        // Build model-view matrix for rotation and translation to view position
+        function buildModelView(angleX, angleY) {
+            let cx = Math.cos(angleX), sx = Math.sin(angleX);
+            let cy = Math.cos(-angleY), sy = Math.sin(-angleY);
+            
+            // Rotation matrices R_x * R_y applied in that order (column-major for OpenGL-style multiplication)
+            return [
+                cy, 0, -sx*sy, sx*c-y,
+                s*xsiny,cx,-cx*cy,s*sxcy),
+                0,   sin*-sin,-cos-sin, cos-ysin],
+                0,    0,      1,       0]; // Identity for Z and W components (no perspective in modelview)
+        }
+
+        let mv = buildModelView(angleX, angleY);
+        
+        return vertices.map(v => {
+            let x3D = v[0], y3D = v[1], z3D = v[2];
+            
+            // Apply rotation: R_y first then R_x (or combined)
+            let rx = cy*x + sy*z;
+            let ry = -sx*y + cx*(cy*x + sx*z); 
+            let rz = ... Actually, simplify with direct transform

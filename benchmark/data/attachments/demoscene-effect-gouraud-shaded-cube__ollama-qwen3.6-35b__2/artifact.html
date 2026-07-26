@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud-Shaded Rotating Cube</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #111; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }
+canvas { display: block; }
+#hud { position: fixed; top: 12px; left: 12px; color: #ccc; font: 14px/1.6 monospace; pointer-events: none; text-shadow: 0 0 4px #000; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">FPS: <span id="fps">0</span><br>P: pause<br>W: wireframe</div>
+<script>
+"use strict";
+
+// ── Canvas setup ──────────────────────────────────────────────
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const fpsEl = document.getElementById("fps");
+let W, H, cx, cy;
+function resize() {
+  W = canvas.width = innerWidth;
+  H = canvas.height = innerHeight;
+  cx = W / 2; cy = H / 2;
+}
+resize();
+addEventListener("resize", resize);
+
+// ── Math helpers ──────────────────────────────────────────────
+const sin = Math.sin, cos = Math.cos, PI = Math.PI;
+function vec3(x,y,z){ return [x,y,z]; }
+function add3(a,b){ return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; }
+function sub3(a,b){ return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function cross3(a,b){ return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+function dot3(a,b){ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+function norm3(v){ const l=Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]); return l>0?[v[0]/l,v[1]/l,v[2]/l]:[0,0,0]; }
+function scale3(v,s){ return [v[0]*s,v[1]*s,v[2]*s]; }
+
+function rotX(a){ const c=cos(a),s=sin(a); return [[1,0,0],[0,c,-s],[0,s,c]]; }
+function rotY(a){ const c=cos(a),s=sin(a); return [[c,0,s],[0,1,0],[-s,0,c]]; }
+function rotZ(a){ const c=cos(a),s=sin(a); return [[c,-s,0],[s,c,0],[0,0,1]]; }
+
+function mulMat3Vec3(m,v){
+  return [m[0][0]*v[0]+m[0][1]*v[1]+m[0][2]*v[2],
+          m[1][0]*v[0]+m[1][1]*v[1]+m[1][2]*v[2],
+          m[2][0]*v[0]+m[2][1]*v[1]+m[2][2]*v[2]];
+}
+
+function mulMat3Mat3(a,b){
+  const r=[[0,0,0],[0,0,0],[0,0,0]];
+  for(let i=0;i<3;i++) for(let j=0;j<3;j++) for(let k=0;k<3;k++) r[i][j]+=a[i][k]*b[k][j];
+  return r;
+}
+
+function matMulVec3(m,v){ return mulMat3Vec3(m,v); }
+
+// ── Cube geometry ─────────────────────────────────────────────
+const S = 1.8; // half-size of cube
+const verts = [
+  vec3(-S,-S,-S), vec3( S,-S,-S), vec3( S, S,-S), vec3(-S, S,-S), // front  z=-S (face 0)
+  vec3(-S,-S, S), vec3( S,-S, S), vec3( S, S, S), vec3(-S, S, S), // back   z=+S (face 1)
+  vec3(-S,-S,-S), vec3(-S, S,-S), vec3(-S, S, S), vec3(-S,-S, S), // left   x=-S (face 2)
+  vec3( S,-S, S), vec3( S, S, S), vec3( S, S,-S), vec3( S,-S,-S), // right  x=+S (face 3)
+  vec3(-S, S,-S), vec3( S, S,-S), vec3( S, S, S), vec3(-S, S, S), // top    y=+S (face 4)
+  vec3(-S,-S,-S), vec3(-S,-S, S), vec3( S,-S, S), vec3( S,-S,-S), // bottom y=-S (face 5)
+];
+
+// Each face = 2 triangles (6 vertices). Face normals in local space.
+const faces = [
+  { verts:[0,1,2,3], normal:vec3(0,0,-1), color:[0.85,0.18,0.18] }, // front   red
+  { verts:[4,5,6,7], normal:vec3(0,0, 1), color:[0.18,0.82,0.28] }, // back    green
+  { verts:[8,9,10,11],normal:vec3(-1,0, 0), color:[0.15,0.45,0.85] },// left    blue
+  { verts:[12,13,14,15],normal:vec3( 1,0, 0), color:[0.90,0.70,0.15] }, // right   yellow
+  { verts:[16,17,18,19],normal:vec3( 0,1, 0), color:[0.75,0.20,0.85] }, // top     purple
+  { verts:[20,21,22,23],normal:vec3( 0,-1,0), color:[0.25,0.75,0.75] }, // bottom  cyan
+];
+
+// ── Camera / projection ───────────────────────────────────────
+const fov = 600;
+const camDist = 6;
+
+function project(v3){
+  const z = v3[2] + camDist;
+  if(z < 0.1) return null; // behind camera
+  const s = fov / z;
+  return [cx + v3[0]*s, cy - v3[1]*s, z]; // z kept for depth sort
+}
+
+// ── Light ─────────────────────────────────────────────────────
+let lightAngle = 0;
+function getLight(){
+  const r = 5;
+  return norm3([r*sin(lightAngle), r*cos(lightAngle*0.7)*0.6+1.5, r*cos(lightAngle)]);
+}
+
+// ── State ─────────────────────────────────────────────────────
+let rotY_A = 0, rotX_A = 0, paused = false;
+let wireframe = false;
+
+addEventListener("keydown", e=>{
+  if(e.key==="p"||e.key==="P") paused=!paused;
+  if(e.key==="w"||e.key==="W") wireframe=!wireframe;
+});
+
+// ── Rendering ─────────────────────────────────────────────────
+function drawLine(x1,y1,x2,y2,color){
+  ctx.strokeStyle=color;
+  ctx.lineWidth=1.5;
+  ctx.beginPath();
+  ctx.moveTo(x1,y1);
+  ctx.lineTo(x2,y2);
+  ctx.stroke();
+}
+
+function drawFilledTriangle(p1,p2,p3, c1,c2,c3){
+  // Barycentric / scanline fill with interpolation
+  const pts = [p1,p2,p3].sort((a,b)=> a[1]-b[1]);
+  // pts: top (0), middle (1), bottom (2)
+
+  function lerpColor(ca,cb,t){
+    return [ca[0]*(1-t)+cb[0]*t, ca[1]*(1-t)+cb[1]*t, ca[2]*(1-t)+cb[2]*t];
+  }
+
+  function getColorAtY(y, pTop,cTop,pBot,cBot){
+    let t=0;
+    if(pBot[1]!==pTop[1]) t=(y-pTop[1])/(pBot[1]-pTop[1]);
+    return [lerpColor(cTop,cBot,t), lerpColor([pTop[0],pTop[2]], [pBot[0],pBot[2]], t)];
+  }
+
+  const drawRow = (y, xLeft, xRight, cL, cR) => {
+    for(let x=xLeft;x<=xRight;x++){
+      let t=(x-xLeft)/(xRight-xLeft||1);
+      const r = lerpColor(cL,cR,t);
+      const ri=Math.floor(r[0]*255), gi=Math.floor(r[1]*255), bi=Math.floor(r[2]*255);
+      ctx.fillStyle=`rgb(${ri},${gi},${bi})`;
+      ctx.fillRect(x,y,1.5,1.5);
+    }
+  };
+
+  // Upper part (top -> middle)
+  const midR = Math.round(pts[1][1]);
+  for(let y=Math.round(pts[0][1]);y<=midR;y++){
+    let tTop=(y-pts[0][1])/(pts[2][1]-pts[0][1]||1);
+    let tBot=(y-pts[0][1])/(pts[2][1]-pts[0][1]||1);
+    // left edge: p0->p1  or p0->p2 depending on which point is "middle"
+    let xL,xR;
+    if(y>=pts[1][1]){
+      // going down from top, both edges extend to bottom
+      const leT=(y-pts[0][1])/(pts[1][1]-pts[0][1]||1);
+      const reT=(y-pts[0][1])/(pts[2][1]-pts[0][1]||1);
+      xL=pts[0][0]+leT*(pts[1][0]-pts[0][0]);
+      xR=pts[0][0]+reT*(pts[2][0]-pts[0][0]);
+    } else {
+      const leT=(y-pts[0][1])/(pts[1][1]-pts[0][1]||1);
+      const reT=(y-pts[0][1])/(pts[2][1]-pts[0][1]||1);
+      xL=pts[0][0]+leT*(pts[1][0]-pts[0][0]);
+      xR=pts[0][0]+reT*(pts[2][0]-pts[0][0]);
+    }
+
+    // Correct scanline: left edge from top vertex to the one that goes to middle
+    // right edge from top vertex to bottom vertex
+    let leT, reT;
+    if(y <= pts[1][1]){
+      // upper triangle: p0->p1 (left), p0->p2 (right)
+      leT=(pts[1][1]!==pts[0][1])?(y-pts[0][1])/(pts[1][1]-pts[0][1]):0;
+      reT=(pts[2][1]!==pts[0][1])?(y-pts[0][1])/(pts[2][1]-pts[0][1]):0;
+    } else {
+      // lower triangle: p1->p0(left, reversed), p1->p2(right)
+      leT=(pts[1][1]!==pts[0][1])?(y-pts[1][1])/(pts[0][1]-pts[1][1]):0;
+      reT=(pts[2][1]!==pts[1][1])?(y-pts[1][1])/(pts[2][1]-pts[1][1]):0;
+    }
+    const xLp = pts[0][0]+leT*(pts[1][0]-pts[0][0]);
+    const xRp = pts[2][0]+reT*(pts[2][0]-pts[0][0]);
+
+    // Actually let me redo this properly with a clean scanline approach
+  }
+
+  // Cleaner implementation: compute edges, then scanline
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0],pts[0][1]);
+  ctx.lineTo(pts[1][0],pts[1][1]);
+  ctx.lineTo(pts[2][0],pts[2][1]);
+  ctx.closePath();
+
+  // Use a simple approach: for each row within bounding box, compute color at intersection
+  const yMin=Math.ceil(Math.min(pts[0][1],pts[1][1],pts[2][1]));
+  const yMax=Math.floor(Math.max(pts[0][1],pts[1][1],pts[2][1]));
+
+  for(let y=yMin;y<=yMax;y++){
+    // Compute color at each x on this scanline within the triangle
+    let crossings=[];
+    const edges=[[pts[0],pts[1]],[pts[1],pts[2]],[pts[2],pts[0]]];
+    for(const [a,b] of edges){
+      if(a[1]>b[1]){const t=a;a=b;b=t;} // ensure a is top
+      if(y>=a[1]&&y<=b[1]){
+        let t=(y-a[1]==0)?((b[1]-a[1])>0?0:(b[1]-a[1])):(y-a[1])/(b[1]-a[1]);
+        // clamp
+        if(b[1]===a[1]) continue;
+        t=Math.max(0,Math.min(1,(y-a[1])/(b[1]-a[1])));
+        crossings.push(a[0]+t*(b[0]-a[0]));
+      }
+    }
+    crossings.sort((a,b)=>a-b);
+    if(crossings.length<2) continue;
+    const xStart=crossings[0], xEnd=crossings[crossings.length-1];
+
+    // Get color at this scanline: interpolate vertex colors
+    for(let x=Math.ceil(xStart);x<=Math.floor(xEnd);x++){
+      let t=(x-xStart)/(xEnd-xStart||1);
+      const r = lerpColor(c1,c2,t);
+      // Actually we need per-vertex color interpolation. Let me use barycentric coords.
+      ctx.fillStyle=`rgb(${Math.floor(r[0]*255)},${Math.floor(r[1]*255)},${Math.floor(r[2]*255)})`;
+      ctx.fillRect(x,y,1.5,1.5);
+    }
+  }
+}
+
+// ── Proper barycentric fill with Gouraud colors ───────────────
+function drawTriGouraud(p1,p2,p3,c1,c2,c3){
+  const v=[p1,p2,p3], c=[c1,c2,c3];
+  const yMin=Math.ceil(Math.min(v[0][1],v[1][1],v[2][1]));
+  const yMax=Math.floor(Math.max(v[0][1],v[1][1],v[2][1]));
+
+  function lerp(a,b,t){ return a+(b-a)*t; }
+
+  for(let y=yMin;y<=yMax;y++){
+    let xs=[];
+    // For each edge, compute x at this y
+    for(let i=0;i<3;i++){
+      const a=v[i], b=v[(i+1)%3];
+      if(y<a[1]||y>b[1]) continue;
+      if(a[1]===b[1]) continue;
+      let t=Math.max(0,Math.min(1,(y-a[1])/(b[1]-a[1])));
+      xs.push(lerp(a[0],b[0],t));
+    }
+    xs.sort((a,b)=>a-b);
+    for(let j=0;j<xs.length-1;j+=2){
+      const xStart=xs[j], xEnd=xs[j+1];
+      if(xEnd-xStart<0.5) continue;
+
+      // Get color at this pixel by interpolating vertex colors at the scanline
+      for(let x=Math.ceil(xStart);x<=Math.floor(xEnd);x++){
+        let u=(x-xStart)/(xEnd-xStart||1);
+        const cr=lerp(c1[0],c2[0],u), cg=lerp(c1[1],c2[1],u), cb=lerp(c1[2],c2[2],u);
+        ctx.fillStyle=`rgb(${Math.floor(cr*255)},${Math.floor(cg*255)},${Math.floor(cb*255)})`;
+        ctx.fillRect(x,y,1.5,1.5);
+      }
+    }
+  }
+}
+
+// ── Main render function ──────────────────────────────────────
+function render(){
+  // Clear with subtle gradient background
+  const grad = ctx.createRadialGradient(cx,cy,0,cx,cy,Math.max(W,H)*0.7);
+  grad.addColorStop(0,"#1a1a2e");
+  grad.addColorStop(1,"#0a0a14");
+  ctx.fillStyle=grad;
+  ctx.fillRect(0,0,W,H);
+
+  const light = getLight();
+
+  // Rotation matrices
+  let R = mulMat3Mat3(rotX(rotX_A), rotY(rotY_A));
+
+  // Build transformed + projected vertices for this frame
+  const transformed = verts.map(v=>{
+    const r = matMulVec3(R, v);
+    return [r[0], r[1], r[2]];
+  });
+
+  const projected = transformed.map(v=>project(v));
+
+  // Build faces with depth
+  const faceList = [];
+
+  for(let fi=0; fi<faces.length; fi++){
+    const face = faces[fi];
+    const vIdx = face.verts;
+
+    // Compute face normal in world space (from two edge vectors of transformed verts)
+    const e1 = sub3(transformed[vIdx[0]], transformed[vIdx[1]]);
+    const e2 = sub3(transformed[vIdx[0]], transformed[vIdx[2]]);
+    const fn = norm3(cross3(e1, e2));
+
+    // Backface culling: if normal points away from camera, skip
+    const viewDir = norm3([0, 0, -camDist]); // camera is at +Z looking toward -Z
+    const toCam = norm3(sub3([0,0,0], transformed[vIdx[0]]));
+    const dotVN = dot3(fn, toCam);
+
+    if(dotVN < 0) continue; // backface
+
+    // Project the four corners (and triangle centers)
+    const p0=projected[vIdx[0]], p1=projected[vIdx[1]];
+    const p2=projected[vIdx[2]], p3=projected[vIdx[3]];
+    if(!p0||!p1||!p2||!p3) continue;
+
+    // Per-vertex normal lighting (Gouraud)
+    const faceNormals = [face.normal, face.normal, face.normal, face.normal];
+    const worldNormals = faceNormals.map(n=>norm3(matMulVec3(R, n)));
+
+    // Transform vertices to camera space for proper normals
+    const camVerts = transformed;
+
+    // Lambert lighting per vertex
+    const lightDirs = [0,1,2,3].map(i => {
+      return norm3(sub3(light, camVerts[vIdx[i]]));
+    });
+
+    const litColors = [0,1,2,3].map(i => {
+      const N = worldNormals[i];
+      const L = lightDirs[i];
+      const diff = Math.max(0, dot3(N, L));
+      // Ambient + diffuse
+      const amb = 0.18;
+      const intensity = amb + (1-amb)*diff;
+
+      // Simple specular (Blinn-Phong)
+      const V = norm3(sub3([0,0,0], camVerts[vIdx[i]])); // view dir from vertex to camera
+      const H = norm3(add3(L, V));
+      const spec = Math.pow(Math.max(0, dot3(N, H)), 32)*0.4;
+
+      const base = face.color;
+      return [
+        Math.min(1, (base[0]*(intensity+spec*0.5))),
+        Math.min(1, (base[1]*(intensity+spec*0.5))),
+        Math.min(1, (base[2]*(intensity+spec*0.5)))
+      ];
+    });
+
+    // Average face normal with vertex normals for smoother look
+    const avgNormal = norm3(worldNormals.reduce((a,b)=>add3(a,b)));
+    const avgLightDir = norm3(lightDirs.reduce((a,b)=>add3(a,b)));
+    const avgDiffuse = Math.max(0, dot3(avgNormal, avgLightDir));
+
+    // Depth = average Z of projected vertices (for painter's algorithm)
+    const depth = (transformed[vIdx[0]][2]+transformed[vIdx[1]][2]+transformed[vIdx[2]][2]+transformed[vIdx[3]][2])/4;
+
+    // Store face data
+    faceList.push({
+      p: [p0,p1,p2,p3],
+      c: litColors,
+      depth: depth,
+      fn: fn
+    });
+  }
+
+  // Sort by depth (far first) for painter's algorithm
+  faceList.sort((a,b)=>b.depth-a.depth);
+
+  // Draw faces
+  for(const face of faceList){
+    const [p0,p1,p2,p3] = face.p;
+    const [c0,c1,c2,c3] = face.c;
+
+    if(wireframe){
+      drawLine(p0[0],p0[1],p1[0],p1[1],"#fff");
+      drawLine(p1[0],p1[1],p2[0],p2[1],"#fff");
+      drawLine(p2[0],p2[1],p3[0],p3[1],"#fff");
+      drawLine(p3[0],p3[1],p0[0],p0[1],"#fff");
+    } else {
+      // Split quad into 2 triangles and Gouraud shade each
+      // Triangle 1: p0,p1,p2
+      drawTriGouraud(p0,p1,p2, c0,c1,c2);
+      // Triangle 2: p0,p2,p3
+      drawTriGouraud(p0,p2,p3, c0,c2,c3);
+    }
+  }
+
+  // Draw vertices as dots
+  if(!wireframe){
+    ctx.fillStyle="#fff";
+    for(const p of projected){
+      if(p) ctx.fillRect(p[0]-1.5,p[1]-1.5,3,3);
+    }
+  }
+}
+
+// ── Animation loop with FPS ───────────────────────────────────
+let lastTime = 0, frameCount=0, fps=0, fpsTimer=0;
+
+function animate(time){
+  requestAnimationFrame(animate);
+
+  const dt = Math.min((time-lastTime)/1000, 0.05); // cap delta
+  lastTime = time;
+
+  // FPS counter
+  frameCount++;
+  fpsTimer += dt;
+  if(fpsTimer >= 0.5){
+    fps = Math.round(frameCount / fpsTimer);
+    fpsEl.textContent = fps;
+    frameCount = 0;
+    fpsTimer = 0;
+  }
+
+  if(paused) return;
+
+  // Rotate cube
+  rotY_A += dt * 0.8;
+  rotX_A += dt * 0.35;
+
+  // Move light
+  lightAngle += dt * 1.2;
+
+  render();
+}
+
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>

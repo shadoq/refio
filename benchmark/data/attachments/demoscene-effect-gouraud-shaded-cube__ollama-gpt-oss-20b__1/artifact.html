@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gouraud Shaded Cube</title>
+<style>
+    body{margin:0;overflow:hidden;background:#000}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+let width, height;
+function resize(){
+    width=canvas.width=window.innerWidth;
+    height=canvas.height=window.innerHeight;
+}
+resize();
+window.addEventListener('resize',resize);
+
+const vertices=[
+    [-1,-1,-1],
+    [ 1,-1,-1],
+    [ 1, 1,-1],
+    [-1, 1,-1],
+    [-1,-1, 1],
+    [ 1,-1, 1],
+    [ 1, 1, 1],
+    [-1, 1, 1]
+];
+const faces=[
+    [4,5,6],[4,6,7], // front
+    [0,2,1],[0,3,2], // back
+    [1,5,6],[1,6,2], // right
+    [0,4,7],[0,7,3], // left
+    [3,7,6],[3,6,2], // top
+    [0,1,5],[0,5,4]  // bottom
+];
+const vertexNormals=Array.from({length:vertices.length},()=>[0,0,0]);
+function cross(a,b){return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];}
+function normalize(v){const l=Math.hypot(...v); return [v[0]/l,v[1]/l,v[2]/l];}
+function normalizeInPlace(v){const l=Math.hypot(...v); v[0]/=l; v[1]/=l; v[2]/=l;}
+for(const tri of faces){
+    const a=vertices[tri[0]], b=vertices[tri[1]], c=vertices[tri[2]];
+    const ab=[b[0]-a[0],b[1]-a[1],b[2]-a[2]];
+    const ac=[c[0]-a[0],c[1]-a[1],c[2]-a[2]];
+    const n=cross(ab,ac);
+    normalizeInPlace(n);
+    for(const idx of tri){
+        vertexNormals[idx][0]+=n[0];
+        vertexNormals[idx][1]+=n[1];
+        vertexNormals[idx][2]+=n[2];
+    }
+}
+for(const n of vertexNormals)normalizeInPlace(n);
+
+function rotateX(v,a){return [v[0], v[1]*Math.cos(a)-v[2]*Math.sin(a), v[1]*Math.sin(a)+v[2]*Math.cos(a)];}
+function rotateY(v,a){return [v[0]*Math.cos(a)+v[2]*Math.sin(a), v[1], -v[0]*Math.sin(a)+v[2]*Math.cos(a)];}
+function rotateZ(v,a){return [v[0]*Math.cos(a)-v[1]*Math.sin(a), v[0]*Math.sin(a)+v[1]*Math.cos(a), v[2]];}
+
+let angleX=0,angleY=0,angleZ=0;
+let elapsed=0;
+let paused=false,wired=false;
+const buffer=new Uint8ClampedArray(width*height*4);
+function clearBuffer(){
+    for(let i=0;i<buffer.length;i+=4){
+        buffer[i]=0;buffer[i+1]=0;buffer[i+2]=0;buffer[i+3]=255;
+    }
+}
+let lastTime=performance.now();
+const fpsTimes=[];
+function render(now){
+    const dt=(now-lastTime)/1000;lastTime=now;
+    if(!paused){angleX+=0.5*dt;angleY+=0.7*dt;angleZ+=0.3*dt;elapsed+=dt;}
+    const light=[5*Math.cos(elapsed),5*Math.sin(elapsed),5];
+    const fov=width/2;
+    if(wired){
+        ctx.clearRect(0,0,width,height);
+        ctx.strokeStyle='#fff';ctx.lineWidth=1;
+        for(const tri of faces){
+            const vIdx=tri.map(i=>vertices[i]);
+            let worldVerts=vIdx.map(v=>{
+                let r=rotateX(v,angleX);r=rotateY(r,angleY);r=rotateZ(r,angleZ);
+                return r;
+            });
+            // backface culling
+            const e1=[worldVerts[1][0]-worldVerts[0][0],worldVerts[1][1]-worldVerts[0][1],worldVerts[1][2]-worldVerts[0][2]];
+            const e2=[worldVerts[2][0]-worldVerts[0][0],worldVerts[2][1]-worldVerts[0][1],worldVerts[2][2]-worldVerts[0][2]];
+            const n=cross(e1,e2);
+            if(n[2]<=0)continue;
+            const proj=worldVerts.map(v=>{
+                const z=v[2]+5; // camera at origin looking +z
+                return {x:(v[0]*fov)/z+width/2,y:(v[1]*fov)/z+height/2};
+            });
+            ctx.beginPath();ctx.moveTo(proj[0].x,proj[0].y);
+            ctx.lineTo(proj[1].x,proj[1].y);ctx.lineTo(proj[2].x,proj[2].y);ctx.closePath();
+            ctx.stroke();
+        }
+    }else{
+        clearBuffer();
+        for(const tri of faces){
+            const vIdx=tri.map(i=>vertices[i]);
+            let worldVerts=vIdx.map(v=>{
+                let r=rotateX(v,angleX);r=rotateY(r,angleY);r=rotateZ(r,angleZ);
+                return r;
+            });
+            // backface culling
+            const e1=[worldVerts[1][0]-worldVerts[0][0],worldVerts[1][1]-worldVerts[0][1],worldVerts[1][2]-worldVerts[0][2]];
+            const e2=[worldVerts[2][0]-worldVerts[0][0],worldVerts[2][1]-worldVerts[0][1],worldVerts[2][2]-worldVerts[0][2]];
+            const n=cross(e1,e2);
+            if(n[2]<=0)continue;
+            const proj=worldVerts.map(v=>{
+                const z=v[2]+5; // camera at origin looking +z
+                return {x:(v[0]*fov)/z+width/2,y:(v[1]*fov)/z+height/2,z};
+            });
+            const colors=worldVerts.map((v,idx)=>{
+                const normal=vertexNormals[idx];
+                let rn=rotateX(normal,angleX);rn=rotateY(rn,angleY);rn=rotateZ(rn,angleZ);
+                normalizeInPlace(rn);
+                const ld=[light[0]-v[0],light[1]-v[1],light[2]-v[2]];
+                normalizeInPlace(ld);
+                const dot=Math.max(0,rn[0]*ld[0]+rn[1]*ld[1]+rn[2]*ld[2]);
+                const inten=50+205*dot;
+                return [inten,inten,inten];
+            });
+            fillTriangle(proj[0],proj[1],proj[2],colors[0],colors[1],colors[2]);
+        }
+        ctx.putImageData(new ImageData(buffer,width,height),0,0);
+    }
+    // FPS
+    fpsTimes.push(now);
+    while(fpsTimes.length>0 && now-fpsTimes[0]>1000)fpsTimes.shift();
+    const fps=fpsTimes.length;
+    ctx.fillStyle='#fff';ctx.font='16px monospace';
+    ctx.fillText(`FPS: ${fps}`,10,20);
+    requestAnimationFrame(render);
+}
+function fillTriangle(v0,v1,v2,c0,c1,c2){
+    const minX=Math.max(0,Math.floor(Math.min(v0.x,v1.x,v2.x)));
+    const maxX=Math.min(width-1,Math.ceil(Math.max(v0.x,v1.x,v2.x)));
+    const minY=Math.max(0,Math.floor(Math.min(v0.y,v1.y,v2.y)));
+    const maxY=Math.min(height-1,Math.ceil(Math.max(v0.y,v1.y,v2.y)));
+    const denom=((v1.y-v2.y)*(v0.x-v2.x)+(v2.x-v1.x)*(v0.y-v2.y));
+    for(let y=minY;y<=maxY;y++){
+        for(let x=minX;x<=maxX;x++){
+            const alpha=((v1.y-v2.y)*(x-v2.x)+(v2.x-v1.x)*(y-v2.y))/denom;
+            const beta=((v2.y-v0.y)*(x-v2.x)+(v0.x-v2.x)*(y-v2.y))/denom;
+            const gamma=1-alpha-beta;
+            if(alpha>=0&&beta>=0&&gamma>=0){
+                const r=Math.round(c0[0]*alpha+c1[0]*beta+c2[0]*gamma);
+                const g=Math.round(c0[1]*alpha+c1[1]*beta+c2[1]*gamma);
+                const b=Math.round(c0[2]*alpha+c1[2]*beta+c2[2]*gamma);
+                const idx=(y*width+x)*4;
+                buffer[idx]=r;buffer[idx+1]=g;buffer[idx+2]=b;buffer[idx+3]=255;
+            }
+        }
+    }
+}
+document.addEventListener('keydown',e=>{
+    if(e.key==='w'||e.key==='W')wired=!wired;
+    else if(e.key==='p'||e.key==='P')paused=!paused;
+});
+requestAnimationFrame(render);
+</script>
+</body>
+</html>
