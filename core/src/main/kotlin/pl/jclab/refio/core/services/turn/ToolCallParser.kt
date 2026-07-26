@@ -813,7 +813,11 @@ class ToolCallParser(
         val disallowed = profileOverrides.disallowedTools?.takeIf { it.isNotEmpty() }
         val scope = profileOverrides.subagentName?.let { "subagent '$it'" } ?: "current run profile"
         val details = when {
-            allowed != null -> "Your available tools are: ${allowed.joinToString(", ")}. Pick one of these or produce a final response."
+            allowed != null -> {
+                val didYouMean = pl.jclab.refio.core.utils.NameSuggestion.closest(toolName, allowed)
+                    ?.let { "Did you mean '$it'? " }.orEmpty()
+                "${didYouMean}Your available tools are: ${allowed.joinToString(", ")}. Pick one of these or produce a final response."
+            }
             disallowed != null -> "This tool is on the blocklist for this profile (${disallowed.joinToString(", ")}). Use a different approach."
             else -> "Check the <available_tools> section and use only tools listed there."
         }

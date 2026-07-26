@@ -16,6 +16,7 @@ import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
+import pl.jclab.refio.core.utils.NameSuggestion
 import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("InvokeSubagentTool")
@@ -84,7 +85,7 @@ class InvokeSubagentTool(
         val router = subagentRouterProvider()
             ?: return ToolResult.error("Subagent system not available")
         val definition = router.getSubagent(subagentName)
-            ?: return ToolResult.error("Subagent not found: $subagentName")
+            ?: return ToolResult.error(subagentNotFoundMessage(router, subagentName))
         if (!definition.enabled) {
             return ToolResult.error("Subagent is disabled: $subagentName")
         }
@@ -261,6 +262,22 @@ class InvokeSubagentTool(
          * [MAX_CONTEXT_REFS] paths in declaration order.
          */
         const val MAX_CONTEXT_REFS = 32
+    }
+
+    /**
+     * A bare "Subagent not found: X" leaves a weak model guessing - it invented the name, so it
+     * has nothing to correct against. List the real names and, for a plausible typo, point at the
+     * nearest one (observed: `architecture-reviewer` -> `architect-reviewer`).
+     */
+    private fun subagentNotFoundMessage(router: SubagentRouter, requested: String): String {
+        val names = runCatching { router.listSubagents(includeDisabled = false).map { it.name } }
+            .getOrElse {
+                logger.warn(it) { "[INVOKE_SUBAGENT] Failed to load subagent list for not-found hint" }
+                emptyList()
+            }
+        val didYouMean = NameSuggestion.closest(requested, names)?.let { " Did you mean '$it'?" }.orEmpty()
+        val available = if (names.isEmpty()) "" else " Available subagents: ${names.sorted().joinToString(", ")}."
+        return "Subagent not found: '$requested'.$didYouMean$available"
     }
 
     private fun buildDynamicDescription(): String {
