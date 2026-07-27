@@ -103,7 +103,14 @@ class MultiAgentScenarioTest {
 
                 // Recover events from DB
                 val loaded = eventBus.loadPersistedEvents("s1")
-                assertTrue(loaded.size >= 6, "Expected at least 6 events (3 started + 3 completed), got ${loaded.size}")
+                // Naming what actually landed: a bare count made an intermittent shortfall
+                // unattributable - a dropped save and an agent that never emitted AgentStarted
+                // both read as "got 5".
+                assertTrue(
+                    loaded.size >= 6,
+                    "Expected at least 6 events (3 started + 3 completed), got ${loaded.size}: " +
+                        loaded.map { "${it::class.simpleName}@${it.sourceAgentId}" }
+                )
 
                 val loadedStarted = loaded.filterIsInstance<AgentEvent.AgentStarted>()
                 val loadedCompleted = loaded.filterIsInstance<AgentEvent.AgentCompleted>()

@@ -119,6 +119,11 @@ Decide by risk (when to ask vs when to proceed):
 - Mask sensitive values in logs, fixtures, test data, and examples.
 - If a secret is needed, read it from the project's existing config / secret mechanism; don't hardcode or invent one.
 
+### Rule 16 — Commit messages
+- One short sentence, imperative, no body. State what changed, not why it was hard.
+- No trailers of any kind. Never add `Co-Authored-By`, `Generated with`, or any other assistant attribution.
+- Rationale, alternatives and investigation notes belong in chat or in `docs/`, never in the commit message.
+
 ## What is Refio
 
 Local-first AI coding assistant for IntelliJ IDEA and the terminal. Kotlin/JVM project with three Gradle modules, each with its own source tree.
@@ -225,7 +230,7 @@ refio.bat -p <throwaway-project> --headless --model ollama/qwen3.6:35b \
 
 ### Multi-scenario / multi-model harness
 
-`benchmark/scripts/e2e-run.sh` (with a `.ps1` sibling) runs the e2e scenarios in `test_data/e2e/*.json` through the headless CLI into a throwaway project, then asserts on the produced `run.json`. HARD tiers (fail the run): run status SUCCESS, content needle in the edited file, build exit 0, no silent context overflow; SOFT (warn only): tool order, judge. `--self-test` exercises just the assertion engine (no LLM call); `--list` shows scenarios; `--all` or `<id>` selects what to run; `--model <provider/model>` compares models on the same task. Set `E2E_OUT_DIR=<dir>` to persist each run as `<id>__<model>__<run>.run.json` plus a `results.jsonl` verdict record (`{scenario, model, run, verdict, reasons[], failure_mode, status, costUsd, tokensOut}`) — the per-run input a pass-rate stabilization gate aggregates over N runs.
+`tools/e2e/e2e-run.sh` (with a `.ps1` sibling) runs the e2e scenarios in `test_data/e2e/*.json` through the headless CLI into a throwaway project, then asserts on the produced `run.json`. HARD tiers (fail the run): run status SUCCESS, content needle in the edited file, build exit 0, no silent context overflow; SOFT (warn only): tool order, judge. `--self-test` exercises just the assertion engine (no LLM call); `--list` shows scenarios; `--all` or `<id>` selects what to run; `--model <provider/model>` compares models on the same task. Set `E2E_OUT_DIR=<dir>` to persist each run as `<id>__<model>__<run>.run.json` plus a `results.jsonl` verdict record (`{scenario, model, run, verdict, reasons[], failure_mode, status, costUsd, tokensOut}`) — the per-run input a pass-rate stabilization gate aggregates over N runs.
 
 ### Gotchas
 

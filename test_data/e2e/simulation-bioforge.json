@@ -1,0 +1,44 @@
+{
+  "id": "simulation-bioforge",
+  "mode": "AGENT",
+  "description": "Artificial-life ecosystem simulator: genome-driven organisms, food/predation, day/night, live trait charts, inspector, seeded generation + save/load. Large stress case.",
+  "category": "simulation",
+  "max_iterations": 40,
+  "fixture": "fixtures/bioforge",
+  "prompt_file": "prompts/simulation-bioforge.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "website_app_bioforge_model_01.html",
+        "regex": "<canvas"
+      },
+      {
+        "path": "website_app_bioforge_model_01.html",
+        "regex": "requestAnimationFrame"
+      },
+      {
+        "path": "website_app_bioforge_model_01.html",
+        "regex": "[Gg]enome|organism|mutat"
+      },
+      {
+        "path": "website_app_bioforge_model_01.html",
+        "regex": "localStorage"
+      }
+    ],
+    "smoke": {
+      "entry": "website_app_bioforge_model_01.html",
+      "dom_present": [
+        "canvas"
+      ]
+    }
+  },
+  "judge": {
+    "criteria": [
+      "bioforge.html is one large self-contained file (no external libraries) simulating an evolving 2D ecosystem: organisms carrying a genome (size, speed, vision, metabolism, reproduction, mutation) that search for food, move, reproduce, mutate, age and die; a day/night cycle and environmental controls; live population and average-trait charts drawn with canvas or SVG; an organism inspector, pause/speed controls, seeded generation and save/load. Responsive and stable with many organisms."
+    ]
+  }
+}

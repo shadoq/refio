@@ -126,11 +126,11 @@ class MultiAgentRunner(
                     // still marks the agent completed so dependents never wait forever.
                     var inbox: AgentMessageInbox? = null
                     try {
-                        // Setup per-agent metrics
-                        val agentMetrics = GlobalMetrics.forAgent(agentId)
-                        agentMetrics.resetCancellation()
-
-                        // Emit start event
+                        // The start event goes out before any setup that can throw, so every agent
+                        // that later reports AgentFailed already has a node in the graph. Emitting
+                        // it after setup let a setup failure produce a Failed event with no Started
+                        // counterpart, leaving an orphan in the Agents Graph and one event short in
+                        // the persisted history.
                         eventBus.emit(AgentEvent.AgentStarted(
                             id = UUID.randomUUID().toString(),
                             sessionId = sessionId,
@@ -143,6 +143,10 @@ class MultiAgentRunner(
                             model = spec.model,
                             dependsOn = spec.dependsOn
                         ))
+
+                        // Setup per-agent metrics
+                        val agentMetrics = GlobalMetrics.forAgent(agentId)
+                        agentMetrics.resetCancellation()
 
                         // Register this agent's inbox so peers (or this agent itself) can route
                         // messages by spec.name via AgentInboxRegistry. The inbox's coroutines die

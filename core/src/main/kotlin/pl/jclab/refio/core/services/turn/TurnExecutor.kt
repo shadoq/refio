@@ -39,6 +39,7 @@ import pl.jclab.refio.core.services.TaskVerifier
 import pl.jclab.refio.core.services.TokenRatioCalibrator
 import pl.jclab.refio.core.services.ToolPermissionsService
 import pl.jclab.refio.core.services.ToolResultData
+import pl.jclab.refio.core.services.TurnLoopConfig
 import pl.jclab.refio.core.services.TurnLoopConfigs
 import pl.jclab.refio.core.services.TurnResult
 import pl.jclab.refio.core.services.WorkingMemoryIntegration
@@ -601,131 +602,32 @@ internal class TurnExecutor(
                     GlobalMetrics.setCurrentOperation(OperationInfo.TurnLLMCall(iteration, mode.name))
 
                     val llmCallStartNanos = System.nanoTime()
-                    // Mutable so the empty-content recovery path below can re-bind it after pulling
-                    // a JSON envelope out of the `thinking` field (qwen3 / Ollama edge case).
-                    suspend fun callModelWithPrompt(
-                        currentPrompt: TurnPrompt,
-                        nativeSchemas: List<ToolSchema>?
-                    ) = if (config.maxRetries > 0 && llmRetryHandler != null) {
-                        val configuredEffort = configService.getTyped(ConfigKeys.GENERAL_REASONING_EFFORT, taskId)
-                        val thinkingEnabled = turnLLMCaller.resolveThinkingEnabled(effectiveProvider, effectiveModel, configuredEffort.isOn)
-                        llmRetryHandler.callWithRetry(
-                            provider = effectiveProvider,
-                            model = effectiveModel,
-                            messages = currentPrompt.messages,
-                            systemPrompt = currentPrompt.systemPrompt,
-                            taskId = taskId,
-                            // Retry path of the decision turn — keep parity with TurnLLMCaller's
-                            // non-retry path so PLAN/AGENT is distinguishable in the api-log Source.
-                            source = "AgentTurnLoop:${mode.name}",
-                            maxRetries = config.maxRetries,
-                            baseDelayMs = config.retryBackoffMs,
-                            responseFormat = responseFormat,
-                            thinking = thinkingEnabled,
-                            reasoningEffort = profileOverrides?.reasoningEffort
-                                ?: configuredEffort.toEffortString()?.takeIf { thinkingEnabled },
-                            noEgressEnabled = configService.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, taskId),
-                            stream = effectiveStreamCallback != null,
-                            onChunk = effectiveStreamCallback,
-                            kwargs = nativeSchemas?.let { mapOf("native_tools" to it) } ?: emptyMap()
-                        )
-                    } else {
-                        turnLLMCaller.callLLM(
-                            taskId = taskId,
-                            mode = mode,
-                            prompt = currentPrompt,
-                            streamCallback = effectiveStreamCallback,
-                            model = effectiveModel,
-                            provider = effectiveProvider,
-                            profileOverrides = profileOverrides,
-                            nativeToolSchemas = nativeSchemas
-                        )
-                    }
-
-                    var llmResponse: pl.jclab.refio.core.llm.LLMResponse
-                    while (true) {
-                        try {
-                            // Pass the MUTABLE activeNativeToolSchemas (not the frozen
-                            // iterationNativeToolSchemas snapshot) so a fallback catch below that
-                            // sets it to null actually drops native tools on the retry — otherwise
-                            // the rebuilt JSON-contract prompt would still ship native schemas.
-                            llmResponse = callModelWithPrompt(prompt, activeNativeToolSchemas)
-                            // One-shot JSON fallback for an EMPTY native response (HTTP 200,
-                            // content="" + zero tool_calls — not an exception). For models whose
-                            // Ollama tool template is broken (the gemma family: supportsFunctionCalling
-                            // =false in ModelDefinitions) the AUTO guard already routes them to JSON,
-                            // but NATIVE_TOOLS_MODE=ALWAYS bypasses that guard and ships tool schemas
-                            // anyway — gemma then returns nothing and the turn used to die with
-                            // TURN_FAILED_NATIVE_EMPTY. Retry ONCE on the JSON-envelope path: the
-                            // non-exception twin of NATIVE_TOOLS_PARSE_FALLBACK below. No persistent
-                            // fallback — ALWAYS stays "force native" next turn; we only rescue this one.
-                            // `activeNativeToolSchemas != null` is the one-shot guard: the retry sets it
-                            // null, so a still-empty JSON response can't loop back here. Skip when this is
-                            // a guardian re-entry that produced empty — the stashed pre-re-entry answer
-                            // is the answer the user already saw, and the empty-native branch finalizes it
-                            // (same predicate as the recovery there).
-                            if (activeNativeToolSchemas != null
-                                && llmResponse.content.isBlank()
-                                && llmResponse.nativeToolCalls.isNullOrEmpty()
-                                && guardianState.restorableResponse(usedTools.size) == null
-                            ) {
-                                logger.warn {
-                                    "[NATIVE_TOOLS_EMPTY_FALLBACK] taskId=$taskId, model=${effectiveModel ?: "unknown"} — " +
-                                        "native response was empty (blank content, zero tool calls); one-shot JSON-path retry (no persistent fallback)"
-                                }
-                                activeNativeToolSchemas = null
-                                prompt = buildPrompt(
-                                    taskId, mode, iteration, maxIterations,
-                                    userContextRefs, runProfile, profileOverrides,
-                                    writeToolsExecutedInTurn, false,
-                                    agentName = agentName, sessionId = evSessionId, modelId = effectiveModel, runId = runId
-                                )
-                                continue
-                            }
-                            break
-                        } catch (e: ToolsNotSupportedException) {
-                            val modelKey = effectiveModel ?: "unknown"
-                            NativeToolsFallbackTracker.markFallback(modelKey, e.message ?: "provider error")
-                            if (activeNativeToolSchemas == null) {
-                                throw e
-                            }
-                            logger.warn {
-                                "[NATIVE_TOOLS_FALLBACK] taskId=$taskId, model=$modelKey — " +
-                                    "rebuilding prompt and retrying on JSON path"
-                            }
-                            activeNativeToolSchemas = null
-                            prompt = buildPrompt(
-                                taskId, mode, iteration, maxIterations,
-                                userContextRefs, runProfile, profileOverrides,
-                                writeToolsExecutedInTurn, false,
-                                agentName = agentName, sessionId = evSessionId, modelId = effectiveModel, runId = runId
-                            )
-                        } catch (e: RefioError.LLMError) {
-                            // Ollama's qwen tool-call template can 500 server-side on malformed
-                            // function-call XML the model emits (observed: "XML syntax error ...
-                            // <parameter> closed by </function>"). That is a per-prompt generation
-                            // glitch, NOT a provider capability gap — the same model uses native
-                            // tools fine on simpler prompts — so do a ONE-SHOT retry on the
-                            // JSON-envelope path WITHOUT persisting a fallback (contrast the
-                            // ToolsNotSupportedException branch above, which marks the model
-                            // permanently via NativeToolsFallbackTracker). If native tools were
-                            // already dropped, rethrow — nothing left to fall back to.
-                            if (activeNativeToolSchemas == null || !isNativeToolTemplateParseError(e)) {
-                                throw e
-                            }
-                            logger.warn {
-                                "[NATIVE_TOOLS_PARSE_FALLBACK] taskId=$taskId, model=${effectiveModel ?: "unknown"} — " +
-                                    "provider rejected a malformed tool-call template; one-shot JSON-path retry (no persistent fallback)"
-                            }
-                            activeNativeToolSchemas = null
-                            prompt = buildPrompt(
-                                taskId, mode, iteration, maxIterations,
-                                userContextRefs, runProfile, profileOverrides,
-                                writeToolsExecutedInTurn, false,
-                                agentName = agentName, sessionId = evSessionId, modelId = effectiveModel, runId = runId
-                            )
-                        }
-                    }
+                    val llmCall = callModelWithNativeFallback(
+                        taskId = taskId,
+                        mode = mode,
+                        iteration = iteration,
+                        maxIterations = maxIterations,
+                        userContextRefs = userContextRefs,
+                        runProfile = runProfile,
+                        profileOverrides = profileOverrides,
+                        writeToolsExecutedInTurn = writeToolsExecutedInTurn,
+                        agentName = agentName,
+                        sessionId = evSessionId,
+                        runId = runId,
+                        config = config,
+                        effectiveModel = effectiveModel,
+                        effectiveProvider = effectiveProvider,
+                        responseFormat = responseFormat,
+                        streamCallback = effectiveStreamCallback,
+                        initialPrompt = prompt,
+                        initialNativeToolSchemas = activeNativeToolSchemas,
+                        guardianHasRestorableAnswer = guardianState.restorableResponse(usedTools.size) != null
+                    )
+                    // The helper owns the retry loop, so its final prompt / schema state has to
+                    // come back out: a fallback there drops native tools for the rest of the turn.
+                    var llmResponse = llmCall.response
+                    prompt = llmCall.prompt
+                    activeNativeToolSchemas = llmCall.nativeToolSchemas
                     val llmDurationMs = (System.nanoTime() - llmCallStartNanos) / 1_000_000
 
                     // Preserve the last substantial assistant PROSE (not a tool-call envelope) so an
@@ -825,69 +727,20 @@ internal class TurnExecutor(
                         && llmResponse.content.isBlank()
                         && llmResponse.nativeToolCalls.isNullOrEmpty()
                         && activeNativeToolSchemas != null) {
-
-                        // Recovery before hard-fail: a guardian re-entry may have discarded a
-                        // COMPLETE prior answer (stashed in guardianState) and the
-                        // re-entry then produced nothing new — empty content, no native tool
-                        // calls, no new tool work. The answer the user already saw is the correct
-                        // result; finalize it as success instead of failing the whole turn.
-                        // Same restore condition as the terminal-text branch below
-                        // (re-entry happened, no new tool work since it — guardianState.restorableResponse). This
-                        // is what saved the "run git 3× then summarize" task from being marked
-                        // FAILED after the judge wrongly re-entered a completed turn.
-                        val recoverable = guardianState.restorableResponse(usedTools.size)
-                        if (recoverable != null) {
-                            logger.warn {
-                                "[TURN_NATIVE_EMPTY_RECOVERED] taskId=$taskId, iteration=$iteration — " +
-                                    "re-entry produced empty native response with no new tool work; " +
-                                    "finalizing the pre-re-entry answer the user already saw."
-                            }
-                            val recoveredText = toolCallParser.extractTextResponse(recoverable.content)
-                            turnPersistence.persist(
-                                role = MessageRole.ASSISTANT,
-                                content = recoveredText.ifEmpty { recoverable.content },
-                                thinking = turnResponseProcessor.resolveAssistantThinking(recoverable),
-                                toolCalls = null,
-                                tokensIn = recoverable.usage.inputTokens,
-                                tokensOut = recoverable.usage.outputTokens,
-                                cost = recoverable.cost,
-                            )
-                            val result = TurnResult(
-                                success = true,
-                                response = recoveredText.ifEmpty { recoverable.content },
-                                iterations = iteration,
-                                tokensIn = totalTokensIn,
-                                tokensOut = totalTokensOut,
-                                cost = totalCost,
-                                toolsUsed = usedTools.distinct()
-                            )
-                            return turnPersistence.finish(result, persistAssistantMessage = false)
-                        }
-
-                        logger.error {
-                            "[TURN_FAILED_NATIVE_EMPTY] taskId=$taskId, iteration=$iteration, " +
-                                "mode=$mode, provider=$effectiveProvider, model=$effectiveModel, " +
-                                "finishReason=${llmResponse.finishReason}, " +
-                                "inputTokens=${llmResponse.usage.inputTokens}, " +
-                                "outputTokens=${llmResponse.usage.outputTokens}. " +
-                                "Model returned empty content with zero native tool calls — most likely " +
-                                "the prompt exceeded the provider's context window and was silently truncated."
-                        }
-                        val response = "Model returned no content and no tool calls. " +
-                            "This usually means the prompt exceeded the model's context window " +
-                            "(inputTokens=${llmResponse.usage.inputTokens}, finishReason=${llmResponse.finishReason}). " +
-                            "Try: (a) shrink the conversation history, (b) increase providers.${effectiveProvider}.${effectiveProvider}_context_size, " +
-                            "or (c) switch to a model with a larger window."
-                        val result = TurnResult(
-                            success = false,
-                            response = response,
-                            iterations = iteration,
-                            tokensIn = totalTokensIn,
-                            tokensOut = totalTokensOut,
-                            cost = totalCost,
-                            toolsUsed = usedTools.distinct()
+                        return finalizeEmptyNativeResponse(
+                            taskId = taskId,
+                            mode = mode,
+                            iteration = iteration,
+                            llmResponse = llmResponse,
+                            effectiveModel = effectiveModel,
+                            effectiveProvider = effectiveProvider,
+                            guardianState = guardianState,
+                            usedTools = usedTools,
+                            totalTokensIn = totalTokensIn,
+                            totalTokensOut = totalTokensOut,
+                            totalCost = totalCost,
+                            turnPersistence = turnPersistence
                         )
-                        return turnPersistence.finish(result, persistAssistantMessage = true)
                     }
 
                     if (mode != TaskMode.CHAT
@@ -2276,6 +2129,230 @@ internal class TurnExecutor(
         updateTurnState { TurnStateSnapshot() }
         emitTurnFinal(success = false)
         return finalResult
+    }
+
+    /**
+     * Terminal handling for a native-tools response that carried neither content nor tool calls.
+     *
+     * Prefers recovery: a guardian re-entry can discard a COMPLETE prior answer and then produce
+     * nothing new, in which case the answer the user already saw is the correct result and the turn
+     * succeeds on it. Only when nothing is restorable is this a real dead end, and the failure text
+     * names the likely cause (a prompt silently truncated past the provider's context window).
+     *
+     * Extracted from `execute` to keep that method under the JVM's 64 KB per-method ceiling.
+     */
+    private suspend fun finalizeEmptyNativeResponse(
+        taskId: String,
+        mode: TaskMode,
+        iteration: Int,
+        llmResponse: pl.jclab.refio.core.llm.LLMResponse,
+        effectiveModel: String,
+        effectiveProvider: String,
+        guardianState: TurnGuardianState,
+        usedTools: List<String>,
+        totalTokensIn: Int,
+        totalTokensOut: Int,
+        totalCost: Double,
+        turnPersistence: TurnPersistence
+    ): TurnResult {
+        val recoverable = guardianState.restorableResponse(usedTools.size)
+        if (recoverable != null) {
+            logger.warn {
+                "[TURN_NATIVE_EMPTY_RECOVERED] taskId=$taskId, iteration=$iteration — " +
+                    "re-entry produced empty native response with no new tool work; " +
+                    "finalizing the pre-re-entry answer the user already saw."
+            }
+            val recoveredText = toolCallParser.extractTextResponse(recoverable.content)
+            turnPersistence.persist(
+                role = MessageRole.ASSISTANT,
+                content = recoveredText.ifEmpty { recoverable.content },
+                thinking = turnResponseProcessor.resolveAssistantThinking(recoverable),
+                toolCalls = null,
+                tokensIn = recoverable.usage.inputTokens,
+                tokensOut = recoverable.usage.outputTokens,
+                cost = recoverable.cost,
+            )
+            val result = TurnResult(
+                success = true,
+                response = recoveredText.ifEmpty { recoverable.content },
+                iterations = iteration,
+                tokensIn = totalTokensIn,
+                tokensOut = totalTokensOut,
+                cost = totalCost,
+                toolsUsed = usedTools.distinct()
+            )
+            return turnPersistence.finish(result, persistAssistantMessage = false)
+        }
+
+        logger.error {
+            "[TURN_FAILED_NATIVE_EMPTY] taskId=$taskId, iteration=$iteration, " +
+                "mode=$mode, provider=$effectiveProvider, model=$effectiveModel, " +
+                "finishReason=${llmResponse.finishReason}, " +
+                "inputTokens=${llmResponse.usage.inputTokens}, " +
+                "outputTokens=${llmResponse.usage.outputTokens}. " +
+                "Model returned empty content with zero native tool calls — most likely " +
+                "the prompt exceeded the provider's context window and was silently truncated."
+        }
+        val response = "Model returned no content and no tool calls. " +
+            "This usually means the prompt exceeded the model's context window " +
+            "(inputTokens=${llmResponse.usage.inputTokens}, finishReason=${llmResponse.finishReason}). " +
+            "Try: (a) shrink the conversation history, (b) increase providers.${effectiveProvider}.${effectiveProvider}_context_size, " +
+            "or (c) switch to a model with a larger window."
+        val result = TurnResult(
+            success = false,
+            response = response,
+            iterations = iteration,
+            tokensIn = totalTokensIn,
+            tokensOut = totalTokensOut,
+            cost = totalCost,
+            toolsUsed = usedTools.distinct()
+        )
+        return turnPersistence.finish(result, persistAssistantMessage = true)
+    }
+
+    /** What the LLM call produced, plus the prompt/schema state a native fallback may have rewritten. */
+    private data class LlmCallOutcome(
+        val response: pl.jclab.refio.core.llm.LLMResponse,
+        val prompt: TurnPrompt,
+        val nativeToolSchemas: List<ToolSchema>?
+    )
+
+    /**
+     * One decision-turn LLM call, including the native-tools fallbacks.
+     *
+     * Three ways a native call can fail without the model being at fault, each rescued once by
+     * rebuilding the prompt on the JSON-envelope path: an empty native response (HTTP 200, blank
+     * content, zero tool calls - the gemma/ALWAYS case), a provider that rejects tool schemas
+     * outright ([ToolsNotSupportedException], which also demotes the model permanently), and a
+     * provider-side 500 on a malformed tool-call template (a per-prompt glitch, so no persistent
+     * demotion). Dropping the schemas is what makes each retry one-shot: the rebuilt prompt carries
+     * no native tools, so the same branch cannot be re-entered.
+     *
+     * Lives outside `execute` because that method sat at 63.5 KB of bytecode - within 2 KB of the
+     * JVM's 64 KB per-method ceiling, and already too large for JaCoCo to instrument, which silently
+     * dropped the whole class from coverage.
+     */
+    private suspend fun callModelWithNativeFallback(
+        taskId: String,
+        mode: TaskMode,
+        iteration: Int,
+        maxIterations: Int,
+        userContextRefs: List<pl.jclab.refio.api.models.ContextReference>,
+        runProfile: TurnRunProfile,
+        profileOverrides: TurnProfileOverrides?,
+        writeToolsExecutedInTurn: Int,
+        agentName: String?,
+        sessionId: String,
+        runId: String,
+        config: TurnLoopConfig,
+        effectiveModel: String,
+        effectiveProvider: String,
+        responseFormat: Map<String, String>?,
+        streamCallback: StreamCallback?,
+        initialPrompt: TurnPrompt,
+        initialNativeToolSchemas: List<ToolSchema>?,
+        guardianHasRestorableAnswer: Boolean
+    ): LlmCallOutcome {
+        var prompt = initialPrompt
+        var nativeToolSchemas = initialNativeToolSchemas
+
+        suspend fun callModelWithPrompt(
+            currentPrompt: TurnPrompt,
+            nativeSchemas: List<ToolSchema>?
+        ) = if (config.maxRetries > 0 && llmRetryHandler != null) {
+            val configuredEffort = configService.getTyped(ConfigKeys.GENERAL_REASONING_EFFORT, taskId)
+            val thinkingEnabled = turnLLMCaller.resolveThinkingEnabled(effectiveProvider, effectiveModel, configuredEffort.isOn)
+            llmRetryHandler.callWithRetry(
+                provider = effectiveProvider,
+                model = effectiveModel,
+                messages = currentPrompt.messages,
+                systemPrompt = currentPrompt.systemPrompt,
+                taskId = taskId,
+                // Retry path of the decision turn — keep parity with TurnLLMCaller's
+                // non-retry path so PLAN/AGENT is distinguishable in the api-log Source.
+                source = "AgentTurnLoop:${mode.name}",
+                maxRetries = config.maxRetries,
+                baseDelayMs = config.retryBackoffMs,
+                responseFormat = responseFormat,
+                thinking = thinkingEnabled,
+                reasoningEffort = profileOverrides?.reasoningEffort
+                    ?: configuredEffort.toEffortString()?.takeIf { thinkingEnabled },
+                noEgressEnabled = configService.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, taskId),
+                stream = streamCallback != null,
+                onChunk = streamCallback,
+                kwargs = nativeSchemas?.let { mapOf("native_tools" to it) } ?: emptyMap()
+            )
+        } else {
+            turnLLMCaller.callLLM(
+                taskId = taskId,
+                mode = mode,
+                prompt = currentPrompt,
+                streamCallback = streamCallback,
+                model = effectiveModel,
+                provider = effectiveProvider,
+                profileOverrides = profileOverrides,
+                nativeToolSchemas = nativeSchemas
+            )
+        }
+
+        suspend fun rebuildPromptWithoutNativeTools(): TurnPrompt = buildPrompt(
+            taskId, mode, iteration, maxIterations,
+            userContextRefs, runProfile, profileOverrides,
+            writeToolsExecutedInTurn, false,
+            agentName = agentName, sessionId = sessionId, modelId = effectiveModel, runId = runId
+        )
+
+        while (true) {
+            try {
+                // Pass the MUTABLE nativeToolSchemas (not the caller's frozen per-iteration
+                // snapshot) so a fallback below that sets it to null actually drops native tools
+                // on the retry — otherwise the rebuilt JSON-contract prompt would still ship them.
+                val response = callModelWithPrompt(prompt, nativeToolSchemas)
+                // Skip the empty-native rescue on a guardian re-entry: the stashed pre-re-entry
+                // answer is what the user already saw, and the empty-native branch finalizes it.
+                if (nativeToolSchemas != null
+                    && response.content.isBlank()
+                    && response.nativeToolCalls.isNullOrEmpty()
+                    && !guardianHasRestorableAnswer
+                ) {
+                    logger.warn {
+                        "[NATIVE_TOOLS_EMPTY_FALLBACK] taskId=$taskId, model=$effectiveModel — " +
+                            "native response was empty (blank content, zero tool calls); one-shot JSON-path retry (no persistent fallback)"
+                    }
+                    nativeToolSchemas = null
+                    prompt = rebuildPromptWithoutNativeTools()
+                    continue
+                }
+                return LlmCallOutcome(response, prompt, nativeToolSchemas)
+            } catch (e: ToolsNotSupportedException) {
+                NativeToolsFallbackTracker.markFallback(effectiveModel, e.message ?: "provider error")
+                if (nativeToolSchemas == null) {
+                    throw e
+                }
+                logger.warn {
+                    "[NATIVE_TOOLS_FALLBACK] taskId=$taskId, model=$effectiveModel — " +
+                        "rebuilding prompt and retrying on JSON path"
+                }
+                nativeToolSchemas = null
+                prompt = rebuildPromptWithoutNativeTools()
+            } catch (e: RefioError.LLMError) {
+                // Ollama's qwen tool-call template can 500 server-side on malformed function-call
+                // XML the model emits. That is a per-prompt generation glitch, NOT a provider
+                // capability gap — the same model uses native tools fine on simpler prompts — so
+                // retry once on the JSON path WITHOUT persisting a fallback (contrast the
+                // ToolsNotSupportedException branch above). If native tools were already dropped,
+                // rethrow: nothing left to fall back to.
+                if (nativeToolSchemas == null || !isNativeToolTemplateParseError(e)) {
+                    throw e
+                }
+                logger.warn {
+                    "[NATIVE_TOOLS_PARSE_FALLBACK] taskId=$taskId, model=$effectiveModel — " +
+                        "provider rejected a malformed tool-call template; one-shot JSON-path retry (no persistent fallback)"
+                }
+                nativeToolSchemas = null
+                prompt = rebuildPromptWithoutNativeTools()
+            }
+        }
     }
 
     private fun resolveInitialNativeToolSchemas(

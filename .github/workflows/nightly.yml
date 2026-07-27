@@ -1,7 +1,7 @@
 name: Nightly
 
 # Nightly regression sweep. GitHub-hosted runners have no GPU and cannot serve a
-# local model, so the model-backed e2e stabilization gate (benchmark/scripts/gate.sh)
+# local model, so the model-backed e2e stabilization gate (tools/e2e/gate.sh)
 # stays a manual / self-hosted concern. What CAN run here every night:
 #   - the full Gradle 'check' (all module tests + coverage gate + sensitive-logging gate)
 #   - the e2e harness assertion-engine self-test (offline, no LLM call)
@@ -60,8 +60,8 @@ jobs:
 
       - name: Benchmark scripts syntax check
         run: |
-          bash -n benchmark/scripts/e2e-run.sh
-          bash -n benchmark/scripts/gate.sh
+          bash -n tools/e2e/e2e-run.sh
+          bash -n tools/e2e/gate.sh
 
       - name: E2E assertion-engine self-test (offline, no LLM)
-        run: bash benchmark/scripts/e2e-run.sh --self-test
+        run: bash tools/e2e/e2e-run.sh --self-test

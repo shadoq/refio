@@ -47,7 +47,7 @@ The CLI runs the exact same loop as the IDE, but scriptable:
   --prompt-file task.md --output json --output-file run.json
 ```
 
-`run.json` carries the full record - status, tokens, cost, every tool call, errors, warnings. That turns an agent run into something you can **test**, not just watch. The e2e harness (`benchmark/scripts/e2e-run.*` + `test_data/e2e/`) is exactly this: scenarios that drop an agent into a throwaway project and assert on the **final state** (right file changed, build green, files it must not touch left intact) rather than on the path it took. The benchmark harness (`benchmark/`) runs the same prompt across many models to compare how they behave.
+`run.json` carries the full record - status, tokens, cost, every tool call, errors, warnings. That turns an agent run into something you can **test**, not just watch. The e2e harness (`tools/e2e/e2e-run.*` + `test_data/e2e/`) is exactly this: scenarios that drop an agent into a throwaway project and assert on the **final state** (right file changed, build green, files it must not touch left intact) rather than on the path it took. The benchmark harness, which runs the same prompt across many models to compare how they behave, lives on the `benchmark` branch: it extends this one with the result data and the review viewer.
 
 **Build agents with agents.**
 

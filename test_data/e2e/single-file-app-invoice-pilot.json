@@ -1,0 +1,42 @@
+{
+  "id": "single-file-app-invoice-pilot",
+  "mode": "AGENT",
+  "description": "Invoicing SPA: clients + invoices, live net/VAT/gross line items, statuses, print/PDF via @media print, JSON export/import, validation + toasts. Hash routing + localStorage.",
+  "category": "single-file-app",
+  "max_iterations": 40,
+  "fixture": "fixtures/invoice-pilot",
+  "prompt_file": "prompts/single-file-app-invoice-pilot.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "invoice_pilot_model_01.html",
+        "regex": "localStorage"
+      },
+      {
+        "path": "invoice_pilot_model_01.html",
+        "regex": "location\\.hash|hashchange"
+      },
+      {
+        "path": "invoice_pilot_model_01.html",
+        "regex": "[Ii]nvoice"
+      },
+      {
+        "path": "invoice_pilot_model_01.html",
+        "regex": "@media[[:space:]]*print|window\\.print"
+      }
+    ],
+    "smoke": {
+      "entry": "invoice_pilot_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "invoice-pilot.html is one self-contained invoicing SPA (hash routing + localStorage, no frameworks): clients CRUD; an invoice builder with a line-items table computing net/VAT/gross live; statuses Draft/Sent/Paid/Overdue; an invoice preview with a print / save-as-PDF button and a dedicated @media print layout; JSON export/import; validation with inline errors, toasts and confirm dialogs."
+    ]
+  }
+}
