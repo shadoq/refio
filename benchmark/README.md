@@ -39,14 +39,14 @@ npm run build
 
 Data lives in `data/tasks.json` and `data/results.json`. In development mode, the admin pages can edit those files through the Vite dev server helpers.
 
-## Harness Scripts (`scripts/`)
+## Harness Scripts (`tools/e2e/`, on `main`)
 
 Shell/Python harness around the headless CLI. All of these run under `bash` (not zsh) and need the CLI dist built first: `sh gradlew :cli:installDist`.
 
 ### TUI smoke test
 
 ```bash
-uv run --with pexpect --with pyte benchmark/scripts/tui-smoke.py
+uv run --with pexpect --with pyte tools/e2e/tui-smoke.py
 ```
 
 Drives the real TUI in a pty (pexpect + pyte screen emulation) through a fixed scene list: startup, F1-F9 navigation, Settings interaction, side panel plus message send, terminal resizes, Ctrl+Q exit. Fully isolated: it passes `JAVA_OPTS=-Duser.home=<tmp>` (env `HOME` does not isolate a JVM) and a throwaway `--project` dir. Scenes covering known open TUI bugs are marked EXPECTED-FAIL and do not fail the script; `--strict` turns them into real failures once the fixes land. No LLM call is made.
@@ -54,7 +54,7 @@ Drives the real TUI in a pty (pexpect + pyte screen emulation) through a fixed s
 ### Scenario validation (deterministic, no LLM call)
 
 ```bash
-bash benchmark/scripts/validate-scenarios.sh --all
+bash tools/e2e/validate-scenarios.sh --all
 ```
 
 Quality gate for the e2e scenario pool. For every scenario that has a golden solution under
@@ -77,7 +77,7 @@ build offline (Python stdlib or plain shell/text; no dependency downloads).
 ### Analysis-scenario validation (deterministic, no LLM call)
 
 ```bash
-bash benchmark/scripts/validate-analysis-scenarios.sh --all
+bash tools/e2e/validate-analysis-scenarios.sh --all
 ```
 
 Quality gate for the PLAN-mode analysis scenarios (those tagged `"category":"analysis"`).
@@ -100,7 +100,7 @@ with `"needle_not_in_fixture": true`. No LLM turn is run.
 
 ```bash
 JUDGE_MODEL=ollama/gpt-oss:20b E2E_OUT_DIR=/tmp/e2e-out \
-  bash benchmark/scripts/e2e-run.sh --model ollama/qwen3.5:4b increase-retry-count
+  bash tools/e2e/e2e-run.sh --model ollama/qwen3.5:4b increase-retry-count
 ```
 
 With `JUDGE_MODEL` set, `e2e-run.sh` runs an external judge after each scenario: the headless CLI in CHAT mode gets the task text, the diff of the fixture project after the run, the build output, and the scenario's optional `judge_criteria` (falls back to `judge.criteria`). The judge answers `{verdict, confidence, reasons}`; unparseable output becomes a FAIL verdict with reason "judge output unparseable". The verdict is appended to the run's `results.jsonl` record as `judge:{...}` and is advisory only - it never fails the run. `JUDGE_MODEL` must differ from the tested `--model`, otherwise judging is skipped with a warning.
@@ -108,7 +108,7 @@ With `JUDGE_MODEL` set, `e2e-run.sh` runs an external judge after each scenario:
 ### Pass-rate gate
 
 ```bash
-bash benchmark/scripts/e2e-gate.sh --model ollama/qwen3.5:4b --runs 5 --threshold 4/5 \
+bash tools/e2e/e2e-gate.sh --model ollama/qwen3.5:4b --runs 5 --threshold 4/5 \
     increase-retry-count find-and-fix-null-check
 ```
 
@@ -117,7 +117,7 @@ Runs each scenario N times (default 5) through `e2e-run.sh`, aggregates `results
 ### Benchmark statistics (quality + speed)
 
 ```bash
-bash benchmark/scripts/e2e-stats.sh /tmp/gate-qwen /tmp/gate-o9 /tmp/gate-o35
+bash tools/e2e/e2e-stats.sh /tmp/gate-qwen /tmp/gate-o9 /tmp/gate-o35
 ```
 
 Read-only aggregation (no LLM) of one or more gate result dirs into a Markdown report:
@@ -129,22 +129,59 @@ already writes to each `results.jsonl` record. `--out <file>` also writes the re
 `--self-test` checks the aggregation offline. This is the benchmark data prepared for
 `test_data/RESULTS.md`.
 
+## Relationship to `main`
+
+This branch **extends** `main`; the dependency never points the other way. `main` owns the e2e
+toolchain in `tools/e2e/` (the case schema, the case loader, the case -> scenario emitter, the
+runner scripts) and the case catalog itself in `test_data/e2e_catalog/`. The benchmark adds the
+viewer, the result data, the strong judges and the case -> review-task half of the generator,
+importing the shared pieces through the `@e2e/*` alias (`../tools/e2e/src`).
+
+Practical consequences:
+
+- `npm ci` in `../tools/e2e` is required before `gen-tasks` / `import-runs` / `gen-all`.
+- `benchmark/src/schema/tasks.ts` re-exports `CriterionSchema` from `@e2e/schema/criterion`;
+  there is exactly one definition of it in the repo.
+- `zod` is pinned to this app's copy in `vite.config.ts` / `vitest.config.ts` / `tsconfig.json`,
+  because `tools/e2e` carries its own `node_modules` with its own zod.
+- Keep merging `main` into this branch, never the reverse.
+
+### Merging `main`
+
+`git merge main` is all it takes; `benchmark/` survives untouched.
+
+The one merge that needed care was the first one after `main` dropped the directory: git saw
+~3k files removed on one side and untouched on the other, and propagated the removal. That was
+resolved once by restoring the tree from the pre-merge tip, and because the resolution is now part
+of this branch's history, later merges start from a merge base that already has it. If a future
+merge from `main` ever proposes deleting `benchmark/` again, that is the recipe:
+
+```bash
+TIP=$(git rev-parse HEAD)            # remember this branch's tip FIRST
+git merge main --no-commit
+git checkout "$TIP" -- benchmark/    # put the directory back verbatim
+git diff --cached "$TIP" -- benchmark   # must print nothing
+git commit
+```
+
 ## Generating result data (catalog -> queue -> results)
 
 Result rows come from the case catalog, not from hand-edited JSON. A case lives under
-`catalog/<category>/<id>/` as a `<id>.case.json` + `<id>.prompt.md` pair and is the single
-source for both an e2e scenario and an admin review task, so the prompt never drifts between
-them. The two `npm` tools below turn a case into a reviewable result; both need the CLI dist
-built first (`sh gradlew :cli:installDist`).
+`../test_data/e2e_catalog/<category>/<name>/` as a `<id>.case.json` + `<id>.prompt.md` pair and is
+the single source for both an e2e scenario and an admin review task, so the prompt never drifts
+between them. The tools below turn a case into a reviewable result; they need the CLI dist built
+first (`sh gradlew :cli:installDist`).
 
 ### 1. Emit the scenario and task from a case (no LLM call)
 
 ```bash
-npm run gen-catalog -- --all          # or: npm run gen-catalog -- <id> ...
+npm run gen-all -- --all      # both halves: e2e artifacts (tools/e2e) + data/tasks.json
+npm run gen-tasks -- <id>     # this branch's half only
+npm run gen-all:check         # CI-style drift check over both halves
 ```
 
-For each case it writes the e2e scenario (`test_data/e2e/<id>.json` + prompt + fixture stub)
-and upserts the admin task in `data/tasks.json`, substituting the deliverable's `{{MODEL_ID}}`
+`gen-tasks` upserts the admin task in `data/tasks.json`; the e2e scenario, prompt copy and
+fixture stub come from `tools/e2e/gen-catalog.ts`, substituting the deliverable's `{{MODEL_ID}}`
 token. Idempotent - an unchanged case produces no diff. `--check` reports drift (for CI),
 `--dry-run` writes nothing.
 

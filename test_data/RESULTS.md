@@ -3,7 +3,7 @@
 Log of e2e benchmark runs (`test_data/e2e/*.json`) through the headless CLI. Each run appends
 a verdict record to `results.jsonl` (`E2E_OUT_DIR`) carrying both quality (verdict, status,
 failure_mode) and per-run performance (`durationMs`, `tokensOut`, `iterations`, `apiCalls`).
-The tables below are produced by `benchmark/scripts/e2e-stats.sh` and cover speed as well as
+The tables below are produced by `tools/e2e/e2e-stats.sh` and cover speed as well as
 pass-rate. Gate: 5 runs per scenario, green at pass-rate >= 0.8. The LLM judge is a separate
 SOFT tier and is disabled here (HARD assertions only).
 
@@ -29,11 +29,11 @@ Reproduce:
 
 ```bash
 # gate a model over 5 runs, persisting per-run records
-bash benchmark/scripts/e2e-gate.sh --all --model <provider/model> \
+bash tools/e2e/e2e-gate.sh --all --model <provider/model> \
   --runs 5 --threshold 0.8 --ollama-host <ollama-host> --max-cost 0 --out <dir>
 
 # aggregate one or more result dirs into the report below (quality + speed)
-bash benchmark/scripts/e2e-stats.sh <dir-model-a> <dir-model-b> ...
+bash tools/e2e/e2e-stats.sh <dir-model-a> <dir-model-b> ...
 ```
 
 Runs: the four gate models were run 2026-07-09/10, 5 runs each over 63 scenarios; two subagent

@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { CriterionSchema } from "./tasks";
+import { CriterionSchema } from "./criterion";
 
-// A single catalog case is the one source of truth for a prompt. The generator
-// emits both a headless e2e scenario (test_data/e2e/<id>.json) and an admin
-// review task (data/tasks.json) from it; import-runs later scores runs against
-// the same `assert` block. Long prompt text lives next to it in <id>.prompt.md,
-// not here.
+// A single catalog case is the one source of truth for a prompt. Cases live in
+// test_data/e2e_catalog/<category>/<name>/. The e2e generator emits a headless
+// scenario (test_data/e2e/<id>.json) from it; the benchmark toolchain emits an
+// admin review task from the same case and scores runs against the same
+// `assert` block. Long prompt text lives next to it in <id>.prompt.md, not here.
 
 export const CaseCategory = z.enum([
   "games",

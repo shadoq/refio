@@ -1,13 +1,14 @@
-// Generator entry point. Reads catalog cases and emits, per case, an e2e scenario
-// (+ prompt copy + fixture stub) and an upserted admin review task. Idempotent:
-// re-running an unchanged case produces no diff. `--check` reports drift for CI.
+// Generator entry point. Reads catalog cases from test_data/e2e_catalog and emits,
+// per case, an e2e scenario (+ prompt copy + fixture stub) under test_data/e2e.
+// Idempotent: re-running an unchanged case produces no diff. `--check` reports
+// drift for CI. Emitting the benchmark review task from the same case is a
+// separate generator that ships with the benchmark toolchain.
 //
-// usage: tsx scripts/catalog/gen-catalog.ts (--all | <id>...) [--check] [--dry-run]
+// usage: tsx tools/e2e/gen-catalog.ts (--all | <id>...) [--check] [--dry-run]
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { loadCases } from "./lib/case";
 import { emitE2e } from "./lib/emit-e2e";
-import { emitTasks } from "./lib/emit-task";
 import type { WriteResult } from "./lib/io";
 
 interface Args {
@@ -36,11 +37,10 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  const scriptDir = dirname(fileURLToPath(import.meta.url)); // scripts/catalog
-  const benchmarkDir = join(scriptDir, "..", ".."); // benchmark/
-  const catalogDir = join(benchmarkDir, "catalog");
-  const e2eDir = join(benchmarkDir, "..", "test_data", "e2e");
-  const now = new Date().toISOString();
+  const scriptDir = dirname(fileURLToPath(import.meta.url)); // tools/e2e
+  const repoRoot = join(scriptDir, "..", "..");
+  const catalogDir = join(repoRoot, "test_data", "e2e_catalog");
+  const e2eDir = join(repoRoot, "test_data", "e2e");
 
   const loaded = await loadCases(catalogDir, args.all ? undefined : args.ids);
   if (loaded.length === 0) {
@@ -52,7 +52,6 @@ async function main(): Promise<void> {
   for (const l of loaded) {
     results.push(...(await emitE2e({ e2eDir, loaded: l, check: args.check, dryRun: args.dryRun })));
   }
-  results.push(await emitTasks({ benchmarkDir, loaded, now, check: args.check, dryRun: args.dryRun }));
 
   const changed = results.filter((r) => r.changed);
   for (const r of results) {

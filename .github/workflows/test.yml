@@ -58,6 +58,33 @@ jobs:
             cli/build/reports/tests/test/
           retention-days: 7
 
+  # The e2e case catalog is the single source for the generated scenarios and prompts
+  # under test_data/e2e. This job fails when a case was edited without regenerating
+  # (or a generated file was hand-edited), so the two can never silently disagree.
+  e2e-catalog:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: tools/e2e/package-lock.json
+
+      - name: Install e2e toolchain
+        run: npm ci
+        working-directory: tools/e2e
+
+      - name: Unit tests (case schema + scenario emitter)
+        run: npm test
+        working-directory: tools/e2e
+
+      - name: Catalog drift check
+        run: npm run gen-catalog:check
+        working-directory: tools/e2e
+
   plugin-verifier:
     runs-on: ubuntu-latest
 

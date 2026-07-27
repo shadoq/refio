@@ -6,8 +6,8 @@ import {
   caseToScenario,
   resolveModelTemplate,
   E2E_MODEL_TOKEN,
-} from "../../../src/lib/catalog/emit";
-import type { CatalogCase } from "../../../src/schema/catalog";
+} from "../src/emit-scenario";
+import type { CatalogCase } from "../src/schema/case";
 import { writeOrCheck, ensureFinalNewline, type WriteResult } from "./io";
 
 export function scenarioJson(c: CatalogCase): string {

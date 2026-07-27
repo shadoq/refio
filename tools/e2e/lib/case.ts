@@ -1,9 +1,9 @@
-// Discover and load catalog cases from benchmark/catalog/**. Each case is a
+// Discover and load catalog cases from test_data/e2e_catalog/**. Each case is a
 // <id>.case.json (validated) plus a sibling <id>.prompt.md holding the prompt.
 import { readFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { CatalogCaseSchema, type CatalogCase } from "../../../src/schema/catalog";
+import { CatalogCaseSchema, type CatalogCase } from "../src/schema/case";
 
 export interface LoadedCase {
   case: CatalogCase;

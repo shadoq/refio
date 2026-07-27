@@ -1,17 +1,11 @@
 import { z } from "zod";
 
-export const RatingScaleSchema = z.object({
-  values: z.array(z.number()).min(2),
-  labels: z.record(z.string(), z.string()).optional(),
-});
-
-export const CriterionSchema = z.object({
-  id: z.string().regex(/^[a-z0-9_-]+$/),
-  name: z.string(),
-  description: z.string(),
-  scale: RatingScaleSchema,
-  weight: z.number().positive().default(1.0),
-});
+// A criterion is shared with the e2e case catalog (a case carries its own extra
+// criteria), so its definition lives with the e2e toolchain and is re-exported here.
+// One definition, two consumers.
+export { RatingScaleSchema, CriterionSchema } from "@e2e/schema/criterion";
+export type { RatingScale, Criterion } from "@e2e/schema/criterion";
+import { CriterionSchema } from "@e2e/schema/criterion";
 
 export const TaskSchema = z.object({
   id: z.string().regex(/^[a-z0-9_-]+$/),
@@ -35,7 +29,5 @@ export const TasksFileSchema = z.object({
   tasks: z.array(TaskSchema),
 });
 
-export type RatingScale = z.infer<typeof RatingScaleSchema>;
-export type Criterion = z.infer<typeof CriterionSchema>;
 export type Task = z.infer<typeof TaskSchema>;
 export type TasksFile = z.infer<typeof TasksFileSchema>;

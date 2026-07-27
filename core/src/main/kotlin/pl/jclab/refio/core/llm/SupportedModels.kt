@@ -64,7 +64,9 @@ object SupportedModels {
         // GPT-5.1
         "gpt-5.1-codex-max",
         "gpt-5.1-codex",
-        "gpt-5.1-codex-mini",
+        // gpt-5.1-codex-mini is deliberately absent: OpenAI deprecated it on the direct API
+        // (/v1/responses returns 404 model_not_found). It stays reachable via OpenRouter
+        // (openai/gpt-5.1-codex-mini), which uses the pattern-based whitelist below.
         "gpt-5.1",
         "gpt-5.1-mini",
         "gpt-5.1-nano",

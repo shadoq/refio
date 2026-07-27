@@ -1,13 +1,11 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
-import { CatalogCaseSchema } from "@/schema/catalog";
-import {
-  caseToScenario,
-  caseToTask,
-  upsertTaskDated,
-  resolveModelTemplate,
-} from "@/lib/catalog/emit";
+import { CatalogCaseSchema } from "@e2e/schema/case";
+import { caseToTask, upsertTaskDated } from "@/lib/catalog/emit-task";
 import type { Task } from "@/schema/tasks";
+
+// The case -> e2e scenario half of the transform is tested in tools/e2e; this file
+// covers only the benchmark half, the review task written into data/tasks.json.
 
 const agentCase = CatalogCaseSchema.parse({
   id: "todo",
@@ -24,73 +22,6 @@ const agentCase = CatalogCaseSchema.parse({
   },
   judge: { criteria: ["one self-contained todo.html"] },
   review: { description: "Single-file todo with filters and persistence." },
-});
-
-const planCase = CatalogCaseSchema.parse({
-  id: "project-analysis",
-  title: "Project analysis",
-  category: "analysis",
-  tier: "medium",
-  mode: "PLAN",
-  maxIterations: 25,
-  fixture: "fixtures/project-analysis",
-  assert: {
-    needleInOutput: { regex: "OrderParser" },
-    fileUnchanged: ["src/pipeline/OrderParser.kt"],
-  },
-  judge: { criteria: ["names the components and the data flow"] },
-  review: { description: "Read-only PLAN analysis." },
-});
-
-describe("caseToScenario (AGENT)", () => {
-  const scn = caseToScenario(agentCase);
-
-  it("carries the identity and run fields", () => {
-    expect(scn.id).toBe("todo");
-    expect(scn.mode).toBe("AGENT");
-    expect(scn.fixture).toBe("fixtures/todo");
-    expect(scn.prompt_file).toBe("prompts/todo.md");
-    expect(scn.max_iterations).toBe(40);
-  });
-
-  it("maps needles onto the deliverable path with {{MODEL_ID}} resolved for e2e", () => {
-    expect(scn.assert.needles_in_file).toEqual([
-      { path: "todo_model_01.html", regex: "localStorage" },
-      { path: "todo_model_01.html", text: "Todo" },
-    ]);
-    expect(scn.assert.tool_order).toEqual(["create_new_file"]);
-    expect(scn.assert.smoke).toEqual({ entry: "todo_model_01.html", dom_present: ["input"] });
-  });
-
-  it("omits keys that do not apply to an AGENT single-file case", () => {
-    expect("needle_in_output" in scn.assert).toBe(false);
-    expect("build_cmd" in scn.assert).toBe(false);
-    expect("file_unchanged" in scn.assert).toBe(false);
-  });
-
-  it("keeps the judge criteria", () => {
-    expect(scn.judge.criteria).toEqual(["one self-contained todo.html"]);
-  });
-});
-
-describe("caseToScenario (PLAN)", () => {
-  const scn = caseToScenario(planCase);
-
-  it("emits needle_in_output and file_unchanged, not needles_in_file", () => {
-    expect(scn.assert.needle_in_output).toEqual({ regex: "OrderParser" });
-    expect(scn.assert.file_unchanged).toEqual(["src/pipeline/OrderParser.kt"]);
-    expect("needles_in_file" in scn.assert).toBe(false);
-    expect("smoke" in scn.assert).toBe(false);
-  });
-});
-
-describe("resolveModelTemplate", () => {
-  it("substitutes every {{MODEL_ID}} occurrence with the token", () => {
-    expect(resolveModelTemplate("snake_{{MODEL_ID}}_01.html", "ollama-qwen")).toBe(
-      "snake_ollama-qwen_01.html",
-    );
-    expect(resolveModelTemplate("no placeholder here", "x")).toBe("no placeholder here");
-  });
 });
 
 describe("caseToTask", () => {

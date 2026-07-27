@@ -4,10 +4,10 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { TasksFileSchema } from "../../../src/schema/tasks";
-import { caseToTaskCore, upsertTaskDated } from "../../../src/lib/catalog/emit";
-import type { CatalogCase } from "../../../src/schema/catalog";
+import { caseToTaskCore, upsertTaskDated } from "../../../src/lib/catalog/emit-task";
+import type { CatalogCase } from "../../../../tools/e2e/src/schema/case";
 import type { Task } from "../../../src/schema/tasks";
-import { writeOrCheck, type WriteResult } from "./io";
+import { writeOrCheck, type WriteResult } from "../../../../tools/e2e/lib/io";
 
 export async function emitTasks(opts: {
   benchmarkDir: string;

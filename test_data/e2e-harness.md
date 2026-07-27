@@ -6,8 +6,8 @@ tools, edits the right file, and leaves the project building.
 
 It is **not** a Gradle module and **not** part of `./gradlew test` (it is slow and needs a model).
 It reuses the existing **headless CLI** (`--headless … --output json`) and asserts on the produced
-`run.json`. See `benchmark/scripts/e2e-run.sh` (primary, validated on macOS/Linux) and
-`benchmark/scripts/e2e-run.ps1` (Windows parity).
+`run.json`. See `tools/e2e/e2e-run.sh` (primary, validated on macOS/Linux) and
+`tools/e2e/e2e-run.ps1` (Windows parity).
 
 ## Consent
 
@@ -16,7 +16,7 @@ dir copied from the fixture; the harness deletes it unless `--keep`). Per `CLAUD
 rule, a human approves the concrete command before it runs. The one exception is:
 
 ```bash
-benchmark/scripts/e2e-run.sh --self-test    # asserts the engine only - no CLI, no LLM, no writes
+tools/e2e/e2e-run.sh --self-test    # asserts the engine only - no CLI, no LLM, no writes
 ```
 
 ## Run
@@ -24,17 +24,17 @@ benchmark/scripts/e2e-run.sh --self-test    # asserts the engine only - no CLI, 
 ```bash
 ./gradlew :cli:installDist                                   # build the headless CLI once
 
-benchmark/scripts/e2e-run.sh --list                         # show selectable scenarios, then exit
-benchmark/scripts/e2e-run.sh --model ollama/qwen3.5:9b \
+tools/e2e/e2e-run.sh --list                         # show selectable scenarios, then exit
+tools/e2e/e2e-run.sh --model ollama/qwen3.5:9b \
   increase-retry-count                                       # select by id (or by file path)
-benchmark/scripts/e2e-run.sh --model ollama/qwen3.5:9b --all # run every scenario
+tools/e2e/e2e-run.sh --model ollama/qwen3.5:9b --all # run every scenario
 ```
 
 To run the suite against a model on **another Ollama host** (or with a different context size) without
 editing config, use the sugar flags (they map to validated `--config providers.ollama.*` overrides):
 
 ```bash
-benchmark/scripts/e2e-run.sh --model ollama/qwen3.5:9b \
+tools/e2e/e2e-run.sh --model ollama/qwen3.5:9b \
   --ollama-host 192.168.5.60 --ollama-ctx 32768 --all     # host -> http://192.168.5.60:11434
 ```
 
@@ -49,7 +49,7 @@ PowerShell parity: `e2e-run.ps1 -Model ollama/qwen3.5:9b -OllamaHost 192.168.5.6
 > That is a real signal (silent truncation is never a success), but not the one you want when
 > checking agent *behaviour*: at 16k `qwen3.5:9b` overflowed all four of these scenarios, while the
 > model itself supports up to 256k context. 32k/64k is comfortable and cheap. Example:
-> `benchmark/scripts/e2e-run.sh --model ollama/qwen3.5:9b --ollama-ctx 65536 --all`.
+> `tools/e2e/e2e-run.sh --model ollama/qwen3.5:9b --ollama-ctx 65536 --all`.
 
 Output is a markdown table: one row per scenario with the verdict + metrics. Exit code is non-zero
 if any HARD assertion failed.
@@ -181,8 +181,8 @@ scripted interaction actually changes state.
 |---|---|---|---|
 | `build-counter-page` | AGENT | generate a one-file counter page that really increments | needles on `#count`/`#inc` + **browser-smoke**: loads clean, `#inc` click changes `#count` |
 
-**Requires a one-time install** of the browser: `npm i -D playwright && npx playwright install chromium`
-(run in `benchmark/`). Without it, a scenario that declares `smoke` HARD-fails with that hint - a
+**Requires a one-time install** of the browser: `npm run smoke:install`
+(run in `tools/e2e/`). Without it, a scenario that declares `smoke` HARD-fails with that hint - a
 verifier you cannot run must never pass silently. The same `smoke` block can be added to the existing
 generation scenarios (`snake-game`, `pixel-plumber`, …) to upgrade "a file landed" into "it runs".
 
@@ -220,6 +220,27 @@ secret like any other fixture value.
 an intentionally-vulnerable stdlib server (`fixtures/ctf-path-traversal/server/vuln_server.py`) instead
 of the safe static file server; `ctf-exposed-endpoint` uses the plain static server. Both need a model
 capable enough to chain recon requests and may legitimately fail on a weak one.
+
+## Where scenarios come from
+
+Two kinds live side by side under `test_data/e2e/`:
+
+- **Hand-written** scenarios (most of the regression suite) - edit the JSON directly.
+- **Catalog-generated** scenarios - authored once as a case in
+  `test_data/e2e_catalog/<category>/<name>/<id>.case.json` (+ `<id>.prompt.md`) and emitted by
+  `tools/e2e/gen-catalog.ts` into `<id>.json`, `prompts/<id>.md` and a fixture stub.
+
+For a generated scenario, **edit the case, not the emitted file**: a hand edit is reverted the next
+time anyone regenerates, and `npm run gen-catalog:check` (a CI job) fails on the drift meanwhile.
+
+```bash
+cd tools/e2e && npm ci
+npm run gen-catalog -- --all      # or: npm run gen-catalog -- website-web-aurora
+```
+
+The same case also feeds the benchmark review task on the `benchmark` branch, which is why the
+prompt keeps a `{{MODEL_ID}}` placeholder; the e2e copy resolves it to the fixed token `model`
+because the harness cannot substitute it.
 
 ## Scenario format (JSON)
 
@@ -314,7 +335,7 @@ runtime check on a generated browser artifact after the turn (HARD, exit-gated l
 `dom_present[]` are selectors that must exist; each `interactions[]` step is `{ press | click,
 expect_text_change? , expect_contains? }` - it performs the action then asserts a selector's text
 changed / contains text (proves the page is actually interactive, not dead markup). Implemented by
-`benchmark/scripts/browser-smoke.mjs`; needs `playwright` installed (see above).
+`tools/e2e/browser-smoke.mjs`; needs `playwright` installed (see above).
 
 The SOFT **`judge.criteria`** stays advisory today (every generation/build scenario carries one). A
 **layer-3 oracle** would let an external strong model (distinct from the model under test) score the
@@ -360,7 +381,7 @@ fields (`scenario`, `model`, `run`, `verdict`, `failure_mode`, `status`, `costUs
 | `apiErrors` | provider/tool error histogram `{errorType: count}` (from `apiLogs[].errorType`) |
 
 These fields are **additive**: the Kotlin gate (`cli --gate`, `GateRunRecord` via Gson) ignores unknown
-fields, so enrichment never breaks it. `benchmark/scripts/e2e-stats.sh <results-dir | results.jsonl> …`
+fields, so enrichment never breaks it. `tools/e2e/e2e-stats.sh <results-dir | results.jsonl> …`
 aggregates one or more result sets into a Markdown report - a per-model leaderboard (pass-rate, avg
 iterations/tokens/**tokens per second**/cost/duration, failure modes), a scenario x model pass-rate
 matrix, a scenario x model **avg-seconds-per-run** matrix (processing time per case), a tool-use

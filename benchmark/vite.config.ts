@@ -342,7 +342,19 @@ function mutateResultsPlugin(): Plugin {
 export default defineConfig({
   plugins: [react(), saveDataPlugin(), uploadPlugin(), mutateResultsPlugin()],
   resolve: {
-    alias: { "@": resolve(__dirname, "src") },
+    alias: {
+      "@": resolve(__dirname, "src"),
+      // The e2e toolchain lives in main and owns the case schema; the benchmark
+      // extends it, so the dependency only ever points this way.
+      "@e2e": resolve(__dirname, "..", "tools", "e2e", "src"),
+      // tools/e2e has its own node_modules; pin zod to this app's copy so the
+      // shared schemas do not drag in a second, type-incompatible instance.
+      zod: resolve(__dirname, "node_modules", "zod"),
+    },
+  },
+  // The dev server must be allowed to read the shared e2e schema outside benchmark/.
+  server: {
+    fs: { allow: [resolve(__dirname), resolve(__dirname, "..", "tools", "e2e")] },
   },
   // Absolute path of the data dir on this dev machine, so the review UI can build
   // idea:// links that open an artifact file in IntelliJ. Dev-only (the admin pages

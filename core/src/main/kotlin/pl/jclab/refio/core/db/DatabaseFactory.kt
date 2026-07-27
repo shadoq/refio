@@ -119,8 +119,20 @@ object DatabaseFactory {
      * Runs the transaction on Dispatchers.IO so JDBC blocking never stalls the
      * caller's dispatcher (event emission happens on hot paths like StreamChunk).
      */
-    suspend fun <T> suspendDbQuery(block: () -> T): T =
-        newSuspendedTransaction(Dispatchers.IO) {
+    suspend fun <T> suspendDbQuery(block: () -> T): T = suspendDbQuery(null, block)
+
+    /**
+     * Same as [suspendDbQuery] but pinned to [db].
+     *
+     * Without an explicit database Exposed resolves the *default* one at execution time, which is
+     * wrong for work that is queued now and runs later on another dispatcher: by the time the
+     * coroutine is scheduled, something else may have registered a different default. That is how a
+     * queued agent event ended up inserting into a database with no `agent_events` table and was
+     * silently lost. Callers that hand off work asynchronously should capture their database up
+     * front and pass it here.
+     */
+    suspend fun <T> suspendDbQuery(db: Database?, block: () -> T): T =
+        newSuspendedTransaction(Dispatchers.IO, db) {
             block()
         }
 }

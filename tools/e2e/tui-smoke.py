@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Run with uv (no venv needed):
-#   uv run --with pexpect --with pyte benchmark/scripts/tui-smoke.py
+#   uv run --with pexpect --with pyte tools/e2e/tui-smoke.py
 #
 # tui-smoke.py - pty smoke test for the Refio TUI.
 #
@@ -31,7 +31,7 @@ try:
     import pyte
 except ImportError:
     print("Missing deps. Run via:")
-    print("  uv run --with pexpect --with pyte benchmark/scripts/tui-smoke.py")
+    print("  uv run --with pexpect --with pyte tools/e2e/tui-smoke.py")
     sys.exit(2)
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))

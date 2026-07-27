@@ -1,6 +1,6 @@
-// @vitest-environment node
-import { describe, it, expect } from "vitest";
-import { CatalogCaseSchema } from "@/schema/catalog";
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { CatalogCaseSchema } from "../src/schema/case";
 
 const validAgentCase = {
   id: "todo",
@@ -16,7 +16,11 @@ const validAgentCase = {
     needles: [{ regex: "localStorage" }, { text: "Todo" }],
     smoke: { entry: "todo.html", domPresent: ["input"] },
   },
-  judge: { criteria: ["todo.html is one self-contained file with add/complete/delete/filter + localStorage."] },
+  judge: {
+    criteria: [
+      "todo.html is one self-contained file with add/complete/delete/filter + localStorage.",
+    ],
+  },
   review: { description: "Single-file todo with filters and persistence." },
 };
 
@@ -37,36 +41,37 @@ const validPlanCase = {
 
 describe("CatalogCaseSchema", () => {
   it("parses a valid AGENT single-file case", () => {
-    expect(CatalogCaseSchema.safeParse(validAgentCase).success).toBe(true);
+    assert.equal(CatalogCaseSchema.safeParse(validAgentCase).success, true);
   });
 
   it("parses a valid PLAN analysis case without a deliverable", () => {
-    expect(CatalogCaseSchema.safeParse(validPlanCase).success).toBe(true);
+    assert.equal(CatalogCaseSchema.safeParse(validPlanCase).success, true);
   });
 
   it("rejects an AGENT case that has no deliverable file", () => {
     const { deliverable, ...noDeliverable } = validAgentCase;
     void deliverable;
-    expect(CatalogCaseSchema.safeParse(noDeliverable).success).toBe(false);
+    assert.equal(CatalogCaseSchema.safeParse(noDeliverable).success, false);
   });
 
   it("rejects an unknown category", () => {
-    expect(
+    assert.equal(
       CatalogCaseSchema.safeParse({ ...validAgentCase, category: "spreadsheet" }).success,
-    ).toBe(false);
+      false,
+    );
   });
 
   it("rejects an id with uppercase letters", () => {
-    expect(CatalogCaseSchema.safeParse({ ...validAgentCase, id: "Todo" }).success).toBe(false);
+    assert.equal(CatalogCaseSchema.safeParse({ ...validAgentCase, id: "Todo" }).success, false);
   });
 
   it("applies defaults for maxIterations, extraCriteria and noContextOverflow", () => {
     const parsed = CatalogCaseSchema.safeParse(validAgentCase);
-    expect(parsed.success).toBe(true);
+    assert.equal(parsed.success, true);
     if (parsed.success) {
-      expect(parsed.data.maxIterations).toBe(40);
-      expect(parsed.data.review.extraCriteria).toEqual([]);
-      expect(parsed.data.assert.noContextOverflow).toBe(true);
+      assert.equal(parsed.data.maxIterations, 40);
+      assert.deepEqual(parsed.data.review.extraCriteria, []);
+      assert.equal(parsed.data.assert.noContextOverflow, true);
     }
   });
 });

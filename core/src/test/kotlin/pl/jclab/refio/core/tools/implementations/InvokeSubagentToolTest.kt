@@ -370,6 +370,31 @@ class InvokeSubagentToolTest {
             // Then
             assertFalse(result.success)
             assertTrue(result.error!!.contains("not found", ignoreCase = true))
+            // The recovery info is the point: a weak model that invented the name has nothing to
+            // correct against unless the real names are listed back to it.
+            assertTrue(
+                result.error!!.contains("test-agent"),
+                "not-found error must list the real subagents: ${result.error}"
+            )
+        }
+
+        @Test
+        fun `should suggest the nearest subagent for a typo`() = runBlocking {
+            // A one-letter slip should point the model straight at the real name instead of only
+            // dumping the catalog - the whole reason the model failed is a near-miss it can fix.
+            val params = mapOf(
+                "_task_id" to "task-123",
+                "subagent_name" to "test-agnt",
+                "goal" to "Test"
+            )
+
+            val result = tool.execute(params)
+
+            assertFalse(result.success)
+            assertTrue(
+                result.error!!.contains("Did you mean 'test-agent'?"),
+                "typo should surface a suggestion: ${result.error}"
+            )
         }
 
         @Test

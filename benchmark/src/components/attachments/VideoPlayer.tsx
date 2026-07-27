@@ -16,7 +16,9 @@ export function VideoPlayer({ src, type, caption }: VideoPlayerProps) {
           title={caption ?? "Video"}
         />
       ) : (
-        // eslint-disable-next-line jsx-a11y/media-has-caption
+        // No <track>: these are screen recordings of benchmark runs, captured without audio,
+        // so there is nothing to caption. (The jsx-a11y plugin this used to silence is not
+        // installed, and ESLint errors on a disable comment for a rule it cannot resolve.)
         <video
           controls
           style={{ width: "100%", maxHeight: 400, borderRadius: 4 }}

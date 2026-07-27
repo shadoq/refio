@@ -8,7 +8,7 @@
 # scenario reaches the threshold. "pass" for a single run = the HARD assertion tier
 # (the LLM judge stays SOFT/advisory and does not count here).
 #
-# Run under `bash` (not zsh): bash benchmark/scripts/e2e-gate.sh ...
+# Run under `bash` (not zsh): bash tools/e2e/e2e-gate.sh ...
 #
 # CONSENT: every run spends tokens / local GPU time and writes into throwaway temp
 # projects (via e2e-run.sh). A human approves the concrete command before it runs.
@@ -27,7 +27,7 @@
 # Exit codes: 0 = every scenario >= threshold, 1 = at least one below, 2 = usage/setup error.
 #
 # Example:
-#   bash benchmark/scripts/e2e-gate.sh --model ollama/qwen3.5:4b --runs 5 --threshold 4/5 \
+#   bash tools/e2e/e2e-gate.sh --model ollama/qwen3.5:4b --runs 5 --threshold 4/5 \
 #       increase-retry-count find-and-fix-null-check
 #
 set -euo pipefail

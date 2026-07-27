@@ -3,6 +3,7 @@ package pl.jclab.refio.core.db.repositories
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import org.jetbrains.exposed.sql.*
+import org.jetbrains.exposed.sql.transactions.TransactionManager
 import pl.jclab.refio.core.agents.events.AgentEvent
 import pl.jclab.refio.core.agents.events.AgentEventRepository
 import pl.jclab.refio.core.agents.events.Artifact
@@ -15,14 +16,25 @@ import pl.jclab.refio.core.db.DatabaseFactory
  * Persists agent events to the agent_events table for history replay
  * and debugging. Uses Gson for JSON serialization of event payloads.
  */
-class AgentEventSqlRepository : AgentEventRepository {
+class AgentEventSqlRepository(
+    /**
+     * Database this repository writes to, captured when it is wired up.
+     *
+     * Event saves are queued by [pl.jclab.refio.core.agents.events.AgentEventBus] and run later on
+     * Dispatchers.IO, so resolving the database lazily meant a queued insert could execute against
+     * whatever default happened to be registered by then - observed as a lost AgentStarted with
+     * "no such table: agent_events". Pinning it here keeps every save on the database the bus was
+     * wired to. Null falls back to Exposed's default, which is correct for a single-database run.
+     */
+    private val database: Database? = TransactionManager.defaultDatabase
+) : AgentEventRepository {
 
     private val gson: Gson = GsonBuilder()
         .disableHtmlEscaping()
         .create()
 
     override suspend fun save(event: AgentEvent) {
-        DatabaseFactory.suspendDbQuery {
+        DatabaseFactory.suspendDbQuery(database) {
             AgentEventsTable.insert {
                 it[id] = event.id
                 it[sessionId] = event.sessionId
@@ -37,7 +49,7 @@ class AgentEventSqlRepository : AgentEventRepository {
 
     override suspend fun findBySessionId(sessionId: String, limit: Int): List<AgentEvent> {
         // Fetch the NEWEST `limit` rows, then restore ascending order for replay.
-        return DatabaseFactory.suspendDbQuery {
+        return DatabaseFactory.suspendDbQuery(database) {
             AgentEventsTable.selectAll()
                 .where { AgentEventsTable.sessionId eq sessionId }
                 .orderBy(AgentEventsTable.timestamp, SortOrder.DESC)
@@ -48,7 +60,7 @@ class AgentEventSqlRepository : AgentEventRepository {
     }
 
     override suspend fun findByAgentId(agentId: String, limit: Int): List<AgentEvent> {
-        return DatabaseFactory.suspendDbQuery {
+        return DatabaseFactory.suspendDbQuery(database) {
             AgentEventsTable.selectAll()
                 .where { AgentEventsTable.sourceAgentId eq agentId }
                 .orderBy(AgentEventsTable.timestamp, SortOrder.DESC)

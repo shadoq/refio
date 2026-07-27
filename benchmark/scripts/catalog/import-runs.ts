@@ -14,11 +14,11 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { readFile, copyFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { loadCases, type LoadedCase } from "./lib/case";
+import { loadCases, type LoadedCase } from "../../../tools/e2e/lib/case";
 import { runHeadless } from "./lib/run-cli";
 import { captureShots } from "../judge/lib/render";
 import { buildDeterministicJudge } from "../../src/lib/catalog/deterministic";
-import { resolveModelTemplate } from "../../src/lib/catalog/emit";
+import { resolveModelTemplate } from "../../../tools/e2e/src/emit-scenario";
 import {
   parseRunJson,
   makeInboxId,
@@ -168,7 +168,10 @@ async function main(): Promise<void> {
     dataDir: join(benchmarkDir, "data"),
   };
 
-  const loaded = await loadCases(join(benchmarkDir, "catalog"), args.all ? undefined : args.ids);
+  const loaded = await loadCases(
+    join(paths.repoRoot, "test_data", "e2e_catalog"),
+    args.all ? undefined : args.ids,
+  );
   if (loaded.length === 0) {
     console.error("no cases matched");
     process.exit(1);

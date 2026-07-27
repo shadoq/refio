@@ -4,6 +4,7 @@ import org.jetbrains.exposed.sql.transactions.transaction
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.io.TempDir
 import pl.jclab.refio.core.db.SubtaskKind
 import pl.jclab.refio.core.db.TaskMode
@@ -11,6 +12,7 @@ import pl.jclab.refio.testutil.TestDatabase
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -71,7 +73,13 @@ class SubtaskRepositoryConcurrencyTest {
         assertEquals(2, third.orderIndex)
     }
 
+    // Waits for the workers without a join deadline: SQLite serializes writers, so on a loaded
+    // machine 100 creates can legitimately outlast any fixed budget, and asserting on a partially
+    // filled queue turned that slowness into a fake "collision" failure. Correctness is judged
+    // only once every worker is done; a genuine hang is caught by the timeout below, which names
+    // the real problem instead of a wrong row count.
     @Test
+    @Timeout(value = 3, unit = TimeUnit.MINUTES, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
     fun `concurrent createNext on one task never collides on order_index`() {
         val task = createTask("task-parallel")
         val threads = 4
@@ -93,10 +101,11 @@ class SubtaskRepositoryConcurrencyTest {
                         failures.add(e)
                     }
                 }
-            }.apply { start() }
+            // Daemon so a hung worker can never outlive the test JVM and stall the whole build.
+            }.apply { isDaemon = true; start() }
         }
         startGate.countDown()
-        workers.forEach { it.join(30_000) }
+        workers.forEach { it.join() }
 
         assertTrue(
             failures.isEmpty(),
