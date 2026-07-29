@@ -35,7 +35,6 @@ internal class UserBubbleRenderer(
 
         messageBlock.add(
             factory.createBubbleHeader(
-                icon = "\uD83D\uDC64",
                 title = "You",
                 foregroundColor = LCATheme.userBubbleForeground
             ).apply { alignmentX = Component.LEFT_ALIGNMENT }

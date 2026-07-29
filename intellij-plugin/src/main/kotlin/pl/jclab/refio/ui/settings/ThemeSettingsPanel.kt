@@ -1,6 +1,8 @@
 package pl.jclab.refio.ui.settings
 
 import com.intellij.ui.components.*
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import pl.jclab.refio.ui.theme.LCATheme
@@ -46,50 +48,42 @@ class ThemeSettingsPanel : JBPanel<ThemeSettingsPanel>(BorderLayout()) {
     init {
         border = JBUI.Borders.empty()
 
-        val mainPanel = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+        // Every section is a preview block, so they are DSL groups rather than panels separated
+        // by hand-sized struts.
+        val form = panel {
+            group("Colors") {
+                row { cell(createLCAThemeColorsSection()).align(AlignX.FILL).resizableColumn() }
+            }
+            group("Chat bubbles") {
+                row { cell(createChatBubbleColorsSection()).align(AlignX.FILL).resizableColumn() }
+            }
+            group("Mode badges") {
+                row { cell(createModeBadgeColorsSection()).align(AlignX.FILL).resizableColumn() }
+            }
+            group("Step status") {
+                row { cell(createStepStatusColorsSection()).align(AlignX.FILL).resizableColumn() }
+            }
+            group("Spacing") {
+                row { cell(createLCAThemeSpacingSection()).align(AlignX.FILL).resizableColumn() }
+            }
+            group("Fonts") {
+                row { cell(createLCAThemeFontsSection()).align(AlignX.FILL).resizableColumn() }
+            }
+            group("Utilities") {
+                row { cell(createLCAThemeUtilitiesSection()).align(AlignX.FILL).resizableColumn() }
+            }
+            group("Borders") {
+                row { cell(createBordersSection()).align(AlignX.FILL).resizableColumn() }
+            }
+            group("Insets") {
+                row { cell(createInsetsSection()).align(AlignX.FILL).resizableColumn() }
+            }
+            group("Components") {
+                row { cell(createComponentsPreviewSection()).align(AlignX.FILL).resizableColumn() }
+            }
         }
 
-        // LCATheme Colors Section
-        mainPanel.add(createLCAThemeColorsSection())
-        mainPanel.add(Box.createVerticalStrut(LCATheme.spacingXl))
-
-        // Chat Bubble Colors Section
-        mainPanel.add(createChatBubbleColorsSection())
-        mainPanel.add(Box.createVerticalStrut(LCATheme.spacingXl))
-
-        // Mode Badge Colors Section
-        mainPanel.add(createModeBadgeColorsSection())
-        mainPanel.add(Box.createVerticalStrut(LCATheme.spacingXl))
-
-        // Step Status Colors Section
-        mainPanel.add(createStepStatusColorsSection())
-        mainPanel.add(Box.createVerticalStrut(LCATheme.spacingXl))
-
-        // LCATheme Spacing Section
-        mainPanel.add(createLCAThemeSpacingSection())
-        mainPanel.add(Box.createVerticalStrut(LCATheme.spacingXl))
-
-        // LCATheme Fonts Section
-        mainPanel.add(createLCAThemeFontsSection())
-        mainPanel.add(Box.createVerticalStrut(LCATheme.spacingXl))
-
-        // LCATheme Utilities Section
-        mainPanel.add(createLCAThemeUtilitiesSection())
-        mainPanel.add(Box.createVerticalStrut(LCATheme.spacingXl))
-
-        // Borders Section
-        mainPanel.add(createBordersSection())
-        mainPanel.add(Box.createVerticalStrut(LCATheme.spacingXl))
-
-        // Insets Section
-        mainPanel.add(createInsetsSection())
-        mainPanel.add(Box.createVerticalStrut(LCATheme.spacingXl))
-
-        // Standard Components Preview
-        mainPanel.add(createComponentsPreviewSection())
-
-        add(JBScrollPane(mainPanel).apply {
+        add(JBScrollPane(form).apply {
             border = JBUI.Borders.empty()
         }, BorderLayout.CENTER)
     }

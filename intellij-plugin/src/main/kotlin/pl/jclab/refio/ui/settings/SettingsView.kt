@@ -2,16 +2,22 @@ package pl.jclab.refio.ui.settings
 
 import pl.jclab.refio.core.config.ConfigKeys
 
+import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.ui.CollectionListModel
+import com.intellij.ui.HyperlinkLabel
+import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
-import com.intellij.ui.components.JBTabbedPane
+import com.intellij.util.ui.JBUI
 import pl.jclab.refio.services.notification.NotificationService
 import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.core.logging.dualLogger
 import kotlinx.coroutines.*
 import java.awt.BorderLayout
+import java.awt.CardLayout
+import java.awt.Dimension
 import java.awt.FlowLayout
 import javax.swing.*
 
@@ -53,81 +59,184 @@ class SettingsView(
     private val advancedPanel = AdvancedSettingsPanel(::onSettingChanged, coreApiClient)
     private val themePanel = ThemeSettingsPanel()
 
+    /** One entry of the category column; a blank [id] marks a non-selectable group separator. */
+    private data class Category(val id: String, val title: String = "", val icon: Icon? = null)
+
+    private val categories = listOf(
+        Category("general", "General", AllIcons.General.Settings),
+        Category("providers", "Providers", AllIcons.General.Web),
+        Category("models", "Models", AllIcons.Nodes.PpLib),
+        Category("prompts", "Prompts", AllIcons.Actions.Edit),
+        Category("context", "Context", AllIcons.Actions.ListFiles),
+        Category(""),
+        Category("mcp", "MCP Servers", AllIcons.Nodes.Plugin),
+        Category("tools", "Tools", AllIcons.General.GearPlain),
+        Category("subagents", "Subagents", AllIcons.Actions.Lightning),
+        Category(""),
+        Category("appearance", "Appearance", AllIcons.Actions.Colors),
+        Category("advanced", "Advanced", AllIcons.General.ShowInfos),
+        Category("docs", "Documentation", AllIcons.Actions.Help)
+    )
+
+    private val categoryModel = CollectionListModel(categories)
+    private val categoryList = JBList(categoryModel)
+    private val cardLayout = CardLayout()
+    private val cards = JPanel(cardLayout)
+
     init {
         border = LCATheme.emptyBorder()
 
         providersPanel.setOnModelsRefreshedCallback(modelsPanel::onProviderModelsRefreshed)
 
-        // Header
-        add(createHeader(), BorderLayout.NORTH)
+        cards.add(createStyledTabPanel("General", generalPanel, scrollable = true), "general")
+        cards.add(providersPanel, "providers")
+        cards.add(createStyledTabPanel("Models", modelsPanel), "models")
+        cards.add(createStyledTabPanel("Prompts", promptsPanel, scrollable = true), "prompts")
+        cards.add(createStyledTabPanel("Context", contextSettingsPanel), "context")
+        cards.add(createStyledTabPanel("MCP Servers", mcpPanel), "mcp")
+        cards.add(toolsPanel, "tools")
+        cards.add(subagentPanel, "subagents")
+        cards.add(createStyledTabPanel("Appearance", themePanel), "appearance")
+        cards.add(advancedPanel, "advanced")
+        cards.add(docsPanel, "docs")
 
-        // Tabbed pane for settings sections
-        val tabbedPane = JBTabbedPane(SwingConstants.TOP).apply {
-            addTab("General", createStyledTabPanel("General", generalPanel, scrollable = true))
-            addTab("Providers", providersPanel)
-            addTab("Models", createStyledTabPanel("Models", modelsPanel))
-            addTab("Prompts", createStyledTabPanel("Prompts", promptsPanel, scrollable = true))
-            addTab("Context", createStyledTabPanel("Context", contextSettingsPanel))
-            addTab("MCP Servers", createStyledTabPanel("MCP Servers", mcpPanel))
-            addTab("Documentation", docsPanel)
-            addTab("Tools", toolsPanel)
-            addTab("Subagents", subagentPanel)  // AI subagents configuration
-            addTab("Advanced", advancedPanel)  // Merged: Advanced + Limits
-            addTab("Theme", createStyledTabPanel("Theme", themePanel))  // LCATheme visual preview
+        categoryList.apply {
+            cellRenderer = CategoryRenderer()
+            // Group headers are labels, not destinations: a click on one keeps the previous
+            // selection instead of showing an empty right-hand side.
+            selectionModel = object : DefaultListSelectionModel() {
+                override fun setSelectionInterval(index0: Int, index1: Int) {
+                    val candidate = categoryModel.getElementAt(index1)
+                    if (candidate.id.isNotEmpty()) super.setSelectionInterval(index1, index1)
+                }
+            }
+            addListSelectionListener { event ->
+                if (event.valueIsAdjusting) return@addListSelectionListener
+                selectedValue?.id?.takeIf { it.isNotEmpty() }?.let { cardLayout.show(cards, it) }
+            }
+            // Icons carry no text, so the name has to arrive on hover.
+            addMouseMotionListener(object : java.awt.event.MouseMotionAdapter() {
+                override fun mouseMoved(e: java.awt.event.MouseEvent) {
+                    val index = locationToIndex(e.point).takeIf { it >= 0 }
+                    toolTipText = index
+                        ?.let { categoryModel.getElementAt(it) }
+                        ?.takeIf { it.id.isNotEmpty() }
+                        ?.title
+                }
+            })
         }
-        add(tabbedPane, BorderLayout.CENTER)
 
-        // Footer
+        // Fixed-width icon strip rather than a splitter: at dock width a draggable divider
+        // ends up collapsed to a few pixels and the labels disappear entirely.
+        val categoryStrip = JBScrollPane(categoryList).apply {
+            border = JBUI.Borders.customLineRight(LCATheme.borderColor)
+            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
+            verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
+            preferredSize = Dimension(JBUI.scale(CATEGORY_STRIP_WIDTH), 0)
+            minimumSize = Dimension(JBUI.scale(CATEGORY_STRIP_WIDTH), 0)
+        }
+
+        val body = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            add(categoryStrip, BorderLayout.WEST)
+            add(cards, BorderLayout.CENTER)
+        }
+
+        add(createHeader(), BorderLayout.NORTH)
+        add(body, BorderLayout.CENTER)
         add(createFooter(), BorderLayout.SOUTH)
+
+        categoryList.selectedIndex = categories.indexOfFirst { it.id == "general" }
     }
 
     private fun createHeader(): JPanel {
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = LCATheme.paddedBorder(12, 16)
+            border = JBUI.Borders.empty(4, 8)
 
-            val backButton = JButton("< Back to Chat").apply {
+            add(JButton("Back to Chat", AllIcons.Actions.Back).apply {
                 addActionListener { onBack() }
-            }
-            add(backButton, BorderLayout.WEST)
+            }, BorderLayout.WEST)
 
-            val titleLabel = JLabel("Settings").apply {
-                font = font.deriveFont(java.awt.Font.BOLD)
+            add(JLabel("Settings", SwingConstants.CENTER), BorderLayout.CENTER)
+        }
+    }
+
+    /**
+     * Icon-only cells. The category name is not drawn because the strip is narrower than any of
+     * the titles; it is delivered through the list tooltip instead.
+     */
+    private inner class CategoryRenderer : ListCellRenderer<Category> {
+
+        private val iconCell = JLabel().apply {
+            horizontalAlignment = SwingConstants.CENTER
+            isOpaque = true
+            border = JBUI.Borders.empty(4)
+            preferredSize = Dimension(JBUI.scale(CATEGORY_STRIP_WIDTH), JBUI.scale(30))
+        }
+
+        private val separatorCell = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            isOpaque = false
+            border = JBUI.Borders.empty(4, 6)
+            add(JSeparator(SwingConstants.HORIZONTAL), BorderLayout.CENTER)
+            preferredSize = Dimension(JBUI.scale(CATEGORY_STRIP_WIDTH), JBUI.scale(9))
+        }
+
+        override fun getListCellRendererComponent(
+            list: JList<out Category>,
+            value: Category?,
+            index: Int,
+            selected: Boolean,
+            hasFocus: Boolean
+        ): java.awt.Component {
+            val entry = value ?: return separatorCell
+            if (entry.id.isEmpty()) return separatorCell
+
+            iconCell.icon = entry.icon
+            iconCell.background = if (selected) {
+                JBUI.CurrentTheme.List.Selection.background(true)
+            } else {
+                list.background
             }
-            add(titleLabel, BorderLayout.CENTER)
+            return iconCell
         }
     }
 
     private fun createFooter(): JPanel {
-        return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 4, 4)).apply {
-            border = LCATheme.customLineBorder(
-                LCATheme.borderColor,
-                1, 0, 0, 0
-            )
+        return JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            border = LCATheme.customLineBorder(LCATheme.borderColor, 1, 0, 0, 0)
 
-            val exportToUserButton = JButton("Export User").apply {
-                addActionListener { onExportToUserConfig() }
-                toolTipText = "Export current settings to ~/.refio/config.yaml"
+            val left = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
+                add(JButton("Export…").apply {
+                    toolTipText = "Export settings to a config file"
+                    addActionListener { showExportMenu(this) }
+                })
+                add(HyperlinkLabel("Reload config").apply {
+                    toolTipText = "Reload configuration from ~/.refio/config.yaml"
+                    addHyperlinkListener { onReloadFromLocalConfig() }
+                })
             }
-            add(exportToUserButton)
 
-            val exportToProjectButton = JButton("Export Project").apply {
-                addActionListener { onExportToProjectConfig() }
-                toolTipText = "Export project-specific settings to <project>/.refio/config.yaml"
+            val right = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 8, 4)).apply {
+                add(JButton("Reset").apply {
+                    foreground = LCATheme.redColor
+                    toolTipText = "Reset all settings to default values"
+                    addActionListener { onResetToDefaults() }
+                })
             }
-            add(exportToProjectButton)
 
-            val reloadFromLocalButton = JButton("Reload Config").apply {
-                addActionListener { onReloadFromLocalConfig() }
-                toolTipText = "Reload configuration from ~/.refio/config.yaml"
-            }
-            add(reloadFromLocalButton)
-
-            val resetButton = JButton("Reset").apply {
-                addActionListener { onResetToDefaults() }
-                toolTipText = "Reset all settings to default values"
-            }
-            add(resetButton)
+            add(left, BorderLayout.WEST)
+            add(right, BorderLayout.EAST)
         }
+    }
+
+    private fun showExportMenu(anchor: JComponent) {
+        val menu = JPopupMenu()
+        menu.add(JMenuItem("Export to user config (~/.refio/config.yaml)").apply {
+            addActionListener { onExportToUserConfig() }
+        })
+        menu.add(JMenuItem("Export to project config (<project>/.refio/config.yaml)").apply {
+            addActionListener { onExportToProjectConfig() }
+        })
+        menu.show(anchor, 0, anchor.height)
     }
 
     private fun createStyledTabPanel(title: String, content: JComponent, scrollable: Boolean = false): JComponent {
@@ -530,5 +639,10 @@ class SettingsView(
     override fun removeNotify() {
         super.removeNotify()
         dispose()
+    }
+
+    private companion object {
+        /** Wide enough for a 16 px icon plus the selection highlight, and no wider. */
+        const val CATEGORY_STRIP_WIDTH = 30
     }
 }

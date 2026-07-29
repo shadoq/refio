@@ -8,6 +8,8 @@ import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.panel
 import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
@@ -151,7 +153,6 @@ class ProvidersSettingsPanel(
             )
         )
 
-        providersPanel.add(Box.createVerticalStrut(12))
 
         providersPanel.add(
             createProviderCard(
@@ -163,7 +164,6 @@ class ProvidersSettingsPanel(
             )
         )
 
-        providersPanel.add(Box.createVerticalStrut(12))
 
         providersPanel.add(
             createProviderCard(
@@ -175,7 +175,6 @@ class ProvidersSettingsPanel(
             )
         )
 
-        providersPanel.add(Box.createVerticalStrut(12))
 
         providersPanel.add(
             createProviderCard(
@@ -188,7 +187,6 @@ class ProvidersSettingsPanel(
             )
         )
 
-        providersPanel.add(Box.createVerticalStrut(12))
 
         providersPanel.add(
             createProviderCard(
@@ -201,7 +199,6 @@ class ProvidersSettingsPanel(
             )
         )
 
-        providersPanel.add(Box.createVerticalStrut(12))
 
         providersPanel.add(
             createProviderCard(
@@ -221,7 +218,6 @@ class ProvidersSettingsPanel(
             )
         )
 
-        providersPanel.add(Box.createVerticalStrut(12))
 
         providersPanel.add(
             createProviderCard(
@@ -236,7 +232,6 @@ class ProvidersSettingsPanel(
             )
         )
 
-        providersPanel.add(Box.createVerticalStrut(12))
 
         providersPanel.add(
             createProviderCard(
@@ -254,6 +249,12 @@ class ProvidersSettingsPanel(
     /**
      * Create a provider configuration card
      */
+    /**
+     * One provider card: name, status, its credentials and a connection test.
+     *
+     * Built with the Kotlin UI DSL so every provider gets the same label column, spacing and
+     * comment styling without per-card GridBag tuning.
+     */
     private fun createProviderCard(
         providerName: String,
         fields: List<ProviderField>,
@@ -262,128 +263,92 @@ class ProvidersSettingsPanel(
     ): JPanel {
         val fieldComponents = mutableMapOf<String, JComponent>()
 
-        return JBPanel<JBPanel<*>>(GridBagLayout()).apply {
-            border = BorderFactory.createCompoundBorder(
-                LCATheme.customLineBorder(LCATheme.borderColor, 1),
-                LCATheme.paddedBorder(LCATheme.spacingLg)
-            )
+        val statusLabel = JLabel(initialStatus.displayText).apply {
+            foreground = initialStatus.color
+        }
+        val testButton = JButton("Test Connection").apply {
+            addActionListener { onTestConnection(providerName) }
+        }
 
-            val gbc = GridBagConstraints().apply {
-                gridx = 0
-                gridy = 0
-                anchor = GridBagConstraints.WEST
-                fill = GridBagConstraints.HORIZONTAL
-                weightx = 1.0
-                insets = LCATheme.insetsSmall
-            }
-
-            // Header with status
-            val statusLabel = JLabel(initialStatus.displayText).apply {
-                foreground = initialStatus.color
-            }
-
-            val headerPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-                add(JLabel(providerName).apply {
-                    font = font.deriveFont(Font.BOLD)
-                }, BorderLayout.WEST)
-                add(statusLabel, BorderLayout.EAST)
-            }
-            add(headerPanel, gbc)
-
-            // Optional description
-            if (description != null) {
-                gbc.gridy++
-                gbc.insets = LCATheme.insetsFormField
-                val escapedDescription = description
-                    .replace("&", "&amp;")
-                    .replace("<", "&lt;")
-                    .replace(">", "&gt;")
-                    .replace("\"", "&quot;")
-                    .replace("'", "&#39;")
-                add(JLabel("<html><font color='gray'>$escapedDescription</font></html>"), gbc)
-            }
-
-            // Fields
-            fields.forEach { field ->
-                gbc.gridy++
-                gbc.insets = LCATheme.insetsGridBagDefault
-                add(JLabel("${field.label}:"), gbc)
-
-                gbc.gridy++
-                gbc.insets = LCATheme.insetsSmall
-
-                val component: JComponent = when (field.type) {
-                    FieldType.TEXT -> {
-                        val textField = JBTextField(field.defaultValue ?: "")
-                        // Auto-save on change
-                        textField.document.addDocumentListener(object : DocumentListener {
-                            override fun insertUpdate(e: DocumentEvent?) =
-                                onFieldChanged(providerName, field.key, getFieldValue(textField))
-
-                            override fun removeUpdate(e: DocumentEvent?) =
-                                onFieldChanged(providerName, field.key, getFieldValue(textField))
-
-                            override fun changedUpdate(e: DocumentEvent?) =
-                                onFieldChanged(providerName, field.key, getFieldValue(textField))
-                        })
-                        textField
-                    }
-
-                    FieldType.PASSWORD -> {
-                        val passwordField = JBPasswordField().apply {
-                            text = field.defaultValue ?: ""
-                        }
-                        // Auto-save on change
-                        passwordField.document.addDocumentListener(object : DocumentListener {
-                            override fun insertUpdate(e: DocumentEvent?) =
-                                onFieldChanged(providerName, field.key, getFieldValue(passwordField))
-
-                            override fun removeUpdate(e: DocumentEvent?) =
-                                onFieldChanged(providerName, field.key, getFieldValue(passwordField))
-
-                            override fun changedUpdate(e: DocumentEvent?) =
-                                onFieldChanged(providerName, field.key, getFieldValue(passwordField))
-                        })
-                        passwordField
-                    }
-
-                    FieldType.DROPDOWN -> JComboBox(field.dropdownOptions?.toTypedArray() ?: arrayOf()).apply {
-                        selectedItem = field.defaultValue ?: field.dropdownOptions?.firstOrNull()
-                        // Auto-save on selection change
-                        addActionListener {
-                            onFieldChanged(providerName, field.key, selectedItem as? String ?: "")
-                        }
+        val card = panel {
+            group(providerName) {
+                row {
+                    cell(statusLabel)
+                }
+                if (description != null) {
+                    row {
+                        comment(escapeHtml(description))
                     }
                 }
-
-                fieldComponents[field.key] = component
-                add(component, gbc)
+                fields.forEach { field ->
+                    val component = createFieldComponent(providerName, field)
+                    fieldComponents[field.key] = component
+                    row("${field.label}:") {
+                        cell(component).align(AlignX.FILL).resizableColumn()
+                    }
+                }
+                row {
+                    cell(testButton).align(AlignX.RIGHT)
+                }
             }
+        }
 
-            // Test Connection button
-            gbc.gridy++
-            gbc.anchor = GridBagConstraints.EAST
-            gbc.fill = GridBagConstraints.NONE
-            gbc.weightx = 0.0
+        // Save card state
+        providerStates[providerName] = ProviderCardState(
+            providerName = providerName,
+            fields = fieldComponents,
+            statusLabel = statusLabel,
+            testButton = testButton
+        )
 
-            val testButton = JButton("Test Connection").apply {
-                addActionListener { onTestConnection(providerName) }
+        return card
+    }
+
+    /** Editor for one provider field; every kind saves as soon as the user changes it. */
+    private fun createFieldComponent(providerName: String, field: ProviderField): JComponent = when (field.type) {
+        FieldType.TEXT -> JBTextField(field.defaultValue ?: "").also { textField ->
+            textField.document.addDocumentListener(object : DocumentListener {
+                override fun insertUpdate(e: DocumentEvent?) =
+                    onFieldChanged(providerName, field.key, getFieldValue(textField))
+
+                override fun removeUpdate(e: DocumentEvent?) =
+                    onFieldChanged(providerName, field.key, getFieldValue(textField))
+
+                override fun changedUpdate(e: DocumentEvent?) =
+                    onFieldChanged(providerName, field.key, getFieldValue(textField))
+            })
+        }
+
+        FieldType.PASSWORD -> JBPasswordField().also { passwordField ->
+            passwordField.text = field.defaultValue ?: ""
+            passwordField.document.addDocumentListener(object : DocumentListener {
+                override fun insertUpdate(e: DocumentEvent?) =
+                    onFieldChanged(providerName, field.key, getFieldValue(passwordField))
+
+                override fun removeUpdate(e: DocumentEvent?) =
+                    onFieldChanged(providerName, field.key, getFieldValue(passwordField))
+
+                override fun changedUpdate(e: DocumentEvent?) =
+                    onFieldChanged(providerName, field.key, getFieldValue(passwordField))
+            })
+        }
+
+        FieldType.DROPDOWN -> JComboBox(field.dropdownOptions?.toTypedArray() ?: arrayOf()).apply {
+            selectedItem = field.defaultValue ?: field.dropdownOptions?.firstOrNull()
+            addActionListener {
+                onFieldChanged(providerName, field.key, selectedItem as? String ?: "")
             }
-            add(testButton, gbc)
-
-            // Save card state
-            providerStates[providerName] = ProviderCardState(
-                providerName = providerName,
-                fields = fieldComponents,
-                statusLabel = statusLabel,
-                testButton = testButton
-            )
         }
     }
 
-    /**
-     * Handle field value change with debounce
-     */
+    private fun escapeHtml(text: String): String = text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&#39;")
+
+
     private fun onFieldChanged(providerName: String, fieldKey: String, value: String) {
         if (isLoadingFromBackend) {
             return

@@ -32,7 +32,6 @@ internal class OtherBubbleRenderer(
         // subagent makes clear whose turn was steered.
         val agent = message.agentName?.takeIf { it.isNotBlank() }
         return createUniversalBubble(
-            icon = "🛡️",
             title = if (agent != null) "Agent guidance · $agent" else "Agent guidance",
             content = if (agent != null) {
                 "Refio prompted the '$agent' subagent to finish the remaining steps before ending its turn."
@@ -60,7 +59,6 @@ internal class OtherBubbleRenderer(
         }
 
         return createUniversalBubble(
-            icon = "\uD83D\uDCDD",
             title = "Summary",
             subtitle = summarySubtitle,
             content = cleanedSummary,
@@ -72,7 +70,6 @@ internal class OtherBubbleRenderer(
 
     private fun createSystemBubble(message: Message): JPanel {
         return createUniversalBubble(
-            icon = "\u2699\uFE0F",
             title = "System",
             content = message.content,
             backgroundColor = LCATheme.systemBubbleBackground,

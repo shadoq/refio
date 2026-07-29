@@ -15,6 +15,9 @@ import pl.jclab.refio.core.services.ConfigKeyUtil
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.services.core.CoreConnectionManager
 import pl.jclab.refio.core.logging.dualLogger
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.panel
+import com.intellij.util.ui.JBUI
 import pl.jclab.refio.ui.theme.LCATheme
 import java.awt.BorderLayout
 import java.awt.Dimension
@@ -46,29 +49,29 @@ class ContextSettingsPanel(
     private val ragProgressService = pl.jclab.refio.services.rag.RagProgressService.getInstance(project)
 
     // Index components
-    private lateinit var ignorePathsTextArea: JBTextArea
-    private lateinit var ignorePathsSourceLabel: JBLabel
-    private lateinit var maxFileSizeField: JBTextField
-    private lateinit var chunkSizeField: JBTextField
-    private lateinit var indexProgressBar: JProgressBar
-    private lateinit var indexStatusLabel: JLabel
-    private lateinit var reindexButton: JButton
-    private lateinit var stopIndexingButton: JButton
-    private lateinit var generateEmbeddingsButton: JButton
-    private lateinit var stopEmbeddingsButton: JButton
-    private lateinit var clearIndexButton: JButton
-    private lateinit var embeddingProgressBar: JProgressBar
-    private lateinit var embeddingStatusLabel: JLabel
-    private lateinit var ragSearchThresholdField: JBTextField
-    private lateinit var ragSearchTopKField: JBTextField
-    private lateinit var ragSearchSemanticWeightField: JBTextField
-    private lateinit var ragSearchHybridEnabledCheckbox: JCheckBox
-    private lateinit var ragSearchIncludeContextChunksCheckbox: JCheckBox
-    private lateinit var chunkingStrategyCombo: JComboBox<String>
-    private lateinit var bm25K1Field: JBTextField
-    private lateinit var bm25BField: JBTextField
-    private lateinit var embeddingModelField: JBTextField
-    private lateinit var indexStatsLabel: JLabel
+    private val ignorePathsTextArea: JBTextArea
+    private val ignorePathsSourceLabel: JBLabel
+    private val maxFileSizeField: JBTextField
+    private val chunkSizeField: JBTextField
+    private val indexProgressBar: JProgressBar
+    private val indexStatusLabel: JLabel
+    private val reindexButton: JButton
+    private val stopIndexingButton: JButton
+    private val generateEmbeddingsButton: JButton
+    private val stopEmbeddingsButton: JButton
+    private val clearIndexButton: JButton
+    private val embeddingProgressBar: JProgressBar
+    private val embeddingStatusLabel: JLabel
+    private val ragSearchThresholdField: JBTextField
+    private val ragSearchTopKField: JBTextField
+    private val ragSearchSemanticWeightField: JBTextField
+    private val ragSearchHybridEnabledCheckbox: JCheckBox
+    private val ragSearchIncludeContextChunksCheckbox: JCheckBox
+    private val chunkingStrategyCombo: JComboBox<String>
+    private val bm25K1Field: JBTextField
+    private val bm25BField: JBTextField
+    private val embeddingModelField: JBTextField
+    private val indexStatsLabel: JLabel
     private val defaultIgnorePathsText = pl.jclab.refio.core.config.ConfigKeys.RAG_IGNORED_DIRECTORIES.default.joinToString("\n")
     private var indexJob: Job? = null
     private var embeddingJob: Job? = null
@@ -79,34 +82,163 @@ class ContextSettingsPanel(
     init {
         border = LCATheme.emptyBorder()
 
-        val contentPanel = JBPanel<JBPanel<*>>().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-
-            // Section 1: Index Status
-            add(createSectionPanel("Index Status", createIndexStatusPanel()))
-            add(Box.createVerticalStrut(LCATheme.spacingLg))
-
-            // Section 2: Embedding Management
-            add(createSectionPanel("Embedding Management", createEmbeddingsSection()))
-            add(Box.createVerticalStrut(LCATheme.spacingLg))
-
-            // Section 3: Chunking & Embedding
-            add(createSectionPanel("Chunking & Embedding", createChunkingEmbeddingSection()))
-            add(Box.createVerticalStrut(LCATheme.spacingLg))
-
-            // Section 4: Search Settings
-            add(createSectionPanel("Search Settings", createSearchSettingsSection()))
-            add(Box.createVerticalStrut(LCATheme.spacingLg))
-
-            // Section 5: Index Statistics
-            add(createSectionPanel("Index Statistics", createIndexStatisticsSection()))
-            add(Box.createVerticalStrut(LCATheme.spacingLg))
-
-            // Section 6: Providers
-            add(createSectionPanel("Providers", createBuiltInProvidersPanel()))
+        indexProgressBar = JProgressBar(0, 100).apply {
+            isStringPainted = true
+            string = "Ready"
+        }
+        indexStatusLabel = JLabel("Idle")
+        reindexButton = JButton("Reindex Project").apply {
+            toolTipText = "Scan project files and build search index"
+            addActionListener { onReindex() }
+        }
+        stopIndexingButton = JButton("Stop Indexing").apply {
+            toolTipText = "Cancel ongoing indexing"
+            isEnabled = false
+            addActionListener { onStopIndexing() }
+        }
+        clearIndexButton = JButton("Clear Index").apply {
+            icon = AllIcons.General.Remove
+            toolTipText = "Delete all indexed data for this project (including embeddings)"
+            addActionListener { onClearIndex() }
         }
 
-        val scrollPane = JBScrollPane(contentPanel).apply {
+        ignorePathsTextArea = JBTextArea().apply {
+            lineWrap = true
+            wrapStyleWord = true
+            text = defaultIgnorePathsText
+        }
+        ignorePathsSourceLabel = JBLabel("Source: Settings UI").apply {
+            foreground = LCATheme.descriptionForeground
+        }
+
+        maxFileSizeField = JBTextField("2", 5)
+        chunkSizeField = JBTextField("1024", 8)
+
+        embeddingProgressBar = JProgressBar(0, 100).apply {
+            isStringPainted = true
+            string = "Ready"
+        }
+        embeddingStatusLabel = JLabel("Ready")
+        generateEmbeddingsButton = JButton("Generate Embeddings").apply {
+            icon = AllIcons.Actions.Lightning
+            toolTipText = "Generate vector embeddings for semantic search"
+            addActionListener { onGenerateEmbeddings() }
+        }
+        stopEmbeddingsButton = JButton("Stop Embeddings").apply {
+            toolTipText = "Cancel ongoing embedding generation"
+            isEnabled = false
+            addActionListener { onStopEmbeddings() }
+        }
+
+        chunkingStrategyCombo = JComboBox(arrayOf("Semantic (recommended for code)", "Default (line-based)")).apply {
+            selectedIndex = 0
+        }
+        embeddingModelField = JBTextField("ollama/nomic-embed-text", 25)
+
+        ragSearchThresholdField = JBTextField("0.5", 6)
+        ragSearchTopKField = JBTextField("5", 4)
+        ragSearchSemanticWeightField = JBTextField("0.7", 4)
+        ragSearchHybridEnabledCheckbox = JCheckBox("Enable hybrid search", false)
+        ragSearchIncludeContextChunksCheckbox = JCheckBox("Include context chunks", false)
+        bm25K1Field = JBTextField("1.5", 4)
+        bm25BField = JBTextField("0.75", 4)
+        setupSearchSettingsAutoSave()
+
+        indexStatsLabel = JLabel("Loading statistics...")
+
+        val form = panel {
+            group("Index status") {
+                row {
+                    cell(indexStatusLabel)
+                    cell(indexProgressBar).align(AlignX.FILL).resizableColumn()
+                }
+                row {
+                    cell(reindexButton)
+                    cell(stopIndexingButton)
+                    cell(clearIndexButton)
+                }
+            }
+
+            group("Ignore paths") {
+                row {
+                    cell(ignorePathsSourceLabel)
+                }
+                row {
+                    cell(
+                        JBScrollPane(ignorePathsTextArea).apply {
+                            preferredSize = Dimension(0, JBUI.scale(120))
+                            border = LCATheme.customLineBorder(LCATheme.borderColor, 1)
+                        }
+                    ).align(AlignX.FILL).resizableColumn()
+                }.rowComment("Patterns for files and directories to exclude from indexing, one per line")
+            }
+
+            group("Indexing limits") {
+                row("Max file size:") {
+                    cell(maxFileSizeField)
+                    label("MB")
+                }.rowComment("Files larger than this are never indexed")
+                row("Chunk size:") {
+                    cell(chunkSizeField)
+                    label("tokens")
+                }.rowComment("Size of the text chunks stored for RAG")
+            }
+
+            group("Embeddings") {
+                row {
+                    cell(embeddingStatusLabel)
+                    cell(embeddingProgressBar).align(AlignX.FILL).resizableColumn()
+                }
+                row {
+                    cell(generateEmbeddingsButton)
+                    cell(stopEmbeddingsButton)
+                }
+                row("Embedding model:") {
+                    cell(embeddingModelField)
+                }.rowComment("Model used to generate the vectors for semantic search")
+                row("Chunking strategy:") {
+                    cell(chunkingStrategyCombo)
+                }.rowComment("Semantic chunking keeps code structure boundaries (classes, functions) intact")
+            }
+
+            group("Search") {
+                row("Similarity threshold:") {
+                    cell(ragSearchThresholdField)
+                    label("0.0 - 1.0")
+                }
+                row("Default TopK:") {
+                    cell(ragSearchTopKField)
+                }
+                row("Semantic weight:") {
+                    cell(ragSearchSemanticWeightField)
+                    label("0.0 - 1.0")
+                }
+                row {
+                    cell(ragSearchHybridEnabledCheckbox)
+                    cell(ragSearchIncludeContextChunksCheckbox)
+                }
+                row("BM25 k1:") {
+                    cell(bm25K1Field)
+                }.rowComment("Term saturation, used in hybrid search (default 1.5)")
+                row("BM25 b:") {
+                    cell(bm25BField)
+                }.rowComment("Length normalization, used in hybrid search (default 0.75)")
+            }
+
+            group("Index statistics") {
+                row {
+                    cell(indexStatsLabel)
+                }
+            }
+
+            group("Context providers") {
+                row {
+                    cell(createBuiltInProvidersPanel()).align(AlignX.FILL).resizableColumn()
+                }.rowComment("Always available with the @ syntax in prompts, for example @file or @diff")
+            }
+        }
+
+        val scrollPane = JBScrollPane(form).apply {
             border = LCATheme.emptyBorder()
             verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
             horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
@@ -137,337 +269,26 @@ class ContextSettingsPanel(
     // ==================== BUILT-IN PROVIDERS ====================
 
     private fun createBuiltInProvidersPanel(): JPanel {
-        return JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = LCATheme.paddedBorder(LCATheme.padding)
+        val providers = ContextProviderRegistry.getAllProviders().sortedBy { it.description.title }
 
-            // Description
-            val description = JBLabel(
-                "<html>These providers are always available for use with the @ syntax in prompts.<br>" +
-                        "Example: @file, @open, @clipboard, @diff, etc.</html>"
-            ).apply {
-                foreground = LCATheme.descriptionForeground
-                border = LCATheme.paddedBorder(0, 0, 8, 0)
-                isEnabled = false
-            }
-            add(description, BorderLayout.NORTH)
-
-            // Providers list
-            val providersListPanel = JBPanel<JBPanel<*>>().apply {
-                layout = BoxLayout(this, BoxLayout.Y_AXIS)
-
-                val providers = ContextProviderRegistry.getAllProviders()
-                    .sortedBy { it.description.title }
-
-                providers.forEach { provider ->
-                    val desc = provider.description
-                    val typeIcon = when (desc.type) {
-                        ProviderType.NORMAL -> AllIcons.Nodes.DataTables
-                        ProviderType.QUERY -> AllIcons.Actions.Search
-                        ProviderType.SUBMENU -> AllIcons.Nodes.Folder
-                    }
-
-                    add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                        add(JLabel(typeIcon))
-                        add(JLabel("@${desc.title}").apply {
-                            font = font.deriveFont(Font.BOLD)
-                            isEnabled = false
-                        })
-                        add(JLabel(desc.displayTitle))
-                        add(JLabel("- ${desc.description}").apply {
-                            foreground = LCATheme.descriptionForeground
-                            isEnabled = false
-                        })
-                    })
+        return panel {
+            providers.forEach { provider ->
+                val desc = provider.description
+                val typeIcon = when (desc.type) {
+                    ProviderType.NORMAL -> AllIcons.Nodes.DataTables
+                    ProviderType.QUERY -> AllIcons.Actions.Search
+                    ProviderType.SUBMENU -> AllIcons.Nodes.Folder
                 }
-                isEnabled = false
+                row {
+                    icon(typeIcon)
+                    label("@${desc.title}").applyToComponent { font = font.deriveFont(Font.BOLD) }
+                    label(desc.displayTitle)
+                    comment(desc.description)
+                }
             }
-            add(providersListPanel, BorderLayout.CENTER)
-
-            isEnabled = false
         }
     }
 
-    // ==================== INDEX SETTINGS ====================
-
-    private fun createIndexStatusPanel(): JPanel {
-        return JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            val contentPanel = JBPanel<JBPanel<*>>().apply {
-                layout = BoxLayout(this, BoxLayout.Y_AXIS)
-
-                // Indexing Status
-                add(createIndexStatusSection())
-                add(Box.createVerticalStrut(16))
-
-                // Ignore Paths
-                add(createIgnorePathsSection())
-                add(Box.createVerticalStrut(16))
-
-                // Index Settings
-                add(createIndexConfigSection())
-            }
-
-            add(contentPanel, BorderLayout.CENTER)
-        }
-    }
-
-    private fun createIndexStatusSection(): JPanel {
-        indexProgressBar = JProgressBar(0, 100).apply {
-            isStringPainted = true
-            string = "Ready"
-        }
-        indexStatusLabel = JLabel("Idle")
-        reindexButton = JButton("Reindex Project").apply {
-            toolTipText = "Scan project files and build search index"
-            addActionListener { onReindex() }
-        }
-        stopIndexingButton = JButton("Stop Indexing").apply {
-            toolTipText = "Cancel ongoing indexing"
-            isEnabled = false
-            addActionListener { onStopIndexing() }
-        }
-        clearIndexButton = JButton("Clear Index").apply {
-            icon = AllIcons.General.Remove
-            toolTipText = "Delete all indexed data for this project (including embeddings)"
-            addActionListener { onClearIndex() }
-        }
-
-        return JBPanel<JBPanel<*>>().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-
-            add(JBLabel("Indexing Status:").apply {
-                font = LCATheme.boldFont
-            })
-            add(Box.createVerticalStrut(8))
-
-            add(JBPanel<JBPanel<*>>(BorderLayout()).apply {
-                add(indexStatusLabel, BorderLayout.WEST)
-                add(indexProgressBar, BorderLayout.CENTER)
-            })
-            add(Box.createVerticalStrut(8))
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
-                add(reindexButton)
-                add(stopIndexingButton)
-                add(clearIndexButton)
-            })
-        }
-    }
-
-    private fun createIgnorePathsSection(): JPanel {
-        ignorePathsTextArea = JBTextArea().apply {
-            lineWrap = true
-            wrapStyleWord = true
-            text = defaultIgnorePathsText
-        }
-        ignorePathsSourceLabel = JBLabel("Source: Settings UI").apply {
-            foreground = LCATheme.descriptionForeground
-        }
-
-        return JBPanel<JBPanel<*>>().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-
-            add(JBLabel("Ignore Paths:").apply {
-                font = LCATheme.boldFont
-            })
-            add(JBLabel("Enter patterns for files and directories to exclude (one per line)").apply {
-                foreground = LCATheme.descriptionForeground
-            })
-            add(Box.createVerticalStrut(4))
-            add(ignorePathsSourceLabel)
-            add(Box.createVerticalStrut(4))
-
-            add(JBScrollPane(ignorePathsTextArea).apply {
-                preferredSize = Dimension(500, 120)
-                border = LCATheme.customLineBorder(LCATheme.borderColor, 1)
-            })
-        }
-    }
-
-    private fun createIndexConfigSection(): JPanel {
-        maxFileSizeField = JBTextField("2", 5)
-        chunkSizeField = JBTextField("1024", 8)
-
-        return JBPanel<JBPanel<*>>().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                add(JBLabel("Max File Size:"))
-                add(maxFileSizeField)
-                add(JBLabel("MB"))
-                add(JBLabel("(files larger than this will be excluded)").apply {
-                    foreground = LCATheme.descriptionForeground
-                })
-            })
-
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                add(JBLabel("Chunk Size:"))
-                add(chunkSizeField)
-                add(JBLabel("tokens"))
-                add(JBLabel("(size of text chunks for RAG)").apply {
-                    foreground = LCATheme.descriptionForeground
-                })
-            })
-        }
-    }
-
-    private fun createSearchSettingsSection(): JPanel {
-        ragSearchThresholdField = JBTextField("0.5", 6)
-        ragSearchTopKField = JBTextField("5", 4)
-        ragSearchSemanticWeightField = JBTextField("0.7", 4)
-        ragSearchHybridEnabledCheckbox = JCheckBox("Enable hybrid search", false)
-        ragSearchIncludeContextChunksCheckbox = JCheckBox("Include context chunks", false)
-        setupSearchSettingsAutoSave()
-
-        return JBPanel<JBPanel<*>>().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-
-            add(JBLabel("Search Settings:").apply {
-                font = LCATheme.boldFont
-            })
-            add(JBLabel("Configure default RAG similarity and ranking behavior").apply {
-                foreground = LCATheme.descriptionForeground
-            })
-            add(Box.createVerticalStrut(8))
-
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                add(JBLabel("Similarity Threshold:"))
-                add(ragSearchThresholdField)
-                add(JBLabel("(0.0 - 1.0)"))
-            })
-
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                add(JBLabel("Default TopK:"))
-                add(ragSearchTopKField)
-            })
-
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                add(JBLabel("Semantic Weight:"))
-                add(ragSearchSemanticWeightField)
-                add(JBLabel("(0.0 - 1.0)"))
-            })
-
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                add(ragSearchHybridEnabledCheckbox)
-                add(ragSearchIncludeContextChunksCheckbox)
-            })
-
-            add(Box.createVerticalStrut(8))
-            add(JBLabel("BM25 Parameters (used in hybrid search):").apply {
-                foreground = LCATheme.descriptionForeground
-            })
-
-            bm25K1Field = JBTextField("1.5", 4)
-            bm25BField = JBTextField("0.75", 4)
-
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                add(JBLabel("k1:"))
-                add(bm25K1Field)
-                add(JBLabel("(term saturation, default 1.5)").apply {
-                    foreground = LCATheme.descriptionForeground
-                })
-            })
-
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                add(JBLabel("b:"))
-                add(bm25BField)
-                add(JBLabel("(length normalization, default 0.75)").apply {
-                    foreground = LCATheme.descriptionForeground
-                })
-            })
-        }
-    }
-
-    private fun createEmbeddingsSection(): JPanel {
-        embeddingProgressBar = JProgressBar(0, 100).apply {
-            isStringPainted = true
-            string = "Ready"
-        }
-        embeddingStatusLabel = JLabel("Ready")
-
-        generateEmbeddingsButton = JButton("Generate Embeddings").apply {
-            icon = AllIcons.Actions.Lightning
-            toolTipText = "Generate vector embeddings for semantic search"
-            addActionListener { onGenerateEmbeddings() }
-        }
-
-        stopEmbeddingsButton = JButton("Stop Embeddings").apply {
-            toolTipText = "Cancel ongoing embedding generation"
-            isEnabled = false
-            addActionListener { onStopEmbeddings() }
-        }
-
-        return JBPanel<JBPanel<*>>().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-
-            add(JBLabel("Embeddings Management:").apply {
-                font = LCATheme.boldFont
-            })
-            add(JBLabel("Generate embeddings for RAG search").apply {
-                foreground = LCATheme.descriptionForeground
-            })
-            add(Box.createVerticalStrut(8))
-
-            add(JBPanel<JBPanel<*>>(BorderLayout()).apply {
-                add(embeddingStatusLabel, BorderLayout.WEST)
-                add(embeddingProgressBar, BorderLayout.CENTER)
-            })
-            add(Box.createVerticalStrut(8))
-
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
-                add(generateEmbeddingsButton)
-                add(stopEmbeddingsButton)
-            })
-        }
-    }
-
-    private fun createChunkingEmbeddingSection(): JPanel {
-        chunkingStrategyCombo = JComboBox(arrayOf("Semantic (recommended for code)", "Default (line-based)")).apply {
-            selectedIndex = 0
-        }
-        embeddingModelField = JBTextField("ollama/nomic-embed-text", 25)
-
-        return JBPanel<JBPanel<*>>().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-
-            add(JBLabel("Chunking Strategy:").apply {
-                font = LCATheme.boldFont
-            })
-            add(JBLabel("Semantic chunking preserves code structure boundaries (classes, functions).").apply {
-                foreground = LCATheme.descriptionForeground
-            })
-            add(Box.createVerticalStrut(4))
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                add(JBLabel("Strategy:"))
-                add(chunkingStrategyCombo)
-            })
-            add(Box.createVerticalStrut(8))
-
-            add(JBLabel("Embedding Model:").apply {
-                font = LCATheme.boldFont
-            })
-            add(JBLabel("Model used for generating vector embeddings.").apply {
-                foreground = LCATheme.descriptionForeground
-            })
-            add(Box.createVerticalStrut(4))
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                add(JBLabel("Model:"))
-                add(embeddingModelField)
-            })
-        }
-    }
-
-    private fun createIndexStatisticsSection(): JPanel {
-        indexStatsLabel = JLabel("Loading statistics...")
-
-        return JBPanel<JBPanel<*>>().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-
-            add(JBLabel("Index Statistics:").apply {
-                font = LCATheme.boldFont
-            })
-            add(Box.createVerticalStrut(4))
-            add(indexStatsLabel)
-        }
-    }
 
     private fun loadIndexStatistics() {
         val projectPath = project.basePath ?: return

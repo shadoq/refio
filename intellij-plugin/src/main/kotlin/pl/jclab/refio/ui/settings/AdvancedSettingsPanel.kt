@@ -1,24 +1,30 @@
 package pl.jclab.refio.ui.settings
 
 import com.intellij.ui.components.JBCheckBox
-import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
+import com.intellij.ui.dsl.builder.columns
+import com.intellij.ui.dsl.builder.panel
 import pl.jclab.refio.core.api.CoreApiRouter
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.core.services.ConfigKeyUtil
 import pl.jclab.refio.ui.theme.LCATheme
 import java.awt.BorderLayout
-import java.awt.FlowLayout
 import javax.swing.*
 
 /**
  * Advanced Settings Panel
  *
  * Manages advanced configuration options including:
- * - Security settings (No-Egress, Read-only mode)
- * - Limits settings (Timeouts, Size limits) - merged from LimitsSettingsPanel
- * - Context optimization threshold (Auto-optimize)
+ * - Security settings (read-only mode)
+ * - Agent sampling
+ * - Limits (timeouts, size limits, context auto-optimize)
+ *
+ * Laid out with the Kotlin UI DSL: groups, label alignment and comment styling come from the
+ * platform rather than from struts and hand-set insets. Settings save on change, so the controls
+ * carry listeners instead of DSL bindings.
  */
 class AdvancedSettingsPanel(
     private val onSettingChanged: (section: String, key: String, value: Any) -> Unit,
@@ -52,23 +58,111 @@ class AdvancedSettingsPanel(
     private var isUpdatingProgrammatically = false
 
     init {
-        border = LCATheme.createSettingsBorder("Advanced Settings")
+        val form = panel {
+            group("Security") {
+                row {
+                    readOnlyModeCheckbox = checkBox("Read-only mode")
+                        .comment("Prevent all file write operations")
+                        .applyToComponent {
+                            addItemListener {
+                                if (isUpdatingProgrammatically) return@addItemListener
+                                save(ConfigKeys.READ_ONLY_MODE.key, isSelected)
+                            }
+                        }
+                        .component
+                }
+            }
 
-        // Main content with visual sections
-        val contentPanel = JBPanel<JBPanel<*>>().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            group("Agent") {
+                row("Decision-turn temperature:") {
+                    decisionTempField = textField()
+                        .columns(6)
+                        .applyToComponent {
+                            text = "0.7"
+                            addFocusListener(object : java.awt.event.FocusAdapter() {
+                                override fun focusLost(e: java.awt.event.FocusEvent?) {
+                                    if (isUpdatingProgrammatically) return
+                                    val value = (text.toDoubleOrNull() ?: 0.7).coerceIn(0.0, 2.0)
+                                    // Normalize the field to the accepted value (clamps/garbage → canonical text)
+                                    isUpdatingProgrammatically = true
+                                    text = formatTemp(value)
+                                    isUpdatingProgrammatically = false
+                                    save(ConfigKeys.AGENT_DECISION_TEMPERATURE.key, value)
+                                }
+                            })
+                        }
+                        .component
+                    label("0.0 - 2.0")
+                }.rowComment(
+                    "Sampling temperature for the PLAN/AGENT turn that picks tools. " +
+                        "Lower = stricter contract adherence (helps small/local models); " +
+                        "higher = more variety. Default 0.7."
+                )
+            }
 
-            add(createSectionPanel("Security", createSecurityPanel()))
-            add(Box.createVerticalStrut(LCATheme.spacingLg))
-            add(createSectionPanel("Agent", createAgentPanel()))
-            add(Box.createVerticalStrut(LCATheme.spacingLg))
-            add(createSectionPanel("Limits", createLimitsPanel()))
+            group("Timeouts") {
+                row("Tool execution:") {
+                    toolExecutionSlider = slider(5, 520, 10, 50)
+                        .applyToComponent {
+                            value = 360
+                            addChangeListener {
+                                toolExecutionLabel.text = "$value seconds"
+                                if (valueIsAdjusting || isUpdatingProgrammatically) return@addChangeListener
+                                save(ConfigKeys.TOOL_EXECUTION_TIMEOUT.key, value)
+                            }
+                        }
+                        .component
+                    toolExecutionLabel = label("360 seconds").component
+                }
 
-            // Filler
-            add(Box.createVerticalGlue())
+                row("API call:") {
+                    apiCallSlider = slider(5, 520, 10, 50)
+                        .applyToComponent {
+                            value = 360
+                            addChangeListener {
+                                apiCallLabel.text = "$value seconds"
+                                if (valueIsAdjusting || isUpdatingProgrammatically) return@addChangeListener
+                                save(ConfigKeys.API_CALL_TIMEOUT.key, value)
+                            }
+                        }
+                        .component
+                    apiCallLabel = label("360 seconds").component
+                }
+            }
+
+            group("Size limits") {
+                row("Maximum file size:") {
+                    maxFileSizeField = intField("10", ConfigKeys.MAX_FILE_SIZE.key, 10)
+                    label("MB")
+                }
+                row("Maximum context size:") {
+                    maxContextSizeField = intField("128000", ConfigKeys.MAX_CONTEXT_SIZE.key, 128000)
+                    label("tokens")
+                }
+                row("Maximum output size:") {
+                    maxOutputSizeField = intField("8192", ConfigKeys.MAX_OUTPUT_SIZE.key, 8192)
+                    label("tokens")
+                }
+            }
+
+            group("Performance") {
+                row("Auto-optimize context at:") {
+                    autoOptimizeSlider = slider(80, 95, 1, 5)
+                        .applyToComponent {
+                            value = 85
+                            addChangeListener {
+                                autoOptimizeLabel.text = "$value%"
+                                if (valueIsAdjusting || isUpdatingProgrammatically) return@addChangeListener
+                                save(ConfigKeys.AUTO_OPTIMIZE_PERCENTAGE.key, value)
+                            }
+                        }
+                        .component
+                    autoOptimizeLabel = label("85%").component
+                }.rowComment("Automatically optimize context when it reaches this percentage of the limit")
+            }
         }
 
-        val scrollPane = JBScrollPane(contentPanel).apply {
+        val scrollPane = JBScrollPane(form).apply {
             border = LCATheme.emptyBorder()
             verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
             horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
@@ -79,259 +173,27 @@ class AdvancedSettingsPanel(
         loadAdvancedConfig()
     }
 
-    // ==================== SECURITY ====================
-
-    private fun createSecurityPanel(): JPanel {
-        readOnlyModeCheckbox = JBCheckBox("Read-only mode", false).apply {
-            addItemListener {
-                if (isUpdatingProgrammatically) {
-                    return@addItemListener
-                }
-                val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                    pl.jclab.refio.core.config.ConfigKeys.READ_ONLY_MODE.key
-                )
-                onSettingChanged(section, key, isSelected)
-            }
-        }
-
-        return JBPanel<JBPanel<*>>().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            border = LCATheme.paddedBorder(LCATheme.padding)
-
-            add(readOnlyModeCheckbox)
-            add(JBLabel("Prevent all file write operations").apply {
-                foreground = LCATheme.descriptionForeground
-                border = LCATheme.paddedBorder(0, 24, 0, 0)
-            })
-        }
-    }
-
-    // ==================== AGENT ====================
-
-    private fun createAgentPanel(): JPanel {
-        decisionTempField = JBTextField("0.7", 8).apply {
+    /** Numeric field that commits on focus loss, falling back to [defaultValue] on garbage input. */
+    private fun com.intellij.ui.dsl.builder.Row.intField(
+        initial: String,
+        fullKey: String,
+        defaultValue: Int
+    ): JBTextField = textField()
+        .columns(8)
+        .applyToComponent {
+            text = initial
             addFocusListener(object : java.awt.event.FocusAdapter() {
                 override fun focusLost(e: java.awt.event.FocusEvent?) {
-                    if (isUpdatingProgrammatically) {
-                        return
-                    }
-                    val value = (text.toDoubleOrNull() ?: 0.7).coerceIn(0.0, 2.0)
-                    // Normalize the field to the accepted value (clamps/garbage → canonical text)
-                    isUpdatingProgrammatically = true
-                    text = formatTemp(value)
-                    isUpdatingProgrammatically = false
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.config.ConfigKeys.AGENT_DECISION_TEMPERATURE.key
-                    )
-                    onSettingChanged(section, key, value)
+                    if (isUpdatingProgrammatically) return
+                    save(fullKey, text.toIntOrNull() ?: defaultValue)
                 }
             })
         }
+        .component
 
-        return JBPanel<JBPanel<*>>().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            border = LCATheme.paddedBorder(LCATheme.padding)
-
-            add(JBLabel("Decision-turn temperature:").apply {
-                font = LCATheme.boldFont
-            })
-            add(Box.createVerticalStrut(4))
-
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                add(JBLabel("Temperature:"))
-                add(decisionTempField)
-                add(JBLabel("0.0 - 2.0"))
-            })
-
-            add(JBLabel(
-                "Sampling temperature for the PLAN/AGENT turn that picks tools. " +
-                    "Lower = stricter contract adherence (helps small/local models); " +
-                    "higher = more variety. Default 0.7."
-            ).apply {
-                foreground = LCATheme.descriptionForeground
-            })
-        }
-    }
-
-    // ==================== LIMITS (merged from LimitsSettingsPanel) ====================
-
-    private fun createLimitsPanel(): JPanel {
-        return JBPanel<JBPanel<*>>().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            border = LCATheme.paddedBorder(LCATheme.padding)
-
-            // Timeouts section
-            add(JBLabel("Timeouts:").apply {
-                font = LCATheme.boldFont
-            })
-            add(Box.createVerticalStrut(8))
-
-            // Tool execution timeout
-            add(JBLabel("Tool Execution Timeout:"))
-            toolExecutionSlider = JSlider(5, 520, 360).apply {
-                majorTickSpacing = 50
-                minorTickSpacing = 10
-                paintTicks = true
-                paintLabels = true
-            }
-            toolExecutionLabel = JLabel("360 seconds")
-
-            toolExecutionSlider.addChangeListener {
-                toolExecutionLabel.text = "${toolExecutionSlider.value} seconds"
-                if (!toolExecutionSlider.valueIsAdjusting) {
-                    if (isUpdatingProgrammatically) {
-                        return@addChangeListener
-                    }
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.config.ConfigKeys.TOOL_EXECUTION_TIMEOUT.key
-                    )
-                    onSettingChanged(section, key, toolExecutionSlider.value)
-                }
-            }
-
-            add(JBPanel<JBPanel<*>>(BorderLayout()).apply {
-                add(toolExecutionSlider, BorderLayout.CENTER)
-                add(toolExecutionLabel, BorderLayout.EAST)
-            })
-
-            add(Box.createVerticalStrut(12))
-
-            // API call timeout
-            add(JBLabel("API Call Timeout:"))
-            apiCallSlider = JSlider(5, 520, 360).apply {
-                majorTickSpacing = 50
-                minorTickSpacing = 10
-                paintTicks = true
-                paintLabels = true
-            }
-            apiCallLabel = JLabel("360 seconds")
-
-            apiCallSlider.addChangeListener {
-                apiCallLabel.text = "${apiCallSlider.value} seconds"
-                if (!apiCallSlider.valueIsAdjusting) {
-                    if (isUpdatingProgrammatically) {
-                        return@addChangeListener
-                    }
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.config.ConfigKeys.API_CALL_TIMEOUT.key
-                    )
-                    onSettingChanged(section, key, apiCallSlider.value)
-                }
-            }
-
-            add(JBPanel<JBPanel<*>>(BorderLayout()).apply {
-                add(apiCallSlider, BorderLayout.CENTER)
-                add(apiCallLabel, BorderLayout.EAST)
-            })
-
-            add(Box.createVerticalStrut(16))
-
-            // Size limits section
-            add(JBLabel("Size Limits:").apply {
-                font = LCATheme.boldFont
-            })
-            add(Box.createVerticalStrut(8))
-
-            // Max file size
-            maxFileSizeField = JBTextField("10", 8).apply {
-                addFocusListener(object : java.awt.event.FocusAdapter() {
-                    override fun focusLost(e: java.awt.event.FocusEvent?) {
-                        if (isUpdatingProgrammatically) {
-                            return
-                        }
-                        val value = text.toIntOrNull() ?: 10
-                        val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                            pl.jclab.refio.core.config.ConfigKeys.MAX_FILE_SIZE.key
-                        )
-                        onSettingChanged(section, key, value)
-                    }
-                })
-            }
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                add(JBLabel("Maximum File Size:"))
-                add(maxFileSizeField)
-                add(JBLabel("MB"))
-            })
-
-            // Max context size
-            maxContextSizeField = JBTextField("128000", 10).apply {
-                addFocusListener(object : java.awt.event.FocusAdapter() {
-                    override fun focusLost(e: java.awt.event.FocusEvent?) {
-                        if (isUpdatingProgrammatically) {
-                            return
-                        }
-                        val value = text.toIntOrNull() ?: 128000
-                        val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                            pl.jclab.refio.core.config.ConfigKeys.MAX_CONTEXT_SIZE.key
-                        )
-                        onSettingChanged(section, key, value)
-                    }
-                })
-            }
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                add(JBLabel("Maximum Context Size:"))
-                add(maxContextSizeField)
-                add(JBLabel("tokens"))
-            })
-
-            // Max output size
-            maxOutputSizeField = JBTextField("8192", 10).apply {
-                addFocusListener(object : java.awt.event.FocusAdapter() {
-                    override fun focusLost(e: java.awt.event.FocusEvent?) {
-                        if (isUpdatingProgrammatically) {
-                            return
-                        }
-                        val value = text.toIntOrNull() ?: 8192
-                        val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                            pl.jclab.refio.core.config.ConfigKeys.MAX_OUTPUT_SIZE.key
-                        )
-                        onSettingChanged(section, key, value)
-                    }
-                })
-            }
-            add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                add(JBLabel("Maximum Output Size:"))
-                add(maxOutputSizeField)
-                add(JBLabel("tokens"))
-            })
-            add(Box.createVerticalStrut(16))
-
-            // Context optimization threshold
-            add(JBLabel("Auto-optimize context at:").apply {
-                font = LCATheme.boldFont
-            })
-            add(Box.createVerticalStrut(4))
-
-            autoOptimizeSlider = JSlider(80, 95, 85).apply {
-                majorTickSpacing = 5
-                minorTickSpacing = 1
-                paintTicks = true
-                paintLabels = true
-            }
-            autoOptimizeLabel = JLabel("85%")
-
-            autoOptimizeSlider.addChangeListener {
-                autoOptimizeLabel.text = "${autoOptimizeSlider.value}%"
-                if (!autoOptimizeSlider.valueIsAdjusting) {
-                    if (isUpdatingProgrammatically) {
-                        return@addChangeListener
-                    }
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.config.ConfigKeys.AUTO_OPTIMIZE_PERCENTAGE.key
-                    )
-                    onSettingChanged(section, key, autoOptimizeSlider.value)
-                }
-            }
-
-            add(JBPanel<JBPanel<*>>(BorderLayout()).apply {
-                add(autoOptimizeSlider, BorderLayout.CENTER)
-                add(autoOptimizeLabel, BorderLayout.EAST)
-            })
-
-            add(JBLabel("Automatically optimize context when it reaches this percentage of limit").apply {
-                foreground = LCATheme.descriptionForeground
-            })
-        }
+    private fun save(fullKey: String, value: Any) {
+        val (section, key) = ConfigKeyUtil.split(fullKey)
+        onSettingChanged(section, key, value)
     }
 
     // ==================== PUBLIC API ====================
@@ -398,13 +260,6 @@ class AdvancedSettingsPanel(
     }
 
     // ==================== HELPERS ====================
-
-    private fun createSectionPanel(title: String, content: JPanel): JPanel {
-        return JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = LCATheme.createSettingsBorder(title)
-            add(content, BorderLayout.CENTER)
-        }
-    }
 
     private fun loadAdvancedConfig() {
         if (coreApiClient == null) {

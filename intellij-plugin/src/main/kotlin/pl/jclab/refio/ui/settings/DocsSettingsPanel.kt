@@ -8,6 +8,9 @@ import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.table.JBTable
+import com.intellij.ui.dsl.builder.Align
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.panel
 import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.core.db.DocIndexingStatus
 import pl.jclab.refio.core.db.DocumentationSource
@@ -33,7 +36,7 @@ class DocsSettingsPanel(
 
     private val logger = dualLogger("DocsSettingsPanel")
     private lateinit var docsTable: JBTable
-    private lateinit var urlField: JBTextField
+    private val urlField: JBTextField
     private val addButton: JButton
     private val addFileButton: JButton
     private val reindexButton: JButton
@@ -48,7 +51,7 @@ class DocsSettingsPanel(
     private val embeddingProgress = mutableMapOf<Int, Int>()
 
     init {
-        border = LCATheme.createSettingsBorder("Documentation")
+        border = LCATheme.emptyBorder()
 
         // Initialize buttons
         addButton = JButton("Add Documentation")
@@ -56,30 +59,38 @@ class DocsSettingsPanel(
         reindexButton = JButton("Reindex Selected")
         deleteButton = JButton("Delete")
 
-        // Main content
-        val contentPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = LCATheme.paddedBorder(8, 0, 0, 0)
+        urlField = JBTextField()
+        urlField.emptyText.text = "Enter documentation URL (e.g., https://docs.example.com)"
+        addButton.addActionListener { onAddUrl() }
+        addFileButton.addActionListener { onAddLocalFiles() }
+        reindexButton.addActionListener { onReindexSelected() }
+        deleteButton.addActionListener { onDeleteSelected() }
 
-            // Add URL panel at top
-            val addUrlPanel = createAddUrlPanel()
-            add(addUrlPanel, BorderLayout.NORTH)
+        val tablePanel = createDocsTable()
 
-            // Table with documentation list
-            val tablePanel = createDocsTable()
-            add(tablePanel, BorderLayout.CENTER)
-
-            // Buttons panel at bottom
-            val buttonsPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
-                reindexButton.addActionListener { onReindexSelected() }
-                deleteButton.addActionListener { onDeleteSelected() }
-                add(reindexButton)
-                add(deleteButton)
+        val form = panel {
+            group("Add source") {
+                row {
+                    cell(urlField).align(AlignX.FILL).resizableColumn()
+                    cell(addButton)
+                }
+                row {
+                    cell(addFileButton)
+                }.rowComment("Documentation URLs and local files are indexed and searchable with @docs")
             }
-            add(buttonsPanel, BorderLayout.SOUTH)
+
+            group("Indexed documentation") {
+                row {
+                    cell(tablePanel).align(Align.FILL).resizableColumn()
+                }.resizableRow()
+                row {
+                    cell(reindexButton)
+                    cell(deleteButton)
+                }
+            }
         }
 
-        // Wrap contentPanel in scroll pane for small screens
-        val scrollPane = JBScrollPane(contentPanel).apply {
+        val scrollPane = JBScrollPane(form).apply {
             border = LCATheme.emptyBorder()
             verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
             horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
@@ -89,36 +100,6 @@ class DocsSettingsPanel(
 
         // Load documentation sources from backend
         loadDocumentation()
-    }
-
-    private fun createAddUrlPanel(): JPanel {
-        return JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = LCATheme.paddedBorder(0, 0, 16, 0)
-
-            // Description
-            val descLabel = JLabel("<html><font color='gray'>Add documentation URLs or local files to index and search</font></html>")
-            add(descLabel, BorderLayout.NORTH)
-
-            // URL input panel
-            val inputPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-                border = LCATheme.paddedBorder(8, 0, 0, 0)
-
-                urlField = JBTextField()
-                urlField.emptyText.text = "Enter documentation URL (e.g., https://docs.example.com)"
-                add(urlField, BorderLayout.CENTER)
-
-                addButton.addActionListener { onAddUrl() }
-                add(addButton, BorderLayout.EAST)
-            }
-            add(inputPanel, BorderLayout.CENTER)
-
-            val localFilePanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
-                border = LCATheme.paddedBorder(8, 0, 0, 0)
-                addFileButton.addActionListener { onAddLocalFiles() }
-                add(addFileButton)
-            }
-            add(localFilePanel, BorderLayout.SOUTH)
-        }
     }
 
     private fun createDocsTable(): JComponent {

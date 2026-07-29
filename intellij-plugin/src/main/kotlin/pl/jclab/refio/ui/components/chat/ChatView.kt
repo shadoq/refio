@@ -25,6 +25,7 @@ import pl.jclab.refio.ui.components.chat.bubble.FlatMessageBlock
 import pl.jclab.refio.ui.components.chat.bubble.MarkdownRenderingService
 import pl.jclab.refio.ui.components.chat.bubble.OtherBubbleRenderer
 import pl.jclab.refio.ui.components.chat.bubble.ToolBubbleRenderer
+import pl.jclab.refio.ui.components.chat.toolcall.ToolCallRow
 import pl.jclab.refio.ui.components.chat.bubble.UserBubbleRenderer
 import pl.jclab.refio.ui.theme.LCATheme
 import kotlinx.coroutines.CoroutineScope
@@ -290,11 +291,41 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
         })
     }
 
+    private val toolCallRowCallbacks = object : ToolCallRow.Callbacks {
+        override fun launch(block: suspend () -> Unit) {
+            cs.launch { block() }
+        }
+
+        override suspend fun loadSnapshotContent(snapshotId: String, filePath: String): String? =
+            sessionManager.apiRouter.snapshotRouter.getSnapshotFileContent(snapshotId, filePath)
+
+        override fun isExpanded(messageId: String): Boolean =
+            toolRowExpandedByMessageId.contains(messageId)
+
+        override fun setExpanded(messageId: String, expanded: Boolean) {
+            if (expanded) {
+                toolRowExpandedByMessageId.add(messageId)
+            } else {
+                toolRowExpandedByMessageId.remove(messageId)
+            }
+        }
+
+        override fun onHeightChanged() {
+            revalidateMessagesArea()
+        }
+
+        override fun openPath(path: String) {
+            fileNavigationService.openPathReference(path)
+        }
+    }
+
     private val toolBubbleRenderer by lazy(LazyThreadSafetyMode.NONE) {
         ToolBubbleRenderer(object : ToolBubbleRenderer.Context {
+            override val project: Project = this@ChatView.project
             override val messages: List<Message>
                 get() = sessionManager.messages.value
             override val bubbleContentContext: BaseBubbleRenderer.BubbleContentContext = this@ChatView.bubbleContentContext
+            override val rowCallbacks: ToolCallRow.Callbacks = toolCallRowCallbacks
         })
     }
 
@@ -331,6 +362,10 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     // Per-message frozen snapshot of streamed tool content (presence == expanded). Captured at the
     // moment the user expands so the preview does not refresh as later chunks grow message.content.
     private val toolContentSnapshotByMessageId = mutableMapOf<String, String>()
+
+    // Tool-call rows the user opened. Kept outside the row components so a transcript re-render
+    // (new message, streaming update) does not silently collapse what the user was reading.
+    private val toolRowExpandedByMessageId = mutableSetOf<String>()
 
     // Live "N chars" labels of currently-streaming tool bubbles, keyed by message id. While a tool
     // streams, only this label's text changes between chunks, so we patch it in place instead of
@@ -940,6 +975,7 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     private fun disposeCodeBlockPanels(component: Component) {
         when (component) {
             is CodeBlockPanel -> component.disposeEditor()
+            is ToolCallRow -> component.dispose()
             is java.awt.Container -> component.components.forEach { child -> disposeCodeBlockPanels(child) }
         }
     }

@@ -71,7 +71,6 @@ internal class AssistantBubbleRenderer(
         }.ifBlank { null }
 
         return createUniversalBubble(
-            icon = "\u2713",
             title = "Done",
             subtitle = statsSubtitle,
             content = message.content.ifBlank { "No execution summary available." },
@@ -110,7 +109,6 @@ internal class AssistantBubbleRenderer(
             null
         }
         return createUniversalBubble(
-            icon = "\uD83D\uDCCB",
             title = "Plan",
             subtitle = planSubtitle,
             content = message.content,
@@ -164,8 +162,8 @@ internal class AssistantBubbleRenderer(
         val headerTitle = if (subagentName != null) "Subagent \u2022 $subagentName" else "Assistant"
         addRow(
             factory.createBubbleHeader(
-                icon = "\uD83E\uDD16",
                 title = headerTitle,
+                subtitle = message.model,
                 foregroundColor = foregroundColor
             )
         )
@@ -532,7 +530,7 @@ internal class AssistantBubbleRenderer(
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             isOpaque = false
         }
-        messageContainer.add(factory.createBubbleHeader("\u2753", "Question"))
+        messageContainer.add(factory.createBubbleHeader("Question"))
         messageContainer.add(
             factory.createBubbleContentPanel(
                 content = message.content,
@@ -591,7 +589,7 @@ internal class AssistantBubbleRenderer(
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             isOpaque = false
         }
-        messageContainer.add(factory.createBubbleHeader("\u26A1", "Approval Required"))
+        messageContainer.add(factory.createBubbleHeader("Approval Required"))
         messageContainer.add(
             factory.createBubbleContentPanel(
                 content = message.content,

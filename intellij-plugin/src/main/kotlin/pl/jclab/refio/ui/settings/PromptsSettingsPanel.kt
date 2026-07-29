@@ -1,15 +1,18 @@
 package pl.jclab.refio.ui.settings
 
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.ProjectManager
-import com.intellij.ui.AnActionButton
 import com.intellij.ui.JBColor
 import com.intellij.ui.ToolbarDecorator
 import com.intellij.ui.components.*
 import com.intellij.ui.table.JBTable
 import pl.jclab.refio.core.api.CoreApiRouter
+import com.intellij.ui.dsl.builder.Align
+import com.intellij.ui.dsl.builder.panel
 import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.core.api.*
 import pl.jclab.refio.core.db.PromptType
@@ -41,13 +44,22 @@ class PromptsSettingsPanel(
     init {
         border = LCATheme.emptyBorder()
 
-        // Tabbed pane for system prompts + slash prompts
-        val tabbedPane = JBTabbedPane().apply {
-            addTab("System Prompts", createPromptsPanel())
-            addTab("Prompts", createSlashPromptsPanel())
+        // Both prompt kinds are one level of hierarchy, so they stack as groups instead of
+        // hiding behind a second row of tabs inside an already nested settings screen.
+        val form = panel {
+            group("System prompts") {
+                row {
+                    cell(createPromptsPanel()).align(Align.FILL).resizableColumn()
+                }.resizableRow()
+            }
+            group("Slash prompts") {
+                row {
+                    cell(createSlashPromptsPanel()).align(Align.FILL).resizableColumn()
+                }.resizableRow()
+            }
         }
 
-        add(tabbedPane, BorderLayout.CENTER)
+        add(form, BorderLayout.CENTER)
     }
 
     private fun createPromptsPanel(): JPanel {
@@ -78,8 +90,10 @@ class PromptsSettingsPanel(
             // Standard IntelliJ toolbar: edit action plus a custom "Use Default" action
             val tablePanel = ToolbarDecorator.createDecorator(promptsTable)
                 .setEditAction { onEditPrompt() }
-                .addExtraAction(object : AnActionButton("Use Default", AllIcons.Actions.Rollback) {
+                .addExtraAction(object : DumbAwareAction("Use Default", null, AllIcons.Actions.Rollback) {
                     override fun actionPerformed(e: AnActionEvent) = onUseDefaultPrompt()
+
+                    override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
                 })
                 .disableAddAction()
                 .disableRemoveAction()

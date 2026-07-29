@@ -67,6 +67,21 @@ internal class FileNavigationService(
         }
     }
 
+    /**
+     * Opens whatever the path points at. Used by tool-call rows, where the same "path" argument
+     * may be a file (read_file) or a directory (read_directory).
+     */
+    fun openPathReference(path: String?) {
+        val resolved = resolveAbsolutePath(path)
+        val virtualFile = resolved?.let { LocalFileSystem.getInstance().findFileByPath(it) }
+        if (virtualFile == null) {
+            showNotification("Not found", "Cannot resolve path ${path ?: "(empty)"}", NotificationType.WARNING)
+            return
+        }
+
+        if (virtualFile.isDirectory) selectFolderReference(resolved) else openFileReference(resolved)
+    }
+
     fun openDocsReference(path: String?) {
         if (path.isNullOrBlank()) {
             showNotification("Invalid URL", "Documentation reference has no URL.", NotificationType.WARNING)

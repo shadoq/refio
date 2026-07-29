@@ -14,6 +14,8 @@ import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.subagents.models.SubagentInfo
 import pl.jclab.refio.core.subagents.models.SubagentScope
 import pl.jclab.refio.core.logging.dualLogger
+import com.intellij.ui.dsl.builder.Align
+import com.intellij.ui.dsl.builder.panel
 import pl.jclab.refio.ui.theme.LCATheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -44,24 +46,21 @@ class SubagentSettingsPanel(
     private var isLoadingSubagents = false
 
     init {
-        border = LCATheme.createSettingsBorder("Subagents")
+        border = LCATheme.emptyBorder()
 
-        // Main content
-        val contentPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = LCATheme.paddedBorder(8, 0, 0, 0)
-            add(createSubagentsTable(), BorderLayout.CENTER)
+        val form = panel {
+            group("Subagents") {
+                row {
+                    cell(createSubagentsTable()).align(Align.FILL).resizableColumn()
+                }.resizableRow()
+                    .rowComment(
+                        "Invoke a subagent from the prompt with the <b>!agent-name</b> prefix. " +
+                            "Built-in agents cannot be modified; add your own in .refio/agents/."
+                    )
+            }
         }
 
-        add(contentPanel, BorderLayout.CENTER)
-
-        // Description
-        val descPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
-            add(JLabel("<html><font color='gray'>" +
-                "Subagents are specialized AI assistants that can be invoked with <b>!agent-name</b> prefix.<br>" +
-                "Built-in agents cannot be modified. Create project or user agents in .refio/agents/ directory." +
-                "</font></html>"))
-        }
-        add(descPanel, BorderLayout.SOUTH)
+        add(form, BorderLayout.CENTER)
 
         // Load subagents
         loadSubagents()

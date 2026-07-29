@@ -2,38 +2,36 @@ package pl.jclab.refio.ui.components.chat.bubble
 
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.intellij.openapi.project.Project
 import pl.jclab.refio.api.models.Message
 import pl.jclab.refio.api.models.ToolCallStatus
-import pl.jclab.refio.ui.theme.LCATheme
-import java.awt.Component
-import java.awt.GridBagConstraints
-import java.awt.GridBagLayout
-import java.awt.Insets
-import javax.swing.JComponent
+import pl.jclab.refio.core.db.MessageMetrics
+import pl.jclab.refio.ui.components.chat.toolcall.ToolCallRow
+import pl.jclab.refio.ui.components.chat.toolcall.ToolCallRowView
 import javax.swing.JPanel
 
+/**
+ * Renders a tool result as a single collapsible row rather than a bubble.
+ *
+ * This class now only extracts what the row needs (name, target path, status, diff size,
+ * duration, snapshot) from the message and its originating tool call; the presentation lives in
+ * [ToolCallRow].
+ */
 internal class ToolBubbleRenderer(
     private val context: Context
 ) : BaseBubbleRenderer() {
 
     companion object {
-        private val DIFF_FOCUSED_TOOLS = setOf(
-            "advance_code_editing",
-            "multi_line_editor",
-            "code_editing"
-        )
         private val PATH_KEYS = listOf("path", "file", "file_path", "filepath", "target_path", "target_file")
+        private val SNAPSHOT_KEYS = listOf("snapshot_id", "snapshotId", "snapshot_id_before_write")
     }
 
     internal interface Context {
+        val project: Project
         val messages: List<Message>
         val bubbleContentContext: BubbleContentContext
+        val rowCallbacks: ToolCallRow.Callbacks
     }
-
-    private data class RenderStatus(
-        val isError: Boolean,
-        val icon: String
-    )
 
     private data class RelatedToolCallInfo(
         val toolName: String,
@@ -41,232 +39,67 @@ internal class ToolBubbleRenderer(
         val success: Boolean?
     )
 
-    private val factory get() = context.bubbleContentContext.componentFactory
-
     fun render(message: Message): JPanel {
-        if (message.content.isBlank()) return createOuterPanel()
-
         val metadata = parseMetadata(message.metadata)
-        val relatedToolCallInfo = resolveRelatedToolCallInfo(message)
-        val toolName = resolveToolName(message, metadata, relatedToolCallInfo)
-        val explicitSuccess = resolveExplicitSuccess(metadata, relatedToolCallInfo)
-        val status = resolveStatus(message.content, explicitSuccess)
+        val related = resolveRelatedToolCallInfo(message)
 
-        val title = buildToolResultTitle(toolName, metadata)
-        if (shouldUseCodeBlock(toolName, message.content, status)) {
-            return createCodeResultBubble(
-                title = title,
-                content = message.content,
-                toolName = toolName,
-                metadata = metadata,
-                relatedToolCallInfo = relatedToolCallInfo
-            )
-        }
-
-        val content = buildRenderableContent(
-            content = message.content,
-            toolName = toolName,
-            metadata = metadata,
-            status = status
+        return ToolCallRow(
+            project = context.project,
+            view = buildView(message, metadata, related),
+            callbacks = context.rowCallbacks
         )
-
-        return createRegularToolResultBubble(title, content)
     }
 
-    private fun createRegularToolResultBubble(title: String, content: String): JPanel {
-        val outerPanel = createOuterPanel()
-        val messageBlock = context.bubbleContentContext.createMessageBlock(LCATheme.toolResultBackground).apply {
-            layout = GridBagLayout()
-        }
-        var row = 0
-
-        fun addRow(component: JComponent, topInset: Int = 0) {
-            messageBlock.add(
-                component,
-                GridBagConstraints().apply {
-                    gridx = 0
-                    gridy = row++
-                    weightx = 1.0
-                    fill = GridBagConstraints.HORIZONTAL
-                    anchor = GridBagConstraints.WEST
-                    insets = Insets(topInset, 0, 0, 0)
-                }
-            )
-        }
-
-        addRow(
-            factory.createBubbleHeader(
-                icon = "\uD83D\uDD27",
-                title = title,
-                foregroundColor = LCATheme.toolResultForeground
-            )
-        )
-        addRow(
-            factory.createBubbleContentPanel(
-                content = content,
-                backgroundColor = LCATheme.toolResultBackground,
-                foregroundColor = LCATheme.toolResultForeground,
-                isUser = false
-            )
-        )
-
-        return addToOuter(outerPanel, messageBlock)
-    }
-
-    private fun createCodeResultBubble(
-        title: String,
-        content: String,
-        toolName: String?,
+    private fun buildView(
+        message: Message,
         metadata: Map<*, *>?,
-        relatedToolCallInfo: RelatedToolCallInfo?
-    ): JPanel {
-        val outerPanel = createOuterPanel()
-        val messageBlock = context.bubbleContentContext.createMessageBlock(LCATheme.toolResultBackground).apply {
-            layout = GridBagLayout()
-        }
-        var row = 0
-
-        fun addRow(component: JComponent, topInset: Int = 0) {
-            messageBlock.add(
-                component,
-                GridBagConstraints().apply {
-                    gridx = 0
-                    gridy = row++
-                    weightx = 1.0
-                    fill = GridBagConstraints.HORIZONTAL
-                    anchor = GridBagConstraints.WEST
-                    insets = Insets(topInset, 0, 0, 0)
-                }
-            )
-        }
-
-        addRow(
-            factory.createBubbleHeader(
-                icon = "\uD83D\uDD27",
-                title = title,
-                foregroundColor = LCATheme.toolResultForeground
-            )
+        related: RelatedToolCallInfo?
+    ): ToolCallRowView {
+        val path = extractPath(metadata, related)
+        return ToolCallRowView(
+            messageId = message.id,
+            name = resolveToolName(message, metadata, related) ?: "tool",
+            subtitle = path,
+            state = resolveState(message, metadata, related),
+            added = message.diffSummary?.additions,
+            removed = message.diffSummary?.deletions,
+            durationMs = resolveDurationMs(message),
+            output = message.content,
+            snapshotId = message.diffSummary?.snapshotId ?: extractSnapshotId(metadata),
+            filePath = path
         )
-
-        val filePath = extractPath(metadata, relatedToolCallInfo)
-
-        addRow(
-            createCollapsibleCodePanel(
-                content = content,
-                context = context.bubbleContentContext,
-                language = inferLanguage(toolName, metadata, relatedToolCallInfo),
-                filePath = filePath
-            ).apply {
-                alignmentX = Component.LEFT_ALIGNMENT
-            },
-            topInset = context.bubbleContentContext.bubbleCompactGap
-        )
-
-        return addToOuter(outerPanel, messageBlock)
     }
 
-    private fun buildRenderableContent(
-        content: String,
-        toolName: String?,
+    /**
+     * A still-running call must not be shown as passed. Explicit status from the originating tool
+     * call wins over scanning the output text, which produced false errors whenever a diff or log
+     * excerpt happened to contain the word "failed".
+     */
+    private fun resolveState(
+        message: Message,
         metadata: Map<*, *>?,
-        status: RenderStatus
-    ): String {
-        val normalized = normalizeText(content)
-
-        if (normalized.isBlank()) {
-            return if (status.isError) "${status.icon} Error" else "${status.icon} No output"
+        related: RelatedToolCallInfo?
+    ): ToolCallRowView.State {
+        if (message.isToolStreaming || message.toolCallInfo?.status == ToolCallStatus.EXECUTING) {
+            return ToolCallRowView.State.RUNNING
         }
 
-        if (isDiffContent(content)) {
-            return "${status.icon} Diff\n\n${wrapDiffInCodeBlock(content)}"
+        resolveExplicitSuccess(metadata, related)?.let {
+            return if (it) ToolCallRowView.State.OK else ToolCallRowView.State.FAILED
         }
 
-        val normalizedTool = toolName?.lowercase()
-        if (!status.isError && normalizedTool in DIFF_FOCUSED_TOOLS) {
-            val extractedDiff = extractDiffPayload(content)
-            if (!extractedDiff.isNullOrBlank()) {
-                return "${status.icon} Diff\n\n```diff\n$extractedDiff\n```"
-            }
-        }
-
-        if (shouldUseCodeBlock(toolName, content, status)) {
-            val language = inferLanguage(toolName, metadata)
-            return buildString {
-                append("${status.icon} Output")
-                append("\n\n```")
-                append(language)
-                append('\n')
-                append(content.replace("\r\n", "\n").replace('\r', '\n').trim())
-                append("\n```")
-            }
-        }
-
-        return "${status.icon} $normalized"
+        val lower = message.content.lowercase()
+        val looksLikeError = lower.startsWith("error") ||
+            lower.contains(" failed") ||
+            lower.contains("error:")
+        return if (looksLikeError) ToolCallRowView.State.FAILED else ToolCallRowView.State.OK
     }
 
-    private fun extractDiffPayload(content: String): String? {
-        val normalized = content
-            .replace("\r\n", "\n")
-            .replace('\r', '\n')
-            .trim()
-        if (normalized.isBlank()) return null
-
-        val fencedDiff = Regex("```diff\\s*([\\s\\S]*?)```", RegexOption.IGNORE_CASE)
-            .find(normalized)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.trim()
-        if (!fencedDiff.isNullOrBlank()) return fencedDiff
-
-        val markerRegex = Regex("(?is)\\bdiff:\\s*(.+)$")
-        val markerMatch = markerRegex.find(normalized)?.groupValues?.getOrNull(1)?.trim()
-        if (!markerMatch.isNullOrBlank() && looksLikeDiff(markerMatch)) {
-            return markerMatch
-        }
-
-        val lines = normalized.lines()
-        val start = lines.indexOfFirst {
-            it.startsWith("diff --git") || it.startsWith("--- ") || it.startsWith("+++ ")
-        }
-        if (start >= 0) {
-            val tail = lines.drop(start).joinToString("\n").trim()
-            if (looksLikeDiff(tail)) return tail
-        }
-
-        return if (looksLikeDiff(normalized)) normalized else null
-    }
-
-    private fun looksLikeDiff(content: String): Boolean {
-        val lines = content.lines()
-        val hasHeader = lines.any { it.startsWith("diff --git") } ||
-            (lines.any { it.startsWith("--- ") } && lines.any { it.startsWith("+++ ") })
-        val hasHunksOrChanges = lines.any { it.startsWith("@@") } ||
-            lines.any { (it.startsWith("+") && !it.startsWith("+++")) || (it.startsWith("-") && !it.startsWith("---")) }
-        return hasHeader || hasHunksOrChanges
-    }
-
-    private fun shouldUseCodeBlock(toolName: String?, content: String, status: RenderStatus): Boolean {
-        if (status.isError) return false
-        val normalizedTool = toolName?.lowercase()
-
-        if (normalizedTool in setOf("read_file", "file_search", "grep_search", "read_directory")) {
-            return true
-        }
-
-        return looksLikeCode(content)
-    }
-
-    private fun inferLanguage(
-        toolName: String?,
-        metadata: Map<*, *>?,
-        relatedToolCallInfo: RelatedToolCallInfo? = null
-    ): String {
-        val path = extractPath(metadata, relatedToolCallInfo)
-        return when (toolName?.lowercase()) {
-            "read_file", "grep_search" -> factory.inferLanguageFromPath(path)
-            "file_search", "read_directory" -> "text"
-            else -> "text"
-        }
+    private fun resolveDurationMs(message: Message): Long? {
+        MessageMetrics.fromJson(message.metadata)?.toolExecutionTimeMs
+            ?.takeIf { it > 0 }
+            ?.let { return it.toLong() }
+        return message.duration?.takeIf { it > 0 }?.let { (it * 1000).toLong() }
     }
 
     private fun resolveToolName(
@@ -283,15 +116,19 @@ internal class ToolBubbleRenderer(
     }
 
     private fun extractPath(metadata: Map<*, *>?, relatedToolCallInfo: RelatedToolCallInfo?): String? {
-        return extractPathFromMap(metadata)
-            ?: relatedToolCallInfo?.path
+        return extractPathFromMap(metadata) ?: relatedToolCallInfo?.path
     }
 
     private fun extractPathFromMap(metadata: Map<*, *>?): String? {
-        return PATH_KEYS
-            .firstNotNullOfOrNull { key ->
-                metadata?.get(key)?.toString()?.takeIf { it.isNotBlank() }
-            }
+        return PATH_KEYS.firstNotNullOfOrNull { key ->
+            metadata?.get(key)?.toString()?.takeIf { it.isNotBlank() }
+        }
+    }
+
+    private fun extractSnapshotId(metadata: Map<*, *>?): String? {
+        return SNAPSHOT_KEYS.firstNotNullOfOrNull { key ->
+            metadata?.get(key)?.toString()?.takeIf { it.isNotBlank() }
+        }
     }
 
     private fun resolveRelatedToolCallInfo(message: Message): RelatedToolCallInfo? {
@@ -318,51 +155,6 @@ internal class ToolBubbleRenderer(
             .firstOrNull()
     }
 
-    private fun buildToolResultTitle(toolName: String?, metadata: Map<*, *>?): String {
-        if (toolName.equals("invoke_subagent", ignoreCase = true)) {
-            val subagentName = metadata?.get("subagent_name")?.toString()
-                ?: metadata?.get("subagent")?.toString()
-            return if (!subagentName.isNullOrBlank()) {
-                "Subagent Result \u2022 $subagentName"
-            } else {
-                "Subagent Result"
-            }
-        }
-
-        return if (toolName != null) {
-            "Tool Result \u2022 $toolName"
-        } else {
-            "Tool Result"
-        }
-    }
-
-    /**
-     * Prefer the authoritative status carried by the originating tool call (or explicit result
-     * metadata) over scanning the output text. Substring scanning produces false errors when the
-     * output legitimately contains words like "failed" or "error:" (e.g. code diffs, log excerpts).
-     * The substring heuristic is kept only as a fallback when no explicit status is available.
-     */
-    private fun resolveStatus(content: String, explicitSuccess: Boolean?): RenderStatus {
-        if (explicitSuccess != null) {
-            return if (explicitSuccess) {
-                RenderStatus(isError = false, icon = "\u2713")
-            } else {
-                RenderStatus(isError = true, icon = "\u2717")
-            }
-        }
-
-        val lower = content.lowercase()
-        val isError = lower.startsWith("error") ||
-            lower.contains(" failed") ||
-            lower.contains("error:")
-
-        return if (isError) {
-            RenderStatus(isError = true, icon = "\u2717")
-        } else {
-            RenderStatus(isError = false, icon = "\u2713")
-        }
-    }
-
     private fun resolveExplicitSuccess(
         metadata: Map<*, *>?,
         relatedToolCallInfo: RelatedToolCallInfo?
@@ -375,91 +167,12 @@ internal class ToolBubbleRenderer(
         }
     }
 
-    private fun normalizeText(content: String): String {
-        return content
-            .replace("\r\n", "\n")
-            .replace('\r', '\n')
-            .lines()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .joinToString(" ")
-            .replace(Regex("\\s+"), " ")
-            .trim()
-    }
-
     private fun parseMetadata(metadata: String?): Map<*, *>? {
         if (metadata.isNullOrBlank()) return null
         return try {
             Gson().fromJson(metadata, TypeToken.get(Map::class.java).type) as? Map<*, *>
         } catch (_: Exception) {
             null
-        }
-    }
-
-    private fun buildToolCallIdToNameMap(messages: List<Message>): Map<String, String> {
-        val map = mutableMapOf<String, String>()
-        messages.forEach { msg ->
-            val info = msg.toolCallInfo
-            if (msg.role == "assistant" && info != null) {
-                map[info.toolCallId] = info.toolName
-            }
-        }
-        return map
-    }
-
-    private fun looksLikeCode(content: String): Boolean {
-        val lines = content.lines()
-        if (lines.size < 5) return false
-
-        val hasCodeMarkers = content.count { it in setOf('<', '>', '{', '}', '(', ')', ';') } > 20
-        val hasIndentation = lines.count { it.startsWith("  ") || it.startsWith("\t") } > lines.size / 4
-        return hasCodeMarkers || hasIndentation
-    }
-
-    private fun isDiffContent(content: String): Boolean {
-        val lines = content.lines()
-        val hasDiffOldMarker = lines.any { it.startsWith("--- ") }
-        val hasDiffNewMarker = lines.any { it.startsWith("+++ ") }
-        val hasHunkHeader = lines.any { line ->
-            line.startsWith("@@") && line.length > 4 && line.indexOf("@@", 2) > 2
-        }
-        val hasChangedLines = lines.any {
-            (it.startsWith("+") && !it.startsWith("+++")) ||
-                (it.startsWith("-") && !it.startsWith("---"))
-        }
-        return hasDiffOldMarker && hasDiffNewMarker && hasHunkHeader && hasChangedLines
-    }
-
-    private fun wrapDiffInCodeBlock(content: String): String {
-        if (content.contains("```diff")) return content
-
-        val diffMarkers = listOf("Diff:", "Diff:\n", "diff:", "diff:\n")
-        var diffStartIndex = -1
-        var markerLength = 0
-
-        for (marker in diffMarkers) {
-            val index = content.indexOf(marker)
-            if (index != -1) {
-                diffStartIndex = index
-                markerLength = marker.length
-                break
-            }
-        }
-
-        return if (diffStartIndex != -1) {
-            val beforeDiff = content.substring(0, diffStartIndex + markerLength)
-            val diffContent = content.substring(diffStartIndex + markerLength).trim()
-            "$beforeDiff\n```diff\n$diffContent\n```"
-        } else {
-            val lines = content.lines()
-            val diffLineIndex = lines.indexOfFirst { it.startsWith("---") || it.startsWith("@@") }
-            if (diffLineIndex > 0) {
-                val beforeDiff = lines.take(diffLineIndex).joinToString("\n")
-                val diffContent = lines.drop(diffLineIndex).joinToString("\n")
-                "$beforeDiff\n```diff\n$diffContent\n```"
-            } else {
-                "```diff\n$content\n```"
-            }
         }
     }
 }
