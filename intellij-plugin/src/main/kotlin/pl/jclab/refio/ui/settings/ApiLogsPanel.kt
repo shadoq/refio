@@ -199,20 +199,23 @@ class ApiLogsPanel(
                     }
                 })
 
-                // Column widths
-                columnModel.getColumn(0).preferredWidth = 150  // Timestamp
-                columnModel.getColumn(1).preferredWidth = 100  // Provider
-                columnModel.getColumn(2).preferredWidth = 150  // Model
-                columnModel.getColumn(3).preferredWidth = 100  // Source
-                columnModel.getColumn(4).preferredWidth = 100  // Input Tokens
-                columnModel.getColumn(5).preferredWidth = 100  // Output Tokens
-                columnModel.getColumn(6).preferredWidth = 100  // Cost
-                columnModel.getColumn(7).preferredWidth = 100  // Latency
-                columnModel.getColumn(8).preferredWidth = 80   // Status
+                fitColumns(
+                    ColumnWidth(min = 50, preferred = 130),  // Timestamp
+                    ColumnWidth(min = 36, preferred = 90),   // Provider
+                    ColumnWidth(min = 44, preferred = 130),  // Model
+                    ColumnWidth(min = 36, preferred = 90),   // Source
+                    ColumnWidth(min = 30, preferred = 80),   // Input Tokens
+                    ColumnWidth(min = 30, preferred = 80),   // Output Tokens
+                    ColumnWidth(min = 30, preferred = 80),   // Cost
+                    ColumnWidth(min = 30, preferred = 80),   // Latency
+                    ColumnWidth(min = 30, preferred = 70)    // Status
+                )
+                showFullValueOnHover()
             }
 
             val scrollPane = JBScrollPane(logsTable).apply {
-                preferredSize = Dimension(900, 400)
+                // Height only: a fixed width here would decide how wide the whole page is.
+                preferredSize = Dimension(0, JBUI.scale(320))
                 border = JBUI.Borders.customLine(LCATheme.borderColor, 1)
             }
 

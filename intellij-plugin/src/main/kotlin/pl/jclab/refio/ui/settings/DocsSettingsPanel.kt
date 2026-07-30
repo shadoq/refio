@@ -5,9 +5,9 @@ import com.intellij.openapi.fileChooser.FileChooserDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBPanel
-import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.table.JBTable
+import com.intellij.util.ui.JBUI
 import com.intellij.ui.dsl.builder.Align
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.panel
@@ -68,7 +68,7 @@ class DocsSettingsPanel(
 
         val tablePanel = createDocsTable()
 
-        val form = panel {
+        val form = settingsForm {
             group("Add source") {
                 row {
                     cell(urlField).align(AlignX.FILL).resizableColumn()
@@ -90,13 +90,7 @@ class DocsSettingsPanel(
             }
         }
 
-        val scrollPane = JBScrollPane(form).apply {
-            border = LCATheme.emptyBorder()
-            verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
-            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
-        }
-
-        add(scrollPane, BorderLayout.CENTER)
+        add(settingsScrollPane(form), BorderLayout.CENTER)
 
         // Load documentation sources from backend
         loadDocumentation()
@@ -118,11 +112,15 @@ class DocsSettingsPanel(
             }
         })
 
-        // Set column widths
-        docsTable.columnModel.getColumn(0).preferredWidth = 350 // Source
-        docsTable.columnModel.getColumn(1).preferredWidth = 100 // Status
-        docsTable.columnModel.getColumn(2).preferredWidth = 150 // Last Indexed
-        docsTable.columnModel.getColumn(3).preferredWidth = 80  // Files
+        docsTable.fitColumns(
+            ColumnWidth(min = 80, preferred = 240),  // Source
+            ColumnWidth(min = 56, preferred = 90),   // Status
+            ColumnWidth(min = 60, preferred = 120),  // Last Indexed
+            ColumnWidth(min = 40, preferred = 60)    // Files
+        )
+        docsTable.showFullValueOnHover()
+
+        // Column 4 carries the row id for the action buttons and is never shown.
         docsTable.columnModel.getColumn(4).minWidth = 0
         docsTable.columnModel.getColumn(4).maxWidth = 0
         docsTable.columnModel.getColumn(4).preferredWidth = 0
@@ -169,7 +167,8 @@ class DocsSettingsPanel(
         docsTable.rowHeight = 28
 
         return JScrollPane(docsTable).apply {
-            preferredSize = Dimension(700, 300)
+            // Zero preferred width: the table must not be what decides how wide the page is.
+            preferredSize = Dimension(0, JBUI.scale(240))
             border = LCATheme.customLineBorder(LCATheme.grayColor, 1)
         }
     }

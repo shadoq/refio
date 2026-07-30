@@ -39,7 +39,7 @@ class GeneralSettingsPanel(
     private var isUpdatingProgrammatically = false
 
     init {
-        val form = panel {
+        val form = settingsForm {
             group("Responses") {
                 row {
                     formatMarkdownCheckbox = checkBox("Format Markdown in responses")

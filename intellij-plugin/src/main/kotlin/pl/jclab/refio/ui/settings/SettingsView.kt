@@ -240,15 +240,7 @@ class SettingsView(
     }
 
     private fun createStyledTabPanel(title: String, content: JComponent, scrollable: Boolean = false): JComponent {
-        val wrappedContent: JComponent = if (scrollable) {
-            JBScrollPane(content).apply {
-                border = LCATheme.emptyBorder()
-                verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
-                horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
-            }
-        } else {
-            content
-        }
+        val wrappedContent: JComponent = if (scrollable) settingsScrollPane(content) else content
 
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
             border = LCATheme.createSettingsBorder(title)

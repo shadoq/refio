@@ -370,10 +370,15 @@ object LCATheme {
         titleColor = com.intellij.util.ui.UIUtil.getLabelForeground()
     }
 
-    /** Standard titled border used by settings panels */
+    /**
+     * Standard titled border used by settings panels.
+     *
+     * The horizontal inset is deliberately tighter than the vertical one: settings live in a docked
+     * tool window where width is the scarce dimension and height can simply scroll.
+     */
     fun createSettingsBorder(title: String, innerPadding: Int = settingsPanelPadding) = compoundBorder(
         createTitledBorder(title),
-        paddedBorder(innerPadding)
+        paddedBorder(innerPadding, innerPadding / 2)
     )
 
     /** Standard section border (line + padding) */

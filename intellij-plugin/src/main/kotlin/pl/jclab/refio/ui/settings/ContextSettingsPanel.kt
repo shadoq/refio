@@ -146,15 +146,19 @@ class ContextSettingsPanel(
 
         indexStatsLabel = JLabel("Loading statistics...")
 
-        val form = panel {
+        val form = settingsForm {
             group("Index status") {
                 row {
                     cell(indexStatusLabel)
                     cell(indexProgressBar).align(AlignX.FILL).resizableColumn()
                 }
+                // Three buttons side by side overflow a docked tool window, so the destructive one
+                // gets its own row.
                 row {
                     cell(reindexButton)
                     cell(stopIndexingButton)
+                }
+                row {
                     cell(clearIndexButton)
                 }
             }
@@ -215,6 +219,8 @@ class ContextSettingsPanel(
                 }
                 row {
                     cell(ragSearchHybridEnabledCheckbox)
+                }
+                row {
                     cell(ragSearchIncludeContextChunksCheckbox)
                 }
                 row("BM25 k1:") {
@@ -238,13 +244,7 @@ class ContextSettingsPanel(
             }
         }
 
-        val scrollPane = JBScrollPane(form).apply {
-            border = LCATheme.emptyBorder()
-            verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
-            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
-        }
-
-        add(scrollPane, BorderLayout.CENTER)
+        add(settingsScrollPane(form), BorderLayout.CENTER)
 
         // Subscribe to RAG progress updates
         cs.launch {
@@ -271,7 +271,7 @@ class ContextSettingsPanel(
     private fun createBuiltInProvidersPanel(): JPanel {
         val providers = ContextProviderRegistry.getAllProviders().sortedBy { it.description.title }
 
-        return panel {
+        return settingsForm {
             providers.forEach { provider ->
                 val desc = provider.description
                 val typeIcon = when (desc.type) {

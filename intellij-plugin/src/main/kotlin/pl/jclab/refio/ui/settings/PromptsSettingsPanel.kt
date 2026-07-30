@@ -10,6 +10,7 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.ToolbarDecorator
 import com.intellij.ui.components.*
 import com.intellij.ui.table.JBTable
+import com.intellij.util.ui.JBUI
 import pl.jclab.refio.core.api.CoreApiRouter
 import com.intellij.ui.dsl.builder.Align
 import com.intellij.ui.dsl.builder.panel
@@ -46,7 +47,7 @@ class PromptsSettingsPanel(
 
         // Both prompt kinds are one level of hierarchy, so they stack as groups instead of
         // hiding behind a second row of tabs inside an already nested settings screen.
-        val form = panel {
+        val form = settingsForm {
             group("System prompts") {
                 row {
                     cell(createPromptsPanel()).align(Align.FILL).resizableColumn()
@@ -64,7 +65,8 @@ class PromptsSettingsPanel(
 
     private fun createPromptsPanel(): JPanel {
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = LCATheme.paddedBorder(8)
+            // Horizontal padding is left to the wrapping DSL group, which already indents its content.
+            border = LCATheme.paddedBorder(LCATheme.gap, 0)
 
             // Description
             val descLabel =
@@ -99,7 +101,7 @@ class PromptsSettingsPanel(
                 .disableRemoveAction()
                 .disableUpDownActions()
                 .createPanel()
-                .apply { preferredSize = Dimension(600, 300) }
+                .apply { preferredSize = Dimension(0, JBUI.scale(280)) }
 
             add(tablePanel, BorderLayout.CENTER)
         }
@@ -107,7 +109,8 @@ class PromptsSettingsPanel(
 
     private fun createSlashPromptsPanel(): JPanel {
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = LCATheme.paddedBorder(8)
+            // Horizontal padding is left to the wrapping DSL group, which already indents its content.
+            border = LCATheme.paddedBorder(LCATheme.gap, 0)
 
             // Description
             val descLabel =
@@ -137,7 +140,7 @@ class PromptsSettingsPanel(
                 .setRemoveAction { onDeleteSlashPrompt() }
                 .disableUpDownActions()
                 .createPanel()
-                .apply { preferredSize = Dimension(600, 300) }
+                .apply { preferredSize = Dimension(0, JBUI.scale(280)) }
 
             add(tablePanel, BorderLayout.CENTER)
         }

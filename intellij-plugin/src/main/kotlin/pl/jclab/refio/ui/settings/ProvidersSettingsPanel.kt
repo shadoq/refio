@@ -6,7 +6,6 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBPasswordField
-import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.panel
@@ -72,14 +71,7 @@ class ProvidersSettingsPanel(
         // Create all provider cards
         createAllProviderCards()
 
-        // Wrap providersPanel in scroll pane for small screens
-        val scrollPane = JBScrollPane(providersPanel).apply {
-            border = LCATheme.emptyBorder()
-            verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
-            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
-        }
-
-        add(scrollPane, BorderLayout.CENTER)
+        add(settingsScrollPane(providersPanel), BorderLayout.CENTER)
 
         // Load configuration from backend
         loadProvidersConfig()
@@ -270,7 +262,7 @@ class ProvidersSettingsPanel(
             addActionListener { onTestConnection(providerName) }
         }
 
-        val card = panel {
+        val card = settingsForm {
             group(providerName) {
                 row {
                     cell(statusLabel)

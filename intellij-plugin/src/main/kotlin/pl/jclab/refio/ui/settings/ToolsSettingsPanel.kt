@@ -49,7 +49,7 @@ class ToolsSettingsPanel(
         val toolsTableComponent = createToolsTable()
         val commandRulesComponent = createCommandRulesPanel()
 
-        val form = panel {
+        val form = settingsForm {
             group("Tool permissions") {
                 row {
                     cell(toolsTableComponent).align(Align.FILL).resizableColumn()
@@ -64,7 +64,7 @@ class ToolsSettingsPanel(
             }
         }
 
-        add(form, BorderLayout.CENTER)
+        add(settingsScrollPane(form), BorderLayout.CENTER)
 
         loadToolDefinitions()
     }
@@ -101,26 +101,16 @@ class ToolsSettingsPanel(
         val agentModeCombo = JComboBox(arrayOf("On", "Ask", "Off"))
         agentModeColumn.cellEditor = DefaultCellEditor(agentModeCombo)
 
-        // Flexible layout: fix mode columns, let Description stretch.
+        // Minimums stay small enough that all four columns survive dock width; Description takes
+        // whatever is left over when there is more room.
         toolsTable.autoResizeMode = JTable.AUTO_RESIZE_SUBSEQUENT_COLUMNS
-        toolsTable.columnModel.getColumn(0).apply {
-            minWidth = 120
-            preferredWidth = 160
-        }
-        toolsTable.columnModel.getColumn(1).apply {
-            minWidth = 160
-            preferredWidth = 280
-        }
-        planModeColumn.apply {
-            minWidth = 80
-            maxWidth = 110
-            preferredWidth = 90
-        }
-        agentModeColumn.apply {
-            minWidth = 80
-            maxWidth = 110
-            preferredWidth = 90
-        }
+        toolsTable.fitColumns(
+            ColumnWidth(min = 70, preferred = 150),
+            ColumnWidth(min = 70, preferred = 260),
+            ColumnWidth(min = 46, preferred = 66, max = 110),
+            ColumnWidth(min = 46, preferred = 66, max = 110)
+        )
+        toolsTable.showFullValueOnHover()
 
         val modeRenderer = object : DefaultTableCellRenderer() {
             override fun getTableCellRendererComponent(
@@ -170,19 +160,12 @@ class ToolsSettingsPanel(
 
         // Flexible layout: Action column fixed, Pattern and Description share the rest.
         commandRulesTable.autoResizeMode = JTable.AUTO_RESIZE_SUBSEQUENT_COLUMNS
-        commandRulesTable.columnModel.getColumn(0).apply {
-            minWidth = 140
-            preferredWidth = 220
-        }
-        commandRulesTable.columnModel.getColumn(1).apply {
-            minWidth = 80
-            maxWidth = 110
-            preferredWidth = 90
-        }
-        commandRulesTable.columnModel.getColumn(2).apply {
-            minWidth = 120
-            preferredWidth = 180
-        }
+        commandRulesTable.fitColumns(
+            ColumnWidth(min = 80, preferred = 200),
+            ColumnWidth(min = 56, preferred = 76, max = 110),
+            ColumnWidth(min = 70, preferred = 170)
+        )
+        commandRulesTable.showFullValueOnHover()
 
         val actionCombo = JComboBox(arrayOf("ALLOW", "BLOCK", "ASK"))
         commandRulesTable.columnModel.getColumn(1).cellEditor = DefaultCellEditor(actionCombo)

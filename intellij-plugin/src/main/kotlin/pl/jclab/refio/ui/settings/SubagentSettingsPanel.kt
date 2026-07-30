@@ -10,6 +10,7 @@ import com.intellij.ui.ToolbarDecorator
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
+import com.intellij.util.ui.JBUI
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.subagents.models.SubagentInfo
 import pl.jclab.refio.core.subagents.models.SubagentScope
@@ -48,7 +49,7 @@ class SubagentSettingsPanel(
     init {
         border = LCATheme.emptyBorder()
 
-        val form = panel {
+        val form = settingsForm {
             group("Subagents") {
                 row {
                     cell(createSubagentsTable()).align(Align.FILL).resizableColumn()
@@ -60,7 +61,7 @@ class SubagentSettingsPanel(
             }
         }
 
-        add(form, BorderLayout.CENTER)
+        add(settingsScrollPane(form), BorderLayout.CENTER)
 
         // Load subagents
         loadSubagents()
@@ -91,13 +92,17 @@ class SubagentSettingsPanel(
             }
         }
 
-        // Column widths
-        subagentsTable.columnModel.getColumn(0).preferredWidth = 150  // Name
-        subagentsTable.columnModel.getColumn(1).preferredWidth = 250  // Description
-        subagentsTable.columnModel.getColumn(2).preferredWidth = 100  // Model
-        subagentsTable.columnModel.getColumn(3).preferredWidth = 150  // Tools
-        subagentsTable.columnModel.getColumn(4).preferredWidth = 80   // Scope
-        subagentsTable.columnModel.getColumn(5).preferredWidth = 70   // Enabled
+        // Six columns have to survive dock width, so every minimum is deliberately small and the
+        // full value comes back on hover.
+        subagentsTable.fitColumns(
+            ColumnWidth(min = 56, preferred = 130),   // Name
+            ColumnWidth(min = 56, preferred = 200),   // Description
+            ColumnWidth(min = 44, preferred = 80),    // Model
+            ColumnWidth(min = 44, preferred = 120),   // Tools
+            ColumnWidth(min = 40, preferred = 70),    // Scope
+            ColumnWidth(min = 40, preferred = 56, max = 70)  // Enabled
+        )
+        subagentsTable.showFullValueOnHover()
 
         // Custom renderer for scope column
         val scopeRenderer = object : DefaultTableCellRenderer() {
@@ -159,7 +164,8 @@ class SubagentSettingsPanel(
             })
             .disableUpDownActions()
             .createPanel()
-            .apply { preferredSize = Dimension(700, 300) }
+            // Zero preferred width: the table must not be what decides how wide the page is.
+            .apply { preferredSize = Dimension(0, JBUI.scale(300)) }
     }
 
     private fun loadSubagents() {

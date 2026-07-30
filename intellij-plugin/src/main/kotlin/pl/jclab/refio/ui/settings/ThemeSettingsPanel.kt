@@ -50,7 +50,7 @@ class ThemeSettingsPanel : JBPanel<ThemeSettingsPanel>(BorderLayout()) {
 
         // Every section is a preview block, so they are DSL groups rather than panels separated
         // by hand-sized struts.
-        val form = panel {
+        val form = settingsForm {
             group("Colors") {
                 row { cell(createLCAThemeColorsSection()).align(AlignX.FILL).resizableColumn() }
             }
@@ -83,9 +83,7 @@ class ThemeSettingsPanel : JBPanel<ThemeSettingsPanel>(BorderLayout()) {
             }
         }
 
-        add(JBScrollPane(form).apply {
-            border = JBUI.Borders.empty()
-        }, BorderLayout.CENTER)
+        add(settingsScrollPane(form), BorderLayout.CENTER)
     }
 
     // ==================== LCATheme COLORS ====================

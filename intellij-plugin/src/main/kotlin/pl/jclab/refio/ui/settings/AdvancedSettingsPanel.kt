@@ -2,7 +2,6 @@ package pl.jclab.refio.ui.settings
 
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBPanel
-import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.columns
 import com.intellij.ui.dsl.builder.panel
@@ -58,7 +57,7 @@ class AdvancedSettingsPanel(
     private var isUpdatingProgrammatically = false
 
     init {
-        val form = panel {
+        val form = settingsForm {
             group("Security") {
                 row {
                     readOnlyModeCheckbox = checkBox("Read-only mode")
@@ -162,13 +161,7 @@ class AdvancedSettingsPanel(
             }
         }
 
-        val scrollPane = JBScrollPane(form).apply {
-            border = LCATheme.emptyBorder()
-            verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
-            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
-        }
-
-        add(scrollPane, BorderLayout.CENTER)
+        add(settingsScrollPane(form), BorderLayout.CENTER)
 
         loadAdvancedConfig()
     }

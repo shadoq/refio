@@ -94,7 +94,7 @@ class MCPSettingsPanel(private val project: Project) : JBPanel<MCPSettingsPanel>
         }
         presetSelector.toolTipText = "Select a preset MCP server to quickly add"
 
-        return panel {
+        return settingsForm {
             row {
                 comment(
                     "In PLAN mode only resources are read, AGENT mode also exposes tools. " +
