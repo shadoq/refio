@@ -138,9 +138,79 @@ providers:
   lmstudio:
     baseUrl: "http://localhost:1234/v1"
     contextSize: 32768
+
+  generic_openai:                # Any OpenAI-compatible server (llama.cpp, vLLM, ...)
+    baseUrl: "http://localhost:8080/v1"
+    apiKey: ""                   # Optional, only if your server requires one
+    model: "qwen3-coder"
+    contextSize: 32768           # Declare it yourself, see below
+    rawRequest: false            # Let the server own sampling, see below
 ```
 
 The Ollama endpoint is shared by chat/completions and embeddings and can be configured in Settings -> Providers.
+
+#### Embeddings on your own server
+
+RAG embeddings can come from any server speaking the OpenAI `/embeddings` shape - llama.cpp,
+vLLM, text-embeddings-inference. Point `models.defaults.embedding` at the
+`openai_compatible` provider and give the endpoint its own section, because embedding models
+usually run as a separate process on a different port:
+
+```yaml
+providers:
+  embeddings:
+    baseUrl: "http://localhost:8081/v1"   # /embeddings is appended
+    apiKey: ""                            # Optional, local servers need none
+
+models:
+  defaults:
+    embedding: "openai_compatible/jina-embeddings-v5"
+```
+
+Three provider ids are accepted for embeddings: `ollama`, `openai`, `openai_compatible`. Anything
+else is an error - it used to fall back to `api.openai.com`, which meant a typo could upload the
+indexed project.
+
+`general.noEgressEnabled` covers embeddings too. A local or private-network endpoint stays
+allowed; a public one is blocked.
+
+**Changing the embedding model requires regenerating the vectors.** Embeddings are stored per
+model, so old and new vectors do not mix, but a search only matches chunks embedded with the
+currently selected model until you re-run indexing.
+
+#### Context window for local servers
+
+`contextSize` is how you tell Refio how large a prompt the server accepts. It matters most for
+`generic_openai`: servers like llama.cpp do not report `context_length` in `/v1/models`, so the
+window cannot be discovered and defaults to 32768 until you declare it. The key has no upper
+bound, so a server running a 760000-token window can be declared as-is.
+
+Settings -> Providers offers sizes that double up to 262144 and then grow in 131072 steps up to
+1048576. Each provider has its own option set, so a limit specific to one runtime does not
+constrain the others. A value outside a provider's set stays valid in `config.yaml`; the dropdown
+then displays the nearest lower offered value, and only overwrites your value if you actually pick
+something from the list.
+
+The resolution order for the effective window is: this per-provider `contextSize`, then Refio's
+built-in table of known cloud models, then whatever the provider reported when its model list was
+fetched, then `limits.maxContextSize` as a last resort. On top of that, `limits.maxContextSize`
+acts as a **ceiling whenever you set it explicitly** - see [Limits](#limits).
+
+#### Raw request mode
+
+`rawRequest: true` (Settings -> Providers -> "Raw request") stops Refio from putting its own
+generation settings in the request body: `temperature`, `max_tokens` and the non-standard
+`request_id` are omitted, so whatever your server is configured with applies. Useful because
+`max_tokens` is otherwise always sent and clamped to `limits.maxOutputSize`.
+
+What it does **not** remove, deliberately:
+
+- `stream` and `stream_options` - without them token usage falls back to local estimates
+- `tools` and `tool_choice` - without them AGENT mode has no tools to call
+
+Reasoning effort is not affected because it was never sent to this provider; only OpenAI and
+OpenRouter receive it. The flag applies to `generic_openai` alone, not to Z.AI, which shares the
+same adapter.
 
 **Security Note:** API keys should be in your **user config only**, not in project config files that may be committed to version control.
 
@@ -197,10 +267,17 @@ limits:
   toolExecutionTimeout: 240      # Tool execution timeout (seconds)
   streamingReadTimeout: 240      # Time between streaming chunks (seconds)
   streamingRequestTimeout: 1800  # Total streaming duration (seconds)
-  maxContextSize: 128000         # Maximum context tokens
+  maxContextSize: 128000         # Ceiling on context tokens, see below
   maxOutputSize: 16384           # Maximum output tokens
   maxFileSize: 10                # Maximum file size (MB)
 ```
+
+**`maxContextSize` is a ceiling once you set it.** Set explicitly (here or in Settings ->
+Advanced), it means "never send more than this", and the model's real window stops mattering -
+useful for capping spend on a model with a very large window. Left unset, it is only the
+last-resort fallback for a model whose window cannot be determined, so its default can never
+shrink a window you declared per provider. If you declare `contextSize: 524288` for a local
+server, do not also set `maxContextSize: 128000` unless you actually want the smaller limit.
 
 ### Advanced Settings
 
@@ -407,6 +484,14 @@ mcp:
 | `providers.openrouter.apiKey` | `openrouter_api_key` | - |
 | `providers.gemini.apiKey` | `gemini_api_key` | - |
 | `providers.lmstudio.baseUrl` | `lmstudio_base_url` | `http://localhost:1234/v1` |
+| `providers.lmstudio.contextSize` | `providers.lmstudio.lmstudio_context_size` | `32768` |
+| `providers.generic_openai.baseUrl` | `providers.generic_openai.generic_openai_base_url` | - |
+| `providers.generic_openai.apiKey` | `providers.generic_openai.generic_openai_api_key` | - |
+| `providers.generic_openai.model` | `providers.generic_openai.generic_openai_model` | - |
+| `providers.generic_openai.contextSize` | `providers.generic_openai.generic_openai_context_size` | `32768` |
+| `providers.generic_openai.rawRequest` | `providers.generic_openai.generic_openai_raw_request` | `false` |
+| `providers.embeddings.baseUrl` | `providers.embeddings.embeddings_base_url` | - |
+| `providers.embeddings.apiKey` | `providers.embeddings.embeddings_api_key` | - |
 | `models.defaults.chat` | `default_model.chat` | `qwen3.5:9b` |
 | `models.defaults.plan` | `default_model.plan` | `qwen3.5:9b` |
 | `models.defaults.coding` | `default_model.agent` | `qwen3.5:9b` |

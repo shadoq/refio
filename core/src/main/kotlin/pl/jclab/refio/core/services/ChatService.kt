@@ -199,9 +199,10 @@ class ChatService(
         // rendering of TOOL messages instead of msg.content.
         val autoOptimizePercentage = configService.getTyped(ConfigKeys.AUTO_OPTIMIZE_PERCENTAGE)
         if (autoOptimizePercentage > 0) {
-            val modelMaxContext = TokenEstimator.getMaxContextForModel(model, provider, configService)
-            val configuredLimit = configService.getTyped(ConfigKeys.MAX_CONTEXT_SIZE, task.id)
-            val effectiveMaxContext = minOf(modelMaxContext, configuredLimit)
+            // The window resolver already applies the user's explicit max-context ceiling, so
+            // capping again here would be a second source of truth - and with an unset key it
+            // would cap an explicitly declared provider window down to the built-in default.
+            val effectiveMaxContext = TokenEstimator.getMaxContextForModel(model, provider, configService, task.id)
             val threshold = (effectiveMaxContext * autoOptimizePercentage) / 100
             val estimatedTokens = TokenEstimator.estimateRequestTokens(messages, systemPrompt)
 

@@ -34,6 +34,8 @@ import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
 import kotlinx.coroutines.*
 import java.awt.BorderLayout
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
 import java.awt.event.MouseEvent
 import javax.swing.*
 import javax.swing.event.DocumentEvent
@@ -105,8 +107,11 @@ class HistoryPanel(
     private val TEST_DATA_PROJECT_ID = "legacy_unknown"
 
     init {
-        preferredSize = JBUI.size(350, 600)
-        border = BorderFactory.createLineBorder(LCATheme.borderColor)
+        // No preferred size and no box around the panel: this is a full card in the tool window's
+        // CardLayout, like the chat and settings views, so it fills the dock and sits flush with
+        // it. A line border made it read as an inset sub-panel, and a fixed 350x600 also made the
+        // card stack report that width as its own preferred size.
+        border = LCATheme.emptyBorder()
 
         searchField = SearchTextField().apply {
             textEditor.emptyText.setText("Search sessions...")
@@ -137,9 +142,23 @@ class HistoryPanel(
 
         sessionList = JBList(listModel).apply {
             cellRenderer = SessionListRenderer()
-            fixedCellHeight = JBUI.scale(38)
+            fixedCellHeight = SessionListRenderer.rowHeight(width)
             selectionMode = ListSelectionModel.SINGLE_SELECTION
             emptyText.text = "No sessions found"
+
+            // The renderer stacks or inlines the row depending on how wide it is, and the cell
+            // height has to follow, otherwise a resize leaves single-line rows in double-height
+            // cells. fixedCellHeight is what keeps the list cheap for long histories, so it is
+            // re-set on resize rather than dropped.
+            addComponentListener(object : ComponentAdapter() {
+                override fun componentResized(e: ComponentEvent) {
+                    val next = SessionListRenderer.rowHeight(width)
+                    if (next == fixedCellHeight) return
+                    fixedCellHeight = next
+                    revalidate()
+                    repaint()
+                }
+            })
         }
 
         ListSpeedSearch.installOn(sessionList) { it.title }

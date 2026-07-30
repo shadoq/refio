@@ -703,6 +703,61 @@ object ConfigKeys {
         yamlAccessor = { it.getGenericOpenAIModel() }
     )
 
+    /**
+     * Context window the user declares for their OpenAI-compatible server.
+     *
+     * Needed because `/v1/models` on servers like llama.cpp does not report `context_length`,
+     * so discovery cannot tell how large the window really is. Same role as the Ollama and
+     * LM Studio overrides, and deliberately without a validator so a server running a very
+     * large window can be declared as-is.
+     */
+    val PROVIDER_CUSTOM_OPENAI_CONTEXT_SIZE = ConfigKey(
+        key = "providers.generic_openai.generic_openai_context_size",
+        parser = String::toIntOrNull,
+        default = 32768,
+        yamlAccessor = { it.getGenericOpenAIContextSize() }
+    )
+
+    /**
+     * Send the chat request without any sampling parameters of ours, for servers that already
+     * pin generation settings server-side.
+     *
+     * Omits `temperature`, `max_tokens` and the non-standard `request_id`. Deliberately keeps
+     * `stream`/`stream_options` (dropping them loses real token accounting) and `tools`
+     * (dropping them breaks AGENT mode). Applies to `generic_openai` only, not to providers
+     * that reuse the same adapter.
+     */
+    val PROVIDER_CUSTOM_OPENAI_RAW_REQUEST = ConfigKey(
+        key = "providers.generic_openai.generic_openai_raw_request",
+        parser = String::toBooleanStrictOrNull,
+        default = false,
+        yamlAccessor = { it.getGenericOpenAIRawRequest() }
+    )
+
+    /**
+     * Base URL of an OpenAI-compatible embeddings endpoint, e.g. a second llama.cpp instance
+     * serving an embedding model. Selected with `models.embedding_model:
+     * openai_compatible/<model>`.
+     *
+     * Separate from the chat provider's base URL on purpose: embeddings commonly run as their
+     * own process on a different port.
+     */
+    val PROVIDER_EMBEDDINGS_BASE_URL = ConfigKey<String?>(
+        key = "providers.embeddings.embeddings_base_url",
+        parser = { it.takeIf { s -> s.isNotBlank() } },
+        default = null,
+        serializer = { it ?: "" },
+        yamlAccessor = { it.getEmbeddingsBaseUrl() }
+    )
+
+    val PROVIDER_EMBEDDINGS_API_KEY = ConfigKey<String?>(
+        key = "providers.embeddings.embeddings_api_key",
+        parser = { it.takeIf { s -> s.isNotBlank() } },
+        default = null,
+        serializer = { it ?: "" },
+        yamlAccessor = { it.getEmbeddingsApiKey() }
+    )
+
     val PROVIDER_ZAI_API_KEY = ConfigKey<String?>(
         key = "providers.zai.zai_api_key",
         parser = { it.takeIf { s -> s.isNotBlank() } },
@@ -930,6 +985,10 @@ object ConfigKeys {
             PROVIDER_CUSTOM_OPENAI_API_KEY,
             PROVIDER_CUSTOM_OPENAI_BASE_URL,
             PROVIDER_CUSTOM_OPENAI_MODEL,
+            PROVIDER_CUSTOM_OPENAI_CONTEXT_SIZE,
+            PROVIDER_CUSTOM_OPENAI_RAW_REQUEST,
+            PROVIDER_EMBEDDINGS_BASE_URL,
+            PROVIDER_EMBEDDINGS_API_KEY,
             PROVIDER_ZAI_API_KEY,
             PROVIDER_ZAI_BASE_URL,
             // Agent flow

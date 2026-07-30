@@ -58,4 +58,41 @@ class NetworkPolicy(
             )
         }
     }
+
+    /**
+     * Like [assertEgressAllowed] but allows a target on the local machine or LAN.
+     *
+     * For callers whose endpoint is user-configured and usually local - LLM providers, embedding
+     * endpoints - no-egress means "do not leave my network", not "do no I/O". Tools that always
+     * reach the public internet should keep using [assertEgressAllowed].
+     */
+    fun assertRemoteEgressAllowed(source: String, target: String, taskId: String? = taskIdProvider()) {
+        if (isLocalTarget(target)) {
+            return
+        }
+        if (isNoEgressEnabled(taskId)) {
+            logger.warn { "No-egress violation blocked: '$source' targets a non-local endpoint '$target'" }
+            throw NoEgressViolationException(
+                "No-egress mode is enabled and $source endpoint is not local: $target"
+            )
+        }
+    }
+
+    companion object {
+        /**
+         * Whether [url] points at this machine or a private network.
+         *
+         * Shared so the LLM path and the embedding path cannot drift apart on what counts as
+         * local. A URL that cannot be parsed is treated as remote - the safe answer.
+         */
+        fun isLocalTarget(url: String): Boolean {
+            return try {
+                val host = java.net.URI(url).host?.lowercase() ?: return false
+                host == "localhost" || host == "127.0.0.1" || host == "::1" ||
+                    host == "0.0.0.0" || host.startsWith("192.168.") || host.startsWith("10.")
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
 }

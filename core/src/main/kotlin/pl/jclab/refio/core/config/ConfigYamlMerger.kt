@@ -68,6 +68,7 @@ internal object ConfigYamlMerger {
             lmstudio = override.lmstudio ?: base.lmstudio,
             genericOpenai = override.genericOpenai ?: base.genericOpenai,
             zai = override.zai ?: base.zai,
+            embeddings = override.embeddings ?: base.embeddings,
         )
     }
 

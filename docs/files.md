@@ -231,7 +231,7 @@
 - **RagIndexingService.kt** — RAG indexing: scans project files, detects changes via checksums, creates semantic chunks; multi-language support.
 - **RagSearchService.kt** — Semantic search with cosine similarity, BM25 scoring, content type filtering, hybrid search, top-K ranking.
 - **RagEmbeddingService.kt** — Generates/stores embeddings with batch processing, error recovery; multiple providers (OpenAI, Ollama); vector serialization.
-- **EmbeddingProvider.kt** — Interface and implementations (`OpenAIEmbeddingProvider`, `OllamaEmbeddingProvider`) for vector embeddings; batch processing, circuit breaker integration.
+- **EmbeddingProvider.kt** — Interface and implementations (`OpenAIEmbeddingProvider`, `OllamaEmbeddingProvider`, `OpenAICompatibleEmbeddingProvider` for a self-hosted `/embeddings` endpoint) for vector embeddings; batch processing, circuit breaker integration, `NetworkPolicy` egress gate.
 - **EmbeddingCircuitBreaker.kt** — Circuit breaker (CLOSED/OPEN/HALF_OPEN) for embedding providers; prevents UI freezing from repeated failures.
 - **LLMRetryHandler.kt** — Exponential backoff retry for LLM API calls; does NOT retry cancellations, auth errors, or invalid requests.
 - **OllamaRequestGate.kt** — Semaphore-based rate limiting for Ollama (default 1 concurrent request per endpoint).
@@ -491,7 +491,10 @@ The bubble system uses a multi-layout composition pattern. **This is historicall
 - **GeneralSettingsPanel.kt** — General preferences: format markdown, streaming, advanced view, thinking mode, no-egress, execution mode (AUTO/INTERACTIVE). All six write to `general.*` config keys.
 - **AdvancedSettingsPanel.kt** — Advanced config options: read-only mode, timeouts, size limits, auto-optimize threshold. (No-egress toggle moved to General.)
 - **ModelsSettingsPanel.kt** — Model selection/config.
-- **ProvidersSettingsPanel.kt** — LLM provider config and API keys.
+- **ProvidersSettingsPanel.kt** — LLM provider config and API keys; per-provider context window and the custom-provider raw-request toggle.
+- **NumericDropdownValue.kt** — Picks what a numeric dropdown shows for a configured value outside its option set (largest option not exceeding it), so a hand-set context window is not misrepresented.
+- **ContextSizeOptions.kt** — Context-window sizes offered per provider (Ollama / LM Studio / custom OpenAI-compatible), kept as independent sets so one runtime's limit does not constrain the others.
+- **history/SessionListRenderer.kt** — Session row in two shapes: stacked while docked, metadata beside the title once the row passes the wide boundary; title length derived from the row width instead of a fixed character count.
 - **ContextSettingsPanel.kt** — Context building and RAG config.
 - **PromptsSettingsPanel.kt** — Prompt template management.
 - **ToolsSettingsPanel.kt** — Tool registry and config.

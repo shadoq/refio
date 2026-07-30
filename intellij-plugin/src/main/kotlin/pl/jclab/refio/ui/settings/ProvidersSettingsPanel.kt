@@ -81,7 +81,7 @@ class ProvidersSettingsPanel(
      * Field types for provider configuration
      */
     private enum class FieldType {
-        TEXT, PASSWORD, DROPDOWN
+        TEXT, PASSWORD, DROPDOWN, CHECKBOX
     }
 
     /**
@@ -130,7 +130,7 @@ class ProvidersSettingsPanel(
                         type = FieldType.DROPDOWN,
                         key = "ollama_context_size",
                         defaultValue = DEFAULT_CONTEXT_SIZE.toString(),
-                        dropdownOptions = listOf("2048", "4096", "8192", "16384", "32768", "65536", "131072")
+                        dropdownOptions = ContextSizeOptions.OLLAMA
                     ),
                     ProviderField(
                         label = "Keep Alive (seconds)",
@@ -202,7 +202,7 @@ class ProvidersSettingsPanel(
                         type = FieldType.DROPDOWN,
                         key = "lmstudio_context_size",
                         defaultValue = DEFAULT_CONTEXT_SIZE.toString(),
-                        dropdownOptions = listOf("2048", "4096", "8192", "16384", "32768", "65536", "131072")
+                        dropdownOptions = ContextSizeOptions.LM_STUDIO
                     )
                 ),
                 initialStatus = ProviderStatus.NEEDS_CONFIG,
@@ -217,10 +217,25 @@ class ProvidersSettingsPanel(
                 fields = listOf(
                     ProviderField("API Key", FieldType.PASSWORD, "generic_openai_api_key"),
                     ProviderField("Base URL", FieldType.TEXT, "generic_openai_base_url"),
-                    ProviderField("Model", FieldType.TEXT, "generic_openai_model")
+                    ProviderField("Model", FieldType.TEXT, "generic_openai_model"),
+                    ProviderField(
+                        label = "Context Size",
+                        type = FieldType.DROPDOWN,
+                        key = "generic_openai_context_size",
+                        defaultValue = DEFAULT_CONTEXT_SIZE.toString(),
+                        dropdownOptions = ContextSizeOptions.GENERIC_OPENAI
+                    ),
+                    ProviderField(
+                        label = "Raw request (server sets sampling)",
+                        type = FieldType.CHECKBOX,
+                        key = "generic_openai_raw_request",
+                        defaultValue = "false"
+                    )
                 ),
                 initialStatus = ProviderStatus.NEEDS_CONFIG,
-                description = "OpenAI-compatible provider with custom base URL and optional default model."
+                description = "OpenAI-compatible provider with custom base URL and optional default model. " +
+                    "Set the context size yourself - these servers do not report it in /v1/models. " +
+                    "Raw request omits temperature and max_tokens; streaming and tools are still sent."
             )
         )
 
@@ -331,6 +346,13 @@ class ProvidersSettingsPanel(
                 onFieldChanged(providerName, field.key, selectedItem as? String ?: "")
             }
         }
+
+        FieldType.CHECKBOX -> JCheckBox().apply {
+            isSelected = field.defaultValue?.toBooleanStrictOrNull() ?: false
+            addActionListener {
+                onFieldChanged(providerName, field.key, isSelected.toString())
+            }
+        }
     }
 
     private fun escapeHtml(text: String): String = text
@@ -354,9 +376,7 @@ class ProvidersSettingsPanel(
 
             logger.debug { "Auto-saving: $jobKey = [REDACTED]" }
 
-            val contextSizeChanged =
-                (providerName.equals("Ollama", ignoreCase = true) && fieldKey == "ollama_context_size") ||
-                    (providerName.equals("LMStudio", ignoreCase = true) && fieldKey == "lmstudio_context_size")
+            val contextSizeChanged = fieldKey in CONTEXT_SIZE_FIELD_KEYS
 
             if (contextSizeChanged) {
                 // Persist synchronously here so the subsequent refresh reads the new value.
@@ -387,28 +407,16 @@ class ProvidersSettingsPanel(
                 logger.error(e) { "Failed to re-sync API keys" }
             }
 
-            // Auto-refresh Ollama models when context size changes
-            if (providerName.equals("Ollama", ignoreCase = true) && fieldKey == "ollama_context_size") {
-                logger.info { "Ollama context size changed to $value - refreshing models..." }
+            // The model list carries the context window per model, so it has to be re-fetched
+            // for the new size to show up.
+            if (contextSizeChanged) {
+                logger.info { "$providerName context size changed to $value - refreshing models..." }
                 withContext(Dispatchers.IO) {
                     try {
                         refreshModelsList(providerName)
-                        logger.info { "✓ Ollama models refreshed with new context size" }
+                        logger.info { "✓ $providerName models refreshed with new context size" }
                     } catch (e: Exception) {
-                        logger.error(e) { "Failed to refresh Ollama models after context size change" }
-                    }
-                }
-            }
-
-            // Auto-refresh LMStudio models when context size changes
-            if (providerName.equals("LMStudio", ignoreCase = true) && fieldKey == "lmstudio_context_size") {
-                logger.info { "LM Studio context size changed to $value - refreshing models..." }
-                withContext(Dispatchers.IO) {
-                    try {
-                        refreshModelsList(providerName)
-                        logger.info { "✓ LM Studio models refreshed with new context size" }
-                    } catch (e: Exception) {
-                        logger.error(e) { "Failed to refresh LM Studio models after context size change" }
+                        logger.error(e) { "Failed to refresh $providerName models after context size change" }
                     }
                 }
             }
@@ -482,6 +490,7 @@ class ProvidersSettingsPanel(
         return when (field) {
             is JBPasswordField -> String(field.password)
             is JComboBox<*> -> field.selectedItem as? String ?: ""
+            is JCheckBox -> field.isSelected.toString()
             is JTextField -> field.text ?: ""
             else -> ""
         }
@@ -493,9 +502,23 @@ class ProvidersSettingsPanel(
     private fun setFieldValue(field: JComponent?, value: String) {
         when (field) {
             is JBPasswordField -> field.text = value
-            is JComboBox<*> -> field.selectedItem = value
+            is JComboBox<*> -> field.selectedItem = nearestOption(field, value)
+            is JCheckBox -> field.isSelected = value.toBooleanStrictOrNull() ?: false
             is JTextField -> field.text = value
         }
+    }
+
+    /** Resolves what a numeric dropdown can actually display for [value]; see [nearestNumericOption]. */
+    private fun nearestOption(combo: JComboBox<*>, value: String): String {
+        val options = (0 until combo.itemCount).mapNotNull { combo.getItemAt(it) as? String }
+        val normalized = nearestNumericOption(options, value)
+        if (normalized != value) {
+            logger.warn {
+                "Configured value $value is not offered by this dropdown - showing $normalized " +
+                    "(largest available value not exceeding it)"
+            }
+        }
+        return normalized
     }
 
     /**
@@ -534,7 +557,9 @@ class ProvidersSettingsPanel(
             "generic_openai" -> mapOf(
                 "api_key" to getFieldValue(fields["generic_openai_api_key"]),
                 "base_url" to getFieldValue(fields["generic_openai_base_url"]),
-                "model" to getFieldValue(fields["generic_openai_model"])
+                "model" to getFieldValue(fields["generic_openai_model"]),
+                "context_size" to getFieldValue(fields["generic_openai_context_size"])
+                    .ifEmpty { DEFAULT_CONTEXT_SIZE.toString() }
             )
 
             "zai" -> mapOf(
@@ -734,5 +759,14 @@ class ProvidersSettingsPanel(
 
         // Reload from backend
         loadProvidersConfig()
+    }
+
+    private companion object {
+        /** Fields whose change has to invalidate the cached model list. */
+        val CONTEXT_SIZE_FIELD_KEYS = setOf(
+            "ollama_context_size",
+            "lmstudio_context_size",
+            "generic_openai_context_size"
+        )
     }
 }

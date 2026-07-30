@@ -241,27 +241,37 @@ class LLMClient(
         val contextTokens = contextContent?.let { TokenEstimator.estimateTokens(it) + 10 } ?: 0  // +10 for message overhead
         val estimatedTokens = preparedRequest.estimatedInputTokens
 
-        val maxContext = TokenEstimator.getMaxContextForModel(model, provider, configService)
-        // Reserve for output: use requested maxTokens, but cap at 50% of context to ensure input space
-        val requestedReserve = maxTokens ?: 4096
-        val reserveForOutput = minOf(requestedReserve, maxContext / 2)
-        val availableForInput = maxContext - reserveForOutput
-
-        logger.info {
-            "[LLM_CLIENT] Token estimate: ~$estimatedTokens tokens (base: $baseEstimatedTokens, context: $contextTokens), " +
-            "model max context: $maxContext, available for input: $availableForInput (reserving $reserveForOutput for output)"
-        }
-
-        if (estimatedTokens > availableForInput) {
-            logger.error {
-                "[LLM_CLIENT] Context too large: estimated $estimatedTokens tokens exceeds available " +
-                "$availableForInput tokens (model max: $maxContext, output reserve: $reserveForOutput)"
+        // Without a ConfigService the context window cannot be resolved, and guessing one here is
+        // what used to reject prompts the provider would have accepted. Skip the pre-flight check
+        // instead of inventing a limit; the provider still enforces its own.
+        if (configService == null) {
+            logger.warn {
+                "[LLM_CLIENT] No ConfigService available - skipping context pre-flight check " +
+                "(estimated ~$estimatedTokens tokens, base: $baseEstimatedTokens, context: $contextTokens)"
             }
-            throw ContextTooLargeException(
-                estimatedTokens = estimatedTokens,
-                maxContextTokens = maxContext,
-                availableTokens = availableForInput
-            )
+        } else {
+            val maxContext = TokenEstimator.getMaxContextForModel(model, provider, configService, taskId)
+            // Reserve for output: use requested maxTokens, but cap at 50% of context to ensure input space
+            val requestedReserve = maxTokens ?: 4096
+            val reserveForOutput = minOf(requestedReserve, maxContext / 2)
+            val availableForInput = maxContext - reserveForOutput
+
+            logger.info {
+                "[LLM_CLIENT] Token estimate: ~$estimatedTokens tokens (base: $baseEstimatedTokens, context: $contextTokens), " +
+                "model max context: $maxContext, available for input: $availableForInput (reserving $reserveForOutput for output)"
+            }
+
+            if (estimatedTokens > availableForInput) {
+                logger.error {
+                    "[LLM_CLIENT] Context too large: estimated $estimatedTokens tokens exceeds available " +
+                    "$availableForInput tokens (model max: $maxContext, output reserve: $reserveForOutput)"
+                }
+                throw ContextTooLargeException(
+                    estimatedTokens = estimatedTokens,
+                    maxContextTokens = maxContext,
+                    availableTokens = availableForInput
+                )
+            }
         }
 
         // Log system messages
@@ -615,14 +625,6 @@ class LLMClient(
     /**
      * Check if an endpoint URL points to a local address (localhost, 127.0.0.1, ::1).
      */
-    private fun isLocalEndpoint(url: String): Boolean {
-        return try {
-            val uri = java.net.URI(url)
-            val host = uri.host?.lowercase() ?: return false
-            host == "localhost" || host == "127.0.0.1" || host == "::1" ||
-                host == "0.0.0.0" || host.startsWith("192.168.") || host.startsWith("10.")
-        } catch (_: Exception) {
-            false
-        }
-    }
+    private fun isLocalEndpoint(url: String): Boolean =
+        pl.jclab.refio.core.security.NetworkPolicy.isLocalTarget(url)
 }

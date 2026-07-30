@@ -126,6 +126,10 @@ class HierarchicalConfigLoader private constructor(
     fun getGenericOpenAIApiKey(): String? = getConfig().providers?.genericOpenai?.apiKey
     fun getGenericOpenAIBaseUrl(): String? = getConfig().providers?.genericOpenai?.baseUrl
     fun getGenericOpenAIModel(): String? = getConfig().providers?.genericOpenai?.model
+    fun getGenericOpenAIContextSize(): Int? = getConfig().providers?.genericOpenai?.contextSize
+    fun getGenericOpenAIRawRequest(): Boolean? = getConfig().providers?.genericOpenai?.rawRequest
+    fun getEmbeddingsBaseUrl(): String? = getConfig().providers?.embeddings?.baseUrl
+    fun getEmbeddingsApiKey(): String? = getConfig().providers?.embeddings?.apiKey
     fun getZAIApiKey(): String? = getConfig().providers?.zai?.apiKey
     fun getZAIBaseUrl(): String? = getConfig().providers?.zai?.baseUrl
 

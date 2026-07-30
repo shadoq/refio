@@ -45,6 +45,48 @@ open class GenericOpenAIAdapter(
         private const val ZAI_RATE_LIMIT_RETRY_DELAY_MS = 15_000L
         private val zaiRequestMutex = Mutex()
         private var zaiNextAllowedAtMs: Long = 0L
+
+        /**
+         * Request-body keys dropped in raw request mode. `stream`, `stream_options`, `tools` and
+         * `tool_choice` stay: without the first two token accounting falls back to estimates, and
+         * without the last two AGENT mode has no tools to call.
+         */
+        private val RAW_REQUEST_OMITTED_KEYS = setOf("temperature", "max_tokens", "request_id")
+    }
+
+    /**
+     * Drops our sampling parameters when the user asked for a raw request, so a server that pins
+     * generation settings itself is not overridden. `max_tokens` in particular is otherwise always
+     * sent, clamped to `limits.max_output_size`.
+     *
+     * Scoped to `generic_openai`: [ZAIAdapter] shares this class but talks to a hosted API where
+     * these parameters are expected.
+     */
+    override fun buildRequestBody(
+        requestMessages: List<Map<String, Any>>,
+        effectiveMaxTokens: Int,
+        temperature: Double,
+        streaming: Boolean,
+        kwargs: Map<String, Any>,
+        requestId: String,
+    ): Map<String, Any> {
+        val body = super.buildRequestBody(
+            requestMessages = requestMessages,
+            effectiveMaxTokens = effectiveMaxTokens,
+            temperature = temperature,
+            streaming = streaming,
+            kwargs = kwargs,
+            requestId = requestId,
+        )
+        if (!isRawRequestEnabled()) return body
+
+        logger.info { "[$providerTag][$requestId] Raw request mode: omitting ${RAW_REQUEST_OMITTED_KEYS.joinToString(", ")}" }
+        return body - RAW_REQUEST_OMITTED_KEYS
+    }
+
+    private fun isRawRequestEnabled(): Boolean {
+        if (providerName != "generic_openai") return false
+        return configService?.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_RAW_REQUEST, taskId) == true
     }
 
     override fun resolveBaseUrl(): String {

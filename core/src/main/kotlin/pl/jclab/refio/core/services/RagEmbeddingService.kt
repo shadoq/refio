@@ -283,8 +283,12 @@ class RagEmbeddingService(
         return Pair(null, model)
     }
 
-    private suspend fun resolveMaxInputChars(modelId: String, provider: String?): Int {
-        val maxContextTokens = TokenEstimator.getMaxContextForModel(modelId, provider)
+    private fun resolveMaxInputChars(modelId: String, provider: String?): Int {
+        // Only clamps chunk length before embedding, so with no config available a conservative
+        // default is enough - unlike the request path, nothing is rejected because of it.
+        val maxContextTokens = configService
+            ?.let { TokenEstimator.getMaxContextForModel(modelId, provider, it) }
+            ?: ConfigService.DEFAULT_CONTEXT_SIZE
         val safeTokens = (maxContextTokens * 0.8).toInt().coerceAtLeast(512)
         return safeTokens * 4
     }

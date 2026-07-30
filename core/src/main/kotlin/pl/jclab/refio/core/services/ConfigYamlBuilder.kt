@@ -69,11 +69,17 @@ internal class ConfigYamlBuilder(
             genericOpenai = GenericOpenAIConfig(
                 apiKey = if (includeApiKeys) configService.get(ConfigKeys.PROVIDER_CUSTOM_OPENAI_API_KEY.key) else null,
                 baseUrl = customOpenAIBaseUrl,
-                model = configService.get(ConfigKeys.PROVIDER_CUSTOM_OPENAI_MODEL.key)
+                model = configService.get(ConfigKeys.PROVIDER_CUSTOM_OPENAI_MODEL.key),
+                contextSize = configService.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_CONTEXT_SIZE),
+                rawRequest = configService.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_RAW_REQUEST)
             ),
             zai = ZAIConfig(
                 apiKey = if (includeApiKeys) configService.get(ConfigKeys.PROVIDER_ZAI_API_KEY.key) else null,
                 baseUrl = configService.get(ConfigKeys.PROVIDER_ZAI_BASE_URL.key) ?: ZAIUrls.DEFAULT
+            ),
+            embeddings = EmbeddingsProviderConfig(
+                baseUrl = configService.get(ConfigKeys.PROVIDER_EMBEDDINGS_BASE_URL.key),
+                apiKey = if (includeApiKeys) configService.get(ConfigKeys.PROVIDER_EMBEDDINGS_API_KEY.key) else null
             )
         )
     }
