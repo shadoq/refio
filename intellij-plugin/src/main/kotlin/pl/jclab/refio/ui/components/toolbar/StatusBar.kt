@@ -178,6 +178,11 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
         foreground = LCATheme.descriptionForeground
     }
     private val contextFillBar = ContextUsageBar()
+    private val contextTokensLabel = JBLabel().apply {
+        font = JBUI.Fonts.create(Font.MONOSPACED, 11)
+        foreground = LCATheme.descriptionForeground
+        toolTipText = "Context tokens used / model context window"
+    }
     private val contextPercentLabel = JBLabel("0%").apply {
         font = JBUI.Fonts.create(Font.MONOSPACED, 11)
     }
@@ -229,6 +234,7 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
             add(stateLabel)
             add(contextLabel)
             add(contextFillBar)
+            add(contextTokensLabel)
             add(contextPercentLabel)
         }
 
@@ -256,6 +262,7 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
         stateLabel.isVisible = full
         contextLabel.isVisible = full
         contextFillBar.isVisible = full
+        contextTokensLabel.isVisible = full
         requestsLabel.isVisible = full
         tokensLabel.isVisible = full
         moreLabel.isVisible = full
@@ -346,6 +353,7 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
         contextFillBar.percentage = percentage
         contextFillBar.currentTokens = contextTokens
         contextFillBar.maxTokens = contextLimit
+        contextTokensLabel.text = StatusBarFormat.contextFill(contextTokens, contextLimit)
         contextPercentLabel.text = "$percentage%"
         contextPercentLabel.foreground = when {
             percentage < 75 -> LCATheme.successColor
@@ -537,4 +545,23 @@ object StatusBarFormat {
 
     /** Session cost, in the user's locale (a comma decimal separator is expected in PL). */
     fun cost(usd: Double): String = String.format("%.2f", usd)
+
+    /**
+     * Context fill as "used / window", e.g. `47K/128K`.
+     *
+     * A percentage alone does not say how much room is left in absolute terms, and the same
+     * percentage means something very different on a 32K and on a 1M window. Whole thousands are
+     * enough to judge that and keep the width stable while the number grows; an unknown window
+     * (no model resolved yet) leaves the metric out rather than printing a misleading limit.
+     */
+    fun contextFill(used: Int, limit: Int): String =
+        if (limit <= 0) "" else "${tokensShort(used)}/${tokensShort(limit)}"
+
+    // Truncated, not rounded: a 32768-token window has to read "32K" the way the user knows it,
+    // and a shown limit must never claim more room than the model actually has.
+    private fun tokensShort(tokens: Int): String = when {
+        tokens >= 1_000_000 -> String.format("%.1fM", tokens / 1_000_000.0)
+        tokens >= 1_000 -> "${tokens / 1_000}K"
+        else -> tokens.toString()
+    }
 }

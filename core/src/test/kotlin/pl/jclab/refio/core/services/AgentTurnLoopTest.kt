@@ -28,6 +28,7 @@ import pl.jclab.refio.core.services.turn.TurnCompletionGuardian
 import pl.jclab.refio.core.services.turn.TurnFinalizer
 import pl.jclab.refio.core.services.turn.TurnGuardrails
 import pl.jclab.refio.core.services.turn.TurnLLMCaller
+import pl.jclab.refio.core.services.turn.TurnPhase
 import pl.jclab.refio.core.services.turn.TurnPromptBuilder
 import pl.jclab.refio.core.services.turn.TurnResponseProcessor
 import pl.jclab.refio.core.services.turn.TurnSubagentValidator
@@ -604,6 +605,48 @@ class AgentTurnLoopTest {
         }
 
         @Test
+        fun `a turn that ends on an abort path leaves no running state behind`() = runTest {
+            // The UI shows a "now running" bar (step, active tool, Stop) for as long as the turn
+            // state is not idle. A turn that ends anywhere other than the happy path must clear it
+            // too, otherwise the user is left with a Stop button for an agent that already stopped.
+            coEvery {
+                llmClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    maxTokens = any(),
+                    temperature = any(),
+                    responseFormat = any(),
+                    thinking = any(),
+                    noEgressEnabled = any(),
+                    stream = any(),
+                    onChunk = any(),
+                    taskId = any(),
+                    subtaskId = any(),
+                    source = any(),
+                    kwargs = any()
+                )
+            } returns LLMResponse(
+                content = "",
+                usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
+                model = "gpt-4",
+                provider = "openai",
+                cost = 0.0,
+                finishReason = "stop"
+            )
+
+            agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Test",
+                mode = TaskMode.PLAN
+            )
+
+            assertEquals(TurnPhase.IDLE, agentTurnLoop.turnState.value.phase)
+            assertNull(agentTurnLoop.turnState.value.activeToolName)
+        }
+
+        @Test
         fun `should handle LLM exceptions gracefully`() = runTest {
             // Given
             coEvery {
@@ -1108,6 +1151,87 @@ class AgentTurnLoopTest {
             assertFalse(
                 result.response.contains("could not recover", ignoreCase = true),
                 "must not surface the give-up error text when a deliverable landed, got: ${result.response}",
+            )
+        }
+
+        @Test
+        fun `repeating itself after the file landed finalizes SUCCESS instead of discarding the write`() = runTest {
+            // e2e regression (ornith:35b, scenarios games-snake4cpu and simulation-bioforge): the model
+            // wrote the deliverable, then spent its self-verification phase saying the same thing twice,
+            // which is exactly when it has nothing new left to say. The cross-iteration text-repetition
+            // guard aborted the turn with success=false unconditionally, so a written file was reported
+            // as a failed turn. The guard must stay - it is the only brake on a real prose loop - but a
+            // turn whose file deliverable already landed has to finalize as done.
+            val advanceTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "advance_code_editing"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.WRITE
+            }
+            every { toolRegistry.getTool("advance_code_editing") } returns advanceTool
+            coEvery { toolExecutor.executeTool(any(), any()) } returns
+                ToolResult(success = true, output = "wrote snake.html (+420/-0)")
+
+            val stallText = "The game is complete. Let me verify the file once more before wrapping up."
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                // iter 1: the WRITE lands - the deliverable is on disk.
+                createLLMResponse("""{"response":"building the game","actions":[{"tool":"advance_code_editing","arguments":{"path":"snake.html","instructions":"build the game"}}]}"""),
+                // iters 2-3: the same sign-off prose twice, no tool call -> repetition abort.
+                createLLMResponse("""{"actions":[],"response":"$stallText","intent":"implementation"}"""),
+                createLLMResponse("""{"actions":[],"response":"$stallText","intent":"implementation"}""")
+            )
+
+            // A terminal text ends the turn on its own, so reaching the cross-iteration guard needs a
+            // guardian re-entry - which is exactly how the model gets a second shot at repeating itself.
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), GuardianRegistry(listOf(ScriptedReenterOnceGuardian())))
+
+            val result = loop.runTurn(
+                taskId = testTaskId,
+                userInput = "Build a Snake game in one HTML file",
+                mode = TaskMode.AGENT
+            )
+
+            assertTrue(result.success, "a landed write must survive the repetition abort: ${result.response}")
+            assertFalse(
+                result.response.contains("no progress is being made", ignoreCase = true),
+                "the abort reason must not be surfaced as the outcome of a delivered turn, got: ${result.response}",
+            )
+        }
+
+        @Test
+        fun `repeating itself with nothing written still aborts the turn`() = runTest {
+            // The other half of the rule: with no deliverable there is nothing to rescue, so a model
+            // stuck repeating itself must still be stopped rather than reported as done.
+            val stallText = "Let me look into this a bit more before I answer."
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                createLLMResponse("""{"actions":[],"response":"$stallText","intent":"implementation"}"""),
+                createLLMResponse("""{"actions":[],"response":"$stallText","intent":"implementation"}""")
+            )
+
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), GuardianRegistry(listOf(ScriptedReenterOnceGuardian())))
+
+            val result = loop.runTurn(
+                taskId = testTaskId,
+                userInput = "Fix the bug",
+                mode = TaskMode.AGENT
+            )
+
+            assertFalse(result.success, "a prose loop with no deliverable must still fail the turn")
+            assertTrue(
+                result.response.contains("no progress is being made", ignoreCase = true),
+                "expected the repetition abort reason, got: ${result.response}",
             )
         }
 
@@ -1942,6 +2066,53 @@ class AgentTurnLoopTest {
                 "when the re-entry produced real tool work, its later answer must win — not the stale pre-re-entry candidate"
             )
         }
+
+        @Test
+        fun `an answer stashed by a re-entry is finalized instead of failing on an empty envelope`() = runTest {
+            // e2e regression (ornith:35b, scenarios subagent-two-file-fix and node-callgraph): the model
+            // delivered its answer, the judge re-entered ("not yet delivered"), the re-entry dropped
+            // native tools for the JSON contract, and on that contract the model returned nothing at all.
+            // The empty-content give-up then reported FAILURE, throwing away both the answer the user had
+            // already seen and the work behind it. An answer the guardian is holding is a deliverable:
+            // the turn must finalize with it rather than fail.
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                createLLMResponse("""{"actions":[],"response":"ANSWER THE USER ALREADY SAW","intent":"analysis"}"""),
+                // The re-entry and its two nudges yield nothing: empty content, no tool calls.
+                emptyLLMResponse(), emptyLLMResponse(), emptyLLMResponse()
+            )
+
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), reenterOnceRegistry())
+
+            val result = loop.runTurn(
+                taskId = testTaskId,
+                userInput = "Map the call graph",
+                mode = TaskMode.AGENT
+            )
+
+            assertTrue(result.success, "a stashed answer must finalize the turn, not fail it: ${result.response}")
+            assertEquals(
+                "ANSWER THE USER ALREADY SAW",
+                result.response,
+                "the answer held by the guardian must be what the turn delivers"
+            )
+            assertFalse(
+                result.response.contains("could not recover", ignoreCase = true),
+                "the give-up error text must not replace a real answer, got: ${result.response}",
+            )
+        }
+
+        private fun emptyLLMResponse() = LLMResponse(
+            content = "",
+            usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
+            model = "ornith:35b", provider = "ollama", cost = 0.0, finishReason = "stop"
+        )
 
         @Test
         fun `deliverable + native no-call stall keeps native on re-entry and finalizes with a clean sign-off`() = runTest {

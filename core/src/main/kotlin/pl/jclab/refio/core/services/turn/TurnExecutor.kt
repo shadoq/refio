@@ -155,6 +155,15 @@ internal class TurnExecutor(
         val agentName: String?,
         val agentDepth: Int?,
     ) {
+        /**
+         * Every terminal exit of [execute] goes through here, which is why the running state is
+         * cleared here rather than at each of the ~20 return sites - only a handful of them used
+         * to do it, so an abort left the UI showing a live step and a Stop button for an agent
+         * that had already finished.
+         *
+         * A nested turn keeps the state alone: it shares this flow with the parent, which is
+         * still running and whose next iteration overwrites it anyway.
+         */
         fun finish(result: TurnResult, persistAssistantMessage: Boolean): TurnResult =
             turnFinalizer.completeTurn(
                 taskId, result, listener, runId, parentRunId, depth,
@@ -163,7 +172,7 @@ internal class TurnExecutor(
                 agentInstanceId = agentInstanceId,
                 agentName = agentName,
                 agentDepth = agentDepth,
-            )
+            ).also { if (depth == 0) updateTurnState { TurnStateSnapshot() } }
 
         fun persist(
             role: MessageRole,
@@ -838,6 +847,39 @@ internal class TurnExecutor(
                                     )
                                     return turnPersistence.finish(result, persistAssistantMessage = true)
                                 }
+                                // Second deliverable shape: an answer a guardian re-entry is holding.
+                                // The re-entry stashes the terminal answer the user already saw, and it
+                                // is also what pushes a native-channel turn onto the JSON contract. When
+                                // the model then returns nothing on that contract, the stash is the only
+                                // surviving record of a turn whose work is done - failing here discarded
+                                // a delivered answer (observed on ornith:35b: two subagents fixed both
+                                // files, the parent turn was still reported FAILED). Restore it, the way
+                                // the clean finalize path does.
+                                val restoredAnswer = guardianState.restorableResponse(usedTools.size)
+                                    ?.let { toolCallParser.extractTextResponse(it.content).ifEmpty { it.content } }
+                                    ?.takeIf { it.isNotBlank() }
+                                if (restoredAnswer != null) {
+                                    logger.warn {
+                                        "[TURN_EMPTY_CONTENT_RESTORED] taskId=$taskId, iteration=$iteration: " +
+                                            "empty JSON envelope after a guardian re-entry, restoring the " +
+                                            "pre-re-entry answer instead of failing the turn"
+                                    }
+                                    val result = TurnResult(
+                                        success = true,
+                                        response = restoredAnswer,
+                                        iterations = iteration,
+                                        tokensIn = totalTokensIn,
+                                        tokensOut = totalTokensOut,
+                                        cost = totalCost,
+                                        toolsUsed = usedTools.distinct()
+                                    )
+                                    // Already written as its own ASSISTANT row at re-entry - persisting
+                                    // again would duplicate it verbatim.
+                                    return turnPersistence.finish(
+                                        result,
+                                        persistAssistantMessage = !guardianState.captureAlreadyFinalized(usedTools.size),
+                                    )
+                                }
                                 logger.error {
                                     "[TURN_FAILED] Empty content from model in JSON mode " +
                                         "(mode=$mode, reason=${decision.reason}, finishReason=${llmResponse.finishReason}, thinkingLength=${llmResponse.thinking?.length ?: 0})"
@@ -1468,9 +1510,23 @@ internal class TurnExecutor(
                             val textRepeatStatus = textRepetitionTracker.record(contentForExtraction)
                             if (textRepeatStatus is TurnGuardrails.LoopStatus.ABORT) {
                                 logger.warn { "[TEXT_REPETITION] taskId=$taskId, iteration=$iteration: ${textRepeatStatus.reason}" }
+                                // Deliverable-aware, like every other terminal abort. Repeating itself is
+                                // what a model does once its work is done and it has nothing new to say -
+                                // the self-verification phase after a write is where this shows up. With
+                                // the file already on disk, failing here would throw away a finished turn
+                                // (observed on local models building a single-page app: the write landed,
+                                // the model then re-stated its sign-off twice and the turn was reported
+                                // FAILED). With nothing written there is nothing to rescue, so the abort
+                                // stands and the prose loop is still stopped.
+                                val deliverableProduced = TurnDeliverable.produced(
+                                    fileWriteToolsExecutedInTurn,
+                                    mode,
+                                    "",
+                                    isSubagent = runProfile == TurnRunProfile.SUBAGENT,
+                                )
                                 val result = TurnResult(
-                                    success = false,
-                                    response = textRepeatStatus.reason,
+                                    success = deliverableProduced,
+                                    response = if (deliverableProduced) DELIVERABLE_STALL_SIGNOFF else textRepeatStatus.reason,
                                     iterations = iteration,
                                     tokensIn = totalTokensIn,
                                     tokensOut = totalTokensOut,
@@ -1989,7 +2045,6 @@ internal class TurnExecutor(
                             "agentName" to (profileOverrides?.subagentName ?: "default")
                         ))
                         val finalResult = turnPersistence.finish(result, persistAssistantMessage = false)
-                        updateTurnState { TurnStateSnapshot() }
                         emitTurnFinal(result.success)
                         return finalResult
                     }
@@ -2064,7 +2119,6 @@ internal class TurnExecutor(
                 toolsUsed = usedTools.distinct()
             )
             val finalResult = turnPersistence.finish(result, persistAssistantMessage = true)
-            updateTurnState { TurnStateSnapshot() }
             emitTurnFinal(success = false)
             return finalResult
         } catch (e: CancellationException) {
@@ -2090,7 +2144,6 @@ internal class TurnExecutor(
                 toolsUsed = usedTools.distinct()
             )
             val finalResult = turnPersistence.finish(result, persistAssistantMessage = true)
-            updateTurnState { TurnStateSnapshot() }
             emitTurnFinal(success = false)
             return finalResult
         } catch (e: Exception) {
@@ -2126,7 +2179,6 @@ internal class TurnExecutor(
             toolsUsed = usedTools.distinct()
         )
         val finalResult = turnPersistence.finish(result, persistAssistantMessage = true)
-        updateTurnState { TurnStateSnapshot() }
         emitTurnFinal(success = false)
         return finalResult
     }

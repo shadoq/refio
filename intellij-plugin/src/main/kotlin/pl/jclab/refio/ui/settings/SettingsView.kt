@@ -102,6 +102,9 @@ class SettingsView(
 
         categoryList.apply {
             cellRenderer = CategoryRenderer()
+            // A cell that does not fit the viewport is otherwise re-painted in a slightly offset
+            // popup on hover, which makes the icons look like they jump sideways.
+            setExpandableItemsEnabled(false)
             // Group headers are labels, not destinations: a click on one keeps the previous
             // selection instead of showing an empty right-hand side.
             selectionModel = object : DefaultListSelectionModel() {
@@ -170,14 +173,17 @@ class SettingsView(
             horizontalAlignment = SwingConstants.CENTER
             isOpaque = true
             border = JBUI.Borders.empty(4)
-            preferredSize = Dimension(JBUI.scale(CATEGORY_STRIP_WIDTH), JBUI.scale(30))
+            // Height only: a cell as wide as the strip is one pixel wider than the viewport left
+            // by the strip's right-hand line, and the list would then overflow it. Width comes
+            // from the list, which the icon is centered in.
+            preferredSize = Dimension(0, JBUI.scale(30))
         }
 
         private val separatorCell = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             isOpaque = false
             border = JBUI.Borders.empty(4, 6)
             add(JSeparator(SwingConstants.HORIZONTAL), BorderLayout.CENTER)
-            preferredSize = Dimension(JBUI.scale(CATEGORY_STRIP_WIDTH), JBUI.scale(9))
+            preferredSize = Dimension(0, JBUI.scale(9))
         }
 
         override fun getListCellRendererComponent(
