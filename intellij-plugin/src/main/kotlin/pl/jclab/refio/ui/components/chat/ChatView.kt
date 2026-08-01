@@ -956,6 +956,24 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
         onContinueRequested = handler
     }
 
+    /** The transcript the timeline projects; the same snapshot this view last rendered. */
+    fun currentMessages(): List<Message> = lastReceivedMessages
+
+    /**
+     * Scrolls the transcript so the bubble of [messageId] is in view - the timeline's whole point.
+     *
+     * Works off the rendered panel rather than the message index, because only a mounted bubble has
+     * a position; a message whose bubble is not currently built (session switched under the click)
+     * is reported back as not found instead of scrolling somewhere arbitrary.
+     */
+    fun scrollToMessage(messageId: String): Boolean {
+        val panel = messagePanelCache[messageId]?.panel ?: return false
+        if (panel.parent == null) return false
+        val target = SwingUtilities.convertRectangle(panel.parent, panel.bounds, this)
+        scrollRectToVisible(target)
+        return true
+    }
+
     fun clearForNewSession() {
         lastReceivedMessages = emptyList()
         disposeMessagePanels(messagePanelCache.values.map { it.panel })

@@ -18,7 +18,10 @@ import pl.jclab.refio.ui.components.debug.DebugPanel
 import pl.jclab.refio.ui.components.context.ContextPanel
 import pl.jclab.refio.ui.components.history.HistoryPanel
 import pl.jclab.refio.ui.components.rag.RagViewPanel
+import com.intellij.ui.OnePixelSplitter
 import pl.jclab.refio.ui.execution.NowRunningBar
+import pl.jclab.refio.ui.execution.TimelinePanel
+import pl.jclab.refio.ui.execution.TimelineSteps
 import pl.jclab.refio.ui.RefioScreen
 import pl.jclab.refio.ui.rail.RefioRail
 import pl.jclab.refio.ui.settings.ApiLogsPanel
@@ -55,6 +58,8 @@ class RefioContentPanel(
     private val chatView: ChatView
     private val promptInputPanel: PromptInputPanel
     private val chatScrollPane: JBScrollPane
+    private val chatSplitter: OnePixelSplitter
+    private val timelinePanel: TimelinePanel
     private val statusBar: StatusBar
 
     private val stepsQueueView: StepsQueueView
@@ -81,6 +86,7 @@ class RefioContentPanel(
     private var settingsView: SettingsView? = null
     private val chatMessagesUpdatedListener = PropertyChangeListener {
         scrollChatToBottom()
+        refreshTimeline()
     }
     private val stopExecutionListener = PropertyChangeListener { evt ->
         if (evt.newValue == true) {
@@ -120,6 +126,12 @@ class RefioContentPanel(
         // their screen is ever shown, so they must exist up front.
         nowRunningBar = NowRunningBar(this) { promptInputPanel.stopCurrentOperation() }
         agentExecutionPanel = pl.jclab.refio.ui.components.agents.AgentExecutionPanel()
+        // Built here, before the turn-state collector below captures it, and mounted into the
+        // splitter only once the layout reaches the wide band.
+        timelinePanel = TimelinePanel(
+            onStop = { promptInputPanel.stopCurrentOperation() },
+            onStepSelected = { messageId -> chatView.scrollToMessage(messageId) }
+        )
 
         cs.launch {
             var turnStateJob: kotlinx.coroutines.Job? = null
@@ -129,7 +141,10 @@ class RefioContentPanel(
                 if (turnStateFlow != null) {
                     turnStateJob = cs.launch {
                         turnStateFlow.collect { snapshot ->
-                            SwingUtilities.invokeLater { nowRunningBar.update(snapshot) }
+                            SwingUtilities.invokeLater {
+                                nowRunningBar.update(snapshot)
+                                timelinePanel.setRunning(snapshot)
+                            }
                         }
                     }
                 }
@@ -146,10 +161,16 @@ class RefioContentPanel(
 
         chatView.addPropertyChangeListener("messagesUpdated", chatMessagesUpdatedListener)
 
+        // Proportion is remembered under this key across IDE restarts (handoff 07B).
+        chatSplitter = OnePixelSplitter(false, "reflo.chat.timeline", CHAT_TIMELINE_PROPORTION).apply {
+            firstComponent = chatScrollPane
+            secondComponent = null
+        }
+
         val chatPanel = JPanel(BorderLayout()).apply {
             background = LCATheme.backgroundColor
             add(nowRunningBar, BorderLayout.NORTH)
-            add(chatScrollPane, BorderLayout.CENTER)
+            add(chatSplitter, BorderLayout.CENTER)
             add(promptInputPanel, BorderLayout.SOUTH)
         }
 
@@ -388,6 +409,25 @@ class RefioContentPanel(
             if (width == Width.NARROW) StatusBar.Level.MINIMAL else StatusBar.Level.NORMAL
         )
         promptInputPanel.setSendCompact(width == Width.NARROW)
+        setTimelineVisible(width == Width.WIDE)
+    }
+
+    /**
+     * The timeline column and the "now running" bar carry the same information, so exactly one of
+     * them is on screen: the column where there is width for it, the bar everywhere else.
+     */
+    private fun setTimelineVisible(visible: Boolean) {
+        if (visible == (chatSplitter.secondComponent != null)) return
+        chatSplitter.secondComponent = if (visible) timelinePanel else null
+        nowRunningBar.setSuppressed(visible)
+        if (visible) {
+            refreshTimeline()
+        }
+    }
+
+    /** Rebuilds the timeline rows from the transcript the chat view currently holds. */
+    private fun refreshTimeline() {
+        timelinePanel.setSteps(TimelineSteps.from(chatView.currentMessages()))
     }
 
     /** Switches the rail and the card stack to [screen]. Safe to call from anywhere on EDT. */
@@ -465,5 +505,10 @@ class RefioContentPanel(
             }
             onShow?.invoke()
         }
+    }
+
+    private companion object {
+        /** Transcript keeps the bulk of the width; the timeline is a margin column, not a second pane. */
+        const val CHAT_TIMELINE_PROPORTION = 0.72f
     }
 }

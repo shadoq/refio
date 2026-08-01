@@ -52,6 +52,7 @@ class NowRunningBar(
     private val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, this)
     private var startedAt = 0L
     private var state: NowRunningState = NowRunningState.HIDDEN
+    private var suppressed = false
 
     init {
         val row = JPanel(HorizontalLayout(JBUI.scale(6))).apply {
@@ -78,6 +79,17 @@ class NowRunningBar(
         Disposer.register(parent, this)
     }
 
+    /**
+     * Hides the bar even while a turn runs, for the wide layout where the timeline column shows the
+     * same thing. Two live progress indicators for one turn read as two turns.
+     */
+    fun setSuppressed(suppressed: Boolean) {
+        if (this.suppressed == suppressed) return
+        this.suppressed = suppressed
+        isVisible = state.visible && !suppressed
+        if (suppressed) spinner.suspend() else if (state.busy) spinner.resume()
+    }
+
     /** Applies a turn snapshot. Safe to call on every emission; only real changes touch the UI. */
     fun update(snapshot: TurnStateSnapshot) {
         val next = NowRunningState.from(snapshot)
@@ -99,9 +111,9 @@ class NowRunningBar(
         stepLabel.text = next.stepText
         detailLabel.text = next.detailText
         progress.isIndeterminate = next.busy
-        if (next.busy) spinner.resume() else spinner.suspend()
+        if (next.busy && !suppressed) spinner.resume() else spinner.suspend()
         spinner.isVisible = next.busy
-        isVisible = true
+        isVisible = !suppressed
     }
 
     /** Elapsed time is local wall clock, so it ticks even between engine emissions. */
