@@ -50,8 +50,17 @@ object MCPManager {
 
     /**
      * Initialize MCP manager for a project.
+     *
+     * [runScopeServers] are servers declared for this process only - they are used and connected
+     * like any other, but never written to the database. That keeps a headless test run from
+     * leaving servers behind in the shared database. On an id collision the run-scope server wins,
+     * so a test can shadow a stored server without editing it.
      */
-    fun initialize(projectId: String? = null, toolRegistry: ToolRegistry? = null) {
+    fun initialize(
+        projectId: String? = null,
+        toolRegistry: ToolRegistry? = null,
+        runScopeServers: List<MCPServerConfig> = emptyList()
+    ) {
         val state = projectStates.computeIfAbsent(mapKey(projectId)) {
             MCPProjectState(projectId = projectId, toolRegistry = toolRegistry)
         }
@@ -59,7 +68,8 @@ object MCPManager {
             state.toolRegistry = toolRegistry
         }
 
-        val configs = repository.getAll(projectId)
+        val stored = repository.getAll(projectId).filterNot { s -> runScopeServers.any { it.id == s.id } }
+        val configs = stored + runScopeServers
         configs.forEach { config -> state.serverConfigs[config.id] = config }
 
         scope.launch {

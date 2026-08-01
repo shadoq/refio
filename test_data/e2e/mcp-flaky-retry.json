@@ -1,0 +1,29 @@
+{
+  "id": "mcp-flaky-retry",
+  "mode": "AGENT",
+  "description": "An MCP tool that fails once must be retried, not abandoned or hallucinated.",
+  "category": "mcp",
+  "max_iterations": 15,
+  "fixture": "fixtures/mcp-empty",
+  "prompt_file": "prompts/mcp-flaky-retry.md",
+  "mcp": {
+    "config": "configs/stdio-flaky.json"
+  },
+  "assert": {
+    "tool_invoked": [
+      {
+        "name": "mcp_stubflaky_flaky_probe"
+      }
+    ],
+    "needle_in_file": {
+      "path": "probe.txt",
+      "regex": "MCP_FLAKY\\{8351d882d56a\\}"
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "Did the agent retry the failing MCP tool and write its real answer, rather than giving up or inventing one?"
+    ]
+  }
+}

@@ -1,8 +1,10 @@
 package pl.jclab.refio.cli
 
 import pl.jclab.refio.core.api.CoreApiRouter
+import pl.jclab.refio.core.config.RefioHome
 import pl.jclab.refio.core.context.ContextProviderRegistry
 import pl.jclab.refio.core.context.mcp.MCPManager
+import pl.jclab.refio.core.context.mcp.MCPServerConfig
 import pl.jclab.refio.core.context.providers.ClipboardContextProvider
 import pl.jclab.refio.core.context.providers.UrlContextProvider
 import pl.jclab.refio.core.context.providers.standalone.*
@@ -36,10 +38,16 @@ class StandaloneCoreBootstrap(
      * Run-scope config overrides from `--config` / `--config-file`. Threaded into the
      * app router and forwarded to the project router. Highest priority, read-only, never persisted.
      */
-    private val runConfigOverrides: Map<String, String> = emptyMap()
+    private val runConfigOverrides: Map<String, String> = emptyMap(),
+    /**
+     * MCP servers declared for this run only (`--mcp-server`). Connected like stored servers but
+     * never written to the database, so a test run leaves no server behind.
+     */
+    private val runScopeMcpServers: List<MCPServerConfig> = emptyList()
 ) {
     private var appRouter: CoreApiRouter? = null
     private var projectRouter: CoreApiRouter? = null
+    private var mcpProjectId: String? = null
 
     val router: CoreApiRouter
         get() = projectRouter ?: throw IllegalStateException("Not initialized. Call initialize() first.")
@@ -64,9 +72,8 @@ class StandaloneCoreBootstrap(
         val refioDir = absolutePath.resolve(".refio").toFile()
         if (!refioDir.exists()) refioDir.mkdirs()
 
-        // 1. Database path: ~/.refio/data/database.sqlite (shared across projects)
-        val userHome = System.getProperty("user.home")
-        val refioDataDir = File(userHome, ".refio/data")
+        // 1. Database path: <refio home>/data/database.sqlite (shared across projects)
+        val refioDataDir = RefioHome.resolve("data").toFile()
         if (!refioDataDir.exists()) refioDataDir.mkdirs()
         val dbPath = File(refioDataDir, "database.sqlite").absolutePath
 
@@ -121,13 +128,35 @@ class StandaloneCoreBootstrap(
         //    tools for the agent — without it the CLI connected servers but never exposed tools.
         try {
             val projectId = ProjectIdGenerator.generate(absolutePath)
-            MCPManager.initialize(projectId, projectRouter.getToolRegistry())
+            mcpProjectId = projectId
+            MCPManager.initialize(projectId, projectRouter.getToolRegistry(), runScopeMcpServers)
         } catch (e: Exception) {
             logger.warn { "MCP initialization skipped: ${e.message}" }
         }
 
         logger.info { "Standalone core initialized" }
         return projectRouter
+    }
+
+    /**
+     * Waits until the MCP servers finish connecting, so their tools are in the registry before the
+     * first LLM call builds its tool schema.
+     *
+     * [MCPManager.initialize] connects in the background. A long-lived IDE absorbs that, but a
+     * headless run starts its turn immediately: a local stdio server usually wins the race while an
+     * HTTP or SSE one, paying for network round trips, does not - and the model then reports the
+     * tool as unavailable. Bounded, and a server that never settles only costs the timeout.
+     */
+    suspend fun awaitMcpReady(timeoutMs: Long = MCP_READY_TIMEOUT_MS) {
+        val projectId = mcpProjectId ?: return
+        val serverIds = MCPManager.getAllServers(projectId).map { it.id }
+        if (serverIds.isEmpty()) return
+        McpProbe.awaitSettled(projectId, serverIds, timeoutMs)
+        logger.info {
+            "MCP settled before turn: " + serverIds.joinToString {
+                "$it=${MCPManager.getServerStatus(projectId, it)}"
+            }
+        }
     }
 
     /**
@@ -153,5 +182,10 @@ class StandaloneCoreBootstrap(
         appRouter = null
 
         logger.info { "Standalone core shut down" }
+    }
+
+    private companion object {
+        /** Enough for an HTTP/SSE handshake; a dead server only costs this once. */
+        const val MCP_READY_TIMEOUT_MS = 20_000L
     }
 }

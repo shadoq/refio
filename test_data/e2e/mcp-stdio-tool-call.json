@@ -1,0 +1,29 @@
+{
+  "id": "mcp-stdio-tool-call",
+  "mode": "AGENT",
+  "description": "Call a tool on an MCP server connected over stdio and write its answer to a file.",
+  "category": "mcp",
+  "max_iterations": 20,
+  "fixture": "fixtures/mcp-empty",
+  "prompt_file": "prompts/mcp-stdio-tool-call.md",
+  "mcp": {
+    "config": "configs/stdio-docs.json"
+  },
+  "assert": {
+    "tool_invoked": [
+      {
+        "name": "mcp_stubdocs_query-docs"
+      }
+    ],
+    "needle_in_file": {
+      "path": "result.txt",
+      "regex": "MCP_DOCS\\{bae621b56dcb\\}"
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "Did the agent call the MCP documentation tool and write its verbatim answer into result.txt?"
+    ]
+  }
+}
