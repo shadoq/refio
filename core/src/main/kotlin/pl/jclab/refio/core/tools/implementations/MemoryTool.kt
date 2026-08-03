@@ -79,7 +79,7 @@ Use for: key findings, intermediate results, decisions, blockers, recovering dat
 
     override suspend fun execute(params: Map<String, Any>): ToolResult {
         val action = params["action"] as? String
-            ?: return ToolResult.error("action required")
+            ?: return ToolResult.error("action required. Use one of: write, read, list, get_subtask_output")
 
         return when (action) {
             "write" -> handleWrite(params)

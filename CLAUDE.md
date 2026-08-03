@@ -1,128 +1,111 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 ## Agent Rules
 
-These rules apply to every task in this project. Precedence when guidance conflicts:
-user's explicit instruction > project CLAUDE.md > AGENTS.md > this file.
-Two rules are a floor and stay in force unless the user explicitly and knowingly overrides them
-in the moment: never disclose or commit secrets (Rule 15), and confirm before destructive or
-irreversible operations (Rule 1). A general "go fast" or a stale config does not silently disable them.
+Apply to every task. Precedence: user's explicit instruction > project CLAUDE.md > AGENTS.md > this file.
+Hard floor, overridable only by an explicit and knowing user decision in the moment: no secrets (12), confirm destructive/irreversible actions (2), no auto-commit (13).
 Bias: caution over speed on non-trivial work.
 
-### Rule 0 — Language & Typography
-- Communicate with the user (chat replies, explanations, questions) in Polish, plain Polish, no marketing jargon.
-- Code identifiers, comments, and internal logs are English.
-- For user-facing text (UI strings, API responses, error messages): match the language and localization mechanism the project already uses (Rule 10). For greenfield code with no existing convention, default to English.
-- Working/design docs may stay Polish.
-- Never use the em dash `—` or en dash `–` anywhere (chat, code, comments, UI, docs, commit messages). Use a plain hyphen `-` instead.
+### 1. Language and typography
+- Talk to the user in Polish, plain, no marketing jargon.
+- Code identifiers, comments, internal logs: English.
+- User-facing text (UI, API responses, errors): follow the project's existing language and i18n mechanism; English if there is none.
+- Working docs may stay Polish.
+- Never use `—` or `–` anywhere. Plain hyphen `-`.
 
-### Rule 1 — Think, Read, Decide
-Think before coding:
-- State assumptions explicitly. Push back when a simpler approach exists.
-- Stop when genuinely blocked or the right path is ambiguous, not at the first sign of uncertainty.
+### 2. Think, read, decide
+- State assumptions. Push back when something simpler works.
+- Before writing code, read the exports, the immediate callers and the shared utilities you touch.
+- If you cannot tell why existing code looks the way it does, ask.
+- Ask based on the decision, not on your discomfort: irreversible, costly or contract-changing → ask; otherwise record the assumption and go.
+- Low-risk, reversible → proceed.
+- Medium-risk (shared code or behavior) → proceed with a short inline plan.
+- High-risk (public API, schema, data model, security, billing, migration, architecture, irreversible state) → stop and ask first, unless the user already approved this concrete change.
+- Stop only when genuinely blocked, not at the first uncertainty.
 
-Read before you write:
-- Before adding code, read exports, immediate callers, and shared utilities.
-- If unsure why existing code is structured a certain way, ask.
-
-Decide by risk (when to ask vs when to proceed):
-- The trigger to ask is the decision, not your discomfort: ask when it is irreversible, costly, or changes a contract; otherwise record the assumption and proceed.
-- Low-risk, reversible → proceed when confident; make the smallest reversible assumption and state it.
-- Medium-risk (shared code or behavior) → proceed only with a short plan.
-- High-risk (public APIs, schemas, data model, security, billing, migrations, architecture, irreversible state) → stop and ask before implementation, unless the user has already explicitly approved this concrete change and its consequences.
-
-### Rule 2 — Simplicity First
+### 3. Simplicity first
 - Minimum code that solves the problem. Nothing speculative.
-- No abstractions for single-use code.
-- Prefer the minimum viable change, unless it increases future maintenance risk in an already known hotspot.
+- No abstraction for single-use code.
+- Prefer the minimum viable change, unless it adds maintenance risk in a known hotspot.
 
-### Rule 3 — Surgical Changes
-- Touch only what you must. Don't improve adjacent code.
-- Match existing style. Don't refactor what isn't broken.
-- If the root cause is outside the initial scope, stop and report it instead of patching symptoms.
-- When an auto-formatter or codegen rewrites a whole file, keep only the diff relevant to your change and revert unrelated formatting churn.
-- Running the project's repo-wide format step is a separate, intentional work item, not a side effect of an unrelated change - unless the project requires it as a CI condition for this change.
+### 4. Surgical changes
+- Touch only what you must. Do not improve adjacent code.
+- Match existing style. Do not refactor what is not broken.
+- Root cause outside scope → report it, do not patch symptoms.
+- If a formatter or codegen rewrites a whole file, keep only your diff and revert the churn.
+- Repo-wide formatting is a separate work item, never a side effect.
 
-### Rule 4 — Goal-Driven Execution
-- Define success criteria. Loop until verified.
-- Strong success criteria let the agent loop independently.
-- "Done" scales to the change type: code plus whatever it actually requires - tests, user-facing docs, migrations, error handling/telemetry. Compiling is not done.
+### 5. Goal-driven execution
+- Define success criteria first, then loop until verified.
+- "Done" scales to the change: code plus what it actually needs (tests, user docs, migration, error handling). Compiling is not done.
 
-### Rule 5 — Use the model only for judgment calls
-- Use the model for: classification, drafting, summarization, extraction.
-- In a production flow, do NOT call the model for a deterministic task (routing, retries, deterministic transforms) when a simpler deterministic implementation meets the requirements.
-- Use model judgment only when intent or context is genuinely ambiguous.
+### 6. Model only for judgment calls
+- Model for: classification, drafting, summarization, extraction, genuinely ambiguous intent.
+- Never for deterministic work (routing, retries, fixed transforms) when plain code does the job.
 
-### Rule 6 — Token budgets are not advisory
-- Rough guide: small task 10k, medium 30k, large 90k. The session hard cap is set by the user / project config.
-- Mechanism: at a task budget → write a short checkpoint (Rule 9); at the session cap → hand off the working state to a fresh session, don't just truncate context.
-- Surface the breach. Do not silently overrun.
+### 7. Token budgets are not advisory
+- Rough guide: small 10k, medium 30k, large 90k; session cap comes from the user or config.
+- At a task budget → write a checkpoint (rule 10). At the session cap → hand off working state to a fresh session, do not just truncate.
+- Surface the breach, never overrun silently.
 
-### Rule 7 — Surface conflicts, don't average them
-- If two patterns contradict, pick one (more recent / more tested).
-- Explain why.
-- Flag the other for cleanup.
+### 8. Tests: TDD by default, real flows, not trivia
+- TDD is the default for behavioral code: write the failing test that defines success, then the minimum code, then refactor.
+- Test complex or risky flows: business logic, state machines, guardrails, parsers, edge cases, regressions.
+- Skip TDD (and usually the test itself) for simple, non-behavioral changes: getters, renames, config or version bumps, docs, styling, a button color, a changed label, a passthrough wrapper, integrations genuinely hard to isolate.
+- Outside those exemptions a change in behavior needs at least one regression test that fails without the fix; "not practical" must name a concrete reason, it is not a blanket excuse.
+- Test name and inputs express the business rule, so the reader sees WHY it matters.
+- A test that cannot fail when the business logic changes is dead weight; delete it instead of writing it.
+- Comment only the non-obvious.
 
-### Rule 8 — Tests verify intent, not just behavior
-- The test name and its inputs should express the business rule, so a reader sees WHY the behavior matters, not just WHAT runs.
-- Add a comment only for a non-obvious reason; don't narrate the obvious.
-- A test that can't fail when business logic changes is wrong.
-
-### Rule 9 — Checkpoint at phase changes
-- Checkpoint when a phase changes (analysis → implementation → tests → blocked), not after every file or command.
-- A checkpoint states what was done, what's verified, what's left.
-- Don't continue from a state you can't describe back.
-
-### Rule 10 — Match the codebase's conventions, even if you disagree
-- Conformance > taste inside the codebase.
-- If you think a convention is harmful, surface it. Don't fork silently.
-
-### Rule 11 — Fail loud
-- "Completed" is wrong if anything was skipped silently.
-- When reporting tests, state it explicitly: which scopes ran, which were skipped, why, and the residual risk. Intentionally excluded suites (e2e, platform, paid integrations) are fine to skip but must be named, not hidden.
-- Default to surfacing uncertainty, not hiding it.
-
-### Rule 12 — Match the approach to the type of work
-- Pick the working mode by the type of work before starting.
-- Describe agents by characteristics (read-only explorer, adversarial reviewer, ...), never hardcode agent names.
-- Feature → write the test that defines success first when practical, then minimum code, then refactor.
-- Bugfix → reproduce with a failing test when practical, root-cause, fix, refactor.
+### 9. Match the approach to the work
+- Feature → failing test first (rule 8), minimum code, then refactor.
+- Bugfix → reproduce with a failing test, root-cause, fix, then refactor.
 - Exploration → read-only explorer; keep the conclusion, not file dumps.
-- Planning/design → plan/brainstorm first.
+- Planning or design → plan first.
 - Review → adversarial review before merge.
-- Cleanup → quality-only refactor, no behavior change.
-- TDD is the preferred default for behavioral code but is not mandatory; use judgment.
-- Exempt from TDD: trivial non-behavioral changes (docs, config/version bumps, renames), config fixes, visual/styling tweaks, and integrations genuinely hard to isolate.
-- Outside those exemptions, a change in behavior needs at least a regression test that would fail without the fix. "Not practical" must name the concrete reason; it is not a blanket excuse.
+- Cleanup → quality only, no behavior change.
+- Describe agents by role (read-only explorer, adversarial reviewer), never by hardcoded agent name.
 
-### Rule 13 — Workflow & Documentation
-- Store documentation in `docs/`, unless the repository already uses another documentation location - then follow that (Rule 10).
-- Classify work by risk and architectural impact, not by file count (Rule 1). A multi-file rename is low-risk; a single-file schema migration is high-risk.
-- Low/medium-risk work → implement directly, keep the plan inline in chat, do NOT create a plan document.
-- High-risk or architecturally significant work (new service/module, schema or public-API change, security, migrations) → before any code, write a plan document.
-- Name the plan by the repo's existing doc convention. If none exists, use `docs/{NNNN}-{title}.md` where `{NNNN}` is the next zero-padded number = (highest existing number in `docs/`) + 1. If two plans would collide on the same number, the second renumbers.
-- The plan covers: expected change, how, why, verification method, success criteria. For migrations and public-API changes also cover: rollback plan, backward compatibility, rollout/deploy order, and how it is validated against real data.
-- Write the plan as for a junior AI agent: what to do, how, and why, with `- [ ]` task checkboxes.
-- Require user review of the plan before implementing only for high-risk or product-changing work. Mark tasks `[x]` as completed.
-- One document per work item: if a plan doc already exists, update it instead of creating a new one.
+### 10. Checkpoint at phase changes
+- Checkpoint on phase change (analysis → implementation → tests → blocked), not per file or command.
+- A checkpoint says: what was done, what is verified, what is left.
+- Do not continue from a state you cannot describe back.
 
-### Rule 14 — No document references in code
-- Never write references to design documents (`doc 0021`, `docs/0011-...md`, `pkt 4`, `iter.4`, `M0..M7`) in anything that ships with the code: comments, identifiers, log/error messages, UI strings, commit messages.
-- The docs are not bundled with the project, so such pointers are dead noise.
-- Describe WHAT the code does and WHY in plain terms that stand on their own.
-- Rationale and iteration history belong in `docs/`, not the source.
-- Plain dates, real-world years, and ticket URLs are fine.
+### 11. Fail loud and do not average conflicts
+- "Completed" is false if anything was skipped silently.
+- When reporting tests: name which scopes ran, which were skipped and why, plus the residual risk. Skipping e2e or paid integrations is fine, hiding it is not.
+- Two contradicting patterns → pick one (more recent or better tested), say why, flag the other for cleanup.
+- Conformance to the codebase beats your taste. If a convention is harmful, surface it, do not fork silently.
 
-### Rule 15 — Secrets and sensitive data
-- Never print or log tokens, keys, passwords, or connection strings. Never commit `.env` or credential files.
-- Mask sensitive values in logs, fixtures, test data, and examples.
-- If a secret is needed, read it from the project's existing config / secret mechanism; don't hardcode or invent one.
+### 12. Secrets
+- Never print, log or commit tokens, keys, passwords, connection strings, `.env` or credential files.
+- Mask sensitive values in logs, fixtures, test data and examples.
+- Need a secret? Read it from the project's existing config mechanism. Never hardcode or invent one.
 
-### Rule 16 — Commit messages
-- One short sentence, imperative, no body. State what changed, not why it was hard.
-- No trailers of any kind. Never add `Co-Authored-By`, `Generated with`, or any other assistant attribution.
-- Rationale, alternatives and investigation notes belong in chat or in `docs/`, never in the commit message.
+### 13. Commits
+- Do NOT commit automatically. Commit only when the user asks.
+- Message: one short imperative sentence, no body. What changed, not how hard it was.
+- No trailers, no `Co-Authored-By`, no "Generated with Claude Code / Codex / any agent", no assistant attribution of any kind.
+- Rationale and investigation notes go to chat or `docs/`, never to the message.
+
+### 14. No documentation references in shipped code
+- Never reference design docs (`doc 0021`, `docs/0011-...md`, `pkt 4`, `iter.4`, `M0..M7`) in anything shipped: comments, identifiers, log or error messages, UI strings, commit messages.
+- Docs are not bundled with the product, so such pointers are dead noise for the reader.
+- Say WHAT the code does and WHY in terms that stand on their own.
+- Plain dates and ticket URLs are fine.
+
+### 15. Documentation and plans
+- Docs live in `docs/`, unless the repo already uses another location (then follow it).
+- Classify by risk and architectural impact, not by file count. A multi-file rename is low-risk; a one-file schema migration is high-risk.
+- Low or medium risk → implement directly, plan inline in chat, no plan document.
+- High-risk or architecturally significant (new module or service, schema or public-API change, security, migration) → write a plan document before any code.
+- Naming: follow the repo convention; otherwise `docs/{NNNN}-{title}.md`, NNNN = highest existing number + 1.
+- The plan covers: expected change, how, why, verification, success criteria. Migrations and public-API changes also cover rollback, backward compatibility, rollout order and validation against real data.
+- Write it for a junior agent: what, how, why, with `- [ ]` checkboxes marked `[x]` as they complete.
+- User review before implementation is required only for high-risk or product-changing work.
+- One document per work item: update the existing plan, do not create a second one.
 
 ## What is Refio
 

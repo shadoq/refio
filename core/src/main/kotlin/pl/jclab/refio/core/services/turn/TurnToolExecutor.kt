@@ -237,6 +237,45 @@ class TurnToolExecutor(
                 name == "invoke_subagent"
 
         /**
+         * `manage_subagent` calls in [toolCalls] that DEFINE an agent (`create`/`update`, or a call
+         * that forgot `action` at all - that is still an attempt to set one up). `delete`/`list` are
+         * housekeeping and do not count.
+         *
+         * Defining an agent does nothing on its own: only `invoke_subagent` runs it. A model that
+         * keeps defining without ever invoking is stuck (observed: four turns spent creating and
+         * re-creating 'root-analyzer', zero analysis produced). Pure so it is unit-testable.
+         */
+        internal fun subagentDefinitionCalls(toolCalls: List<ToolCallData>): List<ToolCallData> =
+            toolCalls.filter { call ->
+                if (call.name != "manage_subagent") return@filter false
+                when (subagentArg(call, "action")) {
+                    null, "create", "update" -> true
+                    else -> false
+                }
+            }
+
+        /** Agent names carried by [subagentDefinitionCalls], in call order, without blanks. */
+        internal fun subagentDefinitionNames(toolCalls: List<ToolCallData>): List<String> =
+            subagentDefinitionCalls(toolCalls).mapNotNull { subagentArg(it, "name") }
+
+        private fun subagentArg(call: ToolCallData, key: String): String? {
+            if (call.arguments.isBlank()) return null
+            return try {
+                TurnJsonUtils.parseJsonToMap(call.arguments)[key]
+                    ?.toString()?.trim()?.takeIf { it.isNotBlank() }
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        /**
+         * Consecutive agent DEFINITIONS (no `invoke_subagent` in between) after which the model is
+         * reminded that an agent has to be run. 2 = it defined one, then defined another instead of
+         * running the first.
+         */
+        const val SUBAGENT_INVOKE_NUDGE_THRESHOLD = 2
+
+        /**
          * Min number of PRIOR failed edits of the same file before the "change approach" nudge
          * fires. 2 prior failures means the current (failing) call is the 3rd attempt.
          */

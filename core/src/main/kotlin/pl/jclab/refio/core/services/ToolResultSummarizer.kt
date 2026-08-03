@@ -5,6 +5,7 @@ import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.services.context.CompressionLevel
+import pl.jclab.refio.core.services.context.FileListingCompression
 import pl.jclab.refio.core.services.context.ToolResultCompression
 import pl.jclab.refio.core.services.context.ToolResultCompressionConfig
 import pl.jclab.refio.core.config.ConfigKeys
@@ -36,6 +37,14 @@ enum class SummaryContextType {
      * The summarizer must NOT rephrase.
      */
     RAW_OUTPUT,
+
+    /**
+     * read_directory / file_search - a listing of paths. Prose summarization is destructive here
+     * (a 29 KB recursive listing came back as "the directory listing reveals a project structure
+     * containing..." with no directory name in it), so these are compressed structurally instead:
+     * per-directory counts, sizes and a sample of names. See [FileListingCompression].
+     */
+    FILE_LISTING,
 
     /** Other tools - standard summarization */
     GENERAL
@@ -210,6 +219,25 @@ class ToolResultSummarizer(
             )
         }
 
+        // Directory listings are compressed STRUCTURALLY, never paraphrased: the agent needs the
+        // directory names and a usable sample of file names to pick its next read, and prose
+        // destroys exactly that (observed: 29 367 chars -> 562 chars of narration, zero names).
+        // Deterministic, so it also costs no WEAK call.
+        if (contextType == SummaryContextType.FILE_LISTING) {
+            val compressed = FileListingCompression.compress(rawOutput)
+            logger.info {
+                "[SUMMARIZER_DETERMINISTIC] FILE_LISTING for tool $toolName: " +
+                    "${rawOutput.length} -> ${compressed.length} chars (grouped by directory, no LLM call)"
+            }
+            return ToolResultSummary(
+                summary = compressed,
+                wasSummarized = compressed.length < rawOutput.length,
+                tokensIn = 0,
+                tokensOut = 0,
+                cost = 0.0
+            )
+        }
+
         logger.info { "[SUMMARIZER] Summarizing result for tool: $toolName (output length: ${rawOutput.length}, context: $contextType)" }
 
         val userPrompt = buildSummarizerPrompt(toolName, rawOutput, contextType)
@@ -228,6 +256,8 @@ class ToolResultSummarizer(
             SummaryContextType.DATA_FILE -> 4096       // Preserve structure + samples
             SummaryContextType.RAW_OUTPUT -> 8192      // Preserve numbers/IDs/errors verbatim
             SummaryContextType.SEARCH_RESULT -> 4096   // Medium for search
+            // Unreachable: FILE_LISTING is compressed deterministically above, before any LLM call.
+            SummaryContextType.FILE_LISTING -> 4096
             SummaryContextType.GENERAL -> 4096         // Standard for others
         }
 
@@ -362,6 +392,9 @@ If the output contains an explicit error / API response (e.g. "HTTP Error 400",
 "code: -970", "Traceback", "SyntaxError"), reproduce that block IN FULL.
             """.trimIndent()
 
+            // Unreachable: FILE_LISTING never reaches the LLM path (see the deterministic
+            // branch above); the arm exists so the `when` stays exhaustive.
+            SummaryContextType.FILE_LISTING,
             SummaryContextType.SEARCH_RESULT -> """
 Focus on:
 - Number of matches found
@@ -438,6 +471,7 @@ Strict rules:
 - Use a markdown code block (```) to wrap any preserved literal output.
             """.trimIndent()
 
+            SummaryContextType.FILE_LISTING,
             SummaryContextType.SEARCH_RESULT -> """
 You are a search result summarizer. Create concise summaries of search matches.
 
@@ -483,7 +517,8 @@ Guidelines:
                 if (isDataFilePath(path)) SummaryContextType.DATA_FILE
                 else SummaryContextType.CODE_ANALYSIS
             }
-            "grep_search", "file_search" -> SummaryContextType.SEARCH_RESULT
+            "read_directory", "file_search" -> SummaryContextType.FILE_LISTING
+            "grep_search" -> SummaryContextType.SEARCH_RESULT
             "run_code", "run_terminal_command", "http_request" -> SummaryContextType.RAW_OUTPUT
             else -> SummaryContextType.GENERAL
         }

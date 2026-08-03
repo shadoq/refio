@@ -68,18 +68,80 @@ class ManageSubagentToolTest {
     }
 
     @Test
-    fun `create fails when agent exists`() = runBlocking {
-        every { router.getSubagent("existing") } returns mockk()
+    fun `repeating an identical create is a no-op success, not a wasted iteration`() = runBlocking {
+        // "An agent by this name must exist" is a desired state for the model, so re-issuing the
+        // same create must not cost it a turn on an error it cannot learn anything from.
+        every { router.getSubagent("existing") } returns SubagentDefinition(
+            name = "existing",
+            description = "Test",
+            systemPrompt = "Test prompt",
+            allowedTools = null,
+            model = "inherit",
+            maxSteps = 25,
+            scope = SubagentScope.TEMPORARY
+        )
 
         val result = tool.execute(mapOf(
             "action" to "create",
             "name" to "existing",
             "description" to "Test",
-            "system_prompt" to "Test",
+            "system_prompt" to "Test prompt",
             "_mode" to "AGENT"
         ))
+
+        assertTrue(result.success)
+        assertTrue(result.output!!.contains("unchanged"))
+        assertTrue(result.output!!.contains("invoke_subagent"))
+        verify(exactly = 0) { router.registerTemporary(any()) }
+    }
+
+    @Test
+    fun `create over an existing agent with a changed definition applies it as an update`() = runBlocking {
+        every { router.getSubagent("existing") } returns SubagentDefinition(
+            name = "existing",
+            description = "Old description",
+            systemPrompt = "Old prompt",
+            model = "inherit",
+            maxSteps = 25,
+            scope = SubagentScope.TEMPORARY
+        )
+
+        val result = tool.execute(mapOf(
+            "action" to "create",
+            "name" to "existing",
+            "description" to "New description",
+            "system_prompt" to "New prompt",
+            "_mode" to "AGENT"
+        ))
+
+        assertTrue(result.success)
+        assertTrue(result.output!!.contains("update"))
+        verify {
+            router.registerTemporary(match {
+                it.description == "New description" && it.systemPrompt == "New prompt"
+            })
+        }
+    }
+
+    @Test
+    fun `create still refuses to shadow a builtin agent`() = runBlocking {
+        every { router.getSubagent("code-reviewer") } returns SubagentDefinition(
+            name = "code-reviewer",
+            description = "Built-in",
+            systemPrompt = "Test",
+            scope = SubagentScope.BUILTIN
+        )
+
+        val result = tool.execute(mapOf(
+            "action" to "create",
+            "name" to "code-reviewer",
+            "description" to "Mine",
+            "system_prompt" to "Mine",
+            "_mode" to "AGENT"
+        ))
+
         assertFalse(result.success)
-        assertTrue(result.error!!.contains("already exists"))
+        assertTrue(result.error!!.contains("builtin"))
     }
 
     @Test
@@ -158,9 +220,14 @@ class ManageSubagentToolTest {
     }
 
     @Test
-    fun `fails without action`() = runBlocking {
+    fun `fails without action and names every valid action`() = runBlocking {
+        // Providers do not enforce the schema's `required`, so this error IS the model's only hint.
         val result = tool.execute(emptyMap())
+
         assertFalse(result.success)
+        listOf("create", "update", "delete", "list").forEach {
+            assertTrue(result.error!!.contains(it), "missing action '$it' in: ${result.error}")
+        }
     }
 
     @Test

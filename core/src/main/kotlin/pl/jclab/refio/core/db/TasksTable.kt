@@ -70,7 +70,27 @@ enum class SubtaskKind {
     KNOWLEDGE_BASE,
     INVOKE_SUBAGENT,
     WEB_SEARCH,
-    FETCH_WEBPAGE
+    FETCH_WEBPAGE,
+    // Kinds below complete the 1:1 mapping with the registered tool names
+    // (ToolRegistry.toSubtaskKind uppercases the tool name). Without them every one of these
+    // tools was stored as PLAN_STEP, which made the subtask list unreadable and logged a WARN
+    // on each call.
+    CODE_INTELLIGENCE,
+    RAG_SEARCH,
+    THINK,
+    TASKS,
+    MEMORY,
+    MANAGE_SUBAGENT,
+    ASK_USER,
+    SLEEP,
+    RUN_PROCESS_BACKGROUND,
+    MONITOR_PROCESS,
+    SEND_MESSAGE,
+    ANSWER_MESSAGE,
+    DELEGATE_TO_STRONG_MODEL,
+    LLM_CALL,
+    FIND_USAGES,
+    RENAME_SYMBOL
 }
 
 /**

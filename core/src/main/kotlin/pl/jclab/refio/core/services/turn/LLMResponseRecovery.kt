@@ -37,6 +37,8 @@ class LLMResponseRecovery(private val toolCallParser: ToolCallParser) {
      * @param jsonMode `true` when no native tool schemas are active (the JSON-envelope contract);
      *   the symmetric native-tools empty branch is handled elsewhere in the loop.
      * @param state shared nudge budget (also incremented by the loop's broken-format branch).
+     * @param hasRestorableAnswer true when a completion-guardian re-entry already stashed the
+     *   terminal answer and has added no tool work since — see [Decision.GiveUp] policy below.
      */
     fun classifyEmptyContent(
         response: LLMResponse,
@@ -46,6 +48,7 @@ class LLMResponseRecovery(private val toolCallParser: ToolCallParser) {
         maxIterations: Int,
         state: RecoveryState,
         profileOverrides: TurnProfileOverrides? = null,
+        hasRestorableAnswer: Boolean = false,
     ): Decision {
         val applies = mode != TaskMode.CHAT &&
             response.content.isBlank() &&
@@ -67,6 +70,15 @@ class LLMResponseRecovery(private val toolCallParser: ToolCallParser) {
         }
         if (recoveredFromThinking.isNotEmpty() || looksLikeEnvelope) {
             return Decision.RecoverFromThinking(thinking ?: "")
+        }
+
+        // A guardian re-entry already stashed the answer the user saw and the model answered that
+        // re-entry with nothing at all. The re-entry WAS the last safety net, so a format nudge has
+        // nothing left to rescue - it only replays a full-context prompt for another empty reply
+        // before the loop restores the same stashed answer anyway (observed on qwen3.6:35b: two
+        // nudges, ~30s and 65K input tokens burned, identical outcome).
+        if (hasRestorableAnswer) {
+            return Decision.GiveUp("empty-content-after-guardian-reentry")
         }
 
         // No envelope to recover: nudge the model to regenerate, bounded to 2 (AGENT only). A weak

@@ -363,6 +363,13 @@ internal class TurnExecutor(
         // MAX_REGENERATION_NUDGES; per-path counts persist for the whole turn (one user request).
         val fullRegenCountByPath = mutableMapOf<String, Int>()
         var regenerationNudgeCount = 0
+        // "Define agents forever, never run one" soft guard: consecutive manage_subagent
+        // create/update calls with no invoke_subagent in between. Defining an agent produces
+        // nothing on its own, so this pattern means the model mistook setup for the work.
+        // Resets on any invoke_subagent; bounded to MAX_SUBAGENT_INVOKE_NUDGES per turn.
+        var consecutiveSubagentDefinitions = 0
+        val definedSubagentNames = linkedSetOf<String>()
+        var subagentInvokeNudgeCount = 0
         // Definitive-loop guard: counts consecutive failures of the SAME (tool + args).
         // Resets whenever arguments change, a different tool is used, or any tool succeeds.
         // Catches true retry loops while allowing the agent to explore with varied calls.
@@ -770,6 +777,8 @@ internal class TurnExecutor(
                             maxIterations = maxIterations,
                             state = recoveryState,
                             profileOverrides = profileOverrides,
+                            hasRestorableAnswer =
+                                guardianState.restorableResponse(usedTools.size) != null,
                         )) {
                             is LLMResponseRecovery.Decision.RecoverFromThinking -> {
                                 logger.warn {
@@ -1378,6 +1387,39 @@ internal class TurnExecutor(
                                     toolCalls = null,
                                 )
                                 regenerationNudgeCount++
+                            }
+                        }
+
+                        // "Define agents forever, never run one" soft nudge. Top-level AGENT only.
+                        // manage_subagent only WRITES a definition; invoke_subagent is what runs it,
+                        // and the create result already says so - a model that keeps defining has
+                        // mistaken the setup for the work (observed: four turns creating and
+                        // re-creating the same 'root-analyzer', zero analysis produced). Non-blocking.
+                        if (mode == TaskMode.AGENT && depth == 0 && iteration < maxIterations) {
+                            if (toolCalls.any { it.name == "invoke_subagent" }) {
+                                consecutiveSubagentDefinitions = 0
+                                definedSubagentNames.clear()
+                            } else {
+                                consecutiveSubagentDefinitions +=
+                                    TurnToolExecutor.subagentDefinitionCalls(toolCalls).size
+                                definedSubagentNames += TurnToolExecutor.subagentDefinitionNames(toolCalls)
+                            }
+                            if (consecutiveSubagentDefinitions >= TurnToolExecutor.SUBAGENT_INVOKE_NUDGE_THRESHOLD &&
+                                subagentInvokeNudgeCount < MAX_SUBAGENT_INVOKE_NUDGES
+                            ) {
+                                logger.info {
+                                    "[SUBAGENT_INVOKE_NUDGE] taskId=$taskId, definitions=$consecutiveSubagentDefinitions, " +
+                                        "agents=${definedSubagentNames.joinToString(",")}, " +
+                                        "nudge=${subagentInvokeNudgeCount + 1}/$MAX_SUBAGENT_INVOKE_NUDGES"
+                                }
+                                turnPersistence.persist(
+                                    role = MessageRole.SYSTEM,
+                                    content = buildSubagentInvokeNudge(definedSubagentNames.toList()),
+                                    metadata = """{"type":"guardian_nudge"}""",
+                                    toolCalls = null,
+                                )
+                                subagentInvokeNudgeCount++
+                                consecutiveSubagentDefinitions = 0
                             }
                         }
 
@@ -3040,7 +3082,41 @@ internal class TurnExecutor(
         )
     }
 
+    private fun buildSubagentInvokeNudge(agentNames: List<String>): String = buildString {
+        val named = agentNames.filter { it.isNotBlank() }
+        appendLine("[⚠ progressive hint — you keep defining agents but never run one]")
+        appendLine(
+            if (named.isEmpty()) {
+                "You have called `manage_subagent` repeatedly without a single `invoke_subagent`."
+            } else {
+                "You have defined ${named.joinToString(", ") { "`$it`" }} with `manage_subagent`, " +
+                    "but you have not run any of them."
+            }
+        )
+        appendLine(
+            "`manage_subagent` only stores a definition — it does no work. Only " +
+                "`invoke_subagent(name=..., goal=...)` actually runs an agent, and a subagent is blind: " +
+                "its `goal` must be self-contained (exact task, relevant paths, required output format)."
+        )
+        appendLine("Do one of:")
+        appendLine(
+            if (named.isEmpty()) {
+                "  (1) run an existing agent now — `manage_subagent(action=\"list\")` shows what is available;"
+            } else {
+                "  (1) run `invoke_subagent(name=\"${named.first()}\", goal=\"...\")` NOW — " +
+                    "dispatch several in one response if they are independent;"
+            }
+        )
+        append(
+            "  (2) or drop the delegation and do the work yourself with the read/write tools — " +
+                "for a small job that is cheaper than a subagent."
+        )
+    }
+
     companion object {
+        /** At most one "you never invoke your agents" nudge per turn — a soft hint, never spam. */
+        private const val MAX_SUBAGENT_INVOKE_NUDGES = 1
+
         /**
          * After this many consecutive information-gathering calls (reads/searches) with no
          * write/persist/deliver, inject the consolidation nudge. Set above a normal multi-file
