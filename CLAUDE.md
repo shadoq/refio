@@ -8,12 +8,16 @@ Apply to every task. Precedence: user's explicit instruction > project CLAUDE.md
 Hard floor, overridable only by an explicit and knowing user decision in the moment: no secrets (12), confirm destructive/irreversible actions (2), no auto-commit (13).
 Bias: caution over speed on non-trivial work.
 
+Proportionality overrides every rule below. These rules set the ceiling of the process, not its obligatory minimum. When a rule would produce an artifact that reduces no real risk for the change at hand, skip it and say in one sentence that you did and why. This never relaxes the hard floor above.
+
 ### 1. Language and typography
 - Talk to the user in Polish, plain, no marketing jargon.
 - Code identifiers, comments, internal logs: English.
 - User-facing text (UI, API responses, errors): follow the project's existing language and i18n mechanism; English if there is none.
 - Working docs may stay Polish.
 - Never use `—` or `–` anywhere. Plain hyphen `-`.
+- Markdown: one paragraph is one line. Never hard-wrap prose to 80/100 columns; let the editor wrap.
+- Diagrams (docs, comments, plans): ASCII/text only. No Mermaid, no images, no external diagram tools.
 
 ### 2. Think, read, decide
 - State assumptions. Push back when something simpler works.
@@ -54,6 +58,7 @@ Bias: caution over speed on non-trivial work.
 - TDD is the default for behavioral code: write the failing test that defines success, then the minimum code, then refactor.
 - Test complex or risky flows: business logic, state machines, guardrails, parsers, edge cases, regressions.
 - Skip TDD (and usually the test itself) for simple, non-behavioral changes: getters, renames, config or version bumps, docs, styling, a button color, a changed label, a passthrough wrapper, integrations genuinely hard to isolate.
+- Small change, especially in the GUI (layout, wording, colors, wiring an existing call to a new button) → no unit test. Tests are for logic worth protecting, not for proving that a widget was added.
 - Outside those exemptions a change in behavior needs at least one regression test that fails without the fix; "not practical" must name a concrete reason, it is not a blanket excuse.
 - Test name and inputs express the business rule, so the reader sees WHY it matters.
 - A test that cannot fail when the business logic changes is dead weight; delete it instead of writing it.
@@ -76,13 +81,16 @@ Bias: caution over speed on non-trivial work.
 ### 11. Fail loud and do not average conflicts
 - "Completed" is false if anything was skipped silently.
 - When reporting tests: name which scopes ran, which were skipped and why, plus the residual risk. Skipping e2e or paid integrations is fine, hiding it is not.
-- Two contradicting patterns → pick one (more recent or better tested), say why, flag the other for cleanup.
+- Two contradicting patterns → first check whether the difference is intentional; if no reason is found, pick one (local to the change, more recent or better tested), say why, flag the other for cleanup.
 - Conformance to the codebase beats your taste. If a convention is harmful, surface it, do not fork silently.
 
-### 12. Secrets
+### 12. Secrets and production data
 - Never print, log or commit tokens, keys, passwords, connection strings, `.env` or credential files.
 - Mask sensitive values in logs, fixtures, test data and examples.
 - Need a secret? Read it from the project's existing config mechanism. Never hardcode or invent one.
+- No real personal data in tests, fixtures or seed data. Never copy production rows into the repo, not even "just one to reproduce it" - generate synthetic values of the same shape.
+- Tests and local runs point at local/test storage and stubs. They must never mutate a production database or a live external service, and never call a paid API without the user approving that exact call.
+- Reading production data for diagnosis needs the user to approve the concrete query first. Report an aggregate or a masked sample, never raw rows in chat, docs or code.
 
 ### 13. Commits
 - Do NOT commit automatically. Commit only when the user asks.
@@ -91,7 +99,7 @@ Bias: caution over speed on non-trivial work.
 - Rationale and investigation notes go to chat or `docs/`, never to the message.
 
 ### 14. No documentation references in shipped code
-- Never reference design docs (`doc 0021`, `docs/0011-...md`, `pkt 4`, `iter.4`, `M0..M7`) in anything shipped: comments, identifiers, log or error messages, UI strings, commit messages.
+- Never reference design docs (`doc 0021`, `docs/0011-...md`, `pkt 4`, `iter.4`, `M0..M7`) in anything shipped: comments, identifiers, log or error messages, commit messages, and everything on the front end - UI strings, tooltips, component names, view comments.
 - Docs are not bundled with the product, so such pointers are dead noise for the reader.
 - Say WHAT the code does and WHY in terms that stand on their own.
 - Plain dates and ticket URLs are fine.
@@ -103,9 +111,16 @@ Bias: caution over speed on non-trivial work.
 - High-risk or architecturally significant (new module or service, schema or public-API change, security, migration) → write a plan document before any code.
 - Naming: follow the repo convention; otherwise `docs/{NNNN}-{title}.md`, NNNN = highest existing number + 1.
 - The plan covers: expected change, how, why, verification, success criteria. Migrations and public-API changes also cover rollback, backward compatibility, rollout order and validation against real data.
+- The document format (required sections, spec anatomy) lives in the `writing-spec` skill - load it before writing a plan document, do not restate it here.
 - Write it for a junior agent: what, how, why, with `- [ ]` checkboxes marked `[x]` as they complete.
 - User review before implementation is required only for high-risk or product-changing work.
 - One document per work item: update the existing plan, do not create a second one.
+
+### 16. Dependencies are a decision, not a shortcut
+- Before adding a library, check that the stdlib, a framework already in the project or an existing helper here cannot do it. Name what you checked. A dependency added to save twenty lines is rarely worth it.
+- Before proposing one, verify it is maintained, compatible with the versions already pinned here, and that its license fits a commercial closed-source product. Say so explicitly when any of these is unclear.
+- A major version upgrade of an existing dependency is a contract change: its own work item, never a side effect of an unrelated task.
+- Never edit a lockfile by hand. Change the manifest and let the tool regenerate it.
 
 ## What is Refio
 
