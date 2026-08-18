@@ -6,7 +6,6 @@ import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.NativeToolCall
-import pl.jclab.refio.core.services.ToolPermissionsService
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -24,7 +23,6 @@ class ToolCallExtractorTest {
     }
     private val parser = ToolCallParser(
         toolRegistry = registry,
-        toolPermissionsService = mockk<ToolPermissionsService>(relaxed = true),
     )
     private val extractor = ToolCallExtractor(parser, registry)
 

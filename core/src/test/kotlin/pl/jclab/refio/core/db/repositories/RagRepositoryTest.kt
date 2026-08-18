@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test
 import pl.jclab.refio.core.db.*
 import pl.jclab.refio.testutil.TestDatabase
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -270,6 +271,49 @@ class RagRepositoryTest {
                 // Then the original survives.
                 assertNotNull(repository.getEmbedding(c0, model))
             }
+        }
+    }
+
+    @Nested
+    inner class AtomicReindexTests {
+
+        @Test
+        fun `a failed chunk insert leaves the previous chunks and fingerprint untouched`() {
+            // No outer transaction here on purpose: the point is what survives a commit boundary.
+            val fileId = repository.createIndexedFile(
+                projectRoot = "/test/project",
+                filePath = "/a.kt",
+                fileHash = "old",
+                checksum = "old",
+                fileSize = 10,
+                lastModified = 1L,
+                mimeType = "text/x-kotlin"
+            )
+            repository.createChunk(fileId, 0, "old chunk", 1, 5)
+
+            // A reindex that dies halfway through writing the new chunks (here: a duplicate
+            // chunk index violating uk_file_chunk).
+            assertFailsWith<Exception> {
+                repository.upsertIndexedFileWithChunks(
+                    existingFileId = fileId,
+                    projectRoot = "/test/project",
+                    filePath = "/a.kt",
+                    fileHash = "new",
+                    checksum = "new",
+                    fileSize = 20,
+                    lastModified = 2L
+                ) { id ->
+                    listOf(
+                        ChunkInsert(id, 0, "new chunk", 1, 5),
+                        ChunkInsert(id, 0, "duplicate index", 6, 10)
+                    )
+                }
+            }
+
+            // Nothing may be half-committed: a file left with a fresh checksum and no chunks is
+            // classified as unchanged forever, so it never gets reindexed.
+            assertEquals(listOf("old chunk"), repository.getChunksForFile(fileId).map { it.content })
+            assertEquals("old", repository.getIndexedFile(fileId)?.checksum)
         }
     }
 

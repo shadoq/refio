@@ -14,6 +14,7 @@ import pl.jclab.refio.core.db.repositories.RagRepository
 import pl.jclab.refio.core.services.rag.RagSearchConfig
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.sqrt
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -441,6 +442,112 @@ class RagSearchServiceTest {
             )
 
             assertEquals(2, results.size, "Non-overlapping distinct regions must both survive")
+        }
+    }
+
+    @Nested
+    inner class CandidatePoolBoundTests {
+
+        /** Unit vector whose cosine against [1,0,0] is exactly [cosine]. */
+        private fun similarityVector(cosine: Float): FloatArray =
+            floatArrayOf(cosine, sqrt(1f - cosine * cosine), 0f)
+
+        private fun stubEmbeddings(records: List<pl.jclab.refio.core.db.Embedding>) {
+            every { ragRepository.countEmbeddings(projectRoot, model, any()) } returns records.size
+            every { ragRepository.getEmbeddingsBatch(projectRoot, model, any(), any(), any()) } answers {
+                val afterId = arg<Int>(3)
+                val limit = arg<Int>(4)
+                records.filter { it.id > afterId }.take(limit)
+            }
+        }
+
+        private fun stubChunkAndFileLookup(requested: MutableList<List<Int>>, fileIdOf: (Int) -> Int = { it }) {
+            every { ragRepository.getChunksBatch(capture(requested)) } answers {
+                firstArg<List<Int>>().map { id ->
+                    createChunkRanged(id, fileIdOf(id), "content $id", startLine = id * 10, endLine = id * 10 + 5)
+                }
+            }
+            every { ragRepository.getFilesBatch(any()) } answers {
+                firstArg<List<Int>>().map { id -> createFile(id, "file$id.kt") }
+            }
+        }
+
+        @Test
+        fun `does not load every chunk above the threshold to answer a small topK`() = runBlocking {
+            // 600 chunks clear the threshold but only 5 are asked for. Loading all of them pulls
+            // 600 full chunk bodies into memory and feeds the O(n^2) redundancy pass, which is
+            // what makes a low threshold able to stall a search past its timeout.
+            coEvery { embeddingProvider.generateEmbedding("test query", model) } returns floatArrayOf(1f, 0f, 0f)
+            stubEmbeddings((1..600).map { createEmbeddingRecord(it, it, similarityVector(0.9f)) })
+
+            val requested = mutableListOf<List<Int>>()
+            stubChunkAndFileLookup(requested)
+
+            val results = service.search(
+                projectRoot = projectRoot,
+                query = "test query",
+                model = model,
+                topK = 5,
+                similarityThreshold = 0.5f
+            )
+
+            assertEquals(5, results.size)
+            // Bound is a small multiple of topK (8x), leaving dedup a wide enough candidate pool.
+            assertTrue(
+                requested.single().size <= 40,
+                "Fetched ${requested.single().size} chunks to return 5 results"
+            )
+        }
+
+        @Test
+        fun `keeps the best matches when the candidate pool is capped`() = runBlocking {
+            // Quality guard for the bound: the pool must retain the highest-similarity chunks,
+            // so the returned top-5 is the same one an unbounded scan would produce.
+            coEvery { embeddingProvider.generateEmbedding("test query", model) } returns floatArrayOf(1f, 0f, 0f)
+            stubEmbeddings((1..600).map { createEmbeddingRecord(it, it, similarityVector(0.99f - it * 0.0005f)) })
+
+            stubChunkAndFileLookup(mutableListOf())
+
+            val results = service.search(
+                projectRoot = projectRoot,
+                query = "test query",
+                model = model,
+                topK = 5,
+                similarityThreshold = 0.5f
+            )
+
+            assertEquals(listOf(1, 2, 3, 4, 5), results.map { it.chunkId })
+        }
+
+        @Test
+        fun `context chunk lookup stays bounded too`() = runBlocking {
+            // includeContextChunks widens the candidate band to 0.8 * threshold. That second
+            // lookup used to fetch every chunk in the widened band, so it stayed unbounded even
+            // when the result set was tiny.
+            coEvery { embeddingProvider.generateEmbedding("test query", model) } returns floatArrayOf(1f, 0f, 0f)
+            val strong = (1..5).map { createEmbeddingRecord(it, it, similarityVector(0.9f)) }
+            val weak = (6..605).map { createEmbeddingRecord(it, it, similarityVector(0.45f)) }
+            stubEmbeddings(strong + weak)
+
+            val requested = mutableListOf<List<Int>>()
+            stubChunkAndFileLookup(requested, fileIdOf = { 1 + it % 3 })
+
+            val results = service.search(
+                projectRoot = projectRoot,
+                query = "test query",
+                model = model,
+                config = RagSearchConfig(
+                    similarityThreshold = 0.5f,
+                    topK = 5,
+                    includeContextChunks = true
+                )
+            )
+
+            assertEquals(5, results.size)
+            assertTrue(
+                requested.all { it.size <= 40 },
+                "Chunk lookups were not bounded: ${requested.map { it.size }}"
+            )
         }
     }
 

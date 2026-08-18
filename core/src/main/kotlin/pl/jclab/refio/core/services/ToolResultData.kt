@@ -47,6 +47,12 @@ data class ToolResultData(
     // the turn loop treats a run of these as a definitive "wrong toolset" loop and aborts fast
     // instead of letting the error-rate window dilute the signal. See TurnGuardrails.
     val blocked: Boolean = false,
+    // True when the approval policy refused this call (headless --auto-approve, or a human-facing
+    // policy denial). Kept apart from `success = false` on purpose: a tool error means the model
+    // cannot drive its tools, a denial means the environment refused a command it was right to
+    // want, so denials must not inflate the tool-error rate that aborts a turn. Counted by
+    // TurnGuardrails.ConsecutiveDeniedToolTracker instead.
+    val notPermitted: Boolean = false,
     // Sub-LLM usage from tools that internally call an LLM (advance_code_editing,
     // multi_line_editor). Persisted on the TOOL ChatMessage so SessionStatsBar
     // and per-message stats include these tokens — they are real LLM cost.

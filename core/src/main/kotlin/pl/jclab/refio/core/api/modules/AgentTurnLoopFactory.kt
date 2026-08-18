@@ -66,7 +66,6 @@ internal class AgentTurnLoopFactory(
 
         val toolCallParser = ToolCallParser(
             toolRegistry = toolRegistry,
-            toolPermissionsService = toolPermissionsService,
             getJsonThinkingXmlTags = { taskId -> configService.getTyped(ConfigKeys.JSON_THINKING_XML_TAGS, taskId) }
         )
 
@@ -145,7 +144,6 @@ internal class AgentTurnLoopFactory(
             turnSubagentValidator = turnSubagentValidator,
             completionGuardians = completionGuardians,
             tokenEstimator = tokenEstimator,
-            conversationCompactor = null,
             llmRetryHandler = null,
             workingMemoryIntegration = workingMemoryIntegration,
             agentEventBus = agentEventBus,

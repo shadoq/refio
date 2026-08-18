@@ -25,6 +25,13 @@ class MCPStdioTransport(
     private var scope: CoroutineScope? = null
     private var writer: BufferedWriter? = null
 
+    /**
+     * Guards the whole message + newline + flush sequence. Read-only tools run in parallel, so
+     * several requests can reach [send] at once; without this the parts of two messages end up on
+     * one line and the server drops both requests.
+     */
+    private val writeLock = Any()
+
     companion object {
         /** Allowed characters in environment variable names (POSIX-safe) */
         private val ENV_NAME_PATTERN = Regex("^[a-zA-Z_][a-zA-Z0-9_]*$")
@@ -88,11 +95,13 @@ class MCPStdioTransport(
 
     fun send(message: String) {
         try {
-            writer?.apply {
-                write(message)
-                write("\n")
-                flush()
-            } ?: throw MCPTransportException("Transport not connected")
+            synchronized(writeLock) {
+                writer?.apply {
+                    write(message)
+                    write("\n")
+                    flush()
+                } ?: throw MCPTransportException("Transport not connected")
+            }
         } catch (e: Exception) {
             onError(MCPTransportException("Failed to send MCP message", e))
         }

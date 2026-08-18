@@ -192,6 +192,50 @@ class TurnVerifierTest {
         assertTrue(outcome.errors.single().contains("timed out"))
     }
 
+    @Test
+    fun `an output that could not be fully drained says so instead of shipping a silent excerpt`() = runTest {
+        // The error list is what the model is told to repair. When the runner could not drain the
+        // command's output to the end, that list is an unknown subset of the real errors, and a
+        // silently short list reads as "these are all the failures". Say it out loud.
+        projectDir.resolve("build.gradle").toFile().writeText("// gradle")
+        val verifier = TurnVerifier(
+            configService(),
+            projectDir,
+            FakeRunner(
+                VerificationExecution(
+                    exitCode = 1,
+                    output = "e: Main.kt:1:1 Unresolved reference: fooBar",
+                    outputTruncated = true,
+                )
+            )
+        )
+
+        val outcome = verifier.verify("task-1") as TurnVerifier.Outcome.Failed
+
+        assertTrue(outcome.errors.any { it.contains("Unresolved reference: fooBar") })
+        assertTrue(
+            outcome.errors.any { it.contains("may be incomplete", ignoreCase = true) },
+            "the model must be told the error list is partial, got: ${outcome.errors}",
+        )
+    }
+
+    @Test
+    fun `a fully drained failure carries no incompleteness note`() = runTest {
+        projectDir.resolve("build.gradle").toFile().writeText("// gradle")
+        val verifier = TurnVerifier(
+            configService(),
+            projectDir,
+            FakeRunner(VerificationExecution(exitCode = 1, output = "e: Main.kt:1:1 broken")),
+        )
+
+        val outcome = verifier.verify("task-1") as TurnVerifier.Outcome.Failed
+
+        assertFalse(
+            outcome.errors.any { it.contains("may be incomplete", ignoreCase = true) },
+            "a complete error list must not warn about truncation, got: ${outcome.errors}",
+        )
+    }
+
     // ---- pre-write baseline: an already-red project is not blamed on the agent ----
 
     @Test

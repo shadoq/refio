@@ -68,8 +68,9 @@ class ConfigServiceTest {
 
         @Test
         fun `should return value from database when present`() {
-            // Given
-            every { configRepository.get("test.key", ConfigScope.APP) } returns
+            // Given - the raw getter asks for the effective value, so it resolves the scope
+            // hierarchy (task, then project, then app) instead of reading app scope directly.
+            every { configRepository.getWithPrecedence("test.key", null, "test-project") } returns
                 createConfig("test.key", "db-value")
 
             // When

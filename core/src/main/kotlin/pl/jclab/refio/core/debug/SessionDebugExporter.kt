@@ -199,7 +199,15 @@ class SessionDebugExporter(
             subtasks = emptyList(),
             conversation = emptyList(),
             apiLogs = emptyList(),
-            errors = orderedAgents.mapNotNull { a -> a.error?.let { "agent ${a.agentName}: $it" } },
+            // A failed agent must never be silent: without the second branch an agent that came
+            // back FAILED carrying no error string left the run with an empty error list.
+            errors = orderedAgents.mapNotNull { a ->
+                when {
+                    a.error != null -> "agent ${a.agentName}: ${a.error}"
+                    a.success != true -> "agent ${a.agentName}: ${a.status} with no reason recorded"
+                    else -> null
+                }
+            },
             warnings = emptyList(),
             multiAgent = SessionDebugSnapshot.MultiAgentInfo(
                 agents = orderedAgents.map {

@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.services
 
+import io.ktor.client.network.sockets.ConnectTimeoutException
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -9,10 +10,14 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import pl.jclab.refio.core.api.StreamCallback
 import pl.jclab.refio.core.api.StreamChunk
+import pl.jclab.refio.core.errors.LLMErrorMapper
+import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
+import java.net.ConnectException
+import java.nio.channels.UnresolvedAddressException
 import java.util.concurrent.CancellationException
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -296,6 +301,89 @@ class LLMRetryHandlerTest {
     }
 
     @Nested
+    inner class ConnectionFailures {
+
+        @Test
+        fun `retries a local server that refused the connection while starting up`() = runTest {
+            // LLMConnectionFailed renders a user-facing hint ("Is Ollama running?") that contains
+            // none of the transient text patterns, so message matching alone never retried it —
+            // the original cause lives only in `cause`. A refused connection to a local server that
+            // is still binding its port is the textbook transient failure and must be retried.
+            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } throws
+                RefioError.LLMConnectionFailed(
+                    provider = "ollama",
+                    endpoint = "http://localhost:11434",
+                    originalCause = ConnectException("Connection refused")
+                ) andThen successResponse()
+
+            val response = retryHandler.callWithRetry(
+                provider = "ollama",
+                model = "qwen3.5:9b",
+                messages = testMessages,
+                taskId = "task-1",
+                source = "test",
+                baseDelayMs = 1
+            )
+
+            assertEquals("response", response.content)
+            assertEquals(1, retryHandler.getStats().totalRetries)
+        }
+
+        @Test
+        fun `retries a connect timeout raised while a large local model loads`() = runTest {
+            // The error mapper classifies a connect timeout as LLMConnectionFailed BEFORE the
+            // timeout branch, so this never reached the unconditional LLMTimeout retry. A cold
+            // start of a big model is the most common local failure and is worth another attempt.
+            val mapped = LLMErrorMapper.fromThrowable(
+                provider = "ollama",
+                model = "qwen3.5:122b",
+                timeoutMs = 60_000,
+                throwable = ConnectTimeoutException("Connect timeout has expired [connect_timeout=30000 ms]"),
+                endpoint = "http://localhost:11434"
+            )
+            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } throws
+                mapped andThen successResponse()
+
+            val response = retryHandler.callWithRetry(
+                provider = "ollama",
+                model = "qwen3.5:122b",
+                messages = testMessages,
+                taskId = "task-1",
+                source = "test",
+                baseDelayMs = 1
+            )
+
+            assertEquals("response", response.content)
+            assertEquals(1, retryHandler.getStats().totalRetries)
+        }
+
+        @Test
+        fun `does not retry when the endpoint host name cannot be resolved`() = runTest {
+            // An unresolvable host is a wrong endpoint in the configuration, not a passing outage:
+            // every attempt fails identically, so retrying only delays a clear error message.
+            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } throws
+                RefioError.LLMConnectionFailed(
+                    provider = "openai",
+                    endpoint = "https://api.opemai.com",
+                    originalCause = UnresolvedAddressException()
+                )
+
+            assertFailsWith<RefioError.LLMConnectionFailed> {
+                retryHandler.callWithRetry(
+                    provider = "openai",
+                    model = "gpt-4o-mini",
+                    messages = testMessages,
+                    taskId = "task-1",
+                    source = "test",
+                    baseDelayMs = 1
+                )
+            }
+
+            assertEquals(0, retryHandler.getStats().totalRetries)
+        }
+    }
+
+    @Nested
     inner class StreamingRetryGuard {
 
         @Test
@@ -441,6 +529,31 @@ class LLMRetryHandlerTest {
             // 2 retries (first call + 2 retries = 3 total attempts, but only 2 are "retries")
             assertEquals(2, retryHandler.getStats().totalRetries)
             assertEquals(1, retryHandler.getStats().totalFailures)
+        }
+
+        @Test
+        fun `maxRetries=0 means one attempt and no retry, not zero attempts`() = runTest {
+            // A user setting limits.max_retries=0 wants "call once, do not retry" — not "never call
+            // the model at all". The old loop ran zero iterations and threw a synthetic error
+            // without ever reaching the provider.
+            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } throws
+                RuntimeException("rate limit exceeded")
+
+            val error = assertFailsWith<RuntimeException> {
+                retryHandler.callWithRetry(
+                    provider = "test",
+                    model = "test-model",
+                    messages = testMessages,
+                    taskId = "task-1",
+                    source = "test",
+                    maxRetries = 0,
+                    baseDelayMs = 1
+                )
+            }
+
+            assertEquals("rate limit exceeded", error.message, "the provider error must surface, not a synthetic one")
+            coVerify(exactly = 1) { llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }
+            assertEquals(0, retryHandler.getStats().totalRetries)
         }
 
         @Test

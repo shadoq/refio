@@ -124,7 +124,8 @@ class OpenAIEmbeddingProvider(
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
                 logger.error { "OpenAI embedding API error: ${response.status} - $errorBody" }
-                EmbeddingCircuitBreaker.recordFailure(providerKey)
+                // The catch below is the single place that records a failure; recording here too
+                // would move the circuit breaker by two for one failed request.
                 throw Exception("OpenAI API error: ${response.status}")
             }
 
@@ -182,7 +183,7 @@ class OpenAIEmbeddingProvider(
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
                 logger.error { "OpenAI embedding batch API error: ${response.status} - $errorBody" }
-                EmbeddingCircuitBreaker.recordFailure(providerKey)
+                // Failure accounting happens once, in the catch below.
                 throw Exception("OpenAI API error: ${response.status}")
             }
 
@@ -285,7 +286,7 @@ class OllamaEmbeddingProvider(
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
                 logger.error { "Ollama embedding API error: ${response.status} - $errorBody" }
-                EmbeddingCircuitBreaker.recordFailure(providerKey)
+                // Failure accounting happens once, in the catch below.
                 throw Exception("Ollama API error: ${response.status}")
             }
 
@@ -338,7 +339,7 @@ class OllamaEmbeddingProvider(
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
                 logger.error { "Ollama embedding batch API error: ${response.status} - $errorBody" }
-                EmbeddingCircuitBreaker.recordFailure(providerKey)
+                // Failure accounting happens once, in the catch below.
                 throw Exception("Ollama API error: ${response.status}")
             }
 
@@ -452,7 +453,7 @@ class OpenAICompatibleEmbeddingProvider(
                 // the difference between a usable error and "it failed".
                 val errorBody = response.bodyAsText().take(500)
                 logger.error { "OpenAI-compatible embedding API error at $endpoint: ${response.status} - $errorBody" }
-                EmbeddingCircuitBreaker.recordFailure(providerKey)
+                // Failure accounting happens once, in the catch below.
                 throw Exception("Embedding API error at $endpoint: ${response.status}")
             }
 

@@ -129,6 +129,23 @@ class TurnToolExecutorSnapshotTest {
     }
 
     @Test
+    fun `a batch edit snapshots every file it is about to rewrite`() = runTest {
+        // multi_edit carries its targets as `edits[].path`, not as a top-level `path`. Reading only
+        // the top level found nothing and skipped the snapshot silently - the one write tool that
+        // can wreck several files at once was also the one with no restore point.
+        every { toolRegistry.getTool("multi_edit") } returns tool("multi_edit", ToolMode.WRITE)
+        every { permissionsService.getPermission("multi_edit", any()) } returns PermissionLevel.ON
+
+        execute(
+            "multi_edit",
+            """{"edits":[{"path":"a.kt","old_string":"x","new_string":"y"},""" +
+                """{"path":"b.kt","old_string":"p","new_string":"q"}]}"""
+        )
+
+        verify(exactly = 1) { snapshotService.createSnapshot("t1", "s1", listOf("a.kt", "b.kt")) }
+    }
+
+    @Test
     fun `disabled snapshots skip the snapshot`() = runTest {
         every { config.enableSnapshots } returns false
         every { toolRegistry.getTool("write_file") } returns tool("write_file", ToolMode.WRITE)

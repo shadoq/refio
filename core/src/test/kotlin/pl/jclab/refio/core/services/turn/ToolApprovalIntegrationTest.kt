@@ -139,6 +139,46 @@ class ToolApprovalIntegrationTest {
             assertEquals("too risky", (result.exceptionOrNull() as ToolRejectedException).reason)
         }
 
+        /**
+         * A policy denial hands the refusal back as a failed tool result instead of unwinding the
+         * turn, so the model can try another route. Ending the turn here is what cost four headless
+         * runs their verdict after the deliverable was already on disk.
+         */
+        @Test
+        fun `tool denied by policy returns a failed result and lets the turn continue`() = runTest {
+            every { permissionsService.getPermission("run_terminal_command", any()) } returns PermissionLevel.ASK
+
+            val call = toolCall()
+
+            val resultDeferred = async {
+                runCatching {
+                    executor.executeSingleTool(
+                        taskId = "t1", toolCall = call, subtaskId = "s1",
+                        listener = null, iteration = 1, _config = mockk(relaxed = true),
+                        mode = TaskMode.AGENT, executionMode = ExecutionMode.AUTO,
+                        runId = "r1", depth = 0, profileOverrides = null, _subtaskIds = emptyMap()
+                    )
+                }
+            }
+
+            delay(50)
+
+            val req = approvalService.pendingRequests.value.first()
+            approvalService.resolveApproval(
+                req.requestId,
+                ToolApprovalService.ApprovalDecision.NotPermitted("auto-approve: 'rm -f todos.json' did not match"),
+            )
+
+            val result = resultDeferred.await()
+            assertTrue(result.isSuccess, "a denial must not unwind the turn")
+            val data = result.getOrThrow()
+            assertEquals(false, data.success)
+            assertTrue(
+                data.content.contains("rm -f todos.json"),
+                "the model has to learn which call was blocked, got: ${data.content}",
+            )
+        }
+
         @Test
         fun `trusted tool auto-approves on second call`() = runTest {
             every { permissionsService.getPermission("run_terminal_command", any()) } returns PermissionLevel.ASK

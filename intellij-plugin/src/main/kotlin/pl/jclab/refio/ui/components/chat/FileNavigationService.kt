@@ -109,6 +109,13 @@ internal class FileNavigationService(
         logger.info { "[DIFF] Opening diff viewer for: ${changes.filePath}" }
         logger.info { "[DIFF] Changes: +${changes.addedLines} -${changes.removedLines}, snapshotId=${changes.snapshotId}" }
 
+        // With a snapshot behind it, show the dialog instead of the bare diff window: it renders the
+        // same before/after comparison and additionally offers reverting the file to the snapshot.
+        if (!changes.snapshotId.isNullOrBlank()) {
+            showFileChangesDialog(changes.filePath, changes.snapshotId)
+            return
+        }
+
         coroutineScope.launch {
             try {
                 val snapshotContent = if (!changes.snapshotId.isNullOrBlank()) {

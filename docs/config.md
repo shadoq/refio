@@ -19,28 +19,49 @@ Refio uses a layered configuration system with the following priority (highest t
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  4. Database (Settings UI)           ← Highest Priority    │
+│  5. Run-scope overrides (CLI --config)  ← Highest Priority  │
 ├─────────────────────────────────────────────────────────────┤
-│  3. Project Config (.refio/config.yaml)                     │
+│  4. Task scope (per-session overrides)                      │
 ├─────────────────────────────────────────────────────────────┤
-│  2. User Config (~/.refio/config.yaml)                      │
+│  3. Project scope (from .refio/config.yaml)                 │
 ├─────────────────────────────────────────────────────────────┤
-│  1. Built-in Defaults                 ← Lowest Priority    │
+│  2. App scope (Settings UI + ~/.refio/config.yaml)          │
+├─────────────────────────────────────────────────────────────┤
+│  1. Built-in Defaults                   ← Lowest Priority  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### How It Works
 
-1. **Built-in Defaults**: Hardcoded values in `ConfigService.kt` (always available)
-2. **User Config**: Personal settings in `~/.refio/config.yaml` (applies to all projects)
-3. **Project Config**: Project-specific settings in `<project>/.refio/config.yaml`
-4. **Database**: Settings changed via the Settings UI (highest priority)
+Config files are **applied into the store on startup**, not consulted on every read. Each file
+lands in its own scope, and the store resolves a key as TASK, then PROJECT, then APP:
 
-When a configuration value is requested:
-1. First check if there's a value in the database
-2. If not found, check the project config file
-3. If not found, check the user config file
-4. If not found, use the built-in default
+1. **Built-in defaults**: hardcoded in `ConfigDefaultsInitializer`, seeded into APP scope on first run
+2. **User config** (`~/.refio/config.yaml`): applied into APP scope for keys that are still unset
+3. **Project config** (`<project>/.refio/config.yaml`): applied into PROJECT scope, so it outranks
+   both the built-in defaults and the user file
+4. **Settings UI**: writes APP scope (or TASK scope for a per-session toggle)
+5. **Run-scope overrides** (`--config key=value` in the CLI): win over everything, are read-only and
+   are never written back to the database
+
+### Files vs the Settings UI
+
+The project file is re-applied whenever **its content changes**. Between those moments the Settings
+UI stays in charge: changing a setting there drops the project-scoped value for that one key, so
+your click always takes effect. Edit the project file again and it wins again on the next start.
+
+Deleting `<project>/.refio/config.yaml` drops everything it had applied, and the settings fall back
+to the user file / built-in defaults on the next start.
+
+A value outside a key's accepted range (for example `limits.maxContextSize: 10`) is refused with
+the offending key named, in both files, rather than being quietly replaced by a default. Since the
+project file is usually committed, fix it in the repository - the whole file stays inert until then.
+
+### What the project file can set
+
+Anything with a YAML mapping in the [Key Reference](#complete-key-mapping) - general toggles,
+limits, providers, models, RAG, context and UI keys. Sections that are not plain key/value settings
+(`prompts`, `mcp`, `docs`, `hooks`) are read straight from the file by the components that own them.
 
 ---
 
@@ -71,6 +92,8 @@ This file contains project-specific settings. It's checked into version control 
 - MCP server configurations
 - Model visibility (which models to show for this project)
 - Custom RAG settings
+- Any setting this project must pin regardless of personal preference (models, limits, tool
+  permissions, no-egress); values here outrank the user file and the built-in defaults
 
 ### Creating Configuration Files
 
@@ -296,7 +319,8 @@ security:
 
 ### Tool Permissions
 
-Control which tools are available in each mode.
+Control which tools are available in each mode. Every tool is one entry under
+`tools.permissions`, and each entry needs **both** modes with one of `ON`, `ASK`, `OFF`:
 
 ```yaml
 tools:
@@ -304,16 +328,23 @@ tools:
     read_file:
       planMode: "ON"
       agentMode: "ON"
-      create_new_file:
-        planMode: "OFF"
-        agentMode: "ON"
-      multi_line_editor:
-        planMode: "OFF"
-        agentMode: "ON"
-      run_terminal_command:
-        planMode: "OFF"
-        agentMode: "OFF"     # Disabled for security
+    create_new_file:
+      planMode: "OFF"
+      agentMode: "ON"
+    multi_line_editor:
+      planMode: "OFF"
+      agentMode: "ON"
+    run_terminal_command:
+      planMode: "OFF"
+      agentMode: "OFF"       # Disabled for security
 ```
+
+An entry that names only one mode, or uses a value other than `ON`/`ASK`/`OFF`, is reported in the
+log and skipped - a malformed line never opens a tool up by accident.
+
+Tools you do not list keep whatever they already have (their smart default derived from the tool's
+read/write mode, or a level you set in Settings). So a file with two entries adjusts those two
+tools and leaves the rest alone, both on startup and via **Settings → Reload from YAML**.
 
 ### RAG Configuration
 
@@ -359,6 +390,22 @@ rag:
 ```
 
 If a project-level `.aiignore` file exists, it overrides `rag.ignoredDirectories` and the default UI ignore list for RAG indexing, project analysis, and automatic searches (for example `@codebase` and `@grep`). Explicit `@file` and `@folder` selections are not filtered. The `.aiignore` syntax follows `.gitignore` patterns.
+
+### Context and Working Memory
+
+How much of the prompt budget goes to recent work and to the facts the agent carries between
+iterations.
+
+```yaml
+context:
+  recentWorkFullDataLimit: 5     # Tool results shown in full before summarizing
+  recentWorkSummaryMaxLength: 1000 # Character budget for a summarized tool result
+  budgetTotalTokens: 0           # 0 = derive the budget from the model's context window
+  budgetInputRatio: 0.85         # Share of the window available for input
+  workingMemoryMaxFacts: 20      # Facts kept per task (must be > 0)
+  budgetSections:                # Per-section token caps, by section name
+    recent_work: 4000
+```
 
 ### UI State
 
@@ -517,6 +564,13 @@ mcp:
 | `ui.intentClassificationEnabled` | `ui.intent_classification_enabled` | `false` |
 | `ui.selectedMode` | `ui.selected_mode` | `CHAT` |
 | `ui.selectedModel` | `ui.selected_model` | - |
+| `context.recentWorkFullDataLimit` | `context.recent_work.full_data_limit` | `5` |
+| `context.recentWorkSummaryMaxLength` | `context.recent_work.summary_max_length` | `1000` |
+| `context.budgetTotalTokens` | `context.budget.total_tokens` | `0` (derive from model) |
+| `context.budgetInputRatio` | `context.budget.input_ratio` | `0.85` |
+| `context.workingMemoryMaxFacts` | `working_memory.max_facts` | `20` |
+| `context.budgetSections.<name>` | `context.budget.section.<name>` | - |
+| `tools.permissions.<tool>` | `tools.permissions` (one JSON document) | per-tool smart default |
 
 ---
 
@@ -623,9 +677,12 @@ mcp:
 ### Config Not Being Applied
 
 1. **Check file location**: Ensure the config file is in the correct location
-2. **Validate YAML syntax**: Use a YAML validator to check for syntax errors
-3. **Check hierarchy**: Remember that database values override YAML values
-4. **Reload config**: Use Settings UI → "Reload from YAML" button
+2. **Validate YAML syntax**: Use a YAML validator to check for syntax errors - a file that fails to
+   parse is reported in the log and the previous values stay in effect
+3. **Restart or reload**: files are applied at startup; **Settings → Reload from YAML** re-applies
+   both the user and the project file without a restart
+4. **Did you change the same setting in the UI?** That change wins until the file is edited again.
+   Touch the file (any real content change) and restart, or use "Reload from YAML"
 
 ### API Keys Not Working
 
@@ -651,6 +708,8 @@ Check the IDE log for messages like:
 ```
 INFO: Loaded user config from ~/.refio/config.yaml
 INFO: Loaded project config from /path/to/project/.refio/config.yaml
+INFO: Applied project config: general.no_egress_enabled = true
+INFO: Materialized project config from /path/to/project/.refio/config.yaml: 4 keys
 INFO: Using chat model from YAML: qwen3.5:9b
 ```
 

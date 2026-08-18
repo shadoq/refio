@@ -623,7 +623,10 @@ class LLMClient(
     }
 
     /**
-     * Check if an endpoint URL points to a local address (localhost, 127.0.0.1, ::1).
+     * Check whether a provider endpoint points at this machine or a private network.
+     *
+     * The verdict comes from the resolved addresses, not from the host text, so an endpoint named
+     * like a private address cannot claim the local-provider exemption under no-egress.
      */
     private fun isLocalEndpoint(url: String): Boolean =
         pl.jclab.refio.core.security.NetworkPolicy.isLocalTarget(url)

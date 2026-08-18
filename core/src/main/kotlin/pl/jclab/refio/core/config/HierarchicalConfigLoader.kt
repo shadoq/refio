@@ -16,7 +16,12 @@ import java.nio.file.Path
  * Database overrides are applied by ConfigService at runtime.
  */
 class HierarchicalConfigLoader private constructor(
-    private val projectRoot: Path?
+    private val projectRoot: Path?,
+    /**
+     * When set, this exact snapshot is served instead of reading and merging files. Used to read
+     * a single already-parsed config (e.g. only the project file) through the same accessors.
+     */
+    private val fixedConfig: ConfigYaml? = null
 ) {
     private val logger = dualLogger("HierarchicalConfigLoader")
 
@@ -33,6 +38,8 @@ class HierarchicalConfigLoader private constructor(
      * Results are cached for 30 seconds.
      */
     fun getConfig(): ConfigYaml {
+        fixedConfig?.let { return it }
+
         val now = System.currentTimeMillis()
         if (cachedConfig != null && (now - cacheTimestamp) < cacheValidityMs) {
             return cachedConfig!!
@@ -203,6 +210,16 @@ class HierarchicalConfigLoader private constructor(
     fun getRagSearchIncludeContextChunks(): Boolean? = getConfig().rag?.searchIncludeContextChunks
 
     // ═══════════════════════════════════════════════════════════════════════════════
+    // Context Settings
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    fun getRecentWorkFullDataLimit(): Int? = getConfig().context?.recentWorkFullDataLimit
+    fun getRecentWorkSummaryMaxLength(): Int? = getConfig().context?.recentWorkSummaryMaxLength
+    fun getContextBudgetTotalTokens(): Int? = getConfig().context?.budgetTotalTokens
+    fun getContextBudgetInputRatio(): Double? = getConfig().context?.budgetInputRatio
+    fun getWorkingMemoryMaxFacts(): Int? = getConfig().context?.workingMemoryMaxFacts
+
+    // ═══════════════════════════════════════════════════════════════════════════════
     // UI Settings
     // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -244,6 +261,14 @@ class HierarchicalConfigLoader private constructor(
                 HierarchicalConfigLoader(projectRoot)
             }
         }
+
+        /**
+         * Read-only view over one already-parsed config, bypassing file loading, merging and the
+         * instance cache. Lets callers reuse the typed accessors on a single source - e.g. reading
+         * the project file alone, without the user file merged underneath it.
+         */
+        fun forSnapshot(config: ConfigYaml): HierarchicalConfigLoader =
+            HierarchicalConfigLoader(projectRoot = null, fixedConfig = config)
 
         /**
          * Clear all cached instances (useful for testing).

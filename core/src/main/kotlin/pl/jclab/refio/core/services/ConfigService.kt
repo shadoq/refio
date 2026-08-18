@@ -17,10 +17,14 @@ import java.nio.file.Path
  * Service for managing application configuration.
  *
  * Configuration hierarchy (from lowest to highest priority):
- * 1. Built-in defaults (hardcoded in this class)
- * 2. User config file (~/.refio/config.yaml)
- * 3. Project config file (<project>/.refio/config.yaml)
- * 4. Database overrides (settings changed via Settings UI)
+ * 1. Built-in defaults (hardcoded in [ConfigDefaultsInitializer])
+ * 2. User config file (~/.refio/config.yaml), applied into APP scope on startup
+ * 3. Project config file (<project>/.refio/config.yaml), applied into PROJECT scope on startup
+ * 4. Stored settings, resolved TASK > PROJECT > APP
+ * 5. Run-scope overrides (CLI `--config`), read-only and never persisted
+ *
+ * Both files are applied to the store rather than consulted per read, so a setting changed later
+ * from the UI wins until the file that set it is edited again.
  *
  * Handles default model selection per logical operation slot.
  */
@@ -153,6 +157,16 @@ class ConfigService(
         projectId: String? = null
     ) = resolver.set(key, value, scope, taskId, projectId)
 
+    /**
+     * Record app-scoped state the user never chose (the session's last mode, model, toggles).
+     *
+     * Unlike [set], this does not supersede a value pinned in `<project>/.refio/config.yaml`:
+     * re-saving a session is bookkeeping, not a settings change, and treating it as one silently
+     * disabled project configuration for these keys moments after startup.
+     */
+    fun setSessionState(key: String, value: String) =
+        resolver.set(key = key, value = value, scope = ConfigScope.APP, supersedeProjectScope = false)
+
     // ==================== UI CONFIGURATION ====================
 
     fun setReasoningEffort(effort: ReasoningEffort, taskId: String? = null) {
@@ -231,6 +245,8 @@ class ConfigService(
         configRepository = configRepository,
         applyYaml = ::applyYaml,
         invalidateAllCaches = configCache::invalidateAll,
+        projectRoot = projectRoot,
+        projectId = defaultProjectId,
     )
 
     private val validator = ConfigValidator(this)
@@ -249,6 +265,25 @@ class ConfigService(
         val updated = defaultsInitializer.reloadFromYaml()
         validator.validateAll()
         return updated
+    }
+
+    /**
+     * Apply `<project>/.refio/config.yaml` to PROJECT scope so project settings outrank the
+     * built-in defaults stored in APP scope. No-op for a service with no project root.
+     *
+     * A value the key's validator rejects aborts with [ConfigValidator.InvalidConfigException],
+     * exactly like a rejected value in the user file: running against a setting that was declared
+     * but silently ignored is worse than stopping with the offending key named.
+     *
+     * @param force re-apply even when the file has not changed since the last run.
+     * @return number of keys written.
+     */
+    fun materializeProjectConfig(force: Boolean = false): Int {
+        val written = defaultsInitializer.materializeProjectConfig(force)
+        if (written > 0) {
+            validator.validateAll()
+        }
+        return written
     }
 
     /**

@@ -6,7 +6,7 @@ import java.util.concurrent.ConcurrentHashMap
  * Records the specific guardrail that aborted a task's turn, so a failing run can be classified by
  * *why* it stopped rather than only by the coarse `session.status`.
  *
- * The e2e harness otherwise buckets every INCOMPLETE turn as "loop" and every FAILED
+ * The e2e harness otherwise buckets every INCOMPLETE turn under one coarse label and every FAILED
  * turn as "agent-fail", which hides the difference between a byte-identical repetition loop and a
  * stalled no-op writer - a distinction the stabilization gate's failure-mode breakdown (and the
  * self-improve diagnosis) needs. The turn loop calls [record] at the abort site; the marker survives
@@ -30,6 +30,20 @@ object TurnFailureMarkerTracker {
      * rounds were exhausted; the turn ended without a verified deliverable.
      */
     const val VERIFICATION_FAILED = "VERIFICATION_FAILED"
+
+    /**
+     * A top-level AGENT turn ended without success and without ever writing a file - typically the
+     * model announced the edit it was about to make and stopped. Distinct from [NOOP_WRITE_STALL],
+     * where writes did happen but changed nothing.
+     */
+    const val NO_FILE_WRITTEN = "NO_FILE_WRITTEN"
+
+    /**
+     * The approval policy refused call after call and the turn was stopped. Names the policy as the
+     * cause instead of leaving it inside the generic tool-error rate, where our own configuration
+     * read as the model's incompetence.
+     */
+    const val TOOL_DENIED_REPEATEDLY = "TOOL_DENIED_REPEATEDLY"
 
     private val markers = ConcurrentHashMap<String, String>()
 

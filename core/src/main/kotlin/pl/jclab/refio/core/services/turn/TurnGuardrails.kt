@@ -114,6 +114,39 @@ class TurnGuardrails {
         }
     }
 
+    /**
+     * Counts calls the approval policy refused, kept apart from the tool-error rate on purpose.
+     *
+     * A tool error says the model cannot drive its tools; a denial says the environment refused a
+     * command the model was right to want. Feeding denials into the error rate made our own policy
+     * look like the model's incompetence and could end a turn that was working - measured on a run
+     * where one refused `lsof` was the eighth of ten "errors" and tipped the 80% abort threshold.
+     *
+     * Persistence still counts: the model is told a blocked call stays blocked, so asking again and
+     * again is a loop - it just ends under its own name. Mirrors
+     * [ConsecutiveBlockedToolTracker]; a permitted call in between clears the streak.
+     */
+    class ConsecutiveDeniedToolTracker(private val abortThreshold: Int = 3) {
+        private var streak = 0
+
+        fun record(denied: Boolean): LoopStatus {
+            if (!denied) {
+                streak = 0
+                return LoopStatus.OK
+            }
+            streak++
+            return if (streak >= abortThreshold) {
+                LoopStatus.ABORT(
+                    reason = "Asked for commands the approval policy blocked $streak times in a row. " +
+                        "A blocked command stays blocked - reach the goal another way, or answer with what you have.",
+                    incomplete = true,
+                )
+            } else {
+                LoopStatus.OK
+            }
+        }
+    }
+
     sealed class LoopStatus {
         object OK : LoopStatus()
 

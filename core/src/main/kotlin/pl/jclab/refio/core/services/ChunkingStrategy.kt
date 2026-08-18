@@ -304,7 +304,7 @@ class SemanticChunkingStrategy(
         // chunk can all truncate (maxChunkChars) down to the SAME leading region, and some
         // analyzers report a span more than once. Identical text → identical embedding →
         // rag_search top-K fills with copies of one fragment (observed 2026-05, session
-        // 1fc544f9: 5× identical ConversationCompactor:29-349 returned for every query,
+        // 1fc544f9: 5× the identical 320-line span of one service file returned for every query,
         // which sent a weak model into a 15-iteration re-search loop). Keep the first
         // occurrence so the richer/earlier chunk (full_file → class → function) wins.
         val seenContent = HashSet<String>()

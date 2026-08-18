@@ -25,6 +25,7 @@
 #   e2e-run.sh [opts] <id|scenario.json> ...  # run selected scenarios (by id OR by file path)
 #     opts: [--cli <path>] [--max-cost <usd>] [--model <provider/model>] [--ollama-host <h>]
 #           [--ollama-ctx <n>] [--config k=v]... [--auto-approve <regex>] [--no-auto-approve] [--keep]
+#           (--ollama-ctx defaults to 65536 — see below; pass it explicitly to compare windows)
 #
 # --auto-approve <regex> overrides which headless command-tool calls are approved (default: common
 #   build/test/inspect commands); --no-auto-approve restores raw "reject every ASK command" (a model
@@ -35,7 +36,13 @@
 #   --config providers.ollama.ollama_endpoint=...). Accepts a host ("box"), host:port
 #   ("box:11434"), or a full URL ("http://box:11434"); bare host/port becomes http://host:11434.
 # --ollama-ctx overrides the configured Ollama context size for this run (sugar for
-#   --config providers.ollama.ollama_context_size=<n>).
+#   --config providers.ollama.ollama_context_size=<n>). Defaults to 65536: measured against a
+#   32768 window, prompts overshot it by 1-10% on the longer scenarios, Ollama truncated the head in
+#   silence, and num_predict was clamped to its 512-token floor in 17 of 21 calls - so the model was
+#   given ~2 KB to write a file with and had lost the start of its instructions. Every scenario
+#   asserts no_context_overflow, which made that a HARD fail regardless of the model under test.
+#   Comparisons between models are only meaningful when they share one window, so it is a default
+#   here rather than something each invocation has to remember.
 #
 # Scenario selection: a positional arg is resolved as (1) an existing file path, else (2)
 # test_data/e2e/<arg>.json, else (3) any scenario whose `.id` equals <arg>. `--all` runs them all.
@@ -70,7 +77,7 @@ CLI="$CLI_DEFAULT"
 MAX_COST="0.50"
 MODEL=""
 OLLAMA_HOST=""
-OLLAMA_CTX=""
+OLLAMA_CTX="65536"
 KEEP=0
 SELF_TEST=0
 LIST=0
@@ -85,7 +92,13 @@ CONFIG_OVERRIDES=()
 # AGENT mode, so they are unaffected), the project is a throwaway temp dir, and CommandDenylist still
 # guards destructive commands AFTER approval. Override with --auto-approve <regex> or disable with
 # --no-auto-approve.
-AUTO_APPROVE='\b(kotlinc|gradlew|gradle|javac|java|python3?|pip3?|node|npm|npx|pnpm|yarn|pytest|mvn|cargo|go|make|cmake|ls|cat|pwd|echo|head|tail|sed|awk|grep|rg|find|wc|diff|test|true|cd|sh|bash|env|export)\b'
+#
+# mkdir/touch/mv/cp are in the list because creating a directory or an empty file is part of writing
+# code, not a separate decision a user would weigh: a model laying out `mkdir -p tests && touch
+# tests/__init__.py` was being refused and losing the turn over it. Claude Code's acceptEdits mode
+# auto-approves the same set for the same reason. Deletion is deliberately NOT here — `rm` stays a
+# refusal, and CommandDenylist still blocks the destructive forms after approval either way.
+AUTO_APPROVE='\b(kotlinc|gradlew|gradle|javac|java|python3?|pip3?|node|npm|npx|pnpm|yarn|pytest|mvn|cargo|go|make|cmake|ls|cat|pwd|echo|head|tail|sed|awk|grep|rg|find|wc|diff|test|true|cd|sh|bash|env|export|mkdir|touch|mv|cp|tr|sort|uniq|cut|sleep|which|lsof)\b'
 
 die() { echo "ERROR: $*" >&2; exit 2; }
 
@@ -158,7 +171,30 @@ if [[ -n "$OLLAMA_CTX" ]]; then
     OLLAMA_SUGAR+=("providers.ollama.ollama_context_size=$OLLAMA_CTX")
 fi
 
+# Endpoint the sugar resolved above, defaulting to the local server, so warm-up hits the same box
+# the scenarios will.
+WARM_ENDPOINT="${endpoint:-http://127.0.0.1:11434}"
+
 require_cmd jq
+
+# --- model warm-up ---------------------------------------------------------
+# Loading a large model can take longer than the Ollama server's own start timeout, which comes
+# back as HTTP 500 "timed out waiting for llama-server to start" and scores as a failed scenario
+# even though the model never ran. Pay that cost once, before the first scenario, and never count
+# it against a model.
+warm_ollama_model() {
+    local model="$1" endpoint="$2"
+    [[ "$model" == ollama/* ]] || return 0
+    local bare="${model#ollama/}"
+    echo "> warming $bare (loading the model, not measured)" >&2
+    local started ended
+    started="$(date +%s)"
+    curl -s --max-time 900 "$endpoint/api/generate" \
+        -d "{\"model\":\"$bare\",\"prompt\":\"hi\",\"stream\":false,\"options\":{\"num_predict\":1}}" \
+        >/dev/null 2>&1 || echo "  warm-up request failed - continuing, the run will show it" >&2
+    ended="$(date +%s)"
+    echo "  warm-up took $((ended - started))s" >&2
+}
 
 # ---------------------------------------------------------------------------
 # Assertion engine — operates purely on a produced run.json + project dir.
@@ -382,10 +418,12 @@ classify_failure_mode() {
     case "$marker" in
         LOOP_ABORTED)     echo "loop-aborted";     return 0 ;;
         NOOP_WRITE_STALL) echo "noop-write-stall"; return 0 ;;
+        NO_FILE_WRITTEN)  echo "no-file-written";  return 0 ;;
+        TOOL_DENIED_REPEATEDLY) echo "policy-denied"; return 0 ;;
     esac
     case "$status" in
         CANCELED)   echo "abort";      return 0 ;;
-        INCOMPLETE) echo "loop";       return 0 ;;
+        INCOMPLETE) echo "incomplete"; return 0 ;;
         FAILED)     echo "agent-fail"; return 0 ;;
         UNKNOWN)    echo "crash";      return 0 ;;
     esac
@@ -1108,6 +1146,8 @@ else
         RESOLVED+=("$sp")
     done
 fi
+
+warm_ollama_model "$MODEL" "$WARM_ENDPOINT"
 
 echo "| scenario | verdict | metrics |"
 echo "|---|---|---|"

@@ -84,11 +84,59 @@ class OllamaAdapter(
      * per-message overhead for role tokens. Not exact — Ollama's actual tokenization differs
      * by model — but consistently sized so the warning fires before silent truncation.
      */
+    /**
+     * Render the conversation the way Ollama's chat API expects it.
+     *
+     * An assistant turn keeps its `tool_calls` in the structured field rather than as prose, so a
+     * model that answered with a bare call (no text, reasoning in its thinking channel) still sees
+     * that it made that call. Ollama wants the arguments as an object, unlike the OpenAI shape
+     * where they are a JSON string; an unparsable argument string is passed through verbatim
+     * rather than dropping the call.
+     */
+    internal fun toOllamaMessages(
+        systemMessages: List<String>,
+        messages: List<LLMMessage>,
+    ): List<Map<String, Any>> = buildList {
+        systemMessages.filter { it.isNotBlank() }.forEach { sysMsg ->
+            add(mapOf<String, Any>("role" to "system", "content" to sysMsg))
+        }
+        for (msg in messages.filter { it.role != "system" }) {
+            val entry = mutableMapOf<String, Any>(
+                "role" to msg.role,
+                "content" to msg.textOnlyContent(),
+            )
+            if (msg.toolCalls.isNotEmpty()) {
+                entry["tool_calls"] = msg.toolCalls.map { call ->
+                    mapOf(
+                        "function" to mapOf(
+                            "name" to call.name,
+                            "arguments" to parseToolArguments(call.argumentsJson),
+                        )
+                    )
+                }
+            }
+            add(entry)
+        }
+    }
+
+    private fun parseToolArguments(argumentsJson: String): Any {
+        if (argumentsJson.isBlank()) {
+            return emptyMap<String, Any>()
+        }
+        return try {
+            @Suppress("UNCHECKED_CAST")
+            gson.fromJson(argumentsJson, Map::class.java) as? Map<String, Any> ?: argumentsJson
+        } catch (e: Exception) {
+            logger.debug { "[OLLAMA] tool-call arguments are not a JSON object, sending verbatim: ${e.message}" }
+            argumentsJson
+        }
+    }
+
     internal fun estimateOllamaInputTokens(
-        messages: List<Map<String, String>>,
+        messages: List<Map<String, Any>>,
         tools: List<ToolSchema>?,
     ): Int {
-        val messageChars = messages.sumOf { (it["content"]?.length ?: 0) + 10 }
+        val messageChars = messages.sumOf { (it["content"]?.toString()?.length ?: 0) + 10 }
         val toolChars = tools?.sumOf { schema ->
             schema.name.length + schema.description.length + schema.parametersJsonSchema.toString().length
         } ?: 0
@@ -140,17 +188,7 @@ class OllamaAdapter(
         kwargs: Map<String, Any>
     ): LLMResponse {
         // Prepare messages
-        val ollamaMessages = mutableListOf<Map<String, String>>()
-
-        // Add system messages from systemMessages parameter
-        systemMessages.filter { it.isNotBlank() }.forEach { sysMsg ->
-            ollamaMessages.add(mapOf("role" to "system", "content" to sysMsg))
-        }
-
-        // Add conversation messages (filter out any system messages as they should be in systemMessages parameter)
-        for (msg in messages.filter { it.role != "system" }) {
-            ollamaMessages.add(mapOf("role" to msg.role, "content" to msg.textOnlyContent()))
-        }
+        val ollamaMessages = toOllamaMessages(systemMessages, messages)
 
         val responseFormat = kwargs["response_format"] as? Map<*, *>
         val jsonMode = responseFormat?.get("type") == "json_object"
@@ -227,7 +265,7 @@ class OllamaAdapter(
      * `content` chunks when Refio expects structured JSON. See AgentTurnLoop empty-content retries.
      */
     internal fun buildOllamaRequestBody(
-        ollamaMessages: List<Map<String, String>>,
+        ollamaMessages: List<Map<String, Any>>,
         jsonMode: Boolean,
         thinkingRequested: Boolean,
         streaming: Boolean,
@@ -508,9 +546,14 @@ class OllamaAdapter(
     }
 
     /**
-     * Execute streaming request with automatic retry on model loading.
-     * When done_reason="load", the model is still loading into GPU memory.
-     * We automatically retry with exponential backoff.
+     * Execute a streaming request and fold the NDJSON chunks into one [LLMResponse].
+     *
+     * Makes exactly one attempt. Retrying a failed call is the job of the retry handler wrapping
+     * the turn, which knows whether any chunk already reached the UI - this loop has usually
+     * emitted content by the time it fails, so re-streaming from here would duplicate output.
+     * A cold model shows up as a connect or read timeout, which that handler already retries.
+     *
+     * `done_reason` (including "load") is reported as the response's finish reason, not acted on.
      */
     private suspend fun executeStreaming(
         requestBody: Map<String, Any>,
@@ -617,18 +660,26 @@ class OllamaAdapter(
                         val content = message?.get("content") as? String ?: ""
                         val thinking = message?.get("thinking") as? String ?: ""  // Reasoning field
                         if (message != null) {
-                            val toolCalls = extractOllamaToolCalls(message)
-                            if (toolCalls.isNotEmpty()) {
-                                rawToolCalls.clear()
-                                rawToolCalls.addAll(toolCalls)
+                            // Accumulate across chunks instead of replacing: a server that splits
+                            // parallel calls over several chunks would otherwise leave only the
+                            // last one and the turn would silently skip the rest of the work.
+                            // Calls already collected are ignored, so a server re-sending the
+                            // cumulative array cannot make the same tool run twice.
+                            val newToolCalls = extractOllamaToolCalls(message)
+                                .filterNot { rawToolCalls.contains(it) }
+                            if (newToolCalls.isNotEmpty()) {
+                                // Index continues across chunks so a consumer merging deltas by
+                                // index does not fold two separate calls into one.
+                                val firstIndex = rawToolCalls.size
+                                rawToolCalls.addAll(newToolCalls)
                                 // Ollama emits the whole tool call at once (no per-arg streaming),
                                 // so surface one progress snapshot per call.
-                                parseNativeOllamaToolCalls(toolCalls).forEachIndexed { idx, call ->
+                                parseNativeOllamaToolCalls(newToolCalls).forEachIndexed { idx, call ->
                                     onStreamChunk(
                                         StreamChunk(
                                             delta = "",
                                             toolCallDelta = NativeToolCallDelta(
-                                                index = idx,
+                                                index = firstIndex + idx,
                                                 nameDelta = call.name,
                                                 argumentsDelta = call.argumentsJson,
                                             ),

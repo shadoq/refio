@@ -185,7 +185,7 @@
 - **WebSearchTool.kt** — Web search via Brave Search, SerpAPI, or DuckDuckGo Instant Answers; configurable provider/API key via `tools.web_search.*` config; returns titles, URLs, snippets.
 - **FetchWebpageTool.kt** — Fetches URL, converts HTML to Markdown via Jsoup (strips nav/ads/scripts), processes with weak LLM model using user prompt; 50K char content limit.
 - **CodeIntelligenceTool.kt** — IDE-independent code intelligence: `find_usages` (grep), `find_definition` (ctags/grep), `list_symbols` (ctags), `get_diagnostics` (compiler CLI); works in CLI without IntelliJ PSI.
-- **MonitorProcessTool.kt** — Reads stdout from background process by `process_id`; returns lines and running status; auto-removes finished processes.
+- **MonitorProcessTool.kt** — Reads stdout from a background process by `process_id` (`action="read"`, default) or kills it (`action="stop"`); returns lines and running status; auto-removes processes whose whole tree has finished.
 - **AskUserTool.kt** — Asks user a question with optional predefined choices; suspends agent loop via `UserQuestionService`; 10-minute timeout.
 - **SleepTool.kt** — Pauses agent execution for up to 30 seconds; uses coroutine `delay()`.
 
@@ -205,7 +205,8 @@
 
 ## `core/services/` — Core Services
 
-- **ProcessManager.kt** — Manages long-running background processes; `start(command, workingDir)` returns `ManagedProcess` with `processId`; `readOutput()` non-blocking line reader; `stop()` forcibly destroys; cross-platform shell wrapping (cmd.exe/sh).
+- **ProcessManager.kt** — Manages long-running background processes; `start(command, workingDir)` returns `ManagedProcess` with `processId`; `readOutput()` non-blocking line reader; `stop()`/`close()` destroy the whole process tree (self-backgrounded children included); cross-platform shell wrapping (cmd.exe/sh).
+- **ProcessTreeTracker.kt** — Retains handles of a process's descendants while it runs, so a child that backgrounds itself and reparents away can still be killed; shared by `ProcessManager` and `RunTerminalCommandTool`.
 - **AgentExecutor.kt** — Orchestrates step-by-step execution: planning → execution → summarization with subtask lifecycle management.
 - **AgentTurnLoop.kt** - Thin facade (~354 LOC) for the self-directing PLAN/AGENT tool loop; keeps the `runTurn` / `continueTurn` / `turnState` / `lastPromptSnapshot` surface byte-stable and delegates the loop body to `turn/TurnExecutor.kt`.
 - **TurnLoopConfig.kt** — Configuration for AgentTurnLoop with factory methods for PLAN (25 iterations) and AGENT (50 iterations) presets; includes auto-compaction thresholds, parallel tools, snapshots, retry config, working memory, read-only budget guard (ADR-0044).
@@ -214,12 +215,10 @@
 - **StepPlanner.kt** — Generates execution plans for subtasks with dynamic parameters based on runtime state; loads context from previous results.
 - **StepSummarizer.kt** — LLM-based step summaries with fallback to simple formatting; tracks tool calls, formats with emoji indicators.
 - **ContextService.kt** — Central context orchestrator (~2140 LOC): delegates to 6 sub-services for RAG loading, MCP resources, context resolution, project summarization, conversation building, task extraction; budget-aware compression.
-- **ConversationCompactor.kt** — Compacts conversation history at 80-85% capacity using WEAK model; keeps last N messages raw, summarizes older ones.
 - **ConversationSummaryService.kt** — LLM-based conversation summaries; tracks summary metadata (count, indices, timestamps) to avoid re-summarizing.
 - **ConfigService.kt** — YAML config management with scope-based precedence (GLOBAL/APP/TASK/USER) (~2268 LOC); in-memory cache, database storage; all deprecated getters removed, callers use `getTyped(ConfigKeys.XXX)`.
 - **PromptsService.kt** — Prompt templates with `{{variable}}` substitution for CHAT/PLAN/AGENT modes; manages user-defined rules and commands.
 - **ToolExecutor.kt** — Sequential tool execution with validation, error handling, streaming for code generation tools; snapshot creation.
-- **ParallelToolExecutor.kt** — Parallel execution for READ_ONLY tools, sequential for WRITE; maintains order, creates snapshots, tracks parallelism stats.
 - **ToolPermissionsService.kt** — 3-level tool permissions (ON/ASK/OFF) per mode (PLAN=read-only, AGENT=read-write) with smart defaults; `run_terminal_command`=ASK in AGENT, `run_code`=OFF by default; task-level overrides via ConfigRouter; `filterAvailableTools()` includes ASK tools.
 - **ToolResultSummarizer.kt** — Summarizes tool outputs using WEAK model; short outputs (<500 chars) skip; deterministic compression fallback.
 - **ToolResultData.kt** — DTO for tool result with summarization info (content, isSummarized, rawOutput, metadata).

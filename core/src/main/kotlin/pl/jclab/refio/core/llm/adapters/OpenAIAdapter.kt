@@ -10,6 +10,7 @@ import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.llm.NativeToolCall
 import pl.jclab.refio.core.llm.StreamChunk
+import pl.jclab.refio.core.llm.StreamFinishReason
 import pl.jclab.refio.core.llm.ToolSchemaSanitizer
 import pl.jclab.refio.core.llm.ToolsNotSupportedException
 import pl.jclab.refio.core.llm.toModelConfig
@@ -479,7 +480,9 @@ class OpenAIAdapter(
         // Add conversation messages (filter out any system messages as they should be in systemMessages parameter).
         // Remap "tool" (used by LLMMessageMapper for tool results) to "assistant" — OpenAI's "tool" role
         // requires a matching tool_call_id, which this adapter does not currently emit.
-        for (msg in messages.filter { it.role != "system" }) {
+        // Same reason as the shared OpenAI-compatible builder: no tool-call field here, so a
+        // tool-call-only turn is skipped rather than sent as an empty assistant message.
+        for (msg in messages.filter { it.role != "system" && !it.isEmptyForTextOnlyProvider() }) {
             val mappedRole = if (msg.role == "tool") "assistant" else msg.role
             openaiMessages.add(mapOf("role" to mappedRole, "content" to toOpenAiMessageContent(msg)))
         }
@@ -872,6 +875,9 @@ class OpenAIAdapter(
         var streamUsage: LLMUsage? = null
         var httpStatus: Int? = null
         var finalFinishReason: String? = null
+        // Did the stream end on purpose? Either the `[DONE]` sentinel or a `finish_reason` from the
+        // provider counts; falling out of the read loop with neither means the peer just went away.
+        var sawTerminator = false
         val endpoint = getEndpoint(definition)
 
         try {
@@ -934,6 +940,7 @@ class OpenAIAdapter(
                     if (pl.jclab.refio.core.services.monitoring.GlobalMetrics.isCancelled()) {
                         logger.info { "$logPrefix Streaming cancelled by user - returning partial response" }
                         finalFinishReason = "cancelled"
+                        sawTerminator = true
                         break
                     }
 
@@ -948,6 +955,7 @@ class OpenAIAdapter(
                     // Check for stream end
                     if (data == "[DONE]") {
                         logger.debug { "$logPrefix Stream complete" }
+                        sawTerminator = true
                         break
                     }
 
@@ -1011,6 +1019,7 @@ class OpenAIAdapter(
                         // Track final finish_reason
                         if (finishReason != null) {
                             finalFinishReason = finishReason
+                            sawTerminator = true
                         }
                     } catch (e: CancellationException) {
                         // Let stream abort (guardrail trip) propagate out of the loop.
@@ -1020,6 +1029,17 @@ class OpenAIAdapter(
                         continue
                     }
                 }
+            }
+
+            // The server closed the connection mid-answer, without [DONE] and without a
+            // finish_reason. Keep what was streamed - it is still the model's work - but record the
+            // cut-off so the turn does not read a half-written envelope as a finished prose reply.
+            if (!sawTerminator && finalFinishReason == null && contentBuilder.isNotEmpty()) {
+                logger.warn {
+                    "$logPrefix Stream ended without [DONE] or finish_reason after " +
+                        "${contentBuilder.length} chars - reporting the response as truncated"
+                }
+                finalFinishReason = StreamFinishReason.TRUNCATED
             }
 
             val toolsWereRequested = requestBody.containsKey("tools")

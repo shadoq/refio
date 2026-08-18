@@ -60,6 +60,84 @@ class ProcessManagerTest {
     }
 
     @Test
+    @Timeout(60)
+    @DisabledOnOs(OS.WINDOWS)
+    fun `stop kills a child that backgrounded itself and outlived the shell`() {
+        val orphan = startSelfBackgroundingProcess(manager)
+
+        assertTrue(orphan.handle.isAlive, "the backgrounded child must outlive the shell")
+
+        manager.stop(orphan.processId)
+
+        assertTrue(waitUntilDead(orphan.handle), "stop() must kill the reparented child, not just the shell")
+    }
+
+    @Test
+    @Timeout(60)
+    @DisabledOnOs(OS.WINDOWS)
+    fun `close kills a child that backgrounded itself`() {
+        // close() runs the same reaping routine as the JVM shutdown hook, which is what protects
+        // the user from a server left running after the IDE or CLI exits.
+        val localManager = ProcessManager()
+        val orphan = startSelfBackgroundingProcess(localManager)
+
+        assertTrue(orphan.handle.isAlive, "the backgrounded child must outlive the shell")
+
+        localManager.close()
+
+        assertTrue(waitUntilDead(orphan.handle), "close() must kill the reparented child")
+    }
+
+    @Test
+    @Timeout(60)
+    @DisabledOnOs(OS.WINDOWS)
+    fun `a process whose child still runs is reported as running`() {
+        val localManager = ProcessManager()
+        try {
+            val orphan = startSelfBackgroundingProcess(localManager)
+
+            val (_, isRunning) = runBlocking { localManager.readOutput(orphan.processId) }
+
+            assertTrue(isRunning, "a live backgrounded child means the process is still running")
+            assertTrue(
+                localManager.get(orphan.processId) != null,
+                "the entry must stay addressable so the user can still stop it"
+            )
+        } finally {
+            localManager.close()
+        }
+    }
+
+    private class SelfBackgroundingProcess(val processId: String, val handle: ProcessHandle)
+
+    /**
+     * Starts a command that backgrounds a child and then exits, so the child is reparented away
+     * from the shell - the shape of `npm start &`, `nohup server &` and every daemonizing binary.
+     * The shell lingers briefly so the descendant is observable before it is orphaned.
+     */
+    private fun startSelfBackgroundingProcess(target: ProcessManager): SelfBackgroundingProcess {
+        val pidFile = File.createTempFile("refio-process-manager", ".pid")
+        pidFile.deleteOnExit()
+        val managed = target.start(
+            "sleep 120 & echo \$! > ${pidFile.absolutePath}; sleep 1",
+            workDir
+        )
+        assertTrue(managed.process.waitFor(20, TimeUnit.SECONDS), "the shell itself must exit")
+
+        val pid = pidFile.readText().trim().toLong()
+        val handle = ProcessHandle.of(pid).orElseThrow { AssertionError("child process $pid not found") }
+        return SelfBackgroundingProcess(managed.processId, handle)
+    }
+
+    private fun waitUntilDead(handle: ProcessHandle): Boolean {
+        val deadline = System.currentTimeMillis() + 10_000
+        while (handle.isAlive && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50)
+        }
+        return !handle.isAlive
+    }
+
+    @Test
     fun `buffer drops oldest lines beyond the cap`() {
         val javaExecutable = File(System.getProperty("java.home"), "bin/java").absolutePath
         val managed = ProcessManager.ManagedProcess(

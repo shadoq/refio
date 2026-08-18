@@ -38,9 +38,19 @@ object TokenRatioCalibrator {
      * @param modelId resolved model id (provider-qualified or bare — used verbatim as the key)
      * @param chars total prompt characters that were sent (system + messages)
      * @param realTokens the provider-reported input-token count for that prompt
+     * @param truncationSuspected true when this request's prompt may have been cut to fit the
+     *   window, which makes the pair unusable as evidence (see below)
      */
-    fun observe(modelId: String, chars: Int, realTokens: Int) {
+    fun observe(modelId: String, chars: Int, realTokens: Int, truncationSuspected: Boolean) {
         if (realTokens <= 0 || chars <= 0) {
+            return
+        }
+        // A possibly-truncated request proves nothing about the tokenizer: a provider that truncates
+        // reports the POST-truncation length, so the full char count paired with it reads as a
+        // looser ratio than the model really has. Folding that in lowers every later estimate,
+        // which blinds the pre-send overflow guard and at the same time tells the context budget it
+        // can pack more text in — each truncation would make the next one harder to see.
+        if (truncationSuspected) {
             return
         }
         val observed = chars.toDouble() / realTokens

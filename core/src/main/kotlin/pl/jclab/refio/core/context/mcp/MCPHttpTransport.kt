@@ -8,10 +8,12 @@ import io.ktor.client.request.post
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.setBody
-import io.ktor.client.statement.bodyAsText
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
+import io.ktor.utils.io.core.readBytes
 import io.ktor.utils.io.readUTF8Line
 import io.ktor.http.ContentType
+import io.ktor.http.contentLength
 import io.ktor.http.contentType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -87,6 +89,15 @@ class MCPHttpTransport(
     private var scope: CoroutineScope? = null
     private var sseJob: Job? = null
 
+    companion object {
+        /**
+         * Cap on one response body. A remote MCP server is a trust boundary and a broken local one
+         * can answer with an unbounded result; either way the whole body would otherwise be read
+         * into memory before anything looks at it.
+         */
+        private const val MAX_RESPONSE_BYTES = 10L * 1024 * 1024
+    }
+
     suspend fun connect() {
         if (config.type == MCPServerType.HTTP_SSE) {
             startSse()
@@ -118,7 +129,7 @@ class MCPHttpTransport(
                         }
                     }
                 }
-                val body = response.bodyAsText()
+                val body = readBoundedBody(response)
                 httpStatus = response.status.value
                 httpLogger.debug { "[${config.id}] HTTP ${response.status.value} response: $body" }
 
@@ -173,6 +184,28 @@ class MCPHttpTransport(
             throw e
         }
     }
+
+    /**
+     * Reads the body, refusing anything past [MAX_RESPONSE_BYTES] with a message that names the
+     * server, so an oversized answer fails as a clear MCP error instead of an out-of-memory kill.
+     */
+    private suspend fun readBoundedBody(response: HttpResponse): String {
+        val declaredLength = response.contentLength()
+        if (declaredLength != null && declaredLength > MAX_RESPONSE_BYTES) {
+            throw tooLarge(declaredLength)
+        }
+
+        val bytes = response.bodyAsChannel().readRemaining(MAX_RESPONSE_BYTES + 1).readBytes()
+        if (bytes.size > MAX_RESPONSE_BYTES) {
+            throw tooLarge(bytes.size.toLong())
+        }
+        return String(bytes, Charsets.UTF_8)
+    }
+
+    private fun tooLarge(size: Long): MCPTransportException = MCPTransportException(
+        "MCP server ${config.id} returned a response of at least $size bytes, " +
+            "over the ${MAX_RESPONSE_BYTES} byte limit"
+    )
 
     private fun startSse() {
         val url = config.url ?: return

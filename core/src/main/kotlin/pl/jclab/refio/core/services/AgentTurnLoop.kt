@@ -83,7 +83,6 @@ class AgentTurnLoop(
 
     // Optional dependencies for enhanced turn loop
     private val tokenEstimator: PromptTokenEstimator = PromptTokenEstimator(),
-    private val conversationCompactor: ConversationCompactor? = null,
     private val llmRetryHandler: LLMRetryHandler? = null,
     private val workingMemoryIntegration: WorkingMemoryIntegration? = null,
     private val pendingUserMessageQueue: PendingUserMessageQueue? = null,
@@ -117,7 +116,6 @@ class AgentTurnLoop(
         turnFinalizer = turnFinalizer,
         completionGuardians = completionGuardians,
         tokenEstimator = tokenEstimator,
-        conversationCompactor = conversationCompactor,
         llmRetryHandler = llmRetryHandler,
         workingMemoryIntegration = workingMemoryIntegration,
         pendingUserMessageQueue = pendingUserMessageQueue,

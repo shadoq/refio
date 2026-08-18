@@ -178,6 +178,33 @@ class ConversationContextBuilderTest {
         )
     }
 
+    /**
+     * A model that answers with a bare tool call and no prose used to vanish from its own history:
+     * the filter keeps such a message on purpose, then the converter dropped it because it only
+     * looked at the text. The model then saw a tool result for a call it had no record of making
+     * and issued the same call again - measured on gemma4:26b, four byte-identical `read_file`
+     * calls in a row until the loop guard stopped the turn. The call has to survive in the
+     * structured channel, NOT as a text footer: that footer was tried before and a model started
+     * echoing it back as its own reply (see the envelope test above).
+     */
+    @Test
+    fun `convertChatMessageToLLMMessage keeps a bare tool call so the model remembers making it`() {
+        val msg = assistantMessage(
+            id = "a6",
+            content = "",
+            toolCalls = listOf(ToolCallData(id = "t9", name = "read_file", arguments = """{"path":"docker-compose.yml"}"""))
+        )
+
+        val llm = builder.convertChatMessageToLLMMessage(msg, toolContentResolver = { "" })
+
+        assertNotNull(llm, "an assistant turn that called a tool must not disappear from history")
+        assertEquals("assistant", llm.role)
+        assertEquals(1, llm.toolCalls.size)
+        assertEquals("read_file", llm.toolCalls.first().name)
+        assertEquals("""{"path":"docker-compose.yml"}""", llm.toolCalls.first().argumentsJson)
+        assertFalse(llm.content.contains("called"), "the call belongs in the structured field, not in prose")
+    }
+
     @Test
     fun `convertChatMessageToLLMMessage renders plain assistant text unchanged`() {
         val msg = assistantMessage(id = "a5", content = "Simple reply, no tools.", toolCalls = null)
@@ -461,12 +488,18 @@ class ConversationContextBuilderTest {
         )
     }
 
+    /**
+     * An envelope with actions but an empty response: the assistant said nothing, it only dispatched
+     * tools. This used to drop the message, because the only way to keep it was a rendered
+     * "→ called: read_file" footer and models mimicked that footer as their own reply. The footer is
+     * still banned - the call now rides in the structured field instead, where there is no prose to
+     * imitate, and the turn survives.
+     *
+     * Dropping it was not harmless: a model whose own turn disappeared saw a tool result it had no
+     * record of requesting and reissued the identical call until a loop guard ended the turn.
+     */
     @Test
-    fun `convertChatMessageToLLMMessage drops tool-only assistant turn with blank response`() {
-        // Envelope with actions but empty response — the assistant effectively said
-        // nothing, it just dispatched tools. Drop the message entirely; the tool
-        // result messages that follow carry the narrative on their own, and they
-        // still display the tool name in the `[Tool result: NAME id: XXX]` header.
+    fun `convertChatMessageToLLMMessage keeps a tool-only assistant turn without any footer`() {
         val msg = assistantMessage(
             id = "a-toolonly",
             content = """{"response":"","actions":[{"tool":"read_file","args":{"path":"x"}}],"intent":"implementation"}""",
@@ -476,11 +509,12 @@ class ConversationContextBuilderTest {
         )
 
         val llm = builder.convertChatMessageToLLMMessage(msg, toolContentResolver = { "" })
-        assertNull(
-            llm,
-            "Blank response must drop the message even when tool calls are present — " +
-                "we used to emit '→ called: read_file' here and the model would mimic it"
-        )
+
+        assertNotNull(llm, "the turn must survive so the model remembers dispatching the tool")
+        assertEquals("", llm.content, "nothing may be rendered as prose")
+        assertFalse(llm.content.contains("→"), "the arrow footer must never come back")
+        assertFalse(llm.content.contains("called:"), "the 'called:' footer must never come back")
+        assertEquals(listOf("read_file"), llm.toolCalls.map { it.name })
     }
 
     @Test

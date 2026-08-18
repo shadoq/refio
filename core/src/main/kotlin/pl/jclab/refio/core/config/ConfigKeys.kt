@@ -565,32 +565,39 @@ object ConfigKeys {
     val RECENT_WORK_FULL_DATA_LIMIT = ConfigKey(
         key = "context.recent_work.full_data_limit",
         parser = String::toIntOrNull,
-        default = 5
+        default = 5,
+        yamlAccessor = { it.getRecentWorkFullDataLimit() }
     )
 
     val RECENT_WORK_SUMMARY_MAX_LENGTH = ConfigKey(
         key = "context.recent_work.summary_max_length",
         parser = String::toIntOrNull,
-        default = 1000
+        default = 1000,
+        yamlAccessor = { it.getRecentWorkSummaryMaxLength() }
     )
 
     val CONTEXT_BUDGET_TOTAL_TOKENS = ConfigKey(
         key = "context.budget.total_tokens",
         parser = String::toIntOrNull,
-        default = 0
+        default = 0,
+        yamlAccessor = { it.getContextBudgetTotalTokens() }
     )
 
     val CONTEXT_BUDGET_INPUT_RATIO = ConfigKey(
         key = "context.budget.input_ratio",
         parser = String::toDoubleOrNull,
         default = 0.85,
+        yamlAccessor = { it.getContextBudgetInputRatio() },
         validator = { it > 0.0 && it <= 1.0 }
     )
 
     val WORKING_MEMORY_MAX_FACTS = ConfigKey(
         key = "working_memory.max_facts",
         parser = String::toIntOrNull,
-        default = 20
+        default = 20,
+        yamlAccessor = { it.getWorkingMemoryMaxFacts() },
+        // Zero or less would silently discard every fact the agent extracts.
+        validator = { it > 0 }
     )
 
     // ==================== SUBAGENTS ====================
@@ -818,6 +825,35 @@ object ConfigKeys {
     )
 
     /**
+     * Per-turn ceiling on total tokens (in + out). `0` disables it.
+     *
+     * The dollar ceiling above cannot hold a local model back: an Ollama run costs nothing, so
+     * [AGENT_MAX_COST_USD] never trips and the iteration cap is the only thing left. Measured on the
+     * e2e set, one scenario consumed 1.56M input tokens against a 50k-150k norm and still failed.
+     * Tokens are the unit that means the same thing whether the model is billed or local.
+     */
+    val AGENT_MAX_TURN_TOKENS = ConfigKey(
+        key = "agent.max_turn_tokens",
+        parser = String::toLongOrNull,
+        default = 1_200_000L,
+        validator = { it >= 0L }
+    )
+
+    /**
+     * Per-turn wall-clock ceiling in minutes. `0` disables it.
+     *
+     * Catches what a token budget cannot: a turn stuck waiting rather than generating (a model that
+     * never answers, a tool blocked on IO). Gemini CLI pairs its subagent turn cap with the same
+     * kind of time bound for this reason.
+     */
+    val AGENT_MAX_TURN_MINUTES = ConfigKey(
+        key = "agent.max_turn_minutes",
+        parser = String::toLongOrNull,
+        default = 45L,
+        validator = { it >= 0L }
+    )
+
+    /**
      * Sampling temperature for the PLAN/AGENT decision turn — the turn that picks a tool and
      * emits the response-format envelope. Defaults to `0.7` (the LLM-wide default).
      *
@@ -996,6 +1032,8 @@ object ConfigKeys {
             MAX_CONSECUTIVE_TOOL_ERRORS,
             MAX_ITERATIONS,
             AGENT_MAX_COST_USD,
+            AGENT_MAX_TURN_TOKENS,
+            AGENT_MAX_TURN_MINUTES,
             AGENT_DECISION_TEMPERATURE,
             JSON_THINKING_XML_TAGS,
             // Verify

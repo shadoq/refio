@@ -11,9 +11,8 @@ import pl.jclab.refio.core.tools.security.RuleAction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import pl.jclab.refio.core.logging.dualLogger
-import java.util.concurrent.ConcurrentHashMap
+import pl.jclab.refio.core.services.ProcessTreeTracker
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
 private val logger = dualLogger("RunTerminalCommandTool")
@@ -100,24 +99,12 @@ class RunTerminalCommandTool(
             }
             val process = processBuilder.start()
 
-            // Continuously snapshot the descendant tree while the process is alive. A backgrounded
-            // child (e.g. `python app.py &`) shares stdout with the shell; a non-interactive `sh -c`
-            // has no job control, so `kill %1` in the command is a no-op and the child survives as an
-            // orphan holding the stdout pipe open. Retaining ProcessHandles here lets us reap that
-            // orphan later even after it reparents away from the shell on exit.
-            val descendants = ConcurrentHashMap.newKeySet<ProcessHandle>()
-            val pollerActive = AtomicBoolean(true)
-            val poller = thread(isDaemon = true, name = "rtc-descendants") {
-                while (pollerActive.get() && process.isAlive) {
-                    process.descendants().forEach { descendants.add(it) }
-                    try {
-                        Thread.sleep(DESCENDANT_POLL_INTERVAL_MS)
-                    } catch (interrupted: InterruptedException) {
-                        break
-                    }
-                }
-                process.descendants().forEach { descendants.add(it) }
-            }
+            // Retain the descendant tree while the process is alive. A backgrounded child (e.g.
+            // `python app.py &`) shares stdout with the shell; a non-interactive `sh -c` has no job
+            // control, so `kill %1` in the command is a no-op and the child survives as an orphan
+            // holding the stdout pipe open. The tracker lets us reap that orphan later even after it
+            // reparents away from the shell on exit.
+            val processTree = ProcessTreeTracker(process, threadName = "rtc-descendants")
 
             // Drain stdout/stderr on a dedicated thread so we never block the coroutine indefinitely.
             // Decode as UTF-8 explicitly: the Windows console emits OEM/ANSI bytes that the JVM
@@ -146,12 +133,12 @@ class RunTerminalCommandTool(
 
             // Wait for the shell to finish within the wall-clock timeout.
             val completed = process.waitFor(effectiveTimeout, TimeUnit.SECONDS)
-            pollerActive.set(false)
+            processTree.close()
 
             if (!completed) {
                 // Timeout: kill the whole tree (shell + any orphaned child) so nothing lingers,
                 // then collect whatever output was captured before the deadline.
-                destroyProcessTree(process, descendants)
+                processTree.destroyTree()
                 reader.join(READER_FINAL_GRACE_MS)
                 val partialOutput = snapshotOutput()
                 val duration = (System.currentTimeMillis() - startTime).toInt()
@@ -194,7 +181,7 @@ class RunTerminalCommandTool(
             val orphanReaped = reader.isAlive
             if (orphanReaped) {
                 logger.warn { "Command exited but left a child holding stdout open: $command; killing surviving process tree" }
-                destroyProcessTree(process, descendants)
+                processTree.destroyTree()
                 reader.join(READER_FINAL_GRACE_MS)
             }
 
@@ -215,6 +202,7 @@ class RunTerminalCommandTool(
             return@withContext ToolResult(
                 success = exitCode == 0,
                 output = truncatedOutput,
+                error = if (exitCode == 0) null else describeFailure(command, exitCode, truncatedOutput),
                 exitCode = exitCode,
                 durationMs = duration,
                 metadata = mapOf(
@@ -233,23 +221,22 @@ class RunTerminalCommandTool(
     }
 
     /**
-     * Forcibly destroy the process and every descendant it spawned, including retained handles of
-     * children that have already reparented away from the shell. This guarantees no orphaned server
-     * survives holding the inherited stdout pipe open after a timeout or normal completion.
-     */
-    private fun destroyProcessTree(process: Process, retained: Set<ProcessHandle>) {
-        retained.forEach { handle ->
-            runCatching { handle.destroyForcibly() }
-        }
-        runCatching {
-            process.descendants().forEach { it.destroyForcibly() }
-        }
-        process.destroyForcibly()
-    }
-
-    /**
      * Get shell command for current OS
      */
+    /**
+     * Builds the failure text for a command that exited non-zero.
+     *
+     * A non-zero exit is not always a malfunction: `grep -c` exits 1 while printing a perfectly
+     * valid count of `0`. Passing the raw output on as the failure reason turns that answer into
+     * a bare "Error: 0" and drops the exit code, the one value that tells the two cases apart.
+     */
+    private fun describeFailure(command: String, exitCode: Int, output: String): String = buildString {
+        append("Command exited with code ").append(exitCode).append(": ").append(command)
+        if (output.isNotBlank()) {
+            append("\nOutput:\n").append(output)
+        }
+    }
+
     private fun getShellCommand(command: String): List<String> {
         val os = System.getProperty("os.name").lowercase()
 
@@ -286,9 +273,6 @@ class RunTerminalCommandTool(
     companion object {
         const val MIN_TIMEOUT_SECONDS = 30L
         const val MAX_TIMEOUT_SECONDS = 600L
-
-        // How often to snapshot the descendant tree while the shell is alive.
-        private const val DESCENDANT_POLL_INTERVAL_MS = 50L
 
         // Read buffer size for draining process output.
         private const val READER_CHUNK_CHARS = 8192

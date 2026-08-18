@@ -33,6 +33,12 @@ class WorkingMemoryService(
     private val entriesByTask = ConcurrentHashMap<String, ConcurrentHashMap<String, WorkingMemoryEntry>>()
     private val entriesBySession = ConcurrentHashMap<String, ConcurrentHashMap<String, WorkingMemoryEntry>>()
 
+    // Working memory lives for as long as the router does - in the IDE that is until the project
+    // is closed. Entries per task are capped, but the number of tasks was not, so every task ever
+    // run in the session stayed resident. Least-recently-used tasks/sessions are dropped instead.
+    private val taskLastUsed = ConcurrentHashMap<String, Long>()
+    private val sessionLastUsed = ConcurrentHashMap<String, Long>()
+
     /**
      * True when [taskId] already has in-memory entries — caller can skip a rebuild.
      * See [rebuildFromSubtasks] for the rebuild entry point.
@@ -137,6 +143,7 @@ class WorkingMemoryService(
         }
 
         trimEntries(taskEntries)
+        touchScope(entriesByTask, taskLastUsed, taskId)
 
         // Also record under sessionId so orchestrator sees all subagent memory
         if (sessionId != null) {
@@ -146,7 +153,32 @@ class WorkingMemoryService(
                 sessionEntries[id] = entry.copy(lastAccessedAt = Instant.now())
             }
             trimEntries(sessionEntries)
+            touchScope(entriesBySession, sessionLastUsed, sessionId)
         }
+    }
+
+    /**
+     * Mark [id] as just used and drop the least-recently-used scopes once [MAX_TRACKED_SCOPES]
+     * is exceeded. Reads count as use, so the task currently being worked on cannot be evicted
+     * by a burst of new ones.
+     */
+    private fun touchScope(
+        store: ConcurrentHashMap<String, ConcurrentHashMap<String, WorkingMemoryEntry>>,
+        lastUsed: ConcurrentHashMap<String, Long>,
+        id: String
+    ) {
+        lastUsed[id] = System.nanoTime()
+        if (store.size <= MAX_TRACKED_SCOPES) return
+
+        val evictionCount = store.size - MAX_TRACKED_SCOPES
+        lastUsed.entries
+            .filter { it.key != id }
+            .sortedBy { it.value }
+            .take(evictionCount)
+            .forEach { (evictedId, _) ->
+                store.remove(evictedId)
+                lastUsed.remove(evictedId)
+            }
     }
 
     /**
@@ -156,12 +188,14 @@ class WorkingMemoryService(
     fun buildSessionMemorySection(sessionId: String, maxTokens: Int): String {
         val sessionEntries = entriesBySession[sessionId]
         if (sessionEntries == null || sessionEntries.isEmpty()) return ""
+        sessionLastUsed[sessionId] = System.nanoTime()
         return formatEntriesAsSection(sessionEntries, maxTokens)
     }
 
     /** Remove session-scoped entries (call on session close). */
     fun clearSession(sessionId: String) {
         entriesBySession.remove(sessionId)
+        sessionLastUsed.remove(sessionId)
     }
 
     fun extractKnowledge(
@@ -210,6 +244,7 @@ class WorkingMemoryService(
         if (maxTokens <= 0) return ""
         val taskEntries = entriesByTask[taskId] ?: return ""
         if (taskEntries.isEmpty()) return ""
+        taskLastUsed[taskId] = System.nanoTime()
         return formatEntriesAsSection(taskEntries, maxTokens, skipExcerptForOriginIds)
     }
 
@@ -364,6 +399,13 @@ class WorkingMemoryService(
     }
 
     companion object {
+        /**
+         * How many tasks (and sessions) keep their working memory resident. Each one holds at
+         * most `maxEntriesPerTask` short entries, so this bounds the cache at a few megabytes
+         * while comfortably covering every task a user touches in one sitting.
+         */
+        internal const val MAX_TRACKED_SCOPES = 64
+
         /**
          * Below this many characters a head+tail truncated working-memory value
          * conveys nothing useful to the agent — better to drop the line entirely

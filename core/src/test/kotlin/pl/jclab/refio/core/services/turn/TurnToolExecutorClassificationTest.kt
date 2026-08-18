@@ -155,6 +155,32 @@ class TurnToolExecutorClassificationTest {
     }
 
     @Test
+    fun `a batch edit yields every file it touches, not none`() {
+        // multi_edit names its targets inside `edits[]`. Reading only the top level found nothing,
+        // so the caller that snapshots before a write silently skipped the one tool that can
+        // overwrite several files in a single call.
+        assertEquals(
+            listOf("src/A.kt", "src/B.kt"),
+            TurnToolExecutor.extractEditPaths(
+                """{"edits":[{"path":"src/A.kt","old_string":"a","new_string":"b"},""" +
+                    """{"path":"src/B.kt","old_string":"c","new_string":"d"}]}"""
+            )
+        )
+    }
+
+    @Test
+    fun `repeated edits of one file collapse to a single path`() {
+        // Two edits of the same file need one snapshot, not two.
+        assertEquals(
+            listOf("src/A.kt"),
+            TurnToolExecutor.extractEditPaths(
+                """{"edits":[{"path":"src/A.kt","old_string":"a","new_string":"b"},""" +
+                    """{"path":"src/A.kt","old_string":"c","new_string":"d"}]}"""
+            )
+        )
+    }
+
+    @Test
     fun `no nudge below the failed-edit threshold`() {
         // One prior failure is normal iteration, not thrashing - stay silent.
         assertEquals(null, TurnToolExecutor.repeatedFailedEditNudgeText("src/A.kt", priorFailedEdits = 0))

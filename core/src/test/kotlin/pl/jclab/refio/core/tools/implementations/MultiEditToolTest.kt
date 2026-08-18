@@ -475,13 +475,14 @@ class MultiEditToolTest {
             Files.writeString(tempDir.resolve("file.txt"), "foo bar foo baz")
 
             // When - apply two edits to the same file
-            // Edits are applied sequentially (cumulative):
-            // 1st edit: "foo bar foo baz" -> replaces first "foo" -> "qux bar foo baz"
-            // 2nd edit: "qux bar foo baz" -> replaces "bar" -> "qux zap foo baz"
+            // Edits are applied sequentially (cumulative). The second old_string exists only in the
+            // content produced by the first edit, so a pass proves the chaining:
+            // 1st edit: "foo bar foo baz" -> "qux bar foo baz"
+            // 2nd edit: "qux bar foo baz" -> "qux zap foo baz"
             val result = tool.execute(mapOf(
                 "edits" to listOf(
-                    mapOf("path" to "file.txt", "old_string" to "foo", "new_string" to "qux"),
-                    mapOf("path" to "file.txt", "old_string" to "bar", "new_string" to "zap")
+                    mapOf("path" to "file.txt", "old_string" to "foo bar", "new_string" to "qux bar"),
+                    mapOf("path" to "file.txt", "old_string" to "qux bar", "new_string" to "qux zap")
                 )
             ))
 
@@ -491,6 +492,115 @@ class MultiEditToolTest {
             assertEquals("qux zap foo baz", content)
             assertTrue(content.contains("qux"))
             assertTrue(content.contains("zap"))
+        }
+    }
+
+    /**
+     * An edit that targets one specific site must not silently land on the first of several
+     * identical matches: the tool reports how many times the string occurs and leaves the file
+     * alone, so the agent can disambiguate instead of corrupting an unrelated line.
+     */
+    @Nested
+    inner class AmbiguousMatchTests {
+
+        @Test
+        fun `ambiguous old_string is rejected with an occurrence count instead of editing the first match`() = runBlocking {
+            // Given - "limit = 10" appears twice; the agent means the second one
+            val original = "limit = 10\nname = \"a\"\nlimit = 10\n"
+            Files.writeString(tempDir.resolve("config.txt"), original)
+
+            // When
+            val result = tool.execute(mapOf(
+                "edits" to listOf(
+                    mapOf("path" to "config.txt", "old_string" to "limit = 10", "new_string" to "limit = 20")
+                )
+            ))
+
+            // Then - error names the occurrence count and the file is untouched
+            assertToolError(result, "appears 2 times")
+            assertEquals(original, readFileContent(tempDir, "config.txt"))
+        }
+
+        @Test
+        fun `ambiguity error tells the agent how to disambiguate`() = runBlocking {
+            // Given
+            Files.writeString(tempDir.resolve("config.txt"), "limit = 10\nlimit = 10\n")
+
+            // When
+            val result = tool.execute(mapOf(
+                "edits" to listOf(
+                    mapOf("path" to "config.txt", "old_string" to "limit = 10", "new_string" to "limit = 20")
+                )
+            ))
+
+            // Then - recovery must point at both escape hatches, not just fail
+            assertToolError(result)
+            val guidance = (result.recovery ?: "") + (result.nextActionHints?.joinToString(" ") ?: "")
+            assertTrue(guidance.contains("context", ignoreCase = true),
+                "Recovery should suggest adding context to old_string but was: $guidance")
+            assertTrue(guidance.contains("replace_all"),
+                "Recovery should mention replace_all but was: $guidance")
+        }
+
+        @Test
+        fun `replace_all applies the edit to every occurrence`() = runBlocking {
+            // Given
+            Files.writeString(tempDir.resolve("config.txt"), "limit = 10\nname = \"a\"\nlimit = 10\n")
+
+            // When
+            val result = tool.execute(mapOf(
+                "edits" to listOf(
+                    mapOf(
+                        "path" to "config.txt",
+                        "old_string" to "limit = 10",
+                        "new_string" to "limit = 20",
+                        "replace_all" to true
+                    )
+                )
+            ))
+
+            // Then
+            assertToolSuccess(result)
+            assertEquals("limit = 20\nname = \"a\"\nlimit = 20\n", readFileContent(tempDir, "config.txt"))
+            assertEquals(2, result.metadata!!["total_replacements"])
+        }
+
+        @Test
+        fun `an ambiguous later edit aborts the whole batch`() = runBlocking {
+            // Given - first edit is unambiguous, second is not
+            Files.writeString(tempDir.resolve("file1.txt"), "old content 1")
+            Files.writeString(tempDir.resolve("file2.txt"), "dup\ndup\n")
+
+            // When
+            val result = tool.execute(mapOf(
+                "edits" to listOf(
+                    mapOf("path" to "file1.txt", "old_string" to "old", "new_string" to "new"),
+                    mapOf("path" to "file2.txt", "old_string" to "dup", "new_string" to "unique")
+                )
+            ))
+
+            // Then - nothing written anywhere
+            assertToolError(result, "appears 2 times")
+            assertEquals("old content 1", readFileContent(tempDir, "file1.txt"))
+            assertEquals("dup\ndup\n", readFileContent(tempDir, "file2.txt"))
+        }
+
+        @Test
+        fun `uniqueness is judged against the content left by an earlier edit in the same batch`() = runBlocking {
+            // Given - "beta" occurs once, but the first edit introduces a second occurrence
+            Files.writeString(tempDir.resolve("file.txt"), "alpha\nbeta\n")
+
+            // When
+            val result = tool.execute(mapOf(
+                "edits" to listOf(
+                    mapOf("path" to "file.txt", "old_string" to "alpha", "new_string" to "beta"),
+                    mapOf("path" to "file.txt", "old_string" to "beta", "new_string" to "gamma")
+                )
+            ))
+
+            // Then - the second edit sees the pending content, where "beta" is now ambiguous
+            assertToolError(result, "appears 2 times")
+            assertEquals("alpha\nbeta\n", readFileContent(tempDir, "file.txt"))
         }
     }
 
@@ -524,6 +634,20 @@ class MultiEditToolTest {
             assertTrue(itemRequired.contains("old_string"))
             assertTrue(itemRequired.contains("new_string"))
         }
+
+        @Test
+        fun `should expose replace_all as an optional per-edit flag defaulting to false`() {
+            // When
+            val schema = tool.getParameterSchema()
+
+            // Then
+            val editsSchema = (schema["properties"] as Map<*, *>)["edits"] as Map<*, *>
+            val itemsSchema = editsSchema["items"] as Map<*, *>
+            val replaceAll = (itemsSchema["properties"] as Map<*, *>)["replace_all"] as Map<*, *>
+            assertEquals("boolean", replaceAll["type"])
+            assertEquals(false, replaceAll["default"])
+            assertFalse((itemsSchema["required"] as List<*>).contains("replace_all"))
+        }
     }
 
     /**
@@ -556,6 +680,43 @@ class MultiEditToolTest {
                 "fun describe(x: String?): String {\r\n    return \"length=\" + (x?.length ?: 0)\r\n}\r\n",
                 content
             )
+        }
+    }
+
+    @Nested
+    inner class ConcurrentModificationTests {
+
+        @Test
+        fun `should refuse to commit content computed from a stale read`() = runBlocking {
+            // Validation and commit each take the file lock separately, so another writer (a second
+            // agent in the same run) can land in between. Committing the pre-computed content would
+            // silently drop that writer's change.
+            val file = tempDir.resolve("Main.kt")
+            Files.writeString(file, "val a = 1\n")
+
+            var revalidations = 0
+            val racingSandbox = io.mockk.spyk(PathSandbox(tempDir))
+            io.mockk.every { racingSandbox.revalidateBeforeIO(any()) } answers {
+                callOriginal()
+                revalidations++
+                if (revalidations == 2) {
+                    Files.writeString(file, "val a = 1\nval b = 2\n")
+                }
+            }
+            val racingTool = MultiEditTool(racingSandbox, FileLimits.DEFAULT)
+
+            val result = racingTool.execute(mapOf(
+                "edits" to listOf(
+                    mapOf(
+                        "path" to "Main.kt",
+                        "old_string" to "val a = 1",
+                        "new_string" to "val a = 42"
+                    )
+                )
+            ))
+
+            assertToolError(result)
+            assertEquals("val a = 1\nval b = 2\n", readFileContent(tempDir, "Main.kt"))
         }
     }
 }

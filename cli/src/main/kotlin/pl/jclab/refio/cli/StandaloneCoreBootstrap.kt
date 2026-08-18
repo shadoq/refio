@@ -168,7 +168,9 @@ class StandaloneCoreBootstrap(
         val localAppRouter = appRouter
 
         try {
-            MCPManager.shutdown()
+            // Servers were started under this project's id; a plain shutdown() targets the
+            // global scope the CLI never uses and would leave every MCP process running.
+            MCPManager.shutdown(mcpProjectId)
         } catch (e: Exception) {
             logger.warn { "Error shutting down MCP: ${e.message}" }
         }

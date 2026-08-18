@@ -155,7 +155,7 @@ class McpContextLoader {
                     return@flatMap outputs
                 }
 
-                tools.forEach { toolDef ->
+                selectContextTools(serverId, serverConfig, tools).forEach { toolDef ->
                     val cacheKey = McpToolCacheKey(
                         projectId = projectId,
                         serverId = serverId,
@@ -250,6 +250,43 @@ class McpContextLoader {
 
             outputs
         }
+    }
+
+    /**
+     * Which tools a CONTEXT-mode server may be asked to run while context is assembled.
+     *
+     * These calls are made on the user's raw prompt, without the tool permission and approval
+     * layers the agent goes through, so they stay narrow. The configured context tool wins - the
+     * settings UI presents it as "run this one tool" and it has to mean that. With no such tool,
+     * only a server the user declared read-only is invoked: a READ_WRITE server also exposes
+     * writing tools and nothing in the tool definition tells them apart.
+     */
+    private fun selectContextTools(
+        serverId: String,
+        config: MCPServerConfig,
+        tools: List<MCPToolDefinition>
+    ): List<MCPToolDefinition> {
+        val configuredTool = config.contextToolName?.trim().orEmpty().ifBlank { null }
+        if (configuredTool != null) {
+            val selected = tools.firstOrNull { it.name == configuredTool }
+            if (selected == null) {
+                logger.warn {
+                    "[CONTEXT] MCP server $serverId does not expose the configured context tool '$configuredTool' - no tool called"
+                }
+                return emptyList()
+            }
+            return listOf(selected)
+        }
+
+        if (config.accessMode != MCPAccessMode.READ) {
+            logger.warn {
+                "[CONTEXT] MCP server $serverId has read/write access and no context tool configured - " +
+                    "no tool called (set the context tool to pick the one that may run)"
+            }
+            return emptyList()
+        }
+
+        return tools
     }
 
     private fun getCachedMcpToolOutput(key: McpToolCacheKey): McpToolCacheEntry? {

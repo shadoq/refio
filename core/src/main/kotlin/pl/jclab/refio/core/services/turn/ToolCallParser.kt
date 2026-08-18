@@ -30,7 +30,6 @@ private val logger = dualLogger("ToolCallParser")
  */
 class ToolCallParser(
     private val toolRegistry: ToolRegistry,
-    private val toolPermissionsService: pl.jclab.refio.core.services.ToolPermissionsService?,
     private val getJsonThinkingXmlTags: (String) -> List<String> = { emptyList() }
 ) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }

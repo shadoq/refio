@@ -164,7 +164,7 @@ All modules use the Kotlin 2.3.20 compiler with `apiVersion`/`languageVersion` p
 ```
 UI (IntelliJ Swing / TUI Mordant)
   → Service Layer (SessionManager, MessageDispatcher)
-    → Domain Routers (12 routers: Task, Chat, Agent, Subtask, Config, Prompts, Tool, RAG, ApiLogs, MultiAgent, ProjectContext, Subagent)
+    → Domain Routers (13 routers: Task, Chat, Agent, Subtask, Config, Prompts, Tool, RAG, ApiLogs, MultiAgent, ProjectContext, Subagent, Snapshot)
     → CoreApiRouter (composition root — creates dependencies, exposes routers, no business logic)
       → Execution (WorkflowOrchestrator → ChatService for CHAT | AgentTurnLoop for PLAN/AGENT)
         → LLMClient (8 provider adapters) + ToolRegistry (~30 tools) + ContextService (14 providers)
@@ -230,6 +230,8 @@ refio.bat -p <throwaway-project> --headless --model ollama/qwen3.6:35b \
 
 `tools/e2e/e2e-run.sh` (with a `.ps1` sibling) runs the e2e scenarios in `test_data/e2e/*.json` through the headless CLI into a throwaway project, then asserts on the produced `run.json`. HARD tiers (fail the run): run status SUCCESS, content needle in the edited file, build exit 0, no silent context overflow; SOFT (warn only): tool order, judge. `--self-test` exercises just the assertion engine (no LLM call); `--list` shows scenarios; `--all` or `<id>` selects what to run; `--model <provider/model>` compares models on the same task. Set `E2E_OUT_DIR=<dir>` to persist each run as `<id>__<model>__<run>.run.json` plus a `results.jsonl` verdict record (`{scenario, model, run, verdict, reasons[], failure_mode, status, costUsd, tokensOut}`) — the per-run input a pass-rate stabilization gate aggregates over N runs.
 
+**Every e2e run uses a 64k context window.** Both harnesses default `--ollama-ctx` / `-OllamaCtx` to `65536`, and a cross-model comparison only means something when all models share one window. At the previous 32768 the longer scenarios overshot the window by 1-10%, Ollama truncated the prompt head in silence, and `num_predict` was clamped to its 512-token floor in 17 of 21 calls - the model was handed ~2 KB to write a file with, having lost the start of its own instructions. Since every scenario asserts `no_context_overflow`, that was a HARD fail attributed to the model rather than to the setup. Override the window only when the window itself is what you are measuring, and say so in the report.
+
 ### Gotchas
 
 - **`--model X` in headless applies to every model slot**, not just the turn LLM: it folds into `ui.selected_model`, which `ModelSelectionService` reads first, so `advance_code_editing` / `multi_line_editor` generate file content with X too. An explicit `--config ui.selected_model=...` still wins over `--model`; the editing tools fall back to the **CODING slot** (`default_model.agent`) only when neither is set. (This fold is applied on the headless and `--multi-agent` paths; it does not change the interactive TUI.)
@@ -275,7 +277,7 @@ JUnit 5 + MockK + Turbine (Flow testing). Tests mirror source structure under `s
 
 ## Important Patterns
 
-- **Thin router pattern**: CoreApiRouter is a composition root (~300 LOC) that creates dependencies and exposes 12 domain routers. Callers use domain routers directly (e.g., `coreApiRouter.taskRouter.createTask()`). No facade methods — zero business logic in CoreApiRouter.
+- **Thin router pattern**: CoreApiRouter is a composition root (~300 LOC) that creates dependencies and exposes 13 domain routers. Callers use domain routers directly (e.g., `coreApiRouter.taskRouter.createTask()`). No facade methods — zero business logic in CoreApiRouter.
 - **StateFlow reactivity**: SessionManager exposes 11 StateFlows; UI observes via `Flow.collect`.
 - **Separate source trees**: Each module has its own `src/main/kotlin`. When adding new core files, ensure they don't depend on IntelliJ Platform APIs — the `:core` module has no IntelliJ dependency.
 - **Security layers**: PathSandbox restricts file ops to project root; CommandRule (regex-based ALLOW/BLOCK/ASK) replaces legacy CommandWhitelist for terminal commands; FileLimits enforces size/extension restrictions; NetworkPolicy is the single egress gate consulted by `WebSearchTool`, `FetchWebpageTool`, and `HttpRequestTool` so `general.no_egress_enabled` blocks all outbound traffic, not just LLM providers. ToolPermissionsService provides 3-level (ON/ASK/OFF) per-mode access control. ToolApprovalService handles user approval flow with session trust rules.
@@ -333,7 +335,7 @@ See [docs/files.md](docs/files.md) for the full per-package file reference.
 - **Snapshot/Memento** — `SnapshotService` for file versioning and rollback with compression and SHA-256.
 
 ### Concurrency Patterns
-- **Parallel Execution** — `ParallelToolExecutor` for READ_ONLY tools; `MultiAgentRunner` with `supervisorScope`; `ModelRegistry` parallel provider fetching.
+- **Parallel Execution** — `TurnToolExecutor` batches READ_ONLY tool calls (fan-out capped by `maxParallelReadTools`); `MultiAgentRunner` with `supervisorScope`; `ModelRegistry` parallel provider fetching.
 - **Single-Flight** — `ModelRegistry` mutex prevents concurrent duplicate API calls.
 - **File Locking** — `FileLockManager` with per-path `Mutex` for atomic file operations.
 - **Flow-based Reactivity** — StateFlow/SharedFlow throughout: SessionStateManager, TuiViewModel, AgentEventBus, RagProgressService.

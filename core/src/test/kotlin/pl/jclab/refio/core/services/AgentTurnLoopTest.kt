@@ -152,7 +152,6 @@ class AgentTurnLoopTest {
 
         val toolCallParser = ToolCallParser(
             toolRegistry = toolRegistry,
-            toolPermissionsService = toolPermissionsService,
             getJsonThinkingXmlTags = { taskId -> configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.JSON_THINKING_XML_TAGS, taskId) }
         )
 
@@ -202,7 +201,6 @@ class AgentTurnLoopTest {
             turnFinalizer = turnFinalizer,
             turnSubagentValidator = turnSubagentValidator,
             tokenEstimator = tokenEstimator,
-            conversationCompactor = null,
             llmRetryHandler = null,
             workingMemoryIntegration = null,
             completionGuardians = completionGuardians,
@@ -1233,6 +1231,72 @@ class AgentTurnLoopTest {
                 result.response.contains("no progress is being made", ignoreCase = true),
                 "expected the repetition abort reason, got: ${result.response}",
             )
+        }
+
+        @Test
+        fun `a repeated PLAN answer is the deliverable, so the repetition abort keeps it`() = runTest {
+            // PLAN cannot write files - the plan text IS the deliverable. A model that restates a
+            // finished plan instead of stopping used to be reported as a failed turn with the loop
+            // message in place of the plan, because the repetition abort asked "was a file written?"
+            // and never looked at the answer it was holding.
+            val plan = "Plan: 1) Add a null guard in ConfigParser.parse before the cast, " +
+                "2) cover it with a regression test for the empty-file case, " +
+                "3) run the parser suite to confirm nothing else regressed."
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                createLLMResponse("""{"actions":[],"response":"$plan","intent":"analysis"}"""),
+                createLLMResponse("""{"actions":[],"response":"$plan","intent":"analysis"}""")
+            )
+
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), GuardianRegistry(listOf(ScriptedReenterOnceGuardian())))
+
+            val result = loop.runTurn(
+                taskId = testTaskId,
+                userInput = "Plan the fix for the config parser crash",
+                mode = TaskMode.PLAN
+            )
+
+            assertTrue(result.success, "a delivered plan must survive the repetition abort: ${result.response}")
+            assertEquals(plan, result.response, "the plan itself must be the outcome, not a loop message")
+        }
+
+        @Test
+        fun `a repeated read-only subagent report is the deliverable, so the abort keeps it`() = runTest {
+            // A read-only subagent returns its whole result as prose - it has no write tool that
+            // could "deliver". Aborting on the repeated sign-off used to hand the calling agent a
+            // loop message instead of the report it delegated for.
+            val report = "Review: DatabaseFactory opens a connection per call and never closes it, " +
+                "so a long session exhausts the pool. Wrap the call in use{} or cache the instance."
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                createLLMResponse("""{"actions":[],"response":"$report","intent":"analysis"}"""),
+                createLLMResponse("""{"actions":[],"response":"$report","intent":"analysis"}""")
+            )
+
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), GuardianRegistry(listOf(ScriptedReenterOnceGuardian())))
+
+            val result = loop.runTurn(
+                taskId = testTaskId,
+                userInput = "Review DatabaseFactory for connection leaks",
+                mode = TaskMode.AGENT,
+                runProfile = TurnRunProfile.SUBAGENT,
+                profileOverrides = TurnProfileOverrides(subagentName = "code-reviewer", depth = 1)
+            )
+
+            assertTrue(result.success, "a delivered subagent report must survive the repetition abort: ${result.response}")
+            assertEquals(report, result.response, "the parent must receive the report, not a loop message")
         }
 
         @Test
@@ -2451,6 +2515,65 @@ class AgentTurnLoopTest {
             .filter { it.isFinal }
         assertEquals(1, terminal.size, "exactly one terminal TurnEnded must close the run even on an uncaught exception")
         assertFalse(terminal.single().success, "a crashed turn must report the node as FAILED, not COMPLETED")
+    }
+
+    @Test
+    fun `a guardrail abort emits the terminal TurnEnded so the graph node stops showing RUNNING`() = runTest {
+        // Only a handful of the turn's exits used to emit the terminal event, and none of the
+        // guardrail aborts did. The graph node is keyed by a one-shot runId, so a turn killed by a
+        // guardrail was stuck at [RUNNING] for good. Every exit funnels through the same
+        // finalization point, so the event belongs there rather than at each return site.
+        val emitted = mutableListOf<pl.jclab.refio.core.agents.events.AgentEvent>()
+        val bus = mockk<pl.jclab.refio.core.agents.events.AgentEventBus>(relaxed = true)
+        coEvery { bus.emit(capture(emitted)) } just Runs
+
+        val stallText = "Let me look into this a bit more before I answer."
+        coEvery {
+            llmClient.complete(
+                provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                subtaskId = any(), source = any(), kwargs = any()
+            )
+        } returnsMany listOf(
+            createLLMResponse("""{"actions":[],"response":"$stallText","intent":"implementation"}"""),
+            createLLMResponse("""{"actions":[],"response":"$stallText","intent":"implementation"}""")
+        )
+
+        val loop = buildAgentTurnLoop(
+            NoopTaskVerifier(),
+            GuardianRegistry(listOf(ScriptedReenterOnceGuardian())),
+            agentEventBus = bus
+        )
+
+        val result = loop.runTurn(taskId = testTaskId, userInput = "Fix the bug", mode = TaskMode.AGENT)
+        assertFalse(result.success, "precondition: the text-repetition guardrail aborted this turn")
+
+        val terminal = emitted
+            .filterIsInstance<pl.jclab.refio.core.agents.events.AgentEvent.TurnEnded>()
+            .filter { it.isFinal }
+        assertEquals(1, terminal.size, "a guardrail-aborted turn must emit exactly one terminal TurnEnded")
+        assertFalse(terminal.single().success, "an aborted turn must close the node as FAILED")
+    }
+
+    @Test
+    fun `a clean turn emits exactly one terminal TurnEnded`() = runTest {
+        // Guards the other side of routing the event through the shared finalization point: the
+        // clean exit must still emit it once, not twice.
+        val emitted = mutableListOf<pl.jclab.refio.core.agents.events.AgentEvent>()
+        val bus = mockk<pl.jclab.refio.core.agents.events.AgentEventBus>(relaxed = true)
+        coEvery { bus.emit(capture(emitted)) } just Runs
+
+        val loop = buildAgentTurnLoop(NoopTaskVerifier(), agentEventBus = bus)
+
+        val result = loop.runTurn(taskId = testTaskId, userInput = "Say hello", mode = TaskMode.AGENT)
+        assertTrue(result.success, "precondition: this turn finishes cleanly")
+
+        val terminal = emitted
+            .filterIsInstance<pl.jclab.refio.core.agents.events.AgentEvent.TurnEnded>()
+            .filter { it.isFinal }
+        assertEquals(1, terminal.size, "a clean turn must emit exactly one terminal TurnEnded")
+        assertTrue(terminal.single().success, "a clean turn must close the node as COMPLETED")
     }
 }
 

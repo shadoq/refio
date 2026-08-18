@@ -40,7 +40,12 @@ class MultiAgentIntegrationTest {
 
     @AfterAll
     fun teardown() {
-        tempDir.toFile().deleteRecursively()
+        // DatabaseFactory is a JVM-wide singleton and never unregisters its Exposed connection,
+        // so this database stays the default one for every test class that runs later. Deleting
+        // the directory now would leave those classes pointing at a file that no longer exists,
+        // failing them with "path to ... does not exist". Defer cleanup to JVM exit instead.
+        val dir = tempDir.toFile()
+        Runtime.getRuntime().addShutdownHook(Thread { dir.deleteRecursively() })
     }
 
     @Test

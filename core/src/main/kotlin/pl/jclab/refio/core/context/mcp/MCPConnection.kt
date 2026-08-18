@@ -55,6 +55,14 @@ class MCPConnection(
     var lastError: String? = null
         private set
 
+    /** True while a transport (process or HTTP client) is still held by this connection. */
+    internal val hasOpenTransport: Boolean
+        get() = transport != null || httpTransport != null
+
+    /** Number of requests still waiting for a response. Non-zero after a failure means a leak. */
+    internal val pendingRequestCount: Int
+        get() = pendingRequests.size
+
     suspend fun connect() {
         logger.info { "Connecting to MCP server: $serverId (${config.type})" }
         status = MCPServerStatus.CONNECTING
@@ -83,8 +91,12 @@ class MCPConnection(
             lastError = null
             logger.info { "Connected to MCP server: $serverId" }
         } catch (e: Exception) {
+            // The transport can already be up when the handshake fails (timeout, a server that
+            // does not speak MCP, HTTP 401/404). Nothing else holds this connection yet, so
+            // without releasing it here the child process or the HTTP clients live on forever.
+            releaseResources()
             status = MCPServerStatus.ERROR
-            lastError = e.message
+            lastError = e.message ?: e::class.simpleName
             logger.error(e) { "Failed to connect to MCP server: $serverId" }
             throw e
         }
@@ -92,15 +104,36 @@ class MCPConnection(
 
     fun disconnect() {
         logger.info { "Disconnecting from MCP server: $serverId" }
-        transport?.disconnect()
-        httpTransport?.disconnect()
+        releaseResources()
+        status = MCPServerStatus.DISCONNECTED
+    }
+
+    /**
+     * Drop the transport and everything tied to it. Callers still waiting for a response are
+     * failed explicitly - clearing the map alone left them to wait out the full request timeout
+     * and then blame a timeout for what was a disconnect.
+     */
+    private fun releaseResources() {
+        runCatching { transport?.disconnect() }
+            .onFailure { logger.warn(it) { "Failed to close stdio transport for $serverId" } }
+        runCatching { httpTransport?.disconnect() }
+            .onFailure { logger.warn(it) { "Failed to close HTTP transport for $serverId" } }
         transport = null
         httpTransport = null
-        pendingRequests.clear()
+        failPendingRequests()
         cachedResourceContent.clear()
         subscribedResources.clear()
         scope.cancel()
-        status = MCPServerStatus.DISCONNECTED
+    }
+
+    private fun failPendingRequests() {
+        if (pendingRequests.isEmpty()) {
+            return
+        }
+        val error = MCPTransportException("MCP server $serverId disconnected before the response arrived")
+        pendingRequests.keys.toList().forEach { id ->
+            pendingRequests.remove(id)?.completeExceptionally(error)
+        }
     }
 
     fun getStatus(): MCPServerStatus = status
@@ -317,12 +350,16 @@ class MCPConnection(
             MCPServerType.STDIO -> {
                 val deferred = CompletableDeferred<MCPSuccessResponse>()
                 pendingRequests[id] = deferred
-                transport?.send(json) ?: throw MCPTransportException("Transport not connected")
+                // The entry is dropped in `finally` so a failed send or a cancelled turn cannot
+                // leave it behind - a cancellation is not a timeout and never reached the catch.
                 try {
+                    val stdio = transport ?: throw MCPTransportException("Transport not connected")
+                    stdio.send(json)
                     withTimeout(config.timeout) { deferred.await() }
                 } catch (e: TimeoutCancellationException) {
-                    pendingRequests.remove(id)
                     throw MCPTransportException("MCP request timed out: $method")
+                } finally {
+                    pendingRequests.remove(id)
                 }
             }
             MCPServerType.HTTP_SSE, MCPServerType.HTTP_STREAMABLE -> {

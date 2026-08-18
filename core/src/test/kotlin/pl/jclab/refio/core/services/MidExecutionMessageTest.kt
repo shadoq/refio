@@ -96,7 +96,6 @@ class MidExecutionMessageTest {
 
         val toolCallParser = ToolCallParser(
             toolRegistry = toolRegistry,
-            toolPermissionsService = toolPermissionsService,
             getJsonThinkingXmlTags = { configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.JSON_THINKING_XML_TAGS, it) }
         )
 
@@ -145,7 +144,6 @@ class MidExecutionMessageTest {
             turnFinalizer = turnFinalizer,
             turnSubagentValidator = turnSubagentValidator,
             tokenEstimator = tokenEstimator,
-            conversationCompactor = null,
             llmRetryHandler = null,
             workingMemoryIntegration = null,
             pendingUserMessageQueue = pendingUserMessageQueue
@@ -341,7 +339,6 @@ class MidExecutionMessageTest {
             )
             val toolCallParser = ToolCallParser(
                 toolRegistry = toolRegistry,
-                toolPermissionsService = toolPermissionsService,
                 getJsonThinkingXmlTags = { configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.JSON_THINKING_XML_TAGS, it) }
             )
             val turnToolExecutor = TurnToolExecutor(

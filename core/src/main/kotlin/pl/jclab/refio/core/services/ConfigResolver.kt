@@ -3,6 +3,7 @@ package pl.jclab.refio.core.services
 import pl.jclab.refio.core.config.ConfigKey
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.config.HierarchicalConfigLoader
+import pl.jclab.refio.core.db.Config
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.db.repositories.ConfigRepository
 
@@ -59,15 +60,7 @@ internal class ConfigResolver(
     }
 
     fun <T> setTyped(configKey: ConfigKey<T>, value: T, scope: ConfigScope = ConfigScope.APP, taskId: String? = null) {
-        val serialized = configKey.serializer(value)
-        configRepository.set(
-            key = configKey.key,
-            value = serialized,
-            scope = scope,
-            taskId = taskId,
-            description = null,
-        )
-        invalidate(configKey.key)
+        set(key = configKey.key, value = configKey.serializer(value), scope = scope, taskId = taskId)
     }
 
     /**
@@ -91,6 +84,9 @@ internal class ConfigResolver(
                 taskId != null -> getConfigWithPrecedence(key = key, taskId = taskId, projectId = projectId)
                 scope == ConfigScope.PROJECT ->
                     resolvedProject?.let { configRepository.get(key, ConfigScope.PROJECT, projectId = it) }
+                // The APP request means "the effective value", so it resolves through the same
+                // hierarchy the typed getter uses instead of skipping project-scoped values.
+                scope == ConfigScope.APP -> getConfigWithPrecedence(key = key, projectId = projectId)
                 else -> configRepository.get(key, scope)
             }
             dbConfig?.value ?: getFromYaml(key)
@@ -105,12 +101,19 @@ internal class ConfigResolver(
         }
     }
 
+    /**
+     * @param supersedeProjectScope true (default) for a deliberate settings change: it also drops
+     *        the project-scoped row so the new value actually takes effect. Pass false for writes
+     *        that merely record state the user did not choose (session autosave) - those must
+     *        leave `<project>/.refio/config.yaml` in charge of the key.
+     */
     fun set(
         key: String,
         value: String,
         scope: ConfigScope = ConfigScope.APP,
         taskId: String? = null,
         projectId: String? = null,
+        supersedeProjectScope: Boolean = true,
     ) {
         val resolvedProjectId = resolveProjectId(projectId)
         configRepository.set(
@@ -121,6 +124,12 @@ internal class ConfigResolver(
             taskId = taskId,
             description = null,
         )
+        if (supersedeProjectScope && scope == ConfigScope.APP && resolvedProjectId != null) {
+            // An explicit setting change has to take effect even when the project config file
+            // pinned the same key. Dropping the project row hands the key back to this value;
+            // editing the file re-materializes it (see ConfigDefaultsInitializer).
+            configRepository.delete(key, ConfigScope.PROJECT, projectId = resolvedProjectId)
+        }
         invalidate(key)
     }
 
@@ -128,11 +137,28 @@ internal class ConfigResolver(
         key: String,
         taskId: String? = null,
         projectId: String? = null,
-    ) = configRepository.getWithPrecedence(
-        key = key,
-        taskId = taskId,
-        projectId = resolveProjectId(projectId),
-    )
+    ): Config? {
+        // Several callers read the raw row instead of the typed value (task verification, model
+        // selection). Without this, run-scope overrides silently did nothing for those keys.
+        runOverrides[key]?.let { raw ->
+            val now = System.currentTimeMillis()
+            return Config(
+                key = key,
+                value = raw,
+                scope = ConfigScope.APP,
+                projectId = null,
+                taskId = null,
+                description = RUN_OVERRIDE_DESCRIPTION,
+                createdAt = now,
+                updatedAt = now,
+            )
+        }
+        return configRepository.getWithPrecedence(
+            key = key,
+            taskId = taskId,
+            projectId = resolveProjectId(projectId),
+        )
+    }
 
     fun invalidate(key: String) {
         cache.invalidateByPrefix("typed:$key:")
@@ -141,4 +167,9 @@ internal class ConfigResolver(
     }
 
     private fun resolveProjectId(projectId: String?): String? = projectId ?: defaultProjectId
+
+    private companion object {
+        /** Marks a row that exists only for the current process, never persisted. */
+        private const val RUN_OVERRIDE_DESCRIPTION = "Run-scope override"
+    }
 }

@@ -198,15 +198,11 @@ class CodeEditingTool(
                     content.replaceFirst(oldMatch, newMatch)
                 }
 
-                // Write updated content
-                Files.writeString(path, newContent)
-                val duration = (System.currentTimeMillis() - startTime).toInt()
-
                 val replacements = countOccurrences(content, oldMatch)
-                val newFileSize = path.fileSize()
 
-                // Build proper unified diff (Myers, 3 lines context) via shared DiffUtils.
-                // This replaces the previous naive "dump old then new" formatter.
+                // Build the unified diff (LCS-based, 3 lines context) via shared DiffUtils BEFORE
+                // writing. The diff is the expensive step here, so doing it first means a failure
+                // leaves the file untouched instead of losing the result of a completed write.
                 val changeSummary = DiffUtils.buildChangeSummary(
                     originalContent = content,
                     newContent = newContent,
@@ -214,6 +210,11 @@ class CodeEditingTool(
                     replacements = replacements
                 )
                 val diff = changeSummary.unifiedDiff ?: ""
+
+                // Write updated content
+                Files.writeString(path, newContent)
+                val duration = (System.currentTimeMillis() - startTime).toInt()
+                val newFileSize = path.fileSize()
 
                 logger.info { "Successfully edited file: $pathStr ($replacements replacements, ${duration}ms, size: $fileSize → $newFileSize bytes, +${changeSummary.addedLines}/-${changeSummary.removedLines})" }
 

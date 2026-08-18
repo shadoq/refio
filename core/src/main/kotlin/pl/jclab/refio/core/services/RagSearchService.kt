@@ -47,6 +47,29 @@ class RagSearchService(
     companion object {
         private const val MIN_SIMILARITY_THRESHOLD = 0.3f
         private const val SEARCH_BATCH_SIZE = 500
+
+        /**
+         * How many candidates per requested result are kept for the ranking stage. Everything
+         * after the similarity scan (chunk body loading, redundancy dedup, context chunks) is
+         * paid per candidate, and dedup is quadratic in full chunk text, so the pool has to be
+         * bounded: a query with a low threshold can otherwise match the whole index. 8x leaves
+         * dedup a wide pool to collapse overlapping regions from and still refill topK.
+         */
+        private const val CANDIDATE_POOL_MULTIPLIER = 8
+
+        /** Upper bound on the pool regardless of topK; never trims below topK itself. */
+        private const val CANDIDATE_POOL_CAP = 500
+
+        /** Context chunks are drawn from a deliberately wider similarity band than results. */
+        private const val CONTEXT_THRESHOLD_FACTOR = 0.8f
+
+        private fun candidatePoolSize(topK: Int): Int {
+            val scaled = topK.toLong() * CANDIDATE_POOL_MULTIPLIER
+            return scaled
+                .coerceAtMost(CANDIDATE_POOL_CAP.toLong())
+                .coerceAtLeast(topK.toLong())
+                .toInt()
+        }
     }
 
     /**
@@ -155,8 +178,16 @@ class RagSearchService(
             return emptyList()
         }
 
-        val similarityByChunkId = mutableMapOf<Int, Float>()
-        val topHeap = PriorityQueue<Pair<Float, Int>>(config.topK + 1, compareBy { it.first })
+        // Only the best candidates survive the scan. The similarity pass is cheap (vectors are
+        // already in memory), everything downstream is not, so the pool is capped here instead
+        // of letting every chunk above the threshold through.
+        val poolSize = candidatePoolSize(config.topK)
+        val poolThreshold = if (config.includeContextChunks) {
+            contextThreshold(config)
+        } else {
+            config.similarityThreshold
+        }
+        val candidateHeap = PriorityQueue<Pair<Float, Int>>(poolSize + 1, compareBy { it.first })
 
         // Query vector norm is constant for the whole search - compute it once
         // instead of once per compared chunk.
@@ -181,13 +212,13 @@ class RagSearchService(
                     val chunkVector = deserializeVector(embedding.vector)
                     val similarity = cosineSimilarity(queryVector, chunkVector, queryNorm)
 
-                    similarityByChunkId[embedding.chunkId] = similarity
-
-                    if (topHeap.size < config.topK) {
-                        topHeap.offer(similarity to embedding.chunkId)
-                    } else if (similarity > (topHeap.peek()?.first ?: Float.NEGATIVE_INFINITY)) {
-                        topHeap.poll()
-                        topHeap.offer(similarity to embedding.chunkId)
+                    if (similarity >= poolThreshold) {
+                        if (candidateHeap.size < poolSize) {
+                            candidateHeap.offer(similarity to embedding.chunkId)
+                        } else if (similarity > (candidateHeap.peek()?.first ?: Float.NEGATIVE_INFINITY)) {
+                            candidateHeap.poll()
+                            candidateHeap.offer(similarity to embedding.chunkId)
+                        }
                     }
                 } catch (e: Exception) {
                     logger.error(e) { "Failed to process embedding ${embedding.id}" }
@@ -198,20 +229,24 @@ class RagSearchService(
             lastSeenId = batch.last().id
         }
 
+        val similarityByChunkId = candidateHeap.associate { (similarity, chunkId) -> chunkId to similarity }
+
         val chunkIdsAboveThreshold = similarityByChunkId
             .filterValues { it >= config.similarityThreshold }
             .keys
             .toList()
 
-        logger.debug { "Embeddings above threshold: ${chunkIdsAboveThreshold.size}/$totalEmbeddings" }
+        logger.debug {
+            "Candidates kept: ${similarityByChunkId.size} (pool $poolSize), " +
+                "above threshold: ${chunkIdsAboveThreshold.size}/$totalEmbeddings"
+        }
 
         if (chunkIdsAboveThreshold.isEmpty()) {
             logger.info { "No embeddings above threshold ${config.similarityThreshold}" }
             return emptyList()
         }
 
-        val chunkIds = (chunkIdsAboveThreshold + topHeap.map { it.second }).distinct()
-        val chunksMap = ragRepository.getChunksBatch(chunkIds).associateBy { it.id }
+        val chunksMap = ragRepository.getChunksBatch(chunkIdsAboveThreshold).associateBy { it.id }
         val fileIds = chunksMap.values.map { it.fileId }.distinct()
         val filesMap = ragRepository.getFilesBatch(fileIds).associateBy { it.id }
 
@@ -261,8 +296,8 @@ class RagSearchService(
             results
         }
 
-        // Log similarity distribution for debugging (use heap results, already top-K)
-        val topSimilarities = topHeap.sortedByDescending { it.first }.take(5)
+        // Log similarity distribution for debugging (use the candidate pool, already ranked)
+        val topSimilarities = candidateHeap.sortedByDescending { it.first }.take(5)
         logger.debug { "Top ${topSimilarities.size} similarities: ${topSimilarities.map { String.format("%.3f", it.first) }}" }
         logger.debug {
             "Threshold: ${config.similarityThreshold}, " +
@@ -285,7 +320,7 @@ class RagSearchService(
      * overlapping chunks of the same file region (full-file ⊃ class ⊃ method) whose embeddings
      * are near-identical, so a single region can occupy the whole top-K as copies — starving a
      * weak model of distinct signal and driving it into re-search loops (observed 2026-05,
-     * session 1fc544f9: 5 identical ConversationCompactor fragments returned for every query).
+     * session 1fc544f9: 5 identical fragments of one service file returned for every query).
      *
      * Walking highest-similarity first, a result is dropped when an already-kept result from the
      * same file either has identical text or fully contains its line range (the kept one already
@@ -427,10 +462,9 @@ class RagSearchService(
         if (topFileIds.isEmpty()) return results
 
         val existingChunkIds = results.map { it.chunkId }.toSet()
-        val contextThreshold = (config.similarityThreshold * 0.8f).coerceAtLeast(0.0f)
-
+        // similarityByChunkId is already the bounded candidate pool, so this stays bounded too.
         val candidateChunkIds = similarityByChunkId
-            .filterValues { it >= contextThreshold }
+            .filterValues { it >= contextThreshold(config) }
             .keys
             .filterNot { existingChunkIds.contains(it) }
 
@@ -459,6 +493,9 @@ class RagSearchService(
 
         return (results + contextResults).distinctBy { it.chunkId }
     }
+
+    private fun contextThreshold(config: RagSearchConfig): Float =
+        (config.similarityThreshold * CONTEXT_THRESHOLD_FACTOR).coerceAtLeast(0.0f)
 
     /**
      * Calculate keyword match score (0.0 to 1.0)

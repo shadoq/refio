@@ -63,10 +63,20 @@ class CommandRuleMatcher(private val rules: List<CommandRule>) {
      * Default: ASK if nothing matches.
      */
     fun match(rawCommand: String): MatchResult {
-        // 1. BLOCK rules (most restrictive)
-        for (cr in compiled[RuleAction.BLOCK].orEmpty()) {
-            if (cr.regex.containsMatchIn(rawCommand)) {
-                return MatchResult(RuleAction.BLOCK, cr.rule)
+        // 1. BLOCK rules (most restrictive). Every built-in BLOCK rule is anchored (`^rm\s+-r`),
+        // and an anchored pattern can only describe the first program on the line, so matching it
+        // against the raw string alone made any prefix a bypass: `rm -rf /` was denied while
+        // `env rm -rf /` or `git status && rm -rf /` ran. A hard deny has to hold for every command
+        // the line runs, so each rule is tested against every command unit the shell would execute
+        // (see [ShellCommandAnalyzer]); the raw line is the first unit, so nothing that matched
+        // before stops matching.
+        val blockRules = compiled[RuleAction.BLOCK].orEmpty()
+        if (blockRules.isNotEmpty()) {
+            val units = ShellCommandAnalyzer.commandUnits(rawCommand)
+            for (cr in blockRules) {
+                if (units.any { cr.regex.containsMatchIn(it) }) {
+                    return MatchResult(RuleAction.BLOCK, cr.rule)
+                }
             }
         }
 
@@ -77,7 +87,7 @@ class CommandRuleMatcher(private val rules: List<CommandRule>) {
         // vetted read-only program overwrite an arbitrary sandbox file. A command carrying
         // any of these operators is therefore held back from ALLOW and falls through to ASK,
         // where the user sees and approves the full line.
-        if (!hasShellControlOperators(rawCommand)) {
+        if (!ShellCommandAnalyzer.hasControlOperators(rawCommand)) {
             for (cr in compiled[RuleAction.ALLOW].orEmpty()) {
                 if (cr.regex.matches(rawCommand)) {
                     return MatchResult(RuleAction.ALLOW, cr.rule)
@@ -94,32 +104,5 @@ class CommandRuleMatcher(private val rules: List<CommandRule>) {
 
         // 4. Default: ASK
         return MatchResult(RuleAction.ASK, null)
-    }
-
-    /**
-     * True when the command contains a shell operator that chains, pipes, substitutes or
-     * redirects — the vectors that let a vetted leading program smuggle in a second, unvetted
-     * command, or turn a read-only program into a file write (`>` / `>>`). Detection is a
-     * plain substring scan, so an operator inside a quoted string is treated conservatively
-     * (downgraded to ASK rather than auto-approved); for a security gate, an extra approval
-     * prompt is the right side to err on. Bare `$VAR` expansion is intentionally not matched
-     * — only `$(` opens a subshell.
-     */
-    private fun hasShellControlOperators(command: String): Boolean {
-        return SHELL_CONTROL_OPERATORS.any { command.contains(it) }
-    }
-
-    companion object {
-        private val SHELL_CONTROL_OPERATORS: List<String> = listOf(
-            ";",    // command separator
-            "&",    // background / && and-chain
-            "|",    // pipe / || or-chain
-            "`",    // backtick command substitution
-            "$(",   // command substitution
-            ">",    // output redirection — lets an allowed read-only program overwrite files (also catches >>, 2>, &>)
-            "<",    // input redirection (also catches <( process substitution and <<< here-string)
-            "\n",   // newline-injected second command
-            "\r"
-        )
     }
 }

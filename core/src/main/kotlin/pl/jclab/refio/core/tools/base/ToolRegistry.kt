@@ -21,6 +21,12 @@ class ToolRegistry {
     private val tools = ConcurrentHashMap<String, Tool>()
 
     /**
+     * Resources owned by the tools in this registry (background processes, reaper threads).
+     * They live as long as the registry does, so the registry is where they get released.
+     */
+    private val resources = java.util.concurrent.CopyOnWriteArrayList<AutoCloseable>()
+
+    /**
      * Named tool group for prompt section headers.
      */
     data class ToolGroup(val name: String, val tools: List<String>)
@@ -72,6 +78,28 @@ class ToolRegistry {
 
         tools[tool.name] = tool
         logger.info { "Registered tool: ${tool.name} (mode=${tool.mode})" }
+    }
+
+    /**
+     * Register a resource shared by this registry's tools, to be released when the owning
+     * project/session goes away.
+     *
+     * @param resource Resource closed by [close]
+     */
+    fun addCloseable(resource: AutoCloseable) {
+        resources.add(resource)
+    }
+
+    /**
+     * Release the resources registered via [addCloseable]. Called when the router owning this
+     * registry closes; without it every new registry left its background threads behind.
+     */
+    fun close() {
+        resources.forEach { resource ->
+            runCatching { resource.close() }
+                .onFailure { logger.warn { "Failed to close tool resource: ${it.message}" } }
+        }
+        resources.clear()
     }
 
     /**
