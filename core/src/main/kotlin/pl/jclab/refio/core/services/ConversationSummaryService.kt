@@ -22,9 +22,28 @@ class ConversationSummaryService(
 ) {
     companion object {
         private const val FALLBACK_SUMMARY_MAX_CHARS = 2_000
-        private const val SUMMARY_THRESHOLD_RATIO = 0.85
-        private const val SUMMARY_TARGET_RATIO = 0.50
-        private const val MIN_KEEP_RECENT_MESSAGES = 2
+
+        /**
+         * Share of the conversation budget that triggers compaction. Lowered 0.85 -> 0.80: firing
+         * at 85% left only 15% of headroom for the turn that follows, and the estimate is an
+         * estimate - a single large tool result landing after the check could still push the
+         * rendered prompt past the window before the next build got a chance to compact.
+         */
+        private const val SUMMARY_THRESHOLD_RATIO = 0.80
+
+        /**
+         * Share of the budget the tail is compacted down to. Lowered 0.50 -> 0.45 so one
+         * compaction buys more room before the next one; compaction costs a weak-model call, so
+         * doing it slightly harder and less often is the cheaper trade.
+         */
+        private const val SUMMARY_TARGET_RATIO = 0.45
+
+        /**
+         * Messages at the end of the tail that are never compacted. Raised 2 -> 4: two rows is
+         * often a single tool call and its result, which left the model without the request that
+         * prompted it. Four keeps the most recent exchange intact next to the summary.
+         */
+        private const val MIN_KEEP_RECENT_MESSAGES = 4
     }
 
     /**

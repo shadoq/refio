@@ -620,13 +620,11 @@ function Invoke-Scenario {
             Set-Content -NoNewline $effectivePrompt
     }
 
-    $maxIter = if ($s.max_iterations) { $s.max_iterations } else { 20 }
     $mode    = if ($s.mode) { $s.mode } else { 'AGENT' }
     $cliArgs = @(
         '--headless', '-p', $work, '--mode', $mode,
         '--output', 'json', '--output-file', $runJson,
         '--debug-level', 'standard',
-        '--config', "agent.max_iterations=$maxIter",
         '--max-cost', $MaxCost
     )
     # Single-agent scenarios pass --prompt-file; multi-agent ones pass --multi-agent <yaml> instead.

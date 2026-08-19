@@ -174,8 +174,8 @@ Callers access domain routers directly via `coreApiRouter.taskRouter`, `coreApiR
 ## Three Execution Modes
 
 - **CHAT** — No tools. Conversation-only via WorkflowOrchestrator → ChatService.
-- **PLAN** — Read-only tools (the read-only subset). AgentTurnLoop with max 100 iterations.
-- **AGENT** — Full read/write tool set (~30 tools). AgentTurnLoop with max 100 iterations. File snapshots before edits.
+- **PLAN** — Read-only tools (the read-only subset). AgentTurnLoop with max 200 iterations.
+- **AGENT** — Full read/write tool set (~30 tools). AgentTurnLoop with max 200 iterations. File snapshots before edits.
 
 Subagents use a nested invocation model (max depth 3) with custom system prompts and tool filtering.
 
@@ -208,7 +208,7 @@ refio.bat -p <throwaway-project> --headless --model ollama/qwen3.6:35b \
 | `--prompt` / `--prompt-file` | The instruction (file form avoids quoting issues). |
 | `--output json` + `--output-file <f>` | Write a `run.json` with metrics (tokens/cost/iterations/status) instead of stdout. |
 | `--debug-level minimal\|standard\|full\|judge` | Detail in the JSON output. |
-| `--config k=v` (repeatable) / `--config-file <f>` | Run-scope config overrides (headless **and** interactive TUI). E.g. `--config agent.max_iterations=80` or retarget a provider: `--config providers.ollama.ollama_endpoint=http://127.0.0.1:11434` / `--config providers.lmstudio.lmstudio_base_url=...`. |
+| `--config k=v` (repeatable) / `--config-file <f>` | Run-scope config overrides (headless **and** interactive TUI). E.g. `--config agent.max_turn_minutes=20` or retarget a provider: `--config providers.ollama.ollama_endpoint=http://127.0.0.1:11434` / `--config providers.lmstudio.lmstudio_base_url=...`. |
 | `--print-config` | Print resolved config (overrides applied) and exit — **no LLM call, writes nothing**. |
 | `-v, --verbose` | Stream live LLM tokens to stderr (on top of always-on turn/tool progress) — tells producing-vs-hanging apart. |
 

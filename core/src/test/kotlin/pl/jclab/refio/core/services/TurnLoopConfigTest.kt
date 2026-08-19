@@ -8,33 +8,9 @@ import kotlin.test.assertTrue
 class TurnLoopConfigTest {
 
     @Test
-    fun `agent config should allow longer runs`() {
-        val config = TurnLoopConfig.agent()
-
-        assertEquals(200, config.maxIterations)
-        assertEquals(3, config.maxFormatRetries)
-    }
-
-    @Test
-    fun `plan config should allow more analysis retries`() {
-        val config = TurnLoopConfig.plan()
-
-        assertEquals(200, config.maxIterations)
-        assertEquals(3, config.maxFormatRetries)
-    }
-
-    // The iteration cap is a runaway backstop, not the cost budget: the error-rate, repetition,
-    // noop-write and blocked-tool trackers abort long before it, and the cost limit caps spend.
-    // Warning well before the cap keeps the operator informed without ending useful work.
-    @Test
-    fun `the iteration warning arrives well before the cap in both modes`() {
-        listOf(TurnLoopConfig.plan(), TurnLoopConfig.agent()).forEach { config ->
-            assertTrue(
-                config.warningThreshold < config.maxIterations,
-                "warning must precede the cap, got ${config.warningThreshold} of ${config.maxIterations}",
-            )
-            assertEquals(50, config.warningThreshold)
-        }
+    fun `both modes share the same iteration backstop`() {
+        assertEquals(200, TurnLoopConfig.agent().maxIterations)
+        assertEquals(200, TurnLoopConfig.plan().maxIterations)
     }
 
     // A tool budget shorter than the work it guards turns into a false failure that costs the whole

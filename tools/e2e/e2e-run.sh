@@ -600,11 +600,10 @@ emit_result_record() {
 run_scenario() {
     local scenario="$1"
     [[ -f "$scenario" ]] || die "scenario not found: $scenario"
-    local sdir id mode prompt_file fixture build_cmd max_iter multi_agent_rel multi_agent_file=""
+    local sdir id mode prompt_file fixture build_cmd multi_agent_rel multi_agent_file=""
     sdir="$(cd "$(dirname "$scenario")" && pwd)"
     id="$(jq -r '.id' "$scenario")"
     mode="$(jq -r '.mode // "AGENT"' "$scenario")"
-    max_iter="$(jq -r '.max_iterations // 20' "$scenario")"
     fixture="$sdir/$(jq -r '.fixture' "$scenario")"
     build_cmd="$(jq -r '.assert.build_cmd // empty' "$scenario")"
     # A scenario drives the turn with either a prompt_file (single agent) or a multi_agent YAML.
@@ -722,7 +721,6 @@ run_scenario() {
         --headless -p "$work" --mode "$mode"
         --output json --output-file "$run_json"
         --debug-level standard            # docs/0061: tool names live in run.json.conversation[]
-        --config "agent.max_iterations=$max_iter"
         --max-cost "$MAX_COST"
     )
     # Single-agent scenarios pass --prompt-file; multi-agent ones pass --multi-agent <yaml> instead.

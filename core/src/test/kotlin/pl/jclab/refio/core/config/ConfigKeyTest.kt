@@ -12,12 +12,12 @@ class ConfigKeyTest {
 
     @Test
     fun `acceptsRaw is true for a parseable value`() {
-        assertTrue(ConfigKeys.MAX_ITERATIONS.acceptsRaw("80"))
+        assertTrue(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.acceptsRaw("80"))
     }
 
     @Test
     fun `acceptsRaw is false for an unparseable value`() {
-        assertFalse(ConfigKeys.MAX_ITERATIONS.acceptsRaw("not-a-number"))
+        assertFalse(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.acceptsRaw("not-a-number"))
     }
 
     @Test

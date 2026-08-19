@@ -61,7 +61,7 @@ class RefioCommand : CliktCommand(name = "refio") {
     val noEgress by option("--no-egress", help = "Block cloud LLM providers").flag()
     val config by option(
         "--config",
-        help = "Run-scope config override key=value (repeatable). Works in both headless and interactive TUI. E.g. --config agent.max_iterations=80 or --config providers.ollama.ollama_endpoint=http://127.0.0.1:11434"
+        help = "Run-scope config override key=value (repeatable). Works in both headless and interactive TUI. E.g. --config agent.max_turn_minutes=20 or --config providers.ollama.ollama_endpoint=http://127.0.0.1:11434"
     ).multiple()
     val configFile by option(
         "--config-file",

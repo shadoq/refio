@@ -806,12 +806,6 @@ object ConfigKeys {
         default = 5
     )
 
-    val MAX_ITERATIONS = ConfigKey(
-        key = "agent.max_iterations",
-        parser = String::toIntOrNull,
-        default = 50
-    )
-
     /**
      * Per-session hard cost ceiling in USD. `0.0` (default) disables the guard. When > 0, the turn
      * loop aborts before an iteration once the session's live cost reaches this value.
@@ -825,31 +819,16 @@ object ConfigKeys {
     )
 
     /**
-     * Per-turn ceiling on total tokens (in + out). `0` disables it.
-     *
-     * The dollar ceiling above cannot hold a local model back: an Ollama run costs nothing, so
-     * [AGENT_MAX_COST_USD] never trips and the iteration cap is the only thing left. Measured on the
-     * e2e set, one scenario consumed 1.56M input tokens against a 50k-150k norm and still failed.
-     * Tokens are the unit that means the same thing whether the model is billed or local.
-     */
-    val AGENT_MAX_TURN_TOKENS = ConfigKey(
-        key = "agent.max_turn_tokens",
-        parser = String::toLongOrNull,
-        default = 1_200_000L,
-        validator = { it >= 0L }
-    )
-
-    /**
      * Per-turn wall-clock ceiling in minutes. `0` disables it.
      *
-     * Catches what a token budget cannot: a turn stuck waiting rather than generating (a model that
+     * Bounds a turn stuck waiting rather than generating (a model that
      * never answers, a tool blocked on IO). Gemini CLI pairs its subagent turn cap with the same
      * kind of time bound for this reason.
      */
     val AGENT_MAX_TURN_MINUTES = ConfigKey(
         key = "agent.max_turn_minutes",
         parser = String::toLongOrNull,
-        default = 45L,
+        default = 30L,
         validator = { it >= 0L }
     )
 
@@ -1030,9 +1009,7 @@ object ConfigKeys {
             // Agent flow
             TASK_VERIFICATION_ENABLED,
             MAX_CONSECUTIVE_TOOL_ERRORS,
-            MAX_ITERATIONS,
             AGENT_MAX_COST_USD,
-            AGENT_MAX_TURN_TOKENS,
             AGENT_MAX_TURN_MINUTES,
             AGENT_DECISION_TEMPERATURE,
             JSON_THINKING_XML_TAGS,

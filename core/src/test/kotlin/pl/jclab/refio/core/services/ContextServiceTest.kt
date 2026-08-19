@@ -769,4 +769,89 @@ class ContextServiceTest {
             )
         }
     }
+    /**
+     * Conversation compaction (ConversationSummaryService) costs a real LLM call and writes a
+     * SYSTEM summary row into the user's conversation, so it must run only where the agent is
+     * actually about to think, and it must never be the reason a turn loses its context.
+     */
+    @Nested
+    inner class ConversationCompactionTests {
+
+        private fun serviceWithSummarizer(summarizer: ConversationSummaryService) = ContextService(
+            projectAnalyzer = projectAnalyzer,
+            taskRepository = taskRepository,
+            chatMessageRepository = chatMessageRepository,
+            subtaskRepository = subtaskRepository,
+            fileAnalyzerService = fileAnalyzerService,
+            configService = configService,
+            workingMemoryService = null,
+            conversationSummaryService = summarizer,
+        )
+
+        private fun longHistory() = (1..6).map { index ->
+            MockFactory.createChatMessage(
+                id = "msg-$index",
+                taskId = "task-1",
+                role = if (index % 2 == 0) MessageRole.ASSISTANT else MessageRole.USER,
+                content = "Message $index " + "x".repeat(400)
+            )
+        }
+
+        @Test
+        fun `the turn path compacts the conversation when it outgrows its budget`() = runTest {
+            val history = longHistory()
+            setupStandardMocks(messages = history)
+            val summarizer = mockk<ConversationSummaryService>()
+            coEvery { summarizer.ensureSummaryIfNeeded(any(), any(), any(), any(), any()) } returns history
+
+            serviceWithSummarizer(summarizer).buildAgentTurnMessages(
+                taskId = "task-1",
+                projectRoot = projectRoot
+            )
+
+            coVerify(exactly = 1) { summarizer.ensureSummaryIfNeeded(any(), any(), any(), any(), any()) }
+        }
+
+        // A context-panel refresh only renders what WOULD be sent. Letting it compact means an
+        // idle user watching the panel pays for weak-model calls and finds summary rows appearing
+        // in a conversation nobody advanced.
+        @Test
+        fun `rendering a read-only preview never compacts the conversation`() = runTest {
+            val history = longHistory()
+            setupStandardMocks(messages = history)
+            val summarizer = mockk<ConversationSummaryService>()
+            coEvery { summarizer.ensureSummaryIfNeeded(any(), any(), any(), any(), any()) } returns history
+
+            val result = serviceWithSummarizer(summarizer).buildAgentTurnMessages(
+                taskId = "task-1",
+                projectRoot = projectRoot,
+                includeProjectContext = false,
+                allowSummarization = false
+            )
+
+            coVerify(exactly = 0) { summarizer.ensureSummaryIfNeeded(any(), any(), any(), any(), any()) }
+            assertTrue(result.messages.isNotEmpty(), "the preview still renders the uncompacted history")
+        }
+
+        // The summarizer talks to a weak model over the network. When that model is down (or
+        // no-egress blocks it) the turn must continue on the uncompacted history - not fall out of
+        // ContextService entirely, which would silently drop the whole project context.
+        @Test
+        fun `a failing summarizer leaves the history intact instead of losing the context build`() = runTest {
+            val history = longHistory()
+            setupStandardMocks(messages = history)
+            val summarizer = mockk<ConversationSummaryService>()
+            coEvery {
+                summarizer.ensureSummaryIfNeeded(any(), any(), any(), any(), any())
+            } throws RuntimeException("weak model unreachable")
+
+            val result = serviceWithSummarizer(summarizer).buildAgentTurnMessages(
+                taskId = "task-1",
+                projectRoot = projectRoot
+            )
+
+            assertTrue(result.messages.isNotEmpty(), "history survives a summarizer outage")
+            assertTrue(result.projectContextPrompt.isNotBlank(), "project context must still be built")
+        }
+    }
 }

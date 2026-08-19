@@ -590,10 +590,9 @@ internal class TurnExecutor(
         // change mid-turn, so resolve once here and re-read only the live task cost per iteration.
         val maxCostUsd = configService.getTyped(ConfigKeys.AGENT_MAX_COST_USD, taskId)
 
-        // Per-turn token and wall-clock ceilings. These are what actually bound a local model: its
-        // calls cost nothing, so the dollar ceiling above never trips and the iteration cap would be
-        // the only brake left.
-        val maxTurnTokens = configService.getTyped(ConfigKeys.AGENT_MAX_TURN_TOKENS, taskId)
+        // Per-turn wall-clock ceiling. This is what actually bounds a local model: its calls cost
+        // nothing, so the dollar ceiling above never trips and the iteration cap would be the only
+        // brake left.
         val maxTurnMinutes = configService.getTyped(ConfigKeys.AGENT_MAX_TURN_MINUTES, taskId)
         val turnStartMs = System.currentTimeMillis()
 
@@ -627,11 +626,9 @@ internal class TurnExecutor(
                     }
                 }
 
-                // Token and wall-clock ceilings, checked in the same place and for the same reason
-                // as the cost one: stop before paying for another LLM call.
+                // Wall-clock ceiling, checked in the same place and for the same reason as the
+                // cost one: stop before paying for another LLM call.
                 TurnBudgetGuard.check(
-                    tokensUsed = (totalTokensIn + totalTokensOut).toLong(),
-                    maxTokens = maxTurnTokens,
                     elapsedMillis = System.currentTimeMillis() - turnStartMs,
                     maxMinutes = maxTurnMinutes,
                 )?.let { breach ->
