@@ -63,6 +63,9 @@ class CoreApiRouter(
     val configService = ConfigService(
         configRepository = persistence.configRepository,
         defaultProjectId = routerProjectId,
+        // Needed for the project config file to be found at all - without it the config layer
+        // only ever sees the user-level YAML.
+        projectRoot = projectRoot,
         runConfigOverrides = runConfigOverrides
     )
 
@@ -308,6 +311,10 @@ class CoreApiRouter(
         subagentRouter?.clearTemporary()
         agentPlanService.clear()
         agentEventBus.close()
+        // Kills background processes this project's tools started, so a dev server does not outlive
+        // the project it was started from.
+        runCatching { toolRegistry?.close() }
+            .onFailure { logger.warn { "Failed to close tool resources: ${it.message}" } }
         routerScope.cancel("CoreApiRouter closing")
     }
 }

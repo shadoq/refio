@@ -14,29 +14,94 @@ import java.security.MessageDigest
  * Diff format note: this util emits a slightly non-standard unified diff with a
  * 2-character line prefix ("  ", "- ", "+ ") because the rest of Refio (UI bubbles,
  * `parseDiffStats`) is already coupled to that format.
+ *
+ * Cost note: the hunks come from a dynamic-programming LCS whose table is O(oldLines * newLines)
+ * ints. Two guards keep that off the heap's critical path: the common prefix/suffix is matched
+ * first (a small edit in a huge file collapses to a table of a few cells), and a changed region
+ * still larger than [MAX_LCS_CELLS] is summarized instead of diffed. Without them a 20k-line file
+ * (well inside the 2 MB write-tool limit) would ask for ~1.6 GB and take down the whole JVM with
+ * an OutOfMemoryError that no `catch (e: Exception)` can intercept.
  */
 object DiffUtils {
 
     private const val DEFAULT_CONTEXT_LINES = 3
 
     /**
-     * Generate a unified diff between [originalContent] and [newContent] using a
-     * Myers-style LCS algorithm with [contextLines] lines of context per hunk.
+     * Budget for the LCS table, in cells (~4 bytes each), measured on the changed region that
+     * survives prefix/suffix trimming. 4M cells is ~16 MB transient - enough for any edit whose
+     * diff a human or a model would still read, and far below the heap an IDE plugin may claim.
      */
-    fun generateUnifiedDiff(
+    private const val MAX_LCS_CELLS = 4_000_000L
+
+    /** Marker emitted in place of the hunks when the changed region exceeds [MAX_LCS_CELLS]. */
+    const val SUPPRESSED_DIFF_MARKER = "diff suppressed"
+
+    /**
+     * Diff plus the line counts that produced it.
+     *
+     * [suppressed] is true when the changed region was too large to diff line by line; the counts
+     * are then the size of the changed region, not per-line insert/delete counts.
+     */
+    data class DiffResult(
+        val diff: String,
+        val addedLines: Int,
+        val removedLines: Int,
+        val suppressed: Boolean
+    )
+
+    /**
+     * Generate a unified diff between [originalContent] and [newContent] with [contextLines] lines
+     * of context per hunk, together with its add/remove counts.
+     */
+    fun computeDiff(
         originalContent: String,
         newContent: String,
         filePath: String,
         contextLines: Int = DEFAULT_CONTEXT_LINES
-    ): String {
+    ): DiffResult {
+        val header = "--- a/$filePath\n+++ b/$filePath\n"
+
+        // Fast path: identical content has no hunks, and skipping the table here is what keeps a
+        // no-op rewrite of a huge file cheap.
+        if (originalContent == newContent) {
+            return DiffResult(diff = header, addedLines = 0, removedLines = 0, suppressed = false)
+        }
+
         val original = originalContent.lines()
         val updated = newContent.lines()
-        val diffEntries = buildDiffEntries(original, updated)
-        val hunks = buildDiffHunks(diffEntries, contextLines)
 
-        return buildString {
-            appendLine("--- a/$filePath")
-            appendLine("+++ b/$filePath")
+        var prefix = 0
+        val minSize = minOf(original.size, updated.size)
+        while (prefix < minSize && original[prefix] == updated[prefix]) {
+            prefix++
+        }
+        var suffix = 0
+        while (suffix < minSize - prefix &&
+            original[original.size - 1 - suffix] == updated[updated.size - 1 - suffix]
+        ) {
+            suffix++
+        }
+
+        val changedOld = original.size - prefix - suffix
+        val changedNew = updated.size - prefix - suffix
+
+        if (changedOld.toLong() * changedNew.toLong() > MAX_LCS_CELLS) {
+            val diff = buildString {
+                append(header)
+                appendLine("@@ -${prefix + 1},$changedOld +${prefix + 1},$changedNew @@")
+                appendLine(
+                    "($SUPPRESSED_DIFF_MARKER: changed region is $changedOld line(s) replaced by " +
+                        "$changedNew line(s), too large to render line by line)"
+                )
+            }
+            return DiffResult(diff = diff, addedLines = changedNew, removedLines = changedOld, suppressed = true)
+        }
+
+        val entries = buildDiffEntries(original, updated, prefix, suffix)
+        val hunks = buildDiffHunks(entries, contextLines)
+
+        val diff = buildString {
+            append(header)
             for (hunk in hunks) {
                 appendLine("@@ -${hunk.oldStart},${hunk.oldCount} +${hunk.newStart},${hunk.newCount} @@")
                 for (entry in hunk.lines) {
@@ -48,11 +113,32 @@ object DiffUtils {
                 }
             }
         }
+
+        return DiffResult(
+            diff = diff,
+            addedLines = entries.count { it.type == DiffEntryType.INSERT },
+            removedLines = entries.count { it.type == DiffEntryType.DELETE },
+            suppressed = false
+        )
     }
+
+    /**
+     * Generate a unified diff between [originalContent] and [newContent] with [contextLines] lines
+     * of context per hunk. Prefer [computeDiff] when the caller also needs the line counts.
+     */
+    fun generateUnifiedDiff(
+        originalContent: String,
+        newContent: String,
+        filePath: String,
+        contextLines: Int = DEFAULT_CONTEXT_LINES
+    ): String = computeDiff(originalContent, newContent, filePath, contextLines).diff
 
     /**
      * Count added/removed lines in a unified diff produced by [generateUnifiedDiff].
      * Counts only data lines (prefixed by "+ " / "- "), not the file headers.
+     *
+     * Returns 0/0 for a diff whose hunks were suppressed - use [computeDiff] when the counts must
+     * hold for arbitrarily large changes.
      */
     fun parseDiffStats(diff: String): Pair<Int, Int> {
         var added = 0
@@ -82,12 +168,11 @@ object DiffUtils {
         replacements: Int? = null,
         created: Boolean = false
     ): ChangeSummary {
-        val diff = generateUnifiedDiff(originalContent, newContent, filePath)
-        val (added, removed) = parseDiffStats(diff)
+        val result = computeDiff(originalContent, newContent, filePath)
         return ChangeSummary(
-            addedLines = added,
-            removedLines = removed,
-            unifiedDiff = diff,
+            addedLines = result.addedLines,
+            removedLines = result.removedLines,
+            unifiedDiff = result.diff,
             oldHash = if (created && originalContent.isEmpty()) null else sha256(originalContent),
             newHash = sha256(newContent),
             replacements = replacements,
@@ -105,7 +190,7 @@ object DiffUtils {
         }
     }
 
-    // ----- internal Myers / hunking implementation -----
+    // ----- internal LCS / hunking implementation -----
 
     private data class DiffEntry(
         val type: DiffEntryType,
@@ -124,14 +209,30 @@ object DiffUtils {
         val lines: List<DiffEntry>
     )
 
-    private fun buildDiffEntries(original: List<String>, updated: List<String>): List<DiffEntry> {
-        val m = original.size
-        val n = updated.size
+    /**
+     * Entries for the whole file: the [prefix] and [suffix] lines that both sides share verbatim
+     * are emitted as context without ever entering the LCS table, which only covers the region
+     * between them.
+     */
+    private fun buildDiffEntries(
+        original: List<String>,
+        updated: List<String>,
+        prefix: Int,
+        suffix: Int
+    ): List<DiffEntry> {
+        val result = mutableListOf<DiffEntry>()
+
+        for (index in 0 until prefix) {
+            result.add(DiffEntry(DiffEntryType.CONTEXT, original[index], index, index))
+        }
+
+        val m = original.size - prefix - suffix
+        val n = updated.size - prefix - suffix
         val lcs = Array(m + 1) { IntArray(n + 1) }
 
         for (i in m - 1 downTo 0) {
             for (j in n - 1 downTo 0) {
-                lcs[i][j] = if (original[i] == updated[j]) {
+                lcs[i][j] = if (original[prefix + i] == updated[prefix + j]) {
                     lcs[i + 1][j + 1] + 1
                 } else {
                     maxOf(lcs[i + 1][j], lcs[i][j + 1])
@@ -139,34 +240,39 @@ object DiffUtils {
             }
         }
 
-        val result = mutableListOf<DiffEntry>()
         var i = 0
         var j = 0
-
         while (i < m && j < n) {
             when {
-                original[i] == updated[j] -> {
-                    result.add(DiffEntry(DiffEntryType.CONTEXT, original[i], i, j))
+                original[prefix + i] == updated[prefix + j] -> {
+                    result.add(DiffEntry(DiffEntryType.CONTEXT, original[prefix + i], prefix + i, prefix + j))
                     i++; j++
                 }
                 lcs[i + 1][j] >= lcs[i][j + 1] -> {
-                    result.add(DiffEntry(DiffEntryType.DELETE, original[i], i, null))
+                    result.add(DiffEntry(DiffEntryType.DELETE, original[prefix + i], prefix + i, null))
                     i++
                 }
                 else -> {
-                    result.add(DiffEntry(DiffEntryType.INSERT, updated[j], null, j))
+                    result.add(DiffEntry(DiffEntryType.INSERT, updated[prefix + j], null, prefix + j))
                     j++
                 }
             }
         }
         while (i < m) {
-            result.add(DiffEntry(DiffEntryType.DELETE, original[i], i, null))
+            result.add(DiffEntry(DiffEntryType.DELETE, original[prefix + i], prefix + i, null))
             i++
         }
         while (j < n) {
-            result.add(DiffEntry(DiffEntryType.INSERT, updated[j], null, j))
+            result.add(DiffEntry(DiffEntryType.INSERT, updated[prefix + j], null, prefix + j))
             j++
         }
+
+        for (k in 0 until suffix) {
+            val oldIndex = original.size - suffix + k
+            val newIndex = updated.size - suffix + k
+            result.add(DiffEntry(DiffEntryType.CONTEXT, original[oldIndex], oldIndex, newIndex))
+        }
+
         return result
     }
 

@@ -1947,6 +1947,40 @@ class PromptInputPanel(
      * Handle Stop button click - cancel current operation
      * Works for all modes: CHAT (streaming), PLAN, AGENT
      */
+    /**
+     * Cancels the running operation, exactly as the composer's Stop button does. Exposed so the
+     * "now running" bar shares one cancel path instead of duplicating it.
+     */
+    fun stopCurrentOperation() = handleStopOperation()
+
+    /**
+     * Narrow dock: the Send and Stop captions are dropped to their icons and the model dropdown
+     * stops sizing itself to the longest model name, which is what pushed the composer wider than
+     * the panel and produced a horizontal scrollbar.
+     */
+    fun setSendCompact(compact: Boolean) {
+        val buttonWidth = if (compact) JBUI.scale(32) else JBUI.scale(90)
+        val buttonHeight = JBUI.scale(28)
+
+        sendButton.text = if (compact) "" else "Send"
+        sendButton.minimumSize = Dimension(buttonWidth, buttonHeight)
+        sendButton.preferredSize = Dimension(buttonWidth, buttonHeight)
+        sendButton.maximumSize = Dimension(buttonWidth, buttonHeight)
+
+        stopButton.text = if (compact) "" else "Stop"
+        stopButton.minimumSize = Dimension(buttonWidth, buttonHeight)
+        stopButton.preferredSize = Dimension(buttonWidth, buttonHeight)
+        stopButton.maximumSize = Dimension(buttonWidth, buttonHeight)
+
+        modelSelector.maximumSize = Dimension(
+            if (compact) JBUI.scale(90) else JBUI.scale(220),
+            buttonHeight
+        )
+
+        revalidate()
+        repaint()
+    }
+
     private fun handleStopOperation() {
         logger.info { "Stop button clicked - canceling operation" }
 

@@ -6,6 +6,7 @@ import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.services.ConfigService
 import java.io.File
+import java.io.IOException
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
@@ -19,6 +20,11 @@ data class VerificationExecution(
     /** Combined stdout + stderr of the command. */
     val output: String,
     val timedOut: Boolean = false,
+    /**
+     * True when the runner gave up before reading the command's output to the end, so [output] is
+     * an unknown subset of what the command printed.
+     */
+    val outputTruncated: Boolean = false,
 )
 
 /**
@@ -48,11 +54,20 @@ class ProcessVerificationCommandRunner : VerificationCommandRunner {
             .redirectErrorStream(true)
             .start()
         // Drain output on a separate thread so a chatty build cannot deadlock on a full pipe
-        // buffer while we block in waitFor.
-        val output = StringBuilder()
+        // buffer while we block in waitFor. StringBuffer, not StringBuilder: the reader may still
+        // be appending when this thread snapshots the text (see [awaitReader]), and Thread.join
+        // with a timeout neither reports success nor establishes happens-before, so a plain
+        // builder would be read unsynchronized and yield an arbitrarily mangled excerpt.
+        val output = StringBuffer()
         val reader = Thread {
-            process.inputStream.bufferedReader().forEachLine { line ->
-                output.appendLine(line)
+            try {
+                process.inputStream.bufferedReader().forEachLine { line ->
+                    output.appendLine(line)
+                }
+            } catch (e: IOException) {
+                // Expected when [awaitReader] closes the pipe to unblock a reader that outlived
+                // the process; anything already drained stays in `output`.
+                logger.debug { "[VERIFY] output reader stopped: ${e.message}" }
             }
         }
         reader.isDaemon = true
@@ -60,13 +75,49 @@ class ProcessVerificationCommandRunner : VerificationCommandRunner {
         val finished = process.waitFor(timeoutSeconds.toLong(), TimeUnit.SECONDS)
         if (!finished) {
             process.destroyForcibly()
-            process.waitFor(5, TimeUnit.SECONDS)
-            // Let the reader thread flush what it already drained before snapshotting.
-            reader.join(2000)
-            return VerificationExecution(exitCode = -1, output = output.toString(), timedOut = true)
+            process.waitFor(KILL_GRACE_SECONDS, TimeUnit.SECONDS)
         }
-        reader.join(2000)
-        return VerificationExecution(exitCode = process.exitValue(), output = output.toString())
+        val fullyDrained = awaitReader(reader, process)
+        return VerificationExecution(
+            exitCode = if (finished) process.exitValue() else -1,
+            output = output.toString(),
+            timedOut = !finished,
+            outputTruncated = !fullyDrained,
+        )
+    }
+
+    /**
+     * Wait for the drain thread to finish and report whether it did.
+     *
+     * The process having exited does NOT close the pipe: a grandchild that inherited the write end
+     * (a backgrounded server, a detached build daemon) keeps it open, and the reader then blocks in
+     * read() indefinitely. Closing our end is a best-effort attempt to release it - on some
+     * platforms a thread already blocked in read() is not woken - so we never wait on the second
+     * join for long, and report the output as incomplete rather than pretending it is whole.
+     */
+    private fun awaitReader(reader: Thread, process: Process): Boolean {
+        reader.join(READER_JOIN_MS)
+        if (!reader.isAlive) {
+            return true
+        }
+        runCatching { process.inputStream.close() }
+        reader.join(READER_CLOSE_JOIN_MS)
+        logger.warn {
+            "[VERIFY] output reader did not finish within ${READER_JOIN_MS}ms - the command left the " +
+                "pipe open (likely a surviving background child); reported output may be incomplete"
+        }
+        return false
+    }
+
+    companion object {
+        /** Grace period for a killed process to actually die before we stop waiting on it. */
+        private const val KILL_GRACE_SECONDS = 5L
+
+        /** How long to wait for the drain thread after the process exits. */
+        private const val READER_JOIN_MS = 2000L
+
+        /** Extra wait after closing the pipe, only to let an unblocked reader publish its last line. */
+        private const val READER_CLOSE_JOIN_MS = 200L
     }
 }
 
@@ -177,8 +228,17 @@ class TurnVerifier(
                     "Verification command '$command' exited with code ${execution.exitCode} (no recognizable error lines in output)."
                 }
             )
+        } + if (execution.outputTruncated) {
+            // The model is told to repair exactly this list. If we could not read the command's
+            // output to the end, a silently short list reads as "these are all the failures".
+            listOf(TRUNCATED_OUTPUT_NOTE)
+        } else {
+            emptyList()
         }
-        logger.warn { "[VERIFY] taskId=$taskId failed (exit=${execution.exitCode}, timedOut=${execution.timedOut}, errors=${errors.size})" }
+        logger.warn {
+            "[VERIFY] taskId=$taskId failed (exit=${execution.exitCode}, timedOut=${execution.timedOut}, " +
+                "truncated=${execution.outputTruncated}, errors=${errors.size})"
+        }
         return Outcome.Failed(exitCode = execution.exitCode, errors = errors, timedOut = execution.timedOut)
     }
 
@@ -197,6 +257,11 @@ class TurnVerifier(
     companion object {
         /** Cap on error lines fed back to the model; full build output never enters the context. */
         const val MAX_ERROR_LINES = 50
+
+        /** Appended to the error list when the command's output could not be read to the end. */
+        const val TRUNCATED_OUTPUT_NOTE =
+            "Note: the verification output could not be read to the end (the command left a " +
+                "background process holding its output stream), so this error list may be incomplete."
 
         /**
          * Autodetect the verification command from well-known project marker files.

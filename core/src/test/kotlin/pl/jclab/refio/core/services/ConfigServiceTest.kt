@@ -68,8 +68,9 @@ class ConfigServiceTest {
 
         @Test
         fun `should return value from database when present`() {
-            // Given
-            every { configRepository.get("test.key", ConfigScope.APP) } returns
+            // Given - the raw getter asks for the effective value, so it resolves the scope
+            // hierarchy (task, then project, then app) instead of reading app scope directly.
+            every { configRepository.getWithPrecedence("test.key", null, "test-project") } returns
                 createConfig("test.key", "db-value")
 
             // When
@@ -200,13 +201,6 @@ class ConfigServiceTest {
             } returns createConfig(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.key, "0")
             val result: Int = configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS)
             assertEquals(0, result)
-        }
-
-        @Test
-        fun `MAX_ITERATIONS should return default when no config`() {
-            every { configRepository.getWithPrecedence(any(), any(), any()) } returns null
-            val result: Int = configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.MAX_ITERATIONS)
-            assertEquals(ConfigKeys.MAX_ITERATIONS.default, result)
         }
     }
 
@@ -446,11 +440,11 @@ class ConfigServiceTest {
             val svc = ConfigService(
                 configRepository,
                 defaultProjectId = "test-project",
-                runConfigOverrides = mapOf(ConfigKeys.MAX_ITERATIONS.key to "80")
+                runConfigOverrides = mapOf(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.key to "80")
             )
 
             // When
-            val result: Int = svc.getTyped(ConfigKeys.MAX_ITERATIONS)
+            val result: Int = svc.getTyped(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS)
 
             // Then
             assertEquals(80, result)
@@ -481,11 +475,11 @@ class ConfigServiceTest {
             val svc = ConfigService(
                 configRepository,
                 defaultProjectId = "test-project",
-                runConfigOverrides = mapOf(ConfigKeys.MAX_ITERATIONS.key to "80")
+                runConfigOverrides = mapOf(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.key to "80")
             )
 
             // When - reading the overridden key
-            svc.getTyped(ConfigKeys.MAX_ITERATIONS)
+            svc.getTyped(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS)
 
             // Then - the override is read-only; it never writes back to the shared DB
             verify(exactly = 0) { configRepository.set(any(), any(), any(), any(), any(), any()) }
@@ -498,14 +492,14 @@ class ConfigServiceTest {
             val svc = ConfigService(
                 configRepository,
                 defaultProjectId = "test-project",
-                runConfigOverrides = mapOf(ConfigKeys.MAX_ITERATIONS.key to "not-a-number")
+                runConfigOverrides = mapOf(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.key to "not-a-number")
             )
 
             // When
-            val result: Int = svc.getTyped(ConfigKeys.MAX_ITERATIONS)
+            val result: Int = svc.getTyped(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS)
 
             // Then - falls through to the key's default (CLI layer rejects bad values loudly upstream)
-            assertEquals(ConfigKeys.MAX_ITERATIONS.default, result)
+            assertEquals(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.default, result)
         }
     }
 }

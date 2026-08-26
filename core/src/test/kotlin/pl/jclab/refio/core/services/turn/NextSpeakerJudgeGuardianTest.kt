@@ -605,6 +605,37 @@ class NextSpeakerJudgeGuardianTest {
         }
     }
 
+    // The cheap exit is a saving on obvious completions, and it is deliberately blind to what the
+    // short reply says. Screening the opening for an announced next step was tried and removed: over
+    // 86 e2e scenarios the sub-30-character band never fired, because real stalls run 70 to 160
+    // characters and reach the judge on length alone. These two pin the saving itself, so a future
+    // attempt at the same idea has to face the cost it would add.
+    @Test
+    fun `a short reply that reports a result before signing off keeps the cheap exit`() = runBlocking {
+        stubJudgeEnabled()
+
+        val decision = guardian().check(ctx(response = "Fixed. Now let me verify."))
+
+        assertEquals(GuardianDecision.Pass, decision)
+        coVerify(exactly = 0) {
+            llmClient.complete(provider = any(), model = any(), messages = any())
+        }
+    }
+
+    @Test
+    fun `a short offer of further help keeps the cheap exit`() = runBlocking {
+        // "Let me know if needed." hands control back to the user, which is the opposite of a
+        // mid-task pause, so spending a judge call on it would be pure waste.
+        stubJudgeEnabled()
+
+        val decision = guardian().check(ctx(response = "Let me know if needed."))
+
+        assertEquals(GuardianDecision.Pass, decision)
+        coVerify(exactly = 0) {
+            llmClient.complete(provider = any(), model = any(), messages = any())
+        }
+    }
+
     @Test
     fun `judge USER verdict produces Pass`() = runBlocking {
         stubJudgeEnabled()

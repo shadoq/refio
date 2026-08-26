@@ -46,10 +46,7 @@ data class ConfigYaml(
     val verify: VerifyConfig? = null
 ) {
     companion object {
-        fun getUserConfigPath(): File {
-            val userHome = System.getProperty("user.home")
-            return File(userHome, ".refio${File.separator}config.yaml")
-        }
+        fun getUserConfigPath(): File = RefioHome.resolve("config.yaml").toFile()
 
         fun getProjectConfigPath(projectRoot: Path): File =
             projectRoot.resolve(".refio").resolve("config.yaml").toFile()

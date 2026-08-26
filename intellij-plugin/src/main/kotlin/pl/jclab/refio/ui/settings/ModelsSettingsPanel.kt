@@ -5,8 +5,12 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
-import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
+import com.intellij.ui.TableSpeedSearch
+import com.intellij.ui.dsl.builder.Align
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.panel
+import com.intellij.util.ui.JBUI
 import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.api.ModelOperation
@@ -221,39 +225,29 @@ class ModelsSettingsPanel(
     init {
         border = LCATheme.emptyBorder()
 
-        // Main content
-        val contentPanel = JBPanel<JBPanel<*>>(GridBagLayout()).apply {
-            val gbc = GridBagConstraints().apply {
-                gridx = 0
-                gridy = 0
-                fill = GridBagConstraints.HORIZONTAL
-                weightx = 1.0
-                weighty = 0.0
+        val presets = createPresetsPanel()
+        val table = createModelsTable()
+        val selection = createModelSelectionPanel()
+
+        val form = settingsForm {
+            group("Presets") {
+                row {
+                    cell(presets).align(AlignX.FILL).resizableColumn()
+                }
             }
-
-            // Presets panel (quick selection)
-            add(createPresetsPanel(), gbc)
-
-            gbc.gridy++
-            gbc.fill = GridBagConstraints.BOTH
-            gbc.weighty = 1.0
-            gbc.insets = LCATheme.insetsTopMedium
-            add(createModelsTable(), gbc)
-
-            gbc.gridy++
-            gbc.weighty = 0.0
-            gbc.insets = LCATheme.insetsTopMedium
-            add(createModelSelectionPanel(), gbc)
+            group("Models") {
+                row {
+                    cell(table).align(Align.FILL).resizableColumn()
+                }.resizableRow()
+            }
+            group("Model selection") {
+                row {
+                    cell(selection).align(AlignX.FILL).resizableColumn()
+                }
+            }
         }
 
-        // Wrap contentPanel in scroll pane for small screens
-        val scrollPane = JBScrollPane(contentPanel).apply {
-            border = LCATheme.emptyBorder()
-            verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
-            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
-        }
-
-        add(scrollPane, BorderLayout.CENTER)
+        add(settingsScrollPane(form), BorderLayout.CENTER)
 
         // Load models from backend
         loadModels()
@@ -263,11 +257,11 @@ class ModelsSettingsPanel(
         val columnNames = arrayOf(
             "Provider",
             "Model Name",
-            "Context Size",
+            "Context",
             "Capabilities",
-            "Price IN ($/1M)",
-            "Price OUT ($/1M)",
-            "Show in Dropdown",
+            "Prompt $/M",
+            "Compl. $/M",
+            "Show",
             "Model ID"  // Hidden column for internal use
         )
 
@@ -296,14 +290,16 @@ class ModelsSettingsPanel(
                 }
             }
 
-            // Column widths
-            columnModel.getColumn(0).preferredWidth = 100  // Provider
-            columnModel.getColumn(1).preferredWidth = 250  // Model Name
-            columnModel.getColumn(2).preferredWidth = 100  // Context Size
-            columnModel.getColumn(3).preferredWidth = 200  // Capabilities
-            columnModel.getColumn(4).preferredWidth = 100  // Price IN
-            columnModel.getColumn(5).preferredWidth = 100  // Price OUT
-            columnModel.getColumn(6).preferredWidth = 120  // Show in Dropdown
+            fitColumns(
+                ColumnWidth(min = 50, preferred = 90),   // Provider
+                ColumnWidth(min = 60, preferred = 190),  // Model Name
+                ColumnWidth(min = 40, preferred = 80),   // Context Size
+                ColumnWidth(min = 40, preferred = 140),  // Capabilities
+                ColumnWidth(min = 40, preferred = 80),   // Price IN
+                ColumnWidth(min = 40, preferred = 80),   // Price OUT
+                ColumnWidth(min = 40, preferred = 50, max = 60)  // Show
+            )
+            showFullValueOnHover()
 
             // Hide column 7 (Model ID) - used only internally
             columnModel.getColumn(7).minWidth = 0
@@ -311,22 +307,20 @@ class ModelsSettingsPanel(
             columnModel.getColumn(7).preferredWidth = 0
         }
 
+        TableSpeedSearch.installOn(modelsTable)
+
         val scrollPane = JScrollPane(modelsTable).apply {
-            minimumSize = Dimension(200, 200)
-            preferredSize = Dimension(400, 300)
-            maximumSize = Dimension(900, 400)
+            // Heights only: a fixed width here would decide how wide the whole page is.
+            minimumSize = Dimension(0, JBUI.scale(200))
+            preferredSize = Dimension(0, JBUI.scale(300))
         }
 
         // Create panel with table and refresh button
         val tablePanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
 
-            border = BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder(
-                    LCATheme.customLineBorder(LCATheme.borderColor, 1),
-                    "Models"
-                ),
-                LCATheme.paddedBorder(LCATheme.padding)
-            )
+            // Title supplied by the wrapping DSL group.
+            // Horizontal padding is left to the wrapping DSL group, which already indents its content.
+            border = LCATheme.paddedBorder(LCATheme.gap, 0)
 
             // Refresh button panel
             val refreshPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
@@ -364,13 +358,9 @@ class ModelsSettingsPanel(
      */
     private fun createPresetsPanel(): JPanel {
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder(
-                    LCATheme.customLineBorder(LCATheme.borderColor, 1),
-                    "Quick Presets"
-                ),
-                LCATheme.paddedBorder(LCATheme.padding)
-            )
+            // Title supplied by the wrapping DSL group.
+            // Horizontal padding is left to the wrapping DSL group, which already indents its content.
+            border = LCATheme.paddedBorder(LCATheme.gap, 0)
 
             // Description label
             val descLabel =
@@ -580,13 +570,10 @@ class ModelsSettingsPanel(
 
     private fun createModelSelectionPanel(): JPanel {
         return JBPanel<JBPanel<*>>(GridBagLayout()).apply {
-            border = BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder(
-                    LCATheme.customLineBorder(LCATheme.borderColor, 1),
-                    "Model Selection per Mode"
-                ),
-                LCATheme.paddedBorder(LCATheme.padding)
-            )
+            // The section title comes from the DSL group that wraps this panel; a titled border
+            // here would draw a second caption over it.
+            // Horizontal padding is left to the wrapping DSL group, which already indents its content.
+            border = LCATheme.paddedBorder(LCATheme.gap, 0)
 
             val gbc = GridBagConstraints().apply {
                 gridx = 0

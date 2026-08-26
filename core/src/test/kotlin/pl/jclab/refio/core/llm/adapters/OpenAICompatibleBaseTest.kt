@@ -351,6 +351,7 @@ class OpenAICompatibleBaseTest {
         every { config.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, any()) } returns ConfigKeys.MAX_OUTPUT_SIZE.default
         every { config.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_BASE_URL) } returns "https://mock.test/v1"
         every { config.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_API_KEY) } returns "test-key"
+        every { config.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_RAW_REQUEST, any()) } returns false
         return config
     }
 

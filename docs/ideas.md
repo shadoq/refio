@@ -73,6 +73,22 @@ no-egress mode, usage audit. Without a policy layer MCP becomes a source of inci
 "secure MCP" differentiator, scoped to local security (the audit angle belongs to the enterprise
 vector, which is off the critical path).
 
+### Settings screens should show values that come from config.yaml
+`ConfigRouter.getConfig(section)` reads only the config database, so any value set exclusively in
+`~/.refio/config.yaml` or `<project>/.refio/config.yaml` is invisible in Settings even though the
+engine honors it (the resolver reads YAML through each key's `yamlAccessor`). Affects every provider
+field, not just context size. A field then shows the value it was constructed with, which
+misrepresents the effective configuration and invites the user to overwrite their own setting.
+Fix direction: have the section read go through the resolver instead of the repository, and mark
+YAML-sourced values as read-only in the UI so a save cannot silently move them into the database.
+
+### Embedding provider resolution has silent egress paths
+`EmbeddingProviderFactory.resolve` maps a bare model name with no known Ollama match to `openai`,
+so a typo in `models.embedding_model` can send project content to `api.openai.com`. Separate from
+the unknown *provider id* path: this one is the bare-name heuristic, which guesses rather than
+failing. Worth narrowing to an explicit provider prefix once the config surface can carry a
+deprecation.
+
 ---
 
 ## PARKED

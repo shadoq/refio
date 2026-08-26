@@ -15,9 +15,9 @@ class RunConfigOverridesTest {
     @Test
     fun `parses valid key=value pairs`() {
         val result = RunConfigOverrides.parse(
-            listOf("agent.max_iterations=80", "tools.native_tools=never")
+            listOf("agent.max_consecutive_tool_errors=80", "tools.native_tools=never")
         )
-        assertEquals("80", result["agent.max_iterations"])
+        assertEquals("80", result["agent.max_consecutive_tool_errors"])
         assertEquals("never", result["tools.native_tools"])
     }
 
@@ -32,15 +32,15 @@ class RunConfigOverridesTest {
     @Test
     fun `rejects a value that fails parse or validation`() {
         val ex = assertFailsWith<IllegalArgumentException> {
-            RunConfigOverrides.parse(listOf("agent.max_iterations=not-a-number"))
+            RunConfigOverrides.parse(listOf("agent.max_consecutive_tool_errors=not-a-number"))
         }
-        assertTrue(ex.message!!.contains("agent.max_iterations"))
+        assertTrue(ex.message!!.contains("agent.max_consecutive_tool_errors"))
     }
 
     @Test
     fun `rejects an entry without an equals sign`() {
         assertFailsWith<IllegalArgumentException> {
-            RunConfigOverrides.parse(listOf("agent.max_iterations"))
+            RunConfigOverrides.parse(listOf("agent.max_consecutive_tool_errors"))
         }
     }
 
@@ -48,22 +48,22 @@ class RunConfigOverridesTest {
     fun `inline pairs override config-file on duplicate keys`() {
         val file = """
             # profile
-            agent.max_iterations=40
+            agent.max_consecutive_tool_errors=40
             tools.native_tools=always
         """.trimIndent()
         val result = RunConfigOverrides.parse(
-            pairs = listOf("agent.max_iterations=80"),
+            pairs = listOf("agent.max_consecutive_tool_errors=80"),
             fileContent = file
         )
-        assertEquals("80", result["agent.max_iterations"])   // inline wins
+        assertEquals("80", result["agent.max_consecutive_tool_errors"])   // inline wins
         assertEquals("always", result["tools.native_tools"]) // from file
     }
 
     @Test
     fun `blank lines and comments in the config-file are ignored`() {
-        val file = "\n# comment\n\nagent.max_iterations=40\n"
+        val file = "\n# comment\n\nagent.max_consecutive_tool_errors=40\n"
         val result = RunConfigOverrides.parse(emptyList(), file)
         assertEquals(1, result.size)
-        assertEquals("40", result["agent.max_iterations"])
+        assertEquals("40", result["agent.max_consecutive_tool_errors"])
     }
 }

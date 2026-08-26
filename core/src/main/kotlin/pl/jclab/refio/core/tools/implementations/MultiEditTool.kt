@@ -25,9 +25,11 @@ private val logger = dualLogger("MultiEditTool")
  *   - path: File path
  *   - old_string: String to replace
  *   - new_string: Replacement string
+ *   - replace_all: Replace every occurrence (default: false)
  *
  * Security:
  * - Path sandbox prevents directory traversal
+ * - old_string must be unique in the file (unless replace_all=true)
  * - All edits are validated up front; if any edit fails, no file is written (atomic for
  *   logical failures - a JVM crash mid-write is still not transactional)
  * - File size limits enforced
@@ -80,7 +82,11 @@ class MultiEditTool(
                 val resolvedPath = resolveSandboxPath(edit.path)
                 withLockedFile(resolvedPath) {
                     val prep = prepareEdit(edit, pendingContent[resolvedPath])
-                    val newContent = prep.originalContent.replaceFirst(prep.oldMatch, prep.newMatch)
+                    val newContent = if (edit.replaceAll) {
+                        prep.originalContent.replace(prep.oldMatch, prep.newMatch)
+                    } else {
+                        prep.originalContent.replaceFirst(prep.oldMatch, prep.newMatch)
+                    }
                     pendingContent[resolvedPath] = newContent
                     prep to newContent
                 }
@@ -138,7 +144,11 @@ class MultiEditTool(
 
         } catch (e: EditException) {
             logger.warn { "Multi-edit failed: ${e.message}" }
-            return ToolResult.error("Edit failed: ${e.message}")
+            return ToolResult.error(
+                message = "Edit failed: ${e.message}",
+                recovery = e.recovery,
+                nextActionHints = e.nextActionHints
+            )
 
         } catch (e: IllegalArgumentException) {
             logger.warn { "Multi-edit validation failed: ${e.message}" }
@@ -168,7 +178,8 @@ class MultiEditTool(
             index = index,
             path = path,
             oldString = oldString,
-            newString = newString
+            newString = newString,
+            replaceAll = edit["replace_all"] as? Boolean ?: false
         )
     }
 
@@ -223,31 +234,84 @@ class MultiEditTool(
             )
         }
 
+        // Check uniqueness if not replaceAll: an ambiguous old_string would silently land on the
+        // first match, which is almost never the site the agent meant.
+        val occurrences = countOccurrences(content, oldMatch)
+        if (!edit.replaceAll && occurrences > 1) {
+            throw EditException(
+                message = "Edit #${edit.index}: String appears $occurrences times in file ${edit.path}.",
+                recovery = "Either pass replace_all=true on this edit to apply to every occurrence, or extend old_string with surrounding context to make it unique.",
+                nextActionHints = listOf(
+                    "Add more surrounding context to old_string",
+                    "Pass replace_all=true on this edit if every occurrence should change"
+                )
+            )
+        }
+
         return PreparedEdit(
             edit = edit,
             path = path,
             originalContent = content,
             oldMatch = oldMatch,
-            newMatch = newMatch
+            newMatch = newMatch,
+            replacements = if (edit.replaceAll) occurrences else 1
         )
     }
 
-    private fun commitEdit(prep: PreparedEdit, newContent: String): EditResult {
-        // newContent was already computed during the validation pass; just persist it.
-        Files.writeString(prep.path, newContent)
+    private fun countOccurrences(text: String, substring: String): Int {
+        if (substring.isEmpty()) return 0
 
-        val newFileSize = prep.path.fileSize()
+        var count = 0
+        var index = 0
+
+        while (text.indexOf(substring, index).also { index = it } != -1) {
+            count++
+            index += substring.length
+        }
+
+        return count
+    }
+
+    private fun commitEdit(prep: PreparedEdit, newContent: String): EditResult {
+        // newContent was computed during the validation pass, which released the file lock before
+        // this one was taken. Another writer (a second agent in the same run) could have landed in
+        // between, and persisting the pre-computed content would silently drop its change. Fail
+        // loud instead. This narrows the window to the gap between this read and the write below;
+        // it does not remove it.
+        val onDisk = try {
+            Files.readString(prep.path)
+        } catch (e: Exception) {
+            throw EditException(
+                message = "Edit #${prep.edit.index}: ${prep.edit.path} became unreadable before the write: ${e.message}",
+                recovery = "Re-read the file and reapply the edit."
+            )
+        }
+        if (onDisk != prep.originalContent) {
+            throw EditException(
+                message = "Edit #${prep.edit.index}: ${prep.edit.path} changed on disk after the edit was validated.",
+                recovery = "Nothing was written for this file. Re-read it and reapply the edit against the current content.",
+                nextActionHints = listOf(
+                    "read_file(path=\"${prep.edit.path}\") to see the current content",
+                    "Reapply the edit with an old_string taken from the fresh content"
+                )
+            )
+        }
+
+        // Build the change summary before writing: a failure there then leaves the file untouched.
         val changeSummary = DiffUtils.buildChangeSummary(
             originalContent = prep.originalContent,
             newContent = newContent,
             filePath = prep.edit.path,
-            replacements = 1
+            replacements = prep.replacements
         )
+
+        Files.writeString(prep.path, newContent)
+        val newFileSize = prep.path.fileSize()
         logger.debug { "Applied edit #${prep.edit.index}: ${prep.edit.path}, size: ${prep.originalContent.length} → ${newContent.length} chars, fileSize=$newFileSize bytes, +${changeSummary.addedLines}/-${changeSummary.removedLines}" }
 
         return EditResult(
             path = prep.edit.path,
-            replacements = 1,
+            replacements = prep.replacements,
             oldLength = prep.originalContent.length,
             newLength = newContent.length,
             changeSummary = changeSummary
@@ -283,6 +347,11 @@ class MultiEditTool(
                             "new_string" to mapOf(
                                 "type" to "string",
                                 "description" to "Replacement string"
+                            ),
+                            "replace_all" to mapOf(
+                                "type" to "boolean",
+                                "description" to "Replace all occurrences (default: false). When false, old_string must appear exactly once in the file",
+                                "default" to false
                             )
                         ),
                         "required" to listOf("path", "old_string", "new_string")
@@ -297,7 +366,8 @@ class MultiEditTool(
         val index: Int,
         val path: String,
         val oldString: String,
-        val newString: String
+        val newString: String,
+        val replaceAll: Boolean
     )
 
     private data class PreparedEdit(
@@ -306,7 +376,8 @@ class MultiEditTool(
         val originalContent: String,
         // edit.oldString / edit.newString re-expressed in the file's line-ending convention.
         val oldMatch: String,
-        val newMatch: String
+        val newMatch: String,
+        val replacements: Int
     )
 
     private data class EditResult(
@@ -317,5 +388,9 @@ class MultiEditTool(
         val changeSummary: ChangeSummary
     )
 
-    private class EditException(message: String) : Exception(message)
+    private class EditException(
+        message: String,
+        val recovery: String? = null,
+        val nextActionHints: List<String>? = null
+    ) : Exception(message)
 }

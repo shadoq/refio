@@ -122,6 +122,81 @@ class ConfigYamlApplier(
             applyKey(ConfigKeys.MAX_FILE_SIZE.key, l.maxFileSize?.toString(), "max file size")
         }
 
+        yamlConfig.context?.let { c ->
+            applyKey(ConfigKeys.RECENT_WORK_FULL_DATA_LIMIT.key, c.recentWorkFullDataLimit?.toString(), "recent work full data limit")
+            applyKey(ConfigKeys.RECENT_WORK_SUMMARY_MAX_LENGTH.key, c.recentWorkSummaryMaxLength?.toString(), "recent work summary max length")
+            applyKey(ConfigKeys.CONTEXT_BUDGET_TOTAL_TOKENS.key, c.budgetTotalTokens?.toString(), "context budget total tokens")
+            applyKey(ConfigKeys.CONTEXT_BUDGET_INPUT_RATIO.key, c.budgetInputRatio?.toString(), "context budget input ratio")
+            applyKey(ConfigKeys.WORKING_MEMORY_MAX_FACTS.key, c.workingMemoryMaxFacts?.toString(), "working memory max facts")
+            c.budgetSections?.forEach { (section, tokens) ->
+                applyKey(
+                    ConfigService.KEY_CONTEXT_BUDGET_SECTION_PREFIX + section,
+                    tokens.toString(),
+                    "context budget for section $section",
+                )
+            }
+        }
+
+        yamlConfig.tools?.permissions?.let { permissions ->
+            count += applyToolPermissions(permissions, overwrite)
+        }
+
         return count
+    }
+
+    /**
+     * Merge the YAML `tools.permissions` block into the single stored permissions row.
+     *
+     * Tools absent from the file keep whatever is stored - a hand-written file listing two tools
+     * must not silently reset every other tool. An entry that does not name both modes with a
+     * known level is skipped and reported, never applied half-way.
+     *
+     * @return 1 when the stored row was written, 0 otherwise.
+     */
+    private fun applyToolPermissions(
+        yamlPermissions: Map<String, pl.jclab.refio.core.config.ToolPermissionConfig>,
+        overwrite: Boolean,
+    ): Int {
+        val fromYaml = yamlPermissions.mapNotNull { (tool, config) ->
+            val planMode = parsePermissionLevel(config.planMode)
+            val agentMode = parsePermissionLevel(config.agentMode)
+            if (planMode == null || agentMode == null) {
+                logger.warn {
+                    "Ignoring tool permission for '$tool' from YAML: planMode='${config.planMode}', " +
+                        "agentMode='${config.agentMode}' (expected ${PermissionLevel.entries.joinToString("/")} for both)"
+                }
+                null
+            } else {
+                tool to ToolPermissionConfig(planMode = planMode, agentMode = agentMode)
+            }
+        }.toMap()
+        if (fromYaml.isEmpty()) return 0
+
+        val stored = readStoredToolPermissions()
+        val merged = if (overwrite) {
+            stored + fromYaml
+        } else {
+            val additions = fromYaml.filterKeys { !stored.containsKey(it) }
+            if (additions.isEmpty()) return 0
+            stored + additions
+        }
+
+        setter(ConfigKeys.TOOLS_PERMISSIONS.key, gson.toJson(ToolPermissions(tools = merged)))
+        val verb = if (overwrite) "Reloaded" else "Loaded"
+        logger.info { "$verb ${fromYaml.size} tool permission(s) from YAML" }
+        return 1
+    }
+
+    private fun readStoredToolPermissions(): Map<String, ToolPermissionConfig> {
+        val stored = configRepository.get(ConfigKeys.TOOLS_PERMISSIONS.key, ConfigScope.APP) ?: return emptyMap()
+        return runCatching { gson.fromJson(stored.value, ToolPermissions::class.java) }
+            .getOrNull()
+            ?.tools
+            ?: emptyMap()
+    }
+
+    private fun parsePermissionLevel(raw: String?): PermissionLevel? {
+        val normalized = raw?.trim()?.uppercase() ?: return null
+        return PermissionLevel.entries.firstOrNull { it.name == normalized }
     }
 }

@@ -12,6 +12,7 @@ import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.llm.NativeToolCall
 import pl.jclab.refio.core.llm.NativeToolCallDelta
 import pl.jclab.refio.core.llm.StreamChunk
+import pl.jclab.refio.core.llm.StreamFinishReason
 import pl.jclab.refio.core.llm.ToolSchemaSanitizer
 import pl.jclab.refio.core.llm.ToolsNotSupportedException
 import pl.jclab.refio.core.llm.toModelConfig
@@ -119,7 +120,9 @@ class AnthropicAdapter(
 
         // Anthropic API requires system messages as top-level "system" parameter, not in messages array
         // Filter out any system messages from conversation messages (they should be in systemMessages parameter)
-        val nonSystemMessages = messages.filter { it.role != "system" }
+        // A tool-call-only turn has nothing this serializer can carry, and Anthropic rejects an
+        // empty content block outright.
+        val nonSystemMessages = messages.filter { it.role != "system" && !it.isEmptyForTextOnlyProvider() }
 
         // Combine all system messages from systemMessages parameter
         val combinedSystemPrompt = systemMessages
@@ -544,6 +547,9 @@ class AnthropicAdapter(
         var cacheWriteTokens = 0
         var httpStatus: Int? = null
         var finalStopReason: String? = null
+        // Did the stream end on purpose? `message_stop` closes it, and `message_delta` carries the
+        // stop reason; falling out of the read loop with neither means the peer just went away.
+        var sawTerminator = false
 
         try {
             // Make streaming HTTP request
@@ -607,6 +613,7 @@ class AnthropicAdapter(
                     if (pl.jclab.refio.core.services.monitoring.GlobalMetrics.isCancelled()) {
                         logger.info { "$logPrefix Streaming cancelled by user - returning partial response" }
                         finalStopReason = "cancelled"
+                        sawTerminator = true
                         break
                     }
 
@@ -757,6 +764,9 @@ class AnthropicAdapter(
                                         @Suppress("UNCHECKED_CAST")
                                         val delta = chunk["delta"] as? Map<String, Any?>
                                         finalStopReason = delta?.get("stop_reason") as? String
+                                        if (finalStopReason != null) {
+                                            sawTerminator = true
+                                        }
 
                                         @Suppress("UNCHECKED_CAST")
                                         val usage = chunk["usage"] as? Map<String, Any?>
@@ -765,6 +775,7 @@ class AnthropicAdapter(
 
                                     "message_stop" -> {
                                         logger.debug { "$logPrefix Stream complete" }
+                                        sawTerminator = true
                                         break
                                     }
                                 }
@@ -778,6 +789,17 @@ class AnthropicAdapter(
                         }
                     }
                 }
+            }
+
+            // The server closed the connection mid-answer, without message_stop and without a stop
+            // reason. Keep what was streamed - it is still the model's work - but record the
+            // cut-off so the turn does not read a half-written envelope as a finished prose reply.
+            if (!sawTerminator && finalStopReason == null && contentBuilder.isNotEmpty()) {
+                logger.warn {
+                    "$logPrefix Stream ended without message_stop or stop_reason after " +
+                        "${contentBuilder.length} chars - reporting the response as truncated"
+                }
+                finalStopReason = StreamFinishReason.TRUNCATED
             }
 
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()

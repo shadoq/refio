@@ -49,7 +49,10 @@ class ToolFactory(
     // CLI/headless falls back to the word-boundary text engine.
     private val refactorer = structuralRefactorer ?: TextStructuralRefactorer(sandbox, fileLimits)
     private val registry = toolRegistry
-    private val processManager = ProcessManager()
+    // Owned by the registry, not by this factory: the factory is discarded right after it fills the
+    // registry, while the background processes (and the reaper thread behind them) have to live as
+    // long as the tools do and be released with them.
+    private val processManager = ProcessManager().also { toolRegistry.addCloseable(it) }
     private val networkPolicy = NetworkPolicy(configService)
     // One SSRF guard shared by every outbound tool, so http_request and fetch_webpage can never
     // diverge. The loopback opt-in is resolved per call to honour run-scope config overrides.

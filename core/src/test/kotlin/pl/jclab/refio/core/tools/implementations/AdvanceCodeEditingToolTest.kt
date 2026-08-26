@@ -774,6 +774,88 @@ class AdvanceCodeEditingToolTest {
             assertTrue(result.success)
             assertEquals("new code", Files.readString(tempDir.resolve("test.kt")))
         }
+
+        @Test
+        fun `should extract the whole file when generated content contains a nested code fence`() = runBlocking {
+            // A README wrapped in ```markdown legitimately contains its own ```bash block starting at
+            // column 0. Extraction must close on the fence that balances the outer one; stopping at the
+            // first inner fence writes only the text before it and silently loses the rest of the file
+            // while the tool still reports success.
+            Files.writeString(tempDir.resolve("README.md"), "old")
+
+            val generated = "# Title\n\nRun this:\n\n```bash\necho hi\n```\n\nDone."
+
+            coEvery {
+                mockLLMClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    temperature = any(),
+                    maxTokens = any(),
+                    stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null,
+                    subtaskId = null,
+                    source = "AdvCodeEditor"
+                )
+            } returns LLMResponse(
+                content = "```markdown\n$generated\n```",
+                usage = LLMUsage(inputTokens = 100, outputTokens = 50, totalTokens = 100 + 50),
+                cost = 0.001,
+                model = "test-model",
+                provider = "test-provider"
+            )
+
+            // When
+            val result = tool.execute(mapOf(
+                "path" to "README.md",
+                "edit_description" to "Document the run command"
+            ))
+
+            // Then
+            assertTrue(result.success)
+            assertEquals(generated, Files.readString(tempDir.resolve("README.md")))
+        }
+
+        @Test
+        fun `should keep the trailing newline the model emitted before the closing fence`() = runBlocking {
+            // A text file that ends with a newline must stay that way; trimming the extracted block
+            // strips the final newline and makes every regenerated file lose its POSIX line ending.
+            Files.writeString(tempDir.resolve("script.py"), "old")
+
+            coEvery {
+                mockLLMClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    temperature = any(),
+                    maxTokens = any(),
+                    stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null,
+                    subtaskId = null,
+                    source = "AdvCodeEditor"
+                )
+            } returns LLMResponse(
+                content = "```python\nprint('hi')\n\n```",
+                usage = LLMUsage(inputTokens = 100, outputTokens = 50, totalTokens = 100 + 50),
+                cost = 0.001,
+                model = "test-model",
+                provider = "test-provider"
+            )
+
+            // When
+            val result = tool.execute(mapOf(
+                "path" to "script.py",
+                "edit_description" to "Print a greeting"
+            ))
+
+            // Then
+            assertTrue(result.success)
+            assertEquals("print('hi')\n", Files.readString(tempDir.resolve("script.py")))
+        }
     }
 
     @Nested
@@ -1050,6 +1132,48 @@ class AdvanceCodeEditingToolTest {
                     source = any()
                 )
             }
+        }
+    }
+
+    @Nested
+    inner class LineEndingTests {
+
+        @Test
+        fun `should keep CRLF line endings when the model returns LF content`() = runBlocking {
+            // The prompt carries the file content, but the model answers in LF. Writing that back
+            // verbatim rewrites every line ending, turning a small edit into a full-file diff.
+            Files.write(
+                tempDir.resolve("test.kt"),
+                "line 1\r\nline 2\r\nline 3\r\n".toByteArray(Charsets.UTF_8)
+            )
+
+            coEvery {
+                mockLLMClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    temperature = any(),
+                    maxTokens = any(),
+                    stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null,
+                    subtaskId = null,
+                    source = any()
+                )
+            } returns LLMResponse(
+                content = "```kotlin\nline 1\nmodified line 2\nline 3\n```",
+                usage = LLMUsage(inputTokens = 100, outputTokens = 50, totalTokens = 150),
+                cost = 0.002,
+                model = "test-model",
+                provider = "test-provider"
+            )
+
+            val result = tool.execute(mapOf("path" to "test.kt", "edit_description" to "Modify line 2"))
+
+            assertTrue(result.success)
+            val written = String(Files.readAllBytes(tempDir.resolve("test.kt")), Charsets.UTF_8)
+            assertEquals("line 1\r\nmodified line 2\r\nline 3", written)
         }
     }
 

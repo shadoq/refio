@@ -14,7 +14,7 @@ class ConfigPrintViewTest {
     fun `isSecret detects api key fields but not normal keys`() {
         assertTrue(ConfigPrintView.isSecret("providers.openai.openai_api_key"))
         assertTrue(ConfigPrintView.isSecret("providers.anthropic.anthropic_api_key"))
-        assertFalse(ConfigPrintView.isSecret("agent.max_iterations"))
+        assertFalse(ConfigPrintView.isSecret("agent.max_consecutive_tool_errors"))
         assertFalse(ConfigPrintView.isSecret("providers.ollama.ollama_endpoint"))
     }
 
@@ -23,12 +23,12 @@ class ConfigPrintViewTest {
         val out = ConfigPrintView.render(
             listOf(
                 ConfigPrintView.Entry("providers.openai.openai_api_key", "sk-secret-123", isOverride = false),
-                ConfigPrintView.Entry("agent.max_iterations", "80", isOverride = false),
+                ConfigPrintView.Entry("agent.max_consecutive_tool_errors", "80", isOverride = false),
             )
         )
         assertFalse(out.contains("sk-secret-123"))
         assertTrue(out.contains("***redacted***"))
-        assertTrue(out.contains("agent.max_iterations = 80"))
+        assertTrue(out.contains("agent.max_consecutive_tool_errors = 80"))
     }
 
     @Test

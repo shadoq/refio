@@ -1,8 +1,17 @@
 package pl.jclab.refio.core.services.turn
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import pl.jclab.refio.core.api.TurnProfileOverrides
 import pl.jclab.refio.core.db.ExecutionMode
 import pl.jclab.refio.core.db.MessageRole
@@ -237,22 +246,78 @@ class TurnToolExecutor(
                 name == "invoke_subagent"
 
         /**
-         * Min number of PRIOR failed edits of the same file before the "change approach" nudge
-         * fires. 2 prior failures means the current (failing) call is the 3rd attempt.
+         * `manage_subagent` calls in [toolCalls] that DEFINE an agent (`create`/`update`, or a call
+         * that forgot `action` at all - that is still an attempt to set one up). `delete`/`list` are
+         * housekeeping and do not count.
+         *
+         * Defining an agent does nothing on its own: only `invoke_subagent` runs it. A model that
+         * keeps defining without ever invoking is stuck (observed: four turns spent creating and
+         * re-creating 'root-analyzer', zero analysis produced). Pure so it is unit-testable.
          */
-        const val REPEATED_FAILED_EDIT_THRESHOLD = 2
+        internal fun subagentDefinitionCalls(toolCalls: List<ToolCallData>): List<ToolCallData> =
+            toolCalls.filter { call ->
+                if (call.name != "manage_subagent") return@filter false
+                when (subagentArg(call, "action")) {
+                    null, "create", "update" -> true
+                    else -> false
+                }
+            }
 
-        /** Target file path of an edit tool call (path / file_path / file), or null. Pure. */
-        internal fun extractEditPath(argumentsJson: String): String? {
-            if (argumentsJson.isBlank()) return null
+        /** Agent names carried by [subagentDefinitionCalls], in call order, without blanks. */
+        internal fun subagentDefinitionNames(toolCalls: List<ToolCallData>): List<String> =
+            subagentDefinitionCalls(toolCalls).mapNotNull { subagentArg(it, "name") }
+
+        private fun subagentArg(call: ToolCallData, key: String): String? {
+            if (call.arguments.isBlank()) return null
             return try {
-                val map = TurnJsonUtils.parseJsonToMap(argumentsJson)
-                (map["path"] ?: map["file_path"] ?: map["file"])
+                TurnJsonUtils.parseJsonToMap(call.arguments)[key]
                     ?.toString()?.trim()?.takeIf { it.isNotBlank() }
             } catch (e: Exception) {
                 null
             }
         }
+
+        /**
+         * Consecutive agent DEFINITIONS (no `invoke_subagent` in between) after which the model is
+         * reminded that an agent has to be run. 2 = it defined one, then defined another instead of
+         * running the first.
+         */
+        const val SUBAGENT_INVOKE_NUDGE_THRESHOLD = 2
+
+        /**
+         * Min number of PRIOR failed edits of the same file before the "change approach" nudge
+         * fires. 2 prior failures means the current (failing) call is the 3rd attempt.
+         */
+        const val REPEATED_FAILED_EDIT_THRESHOLD = 2
+
+        /**
+         * Every file path an edit tool call is about to touch: the top-level target
+         * (path / file_path / file) plus the per-edit targets of a batch edit, which carries them
+         * as `edits[].path`. A batch edit writes several files, so callers that need the full set
+         * (snapshot-before-write) must use this; [extractEditPath] stays single-valued for the
+         * per-file heuristics built on it. Pure.
+         */
+        internal fun extractEditPaths(argumentsJson: String): List<String> {
+            if (argumentsJson.isBlank()) return emptyList()
+            return try {
+                val map = TurnJsonUtils.parseJsonToMap(argumentsJson)
+                val paths = mutableListOf<String>()
+                (map["path"] ?: map["file_path"] ?: map["file"])?.let { paths.add(it.toString()) }
+                (map["edits"] as? List<*>)?.forEach { edit ->
+                    (edit as? Map<*, *>)?.get("path")?.let { paths.add(it.toString()) }
+                }
+                paths.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+
+        /**
+         * Target file path of an edit tool call (path / file_path / file, else the first
+         * `edits[].path`), or null. Pure.
+         */
+        internal fun extractEditPath(argumentsJson: String): String? =
+            extractEditPaths(argumentsJson).firstOrNull()
 
         /**
          * True when a `read_file` call requests a specific line range (offset and/or limit). Such a
@@ -272,8 +337,8 @@ class TurnToolExecutor(
         /**
          * Path-writing tools whose SUCCESSFUL write makes a later same-path `read_file` redundant —
          * the write result's changeSummary (diff + line counts) is already in history. multi_edit is
-         * intentionally absent: its path lives in `edits[].path`, not a top-level `path`, so
-         * [extractEditPath] can't match it and it would never short-circuit anyway.
+         * intentionally absent: it can touch several files in one call and only the first one would
+         * be compared here, so suppressing a later read of any of them would be guesswork.
          */
         internal val PATH_WRITE_TOOL_NAMES = setOf(
             "create_new_file", "code_editing", "advance_code_editing", "multi_line_editor"
@@ -372,6 +437,78 @@ class TurnToolExecutor(
 
         /** Execution tools whose repeated back-to-back failures trigger the change-approach nudge. */
         val EXECUTION_TOOL_NAMES = setOf("run_code", "run_terminal_command")
+
+        /**
+         * Tools whose duration is dominated by waiting on the network or on a local model, so they
+         * get [TurnLoopConfig.networkToolTimeout] instead of the in-process budget. They are NOT
+         * exempted: an exemption would bring back the unbounded hang the budget exists to stop, and
+         * an HTTP client can stall well past its own timeout (a stalled TLS handshake, a server that
+         * dribbles bytes). MCP tools are matched by their `mcp_` name prefix - they run against an
+         * external server, so they belong here whatever the server calls them.
+         */
+        internal val NETWORK_BOUND_TOOLS = setOf(
+            "rag_search",
+            "web_search",
+            "http_request"
+        )
+
+        /** Name prefix given to every MCP-provided tool (see MCPToolWrapper). */
+        internal const val MCP_TOOL_PREFIX = "mcp_"
+
+        /**
+         * Tools exempt from the per-call wall-clock budget ([TurnLoopConfig.toolTimeout]), because
+         * their duration is dominated by something that already bounds itself and legitimately runs
+         * far longer than a local read:
+         *  - delegation runs a whole nested turn loop (bounded by its own iteration/cost guards);
+         *  - the LLM-backed editors and fetch_webpage are bounded by the provider api_timeout;
+         *  - the execution tools enforce their own wall-clock limit on the child process;
+         *  - ask_user waits for a human and sleep is a deliberate wait.
+         * Everything else is in-process CPU/filesystem work with no internal bound, which is exactly
+         * what the budget exists for.
+         */
+        internal val TIMEOUT_EXEMPT_TOOLS = setOf(
+            "invoke_subagent",
+            "delegate_to_strong_model",
+            "advance_code_editing",
+            "multi_line_editor",
+            "fetch_webpage",
+            "llm_call",
+            "run_terminal_command",
+            "run_code",
+            "run_process_background",
+            "ask_user",
+            "sleep"
+        )
+
+        /** Longest command shown in the approval line before it is cut short. */
+        internal const val COMMAND_DESCRIPTION_MAX_CHARS = 300
+
+        /**
+         * The command as shown to the user before they approve it. Newlines are folded so a
+         * multi-line script cannot push the interesting part out of a one-line panel, and only the
+         * TAIL is dropped when it is too long - the head carries the program being run, which is
+         * what the decision hangs on. Pure.
+         */
+        internal fun describeCommand(rawCommand: Any?): String {
+            val command = rawCommand?.toString()?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
+            if (command.isEmpty()) {
+                return ""
+            }
+            return if (command.length <= COMMAND_DESCRIPTION_MAX_CHARS) {
+                command
+            } else {
+                command.take(COMMAND_DESCRIPTION_MAX_CHARS) + "… (+${command.length - COMMAND_DESCRIPTION_MAX_CHARS} chars)"
+            }
+        }
+
+        /**
+         * What the agent is told when a call is abandoned. Names the budget and the way out, so the
+         * model narrows the call instead of retrying the same runaway one. Pure.
+         */
+        internal fun toolTimeoutMessage(toolName: String, timeoutMs: Long): String =
+            "Tool '$toolName' timed out after ${timeoutMs}ms and was aborted. Retry with a narrower " +
+                "scope (a more specific pattern, a smaller directory, a single file) instead of " +
+                "repeating the same call."
 
         /**
          * Min number of PRIOR consecutive execution failures before the change-approach nudge fires.
@@ -665,13 +802,131 @@ class TurnToolExecutor(
             return
         }
         try {
-            val path = extractEditPath(toolCall.arguments) ?: return
-            val snapshotId = snapshotService.createSnapshot(taskId, subtaskId, listOf(path))
+            val paths = extractEditPaths(toolCall.arguments)
+            if (paths.isEmpty()) {
+                // A write with no recognisable target leaves no restore point. Say so - a silent
+                // return is how the batch-edit gap (paths live in `edits[].path`) stayed invisible.
+                logger.warn {
+                    "[SNAPSHOT] No file path found in ${toolCall.name} arguments — write runs without " +
+                        "a restore point"
+                }
+                return
+            }
+            val snapshotId = snapshotService.createSnapshot(taskId, subtaskId, paths)
             if (snapshotId != null) {
                 subtaskRepository.linkSnapshot(subtaskId, snapshotId)
             }
         } catch (e: Exception) {
             logger.warn(e) { "[SNAPSHOT] Failed to create snapshot for ${toolCall.name}" }
+        }
+    }
+
+    /**
+     * Wall-clock budget for a single call of [toolName], in ms. 0 means "no budget" - see
+     * [TIMEOUT_EXEMPT_TOOLS].
+     */
+    private fun resolveToolTimeoutMs(toolName: String, config: TurnLoopConfig): Long {
+        if (toolName in TIMEOUT_EXEMPT_TOOLS) {
+            return 0
+        }
+        val budget = if (isNetworkBound(toolName)) config.networkToolTimeout else config.toolTimeout
+        return try {
+            budget.toMillis()
+        } catch (e: Exception) {
+            0
+        }
+    }
+
+    /** True for calls whose wall-clock is set by a remote server or a local model, not by this JVM. */
+    private fun isNetworkBound(toolName: String): Boolean =
+        toolName in NETWORK_BOUND_TOOLS || toolName.startsWith(MCP_TOOL_PREFIX)
+
+    /**
+     * Run [block] under a hard wall-clock budget of [timeoutMs] (0 disables it).
+     *
+     * Why not plain `withTimeout`: cancellation in coroutines is cooperative, so a tool that never
+     * suspends - a quadratic regex over one very long line, a blocking read - would keep the caller
+     * parked long past the deadline. Why not `runInterruptible`: it takes a *blocking* lambda, and
+     * `Tool.execute` is `suspend`, so the tool call cannot be handed to it.
+     *
+     * So the call runs in a detached coroutine on [Dispatchers.IO] with a watchdog beside it. When
+     * the watchdog fires, the caller is released with a normal error result, the worker is cancelled
+     * and its thread interrupted. The interrupt unblocks blocking IO; `java.util.regex` ignores it,
+     * which is why GrepSearchTool caps the length of a line it will match against.
+     */
+    private suspend fun executeWithBudget(
+        toolName: String,
+        timeoutMs: Long,
+        block: suspend () -> ToolResult
+    ): ToolResult {
+        if (timeoutMs <= 0) {
+            return block()
+        }
+
+        val handle = WorkerThreadHandle()
+        val outcome = CompletableDeferred<ToolResult>()
+        // Detached Job: the point is to be able to walk away from a tool that ignores cancellation.
+        val scope = CoroutineScope(currentCoroutineContext() + Dispatchers.IO + Job())
+        try {
+            scope.launch {
+                handle.attach(Thread.currentThread())
+                try {
+                    outcome.complete(block())
+                } catch (e: CancellationException) {
+                    // Abandoned by the watchdog or by the caller - the result is already decided.
+                } catch (e: Throwable) {
+                    outcome.completeExceptionally(e)
+                } finally {
+                    handle.detach()
+                }
+            }
+            scope.launch {
+                delay(timeoutMs)
+                if (outcome.complete(ToolResult.error(toolTimeoutMessage(toolName, timeoutMs)))) {
+                    logger.warn {
+                        "[TOOL_TIMEOUT] tool=$toolName exceeded ${timeoutMs}ms — abandoning the call " +
+                            "so the turn can continue"
+                    }
+                }
+            }
+            return outcome.await()
+        } finally {
+            // Reached as soon as the result is decided - by the tool, by the watchdog, or by the
+            // caller being cancelled. Stops the worker in all three cases; the interrupt is a no-op
+            // once the tool has left the thread.
+            scope.cancel()
+            handle.interrupt()
+        }
+    }
+
+    /**
+     * Lets the watchdog interrupt the worker thread without leaving a pooled thread interrupted
+     * after the tool has already finished (the interrupt would then hit an unrelated task).
+     */
+    private class WorkerThreadHandle {
+        private val lock = Any()
+        private var thread: Thread? = null
+        private var finished = false
+
+        fun attach(worker: Thread) {
+            synchronized(lock) { thread = worker }
+        }
+
+        /** Called on the worker thread itself, so clearing the flag clears it where it was set. */
+        fun detach() {
+            synchronized(lock) {
+                thread = null
+                finished = true
+                Thread.interrupted()
+            }
+        }
+
+        fun interrupt() {
+            synchronized(lock) {
+                if (!finished) {
+                    thread?.interrupt()
+                }
+            }
         }
     }
 
@@ -741,6 +996,32 @@ class TurnToolExecutor(
                 when (decision) {
                     is ToolApprovalService.ApprovalDecision.Approved -> { /* continue */ }
                     is ToolApprovalService.ApprovalDecision.Trusted -> { /* continue, pattern saved */ }
+                    is ToolApprovalService.ApprovalDecision.NotPermitted -> {
+                        // A rule said no to this one call, so the turn keeps going and the model is
+                        // told what was blocked - the same shape as any other failed tool result.
+                        // Naming the blocked call and telling it not to retry matters: without that
+                        // the model re-issues the identical command and burns the iteration budget.
+                        val errorText = "Error: not permitted — ${decision.reason ?: "no reason"}. " +
+                            "This call was blocked and retrying it will be blocked again; " +
+                            "reach the goal another way or continue without it."
+                        listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
+                        subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
+                        subtaskRepository.updateResult(
+                            subtaskId, result = null,
+                            errorMessage = "Not permitted: ${decision.reason ?: "no reason"}"
+                        )
+                        logger.info { "[NOT_PERMITTED] tool='${toolCall.name}': ${decision.reason ?: "no reason"}" }
+                        return ToolResultData(
+                            toolCallId = toolCall.id,
+                            subtaskId = subtaskId,
+                            content = errorText,
+                            isSummarized = false,
+                            success = false,
+                            rawOutput = null,
+                            metadata = null,
+                            notPermitted = true,
+                        )
+                    }
                     is ToolApprovalService.ApprovalDecision.Rejected -> {
                         val errorText = "Error: User rejected — ${decision.reason ?: "no reason"}"
                         // Drive the temp-message lifecycle to FAILED before throwing, so the
@@ -892,46 +1173,56 @@ class TurnToolExecutor(
             )
 
             val tExecStart = System.currentTimeMillis()
-            val toolResult = if (listener != null && toolCall.name in streamingToolNames) {
-                val subtask = subtaskRepository.findById(subtaskId)
-                    ?: throw IllegalStateException("Subtask not found for tool call: $subtaskId")
+            // Streaming editors snapshot inside ToolExecutor.executeToolsWithStreaming; every other
+            // write is snapshotted here, outside the time budget (a large file must not eat it).
+            val streamingListener = listener?.takeIf { toolCall.name in streamingToolNames }
+            if (streamingListener == null) {
+                maybeSnapshotBeforeWrite(taskId, subtaskId, toolCall, tool, _config)
+            }
+            val toolResult = executeWithBudget(
+                toolName = toolCall.name,
+                timeoutMs = resolveToolTimeoutMs(toolCall.name, _config)
+            ) {
+                if (streamingListener != null) {
+                    val subtask = subtaskRepository.findById(subtaskId)
+                        ?: throw IllegalStateException("Subtask not found for tool call: $subtaskId")
 
-                val executionListener = object : ExecutionEventListener {
-                    override fun onToolCodeGenerationStream(
-                        step: Subtask,
-                        toolName: String,
-                        filePath: String,
-                        streamContent: String,
-                        isComplete: Boolean
-                    ) {
-                        if (step.id == subtaskId) {
-                            listener.onToolStreamChunk(taskId, toolCall.id, "", streamContent)
+                    val executionListener = object : ExecutionEventListener {
+                        override fun onToolCodeGenerationStream(
+                            step: Subtask,
+                            toolName: String,
+                            filePath: String,
+                            streamContent: String,
+                            isComplete: Boolean
+                        ) {
+                            if (step.id == subtaskId) {
+                                streamingListener.onToolStreamChunk(taskId, toolCall.id, "", streamContent)
+                            }
                         }
                     }
+
+                    val executionResult = toolExecutor.executeToolsWithStreaming(
+                        toolCalls = listOf(toolCallRequest),
+                        subtask = subtask,
+                        listener = executionListener
+                    )
+
+                    val output = executionResult.outputs.firstOrNull()?.result
+                        ?: throw IllegalStateException("Missing tool output for ${toolCall.name}")
+
+                    ToolResult(
+                        success = output.success,
+                        output = output.output,
+                        error = output.error,
+                        metadata = output.metadata,
+                        filesChanged = output.affectedFiles,
+                        nextActionHints = output.nextActionHints,
+                        recovery = output.recovery,
+                        changeSummary = output.changeSummary
+                    )
+                } else {
+                    toolExecutor.executeTool(toolCallRequest, taskId)
                 }
-
-                val executionResult = toolExecutor.executeToolsWithStreaming(
-                    toolCalls = listOf(toolCallRequest),
-                    subtask = subtask,
-                    listener = executionListener
-                )
-
-                val output = executionResult.outputs.firstOrNull()?.result
-                    ?: throw IllegalStateException("Missing tool output for ${toolCall.name}")
-
-                ToolResult(
-                    success = output.success,
-                    output = output.output,
-                    error = output.error,
-                    metadata = output.metadata,
-                    filesChanged = output.affectedFiles,
-                    nextActionHints = output.nextActionHints,
-                    recovery = output.recovery,
-                    changeSummary = output.changeSummary
-                )
-            } else {
-                maybeSnapshotBeforeWrite(taskId, subtaskId, toolCall, tool, _config)
-                toolExecutor.executeTool(toolCallRequest, taskId)
             }
 
             val execMs = System.currentTimeMillis() - tExecStart
@@ -1234,6 +1525,10 @@ class TurnToolExecutor(
             "read_directory" -> params["path"]?.toString() ?: ""
             "file_search" -> "pattern: ${params["pattern"]}"
             "grep_search" -> "pattern: ${params["pattern"]}"
+            // The approval panel shows this line and nothing else, so it has to carry the command
+            // itself - approving a bare "run_terminal_command" is approving an unknown command.
+            "run_terminal_command" -> describeCommand(params["command"])
+            "run_process_background" -> describeCommand(params["command"])
             "code_editing" -> params["path"]?.toString() ?: ""
             "create_new_file" -> params["path"]?.toString() ?: ""
             "multi_edit" -> "${(params["edits"] as? List<*>)?.size ?: 0} files"

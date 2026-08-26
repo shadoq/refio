@@ -27,6 +27,12 @@ object SupportedModels {
      * - GPT-4 (original)
      * - GPT-3.5 Turbo (cost-effective)
      * - O1 series (reasoning models)
+     *
+     * The GPT-5.1 and GPT-5.2 Codex variants are deliberately absent: the direct OpenAI API no
+     * longer serves them for our key type (/v1/responses answers 404 model_not_found, and
+     * streaming yields an empty completion). Verified manually. They stay reachable through
+     * OpenRouter (openai/gpt-5.1-codex...), which uses the pattern-based whitelist further down.
+     * Newer Codex generations (5.3+) still work on the direct API and stay listed.
      */
     private val OPENAI_SUPPORTED = setOf(
         // GPT-5.6
@@ -54,23 +60,15 @@ object SupportedModels {
         "gpt-5.3-codex-max",
         "gpt-5.3-codex",
         "gpt-5.3-codex-mini",
-        // GPT-5.2
+        // GPT-5.2 - codex variants intentionally omitted, see the KDoc above
         "gpt-5.2",
         "gpt-5.2-mini",
         "gpt-5.2-nano",
-        "gpt-5.2-codex-max",
-        "gpt-5.2-codex",
-        "gpt-5.2-codex-mini",
         // GPT-5.1
-        "gpt-5.1-codex-max",
-        "gpt-5.1-codex",
-        // gpt-5.1-codex-mini is deliberately absent: OpenAI deprecated it on the direct API
-        // (/v1/responses returns 404 model_not_found). It stays reachable via OpenRouter
-        // (openai/gpt-5.1-codex-mini), which uses the pattern-based whitelist below.
         "gpt-5.1",
         "gpt-5.1-mini",
         "gpt-5.1-nano",
-        // GPT-5.1
+        // GPT-5
         "gpt-5",
         "gpt-5-mini",
         "gpt-5-nano",

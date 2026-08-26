@@ -64,6 +64,28 @@ class RenameSymbolTool(
                 )
             }
 
+            // Blast-radius gate. The text engine rewrites every project file containing the word,
+            // comments and string literals included, and nothing restores the ones it should not
+            // have touched. A rename that reaches this many files is far more likely to be a common
+            // word than a symbol, so it has to be asked for explicitly.
+            val confirmed = params["confirm_wide_rename"] == true
+            if (!confirmed) {
+                val affectedFiles = refactorer.findUsages(oldName).map { it.file }.distinct()
+                if (affectedFiles.size > WIDE_RENAME_FILE_LIMIT) {
+                    return ToolResult.error(
+                        message = "Renaming '$oldName' would rewrite ${affectedFiles.size} files, " +
+                            "over the $WIDE_RENAME_FILE_LIMIT-file limit for an unconfirmed rename.",
+                        recovery = "Check the list with find_usages. If every hit really is this symbol, " +
+                            "repeat the call with confirm_wide_rename=true; otherwise rename the " +
+                            "occurrences you mean with code_editing or multi_edit.",
+                        nextActionHints = listOf(
+                            "find_usages(symbol_name=\"$oldName\") to review what would change",
+                            "Re-run rename_symbol with confirm_wide_rename=true once the list looks right"
+                        )
+                    )
+                }
+            }
+
             logger.info { "Renaming symbol '$oldName' -> '$newName' (anchor $file:$line)" }
             val result = refactorer.renameSymbol(file, line, oldName, newName)
             val duration = (System.currentTimeMillis() - startTime).toInt()
@@ -128,9 +150,24 @@ class RenameSymbolTool(
                 "new_name" to mapOf(
                     "type" to "string",
                     "description" to "New symbol name (plain identifier)"
+                ),
+                "confirm_wide_rename" to mapOf(
+                    "type" to "boolean",
+                    "description" to "Allow a rename that rewrites more than $WIDE_RENAME_FILE_LIMIT files. " +
+                        "Review find_usages output first - the text engine also rewrites comments and string literals.",
+                    "default" to false
                 )
             ),
             "required" to listOf("file", "line", "old_name", "new_name")
         )
+    }
+
+    private companion object {
+        /**
+         * Above this many files a rename stops looking like a symbol and starts looking like a common
+         * word, so it needs `confirm_wide_rename`. Picked from the shape of real refactors: renames
+         * that big are rare, and the text engine has no preview and nothing to undo it with.
+         */
+        const val WIDE_RENAME_FILE_LIMIT = 20
     }
 }

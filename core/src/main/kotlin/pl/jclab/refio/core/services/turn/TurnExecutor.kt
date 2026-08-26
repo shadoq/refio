@@ -30,7 +30,6 @@ import pl.jclab.refio.core.llm.shouldUseNativeTools
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.debug.TurnFailureMarkerTracker
 import pl.jclab.refio.core.services.ConfigService
-import pl.jclab.refio.core.services.ConversationCompactor
 import pl.jclab.refio.core.services.LLMRetryHandler
 import pl.jclab.refio.core.services.NoopTaskVerifier
 import pl.jclab.refio.core.services.PendingUserMessageQueue
@@ -105,7 +104,6 @@ internal class TurnExecutor(
 
     // Optional dependencies for enhanced turn loop
     private val tokenEstimator: PromptTokenEstimator = PromptTokenEstimator(),
-    private val conversationCompactor: ConversationCompactor? = null,
     private val llmRetryHandler: LLMRetryHandler? = null,
     private val workingMemoryIntegration: WorkingMemoryIntegration? = null,
     private val pendingUserMessageQueue: PendingUserMessageQueue? = null,
@@ -154,16 +152,48 @@ internal class TurnExecutor(
         val agentInstanceId: String?,
         val agentName: String?,
         val agentDepth: Int?,
+        /** Needed by [finish] to tell an AGENT turn that delivered nothing from a PLAN turn that never could. */
+        val mode: TaskMode,
     ) {
-        fun finish(result: TurnResult, persistAssistantMessage: Boolean): TurnResult =
-            turnFinalizer.completeTurn(
+        /**
+         * Every terminal exit of the turn loop goes through here, which is why the running state is
+         * cleared here rather than at each of the ~20 return sites - only a handful of them used
+         * to do it, so an abort left the UI showing a live step and a Stop button for an agent
+         * that had already finished.
+         *
+         * The run-terminating AgentEvent needs the same single funnel but cannot live here: it is a
+         * suspending emission, and ~20 extra suspension points inside the loop body push its
+         * generated state machine past the JVM's 64 KB per-method limit. It is raised one level up,
+         * in [execute], which wraps every return of the loop plus the throwing path.
+         *
+         * A nested turn keeps the state alone: it shares this flow with the parent, which is
+         * still running and whose next iteration overwrites it anyway.
+         */
+        fun finish(result: TurnResult, persistAssistantMessage: Boolean): TurnResult {
+            // Say WHY a turn ended empty-handed. Without this every such run reached the reports as
+            // a bare INCOMPLETE, indistinguishable from a repetition loop. First marker wins, so a
+            // guardrail that already named the cause keeps its claim.
+            if (TurnDeliverable.stalledWithoutWriting(
+                    success = result.success,
+                    mode = mode,
+                    depth = depth,
+                    fileWriteToolsExecutedInTurn = result.toolsUsed.count { turnToolExecutor.isFileWriteTool(it) },
+                )
+            ) {
+                pl.jclab.refio.core.debug.TurnFailureMarkerTracker.record(
+                    taskId,
+                    pl.jclab.refio.core.debug.TurnFailureMarkerTracker.NO_FILE_WRITTEN,
+                )
+            }
+            return turnFinalizer.completeTurn(
                 taskId, result, listener, runId, parentRunId, depth,
                 persistAssistantMessage = persistAssistantMessage,
                 metadata = subagentMetadata,
                 agentInstanceId = agentInstanceId,
                 agentName = agentName,
                 agentDepth = agentDepth,
-            )
+            ).also { if (depth == 0) updateTurnState { TurnStateSnapshot() } }
+        }
 
         fun persist(
             role: MessageRole,
@@ -240,6 +270,23 @@ internal class TurnExecutor(
         }
     }
 
+    /**
+     * Runs the turn loop and marks the run terminal for the Agents Graph.
+     *
+     * The per-iteration TurnEnded only closes an iteration span (isFinal=false); without a final
+     * one the graph node - keyed by runId for subagents and by the session for the top level - is
+     * never flipped off RUNNING and lingers as "[RUNNING]" long after the turn finished. That key
+     * is a one-shot, so nothing later repairs it.
+     *
+     * The loop body has ~20 terminal returns; the event is raised here, around all of them, rather
+     * than at each site (only 4 used to have it, so every guardrail abort left a stuck node). The
+     * natural funnel one level down, [TurnPersistence.finish], cannot host it: making that method
+     * suspend adds ~20 suspension points to the loop body and its generated state machine then
+     * exceeds the JVM's 64 KB per-method limit.
+     *
+     * An exception escaping the loop is the one exit this wrapper does not cover - it is closed by
+     * the loop's own backstop catch, which knows the iteration it died on and rethrows.
+     */
     internal suspend fun execute(
         taskId: String,
         mode: TaskMode,
@@ -261,6 +308,67 @@ internal class TurnExecutor(
         /** Stable agent name for A2A routing — injected into tool params as AGENT_NAME. */
         agentName: String? = null
     ): TurnResult {
+        val result = executeLoop(
+            taskId, mode, executionMode, listener, streamCallback, model, provider,
+            userContextRefs, runProfile, profileOverrides, runId, parentRunId, depth,
+            source, userMessageStrategy, emitSessionId, emitSourceAgentId, agentName
+        )
+        emitTurnFinal(
+            taskId, emitSessionId, emitSourceAgentId, runId, parentRunId, depth,
+            iterations = result.iterations, success = result.success
+        )
+        return result
+    }
+
+    /** durationMs=0 so it doesn't double-count the iteration duration already reported. */
+    private suspend fun emitTurnFinal(
+        taskId: String,
+        emitSessionId: String?,
+        emitSourceAgentId: String?,
+        runId: String,
+        parentRunId: String?,
+        depth: Int,
+        iterations: Int,
+        success: Boolean,
+    ) {
+        emitTurnEvent(taskId) {
+            pl.jclab.refio.core.agents.events.AgentEvent.TurnEnded(
+                id = UUID.randomUUID().toString(),
+                sessionId = emitSessionId ?: taskId,
+                sourceAgentId = emitSourceAgentId ?: taskId,
+                timestamp = System.currentTimeMillis(),
+                correlationId = runId,
+                iteration = iterations,
+                durationMs = 0,
+                isFinal = true,
+                success = success,
+                runId = runId,
+                parentRunId = parentRunId,
+                depth = depth,
+            )
+        }
+    }
+
+    private suspend fun executeLoop(
+        taskId: String,
+        mode: TaskMode,
+        executionMode: ExecutionMode,
+        listener: TurnEventListener?,
+        streamCallback: StreamCallback?,
+        model: String?,
+        provider: String?,
+        userContextRefs: List<pl.jclab.refio.api.models.ContextReference>,
+        runProfile: TurnRunProfile,
+        profileOverrides: TurnProfileOverrides?,
+        runId: String,
+        parentRunId: String?,
+        depth: Int,
+        source: TurnSource,
+        userMessageStrategy: UserMessageStrategy,
+        emitSessionId: String?,
+        emitSourceAgentId: String?,
+        agentName: String?
+    ): TurnResult {
         // sessionId/sourceAgentId used in AgentEvent emissions. Default to taskId so
         // single-agent sessions remain self-contained; multi-agent overrides with parent ids.
         val evSessionId = emitSessionId ?: taskId
@@ -270,30 +378,8 @@ internal class TurnExecutor(
         val config = TurnLoopConfigs.forMode(mode)
         val maxIterations = turnLLMCaller.resolveMaxIterations(config, profileOverrides)
 
-        // Marks this run terminal for the Agents Graph. The per-iteration TurnEnded only closes an
-        // iteration span (isFinal=false); without a final one, the graph node - keyed by runId for
-        // subagents and by the session for the top level - is never flipped off RUNNING and lingers
-        // as "[RUNNING]" long after the turn finished. Emitted at every turn exit below.
-        // durationMs=0 so it doesn't double-count the iteration duration already reported.
-        suspend fun emitTurnFinal(success: Boolean) {
-            emitTurnEvent(taskId) {
-                pl.jclab.refio.core.agents.events.AgentEvent.TurnEnded(
-                    id = UUID.randomUUID().toString(),
-                    sessionId = evSessionId,
-                    sourceAgentId = evSourceAgentId,
-                    timestamp = System.currentTimeMillis(),
-                    correlationId = runId,
-                    iteration = iteration,
-                    durationMs = 0,
-                    isFinal = true,
-                    success = success,
-                    runId = runId,
-                    parentRunId = parentRunId,
-                    depth = depth,
-                )
-            }
-        }
         val errorTracker = ToolErrorTracker(windowSize = config.errorWindowSize)
+        val deniedTracker = TurnGuardrails.ConsecutiveDeniedToolTracker()
         // Unified repetition tracker — catches two overlapping "stuck on same object"
         // failure modes with a single state: (a) the same (tool, target) pair invoked
         // many times total, and (b) the same tool producing byte-identical output on
@@ -354,6 +440,13 @@ internal class TurnExecutor(
         // MAX_REGENERATION_NUDGES; per-path counts persist for the whole turn (one user request).
         val fullRegenCountByPath = mutableMapOf<String, Int>()
         var regenerationNudgeCount = 0
+        // "Define agents forever, never run one" soft guard: consecutive manage_subagent
+        // create/update calls with no invoke_subagent in between. Defining an agent produces
+        // nothing on its own, so this pattern means the model mistook setup for the work.
+        // Resets on any invoke_subagent; bounded to MAX_SUBAGENT_INVOKE_NUDGES per turn.
+        var consecutiveSubagentDefinitions = 0
+        val definedSubagentNames = linkedSetOf<String>()
+        var subagentInvokeNudgeCount = 0
         // Definitive-loop guard: counts consecutive failures of the SAME (tool + args).
         // Resets whenever arguments change, a different tool is used, or any tool succeeds.
         // Catches true retry loops while allowing the agent to explore with varied calls.
@@ -410,6 +503,7 @@ internal class TurnExecutor(
         val turnPersistence = TurnPersistence(
             taskId, listener, runId, parentRunId, depth,
             subagentMetadata, persistAgentInstanceId, persistAgentName, persistAgentDepth,
+            mode,
         )
 
         // For subagent turns, wrap the caller's streamCallback so each token delta is ALSO
@@ -496,6 +590,12 @@ internal class TurnExecutor(
         // change mid-turn, so resolve once here and re-read only the live task cost per iteration.
         val maxCostUsd = configService.getTyped(ConfigKeys.AGENT_MAX_COST_USD, taskId)
 
+        // Per-turn wall-clock ceiling. This is what actually bounds a local model: its calls cost
+        // nothing, so the dollar ceiling above never trips and the iteration cap would be the only
+        // brake left.
+        val maxTurnMinutes = configService.getTyped(ConfigKeys.AGENT_MAX_TURN_MINUTES, taskId)
+        val turnStartMs = System.currentTimeMillis()
+
         try {
             while (iteration < maxIterations) {
                 if (GlobalMetrics.isCancelled()) {
@@ -524,6 +624,27 @@ internal class TurnExecutor(
                         )
                         return turnPersistence.finish(result, persistAssistantMessage = true)
                     }
+                }
+
+                // Wall-clock ceiling, checked in the same place and for the same reason as the
+                // cost one: stop before paying for another LLM call.
+                TurnBudgetGuard.check(
+                    elapsedMillis = System.currentTimeMillis() - turnStartMs,
+                    maxMinutes = maxTurnMinutes,
+                )?.let { breach ->
+                    val reason = TurnBudgetGuard.describe(breach)
+                    logger.warn { "[TURN_BUDGET_EXCEEDED] taskId=$taskId, iteration=$iteration - $reason" }
+                    val result = TurnResult(
+                        success = false,
+                        response = reason,
+                        iterations = iteration,
+                        tokensIn = totalTokensIn,
+                        tokensOut = totalTokensOut,
+                        cost = totalCost,
+                        toolsUsed = usedTools.distinct(),
+                        incomplete = true
+                    )
+                    return turnPersistence.finish(result, persistAssistantMessage = true)
                 }
 
                 // Emit TurnStarted for Session Trace panel
@@ -558,36 +679,6 @@ internal class TurnExecutor(
 
                     val iterationNativeToolSchemas = activeNativeToolSchemas
                     val useNativeTools = iterationNativeToolSchemas != null
-
-                    // Auto-compact if context window is filling.
-                    // ModelWindow.resolve honors the user's provider override
-                    // (PROVIDER_OLLAMA_CONTEXT_SIZE etc.) — getSafeTokenLimit alone did not,
-                    // which is why compaction never fired when the user shrunk the Ollama window.
-                    if (config.enableAutoCompaction && conversationCompactor != null) {
-                        val maxTokens = pl.jclab.refio.core.llm.ModelWindow.resolve(
-                            provider = effectiveProvider,
-                            model = effectiveModel,
-                            configService = configService,
-                            taskId = taskId,
-                        )
-                        val tempPrompt = buildPrompt(
-                            taskId, mode, iteration, maxIterations,
-                            userContextRefs, runProfile, profileOverrides,
-                            writeToolsExecutedInTurn, useNativeTools,
-                            nativeToolSchemas = iterationNativeToolSchemas,
-                            agentName = agentName, sessionId = evSessionId, modelId = effectiveModel, runId = runId
-                        )
-                        val (fits, estimated) = tokenEstimator.checkFits(tempPrompt, maxTokens, provider = effectiveProvider)
-
-                        if (!fits) {
-                            conversationCompactor.maybeCompact(
-                                taskId = taskId,
-                                currentTokens = estimated,
-                                maxTokens = maxTokens,
-                                threshold = config.compactionThreshold
-                            )
-                        }
-                    }
 
                     var prompt = buildPrompt(
                         taskId, mode, iteration, maxIterations,
@@ -642,7 +733,12 @@ internal class TurnExecutor(
                     // input-token count back so the next turn's budget math self-corrects per model.
                     val promptChars = prompt.systemPrompt.length +
                         prompt.messages.sumOf { it.content.length }
-                    TokenRatioCalibrator.observe(effectiveModel, promptChars, llmResponse.usage.inputTokens)
+                    TokenRatioCalibrator.observe(
+                        effectiveModel,
+                        promptChars,
+                        llmResponse.usage.inputTokens,
+                        truncationSuspected = pl.jclab.refio.core.debug.ContextOverflowTracker.didOverflow(taskId),
+                    )
 
                     // Generic context-overflow guard for providers that report the
                     // TRUE pre-truncation input count (cloud: OpenAI/Anthropic/Gemini). Ollama is
@@ -761,6 +857,8 @@ internal class TurnExecutor(
                             maxIterations = maxIterations,
                             state = recoveryState,
                             profileOverrides = profileOverrides,
+                            hasRestorableAnswer =
+                                guardianState.restorableResponse(usedTools.size) != null,
                         )) {
                             is LLMResponseRecovery.Decision.RecoverFromThinking -> {
                                 logger.warn {
@@ -837,6 +935,39 @@ internal class TurnExecutor(
                                         toolsUsed = usedTools.distinct()
                                     )
                                     return turnPersistence.finish(result, persistAssistantMessage = true)
+                                }
+                                // Second deliverable shape: an answer a guardian re-entry is holding.
+                                // The re-entry stashes the terminal answer the user already saw, and it
+                                // is also what pushes a native-channel turn onto the JSON contract. When
+                                // the model then returns nothing on that contract, the stash is the only
+                                // surviving record of a turn whose work is done - failing here discarded
+                                // a delivered answer (observed on ornith:35b: two subagents fixed both
+                                // files, the parent turn was still reported FAILED). Restore it, the way
+                                // the clean finalize path does.
+                                val restoredAnswer = guardianState.restorableResponse(usedTools.size)
+                                    ?.let { toolCallParser.extractTextResponse(it.content).ifEmpty { it.content } }
+                                    ?.takeIf { it.isNotBlank() }
+                                if (restoredAnswer != null) {
+                                    logger.warn {
+                                        "[TURN_EMPTY_CONTENT_RESTORED] taskId=$taskId, iteration=$iteration: " +
+                                            "empty JSON envelope after a guardian re-entry, restoring the " +
+                                            "pre-re-entry answer instead of failing the turn"
+                                    }
+                                    val result = TurnResult(
+                                        success = true,
+                                        response = restoredAnswer,
+                                        iterations = iteration,
+                                        tokensIn = totalTokensIn,
+                                        tokensOut = totalTokensOut,
+                                        cost = totalCost,
+                                        toolsUsed = usedTools.distinct()
+                                    )
+                                    // Already written as its own ASSISTANT row at re-entry - persisting
+                                    // again would duplicate it verbatim.
+                                    return turnPersistence.finish(
+                                        result,
+                                        persistAssistantMessage = !guardianState.captureAlreadyFinalized(usedTools.size),
+                                    )
                                 }
                                 logger.error {
                                     "[TURN_FAILED] Empty content from model in JSON mode " +
@@ -1176,7 +1307,7 @@ internal class TurnExecutor(
                         listener?.onToolBatchCompleted(taskId, batchSummary)
 
                         val tracking = trackToolBatch(
-                            toolResults, errorTracker, repetitionTracker, blockedTracker,
+                            toolResults, errorTracker, repetitionTracker, blockedTracker, deniedTracker,
                             consecutiveIdenticalFailures, lastFailureSignature
                         )
                         consecutiveIdenticalFailures = tracking.consecutiveIdenticalFailures
@@ -1269,6 +1400,28 @@ internal class TurnExecutor(
                             return turnPersistence.finish(result, persistAssistantMessage = true)
                         }
 
+                        // Same shape as the blocked-tool abort above, under its own name: the model
+                        // was told a blocked command stays blocked and kept asking anyway.
+                        val deniedAbort = tracking.deniedAbort
+                        if (deniedAbort != null) {
+                            logger.warn { "[DENIED_TOOL_ABORT] taskId=$taskId, reason=${deniedAbort.reason}" }
+                            pl.jclab.refio.core.debug.TurnFailureMarkerTracker.record(
+                                taskId,
+                                pl.jclab.refio.core.debug.TurnFailureMarkerTracker.TOOL_DENIED_REPEATEDLY,
+                            )
+                            val deniedResult = TurnResult(
+                                success = false,
+                                response = deniedAbort.reason,
+                                iterations = iteration,
+                                tokensIn = totalTokensIn,
+                                tokensOut = totalTokensOut,
+                                cost = totalCost,
+                                toolsUsed = usedTools.distinct(),
+                                incomplete = true
+                            )
+                            return turnPersistence.finish(deniedResult, persistAssistantMessage = true)
+                        }
+
                         val writeToolCalls = turnToolExecutor.countWriteToolCalls(toolCalls)
                         val verificationToolCalls = turnToolExecutor.countVerificationToolCalls(toolCalls)
                         writeToolsExecutedInTurn += writeToolCalls
@@ -1336,6 +1489,39 @@ internal class TurnExecutor(
                                     toolCalls = null,
                                 )
                                 regenerationNudgeCount++
+                            }
+                        }
+
+                        // "Define agents forever, never run one" soft nudge. Top-level AGENT only.
+                        // manage_subagent only WRITES a definition; invoke_subagent is what runs it,
+                        // and the create result already says so - a model that keeps defining has
+                        // mistaken the setup for the work (observed: four turns creating and
+                        // re-creating the same 'root-analyzer', zero analysis produced). Non-blocking.
+                        if (mode == TaskMode.AGENT && depth == 0 && iteration < maxIterations) {
+                            if (toolCalls.any { it.name == "invoke_subagent" }) {
+                                consecutiveSubagentDefinitions = 0
+                                definedSubagentNames.clear()
+                            } else {
+                                consecutiveSubagentDefinitions +=
+                                    TurnToolExecutor.subagentDefinitionCalls(toolCalls).size
+                                definedSubagentNames += TurnToolExecutor.subagentDefinitionNames(toolCalls)
+                            }
+                            if (consecutiveSubagentDefinitions >= TurnToolExecutor.SUBAGENT_INVOKE_NUDGE_THRESHOLD &&
+                                subagentInvokeNudgeCount < MAX_SUBAGENT_INVOKE_NUDGES
+                            ) {
+                                logger.info {
+                                    "[SUBAGENT_INVOKE_NUDGE] taskId=$taskId, definitions=$consecutiveSubagentDefinitions, " +
+                                        "agents=${definedSubagentNames.joinToString(",")}, " +
+                                        "nudge=${subagentInvokeNudgeCount + 1}/$MAX_SUBAGENT_INVOKE_NUDGES"
+                                }
+                                turnPersistence.persist(
+                                    role = MessageRole.SYSTEM,
+                                    content = buildSubagentInvokeNudge(definedSubagentNames.toList()),
+                                    metadata = """{"type":"guardian_nudge"}""",
+                                    toolCalls = null,
+                                )
+                                subagentInvokeNudgeCount++
+                                consecutiveSubagentDefinitions = 0
                             }
                         }
 
@@ -1467,17 +1653,22 @@ internal class TurnExecutor(
                         ) {
                             val textRepeatStatus = textRepetitionTracker.record(contentForExtraction)
                             if (textRepeatStatus is TurnGuardrails.LoopStatus.ABORT) {
-                                logger.warn { "[TEXT_REPETITION] taskId=$taskId, iteration=$iteration: ${textRepeatStatus.reason}" }
-                                val result = TurnResult(
-                                    success = false,
-                                    response = textRepeatStatus.reason,
-                                    iterations = iteration,
-                                    tokensIn = totalTokensIn,
-                                    tokensOut = totalTokensOut,
-                                    cost = totalCost,
-                                    toolsUsed = usedTools.distinct()
+                                return finalizeTextRepetition(
+                                    taskId = taskId,
+                                    mode = mode,
+                                    executionMode = executionMode,
+                                    runProfile = runProfile,
+                                    iteration = iteration,
+                                    abortReason = textRepeatStatus.reason,
+                                    contentForExtraction = contentForExtraction,
+                                    llmResponse = llmResponse,
+                                    fileWriteToolsExecutedInTurn = fileWriteToolsExecutedInTurn,
+                                    usedTools = usedTools,
+                                    totalTokensIn = totalTokensIn,
+                                    totalTokensOut = totalTokensOut,
+                                    totalCost = totalCost,
+                                    turnPersistence = turnPersistence
                                 )
-                                return turnPersistence.finish(result, persistAssistantMessage = true)
                             }
                         }
                         // Detect "effectively empty" JSON envelope: model returned a complete object
@@ -1988,10 +2179,7 @@ internal class TurnExecutor(
                             "iterations" to iteration.toString(),
                             "agentName" to (profileOverrides?.subagentName ?: "default")
                         ))
-                        val finalResult = turnPersistence.finish(result, persistAssistantMessage = false)
-                        updateTurnState { TurnStateSnapshot() }
-                        emitTurnFinal(result.success)
-                        return finalResult
+                        return turnPersistence.finish(result, persistAssistantMessage = false)
                     }
                 } finally {
                     GlobalMetrics.endOperation(iterationToken)
@@ -2063,10 +2251,7 @@ internal class TurnExecutor(
                 cost = totalCost,
                 toolsUsed = usedTools.distinct()
             )
-            val finalResult = turnPersistence.finish(result, persistAssistantMessage = true)
-            updateTurnState { TurnStateSnapshot() }
-            emitTurnFinal(success = false)
-            return finalResult
+            return turnPersistence.finish(result, persistAssistantMessage = true)
         } catch (e: CancellationException) {
             updateTurnState { copy(phase = TurnPhase.FAILED) }
             hookService?.trigger("on_agent_error", mapOf(
@@ -2089,18 +2274,17 @@ internal class TurnExecutor(
                 cost = totalCost,
                 toolsUsed = usedTools.distinct()
             )
-            val finalResult = turnPersistence.finish(result, persistAssistantMessage = true)
-            updateTurnState { TurnStateSnapshot() }
-            emitTurnFinal(success = false)
-            return finalResult
+            return turnPersistence.finish(result, persistAssistantMessage = true)
         } catch (e: Exception) {
-            // Backstop for every other failure (e.g. a DB write throwing mid-turn). The specific
-            // catches above emit the terminal TurnEnded on their paths; without this one an
-            // uncaught exception escapes and the agent's graph node is never flipped off RUNNING.
-            // Best-effort emit (emitTurnEvent swallows), then rethrow so the caller still sees and
-            // reports the real error unchanged.
+            // Backstop for every other failure (e.g. a DB write throwing mid-turn). Returning exits
+            // get their terminal TurnEnded from the caller; an exception skips that, so without this
+            // the agent's graph node is never flipped off RUNNING. Best-effort emit (emitTurnEvent
+            // swallows), then rethrow so the caller still sees and reports the real error unchanged.
             updateTurnState { copy(phase = TurnPhase.FAILED) }
-            emitTurnFinal(success = false)
+            emitTurnFinal(
+                taskId, emitSessionId, emitSourceAgentId, runId, parentRunId, depth,
+                iterations = iteration, success = false
+            )
             throw e
         }
 
@@ -2125,10 +2309,74 @@ internal class TurnExecutor(
             cost = totalCost,
             toolsUsed = usedTools.distinct()
         )
-        val finalResult = turnPersistence.finish(result, persistAssistantMessage = true)
-        updateTurnState { TurnStateSnapshot() }
-        emitTurnFinal(success = false)
-        return finalResult
+        return turnPersistence.finish(result, persistAssistantMessage = true)
+    }
+
+    /**
+     * Terminal handling for the cross-iteration text-repetition guard: the model produced the same
+     * no-tool-call text twice, so no further progress is possible.
+     *
+     * Deliverable-aware, like every other terminal abort. Repeating itself is what a model does once
+     * its work is done and it has nothing new to say - the self-verification phase after a write is
+     * where this shows up. Failing there would throw away a finished turn (observed on local models
+     * building a single-page app: the write landed, the model then re-stated its sign-off twice and
+     * the turn was reported FAILED). With nothing delivered there is nothing to rescue, so the abort
+     * stands and the prose loop is still stopped.
+     *
+     * The answer TEXT counts as much as the write count: in PLAN a file deliverable is structurally
+     * impossible and a read-only subagent has no write tool at all, so for those the repeated text
+     * IS the deliverable and must be returned verbatim - the calling agent (or the user) asked for
+     * exactly that prose, and the canned sign-off would replace it with a claim about files.
+     *
+     * Extracted from `execute` to keep that method under the JVM's 64 KB per-method ceiling.
+     */
+    private suspend fun finalizeTextRepetition(
+        taskId: String,
+        mode: TaskMode,
+        executionMode: ExecutionMode,
+        runProfile: TurnRunProfile,
+        iteration: Int,
+        abortReason: String,
+        contentForExtraction: String,
+        llmResponse: pl.jclab.refio.core.llm.LLMResponse,
+        fileWriteToolsExecutedInTurn: Int,
+        usedTools: List<String>,
+        totalTokensIn: Int,
+        totalTokensOut: Int,
+        totalCost: Double,
+        turnPersistence: TurnPersistence
+    ): TurnResult {
+        logger.warn { "[TEXT_REPETITION] taskId=$taskId, iteration=$iteration: $abortReason" }
+        // Measure the model's prose, not the `{"actions":[],"response":"…"}` wrapper, or the
+        // envelope syntax alone would pass for an answer.
+        val repeatedText = toolCallParser.extractTextResponse(contentForExtraction)
+            .ifEmpty { contentForExtraction }
+        val deliverableProduced = TurnDeliverable.produced(
+            fileWriteToolsExecutedInTurn,
+            mode,
+            repeatedText,
+            isSubagent = runProfile == TurnRunProfile.SUBAGENT,
+        )
+        if (deliverableProduced) {
+            // Same as the clean exit: a PLAN answer that lists subtasks must still materialize
+            // them, or "success" would mean a plan whose structured half was silently dropped.
+            // No-op outside PLAN and for subagents.
+            turnResponseProcessor.tryCreatePlanSubtasks(taskId, mode, executionMode, llmResponse, runProfile)
+        }
+        val result = TurnResult(
+            success = deliverableProduced,
+            response = when {
+                !deliverableProduced -> abortReason
+                fileWriteToolsExecutedInTurn > 0 -> DELIVERABLE_STALL_SIGNOFF
+                else -> repeatedText
+            },
+            iterations = iteration,
+            tokensIn = totalTokensIn,
+            tokensOut = totalTokensOut,
+            cost = totalCost,
+            toolsUsed = usedTools.distinct()
+        )
+        return turnPersistence.finish(result, persistAssistantMessage = true)
     }
 
     /**
@@ -2542,6 +2790,8 @@ internal class TurnExecutor(
         val lastFailureSignature: String?,
         // Set when the model called unavailable (profile-blocked) tools too many times in a row.
         val blockedAbort: TurnGuardrails.LoopStatus.ABORT? = null,
+        // Set when the approval policy refused too many calls in a row.
+        val deniedAbort: TurnGuardrails.LoopStatus.ABORT? = null,
     )
 
     // Track error rate + definitive-loop detection + unified repetition tracker.
@@ -2552,6 +2802,7 @@ internal class TurnExecutor(
         errorTracker: ToolErrorTracker,
         repetitionTracker: TurnRepetitionTracker,
         blockedTracker: TurnGuardrails.ConsecutiveBlockedToolTracker,
+        deniedTracker: TurnGuardrails.ConsecutiveDeniedToolTracker,
         consecutiveIdenticalFailures: Int,
         lastFailureSignature: String?,
     ): ToolBatchTracking {
@@ -2562,6 +2813,8 @@ internal class TurnExecutor(
         var repetitionAbort: TurnGuardrails.LoopStatus.ABORT? = null
         // Set once the model has called unavailable (profile-blocked) tools too many times in a row.
         var blockedAbort: TurnGuardrails.LoopStatus.ABORT? = null
+        // Set once the approval policy refused too many calls in a row.
+        var deniedAbort: TurnGuardrails.LoopStatus.ABORT? = null
         // Name of the tool that triggered the repetition abort (for deliverable-aware
         // handling: a loop on an optional VERIFICATION tool after the work is done is not
         // the same as a loop that never produced the deliverable).
@@ -2573,7 +2826,15 @@ internal class TurnExecutor(
         for ((toolCall, result) in toolResults) {
             if (result.noop) noopCallIds.add(toolCall.id)
             val success = result.success
-            errorTracker.recordResult(success)
+            // A denial is the environment refusing, not the model failing: counting it as a tool
+            // error let our own policy push a working turn over the error-rate threshold.
+            if (!result.notPermitted) {
+                errorTracker.recordResult(success)
+            }
+            when (val deniedStatus = deniedTracker.record(result.notPermitted)) {
+                is TurnGuardrails.LoopStatus.ABORT -> if (deniedAbort == null) deniedAbort = deniedStatus
+                TurnGuardrails.LoopStatus.OK -> Unit
+            }
             // Arg-independent "wrong toolset" backstop: a run of profile-blocked calls aborts even
             // when varying args keep the definitive-loop signature resetting and the error window
             // stays diluted. First ABORT in the batch wins.
@@ -2625,6 +2886,7 @@ internal class TurnExecutor(
             consecutiveIdenticalFailures = consecutiveIdenticalFailures,
             lastFailureSignature = lastFailureSignature,
             blockedAbort = blockedAbort,
+            deniedAbort = deniedAbort,
         )
     }
 
@@ -2988,7 +3250,41 @@ internal class TurnExecutor(
         )
     }
 
+    private fun buildSubagentInvokeNudge(agentNames: List<String>): String = buildString {
+        val named = agentNames.filter { it.isNotBlank() }
+        appendLine("[⚠ progressive hint — you keep defining agents but never run one]")
+        appendLine(
+            if (named.isEmpty()) {
+                "You have called `manage_subagent` repeatedly without a single `invoke_subagent`."
+            } else {
+                "You have defined ${named.joinToString(", ") { "`$it`" }} with `manage_subagent`, " +
+                    "but you have not run any of them."
+            }
+        )
+        appendLine(
+            "`manage_subagent` only stores a definition — it does no work. Only " +
+                "`invoke_subagent(name=..., goal=...)` actually runs an agent, and a subagent is blind: " +
+                "its `goal` must be self-contained (exact task, relevant paths, required output format)."
+        )
+        appendLine("Do one of:")
+        appendLine(
+            if (named.isEmpty()) {
+                "  (1) run an existing agent now — `manage_subagent(action=\"list\")` shows what is available;"
+            } else {
+                "  (1) run `invoke_subagent(name=\"${named.first()}\", goal=\"...\")` NOW — " +
+                    "dispatch several in one response if they are independent;"
+            }
+        )
+        append(
+            "  (2) or drop the delegation and do the work yourself with the read/write tools — " +
+                "for a small job that is cheaper than a subagent."
+        )
+    }
+
     companion object {
+        /** At most one "you never invoke your agents" nudge per turn — a soft hint, never spam. */
+        private const val MAX_SUBAGENT_INVOKE_NUDGES = 1
+
         /**
          * After this many consecutive information-gathering calls (reads/searches) with no
          * write/persist/deliver, inject the consolidation nudge. Set above a normal multi-file

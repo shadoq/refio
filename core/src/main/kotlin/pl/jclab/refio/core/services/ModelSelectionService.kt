@@ -77,8 +77,8 @@ internal class ModelSelectionService(private val configService: ConfigService) {
             return fallbackModelForOperation(operation)
         }
 
-        if (config != null) {
-            val data = gson.fromJson(config.value, ModelConfigData::class.java)
+        val data = config?.let { parseModelConfig(it.value, label) }
+        if (data != null) {
             if (operation != ModelOperation.DEFAULT && isInheritedModelConfig(data)) {
                 logger.debug { "Using inherited $label model -> default model" }
                 return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
@@ -117,8 +117,8 @@ internal class ModelSelectionService(private val configService: ConfigService) {
         projectId: String? = null
     ): Pair<String, String>? {
         val config = configService.getConfigWithPrecedence(key = ConfigKeys.STRONG_MODEL.key, taskId = taskId, projectId = projectId)
-        if (config != null) {
-            val data = gson.fromJson(config.value, ModelConfigData::class.java)
+        val data = config?.let { parseModelConfig(it.value, "strong") }
+        if (data != null) {
             if (isInheritedModelConfig(data)) {
                 logger.debug { "Using inherited strong model -> default model" }
                 return getDefaultModel(ModelOperation.DEFAULT, taskId, projectId)
@@ -295,6 +295,16 @@ internal class ModelSelectionService(private val configService: ConfigService) {
         ModelOperation.EMBEDDING -> ConfigKeys.EMBEDDING_MODEL.key
         ModelOperation.STRONG -> ConfigKeys.STRONG_MODEL.key
     }
+
+    /**
+     * Model slots are stored as a `{modelId, provider}` document. A value in any other shape
+     * (a hand-written config override, a hand-edited row) is reported and treated as absent, so
+     * selection falls through to the YAML/fallback chain instead of failing the whole turn.
+     */
+    private fun parseModelConfig(raw: String, label: String): ModelConfigData? =
+        runCatching { gson.fromJson(raw, ModelConfigData::class.java) }
+            .onFailure { logger.warn { "Ignoring malformed $label model config '$raw': ${it.message}" } }
+            .getOrNull()
 
     private fun isInheritedModelConfig(data: ModelConfigData): Boolean {
         return data.modelId.equals(INHERIT_MODEL_VALUE, ignoreCase = true) &&

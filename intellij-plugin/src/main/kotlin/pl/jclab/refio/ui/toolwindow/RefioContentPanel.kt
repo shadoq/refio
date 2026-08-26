@@ -18,18 +18,22 @@ import pl.jclab.refio.ui.components.debug.DebugPanel
 import pl.jclab.refio.ui.components.context.ContextPanel
 import pl.jclab.refio.ui.components.history.HistoryPanel
 import pl.jclab.refio.ui.components.rag.RagViewPanel
-import pl.jclab.refio.ui.execution.TurnStateStatusBar
+import pl.jclab.refio.ui.execution.NowRunningBar
+import pl.jclab.refio.ui.RefioScreen
+import pl.jclab.refio.ui.rail.RefioRail
 import pl.jclab.refio.ui.settings.ApiLogsPanel
 import pl.jclab.refio.ui.settings.SettingsView
+import com.intellij.util.ui.JBUI
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.awt.BorderLayout
 import java.awt.CardLayout
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
 import java.beans.PropertyChangeListener
 import javax.swing.JPanel
-import javax.swing.JTabbedPane
 import javax.swing.SwingUtilities
 
 /**
@@ -63,11 +67,13 @@ class RefioContentPanel(
     private val historyPanel: HistoryPanel
     private var ragViewPanel: RagViewPanel? = null
 
-    private val turnStateStatusBar: TurnStateStatusBar
+    private val nowRunningBar: NowRunningBar
 
-    private val tabbedPane: JTabbedPane
-    private val baseTabs: List<Pair<String, java.awt.Component>>
-    private val advancedTabs: List<Pair<String, java.awt.Component>>
+    private val rail: RefioRail
+    private val screenCards: JPanel
+    private val screenCardLayout: CardLayout
+    private val screenComponents: Map<RefioScreen, java.awt.Component>
+    private var advancedViewEnabled = false
     private val middlePanel: JPanel
     private val cardLayout: CardLayout
     private val agentExecutionPanel: pl.jclab.refio.ui.components.agents.AgentExecutionPanel
@@ -109,10 +115,10 @@ class RefioContentPanel(
         statusBar = StatusBar(project)
         stepsQueueView = StepsQueueView(project)
         historyPanel = HistoryPanel(project, autoLoadOnInit = false)
-        // turnStateStatusBar and agentExecutionPanel stay eager: both are updated by
+        // nowRunningBar and agentExecutionPanel stay eager: both are updated by
         // session collectors below (turn-state stream / agent-event subscription) before
-        // their tab is ever shown, so they must exist up front.
-        turnStateStatusBar = TurnStateStatusBar()
+        // their screen is ever shown, so they must exist up front.
+        nowRunningBar = NowRunningBar(this) { promptInputPanel.stopCurrentOperation() }
         agentExecutionPanel = pl.jclab.refio.ui.components.agents.AgentExecutionPanel()
 
         cs.launch {
@@ -123,7 +129,9 @@ class RefioContentPanel(
                 if (turnStateFlow != null) {
                     turnStateJob = cs.launch {
                         turnStateFlow.collect { snapshot ->
-                            SwingUtilities.invokeLater { turnStateStatusBar.update(snapshot) }
+                            SwingUtilities.invokeLater {
+                                nowRunningBar.update(snapshot)
+                            }
                         }
                     }
                 }
@@ -140,50 +148,49 @@ class RefioContentPanel(
 
         chatView.addPropertyChangeListener("messagesUpdated", chatMessagesUpdatedListener)
 
+        // Single-column chat at every width: transcript only, no side timeline column.
         val chatPanel = JPanel(BorderLayout()).apply {
             background = LCATheme.backgroundColor
+            add(nowRunningBar, BorderLayout.NORTH)
             add(chatScrollPane, BorderLayout.CENTER)
             add(promptInputPanel, BorderLayout.SOUTH)
         }
 
         val stepsPanel = JPanel(BorderLayout()).apply {
-            add(turnStateStatusBar, BorderLayout.NORTH)
             add(stepsQueueView, BorderLayout.CENTER)
         }
 
-        baseTabs = listOf(
-            "Chat" to chatPanel,
-            "Execution" to stepsPanel
-        )
-        // Each heavy advanced panel is wrapped in a LazyTab and only built the first time
-        // its tab is entered. agentExecutionPanel is added directly because it must stay eager.
-        advancedTabs = listOf(
-            "Context" to LazyTab({ ContextPanel(project).also { contextPanel = it } }),
-            "Agents" to agentExecutionPanel,
-            "RAG" to LazyTab({ RagViewPanel(project).also { ragViewPanel = it } }),
-            "Debug" to LazyTab({
+        // Each heavy advanced screen is wrapped in a LazyTab and only built the first time
+        // it is shown. agentExecutionPanel is added directly because it must stay eager.
+        screenComponents = mapOf(
+            RefioScreen.CHAT to chatPanel,
+            RefioScreen.EXECUTION to stepsPanel,
+            RefioScreen.CONTEXT to LazyTab({ ContextPanel(project).also { contextPanel = it } }),
+            RefioScreen.AGENTS to agentExecutionPanel,
+            RefioScreen.RAG to LazyTab({ RagViewPanel(project).also { ragViewPanel = it } }),
+            RefioScreen.DEBUG to LazyTab({
                 DebugPanel(project).also {
                     debugPanel = it
                     it.agentTraceProvider = { agentExecutionPanel.toText() }
                 }
             }),
-            "Logs" to LazyTab({ LogsPanel(project).also { logsPanel = it } }),
-            "API" to LazyTab(
+            RefioScreen.LOGS to LazyTab({ LogsPanel(project).also { logsPanel = it } }),
+            RefioScreen.API to LazyTab(
                 create = { ApiLogsPanel(coreApiClient, autoLoadOnInit = false).also { apiLogsPanel = it } },
                 onShow = { apiLogsPanel?.ensureLoaded() }
             )
         )
 
-        tabbedPane = JTabbedPane().apply {
-            (baseTabs + advancedTabs).forEach { (title, component) -> addTab(title, component) }
-            addChangeListener {
-                val selected = if (selectedIndex >= 0) getComponentAt(selectedIndex) else null
-                (selected as? LazyTab)?.ensureShown()
-            }
+        screenCardLayout = CardLayout()
+        screenCards = JPanel(screenCardLayout).apply {
+            screenComponents.forEach { (screen, component) -> add(component, screen.name) }
         }
 
+        rail = RefioRail({ RefioScreen.visibleFor(advancedViewEnabled) }) { showScreen(it) }
+
         val normalContentPanel = JPanel(BorderLayout()).apply {
-            add(tabbedPane, BorderLayout.CENTER)
+            add(rail, BorderLayout.WEST)
+            add(screenCards, BorderLayout.CENTER)
             border = LCATheme.paddedBorder(0, 0, 2, 0)
         }
 
@@ -195,6 +202,8 @@ class RefioContentPanel(
 
         add(middlePanel, BorderLayout.CENTER)
         add(statusBar, BorderLayout.SOUTH)
+
+        installResponsiveness()
 
         cs.launch {
             try {
@@ -313,7 +322,7 @@ class RefioContentPanel(
 
         cardLayout.show(middlePanel, "NORMAL")
 
-        tabbedPane.selectedIndex = 0
+        openScreen(RefioScreen.CHAT)
 
         middlePanel.revalidate()
         middlePanel.repaint()
@@ -337,7 +346,7 @@ class RefioContentPanel(
 
         cardLayout.show(middlePanel, "NORMAL")
 
-        tabbedPane.selectedIndex = 0
+        openScreen(RefioScreen.CHAT)
 
         middlePanel.revalidate()
         middlePanel.repaint()
@@ -346,21 +355,70 @@ class RefioContentPanel(
     private fun updateStepsQueueVisibility(@Suppress("UNUSED_PARAMETER") mode: TaskMode) {
     }
 
+    /**
+     * Width bands the panel adapts to. Docked at 300 px and undocked at 1200 px are the same
+     * component, so the layout is chosen by band rather than by pixel.
+     */
+    private enum class Width { NARROW, NORMAL, WIDE }
+
+    private var currentWidth: Width? = null
+
+    private fun widthClassOf(px: Int): Width = when {
+        px < JBUI.scale(360) -> Width.NARROW
+        px < JBUI.scale(560) -> Width.NORMAL
+        else -> Width.WIDE
+    }
+
+    /**
+     * One listener on the root, not one per component: rebuilding on every pixel of a drag was
+     * what made resizing stutter, so the layout is only reapplied when the band actually changes.
+     */
+    private fun installResponsiveness() {
+        addComponentListener(object : ComponentAdapter() {
+            override fun componentResized(e: ComponentEvent) {
+                val next = widthClassOf(width)
+                if (next == currentWidth) return
+                currentWidth = next
+                applyWidthClass(next)
+            }
+        })
+    }
+
+    private fun applyWidthClass(width: Width) {
+        logger.debug { "Applying width class: $width" }
+        rail.setCompact(width == Width.NARROW)
+        statusBar.setLevel(
+            if (width == Width.NARROW) StatusBar.Level.MINIMAL else StatusBar.Level.NORMAL
+        )
+        promptInputPanel.setSendCompact(width == Width.NARROW)
+    }
+
+    /** Switches the rail and the card stack to [screen]. Safe to call from anywhere on EDT. */
+    fun openScreen(screen: RefioScreen) {
+        if (rail.selected == screen) {
+            showScreen(screen)
+        } else {
+            rail.select(screen)
+        }
+    }
+
+    private fun showScreen(screen: RefioScreen) {
+        screenCardLayout.show(screenCards, screen.name)
+        (screenComponents[screen] as? LazyTab)?.ensureShown()
+    }
+
     fun setAdvancedViewEnabled(enabled: Boolean) {
         logger.info { "Setting advanced view: $enabled" }
 
         javax.swing.SwingUtilities.invokeLater {
-            val desiredTabs = if (enabled) baseTabs + advancedTabs else baseTabs
-            val currentTitles = (0 until tabbedPane.tabCount).map { tabbedPane.getTitleAt(it) }
-            if (currentTitles != desiredTabs.map { it.first }) {
-                val selectedComponent = tabbedPane.selectedComponent
-                tabbedPane.removeAll()
-                desiredTabs.forEach { (title, component) -> tabbedPane.addTab(title, component) }
-                val restoredIndex = desiredTabs.indexOfFirst { it.second === selectedComponent }
-                tabbedPane.selectedIndex = if (restoredIndex >= 0) restoredIndex else 0
-                tabbedPane.revalidate()
-                tabbedPane.repaint()
+            if (advancedViewEnabled == enabled) return@invokeLater
+            advancedViewEnabled = enabled
+            // Leaving advanced mode while an advanced screen is open would strand the user on a
+            // screen with no rail button, so fall back to Chat.
+            if (!enabled && rail.selected.advancedOnly) {
+                rail.select(RefioScreen.CHAT)
             }
+            rail.refresh()
         }
     }
 
@@ -374,6 +432,8 @@ class RefioContentPanel(
         settingsView?.dispose()
         chatView.dispose()
         stepsQueueView.dispose()
+        historyPanel.dispose()
+        nowRunningBar.dispose()
         // Lazy advanced panels: dispose only the ones actually instantiated.
         contextPanel?.dispose()
         promptInputPanel.dispose()

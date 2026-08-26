@@ -80,48 +80,27 @@ object TokenEstimator {
     }
 
     /**
-     * Get model's max context size, with fallback.
+     * Get the model's max context window in tokens.
      *
-     * Priority: ModelDefinitions (single source of truth) -> ModelRegistry -> pattern-based fallback
+     * Thin wrapper over [ModelWindow.resolve] that only adds provider inference. This used to
+     * own a second resolution chain whose last resort was [ConfigService.DEFAULT_CONTEXT_SIZE],
+     * so the pre-flight check in [LLMClient] and the context budget disagreed: for a locally
+     * served model the budget sized the prompt against the configured window while pre-flight
+     * rejected it at 32 768, and no setting could raise that. There is now exactly one resolver.
      *
      * @param modelId Model identifier
-     * @param provider Provider name (openai, anthropic, ollama, openrouter). If null, will be inferred.
-     * @param configService Optional config service for dynamic lookup
-     * @return Max context tokens (defaults to 128000 if unknown)
+     * @param provider Provider name (openai, anthropic, ollama, openrouter). If null, inferred from [modelId].
+     * @param configService Config source; user overrides and the explicit ceiling are read from it.
+     * @param taskId Task scope for config lookups, when the caller has one.
      */
-    suspend fun getMaxContextForModel(
+    fun getMaxContextForModel(
         modelId: String,
         provider: String? = null,
-        configService: ConfigService? = null
-    ): Int {
-        return getDefaultContextSize(modelId, provider, configService)
-    }
-
-    /**
-     * Get default context size based on model definitions.
-     * Used as last resort when model is not in ModelDefinitions or ModelRegistry.
-     */
-    @Suppress("UNUSED_PARAMETER")
-    private suspend fun getDefaultContextSize(
-        modelId: String,
-        provider: String? = null,
-        _configService: ConfigService? = null
+        configService: ConfigService,
+        taskId: String? = null,
     ): Int {
         val resolvedProvider = provider ?: inferProvider(modelId)
-
-        val definition = ModelDefinitions.getDefinition(resolvedProvider, modelId)
-        if (definition != null) {
-            return definition.maxContext
-        }
-
-        // Do not trigger provider model discovery from the request hot path.
-        // At this stage we only trust static definitions or an already-warmed cache.
-        val modelConfig = getModelConfigFromCache(modelId)
-        if (modelConfig != null) {
-            return modelConfig.maxContext
-        }
-
-        return ConfigService.DEFAULT_CONTEXT_SIZE
+        return ModelWindow.resolve(resolvedProvider, modelId, configService, taskId)
     }
 }
 

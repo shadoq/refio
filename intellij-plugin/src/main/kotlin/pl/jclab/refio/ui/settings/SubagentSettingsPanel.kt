@@ -10,10 +10,13 @@ import com.intellij.ui.ToolbarDecorator
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
+import com.intellij.util.ui.JBUI
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.subagents.models.SubagentInfo
 import pl.jclab.refio.core.subagents.models.SubagentScope
 import pl.jclab.refio.core.logging.dualLogger
+import com.intellij.ui.dsl.builder.Align
+import com.intellij.ui.dsl.builder.panel
 import pl.jclab.refio.ui.theme.LCATheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -44,24 +47,21 @@ class SubagentSettingsPanel(
     private var isLoadingSubagents = false
 
     init {
-        border = LCATheme.createSettingsBorder("Subagents")
+        border = LCATheme.emptyBorder()
 
-        // Main content
-        val contentPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = LCATheme.paddedBorder(8, 0, 0, 0)
-            add(createSubagentsTable(), BorderLayout.CENTER)
+        val form = settingsForm {
+            group("Subagents") {
+                row {
+                    cell(createSubagentsTable()).align(Align.FILL).resizableColumn()
+                }.resizableRow()
+                    .rowComment(
+                        "Invoke a subagent from the prompt with the <b>!agent-name</b> prefix. " +
+                            "Built-in agents cannot be modified; add your own in .refio/agents/."
+                    )
+            }
         }
 
-        add(contentPanel, BorderLayout.CENTER)
-
-        // Description
-        val descPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
-            add(JLabel("<html><font color='gray'>" +
-                "Subagents are specialized AI assistants that can be invoked with <b>!agent-name</b> prefix.<br>" +
-                "Built-in agents cannot be modified. Create project or user agents in .refio/agents/ directory." +
-                "</font></html>"))
-        }
-        add(descPanel, BorderLayout.SOUTH)
+        add(settingsScrollPane(form), BorderLayout.CENTER)
 
         // Load subagents
         loadSubagents()
@@ -92,13 +92,17 @@ class SubagentSettingsPanel(
             }
         }
 
-        // Column widths
-        subagentsTable.columnModel.getColumn(0).preferredWidth = 150  // Name
-        subagentsTable.columnModel.getColumn(1).preferredWidth = 250  // Description
-        subagentsTable.columnModel.getColumn(2).preferredWidth = 100  // Model
-        subagentsTable.columnModel.getColumn(3).preferredWidth = 150  // Tools
-        subagentsTable.columnModel.getColumn(4).preferredWidth = 80   // Scope
-        subagentsTable.columnModel.getColumn(5).preferredWidth = 70   // Enabled
+        // Six columns have to survive dock width, so every minimum is deliberately small and the
+        // full value comes back on hover.
+        subagentsTable.fitColumns(
+            ColumnWidth(min = 56, preferred = 130),   // Name
+            ColumnWidth(min = 56, preferred = 200),   // Description
+            ColumnWidth(min = 44, preferred = 80),    // Model
+            ColumnWidth(min = 44, preferred = 120),   // Tools
+            ColumnWidth(min = 40, preferred = 70),    // Scope
+            ColumnWidth(min = 40, preferred = 56, max = 70)  // Enabled
+        )
+        subagentsTable.showFullValueOnHover()
 
         // Custom renderer for scope column
         val scopeRenderer = object : DefaultTableCellRenderer() {
@@ -160,7 +164,8 @@ class SubagentSettingsPanel(
             })
             .disableUpDownActions()
             .createPanel()
-            .apply { preferredSize = Dimension(700, 300) }
+            // Zero preferred width: the table must not be what decides how wide the page is.
+            .apply { preferredSize = Dimension(0, JBUI.scale(300)) }
     }
 
     private fun loadSubagents() {

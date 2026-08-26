@@ -16,8 +16,13 @@ private val logger = dualLogger("ProcessManager")
  *
  * Each process gets a daemon reader thread that continuously drains its merged
  * stdout/stderr into a bounded buffer, so a chatty child never blocks on a full
- * OS pipe. A JVM shutdown hook kills any still-running children so they are not
- * orphaned when the host process exits.
+ * OS pipe, plus a [ProcessTreeTracker] that retains the handles of its children.
+ * The tracker is what makes a self-backgrounding command (`server &`, `nohup …`)
+ * stoppable: the shell exits at once and the real process is reparented away, so
+ * without retained handles neither [stop] nor shutdown would reach it.
+ *
+ * "Running" therefore means the whole tree, not just the shell - an entry stays
+ * addressable (and reapable) for as long as anything it started is alive.
  */
 class ProcessManager(
     private val completedRetentionMs: Long = DEFAULT_COMPLETED_RETENTION_MS,
@@ -30,6 +35,12 @@ class ProcessManager(
         val process: Process,
         val startedAt: Long = System.currentTimeMillis()
     ) {
+        /** Retains handles of children that background themselves and reparent away. */
+        internal val tracker = ProcessTreeTracker(process, threadName = "process-tree-$processId")
+
+        /** Alive means the process OR anything it spawned - a backgrounded server included. */
+        internal fun isTreeAlive(): Boolean = tracker.isTreeAlive()
+
         /** Lines drained from the process but not yet consumed via readOutput(). */
         internal val pendingLines = ArrayDeque<String>()
         internal var pendingChars = 0
@@ -70,9 +81,11 @@ class ProcessManager(
     private val cleanupExecutor = Executors.newSingleThreadScheduledExecutor { task ->
         Thread(task, "process-manager-reaper").apply { isDaemon = true }
     }
+    // No isAlive check: a command that backgrounded itself leaves an exited shell behind, and
+    // skipping those is exactly how a server survived the host process and kept running.
     private val shutdownHook = Thread {
         for (managed in processes.values) {
-            if (managed.process.isAlive) destroyTree(managed.process)
+            reap(managed)
         }
     }
 
@@ -106,12 +119,12 @@ class ProcessManager(
 
     fun stop(processId: String) {
         val managed = processes.remove(processId) ?: return
-        destroyTree(managed.process)
+        reap(managed)
         logger.info { "Stopped process $processId" }
     }
 
     fun listRunning(): List<ManagedProcess> =
-        processes.values.filter { it.process.isAlive }.toList()
+        processes.values.filter { it.isTreeAlive() }.toList()
 
     /**
      * Returns output accumulated since the last call (up to maxLines) and whether
@@ -124,8 +137,11 @@ class ProcessManager(
 
             val lines = managed.take(maxLines)
 
-            val isRunning = managed.process.isAlive
-            if (!isRunning) processes.remove(processId)
+            val isRunning = managed.isTreeAlive()
+            if (!isRunning) {
+                processes.remove(processId)
+                managed.tracker.close()
+            }
 
             Pair(lines, isRunning)
         }
@@ -145,29 +161,33 @@ class ProcessManager(
         drain.start()
     }
 
+    /**
+     * Drops finished entries after the retention window. An entry whose tree is still alive is
+     * never dropped: losing it would leave a running server with no id to stop it by and outside
+     * the shutdown hook's reach.
+     */
     private fun evictExpiredProcesses() {
         val now = System.currentTimeMillis()
         processes.entries.removeIf { (_, managed) ->
-            !managed.process.isAlive && now - managed.startedAt >= completedRetentionMs
+            val expired = !managed.isTreeAlive() && now - managed.startedAt >= completedRetentionMs
+            if (expired) {
+                managed.tracker.close()
+            }
+            expired
         }
     }
 
     override fun close() {
         cleanupExecutor.shutdownNow()
-        processes.values.forEach { managed ->
-            if (managed.process.isAlive) destroyTree(managed.process)
-        }
+        processes.values.forEach { managed -> reap(managed) }
         processes.clear()
         runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }
     }
 
-    private fun destroyTree(process: Process) {
-        try {
-            process.toHandle().descendants().forEach { it.destroyForcibly() }
-        } catch (_: Exception) {
-            // Best effort: fall through to killing the root process.
-        }
-        process.destroyForcibly()
+    /** Kills the whole process tree and stops tracking it. */
+    private fun reap(managed: ManagedProcess) {
+        managed.tracker.destroyTree()
+        managed.tracker.close()
     }
 
     private fun shellWrap(cmd: String): List<String> =

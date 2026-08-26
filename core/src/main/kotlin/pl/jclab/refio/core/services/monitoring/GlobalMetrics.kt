@@ -9,6 +9,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.DoubleAdder
 
 /**
  * Global metrics service tracking all operations across all sessions.
@@ -37,8 +38,9 @@ object GlobalMetrics {
     private val _totalTokensIn = AtomicLong(0)
     private val _totalTokensOut = AtomicLong(0)
 
-    // Cost tracking
-    private val _totalCostUsd = AtomicLong(0) // Store as cents (x100)
+    // Cost tracking. Kept in dollars: a single request on a cheap model costs a fraction of a
+    // cent, so any integer-scaled accumulator truncates it away and reports a whole session as free.
+    private val _totalCostUsd = DoubleAdder()
 
     // Cache metrics
     val cacheMetrics = ConcurrentHashMap<String, CacheStats>()
@@ -115,7 +117,7 @@ object GlobalMetrics {
 
         _totalTokensIn.addAndGet(tokensIn.toLong())
         _totalTokensOut.addAndGet(tokensOut.toLong())
-        _totalCostUsd.addAndGet((costUsd * 100).toLong()) // Store as cents
+        _totalCostUsd.add(costUsd)
 
         updateMetricsSnapshot()
 
@@ -256,7 +258,7 @@ object GlobalMetrics {
         sb.appendLine("Requests: ${_totalRequests.get()} total, " +
             "${_successfulRequests.get()} success, ${_failedRequests.get()} failed")
         sb.appendLine("Tokens: ${_totalTokensIn.get()} in, ${_totalTokensOut.get()} out")
-        sb.appendLine("Cost: $${_totalCostUsd.get() / 100.0}")
+        sb.appendLine("Cost: $${"%.4f".format(java.util.Locale.US, _totalCostUsd.sum())}")
         sb.appendLine()
 
         // Cache metrics
@@ -296,7 +298,7 @@ object GlobalMetrics {
         _failedRequests.set(0)
         _totalTokensIn.set(0)
         _totalTokensOut.set(0)
-        _totalCostUsd.set(0)
+        _totalCostUsd.reset()
         cacheMetrics.clear()
         operationMetrics.clear()
 
@@ -315,7 +317,7 @@ object GlobalMetrics {
             failedRequests = _failedRequests.get(),
             totalTokensIn = _totalTokensIn.get(),
             totalTokensOut = _totalTokensOut.get(),
-            totalCostUsd = _totalCostUsd.get() / 100.0, // Convert cents to dollars
+            totalCostUsd = _totalCostUsd.sum(),
             currentOperation = _currentOperation.value
         )
     }
@@ -448,7 +450,7 @@ class AgentMetrics(val agentId: String) {
 
     private val _tokensIn = AtomicLong(0)
     private val _tokensOut = AtomicLong(0)
-    private val _costUsd = AtomicLong(0) // cents
+    private val _costUsd = DoubleAdder() // dollars; see GlobalMetrics cost tracking
 
     fun setCurrentOperation(op: OperationInfo) { _currentOperation.value = op }
     fun clearCurrentOperation() { _currentOperation.value = OperationInfo.Idle }
@@ -459,10 +461,10 @@ class AgentMetrics(val agentId: String) {
     fun recordTokens(tokensIn: Int, tokensOut: Int, costUsd: Double) {
         _tokensIn.addAndGet(tokensIn.toLong())
         _tokensOut.addAndGet(tokensOut.toLong())
-        _costUsd.addAndGet((costUsd * 100).toLong())
+        _costUsd.add(costUsd)
     }
 
     val totalTokensIn: Long get() = _tokensIn.get()
     val totalTokensOut: Long get() = _tokensOut.get()
-    val totalCostUsd: Double get() = _costUsd.get() / 100.0
+    val totalCostUsd: Double get() = _costUsd.sum()
 }

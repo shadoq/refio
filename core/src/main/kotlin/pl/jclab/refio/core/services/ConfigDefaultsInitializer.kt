@@ -2,15 +2,20 @@ package pl.jclab.refio.core.services
 
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.config.ConfigYaml
+import pl.jclab.refio.core.config.HierarchicalConfigLoader
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.db.repositories.ConfigRepository
 import pl.jclab.refio.core.llm.adapters.ZAIUrls
 import pl.jclab.refio.core.logging.dualLogger
+import java.io.File
+import java.nio.file.Path
+import java.security.MessageDigest
 /**
  * Owns the one-shot startup contract:
  *  1. [initializeDefaults] — seed DB with built-in defaults (only keys not already set).
- *  2. [loadFromYamlIfMissing] — merge user/project YAML into DB for missing keys only.
+ *  2. [loadFromYamlIfMissing] - merge user YAML into DB for missing keys only.
  *  3. [reloadFromYaml] — force reload from YAML, overwriting DB (invoked via Settings UI button).
+ *  4. [materializeProjectConfig] - turn the project config file into PROJECT-scoped rows.
  *
  * Extracted from [ConfigService] so the facade isn't 1000+ LOC.
  * Writes go through [configService.set] so cache invalidation stays consistent;
@@ -20,6 +25,8 @@ internal class ConfigDefaultsInitializer(
     private val configRepository: ConfigRepository,
     private val applyYaml: (ConfigYaml, Boolean) -> Int,
     private val invalidateAllCaches: () -> Unit,
+    private val projectRoot: Path? = null,
+    private val projectId: String? = null,
 ) {
     private val logger = dualLogger("ConfigDefaultsInitializer")
 
@@ -62,12 +69,109 @@ internal class ConfigDefaultsInitializer(
 
         logger.info { "Reloading all configuration from YAML file (overwriting DB)" }
         val updatedCount = applyYaml(yamlConfig, true)
-        logger.info { "Finished reloading configuration from YAML: $updatedCount keys updated" }
+        // The user file was just written over the whole APP scope, which clears the project rows
+        // for every key it touched; re-apply the project file so both files stay in effect.
+        val projectCount = materializeProjectConfig(force = true)
+        logger.info { "Finished reloading configuration from YAML: $updatedCount keys updated, $projectCount project keys" }
         invalidateAllCaches()
         return updatedCount
     }
 
+    /**
+     * Turn `<project>/.refio/config.yaml` into PROJECT-scoped rows so it wins over the built-in
+     * defaults seeded into APP scope, and loses to a per-task override - the documented
+     * TASK > PROJECT > APP order.
+     *
+     * The rows are rewritten only when the file's content changed since the last run (its digest
+     * is stored alongside them). That keeps the rule predictable in both directions: editing the
+     * file applies it on the next start, and changing the same setting afterwards in the UI keeps
+     * working, because that write drops the project row for that one key and no later start
+     * resurrects it until the file itself changes.
+     *
+     * @param force rewrite even when the file is unchanged (used by the explicit YAML reload).
+     * @return number of keys written.
+     */
+    fun materializeProjectConfig(force: Boolean = false): Int {
+        val root = projectRoot ?: return 0
+        val project = projectId ?: return 0
+        val file = ConfigYaml.getProjectConfigPath(root)
+
+        if (!file.exists()) {
+            return clearMaterializedRows(project)
+        }
+
+        val fingerprint = fingerprintOf(file)
+        val storedFingerprint = configRepository
+            .get(PROJECT_CONFIG_FINGERPRINT_KEY, ConfigScope.PROJECT, projectId = project)
+            ?.value
+        if (!force && storedFingerprint == fingerprint) {
+            logger.debug { "Project config unchanged since last run, keeping current values" }
+            return 0
+        }
+
+        val projectYaml = ConfigYaml.loadProjectConfig(root)
+        if (projectYaml == null) {
+            logger.warn { "Project config at ${file.absolutePath} could not be parsed, keeping previous values" }
+            return 0
+        }
+
+        // Read the project file alone (no user file merged underneath) so only what this project
+        // actually declares becomes a project-scoped value.
+        val projectOnly = HierarchicalConfigLoader.forSnapshot(projectYaml)
+        configRepository.deleteByScope(ConfigScope.PROJECT, projectId = project)
+
+        var count = 0
+        for (configKey in ConfigKeys.allKeys()) {
+            val value = configKey.yamlAccessor?.invoke(projectOnly)?.toString() ?: continue
+            configRepository.set(
+                key = configKey.key,
+                value = value,
+                scope = ConfigScope.PROJECT,
+                projectId = project,
+                description = PROJECT_ROW_DESCRIPTION,
+            )
+            logger.info { "Applied project config: ${configKey.key} = $value" }
+            count++
+        }
+        configRepository.set(
+            key = PROJECT_CONFIG_FINGERPRINT_KEY,
+            value = fingerprint,
+            scope = ConfigScope.PROJECT,
+            projectId = project,
+            description = PROJECT_ROW_DESCRIPTION,
+        )
+
+        logger.info { "Materialized project config from ${file.absolutePath}: $count keys" }
+        invalidateAllCaches()
+        return count
+    }
+
+    /** The project file is gone, so its values must stop applying. */
+    private fun clearMaterializedRows(project: String): Int {
+        val hadRows = configRepository
+            .get(PROJECT_CONFIG_FINGERPRINT_KEY, ConfigScope.PROJECT, projectId = project) != null
+        if (!hadRows) return 0
+
+        val deleted = configRepository.deleteByScope(ConfigScope.PROJECT, projectId = project)
+        logger.info { "Project config file removed, dropped $deleted project-scoped values" }
+        invalidateAllCaches()
+        return 0
+    }
+
+    private fun fingerprintOf(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(file.readBytes())
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
     companion object {
+        /**
+         * Digest of the project config file the current PROJECT-scoped rows were built from.
+         * Stored in the same scope so it is dropped together with them.
+         */
+        private const val PROJECT_CONFIG_FINGERPRINT_KEY = "project_config.fingerprint"
+
+        private const val PROJECT_ROW_DESCRIPTION = "From project config file"
+
         /**
          * (key, value, description) triples seeded on first run. Order is intentional —
          * UI toggles first, then models, then feature flags, then RAG/context/agent knobs.

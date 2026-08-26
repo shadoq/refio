@@ -177,8 +177,8 @@ enum class ToolCategory {
 
     /**
      * Tools that manage internal agent state (plans, memory, messages, subagents).
-     * Do not modify user files. Treated as sequential by ParallelToolExecutor
-     * despite being READ_ONLY in filesystem terms.
+     * Do not modify user files, so they are READ_ONLY in filesystem terms and the turn loop
+     * batches them like any other read (see TurnToolExecutor).
      */
     SYSTEM
 }
@@ -194,7 +194,7 @@ data class ChangeSummary(
     val addedLines: Int,
     /** Number of lines removed (per "-" lines in unified diff). */
     val removedLines: Int,
-    /** Unified diff (Myers algorithm, 3 lines context). Null for create-from-empty. */
+    /** Unified diff (LCS-based, 3 lines context). Null for create-from-empty. */
     val unifiedDiff: String? = null,
     /** SHA-256 hash of file content before edit. Null if file did not exist. */
     val oldHash: String? = null,
@@ -211,9 +211,18 @@ data class ChangeSummary(
      * but this flag lets callers and the agent distinguish a genuine edit from a
      * silent no-op — typically the LLM editor returned unchanged content, a search
      * pattern did not match, or the edit_description was too vague to apply.
+     *
+     * Decided on the content hashes when both are known: they cover the exact bytes, while the
+     * line counts come from a diff that ignores line endings. A rewrite that only swaps CRLF for
+     * LF changes every line ending on disk yet produces an empty line diff, and reporting that as
+     * "no changes applied" would hide a whole-file rewrite from the agent and the reviewer.
      */
     val noop: Boolean
-        get() = !created && addedLines == 0 && removedLines == 0
+        get() = when {
+            created -> false
+            oldHash != null && newHash != null -> oldHash == newHash
+            else -> addedLines == 0 && removedLines == 0
+        }
 }
 
 /**

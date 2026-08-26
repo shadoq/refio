@@ -1,11 +1,28 @@
 package pl.jclab.refio.ui.components.steps
 
+import com.intellij.icons.AllIcons
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.ActionGroup
+import com.intellij.openapi.actionSystem.ActionUpdateThread
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.openapi.ui.MessageDialogBuilder
+import com.intellij.ui.CollectionListModel
+import com.intellij.ui.DoubleClickListener
+import com.intellij.ui.HyperlinkLabel
 import com.intellij.ui.JBColor
+import com.intellij.ui.OnePixelSplitter
+import com.intellij.ui.PopupHandler
+import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.components.JBTextArea
+import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.core.api.SubtaskResponse
@@ -16,7 +33,6 @@ import pl.jclab.refio.ui.components.common.PromptDialog
 import kotlinx.coroutines.*
 import java.awt.*
 import java.awt.datatransfer.StringSelection
-import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.io.File
 import java.time.Instant
@@ -28,69 +44,82 @@ import javax.swing.event.AncestorListener
 import javax.swing.filechooser.FileNameExtensionFilter
 
 /**
- * Steps Queue View - displays subtasks (steps) for active session
+ * Steps Queue View - execution steps of the active session.
  *
- * Features:
- * - Read-only list of subtasks
- * - Status badges (new, pending, running, success, failed)
- * - Collapsible step details with expand/collapse
- * - Detailed tool parameters and execution results
- * - Per-step metrics (model, tokens, cost, time)
- * - Error messages for failed steps
+ * A plan is shown as a summary header plus one row per step, so a seven-step run fits on screen
+ * and the outcome (how many passed, how long it took, where the time went) is readable without
+ * opening anything. Selecting a failed step reveals its error under the list; the full payload
+ * stays behind the details dialog.
  */
-class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(BorderLayout()) {
+class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(BorderLayout()), Disposable {
 
     // Use EDT dispatcher for UI updates in IntelliJ
     private val cs = CoroutineScope(SupervisorJob())
     private val sessionManager = SessionManager.getInstance(project)
     private val stepExecutionService = StepExecutionService.getInstance(project)
     private val logger = dualLogger("StepsQueueView")
-    private val timestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault())
 
-    private val stepsPanel: JPanel
-    private val scrollPane: JBScrollPane
-    private val emptyStateLabel: JLabel
-    private val executionToolbar: JPanel
+    private val planSummary = PlanSummaryPanel()
+    private val listModel = CollectionListModel<StepRowView>()
+    private val stepList: JBList<StepRowView>
+    private val detailPanel = JPanel(BorderLayout())
+    private val splitter = OnePixelSplitter(true, "refio.exec.split", 0.7f)
+
+    private val subtasksById = mutableMapOf<String, SubtaskResponse>()
 
     // Execution control buttons (for enabling/disabling)
     private lateinit var replanBtn: JButton
     private lateinit var cancelAllBtn: JButton
 
     init {
-        border = LCATheme.paddedBorder(4)
-
-        // Buttons toolbar: Add Step | Resume | Re-plan | Delete All
-        executionToolbar = createExecutionToolbar()
-
-        // Steps list
-        stepsPanel = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            background = LCATheme.backgroundColor
+        stepList = JBList(listModel).apply {
+            cellRenderer = StepListRenderer()
+            fixedCellHeight = JBUI.scale(26)
+            selectionMode = ListSelectionModel.SINGLE_SELECTION
+            emptyText.text = "No steps planned"
+            emptyText.appendSecondaryText(
+                "Use Plan or Agent mode to create an execution plan",
+                SimpleTextAttributes.GRAYED_SMALL_ATTRIBUTES,
+                null
+            )
         }
 
-        scrollPane = JBScrollPane(stepsPanel).apply {
-            border = LCATheme.emptyBorder()
+        stepList.addListSelectionListener { event ->
+            if (!event.valueIsAdjusting) showDetailFor(stepList.selectedValue)
+        }
+
+        object : DoubleClickListener() {
+            override fun onDoubleClick(event: MouseEvent): Boolean {
+                val row = stepList.selectedValue ?: return false
+                openDetailsDialog(row)
+                return true
+            }
+        }.installOn(stepList)
+
+        PopupHandler.installPopupMenu(stepList, contextActions(), "Refio.Steps.Popup")
+
+        detailPanel.apply {
+            background = LCATheme.backgroundColor
+            border = JBUI.Borders.empty(6, 8)
+            isVisible = false
+        }
+
+        splitter.firstComponent = JBScrollPane(stepList).apply {
+            border = JBUI.Borders.empty()
             verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
             horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
         }
+        splitter.secondComponent = null
 
-        // Empty state
-        emptyStateLabel = JLabel(
-            "<html><div style='text-align: center; color: gray; font-style: italic;'>" +
-                    "No steps planned<br>" +
-                    "Use Plan/Agent mode to create execution plan" +
-                    "</div></html>"
-        ).apply {
-            horizontalAlignment = SwingConstants.CENTER
-            border = LCATheme.paddedBorder(20)
+        val header = JPanel(BorderLayout()).apply {
+            add(planSummary, BorderLayout.NORTH)
+            add(createExecutionToolbar(), BorderLayout.SOUTH)
         }
 
-        // Layout: Buttons (fixed) | Steps (scrollable)
-        add(executionToolbar, BorderLayout.NORTH)
-        add(scrollPane, BorderLayout.CENTER)
+        add(header, BorderLayout.NORTH)
+        add(splitter, BorderLayout.CENTER)
 
-        // Initially show empty state
-        showEmptyState()
+        planSummary.update(emptyList())
 
         // Observe subtasks
         cs.launch {
@@ -115,9 +144,9 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
             }
         }
 
-        // Auto-refresh subtasks when the panel becomes visible in the hierarchy — tab switches
-        // in the Agents/RAG/Debug/Logs/API tab-pane don't re-run init(), so without this the
-        // StateFlow shows whatever was last cached from a prior session tick.
+        // Auto-refresh subtasks when the panel becomes visible in the hierarchy — switching
+        // screens on the rail doesn't re-run init(), so without this the StateFlow shows whatever
+        // was last cached from a prior session tick.
         addAncestorListener(object : AncestorListener {
             override fun ancestorAdded(event: AncestorEvent?) {
                 if (sessionManager.activeSession.value == null) return
@@ -136,7 +165,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
         // Auto-refresh on step state changes. AgentEventBus.ToolCalled fires when a tool
         // finishes (subtask PENDING → SUCCESS/FAILED) and TurnEnded covers the case where a
         // whole turn batch just completed. Pulling the fresh list into the StateFlow keeps the
-        // view updated without waiting for the user to click ⟳ Refresh.
+        // view updated without waiting for the user to click Refresh.
         cs.launch {
             sessionManager.apiRouter.agentEventBus.events.collect { event ->
                 val triggersRefresh = event is pl.jclab.refio.core.agents.events.AgentEvent.ToolCalled ||
@@ -153,511 +182,131 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
         }
     }
 
-    private fun showEmptyState() {
-        stepsPanel.removeAll()
-        stepsPanel.add(emptyStateLabel)
-        stepsPanel.revalidate()
-        stepsPanel.repaint()
-    }
-
     private fun updateSteps(subtasks: List<SubtaskResponse>) {
         logger.debug { "updateSteps called with ${subtasks.size} subtasks" }
 
         SwingUtilities.invokeLater {
-            stepsPanel.removeAll()
+            val sorted = subtasks.sortedBy { it.orderIndex }
 
-            if (subtasks.isEmpty()) {
-                logger.debug { "Showing empty state" }
-                showEmptyState()
-                return@invokeLater
+            subtasksById.clear()
+            sorted.forEach { subtasksById[it.id] = it }
+
+            val rows = sorted.mapIndexed { index, subtask -> StepRowView.from(subtask, index + 1) }
+
+            val selectedId = stepList.selectedValue?.id
+            listModel.replaceAll(rows)
+            planSummary.update(rows)
+
+            val restored = rows.indexOfFirst { it.id == selectedId }
+            if (restored >= 0) {
+                stepList.selectedIndex = restored
+            } else {
+                showDetailFor(null)
             }
-
-            logger.debug { "Rendering ${subtasks.size} subtasks" }
-
-            // Sort by orderIndex to show steps in execution order
-            val sortedSubtasks = subtasks.sortedBy { it.orderIndex }
-            logger.debug { "Sorted ${sortedSubtasks.size} subtasks by orderIndex" }
-
-            // Render each step in order
-            sortedSubtasks.forEachIndexed { index, subtask ->
-                val stepNumber = index + 1
-                logger.debug { "Rendering step $stepNumber: ${subtask.description.take(50)} [${subtask.status}]" }
-
-                val itemPanel = createStepItem(subtask, stepNumber)
-                stepsPanel.add(itemPanel)
-
-                // Add small separator between steps
-                if (index < sortedSubtasks.size - 1) {
-                    stepsPanel.add(Box.createVerticalStrut(4))
-                }
-            }
-
-            // Push cards to the top so a lone card does not stretch to viewport height
-            stepsPanel.add(Box.createVerticalGlue())
-
-            stepsPanel.revalidate()
-            stepsPanel.repaint()
-            logger.debug { "UI updated successfully" }
         }
     }
 
-    private fun createStepItem(subtask: SubtaskResponse, stepNumber: Int): JPanel {
-        val card = object : JPanel() {
-            override fun getMaximumSize(): Dimension {
-                val preferred = preferredSize
-                return Dimension(Int.MAX_VALUE, preferred.height)
-            }
+    /**
+     * A failed step explains itself under the list. `JBList` cannot host variable-height rows
+     * sensibly, so the detail lives in the lower half of a splitter rather than inline.
+     */
+    private fun showDetailFor(row: StepRowView?) {
+        val error = row?.takeIf { it.state == StepRowView.State.FAILED }?.errorMessage
+
+        detailPanel.removeAll()
+
+        if (row == null || error == null) {
+            detailPanel.isVisible = false
+            splitter.secondComponent = null
+            return
         }
-        return card.apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+
+        val message = JBTextArea(error).apply {
+            isEditable = false
+            lineWrap = true
+            wrapStyleWord = true
+            font = JBUI.Fonts.create(Font.MONOSPACED, 11)
+            foreground = LCATheme.errorColor
             background = LCATheme.backgroundColor
-            border = BorderFactory.createCompoundBorder(
-                BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(LCATheme.borderColor, 1),
-                    BorderFactory.createMatteBorder(0, 4, 0, 0, getStripeColorForStatus(subtask.status))
-                ),
-                LCATheme.emptyBorder()
-            )
-
-            // Action buttons (compact)
-            val buttonsAndStatus = createCompactActions(subtask, stepNumber)
-            // Status badge
-            buttonsAndStatus.add(createStatusBadge(subtask.status))
-            add(buttonsAndStatus)
-
-            // Header (always visible)
-            val header = createCompactStepHeader(subtask, stepNumber)
-            add(header)
-
-            // Section: Metrics (show for PLANNED, RUNNING, SUCCESS, FAILED - whenever we have data)
-            val metricsSection = createMetricsSection(subtask)
-            if (metricsSection != null) {
-                add(metricsSection)
-            }
         }
-    }
 
-
-    private fun createCompactStepHeader(subtask: SubtaskResponse, stepNumber: Int): JPanel {
-        return JPanel(BorderLayout(8, 0)).apply {
+        val actions = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(8), 0)).apply {
             isOpaque = false
-            border = LCATheme.paddedBorder(6, 8)
-            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            toolTipText = "Click to open full step details"
-
-            val leftFixedPanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
-                isOpaque = false
-                preferredSize = Dimension(72, 24)
-                minimumSize = Dimension(72, 24)
-                add(JBLabel("Step $stepNumber:").apply {
-                    font = font.deriveFont(Font.BOLD, 12f)
-                })
-            }
-
-            val fullDesc = subtask.description.ifBlank { subtask.kind }
-            val descLabel = JBLabel(fullDesc).apply {
-                font = font.deriveFont(11f)
-                toolTipText = fullDesc
-            }
-
-            val rightPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 0)).apply {
-                isOpaque = false
-
-                val startedAt = subtask.startedAt
-                val finishedAt = subtask.completedAt ?: subtask.finishedAt
-                if (startedAt != null && finishedAt != null) {
-                    val executionMs = finishedAt - startedAt
-                    add(JBLabel(formatTime(executionMs)).apply {
-                        font = font.deriveFont(10f)
-                        foreground = LCATheme.grayColor
-                    })
-                }
-            }
-
-            add(leftFixedPanel, BorderLayout.WEST)
-            add(descLabel, BorderLayout.CENTER)
-            add(rightPanel, BorderLayout.EAST)
-
-            installHeaderClickHandler(this, subtask, stepNumber)
-            installHeaderClickHandler(leftFixedPanel, subtask, stepNumber)
-            installHeaderClickHandler(descLabel, subtask, stepNumber)
-            installHeaderClickHandler(rightPanel, subtask, stepNumber)
-        }
-    }
-
-    /**
-     * Create compact action buttons for header (icons only)
-     */
-    @Suppress("UNUSED_PARAMETER")
-    private fun createCompactActions(subtask: SubtaskResponse, _stepNumber: Int): JPanel {
-
-        val panel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0))
-
-        // Approve button (mark a planned/awaiting step as approved). The legacy "run this
-        // step now" execution was removed with the old plan/step model.
-        if (subtask.status == "PENDING_APPROVAL") {
-            panel.add(createCompactButton("✔", "Approve step") {
-                cs.launch {
-                    try {
-                        sessionManager.approveSubtask(subtask.id)
-                    } catch (e: Exception) {
-                        logger.error(e) { "Failed to approve step" }
-                    }
+            add(HyperlinkLabel("Show details").apply {
+                addHyperlinkListener { openDetailsDialog(row) }
+            })
+            add(HyperlinkLabel("Copy error").apply {
+                addHyperlinkListener {
+                    Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(error), null)
                 }
             })
         }
 
-        // Skip button
-        if (subtask.status in listOf("PENDING_APPROVAL", "PENDING", "PLANNED")) {
-            panel.add(createCompactButton("⏭", "Skip step") {
+        detailPanel.add(JBScrollPane(message).apply { border = JBUI.Borders.empty() }, BorderLayout.CENTER)
+        detailPanel.add(actions, BorderLayout.SOUTH)
+        detailPanel.isVisible = true
+        splitter.secondComponent = detailPanel
+        detailPanel.revalidate()
+        detailPanel.repaint()
+    }
+
+    private fun contextActions(): ActionGroup = DefaultActionGroup().apply {
+        add(object : DumbAwareAction("Approve Step", "Approve the selected step", AllIcons.Actions.Commit) {
+            override fun actionPerformed(e: AnActionEvent) {
+                val row = stepList.selectedValue ?: return
                 cs.launch {
                     try {
-                        sessionManager.skipSubtask(subtask.id)
-                    } catch (e: Exception) {
-                        logger.error(e) { "Failed to skip step" }
-                    }
-                }
-            })
-        }
-
-        return panel
-    }
-
-    /**
-     * Create compact icon button (20x20)
-     */
-    private fun createCompactButton(icon: String, tooltip: String, action: () -> Unit): JButton {
-        return JButton(icon).apply {
-            toolTipText = tooltip
-            isFocusPainted = false
-            isBorderPainted = false
-            isContentAreaFilled = false
-            preferredSize = Dimension(20, 20)
-            font = font.deriveFont(11f)
-            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            addActionListener { action() }
-        }
-    }
-
-    /**
-     * Create action buttons for a step
-     */
-    private fun createStepActions(subtask: SubtaskResponse, stepNumber: Int): JPanel {
-        return JPanel(FlowLayout(FlowLayout.CENTER, 2, 0)).apply {
-            isOpaque = false
-
-            // Approve button (mark an awaiting step approved). The legacy "run this step now"
-            // execution was removed with the old plan/step model.
-            if (subtask.status == "PENDING_APPROVAL") {
-                add(createActionButton("✔", "Approve this step") {
-                    cs.launch {
-                        try {
-                            sessionManager.approveSubtask(subtask.id)
-                            logger.info { "Approved step: ${subtask.id}" }
-                        } catch (e: Exception) {
-                            logger.error(e) { "Failed to approve step" }
-                        }
-                    }
-                })
-            }
-
-            // Skip button (only for PENDING_APPROVAL/PENDING/PLANNED steps)
-            if (subtask.status in listOf("PENDING_APPROVAL", "PENDING", "PLANNED")) {
-                add(createActionButton("⏭", "Skip this step") {
-                    cs.launch {
-                        try {
-                            sessionManager.skipSubtask(subtask.id)
-                            logger.info { "Skipped step: ${subtask.id}" }
-                        } catch (e: Exception) {
-                            logger.error(e) { "Failed to skip step" }
-                        }
-                    }
-                })
-            }
-
-            // Move Up button (only if not first step and not completed)
-            if (stepNumber > 1 && subtask.status !in listOf("SUCCESS", "FAILED", "RUNNING")) {
-                add(createActionButton("↑", "Move step up") {
-                    cs.launch {
-                        try {
-                            sessionManager.moveStepUp(subtask.id)
-                            logger.info { "Moved step up: ${subtask.id}" }
-                        } catch (e: Exception) {
-                            logger.error(e) { "Failed to move step up" }
-                        }
-                    }
-                })
-            }
-
-            // Move Down button (only if not last step and not completed)
-            val totalSteps = sessionManager.subtasks.value.size
-            if (stepNumber < totalSteps && subtask.status !in listOf("SUCCESS", "FAILED", "RUNNING")) {
-                add(createActionButton("↓", "Move step down") {
-                    cs.launch {
-                        try {
-                            sessionManager.moveStepDown(subtask.id)
-                            logger.info { "Moved step down: ${subtask.id}" }
-                        } catch (e: Exception) {
-                            logger.error(e) { "Failed to move step down" }
-                        }
-                    }
-                })
-            }
-
-            // Delete button (only for PENDING/PLANNED steps)
-            if (subtask.status in listOf("PENDING", "PLANNED")) {
-                add(createActionButton("✖", "Delete this step", isDestructive = true) {
-                    val confirmed = JOptionPane.showConfirmDialog(
-                        this@StepsQueueView,
-                        "Are you sure you want to delete this step?",
-                        "Confirm Deletion",
-                        JOptionPane.YES_NO_OPTION,
-                        JOptionPane.WARNING_MESSAGE
-                    ) == JOptionPane.YES_OPTION
-
-                    if (confirmed) {
-                        cs.launch {
-                            try {
-                                sessionManager.deleteStep(subtask.id)
-                                logger.info { "Deleted step: ${subtask.id}" }
-                            } catch (e: Exception) {
-                                logger.error(e) { "Failed to delete step" }
-                            }
-                        }
-                    }
-                })
-            }
-        }
-    }
-
-    /**
-     * Create small action button
-     */
-    private fun createActionButton(
-        icon: String,
-        tooltip: String,
-        isDestructive: Boolean = false,
-        action: () -> Unit
-    ): JButton {
-        return JButton(icon).apply {
-            toolTipText = tooltip
-            isFocusPainted = false
-            isBorderPainted = false
-            isContentAreaFilled = false
-            preferredSize = Dimension(24, 24)
-            font = font.deriveFont(12f)
-            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            if (isDestructive) {
-                foreground = LCATheme.redColor
-            }
-            addActionListener {
-                action()
-            }
-        }
-    }
-
-
-    private fun createToolsSection(subtask: SubtaskResponse): JPanel? {
-        val tools = parseToolsFromSubtask(subtask) ?: return null
-
-        return JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            isOpaque = false
-
-            val titleLabel = JBLabel("🔧 Tools Planned:").apply {
-                font = font.deriveFont(Font.BOLD, 11f)
-                foreground = LCATheme.grayColor
-            }
-            add(titleLabel)
-            add(Box.createVerticalStrut(4))
-
-            tools.forEach { tool ->
-                val toolPanel = JPanel(BorderLayout()).apply {
-                    isOpaque = false
-                    border = LCATheme.paddedBorder(0, 0, 0, 16)
-
-                    val toolLabel = JBLabel("• ${tool.name}").apply {
-                        font = font.deriveFont(Font.BOLD, 11f)
-                    }
-                    add(toolLabel, BorderLayout.NORTH)
-
-                    if (tool.args.isNotEmpty()) {
-                        val argsPanel = JPanel().apply {
-                            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-                            isOpaque = false
-                            border = LCATheme.paddedBorder(0, 0, 0, 16)
-
-                            tool.args.forEach { (key, value) ->
-                                val argLabel = JBLabel("- $key: ${formatArgValue(value)}").apply {
-                                    font = font.deriveFont(10f)
-                                    foreground = LCATheme.grayColor
-                                }
-                                add(argLabel)
-                            }
-                        }
-                        add(argsPanel, BorderLayout.CENTER)
-                    }
-                }
-                add(toolPanel)
-                add(Box.createVerticalStrut(4))
-            }
-        }
-    }
-
-    private fun createMetricsSection(subtask: SubtaskResponse): JPanel? {
-        // Calculate execution time from timestamps
-        val startedAtMs = subtask.startedAt
-        val finishedAtMs = subtask.completedAt ?: subtask.finishedAt
-        val executionMs = if (startedAtMs != null && finishedAtMs != null) {
-            finishedAtMs - startedAtMs
-        } else null
-
-        if (subtask.model == null && executionMs == null && subtask.latencyMs <= 0) return null
-
-        return JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            isOpaque = false
-
-            add(Box.createVerticalStrut(4))
-
-            // Compact metrics in flow layout (chips style)
-            val metricsRow = JPanel(FlowLayout(FlowLayout.LEFT, 8, 2)).apply {
-                isOpaque = false
-                border = LCATheme.paddedBorder(0, 0, 0, 12)
-
-                // Model chip
-                val subtaskModel = subtask.model
-                if (subtaskModel != null) {
-                    val modelText = if (subtask.provider != null) {
-                        "$subtaskModel (${subtask.provider})"
-                    } else {
-                        subtaskModel
-                    }
-                    add(createMetricChip("🤖", modelText))
-                }
-
-                // Time chip
-                if (executionMs != null) {
-                    add(createMetricChip("⏱", formatTime(executionMs)))
-                }
-
-                // Tokens chip
-                if (subtask.tokensIn > 0 || subtask.tokensOut > 0) {
-                    add(createMetricChip("📊", "${subtask.tokensIn}/${subtask.tokensOut}"))
-                }
-
-                // Cost chip
-                if (subtask.costUsd > 0.0) {
-                    add(createMetricChip("💰", "$${String.format("%.4f", subtask.costUsd)}"))
-                }
-            }
-            add(metricsRow)
-        }
-    }
-
-    /**
-     * Create compact metric chip (icon + value)
-     */
-    private fun createMetricChip(icon: String, value: String): JLabel {
-        return JLabel("$icon $value").apply {
-            font = font.deriveFont(10f)
-            foreground = LCATheme.grayColor
-            background = LCATheme.systemBubbleBackground
-            isOpaque = true
-            border = LCATheme.paddedBorder(2, 6)
-        }
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    private fun parseToolsFromSubtask(subtask: SubtaskResponse): List<ToolInfo>? {
-        try {
-            // Try step_plan_json first (from prepare endpoint)
-            subtask.stepPlanJson?.let { json ->
-                val gson = pl.jclab.refio.core.utils.GsonInstance.gson
-                val plan = gson.fromJson(json, Map::class.java)
-                val tools = plan["tools"] as? List<Map<String, Any>>
-                if (!tools.isNullOrEmpty()) {
-                    return tools.map { tool ->
-                        ToolInfo(
-                            name = tool["name"] as? String ?: "unknown",
-                            args = tool["args"] as? Map<String, Any> ?: emptyMap()
-                        )
+                        sessionManager.approveSubtask(row.id)
+                    } catch (ex: Exception) {
+                        logger.error(ex) { "Failed to approve step" }
                     }
                 }
             }
 
-            // Fallback to params_json
-            subtask.paramsJson?.let { json ->
-                val gson = pl.jclab.refio.core.utils.GsonInstance.gson
-                val params = gson.fromJson(json, Map::class.java)
-                val tools = params["tools"] as? List<Map<String, Any>>
-                if (!tools.isNullOrEmpty()) {
-                    return tools.map { tool ->
-                        ToolInfo(
-                            name = tool["name"] as? String ?: "unknown",
-                            args = tool["args"] as? Map<String, Any> ?: emptyMap()
-                        )
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabledAndVisible = stepList.selectedValue?.canApprove == true
+            }
+
+            override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+        })
+
+        add(object : DumbAwareAction("Skip Step", "Skip the selected step", AllIcons.Actions.Forward) {
+            override fun actionPerformed(e: AnActionEvent) {
+                val row = stepList.selectedValue ?: return
+                cs.launch {
+                    try {
+                        sessionManager.skipSubtask(row.id)
+                    } catch (ex: Exception) {
+                        logger.error(ex) { "Failed to skip step" }
                     }
                 }
             }
-        } catch (e: Exception) {
-            logger.debug { "Failed to parse tools: ${e.message}" }
-        }
-        return null
-    }
 
-    private fun formatArgValue(value: Any?): String {
-        return when (value) {
-            is String -> if (value.length > 50) "${value.take(47)}..." else value
-            is Map<*, *> -> "{...}"
-            is List<*> -> "[...] (${value.size} items)"
-            else -> value.toString()
-        }
-    }
-
-    private fun formatTime(ms: Long): String {
-        return when {
-            ms < 1000 -> "${ms}ms"
-            ms < 60_000 -> String.format("%.2fs", ms / 1000.0)
-            else -> {
-                val minutes = ms / 60_000
-                val seconds = (ms % 60_000) / 1000
-                "${minutes}m ${seconds}s"
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabledAndVisible = stepList.selectedValue?.canSkip == true
             }
-        }
-    }
 
-    private fun formatCost(cost: Double?): String? {
-        if (cost == null) return null
-        return "$${String.format("%.4f", cost)}"
-    }
+            override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+        })
 
-    private fun formatTimestamp(timestamp: Long?): String? {
-        return timestamp?.let { timestampFormatter.format(Instant.ofEpochMilli(it)) }
-    }
+        addSeparator()
 
-    private fun prettyJsonOrRaw(raw: String?): String? {
-        if (raw.isNullOrBlank()) return null
-        return try {
-            val gson = pl.jclab.refio.core.utils.GsonInstance.gson
-            gson.toJson(gson.fromJson(raw, Any::class.java))
-        } catch (_: Exception) {
-            raw
-        }
-    }
-
-    private fun installHeaderClickHandler(component: JComponent, subtask: SubtaskResponse, stepNumber: Int) {
-        component.addMouseListener(object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent) {
-                if (e.clickCount == 1 && SwingUtilities.isLeftMouseButton(e)) {
-                    showStepDetailsDialog(subtask, stepNumber)
-                }
+        add(object : DumbAwareAction("Show Details", "Open the full step payload", AllIcons.Actions.Preview) {
+            override fun actionPerformed(e: AnActionEvent) {
+                stepList.selectedValue?.let { openDetailsDialog(it) }
             }
+
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = stepList.selectedValue != null
+            }
+
+            override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
         })
     }
 
-    private fun showStepDetailsDialog(subtask: SubtaskResponse, stepNumber: Int) {
-        StepDetailsDialog(project, subtask, stepNumber, this::buildStepDetailsText).show()
+    private fun openDetailsDialog(row: StepRowView) {
+        val subtask = subtasksById[row.id] ?: return
+        StepDetailsDialog(project, subtask, row.number, this::buildStepDetailsText).show()
     }
 
     private fun buildStepDetailsText(subtask: SubtaskResponse, stepNumber: Int): String {
@@ -667,7 +316,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
             appendLine()
             appendLine("kind: ${subtask.kind}")
             appendLine("status: ${subtask.status}")
-            appendLine("description: ${subtask.description.orEmpty()}")
+            appendLine("description: ${subtask.description}")
             appendLine()
             appendLine("params_json:")
             appendLine(prettyJsonOrRaw(subtask.paramsJson).orEmpty())
@@ -691,64 +340,46 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
             appendLine("llm_provider: ${subtask.provider.orEmpty()}")
             appendLine("input_tokens: ${subtask.tokensIn}")
             appendLine("output_tokens: ${subtask.tokensOut}")
-            appendLine("cost_usd: ${formatCost(subtask.costUsd).orEmpty()}")
+            appendLine("cost_usd: ${String.format("%.4f", subtask.costUsd)}")
             appendLine("latency_ms: ${subtask.latencyMs}")
             appendLine()
-            appendLine("created_at: ${formatTimestamp(subtask.createdAt).orEmpty()}")
-            appendLine("updated_at: ${formatTimestamp(subtask.updatedAt).orEmpty()}")
-            appendLine("started_at: ${formatTimestamp(subtask.startedAt).orEmpty()}")
-            appendLine("completed_at: ${formatTimestamp(completedAt).orEmpty()}")
-            appendLine("finished_at: ${formatTimestamp(subtask.finishedAt).orEmpty()}")
+            appendLine("created_at: ${formatTimestamp(subtask.createdAt)}")
+            appendLine("updated_at: ${formatTimestamp(subtask.updatedAt)}")
+            appendLine("started_at: ${formatTimestamp(subtask.startedAt)}")
+            appendLine("completed_at: ${formatTimestamp(completedAt)}")
+            appendLine("finished_at: ${formatTimestamp(subtask.finishedAt)}")
         }
     }
 
-    private fun getStripeColorForStatus(status: String): Color {
-        return when (status) {
-            "PENDING_APPROVAL", "PLANNED" -> JBColor(Color(0xE6, 0x8A, 0x00), Color(0xD0, 0x8B, 0x3A))
-            "RUNNING" -> JBColor(Color(0x38, 0x74, 0xCB), Color(0x54, 0x8A, 0xF7))
-            "SUCCESS" -> JBColor(Color(0x2E, 0x7D, 0x32), Color(0x4C, 0xAF, 0x50))
-            "FAILED" -> JBColor(Color(0xC6, 0x28, 0x28), Color(0xE5, 0x53, 0x53))
-            else -> LCATheme.borderColor
+    private fun prettyJsonOrRaw(raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        return try {
+            val parsed = com.google.gson.JsonParser.parseString(raw)
+            com.google.gson.GsonBuilder().setPrettyPrinting().create().toJson(parsed)
+        } catch (_: Exception) {
+            raw
         }
     }
 
-    private fun createStatusBadge(status: String): JLabel {
-        val (text, bgColor) = when (status.uppercase()) {
-            "NEW" -> "NEW" to LCATheme.stepNewBackground
-            "PENDING" -> "PENDING" to LCATheme.stepPendingBackground
-            "PLANNED" -> "PLANNED" to LCATheme.stepPendingBackground
-            "RUNNING" -> "RUNNING" to LCATheme.stepRunningBackground
-            "SUCCESS" -> "SUCCESS" to LCATheme.stepSuccessBackground
-            "FAILED" -> "FAILED" to LCATheme.stepFailedBackground
-            "SKIPPED" -> "SKIPPED" to LCATheme.stepSkippedBackground
-            "CANCELED" -> "CANCELED" to LCATheme.stepCanceledBackground
-            else -> status.uppercase() to LCATheme.grayColor
-        }
-
-        return JLabel(text).apply {
-            font = font.deriveFont(Font.BOLD, 10f)
-            foreground = LCATheme.whiteColor
-            background = bgColor
-            isOpaque = true
-            border = LCATheme.paddedBorder(2, 6)
-        }
+    private fun formatTimestamp(timestamp: Long?): String {
+        if (timestamp == null || timestamp <= 0) return ""
+        return timestampFormatter.format(Instant.ofEpochMilli(timestamp))
     }
 
+    private val timestampFormatter =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault())
 
     /**
-     * Create execution toolbar with Resume/Re-plan/Cancel All buttons
+     * Toolbar above the list: refresh, re-plan, and the destructive clear kept apart on the right.
      */
     private fun createExecutionToolbar(): JPanel {
         val toolbar = JPanel(BorderLayout()).apply {
-            border = BorderFactory.createMatteBorder(0, 0, 1, 0, LCATheme.borderColor)
+            border = JBUI.Borders.customLineBottom(LCATheme.borderColor)
         }
-        val panel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 4))
+        val panel = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(6), JBUI.scale(3)))
 
-        // Refresh button — always active
-        val refreshBtn = JButton("⟳ Refresh").apply {
+        val refreshBtn = JButton("Refresh", AllIcons.Actions.Refresh).apply {
             toolTipText = "Refresh steps list"
-            preferredSize = Dimension(100, 28)
-            isEnabled = true
             addActionListener {
                 logger.info { "Refresh steps clicked" }
                 cs.launch {
@@ -763,10 +394,8 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
         }
         panel.add(refreshBtn)
 
-        // Re-plan button — delete pending first, then ask LLM for new plan
         replanBtn = JButton("Re-plan").apply {
             toolTipText = "Delete remaining steps and generate new plan"
-            preferredSize = Dimension(90, 28)
             isEnabled = false
             addActionListener {
                 logger.info { "Re-plan clicked" }
@@ -791,21 +420,16 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
         }
         panel.add(replanBtn)
 
-        // Delete All button — deterministic delete
-        cancelAllBtn = JButton("Delete All").apply {
+        cancelAllBtn = JButton("Clear").apply {
             toolTipText = "Delete all remaining steps"
-            preferredSize = Dimension(100, 28)
             foreground = LCATheme.redColor
             isEnabled = false
             addActionListener {
-                logger.info { "Delete all clicked" }
-                val confirmed = JOptionPane.showConfirmDialog(
-                    this@StepsQueueView,
-                    "Are you sure you want to delete all remaining steps?",
-                    "Confirm Deletion",
-                    JOptionPane.YES_NO_OPTION,
-                    JOptionPane.WARNING_MESSAGE
-                ) == JOptionPane.YES_OPTION
+                logger.info { "Clear steps clicked" }
+                val confirmed = MessageDialogBuilder
+                    .yesNo("Confirm Deletion", "Delete all remaining steps?")
+                    .asWarning()
+                    .ask(this@StepsQueueView)
 
                 if (confirmed) {
                     cs.launch {
@@ -819,8 +443,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
                 }
             }
         }
-        // Destructive action goes to the right edge, away from Refresh/Re-plan
-        val rightPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 4))
+        val rightPanel = JPanel(FlowLayout(FlowLayout.RIGHT, JBUI.scale(6), JBUI.scale(3)))
         rightPanel.add(cancelAllBtn)
 
         toolbar.add(panel, BorderLayout.WEST)
@@ -829,29 +452,7 @@ class StepsQueueView(private val project: Project) : JBPanel<StepsQueueView>(Bor
         return toolbar
     }
 
-    /**
-     * Show dialog to add new step
-     */
-    private fun showAddStepDialog() {
-        val description = PromptDialog.showAndGet(
-            title = "Add New Step",
-            label = "Enter step description:",
-            defaultText = ""
-        )
-
-        if (description != null && description.isNotBlank()) {
-            cs.launch {
-                try {
-                    sessionManager.sendMessage("Add step: $description")
-                    logger.info { "Add step request sent via AgentTurnLoop" }
-                } catch (e: Exception) {
-                    logger.error(e) { "Failed to send add step request via AgentTurnLoop" }
-                }
-            }
-        }
-    }
-
-    fun dispose() {
+    override fun dispose() {
         cs.cancel()
     }
 }

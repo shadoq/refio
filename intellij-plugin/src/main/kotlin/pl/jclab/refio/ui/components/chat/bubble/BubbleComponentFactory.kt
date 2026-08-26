@@ -92,32 +92,34 @@ internal class BubbleComponentFactory(
         private val NESTED_PARAM_KEYS = listOf("arguments", "args", "params", "tool_args")
     }
 
+    /**
+     * One compact caption line above a message.
+     *
+     * A full-height row with an emoji per message cost more vertical space than the messages it
+     * labelled, so the role (and optional detail such as the model) is a single small caps line.
+     */
     fun createBubbleHeader(
-        icon: String,
         title: String,
         subtitle: String? = null,
-        foregroundColor: Color = LCATheme.assistantBubbleForeground
+        @Suppress("UNUSED_PARAMETER") foregroundColor: Color = LCATheme.assistantBubbleForeground
     ): JPanel {
-        val headerPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
+        val headerPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 1)).apply {
             isOpaque = false
             alignmentX = Component.LEFT_ALIGNMENT
         }
 
-        headerPanel.add(JLabel(icon).apply {
-            font = LCATheme.bodyFont
-        })
-
-        headerPanel.add(JLabel(title).apply {
-            font = LCATheme.boldFont
-            foreground = foregroundColor
-        })
-
-        if (subtitle != null) {
-            headerPanel.add(JLabel(subtitle).apply {
-                font = LCATheme.bodyFont
-                foreground = LCATheme.mutedForeground
-            })
+        val caption = buildString {
+            append(title.uppercase())
+            if (!subtitle.isNullOrBlank()) {
+                append(" · ")
+                append(subtitle)
+            }
         }
+
+        headerPanel.add(JLabel(caption).apply {
+            font = LCATheme.smallFont
+            foreground = LCATheme.mutedForeground
+        })
 
         return headerPanel
     }

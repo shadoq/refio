@@ -720,6 +720,75 @@ class MultiLineEditorToolTest {
     }
 
     @Nested
+    inner class LineEndingTests {
+
+        @Test
+        fun `should keep CRLF line endings when editing a Windows file`() = runBlocking {
+            // The model is fed LF content and answers with LF. Writing that back verbatim rewrites
+            // every line ending in the file, so a one-line edit shows up in git as a full rewrite.
+            val crlf = "line 1\r\nline 2\r\nline 3\r\n"
+            Files.write(tempDir.resolve("test.kt"), crlf.toByteArray(Charsets.UTF_8))
+
+            stubEditorResponse(
+                """
+                ```json
+                {"changes": [{"line_start": 2, "line_end": 2, "new_content": "modified line 2", "description": "d"}]}
+                ```
+                """.trimIndent()
+            )
+
+            val result = tool.execute(mapOf("path" to "test.kt", "edit_description" to "Modify line 2"))
+
+            assertTrue(result.success)
+            val written = String(Files.readAllBytes(tempDir.resolve("test.kt")), Charsets.UTF_8)
+            assertEquals("line 1\r\nmodified line 2\r\nline 3\r\n", written)
+        }
+
+        @Test
+        fun `should leave LF files as LF`() = runBlocking {
+            Files.write(tempDir.resolve("test.kt"), "line 1\nline 2\nline 3\n".toByteArray(Charsets.UTF_8))
+
+            stubEditorResponse(
+                """
+                ```json
+                {"changes": [{"line_start": 2, "line_end": 2, "new_content": "modified line 2", "description": "d"}]}
+                ```
+                """.trimIndent()
+            )
+
+            val result = tool.execute(mapOf("path" to "test.kt", "edit_description" to "Modify line 2"))
+
+            assertTrue(result.success)
+            val written = String(Files.readAllBytes(tempDir.resolve("test.kt")), Charsets.UTF_8)
+            assertEquals("line 1\nmodified line 2\nline 3\n", written)
+        }
+
+        private fun stubEditorResponse(content: String) {
+            coEvery {
+                mockLLMClient.complete(
+                    provider = any(),
+                    model = any(),
+                    messages = any(),
+                    systemPrompt = any(),
+                    temperature = any(),
+                    maxTokens = any(),
+                    stream = false,
+                    onChunk = null as ((pl.jclab.refio.core.api.StreamChunk) -> Unit)?,
+                    taskId = null,
+                    subtaskId = null,
+                    source = any()
+                )
+            } returns LLMResponse(
+                content = content,
+                usage = LLMUsage(inputTokens = 100, outputTokens = 50, totalTokens = 150),
+                cost = 0.001,
+                model = "test-model",
+                provider = "test-provider"
+            )
+        }
+    }
+
+    @Nested
     inner class ParameterSchemaTests {
 
         @Test

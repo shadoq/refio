@@ -92,9 +92,9 @@ abstract class OpenAICompatibleAdapter(
     protected open fun extraRequestHeaders(): Map<String, String> = emptyMap()
 
     /**
-     * Inspect each raw SSE chunk before normal delta processing. Throwing
-     * [IllegalStateException] from here propagates up as a stream error
-     * (used by OpenRouter to surface mid-stream provider errors).
+     * Inspect each raw SSE chunk before normal delta processing. Throwing anything
+     * from here aborts the stream and propagates as a stream error, whatever the
+     * exception type (used by OpenRouter to surface mid-stream provider errors).
      */
     protected open fun onStreamRawChunk(chunk: com.google.gson.JsonObject) = Unit
 

@@ -1,0 +1,34 @@
+{
+  "id": "mcp-sse-tool-call",
+  "mode": "AGENT",
+  "description": "Call a tool on an MCP server connected over SSE.",
+  "category": "mcp",
+  "max_iterations": 20,
+  "fixture": "fixtures/mcp-empty",
+  "prompt_file": "prompts/mcp-sse-tool-call.md",
+  "mcp": {
+    "config": "configs/sse-docs.json",
+    "stub": {
+      "script": "stub_sse.py",
+      "profile": "docs",
+      "port": 8932
+    }
+  },
+  "assert": {
+    "tool_invoked": [
+      {
+        "name": "mcp_stubsse_query-docs"
+      }
+    ],
+    "needle_in_file": {
+      "path": "result.txt",
+      "regex": "MCP_DOCS\\{56adcfcde426\\}"
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "Did the agent call the MCP tool over SSE and write its verbatim answer into result.txt?"
+    ]
+  }
+}

@@ -478,7 +478,27 @@ class ContextFormatter(
         compressionConfig: ToolResultCompressionConfig
     ): String {
         val fileAttr = buildToolFileAttribute(step, config.includeMetadata)
-        val content = ToolResultCompression.compress(step.result, step.summary, level, compressionConfig, step.subtaskId)
+        // Directory listings are grouped per directory BEFORE the budget-driven compression.
+        // The raw listing lives in the subtask row, so without this the same 400 paths were
+        // re-sent verbatim on every iteration (~15,5K tokens = 40 % of the context budget in the
+        // observed session) while the conversation held only a compressed view of them. Grouping
+        // is lossless for the decision the agent makes here ("which directory do I open next").
+        val rawResult = if (step.tool in LISTING_TOOLS) {
+            // The pointer is added here rather than left to ToolResultCompression: that helper
+            // compares against the text it was GIVEN, which is already the grouped listing, so it
+            // would never notice that names were dropped. The full listing stays in the subtask row.
+            FileListingCompression.compress(step.result).let { grouped ->
+                if (grouped.length < step.result.length) {
+                    grouped + "\n[listing grouped by directory - full list: " +
+                        "memory(action=\"get_subtask_output\", subtask_id=\"${step.subtaskId}\")]"
+                } else {
+                    grouped
+                }
+            }
+        } else {
+            step.result
+        }
+        val content = ToolResultCompression.compress(rawResult, step.summary, level, compressionConfig, step.subtaskId)
         val tagSuffix = if (fileAttr.isNotBlank()) " $fileAttr" else ""
 
         // Add compression level attribute (only show if not FULL)
@@ -992,5 +1012,10 @@ class ContextFormatter(
             lines < 100 && nestingLevel < 20 -> "medium"
             else -> "high"
         }
+    }
+
+    private companion object {
+        /** Tools whose output is a path listing - grouped per directory in RECENT_WORK. */
+        val LISTING_TOOLS = setOf("read_directory", "file_search")
     }
 }

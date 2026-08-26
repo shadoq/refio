@@ -157,7 +157,6 @@ internal abstract class BaseBubbleRenderer {
 
     @Suppress("UNUSED_PARAMETER")
     internal fun createUniversalBubble(
-        icon: String,
         title: String,
         subtitle: String? = null,
         content: String,
@@ -176,7 +175,7 @@ internal abstract class BaseBubbleRenderer {
             maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
         }
 
-        messageBlock.add(context.componentFactory.createBubbleHeader(icon, title, subtitle, foregroundColor))
+        messageBlock.add(context.componentFactory.createBubbleHeader(title, subtitle, foregroundColor))
 
         val maxWidth = (context.availableWidth - context.scrollBarAndPadding).coerceAtLeast(200)
         val segments = ContentSegmentParser.parse(content, isStreaming = isStreaming)

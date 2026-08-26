@@ -1228,37 +1228,6 @@ object ModelDefinitions {
             ),
             active = true
         ),
-        "o3-pro" to ModelDefinition(
-            id = "o3-pro",
-            name = "O3 Pro",
-            provider = "openai",
-            description = "Reasoning O3 Pro model",
-            capabilities = listOf(
-                ModelCapability.CHAT_COMPLETION,
-                ModelCapability.TEXT_COMPLETION
-            ),
-            modelType = ModelType.TEXT,
-            maxContext = 128_000,
-            maxOutputTokens = 65_536,
-            costPer1MInput = 20.00,
-            costPer1MOutput = 80.00,
-            supportsVision = false,
-            supportsReasoning = true,
-            supportsStreaming = true,
-            supportsFunctionCalling = false,
-            supportsThinking = true,
-            removeParams = listOf(
-                "frequency_penalty",
-                "presence_penalty",
-                "top_p",
-                "temperature"
-            ),
-            paramMappings = mapOf(
-                "max_tokens" to "max_completion_tokens"
-            ),
-            active = true
-        ),
-
         // ---------------------------------------------
         // To Check
         // ---------------------------------------------
@@ -3690,6 +3659,76 @@ object ModelDefinitions {
             active = true
         ),
 
+        // Qwen 3.8 - 27B multimodal; thinking is on by default and tunable per request
+        "qwen3.8:latest" to ModelDefinition(
+            id = "qwen3.8:latest",
+            name = "Qwen 3.8 27B",
+            provider = "ollama",
+            description = "Qwen 3.8 27B multimodal model with 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "qwen3.8:27b" to ModelDefinition(
+            id = "qwen3.8:27b",
+            name = "Qwen 3.8 27B",
+            provider = "ollama",
+            description = "Qwen 3.8 27B multimodal model with 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "qwen3.8:27b-mlx" to ModelDefinition(
+            id = "qwen3.8:27b-mlx",
+            name = "Qwen 3.8 27B (MLX)",
+            provider = "ollama",
+            description = "Qwen 3.8 27B multimodal model, MLX build for Apple silicon",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
         "qwen3-next:80b" to ModelDefinition(
             id = "qwen3-next:80b",
             name = "Qwen 3 Next 80B",
@@ -3897,18 +3936,22 @@ object ModelDefinitions {
             active = true
         ),
 
-        "nemotron-cascade-2:30b" to ModelDefinition(
-            id = "nemotron-cascade-2:30b",
-            name = "Nemotron Cascade 2 30B",
+        // Nemotron 3 Nano Omni — multimodal LLM that unifies video, audio, image,
+        // and text understanding for Q&A, summarization, transcription, and
+        // document-intelligence workflows. 33B params, 128K context.
+        // Nemotron 3.5 Lightning - 30B MoE with 3B active parameters
+        "nemotron-3.5-lightning:latest" to ModelDefinition(
+            id = "nemotron-3.5-lightning:latest",
+            name = "Nemotron 3.5 Lightning 30B",
             provider = "ollama",
-            description = "NVIDIA Nemotron Cascade 2 30B with native tool use",
+            description = "NVIDIA Nemotron 3.5 Lightning MoE (30B total, 3B active) with 1M context",
             capabilities = listOf(
                 ModelCapability.CHAT_COMPLETION,
                 ModelCapability.TEXT_COMPLETION,
                 ModelCapability.TOOL_USE
             ),
             modelType = ModelType.TEXT,
-            maxContext = 128_000,
+            maxContext = 1_000_000,
             maxOutputTokens = null,
             costPer1MInput = 0.0,
             costPer1MOutput = 0.0,
@@ -3920,9 +3963,52 @@ object ModelDefinitions {
             active = true
         ),
 
-        // Nemotron 3 Nano Omni — multimodal LLM that unifies video, audio, image,
-        // and text understanding for Q&A, summarization, transcription, and
-        // document-intelligence workflows. 33B params, 128K context.
+        "nemotron-3.5-lightning:30b" to ModelDefinition(
+            id = "nemotron-3.5-lightning:30b",
+            name = "Nemotron 3.5 Lightning 30B",
+            provider = "ollama",
+            description = "NVIDIA Nemotron 3.5 Lightning MoE (30B total, 3B active) with 1M context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_000_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "nemotron-3.5-lightning:30b-mlx" to ModelDefinition(
+            id = "nemotron-3.5-lightning:30b-mlx",
+            name = "Nemotron 3.5 Lightning 30B (MLX)",
+            provider = "ollama",
+            description = "Nemotron 3.5 Lightning MoE, MLX build for Apple silicon with 256K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 256_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
         "nemotron3:33b" to ModelDefinition(
             id = "nemotron3:33b",
             name = "Nemotron 3 Nano Omni 33B",
@@ -3931,6 +4017,76 @@ object ModelDefinitions {
             capabilities = listOf(
                 ModelCapability.CHAT_COMPLETION,
                 ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        // Muse Glimmer - 30B multimodal, tuned for tool use, long tasks and failure recovery
+        "muse-glimmer:latest" to ModelDefinition(
+            id = "muse-glimmer:latest",
+            name = "Muse Glimmer 30B",
+            provider = "ollama",
+            description = "Muse Glimmer 30B multimodal model with 128K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "muse-glimmer:30b" to ModelDefinition(
+            id = "muse-glimmer:30b",
+            name = "Muse Glimmer 30B",
+            provider = "ollama",
+            description = "Muse Glimmer 30B multimodal model with 128K context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.VISION,
+                ModelCapability.TOOL_USE
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 128_000,
+            maxOutputTokens = null,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            defaultParams = mapOf("temperature" to 0.7),
+            active = true
+        ),
+
+        "muse-glimmer:30b-mlx" to ModelDefinition(
+            id = "muse-glimmer:30b-mlx",
+            name = "Muse Glimmer 30B (MLX)",
+            provider = "ollama",
+            description = "Muse Glimmer 30B multimodal model, MLX build for Apple silicon",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
                 ModelCapability.VISION,
                 ModelCapability.TOOL_USE
             ),

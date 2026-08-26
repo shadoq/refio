@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.registry
 
+import pl.jclab.refio.core.config.RefioHome
 import pl.jclab.refio.core.logging.dualLogger
 import java.net.JarURLConnection
 import java.nio.file.Files
@@ -70,7 +71,7 @@ abstract class FileBasedRegistry<T>(
         loadBuiltinResources()
 
         // Layer 2: User files
-        val userDir = Path.of(System.getProperty("user.home"), ".refio", resourceDir)
+        val userDir = RefioHome.resolve(resourceDir)
         loadFromDirectory(userDir, DefinitionScope.USER, userFileItems)
 
         // Layer 3: Project files (highest priority)

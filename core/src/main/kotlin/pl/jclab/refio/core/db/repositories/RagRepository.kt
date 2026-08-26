@@ -45,6 +45,15 @@ class EmbeddingInsert(
  */
 class RagRepository {
 
+    companion object {
+        /**
+         * Ceiling for ids bound into a single `IN (...)` clause. sqlite-jdbc rejects a statement
+         * with more than 32766 variables, and older SQLite builds cap at 999, so batched lookups
+         * are windowed well below both.
+         */
+        private const val MAX_IN_LIST_SIZE = 900
+    }
+
     // ========== Indexed Files Operations ==========
 
     /**
@@ -101,6 +110,72 @@ class RagRepository {
     }
 
     /**
+     * Create or refresh one indexed file together with all of its chunks in a SINGLE transaction.
+     *
+     * Indexing used to run this as three independent transactions: commit the new checksum,
+     * delete the old chunks, insert the new ones. Losing the process between them (IDE closed,
+     * kill) left the file row carrying an up-to-date checksum with zero chunks under it, and
+     * since indexing classifies files by checksum alone that file was reported as unchanged by
+     * every later run - a permanent hole in the index that only a manual Clear Index could fix.
+     * The mirror case (new checksum, stale chunks) was just as durable.
+     *
+     * Doing all of it in one transaction makes the replacement atomic: either the file has its
+     * new fingerprint together with its new chunks, or nothing changed at all and the next run
+     * reindexes it. The inner repository calls join this transaction (Exposed nests by default),
+     * so this also costs one writer-lock acquisition instead of three.
+     *
+     * On the refresh path only the fingerprint columns are written - path, mime type, content
+     * type and source URL keep their stored values, matching [updateIndexedFile].
+     *
+     * @param existingFileId row to refresh, or null to create a new file row
+     * @param chunks builds the chunk rows once the file id is known
+     * @return the file id
+     */
+    fun upsertIndexedFileWithChunks(
+        existingFileId: Int?,
+        projectRoot: String,
+        filePath: String,
+        fileHash: String,
+        checksum: String? = null,
+        fileSize: Long,
+        mimeType: String? = null,
+        lastModified: Long,
+        contentType: RagContentType = RagContentType.PROJECT_CODE,
+        sourceUrl: String? = null,
+        metadata: String? = null,
+        chunks: (fileId: Int) -> List<ChunkInsert>
+    ): Int = transaction {
+        val fileId = if (existingFileId != null) {
+            updateIndexedFile(
+                fileId = existingFileId,
+                fileHash = fileHash,
+                checksum = checksum,
+                fileSize = fileSize,
+                lastModified = lastModified,
+                metadata = metadata
+            )
+            deleteChunksForFile(existingFileId)
+            existingFileId
+        } else {
+            createIndexedFile(
+                projectRoot = projectRoot,
+                filePath = filePath,
+                fileHash = fileHash,
+                checksum = checksum,
+                fileSize = fileSize,
+                mimeType = mimeType,
+                lastModified = lastModified,
+                contentType = contentType,
+                sourceUrl = sourceUrl,
+                metadata = metadata
+            )
+        }
+
+        createChunksBatch(chunks(fileId))
+        fileId
+    }
+
+    /**
      * Update indexed file metadata JSON (nullable to allow clearing).
      */
     fun updateIndexedFileMetadata(fileId: Int, metadata: String?) = transaction {
@@ -143,8 +218,10 @@ class RagRepository {
             return@transaction emptyList()
         }
 
-        IndexFilesTable.selectAll().where { IndexFilesTable.id inList fileIds }
-            .map { mapIndexFile(it) }
+        fileIds.chunked(MAX_IN_LIST_SIZE).flatMap { window ->
+            IndexFilesTable.selectAll().where { IndexFilesTable.id inList window }
+                .map { mapIndexFile(it) }
+        }
     }
 
     /**
@@ -273,8 +350,36 @@ class RagRepository {
             return@transaction emptyList()
         }
 
-        IndexChunksTable.selectAll().where { IndexChunksTable.id inList chunkIds }
-            .map { mapIndexChunk(it) }
+        chunkIds.chunked(MAX_IN_LIST_SIZE).flatMap { window ->
+            IndexChunksTable.selectAll().where { IndexChunksTable.id inList window }
+                .map { mapIndexChunk(it) }
+        }
+    }
+
+    /**
+     * File ids of a project that currently have at least one chunk row.
+     *
+     * Lets indexing spot a file whose chunks are missing even though its checksum looks current
+     * - the state an interrupted reindex used to leave behind - and rebuild it instead of
+     * trusting the checksum. Also heals indexes already broken that way, since nothing else
+     * reconciles them.
+     */
+    fun getFileIdsWithChunks(
+        projectRoot: String,
+        contentType: RagContentType? = null
+    ): Set<Int> = transaction {
+        val query = IndexChunksTable
+            .innerJoin(IndexFilesTable, { fileId }, { IndexFilesTable.id })
+            .select(IndexChunksTable.fileId)
+            .where { IndexFilesTable.projectRoot eq projectRoot }
+
+        val filtered = if (contentType != null) {
+            query.andWhere { IndexFilesTable.contentType eq contentType }
+        } else {
+            query
+        }
+
+        filtered.withDistinct().map { it[IndexChunksTable.fileId] }.toSet()
     }
 
     /**

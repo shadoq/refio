@@ -113,7 +113,9 @@ class RagIndexingService(
             .getIndexedFiles(projectKey, contentType)
             .associateBy { it.filePath }
 
-        val classification = classifyFiles(scannedFiles, existingFiles)
+        val fileIdsWithChunks = ragRepository.getFileIdsWithChunks(projectKey, contentType)
+
+        val classification = classifyFiles(scannedFiles, existingFiles, fileIdsWithChunks)
         deleteRemovedFiles(existingFiles.values, scannedFiles.map { it.relativePath }.toSet())
 
         val filesToIndex = classification.newFiles + classification.modifiedFiles
@@ -300,11 +302,13 @@ class RagIndexingService(
 
     private fun classifyFiles(
         scannedFiles: List<ScannedFile>,
-        existingFiles: Map<String, pl.jclab.refio.core.db.IndexFile>
+        existingFiles: Map<String, pl.jclab.refio.core.db.IndexFile>,
+        fileIdsWithChunks: Set<Int>
     ): ClassificationResult {
         val newFiles = mutableListOf<ProjectFile>()
         val modifiedFiles = mutableListOf<ProjectFile>()
         val unchangedFiles = mutableListOf<ProjectFile>()
+        var missingChunks = 0
 
         scannedFiles.forEach { scanned ->
             try {
@@ -318,9 +322,21 @@ class RagIndexingService(
                 )
 
                 val existing = existingFiles[scanned.relativePath]
+                // A non-empty file registered with no chunks is an index hole left by an
+                // interrupted reindex. The checksum says "current", so only this check gets it
+                // rebuilt. Empty files are excluded: they have nothing to chunk and would
+                // otherwise be reprocessed on every run.
+                val chunksMissing = existing != null &&
+                    scanned.fileSize > 0 &&
+                    existing.id !in fileIdsWithChunks
+
                 when {
                     existing == null -> newFiles.add(projectFile)
                     existing.checksum == null || existing.checksum != checksum -> modifiedFiles.add(projectFile)
+                    chunksMissing -> {
+                        missingChunks++
+                        modifiedFiles.add(projectFile)
+                    }
                     else -> unchangedFiles.add(projectFile)
                 }
             } catch (e: Exception) {
@@ -329,7 +345,8 @@ class RagIndexingService(
         }
 
         logger.info {
-            "File classification: ${newFiles.size} new, ${modifiedFiles.size} modified, ${unchangedFiles.size} unchanged"
+            "File classification: ${newFiles.size} new, ${modifiedFiles.size} modified " +
+                "(${missingChunks} rebuilt after missing chunks), ${unchangedFiles.size} unchanged"
         }
 
         return ClassificationResult(newFiles, modifiedFiles, unchangedFiles)
@@ -384,44 +401,33 @@ class RagIndexingService(
             null
         }
 
-        val fileId = if (existing != null) {
-            ragRepository.updateIndexedFile(
-                fileId = existing.id,
-                fileHash = projectFile.checksum,
-                checksum = projectFile.checksum,
-                fileSize = projectFile.fileSize,
-                lastModified = projectFile.lastModified
-            )
-            ragRepository.deleteChunksForFile(existing.id)
-            existing.id
-        } else {
-            ragRepository.createIndexedFile(
-                projectRoot = projectRoot.toString(),
-                filePath = projectFile.relativePath,
-                fileHash = projectFile.checksum,
-                checksum = projectFile.checksum,
-                fileSize = projectFile.fileSize,
-                mimeType = mimeType,
-                lastModified = projectFile.lastModified,
-                contentType = contentType
-            )
+        // File fingerprint and chunks are written in one transaction - see
+        // RagRepository.upsertIndexedFileWithChunks. A partial write would register the file as
+        // up-to-date with no chunks, and classification would then skip it forever.
+        ragRepository.upsertIndexedFileWithChunks(
+            existingFileId = existing?.id,
+            projectRoot = projectRoot.toString(),
+            filePath = projectFile.relativePath,
+            fileHash = projectFile.checksum,
+            checksum = projectFile.checksum,
+            fileSize = projectFile.fileSize,
+            mimeType = mimeType,
+            lastModified = projectFile.lastModified,
+            contentType = contentType
+        ) { fileId ->
+            chunks.take(maxChunks).mapIndexed { index, chunk ->
+                ChunkInsert(
+                    fileId = fileId,
+                    chunkIndex = index,
+                    content = chunk.content,
+                    startLine = chunk.startLine,
+                    endLine = chunk.endLine,
+                    metadata = chunk.metadata
+                        .takeIf { it != ChunkMetadata() }
+                        ?.let { metadata -> gson.toJson(metadata) }
+                )
+            }
         }
-
-        // Single batched insert (one writer-lock acquisition) instead of one transaction
-        // per chunk — see RagRepository.createChunksBatch.
-        val chunkInserts = chunks.take(maxChunks).mapIndexed { index, chunk ->
-            ChunkInsert(
-                fileId = fileId,
-                chunkIndex = index,
-                content = chunk.content,
-                startLine = chunk.startLine,
-                endLine = chunk.endLine,
-                metadata = chunk.metadata
-                    .takeIf { it != ChunkMetadata() }
-                    ?.let { metadata -> gson.toJson(metadata) }
-            )
-        }
-        ragRepository.createChunksBatch(chunkInserts)
     }
 
     private fun analyzeContent(path: Path, content: String): CodeElements {

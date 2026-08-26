@@ -5,9 +5,12 @@ import com.intellij.openapi.fileChooser.FileChooserDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBPanel
-import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.table.JBTable
+import com.intellij.util.ui.JBUI
+import com.intellij.ui.dsl.builder.Align
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.panel
 import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.core.db.DocIndexingStatus
 import pl.jclab.refio.core.db.DocumentationSource
@@ -33,7 +36,7 @@ class DocsSettingsPanel(
 
     private val logger = dualLogger("DocsSettingsPanel")
     private lateinit var docsTable: JBTable
-    private lateinit var urlField: JBTextField
+    private val urlField: JBTextField
     private val addButton: JButton
     private val addFileButton: JButton
     private val reindexButton: JButton
@@ -48,7 +51,7 @@ class DocsSettingsPanel(
     private val embeddingProgress = mutableMapOf<Int, Int>()
 
     init {
-        border = LCATheme.createSettingsBorder("Documentation")
+        border = LCATheme.emptyBorder()
 
         // Initialize buttons
         addButton = JButton("Add Documentation")
@@ -56,69 +59,41 @@ class DocsSettingsPanel(
         reindexButton = JButton("Reindex Selected")
         deleteButton = JButton("Delete")
 
-        // Main content
-        val contentPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = LCATheme.paddedBorder(8, 0, 0, 0)
+        urlField = JBTextField()
+        urlField.emptyText.text = "Enter documentation URL (e.g., https://docs.example.com)"
+        addButton.addActionListener { onAddUrl() }
+        addFileButton.addActionListener { onAddLocalFiles() }
+        reindexButton.addActionListener { onReindexSelected() }
+        deleteButton.addActionListener { onDeleteSelected() }
 
-            // Add URL panel at top
-            val addUrlPanel = createAddUrlPanel()
-            add(addUrlPanel, BorderLayout.NORTH)
+        val tablePanel = createDocsTable()
 
-            // Table with documentation list
-            val tablePanel = createDocsTable()
-            add(tablePanel, BorderLayout.CENTER)
-
-            // Buttons panel at bottom
-            val buttonsPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
-                reindexButton.addActionListener { onReindexSelected() }
-                deleteButton.addActionListener { onDeleteSelected() }
-                add(reindexButton)
-                add(deleteButton)
+        val form = settingsForm {
+            group("Add source") {
+                row {
+                    cell(urlField).align(AlignX.FILL).resizableColumn()
+                    cell(addButton)
+                }
+                row {
+                    cell(addFileButton)
+                }.rowComment("Documentation URLs and local files are indexed and searchable with @docs")
             }
-            add(buttonsPanel, BorderLayout.SOUTH)
+
+            group("Indexed documentation") {
+                row {
+                    cell(tablePanel).align(Align.FILL).resizableColumn()
+                }.resizableRow()
+                row {
+                    cell(reindexButton)
+                    cell(deleteButton)
+                }
+            }
         }
 
-        // Wrap contentPanel in scroll pane for small screens
-        val scrollPane = JBScrollPane(contentPanel).apply {
-            border = LCATheme.emptyBorder()
-            verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
-            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
-        }
-
-        add(scrollPane, BorderLayout.CENTER)
+        add(settingsScrollPane(form), BorderLayout.CENTER)
 
         // Load documentation sources from backend
         loadDocumentation()
-    }
-
-    private fun createAddUrlPanel(): JPanel {
-        return JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = LCATheme.paddedBorder(0, 0, 16, 0)
-
-            // Description
-            val descLabel = JLabel("<html><font color='gray'>Add documentation URLs or local files to index and search</font></html>")
-            add(descLabel, BorderLayout.NORTH)
-
-            // URL input panel
-            val inputPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-                border = LCATheme.paddedBorder(8, 0, 0, 0)
-
-                urlField = JBTextField()
-                urlField.emptyText.text = "Enter documentation URL (e.g., https://docs.example.com)"
-                add(urlField, BorderLayout.CENTER)
-
-                addButton.addActionListener { onAddUrl() }
-                add(addButton, BorderLayout.EAST)
-            }
-            add(inputPanel, BorderLayout.CENTER)
-
-            val localFilePanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT)).apply {
-                border = LCATheme.paddedBorder(8, 0, 0, 0)
-                addFileButton.addActionListener { onAddLocalFiles() }
-                add(addFileButton)
-            }
-            add(localFilePanel, BorderLayout.SOUTH)
-        }
     }
 
     private fun createDocsTable(): JComponent {
@@ -137,11 +112,15 @@ class DocsSettingsPanel(
             }
         })
 
-        // Set column widths
-        docsTable.columnModel.getColumn(0).preferredWidth = 350 // Source
-        docsTable.columnModel.getColumn(1).preferredWidth = 100 // Status
-        docsTable.columnModel.getColumn(2).preferredWidth = 150 // Last Indexed
-        docsTable.columnModel.getColumn(3).preferredWidth = 80  // Files
+        docsTable.fitColumns(
+            ColumnWidth(min = 80, preferred = 240),  // Source
+            ColumnWidth(min = 56, preferred = 90),   // Status
+            ColumnWidth(min = 60, preferred = 120),  // Last Indexed
+            ColumnWidth(min = 40, preferred = 60)    // Files
+        )
+        docsTable.showFullValueOnHover()
+
+        // Column 4 carries the row id for the action buttons and is never shown.
         docsTable.columnModel.getColumn(4).minWidth = 0
         docsTable.columnModel.getColumn(4).maxWidth = 0
         docsTable.columnModel.getColumn(4).preferredWidth = 0
@@ -188,7 +167,8 @@ class DocsSettingsPanel(
         docsTable.rowHeight = 28
 
         return JScrollPane(docsTable).apply {
-            preferredSize = Dimension(700, 300)
+            // Zero preferred width: the table must not be what decides how wide the page is.
+            preferredSize = Dimension(0, JBUI.scale(240))
             border = LCATheme.customLineBorder(LCATheme.grayColor, 1)
         }
     }

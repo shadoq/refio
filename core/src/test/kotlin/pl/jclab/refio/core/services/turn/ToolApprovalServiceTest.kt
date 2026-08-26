@@ -181,6 +181,75 @@ class ToolApprovalServiceTest {
     }
 
     @Nested
+    inner class ExposureTimeoutTests {
+        // Both UIs render only pendingRequests.first(), so a second concurrent request (parallel
+        // invoke_subagent) is invisible while the first is on screen. Starting its timeout when it
+        // was queued auto-rejected a request the user was never shown: think about the first one
+        // for longer than the timeout and the second dies unseen. The clock must measure the time
+        // the user could actually see the request.
+        @Test
+        fun `a queued request does not burn its timeout while another one is on screen`() = runTest {
+            val service = ToolApprovalService(approvalTimeoutMs = 1_000)
+            val first = request(args = mapOf("command" to "git status"))
+            val second = request(args = mapOf("command" to "npm test"))
+
+            val firstDecision = async { service.requestApproval(first) }
+            val secondDecision = async { service.requestApproval(second) }
+            delay(10)
+            assertEquals(2, service.pendingRequests.value.size)
+
+            // The user deliberates on the visible request for almost the whole timeout.
+            delay(900)
+            service.resolveApproval(first.requestId, ApprovalDecision.Approved)
+            assertIs<ApprovalDecision.Approved>(firstDecision.await())
+
+            // The second request only becomes visible now, so its own timeout starts now.
+            delay(900)
+            assertEquals(1, service.pendingRequests.value.size)
+
+            service.resolveApproval(second.requestId, ApprovalDecision.Approved)
+            assertIs<ApprovalDecision.Approved>(secondDecision.await())
+        }
+
+        @Test
+        fun `the visible request still times out`() = runTest {
+            val service = ToolApprovalService(approvalTimeoutMs = 1_000)
+            val req = request()
+
+            val decision = async { service.requestApproval(req) }
+            delay(1_500)
+
+            assertIs<ApprovalDecision.Rejected>(decision.await())
+            assertTrue(service.pendingRequests.value.isEmpty())
+        }
+
+        // Requests are shown one at a time, so the order they are shown in must be the order they
+        // arrived in - iterating a hash map handed the user an arbitrary one and starved the rest.
+        @Test
+        fun `requests are exposed in arrival order`() = runTest {
+            val service = ToolApprovalService(approvalTimeoutMs = 0)
+            val requests = (1..10).map { request(args = mapOf("command" to "step-$it")) }
+
+            val decisions = requests.map { req -> async { service.requestApproval(req) } }
+            delay(10)
+
+            assertEquals(
+                requests.map { it.requestId },
+                service.pendingRequests.value.map { it.requestId }
+            )
+
+            service.cancelAll()
+            decisions.forEach { d ->
+                try {
+                    d.await()
+                } catch (_: kotlinx.coroutines.CancellationException) {
+                    // cancelAll unblocks every waiter, queued ones included
+                }
+            }
+        }
+    }
+
+    @Nested
     inner class PendingRequestsFlowTests {
         @Test
         fun `pendingRequests should expose request details`() = runTest {

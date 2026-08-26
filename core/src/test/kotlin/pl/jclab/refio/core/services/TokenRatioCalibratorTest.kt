@@ -30,9 +30,39 @@ class TokenRatioCalibratorTest {
         // cloud families sit near base
         assertEquals(3.6, PromptTokenEstimator.charsPerToken("gpt-4o"))
         assertEquals(3.6, PromptTokenEstimator.charsPerToken("claude-3.7-sonnet"))
-        // unknown / null fall back to the shared base
-        assertEquals(PromptTokenEstimator.CHARS_PER_TOKEN_BASE, PromptTokenEstimator.charsPerToken("some-unknown-model"))
+        // Only a caller with no model at all falls back to the shared base.
         assertEquals(PromptTokenEstimator.CHARS_PER_TOKEN_BASE, PromptTokenEstimator.charsPerToken(null))
+    }
+
+    /**
+     * An unrecognized name must get the DENSE prior, not the loose base. Measured case: ollama's
+     * own `/api/show` reports `ornith:35b` as architecture `qwen35moe`, a dense tokenizer (~3.2),
+     * but the name carries no family fragment. Under the loose base the estimate ran ~9% low, so a
+     * prompt that did overflow `num_ctx` looked like it fitted and Ollama truncated the head in
+     * silence. Under-counting is the only direction that costs correctness; over-counting merely
+     * leaves a sliver of the window unused, and the calibrator corrects it after the first call.
+     */
+    @Test
+    fun `a model whose name names no family gets the dense prior, not the loose base`() {
+        assertEquals(3.2, PromptTokenEstimator.charsPerToken("ornith:35b"))
+        assertEquals(3.2, PromptTokenEstimator.charsPerToken("gemma3:12b"))
+        assertEquals(3.2, PromptTokenEstimator.charsPerToken("some-unknown-model"))
+    }
+
+    // gpt-oss runs locally on ollama, so matching the bare "gpt" fragment handed it the cloud BPE
+    // ratio and the same silent-truncation exposure as the case above.
+    @Test
+    fun `a local model with a cloud-looking name is still treated as dense`() {
+        assertEquals(3.2, PromptTokenEstimator.charsPerToken("gpt-oss:20b"))
+    }
+
+    // Cloud tokenizers really are looser, and a cloud provider errors on an oversized prompt
+    // instead of truncating it, so there is no silent-truncation risk to protect against here.
+    @Test
+    fun `cloud BPE families keep the loose ratio`() {
+        assertEquals(3.6, PromptTokenEstimator.charsPerToken("gemini-2.5-pro"))
+        assertEquals(3.6, PromptTokenEstimator.charsPerToken("google/gemini-3-pro"))
+        assertEquals(3.6, PromptTokenEstimator.charsPerToken("grok-4"))
     }
 
     @Test
@@ -50,8 +80,8 @@ class TokenRatioCalibratorTest {
     fun `observe twice converges ratioFor to the observed value`() {
         val model = "ollama/qwen2.5-coder:7b"
         // prior is 3.2; real usage says the text is denser (3.0 chars/token)
-        TokenRatioCalibrator.observe(model, chars = 3000, realTokens = 1000) // observed 3.0
-        TokenRatioCalibrator.observe(model, chars = 3000, realTokens = 1000) // observed 3.0
+        TokenRatioCalibrator.observe(model, chars = 3000, realTokens = 1000, truncationSuspected = false)
+        TokenRatioCalibrator.observe(model, chars = 3000, realTokens = 1000, truncationSuspected = false)
         // EMA: r1 = 3.0 (first), r2 = 0.7*3.0 + 0.3*3.0 = 3.0 -> converged to 3.0
         assertEquals(3.0, TokenRatioCalibrator.ratioFor(model), 0.0001)
     }
@@ -64,10 +94,35 @@ class TokenRatioCalibratorTest {
     @Test
     fun `observe ignores non-positive token counts`() {
         val model = "gpt-4o"
-        TokenRatioCalibrator.observe(model, chars = 100, realTokens = 0)
-        TokenRatioCalibrator.observe(model, chars = 100, realTokens = -5)
+        TokenRatioCalibrator.observe(model, chars = 100, realTokens = 0, truncationSuspected = false)
+        TokenRatioCalibrator.observe(model, chars = 100, realTokens = -5, truncationSuspected = false)
         // still the prior, no NaN/divide-by-zero
         assertEquals(3.6, TokenRatioCalibrator.ratioFor(model), 0.0001)
+    }
+
+    /**
+     * The poisoning this guard exists for. Ollama reports the prompt length AFTER it truncated, so
+     * pairing the full character count with that number yields an inflated chars/token ratio. A
+     * higher ratio lowers every later estimate, which blinds the very overflow guard that flagged
+     * the truncation, and simultaneously tells the context budget it can pack more text in. Left
+     * unguarded the loop reinforces itself: each truncation makes the next one harder to see.
+     */
+    @Test
+    fun `a sample from a turn that may have been truncated is not folded into the ratio`() {
+        val model = "ornith:35b"
+        // 117565 chars really was ~36700 tokens at 3.2; ollama answered "32256" after cutting the
+        // head, which reads as 3.65 chars/token.
+        TokenRatioCalibrator.observe(model, chars = 117_565, realTokens = 32_256, truncationSuspected = true)
+
+        assertEquals(3.2, TokenRatioCalibrator.ratioFor(model), 0.0001, "a truncated sample must leave the prior untouched")
+    }
+
+    @Test
+    fun `a clean sample still teaches the ratio`() {
+        val model = "ornith:35b"
+        TokenRatioCalibrator.observe(model, chars = 96_000, realTokens = 32_000, truncationSuspected = false)
+
+        assertEquals(3.0, TokenRatioCalibrator.ratioFor(model), 0.0001)
     }
 
     @Test

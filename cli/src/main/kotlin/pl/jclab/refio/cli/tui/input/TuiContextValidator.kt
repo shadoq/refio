@@ -1,5 +1,6 @@
 package pl.jclab.refio.cli.tui.input
 
+import pl.jclab.refio.core.config.RefioHome
 import java.io.File
 
 /**
@@ -97,7 +98,7 @@ object TuiContextValidator {
             return ValidationResult(isValid = false, warning = "@codebase: requires a search query")
         }
         // Check if RAG index exists (look for database file)
-        val dbFile = File(System.getProperty("user.home"), ".refio/data/database.sqlite")
+        val dbFile = RefioHome.resolve("data", "database.sqlite").toFile()
         if (!dbFile.exists()) {
             return ValidationResult(isValid = true, warning = "RAG index may not be available. Run reindex first.")
         }

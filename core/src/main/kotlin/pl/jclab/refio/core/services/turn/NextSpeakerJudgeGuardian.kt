@@ -464,14 +464,23 @@ class NextSpeakerJudgeGuardian(
      * is exactly the case the goal-aware judge must verify against transcript evidence. The
      * trailing-`?` check still applies because a clarifying question always needs user input
      * regardless of any active goal.
+     *
+     * Very short replies also skip the judge, because "Done." / "42" / "No bug found." are the
+     * cheap, unambiguous completions this filter exists for.
+     *
+     * A short reply that only announces the next step ("Now let me run git branch.", 26 chars) is
+     * the canonical intent-without-action stall and slips through here. Pattern-matching the opening
+     * for intent was tried and removed: across 86 e2e scenarios the sub-30-character band never
+     * fired once, because real stalls run 70 to 160 characters and reach the judge anyway. Catching
+     * those needs a check on the turn's outcome (AGENT mode, nothing written), not on prose shape.
      */
     private fun looksClearlyDone(text: String, hasGoal: Boolean): Boolean {
         val trimmed = text.trimEnd { it.isWhitespace() || it == '"' || it == '\'' || it == ')' || it == ']' }
         if (trimmed.endsWith("?")) return true
         if (hasGoal) return false
-        if (trimmed.length < 30) return true
         val tail = trimmed.takeLast(80).lowercase()
-        return EXPLICIT_DONE_MARKERS.any { tail.contains(it) }
+        if (EXPLICIT_DONE_MARKERS.any { tail.contains(it) }) return true
+        return trimmed.length < SHORT_REPLY_MAX_CHARS
     }
 
     private enum class NextSpeakerVerdict { USER, MODEL, UNCERTAIN }
@@ -574,6 +583,9 @@ class NextSpeakerJudgeGuardian(
             val earlyLimit = (maxIterations * EARLY_REENTRY_ITERATION_FRACTION).toInt()
             return if (iteration <= earlyLimit) MAX_EARLY_JUDGE_REENTRIES else 1
         }
+
+        /** Below this length a reply is treated as an obvious completion and skips the judge call. */
+        const val SHORT_REPLY_MAX_CHARS = 30
 
         private val EXPLICIT_DONE_MARKERS = listOf(
             "task complete",

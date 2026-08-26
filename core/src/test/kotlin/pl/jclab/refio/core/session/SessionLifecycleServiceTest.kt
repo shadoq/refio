@@ -283,14 +283,64 @@ class SessionLifecycleServiceTest {
             // The CODING slot (advance_code_editing) resolves its model from the ui.selected_model
             // APP config, never from the task uiState blob. Creating the session must flush the
             // dropdown model there, otherwise file generation runs on the stale provider while the
-            // turn LLM already uses the new one.
+            // turn LLM already uses the new one. It is written as session state, so a model pinned
+            // in the project config file keeps precedence until the user picks one explicitly.
             verify {
-                configService.set(
+                configService.setSessionState(
                     ConfigKeys.UI_SELECTED_MODEL.key,
-                    "Openai/gpt-5.6-sol",
-                    ConfigScope.APP
+                    "Openai/gpt-5.6-sol"
                 )
             }
+        } finally {
+            unmockkStatic("org.jetbrains.exposed.sql.transactions.ThreadLocalTransactionManagerKt")
+        }
+    }
+
+    /**
+     * "Trust" in the approval prompt promises the permission lasts *for this session*. The trust
+     * map lives on the project-wide router, and nothing ever reset it, so a tool trusted in one
+     * conversation stayed trusted in every later one until the IDE was closed. Starting a new
+     * conversation ends the old one, and with it the trust it granted.
+     */
+    @Test
+    fun `starting a new session drops the trust granted in the previous one`() = runBlocking {
+        mockkStatic("org.jetbrains.exposed.sql.transactions.ThreadLocalTransactionManagerKt")
+        every { transaction(any(), any<Function1<Transaction, Any>>()) } answers {
+            val block = arg<Transaction.() -> Any>(1)
+            block(mockk())
+        }
+        try {
+            val projectRouter = mockk<CoreApiRouter>(relaxed = true)
+            val configService = mockk<ConfigService>(relaxed = true)
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+
+            every { configService.getTyped(ConfigKeys.READ_ONLY_MODE) } returns false
+            every { projectRouter.taskRouter.createTask(any()) } returns TaskResponse(
+                id = "session-new",
+                name = "Session (AGENT)",
+                mode = TaskMode.AGENT.name,
+                status = TaskStatus.PENDING.name,
+                readOnly = false,
+                pinned = false,
+                executionMode = ExecutionMode.AUTO.name,
+                uiState = null,
+                createdAt = 1L,
+                updatedAt = 2L
+            )
+
+            val service = SessionLifecycleService(
+                projectRouter = projectRouter,
+                configService = configService,
+                stateManager = SessionStateManager(),
+                modeSwitchMutex = Mutex(),
+                projectId = "project-1",
+                normalizedProjectPath = "C:\\\\project",
+                scope = scope
+            )
+
+            service.createSession(name = "Session (AGENT)", mode = TaskMode.AGENT)
+
+            verify { projectRouter.toolApprovalService.onSessionEnd() }
         } finally {
             unmockkStatic("org.jetbrains.exposed.sql.transactions.ThreadLocalTransactionManagerKt")
         }

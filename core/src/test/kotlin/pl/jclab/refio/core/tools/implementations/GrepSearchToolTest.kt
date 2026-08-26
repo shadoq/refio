@@ -697,6 +697,50 @@ class GrepSearchToolTest {
     }
 
     @Nested
+    inner class LongLineTests {
+
+        /**
+         * Matching is scanned from every start offset, so an unanchored pattern over a single very
+         * long line is quadratic: measured ~4 s at 50k characters and ~8 s at 100k, and a line may
+         * legally reach the 2 MB file limit. java.util.regex answers neither cancellation nor
+         * Thread.interrupt() while it runs, so such a line has to be refused before it is matched.
+         */
+        @Test
+        fun `a very long line is not matched against and the skip is reported`() = runBlocking {
+            Files.writeString(
+                tempDir.resolve("bundle.min.js"),
+                "needle " + "abcdefghij".repeat(200_000) + "!"
+            )
+
+            val started = System.currentTimeMillis()
+            val result = tool.execute(mapOf("pattern" to "[a-z]*!", "path" to "."))
+            val elapsed = System.currentTimeMillis() - started
+
+            assertTrue(result.success)
+            assertTrue(elapsed < 5_000, "a 2 MB single-line file must not stall the call, took ${elapsed}ms")
+            assertEquals(1, result.metadata?.get("long_lines_skipped"))
+            assertTrue(
+                result.output!!.contains("were not searched"),
+                "skipping must be visible, not silent: ${result.output}"
+            )
+        }
+
+        @Test
+        fun `an ordinary long-ish line is still searched`() {
+            // The cap must not quietly shrink normal search: only absurd machine-generated lines go.
+            runBlocking {
+                Files.writeString(tempDir.resolve("wide.txt"), "x".repeat(5_000) + " needle")
+
+                val result = tool.execute(mapOf("pattern" to "needle", "path" to "."))
+
+                assertTrue(result.success)
+                assertTrue(result.output!!.contains("wide.txt"), "got: ${result.output}")
+                assertEquals(0, result.metadata?.get("long_lines_skipped"))
+            }
+        }
+    }
+
+    @Nested
     inner class ParameterSchemaTests {
 
         @Test

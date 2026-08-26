@@ -643,7 +643,7 @@ the test (or just isolate it on a branch up front like in other tests).
 ## Test 18 - Heavy parallel reads + ContextBudget (T1 + T3)
 
 **Mode:** PLAN
-**Goal:** `ParallelToolExecutor`, `ContextBudget` decides what to cut.
+**Goal:** parallel READ_ONLY batching in `TurnToolExecutor`, `ContextBudget` decides what to cut.
 
 **Prompt:**
 
@@ -664,8 +664,10 @@ file:line for each cell.
 **Expected result:**
 - In **one** turn 6 `read_file` calls (check that `subtasks` share the
   same `parentTurn`).
-- `ParallelToolExecutor` runs them in parallel (check log
-  `[ParallelToolExecutor] Executing N tools in parallel`).
+- `TurnToolExecutor` runs them in parallel (check log
+  `[PARALLEL] Executing N READ_ONLY in parallel (no WRITE tools in batch)`;
+  above `maxParallelReadTools` = 6 the log says `[PARALLEL_CAPPED]` and the
+  batch is chunked instead).
 - A 3x4 table with citations.
 - T3 (qwen3.6:35b) historically prefers serial reads - if it goes serial,
   note as a prompt regression signal.
@@ -2017,7 +2019,7 @@ sentence.
 | 15 | PLAN | (expected: none) | T4 | tool permission |
 | 16 | AGENT | code_editing+restore | T1 | snapshot/rollback |
 | 17 | AGENT | code_editing x9 | T1 | verification step |
-| 18 | PLAN | parallel read_file x6 | T1+T3 | ParallelToolExecutor |
+| 18 | PLAN | parallel read_file x6 | T1+T3 | TurnToolExecutor parallel batch |
 | 19 | AGENT | 8x read + write report | T1+T3 | LLM adapter map |
 | 20 | AGENT | grep+read+write report | T1+T2+T3 | security boundaries |
 | 21 | AGENT | broad exploration | T1+T3 | code smells hunt, discipline cap=20 |

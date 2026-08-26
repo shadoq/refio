@@ -45,9 +45,9 @@ class HeadlessResultTest {
     // The no-egress override must not clobber other run-scope overrides (e.g. --config).
     @Test
     fun `no-egress override preserves existing overrides`() {
-        val base = mapOf("agent.max_iterations" to "80")
+        val base = mapOf("agent.max_consecutive_tool_errors" to "80")
         val result = withNoEgress(base, noEgress = true)
-        assertEquals("80", result["agent.max_iterations"])
+        assertEquals("80", result["agent.max_consecutive_tool_errors"])
         assertEquals("true", result[ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key])
     }
 
@@ -79,9 +79,9 @@ class HeadlessResultTest {
     // The model injection must not drop other run-scope overrides (e.g. --config, --max-cost).
     @Test
     fun `model injection preserves existing overrides`() {
-        val base = mapOf("agent.max_iterations" to "80")
+        val base = mapOf("agent.max_consecutive_tool_errors" to "80")
         val result = withSelectedModel(base, model = "ollama/qwen3.5:9b")
-        assertEquals("80", result["agent.max_iterations"])
+        assertEquals("80", result["agent.max_consecutive_tool_errors"])
         assertEquals("ollama/qwen3.5:9b", result[ConfigKeys.UI_SELECTED_MODEL.key])
     }
 }

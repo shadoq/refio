@@ -83,8 +83,11 @@ Actions: create, update, delete, list"""
     override suspend fun execute(params: Map<String, Any>): ToolResult {
         val router = subagentRouterProvider()
             ?: return ToolResult.error("SubagentRouter not available")
+        // Providers do not enforce the schema's `required`, so a missing action reaches us as a
+        // normal call. Name the valid values here too - a bare "action required" costs the model
+        // a whole iteration of guessing.
         val action = params["action"] as? String
-            ?: return ToolResult.error("action required")
+            ?: return ToolResult.error("action required. Use one of: create, update, delete, list")
         val parentMode = (params[pl.jclab.refio.core.tools.base.ToolInternalParams.MODE] as? String)?.let {
             try { TaskMode.valueOf(it) } catch (_: Exception) { null }
         } ?: TaskMode.PLAN
@@ -122,10 +125,6 @@ Actions: create, update, delete, list"""
             return ToolResult.error("Invalid name '$name'. Use kebab-case (e.g. 'csv-parser')")
         }
 
-        if (router.getSubagent(name) != null) {
-            return ToolResult.error("Subagent '$name' already exists. Use action='update' to modify.")
-        }
-
         val definition = SubagentDefinition(
             name = name,
             description = description,
@@ -137,6 +136,41 @@ Actions: create, update, delete, list"""
             maxSteps = maxSteps,
             executionMode = SubagentExecutionMode.MULTI_STEP
         )
+
+        // Idempotent create. For the agent, "an agent by this name must exist" is a desired STATE,
+        // not an operation, so repeating it is a harmless mistake - and a hard error there burns a
+        // full iteration (observed: the model re-created the same 'root-analyzer' one turn later
+        // and lost 21s to `already exists. Use action='update'`). Same definition = no-op success,
+        // different definition = do what the model meant and say it was an update.
+        val existing = router.getSubagent(name)
+        if (existing != null) {
+            if (existing.scope == SubagentScope.BUILTIN) {
+                return ToolResult.error(
+                    "'$name' is a builtin subagent and cannot be replaced. " +
+                        "Invoke it as is, or pick a different name."
+                )
+            }
+            if (sameDefinition(existing, definition)) {
+                return ToolResult(
+                    success = true,
+                    output = buildString {
+                        appendLine("Subagent '$name' already exists with this definition - unchanged.")
+                        appendLine("Use invoke_subagent(name='$name', goal='...') to run it.")
+                    },
+                    metadata = mapOf("agent_name" to name, "unchanged" to "true")
+                )
+            }
+            val updateResult = handleUpdate(params, router, parentMode)
+            return if (updateResult.success) {
+                updateResult.copy(
+                    output = "Subagent '$name' already existed - applied your definition as an update.\n" +
+                        updateResult.output +
+                        "\nUse invoke_subagent(name='$name', goal='...') to run it."
+                )
+            } else {
+                updateResult
+            }
+        }
 
         return when (scope) {
             "temporary" -> {
@@ -293,6 +327,18 @@ Actions: create, update, delete, list"""
     }
 
     companion object {
+        /**
+         * Whether a repeated `create` asks for exactly what is already registered. Only the fields
+         * `create` can set are compared - scope/priority/enabled are set by the registry, not by
+         * the caller, so they would make every repeat look like a change.
+         */
+        fun sameDefinition(existing: SubagentDefinition, requested: SubagentDefinition): Boolean =
+            existing.description == requested.description &&
+                existing.systemPrompt == requested.systemPrompt &&
+                existing.allowedTools == requested.allowedTools &&
+                existing.model == requested.model &&
+                existing.maxSteps == requested.maxSteps
+
         private val NAME_PATTERN = Regex("^[a-z][a-z0-9-]*[a-z0-9]$")
 
         private val READ_ONLY_AND_SYSTEM_TOOLS =

@@ -151,32 +151,10 @@ class DocumentationIndexingService(
 
                     // Check if already indexed (by path = URL)
                     val existingFile = ragRepository.getIndexedFileByPath(projectRoot, current.url)
-                    val fileId = if (existingFile != null && existingFile.fileHash == contentHash) {
+                    if (existingFile != null && existingFile.fileHash == contentHash) {
                         // Already indexed with same content, skip
                         logger.debug { "Skipping already indexed page: ${current.url}" }
                         continue
-                    } else if (existingFile != null) {
-                        // Content changed, delete old chunks and reindex
-                        ragRepository.deleteChunksForFile(existingFile.id)
-                        ragRepository.updateIndexedFile(
-                            fileId = existingFile.id,
-                            fileHash = contentHash,
-                            fileSize = textContent.length.toLong(),
-                            lastModified = System.currentTimeMillis()
-                        )
-                        existingFile.id
-                    } else {
-                        // Create new index_files record
-                        ragRepository.createIndexedFile(
-                            projectRoot = projectRoot,
-                            filePath = current.url,  // URL as path (full page URL)
-                            fileHash = contentHash,
-                            fileSize = textContent.length.toLong(),
-                            mimeType = "text/html",
-                            lastModified = System.currentTimeMillis(),
-                            contentType = RagContentType.DOCUMENTATION,
-                            sourceUrl = url  // Base URL (same for all pages from this doc source)
-                        )
                     }
 
                     // Chunk text
@@ -187,8 +165,20 @@ class DocumentationIndexingService(
                         CHUNK_OVERLAP_TOKENS
                     )
 
-                    // Create chunks in one batched insert (one writer-lock acquisition)
-                    chunksCreated += ragRepository.createChunksBatch(
+                    // Page fingerprint and chunks are written in one transaction: a partial
+                    // write would mark the page as indexed with its chunks missing, and the
+                    // hash check above would then skip it on every later crawl.
+                    ragRepository.upsertIndexedFileWithChunks(
+                        existingFileId = existingFile?.id,
+                        projectRoot = projectRoot,
+                        filePath = current.url,  // URL as path (full page URL)
+                        fileHash = contentHash,
+                        fileSize = textContent.length.toLong(),
+                        mimeType = "text/html",
+                        lastModified = System.currentTimeMillis(),
+                        contentType = RagContentType.DOCUMENTATION,
+                        sourceUrl = url  // Base URL (same for all pages from this doc source)
+                    ) { fileId ->
                         chunks.mapIndexed { index, chunk ->
                             ChunkInsert(
                                 fileId = fileId,
@@ -198,8 +188,9 @@ class DocumentationIndexingService(
                                 endLine = chunk.endLine
                             )
                         }
-                    )
+                    }
 
+                    chunksCreated += chunks.size
                     pagesIndexed++
 
                     // Extract links for crawling
@@ -305,28 +296,6 @@ class DocumentationIndexingService(
             return@flow
         }
 
-        val fileId = if (existingFile != null) {
-            ragRepository.deleteChunksForFile(existingFile.id)
-            ragRepository.updateIndexedFile(
-                fileId = existingFile.id,
-                fileHash = contentHash,
-                fileSize = Files.size(path),
-                lastModified = Files.getLastModifiedTime(path).toMillis()
-            )
-            existingFile.id
-        } else {
-            ragRepository.createIndexedFile(
-                projectRoot = projectRoot,
-                filePath = filePath,
-                fileHash = contentHash,
-                fileSize = Files.size(path),
-                mimeType = Files.probeContentType(path),
-                lastModified = Files.getLastModifiedTime(path).toMillis(),
-                contentType = RagContentType.DOCUMENTATION,
-                sourceUrl = filePath
-            )
-        }
-
         @Suppress("DEPRECATION")
         val chunks = chunkingStrategy.chunkText(
             content,
@@ -334,8 +303,19 @@ class DocumentationIndexingService(
             CHUNK_OVERLAP_TOKENS
         )
 
-        // Create chunks in one batched insert (one writer-lock acquisition)
-        val chunksCreated = ragRepository.createChunksBatch(
+        // File fingerprint and chunks in one transaction: a partial write would mark the file
+        // as indexed with its chunks missing, and the hash check above would skip it forever.
+        ragRepository.upsertIndexedFileWithChunks(
+            existingFileId = existingFile?.id,
+            projectRoot = projectRoot,
+            filePath = filePath,
+            fileHash = contentHash,
+            fileSize = Files.size(path),
+            mimeType = Files.probeContentType(path),
+            lastModified = Files.getLastModifiedTime(path).toMillis(),
+            contentType = RagContentType.DOCUMENTATION,
+            sourceUrl = filePath
+        ) { fileId ->
             chunks.mapIndexed { index, chunk ->
                 ChunkInsert(
                     fileId = fileId,
@@ -345,7 +325,9 @@ class DocumentationIndexingService(
                     endLine = chunk.endLine
                 )
             }
-        )
+        }
+
+        val chunksCreated = chunks.size
 
         val fileName = path.fileName?.toString() ?: filePath
         documentationRepository.updateDocSource(

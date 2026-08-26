@@ -237,8 +237,12 @@ $stickyRequirements
         } else {
             0
         }
+        // The model matters here. Without it the estimate falls back to the generic chars/token
+        // ratio, which under-counts a qwen/llama prompt by roughly a tenth; the system prompt is
+        // large, so that slack goes straight into the dynamic sections and the assembled request
+        // overruns num_ctx, which Ollama then truncates without saying so.
         val staticPrefixTokens =
-            pl.jclab.refio.core.services.PromptTokenEstimator.estimateBase(systemPrompt) + nativeToolTokens
+            pl.jclab.refio.core.services.PromptTokenEstimator.estimateBase(systemPrompt, modelId) + nativeToolTokens
 
         // Use ContextService for messages and project context (for PLAN and AGENT modes)
         if ((mode == TaskMode.PLAN || mode == TaskMode.AGENT) && contextService != null && projectRoot != null) {

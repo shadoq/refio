@@ -1,8 +1,16 @@
 package pl.jclab.refio.ui.settings
 
+import com.intellij.icons.AllIcons
+import com.intellij.openapi.actionSystem.ActionUpdateThread
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.ui.JBColor
+import com.intellij.ui.ToolbarDecorator
 import com.intellij.ui.components.JBPanel
+import com.intellij.ui.dsl.builder.Align
+import com.intellij.ui.dsl.builder.panel
 import com.intellij.ui.table.JBTable
+import com.intellij.util.ui.JBUI
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.api.ToolDefinitionInfo
 import pl.jclab.refio.core.tools.security.CommandRule
@@ -38,23 +46,25 @@ class ToolsSettingsPanel(
     private var isLoadingPermissions = false
 
     init {
-        border = LCATheme.createSettingsBorder("Tools")
+        val toolsTableComponent = createToolsTable()
+        val commandRulesComponent = createCommandRulesPanel()
 
-        val contentPanel = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            border = LCATheme.paddedBorder(8, 0, 0, 0)
-            add(createToolsTable())
-            add(Box.createVerticalStrut(12))
-            add(createCommandRulesPanel())
+        val form = settingsForm {
+            group("Tool permissions") {
+                row {
+                    cell(toolsTableComponent).align(Align.FILL).resizableColumn()
+                }.resizableRow()
+                    .rowComment("Per-mode access: On runs without asking, Ask requires approval, Off hides the tool")
+            }
+            group("Terminal command rules") {
+                row {
+                    cell(commandRulesComponent).align(Align.FILL).resizableColumn()
+                }.resizableRow()
+                    .rowComment("First matching pattern decides: ALLOW runs, ASK prompts, BLOCK refuses")
+            }
         }
 
-        val scrollPane = com.intellij.ui.components.JBScrollPane(contentPanel).apply {
-            border = LCATheme.emptyBorder()
-            verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
-            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
-        }
-
-        add(scrollPane, BorderLayout.CENTER)
+        add(settingsScrollPane(form), BorderLayout.CENTER)
 
         loadToolDefinitions()
     }
@@ -91,26 +101,16 @@ class ToolsSettingsPanel(
         val agentModeCombo = JComboBox(arrayOf("On", "Ask", "Off"))
         agentModeColumn.cellEditor = DefaultCellEditor(agentModeCombo)
 
-        // Flexible layout: fix mode columns, let Description stretch.
+        // Minimums stay small enough that all four columns survive dock width; Description takes
+        // whatever is left over when there is more room.
         toolsTable.autoResizeMode = JTable.AUTO_RESIZE_SUBSEQUENT_COLUMNS
-        toolsTable.columnModel.getColumn(0).apply {
-            minWidth = 120
-            preferredWidth = 160
-        }
-        toolsTable.columnModel.getColumn(1).apply {
-            minWidth = 160
-            preferredWidth = 280
-        }
-        planModeColumn.apply {
-            minWidth = 80
-            maxWidth = 110
-            preferredWidth = 90
-        }
-        agentModeColumn.apply {
-            minWidth = 80
-            maxWidth = 110
-            preferredWidth = 90
-        }
+        toolsTable.fitColumns(
+            ColumnWidth(min = 70, preferred = 150),
+            ColumnWidth(min = 70, preferred = 260),
+            ColumnWidth(min = 46, preferred = 66, max = 110),
+            ColumnWidth(min = 46, preferred = 66, max = 110)
+        )
+        toolsTable.showFullValueOnHover()
 
         val modeRenderer = object : DefaultTableCellRenderer() {
             override fun getTableCellRendererComponent(
@@ -142,18 +142,13 @@ class ToolsSettingsPanel(
 
         return JScrollPane(toolsTable).apply {
             border = LCATheme.customLineBorder(LCATheme.grayColor, 1)
-            preferredSize = Dimension(0, 250)
-            minimumSize = Dimension(0, 150)
+            preferredSize = Dimension(0, JBUI.scale(250))
+            minimumSize = Dimension(0, JBUI.scale(150))
             horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
         }
     }
 
     private fun createCommandRulesPanel(): JComponent {
-        val panel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = LCATheme.createSettingsBorder("Terminal Command Rules")
-            preferredSize = Dimension(0, 310)
-        }
-
         val columns = arrayOf("Pattern (regex)", "Action", "Description")
         commandRulesTable = JBTable(object : DefaultTableModel(columns, 0) {
             override fun isCellEditable(row: Int, column: Int): Boolean = true
@@ -165,19 +160,12 @@ class ToolsSettingsPanel(
 
         // Flexible layout: Action column fixed, Pattern and Description share the rest.
         commandRulesTable.autoResizeMode = JTable.AUTO_RESIZE_SUBSEQUENT_COLUMNS
-        commandRulesTable.columnModel.getColumn(0).apply {
-            minWidth = 140
-            preferredWidth = 220
-        }
-        commandRulesTable.columnModel.getColumn(1).apply {
-            minWidth = 80
-            maxWidth = 110
-            preferredWidth = 90
-        }
-        commandRulesTable.columnModel.getColumn(2).apply {
-            minWidth = 120
-            preferredWidth = 180
-        }
+        commandRulesTable.fitColumns(
+            ColumnWidth(min = 80, preferred = 200),
+            ColumnWidth(min = 56, preferred = 76, max = 110),
+            ColumnWidth(min = 70, preferred = 170)
+        )
+        commandRulesTable.showFullValueOnHover()
 
         val actionCombo = JComboBox(arrayOf("ALLOW", "BLOCK", "ASK"))
         commandRulesTable.columnModel.getColumn(1).cellEditor = DefaultCellEditor(actionCombo)
@@ -199,40 +187,30 @@ class ToolsSettingsPanel(
 
         populateCommandRulesTable(CommandRuleDefaults.DEFAULT_RULES)
 
-        val addButton = JButton("Add Rule").apply {
-            addActionListener {
+        // Add/remove/reset live in the table's own toolbar, so they scale and theme with the IDE
+        // instead of being a hand-placed button row.
+        return ToolbarDecorator.createDecorator(commandRulesTable)
+            .setAddAction {
                 val model = commandRulesTable.model as DefaultTableModel
                 model.addRow(arrayOf("^new_command(\\s+.*)?$", "ASK", "New rule"))
                 commandRulesTable.changeSelection(model.rowCount - 1, 0, false, false)
             }
-        }
-        val removeButton = JButton("Remove Selected").apply {
-            addActionListener {
+            .setRemoveAction {
                 val model = commandRulesTable.model as DefaultTableModel
                 commandRulesTable.selectedRows.sortedDescending().forEach { row ->
                     if (row in 0 until model.rowCount) model.removeRow(row)
                 }
             }
-        }
-        val resetButton = JButton("Reset Defaults").apply {
-            addActionListener { populateCommandRulesTable(CommandRuleDefaults.DEFAULT_RULES) }
-        }
+            .disableUpDownActions()
+            .addExtraAction(object : DumbAwareAction("Reset Defaults", null, AllIcons.Actions.Rollback) {
+                override fun actionPerformed(e: AnActionEvent) {
+                    populateCommandRulesTable(CommandRuleDefaults.DEFAULT_RULES)
+                }
 
-        val actions = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
-            add(addButton)
-            add(removeButton)
-            add(resetButton)
-        }
-
-        val centerPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            add(JScrollPane(commandRulesTable).apply {
-                border = LCATheme.customLineBorder(LCATheme.grayColor, 1)
-            }, BorderLayout.CENTER)
-            add(actions, BorderLayout.SOUTH)
-        }
-        panel.add(centerPanel, BorderLayout.CENTER)
-
-        return panel
+                override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+            })
+            .createPanel()
+            .apply { preferredSize = Dimension(0, JBUI.scale(260)) }
     }
 
     private fun populateCommandRulesTable(rules: List<CommandRule>) {

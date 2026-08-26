@@ -2,215 +2,114 @@ package pl.jclab.refio.ui.settings
 
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBPanel
-import pl.jclab.refio.ui.theme.LCATheme
+import com.intellij.ui.dsl.builder.panel
 import pl.jclab.refio.core.api.CoreApiRouter
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.core.services.ConfigKeyUtil
 import kotlinx.coroutines.*
-import java.awt.GridBagConstraints
-import java.awt.GridBagLayout
+import java.awt.BorderLayout
 import java.awt.event.ItemEvent
 import javax.swing.JComboBox
-import javax.swing.JLabel
 
 /**
  * General Settings Panel
- * Contains general application settings
+ *
+ * Built with the Kotlin UI DSL so label alignment, row spacing and the grey explanation lines
+ * come from the platform instead of hand-tuned insets. Values are saved as they change (there is
+ * no Apply button), hence listeners rather than DSL bindings.
  */
 class GeneralSettingsPanel(
     private val onSettingChanged: (section: String, key: String, value: Any) -> Unit,
     private val coreApiClient: CoreApiRouter?
-) : JBPanel<GeneralSettingsPanel>(GridBagLayout()) {
+) : JBPanel<GeneralSettingsPanel>(BorderLayout()) {
 
     private val logger = dualLogger("GeneralSettingsPanel")
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private val formatMarkdownCheckbox: JBCheckBox
-    private val streamingEnabledCheckbox: JBCheckBox
-    private val advancedViewCheckbox: JBCheckBox
-    private val reasoningEffortCombo: JComboBox<String>
-    private val noEgressEnabledCheckbox: JBCheckBox
-    private val executionModeCombo: JComboBox<String>
-    private val nativeToolsModeCombo: JComboBox<String>
+    private lateinit var formatMarkdownCheckbox: JBCheckBox
+    private lateinit var streamingEnabledCheckbox: JBCheckBox
+    private lateinit var advancedViewCheckbox: JBCheckBox
+    private lateinit var reasoningEffortCombo: JComboBox<String>
+    private lateinit var noEgressEnabledCheckbox: JBCheckBox
+    private lateinit var executionModeCombo: JComboBox<String>
+    private lateinit var nativeToolsModeCombo: JComboBox<String>
 
     // Flag to prevent triggering onSettingChanged during programmatic updates
     private var isUpdatingProgrammatically = false
 
     init {
-        border = LCATheme.emptyBorder()
+        val form = settingsForm {
+            group("Responses") {
+                row {
+                    formatMarkdownCheckbox = checkBox("Format Markdown in responses")
+                        .comment("Enable markdown rendering in chat responses")
+                        .applyToComponent { onToggle(ConfigKeys.FORMAT_MARKDOWN.key) }
+                        .component
+                }
+                row {
+                    streamingEnabledCheckbox = checkBox("Enable streaming responses")
+                        .comment("Stream LLM responses in real-time")
+                        .applyToComponent { onToggle(ConfigKeys.STREAMING_ENABLED.key) }
+                        .component
+                }
+                row("Reasoning effort:") {
+                    reasoningEffortCombo = comboBox(listOf("OFF", "LOW", "MEDIUM", "HIGH"))
+                        .applyToComponent { onSelect(ConfigKeys.GENERAL_REASONING_EFFORT.key) }
+                        .component
+                }.rowComment("Reasoning strength for models that support it (OFF disables it where the provider allows)")
+            }
 
-        val gbc = GridBagConstraints().apply {
-            gridx = 0
-            gridy = 0
-            anchor = GridBagConstraints.WEST
-            fill = GridBagConstraints.HORIZONTAL
-            weightx = 1.0
-            insets = LCATheme.insetsMedium
-        }
+            group("Execution") {
+                row("Execution mode:") {
+                    executionModeCombo = comboBox(listOf("AUTO", "INTERACTIVE"))
+                        .applyToComponent { onSelect(ConfigKeys.GENERAL_EXECUTION_MODE.key) }
+                        .component
+                }.rowComment("AUTO executes steps automatically; INTERACTIVE waits for confirmation")
 
-        // Format Markdown option
-        gbc.insets = LCATheme.insetsGridBagLarge
-        formatMarkdownCheckbox = JBCheckBox("Format Markdown in responses", true).apply {
-            addItemListener { event ->
-                if (!isUpdatingProgrammatically) {
-                    val isSelected = event.stateChange == ItemEvent.SELECTED
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.config.ConfigKeys.FORMAT_MARKDOWN.key
-                    )
-                    onSettingChanged(section, key, isSelected)
+                row("Native tools mode:") {
+                    nativeToolsModeCombo = comboBox(listOf("auto", "always", "never"))
+                        .applyToComponent { onSelect(ConfigKeys.NATIVE_TOOLS_MODE.key) }
+                        .component
+                }.rowComment("auto: use native tools if the model supports it; always: force native tools; never: use JSON fallback")
+            }
+
+            group("Interface") {
+                row {
+                    advancedViewCheckbox = checkBox("Advanced View")
+                        .comment("Show additional metrics and the Context, RAG, Debug, Logs and API screens")
+                        .applyToComponent { onToggle(ConfigKeys.ADVANCED_VIEW.key) }
+                        .component
+                }
+                row {
+                    noEgressEnabledCheckbox = checkBox("No-egress mode (block network)")
+                        .comment("Restrict tools to local-only operations (no outbound network)")
+                        .applyToComponent { onToggle(ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key) }
+                        .component
                 }
             }
         }
-        add(formatMarkdownCheckbox, gbc)
 
-        // Add description
-        gbc.gridy++
-        gbc.insets = LCATheme.insetsDetailsIndented
-        add(JLabel("<html><font color='gray'>Enable markdown rendering in chat responses</font></html>"), gbc)
-
-        // Enable Streaming option
-        gbc.gridy++
-        gbc.insets = LCATheme.insetsGridBagLarge
-        streamingEnabledCheckbox = JBCheckBox("Enable streaming responses", true).apply {
-            addItemListener { event ->
-                if (!isUpdatingProgrammatically) {
-                    val isSelected = event.stateChange == ItemEvent.SELECTED
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.config.ConfigKeys.STREAMING_ENABLED.key
-                    )
-                    onSettingChanged(section, key, isSelected)
-                }
-            }
-        }
-        add(streamingEnabledCheckbox, gbc)
-
-        // Add description
-        gbc.gridy++
-        gbc.insets = LCATheme.insetsDetailsIndented
-        add(JLabel("<html><font color='gray'>Stream LLM responses in real-time</font></html>"), gbc)
-
-        // Advanced View option
-        gbc.gridy++
-        gbc.insets = LCATheme.insetsGridBagLarge
-        advancedViewCheckbox = JBCheckBox("Advanced View", false).apply {
-            addItemListener { event ->
-                if (!isUpdatingProgrammatically) {
-                    val isSelected = event.stateChange == ItemEvent.SELECTED
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.config.ConfigKeys.ADVANCED_VIEW.key
-                    )
-                    onSettingChanged(section, key, isSelected)
-                }
-            }
-        }
-        add(advancedViewCheckbox, gbc)
-
-        // Add description
-        gbc.gridy++
-        gbc.insets = LCATheme.insetsDetailsIndented
-        add(
-            JLabel("<html><font color='gray'>Show additional metrics rows and all tabs (Steps, Context, RAG, Debug)</font></html>"),
-            gbc
-        )
-
-        // Reasoning effort
-        gbc.gridy++
-        gbc.insets = LCATheme.insetsGridBagLarge
-        reasoningEffortCombo = JComboBox(arrayOf("OFF", "LOW", "MEDIUM", "HIGH")).apply {
-            addActionListener {
-                if (!isUpdatingProgrammatically) {
-                    val value = selectedItem as? String ?: return@addActionListener
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.config.ConfigKeys.GENERAL_REASONING_EFFORT.key
-                    )
-                    onSettingChanged(section, key, value)
-                }
-            }
-        }
-        val reasoningPanel = JBPanel<JBPanel<*>>(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0)).apply {
-            add(JLabel("Reasoning effort: "))
-            add(reasoningEffortCombo)
-        }
-        add(reasoningPanel, gbc)
-
-        gbc.gridy++
-        gbc.insets = LCATheme.insetsDetailsIndented
-        add(JLabel("<html><font color='gray'>Reasoning strength for models that support it (OFF disables it where the provider allows)</font></html>"), gbc)
-
-        // No-egress mode
-        gbc.gridy++
-        gbc.insets = LCATheme.insetsGridBagLarge
-        noEgressEnabledCheckbox = JBCheckBox("No-egress mode (block network)", false).apply {
-            addItemListener { event ->
-                if (!isUpdatingProgrammatically) {
-                    val isSelected = event.stateChange == ItemEvent.SELECTED
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.config.ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key
-                    )
-                    onSettingChanged(section, key, isSelected)
-                }
-            }
-        }
-        add(noEgressEnabledCheckbox, gbc)
-
-        gbc.gridy++
-        gbc.insets = LCATheme.insetsDetailsIndented
-        add(JLabel("<html><font color='gray'>Restrict tools to local-only operations (no outbound network)</font></html>"), gbc)
-
-        // Execution mode
-        gbc.gridy++
-        gbc.insets = LCATheme.insetsGridBagLarge
-        executionModeCombo = JComboBox(arrayOf("AUTO", "INTERACTIVE")).apply {
-            addActionListener {
-                if (!isUpdatingProgrammatically) {
-                    val value = selectedItem as? String ?: return@addActionListener
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.config.ConfigKeys.GENERAL_EXECUTION_MODE.key
-                    )
-                    onSettingChanged(section, key, value)
-                }
-            }
-        }
-        val execPanel = JBPanel<JBPanel<*>>(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0)).apply {
-            add(JLabel("Execution mode: "))
-            add(executionModeCombo)
-        }
-        add(execPanel, gbc)
-
-        gbc.gridy++
-        gbc.insets = LCATheme.insetsDetailsIndented
-        add(JLabel("<html><font color='gray'>AUTO executes steps automatically; INTERACTIVE waits for confirmation</font></html>"), gbc)
-
-        // Native tools mode
-        gbc.gridy++
-        gbc.insets = LCATheme.insetsGridBagLarge
-        nativeToolsModeCombo = JComboBox(arrayOf("auto", "always", "never")).apply {
-            addActionListener {
-                if (!isUpdatingProgrammatically) {
-                    val value = selectedItem as? String ?: return@addActionListener
-                    val (section, key) = pl.jclab.refio.core.services.ConfigKeyUtil.split(
-                        pl.jclab.refio.core.config.ConfigKeys.NATIVE_TOOLS_MODE.key
-                    )
-                    onSettingChanged(section, key, value)
-                }
-            }
-        }
-        val nativeToolsPanel = JBPanel<JBPanel<*>>(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0)).apply {
-            add(JLabel("Native tools mode: "))
-            add(nativeToolsModeCombo)
-        }
-        add(nativeToolsPanel, gbc)
-
-        gbc.gridy++
-        gbc.insets = LCATheme.insetsDetailsIndented
-        add(JLabel("<html><font color='gray'>auto: use native tools if model supports it; always: force native tools; never: use JSON fallback</font></html>"), gbc)
-
-        // Filler to push content to top
-        gbc.gridy++
-        gbc.weighty = 1.0
-        gbc.fill = GridBagConstraints.BOTH
-        add(JBPanel<JBPanel<*>>(), gbc)
+        add(form, BorderLayout.NORTH)
 
         loadGeneralConfig()
+    }
+
+    private fun javax.swing.JCheckBox.onToggle(fullKey: String) {
+        addItemListener { event ->
+            if (isUpdatingProgrammatically) return@addItemListener
+            val (section, key) = ConfigKeyUtil.split(fullKey)
+            onSettingChanged(section, key, event.stateChange == ItemEvent.SELECTED)
+        }
+    }
+
+    private fun JComboBox<String>.onSelect(fullKey: String) {
+        addActionListener {
+            if (isUpdatingProgrammatically) return@addActionListener
+            val value = selectedItem as? String ?: return@addActionListener
+            val (section, key) = ConfigKeyUtil.split(fullKey)
+            onSettingChanged(section, key, value)
+        }
     }
 
     /**

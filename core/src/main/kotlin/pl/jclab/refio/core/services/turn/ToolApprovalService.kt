@@ -46,15 +46,38 @@ class ToolApprovalService(
 
         /** Reject — stops the agent loop, returns to user prompt */
         data class Rejected(val reason: String? = null) : ApprovalDecision()
+
+        /**
+         * Deny this one call and let the turn continue.
+         *
+         * A policy refusing one command is a different speech act from a human clicking reject: the
+         * human is saying "stop working", a rule is saying "not that way". Both used to end the turn,
+         * which in a headless run meant a single unmatched command killed everything after it -
+         * measured on the e2e set, four runs were scored as failures after they had already written
+         * their deliverable and were only cleaning up.
+         *
+         * The denial is handed back to the model as a failed tool result, so it can pick another
+         * route the way it does with any other refusal.
+         */
+        data class NotPermitted(val reason: String? = null) : ApprovalDecision()
     }
 
     private data class PendingEntry(
         val request: ApprovalRequest,
-        val deferred: CompletableDeferred<ApprovalDecision>
+        val deferred: CompletableDeferred<ApprovalDecision>,
+        /**
+         * Completed once this request is the one the user can actually act on (the head of the
+         * queue, which is all either UI renders) or once it leaves the queue for any other reason.
+         */
+        val exposed: CompletableDeferred<Unit> = CompletableDeferred()
     )
 
-    /** Pending requests: requestId → (request + deferred) */
-    private val pending = ConcurrentHashMap<String, PendingEntry>()
+    /**
+     * Pending requests: requestId → (request + deferred), in arrival order. A LinkedHashMap, not a
+     * ConcurrentHashMap: requests are shown one at a time, so an arbitrary hash order decided which
+     * one the user saw and could starve the rest. Every access is inside [pendingLock].
+     */
+    private val pending = LinkedHashMap<String, PendingEntry>()
     private val pendingLock = Any()
 
     /** Session-level trust rules: toolName → list of Regex patterns (null = unconditional trust) */
@@ -84,14 +107,19 @@ class ToolApprovalService(
         }
 
         val deferred = CompletableDeferred<ApprovalDecision>()
+        val entry = PendingEntry(request, deferred)
         synchronized(pendingLock) {
-            pending[request.requestId] = PendingEntry(request, deferred)
-            _pendingRequests.value = pending.values.map { it.request }
+            pending[request.requestId] = entry
+            publishPending()
         }
 
         logger.info { "[APPROVAL] Waiting for user decision on ${request.toolName} (requestId=${request.requestId})" }
 
         return try {
+            // Concurrent tool calls (parallel subagents) queue up, but only the head is rendered.
+            // Timing out a request the user was never shown rejects it behind their back, so the
+            // clock measures the time it was on screen, not the time it spent waiting in line.
+            entry.exposed.await()
             if (approvalTimeoutMs > 0) {
                 withTimeout(approvalTimeoutMs) { deferred.await() }
             } else {
@@ -103,9 +131,19 @@ class ToolApprovalService(
         } finally {
             synchronized(pendingLock) {
                 pending.remove(request.requestId)
-                _pendingRequests.value = pending.values.map { it.request }
+                publishPending()
             }
         }
+    }
+
+    /**
+     * Republish the queue and hand the head its exposure signal. Must be called while holding
+     * [pendingLock]; [CompletableDeferred.complete] is non-blocking and idempotent, so signalling
+     * an already-exposed head is a no-op.
+     */
+    private fun publishPending() {
+        _pendingRequests.value = pending.values.map { it.request }
+        pending.values.firstOrNull()?.exposed?.complete(Unit)
     }
 
     /**
@@ -124,11 +162,14 @@ class ToolApprovalService(
 
         val entry = synchronized(pendingLock) {
             val removed = pending.remove(requestId)
-            _pendingRequests.value = pending.values.map { it.request }
+            publishPending()
             removed
         }
         if (entry != null) {
             entry.deferred.complete(decision)
+            // A queued request can be resolved without ever reaching the head (headless
+            // auto-approval resolves the whole list); release its waiter too.
+            entry.exposed.complete(Unit)
             logger.info { "[APPROVAL] Resolved requestId=$requestId decision=${decision::class.simpleName}" }
         } else {
             logger.warn { "[APPROVAL] No pending request for requestId=$requestId" }
@@ -140,7 +181,12 @@ class ToolApprovalService(
      */
     fun cancelAll() {
         synchronized(pendingLock) {
-            pending.values.forEach { it.deferred.cancel() }
+            pending.values.forEach { entry ->
+                entry.deferred.cancel()
+                // Queued requests are parked on `exposed`, not on `deferred`, so cancelling only
+                // the decision would leave them waiting for a head they will never become.
+                entry.exposed.cancel()
+            }
             pending.clear()
             _pendingRequests.value = emptyList()
         }

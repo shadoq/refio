@@ -10,6 +10,9 @@ import pl.jclab.refio.core.tools.security.FileLimits
 import pl.jclab.refio.core.tools.security.LimitExceededException
 import pl.jclab.refio.core.security.RegexSafetyValidator
 import pl.jclab.refio.core.logging.dualLogger
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import java.nio.file.Files
 import kotlin.io.path.isDirectory
 import kotlin.io.path.isRegularFile
@@ -91,6 +94,7 @@ class GrepSearchTool(
             val results = mutableListOf<GrepResult>()
             var filesSearched = 0
             var filesSkipped = 0
+            var longLinesSkipped = 0
 
             // Single-file mode: skip the walk, agents often pass a concrete file path here.
             // The "Not a directory" rejection cost a whole turn for a trivial intent mismatch.
@@ -99,7 +103,9 @@ class GrepSearchTool(
                 if (limits.shouldExcludeFile(fileName)) {
                     return ToolResult.error("File extension excluded by safety limits: $fileName")
                 }
-                searchInFile(path, contentRegex, results, maxResults)?.let { filesSkipped += it }
+                val outcome = searchInFile(path, contentRegex, results, maxResults)
+                if (outcome.fileSkipped) filesSkipped++
+                longLinesSkipped += outcome.longLinesSkipped
                 filesSearched = 1
             } else if (path.isDirectory()) {
                 // file_pattern is a NAME filter, but models often pass a path-anchored
@@ -143,8 +149,9 @@ class GrepSearchTool(
                         }
 
                         filesSearched++
-                        val skipped = searchInFile(file, contentRegex, results, maxResults)
-                        if (skipped != null) filesSkipped += skipped
+                        val outcome = searchInFile(file, contentRegex, results, maxResults)
+                        if (outcome.fileSkipped) filesSkipped++
+                        longLinesSkipped += outcome.longLinesSkipped
                         if (results.size >= maxResults) limitReached = true
                     }
                 }
@@ -168,10 +175,18 @@ class GrepSearchTool(
             }
 
             // Format output (verbosity controlled by `detail`)
-            val output = when {
+            val body = when {
                 ranked.isEmpty() -> "No matches found for pattern: $pattern"
                 detail == "summary" -> formatResultsSummary(ranked)
                 else -> formatResults(ranked)
+            }
+            // Skipped lines must be visible: a silent skip looks like "no match here" and sends the
+            // agent looking in the wrong place.
+            val output = if (longLinesSkipped > 0) {
+                "$body\n\n$longLinesSkipped line(s) longer than $MAX_SEARCHABLE_LINE_CHARS characters " +
+                    "were not searched (minified or generated content)."
+            } else {
+                body
             }
 
             val duration = (System.currentTimeMillis() - startTime).toInt()
@@ -197,11 +212,16 @@ class GrepSearchTool(
                 metadata = mapOf(
                     "match_count" to results.size,
                     "files_searched" to filesSearched,
+                    "long_lines_skipped" to longLinesSkipped,
                     "pattern" to pattern,
                     "search_path" to pathStr,
                     "detail" to detail
                 )
             )
+
+        } catch (e: CancellationException) {
+            // Cancellation is not a tool failure - let it unwind, or the turn cannot be stopped.
+            throw e
 
         } catch (e: SecurityException) {
             logger.warn { "Security violation in grep_search: ${e.message}" }
@@ -213,32 +233,55 @@ class GrepSearchTool(
         }
     }
 
-    // Returns 1 if file was skipped due to size, null otherwise. Caller tracks `filesSkipped`.
-    private fun searchInFile(
+    /** What one file contributed beyond its matches: was it skipped, and how many lines were too long. */
+    private data class FileScanOutcome(
+        val fileSkipped: Boolean = false,
+        val longLinesSkipped: Int = 0
+    )
+
+    private suspend fun searchInFile(
         file: java.nio.file.Path,
         contentRegex: Regex,
         results: MutableList<GrepResult>,
         maxResults: Int
-    ): Int? {
+    ): FileScanOutcome {
+        // Stop promptly when the turn is cancelled or the call ran out of its time budget.
+        currentCoroutineContext().ensureActive()
+
         val fileSize = Files.size(file)
         if (fileSize > limits.maxFileSize) {
             logger.debug { "Skipping large file: ${file.toAbsolutePath()}, size=$fileSize bytes (max ${limits.maxFileSize})" }
-            return 1
+            return FileScanOutcome(fileSkipped = true)
         }
+        var longLinesSkipped = 0
         try {
             val content = Files.readString(file)
             val lines = content.lines()
             val relativePath = sandbox.resolve(".").relativize(file).toString()
             for ((index, line) in lines.withIndex()) {
+                if (line.length > MAX_SEARCHABLE_LINE_CHARS) {
+                    // Matching is scanned from every start offset, so an unanchored pattern over a
+                    // single very long line costs O(n^2) - a 2 MB minified line runs for hours, and
+                    // java.util.regex answers neither cancellation nor Thread.interrupt() while it
+                    // does. Such a line is also unusable as output: the whole blob would land in the
+                    // agent's context. Skip it and say so.
+                    longLinesSkipped++
+                    continue
+                }
                 if (contentRegex.containsMatchIn(line)) {
                     results.add(GrepResult(file = relativePath, lineNumber = index + 1, line = line.trim()))
-                    if (results.size >= maxResults) return null
+                    if (results.size >= maxResults) return FileScanOutcome(longLinesSkipped = longLinesSkipped)
                 }
             }
+        } catch (e: StackOverflowError) {
+            // A pathological pattern can recurse java.util.regex off the stack. The stack is unwound
+            // by the time we get here, so one poisonous file must not take the whole turn down.
+            logger.warn { "Pattern overflowed the stack on file: ${file.fileName} - skipping it" }
+            return FileScanOutcome(fileSkipped = true, longLinesSkipped = longLinesSkipped)
         } catch (e: Exception) {
             logger.debug { "Failed to read file: ${file.fileName} - ${e.message}" }
         }
-        return null
+        return FileScanOutcome(longLinesSkipped = longLinesSkipped)
     }
 
     private fun globToRegex(pattern: String): Regex {
@@ -319,6 +362,14 @@ class GrepSearchTool(
     )
 
     companion object {
+        /**
+         * Longest line the pattern is matched against. 10k characters is far beyond any
+         * human-written source line (the longest lines in this repo are ~200), so the cap only ever
+         * hits minified bundles, embedded base64 and generated one-liners - content whose matched
+         * line could not be shown usefully anyway.
+         */
+        const val MAX_SEARCHABLE_LINE_CHARS = 10_000
+
         // A line looks like a *declaration* (a type/function being defined) rather than a usage.
         // Such lines rank above plain usages so an agent grepping for a symbol sees its definition
         // first. `val`/`var` are deliberately EXCLUDED: they overwhelmingly mark

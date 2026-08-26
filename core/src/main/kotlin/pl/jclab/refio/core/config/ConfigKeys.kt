@@ -565,32 +565,39 @@ object ConfigKeys {
     val RECENT_WORK_FULL_DATA_LIMIT = ConfigKey(
         key = "context.recent_work.full_data_limit",
         parser = String::toIntOrNull,
-        default = 5
+        default = 5,
+        yamlAccessor = { it.getRecentWorkFullDataLimit() }
     )
 
     val RECENT_WORK_SUMMARY_MAX_LENGTH = ConfigKey(
         key = "context.recent_work.summary_max_length",
         parser = String::toIntOrNull,
-        default = 1000
+        default = 1000,
+        yamlAccessor = { it.getRecentWorkSummaryMaxLength() }
     )
 
     val CONTEXT_BUDGET_TOTAL_TOKENS = ConfigKey(
         key = "context.budget.total_tokens",
         parser = String::toIntOrNull,
-        default = 0
+        default = 0,
+        yamlAccessor = { it.getContextBudgetTotalTokens() }
     )
 
     val CONTEXT_BUDGET_INPUT_RATIO = ConfigKey(
         key = "context.budget.input_ratio",
         parser = String::toDoubleOrNull,
         default = 0.85,
+        yamlAccessor = { it.getContextBudgetInputRatio() },
         validator = { it > 0.0 && it <= 1.0 }
     )
 
     val WORKING_MEMORY_MAX_FACTS = ConfigKey(
         key = "working_memory.max_facts",
         parser = String::toIntOrNull,
-        default = 20
+        default = 20,
+        yamlAccessor = { it.getWorkingMemoryMaxFacts() },
+        // Zero or less would silently discard every fact the agent extracts.
+        validator = { it > 0 }
     )
 
     // ==================== SUBAGENTS ====================
@@ -703,6 +710,61 @@ object ConfigKeys {
         yamlAccessor = { it.getGenericOpenAIModel() }
     )
 
+    /**
+     * Context window the user declares for their OpenAI-compatible server.
+     *
+     * Needed because `/v1/models` on servers like llama.cpp does not report `context_length`,
+     * so discovery cannot tell how large the window really is. Same role as the Ollama and
+     * LM Studio overrides, and deliberately without a validator so a server running a very
+     * large window can be declared as-is.
+     */
+    val PROVIDER_CUSTOM_OPENAI_CONTEXT_SIZE = ConfigKey(
+        key = "providers.generic_openai.generic_openai_context_size",
+        parser = String::toIntOrNull,
+        default = 32768,
+        yamlAccessor = { it.getGenericOpenAIContextSize() }
+    )
+
+    /**
+     * Send the chat request without any sampling parameters of ours, for servers that already
+     * pin generation settings server-side.
+     *
+     * Omits `temperature`, `max_tokens` and the non-standard `request_id`. Deliberately keeps
+     * `stream`/`stream_options` (dropping them loses real token accounting) and `tools`
+     * (dropping them breaks AGENT mode). Applies to `generic_openai` only, not to providers
+     * that reuse the same adapter.
+     */
+    val PROVIDER_CUSTOM_OPENAI_RAW_REQUEST = ConfigKey(
+        key = "providers.generic_openai.generic_openai_raw_request",
+        parser = String::toBooleanStrictOrNull,
+        default = false,
+        yamlAccessor = { it.getGenericOpenAIRawRequest() }
+    )
+
+    /**
+     * Base URL of an OpenAI-compatible embeddings endpoint, e.g. a second llama.cpp instance
+     * serving an embedding model. Selected with `models.embedding_model:
+     * openai_compatible/<model>`.
+     *
+     * Separate from the chat provider's base URL on purpose: embeddings commonly run as their
+     * own process on a different port.
+     */
+    val PROVIDER_EMBEDDINGS_BASE_URL = ConfigKey<String?>(
+        key = "providers.embeddings.embeddings_base_url",
+        parser = { it.takeIf { s -> s.isNotBlank() } },
+        default = null,
+        serializer = { it ?: "" },
+        yamlAccessor = { it.getEmbeddingsBaseUrl() }
+    )
+
+    val PROVIDER_EMBEDDINGS_API_KEY = ConfigKey<String?>(
+        key = "providers.embeddings.embeddings_api_key",
+        parser = { it.takeIf { s -> s.isNotBlank() } },
+        default = null,
+        serializer = { it ?: "" },
+        yamlAccessor = { it.getEmbeddingsApiKey() }
+    )
+
     val PROVIDER_ZAI_API_KEY = ConfigKey<String?>(
         key = "providers.zai.zai_api_key",
         parser = { it.takeIf { s -> s.isNotBlank() } },
@@ -744,12 +806,6 @@ object ConfigKeys {
         default = 5
     )
 
-    val MAX_ITERATIONS = ConfigKey(
-        key = "agent.max_iterations",
-        parser = String::toIntOrNull,
-        default = 50
-    )
-
     /**
      * Per-session hard cost ceiling in USD. `0.0` (default) disables the guard. When > 0, the turn
      * loop aborts before an iteration once the session's live cost reaches this value.
@@ -760,6 +816,20 @@ object ConfigKeys {
         parser = String::toDoubleOrNull,
         default = 0.0,
         validator = { it >= 0.0 }
+    )
+
+    /**
+     * Per-turn wall-clock ceiling in minutes. `0` disables it.
+     *
+     * Bounds a turn stuck waiting rather than generating (a model that
+     * never answers, a tool blocked on IO). Gemini CLI pairs its subagent turn cap with the same
+     * kind of time bound for this reason.
+     */
+    val AGENT_MAX_TURN_MINUTES = ConfigKey(
+        key = "agent.max_turn_minutes",
+        parser = String::toLongOrNull,
+        default = 30L,
+        validator = { it >= 0L }
     )
 
     /**
@@ -930,13 +1000,17 @@ object ConfigKeys {
             PROVIDER_CUSTOM_OPENAI_API_KEY,
             PROVIDER_CUSTOM_OPENAI_BASE_URL,
             PROVIDER_CUSTOM_OPENAI_MODEL,
+            PROVIDER_CUSTOM_OPENAI_CONTEXT_SIZE,
+            PROVIDER_CUSTOM_OPENAI_RAW_REQUEST,
+            PROVIDER_EMBEDDINGS_BASE_URL,
+            PROVIDER_EMBEDDINGS_API_KEY,
             PROVIDER_ZAI_API_KEY,
             PROVIDER_ZAI_BASE_URL,
             // Agent flow
             TASK_VERIFICATION_ENABLED,
             MAX_CONSECUTIVE_TOOL_ERRORS,
-            MAX_ITERATIONS,
             AGENT_MAX_COST_USD,
+            AGENT_MAX_TURN_MINUTES,
             AGENT_DECISION_TEMPERATURE,
             JSON_THINKING_XML_TAGS,
             // Verify

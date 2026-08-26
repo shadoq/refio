@@ -319,17 +319,18 @@ The turn loop has been enhanced with six major optimizations inspired by Codex C
 ```
 Context Window Filling → Token Estimation → Compaction Trigger
     ↓
-ConversationCompactor
-    ├── Keep last 4 messages raw (continuity)
-    ├── Summarize older messages using weak model
-    └── Replace with single <conversation_summary> message
+ConversationSummaryService
+    ├── Only messages after the last summary are considered (never summarize a summary)
+    ├── Keep at least the last 2 messages raw (continuity)
+    ├── Summarize older messages using the WEAK model
+    └── Replace with a single <conversation_summary> message
     ↓
-Context reduced by ~60%, conversation continues
+Conversation tail brought back to ~50% of the budget, conversation continues
 ```
 
-**Configuration:**
-- PLAN mode: Triggers at 85% of context window
-- AGENT mode: Triggers at 80% of context window
+**Configuration:** triggers when the uncompressed tail exceeds 85% of the conversation budget,
+in every mode (`ConversationSummaryService.SUMMARY_THRESHOLD_RATIO`). The `TurnLoopConfig`
+compaction fields are leftovers and are not read by the turn loop.
 
 #### 2. Prompt Caching
 
@@ -350,7 +351,7 @@ Reduced LLM prompt construction overhead
 
 #### 3. Parallel Tool Execution
 
-READ_ONLY tools execute concurrently while WRITE tools remain sequential:
+READ_ONLY tools execute concurrently while WRITE tools remain sequential (`TurnToolExecutor`):
 
 ```
 Tool Calls: [read_file(a.kt), read_file(b.kt), grep_search("TODO")]

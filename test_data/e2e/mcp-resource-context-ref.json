@@ -1,0 +1,27 @@
+{
+  "id": "mcp-resource-context-ref",
+  "mode": "AGENT",
+  "description": "An MCP resource reaches the model through a context reference, since it has no agent tool.",
+  "category": "mcp",
+  "max_iterations": 12,
+  "fixture": "fixtures/mcp-empty",
+  "prompt_file": "prompts/mcp-resource-context-ref.md",
+  "mcp": {
+    "config": "configs/stdio-notes.json"
+  },
+  "context_refs": [
+    "@stubnotes:project-notes"
+  ],
+  "assert": {
+    "needle_in_file": {
+      "path": "found.txt",
+      "regex": "MCP_RES_NEEDLE\\{notes_4F\\}"
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "Did the agent take the needle from the attached MCP context rather than from the filesystem?"
+    ]
+  }
+}

@@ -3,6 +3,7 @@ package pl.jclab.refio.core.services.context
 import pl.jclab.refio.core.db.ChatMessage
 import pl.jclab.refio.core.db.MessageRole
 import pl.jclab.refio.core.llm.LLMMessage
+import pl.jclab.refio.core.llm.LLMToolCall
 import pl.jclab.refio.core.llm.LLMMessageMapper
 
 /**
@@ -286,9 +287,27 @@ class ConversationContextBuilder {
 
             MessageRole.ASSISTANT -> {
                 val responseText = extractResponseText(msg.content)
-                if (responseText.isNotBlank()) {
-                    LLMMessage(role = "assistant", content = responseText)
-                } else null
+                // The calls ride in the structured field, never as a text footer: a rendered
+                // footer was tried and a model began echoing it back as its own reply. Carrying
+                // them keeps a turn that called a tool without saying anything - drop it and the
+                // model loses the record of its own action, sees a result it never asked for, and
+                // reissues the same call until a loop guard ends the turn.
+                val calls = msg.toolCalls.orEmpty()
+                    .filter { it.name.isNotBlank() }
+                    .map { LLMToolCall(id = it.id, name = it.name, argumentsJson = it.arguments) }
+                when {
+                    responseText.isNotBlank() -> LLMMessage(
+                        role = "assistant",
+                        content = responseText,
+                        toolCalls = calls,
+                    )
+                    calls.isNotEmpty() -> LLMMessage(
+                        role = "assistant",
+                        content = "",
+                        toolCalls = calls,
+                    )
+                    else -> null
+                }
             }
 
             MessageRole.TOOL -> {

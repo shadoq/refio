@@ -11,6 +11,7 @@ import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.db.repositories.TaskRepository
 import pl.jclab.refio.core.tools.DiffUtils
+import pl.jclab.refio.core.tools.LineEndings
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.FileTool
 import pl.jclab.refio.core.tools.base.ToolCategory
@@ -424,25 +425,39 @@ class AdvanceCodeEditingTool(
                 )
             }
 
-            // 6. Generate diff (delegated to shared DiffUtils)
-            val diff = DiffUtils.generateUnifiedDiff(
+            // 6. Re-express the generated file in the line-ending convention it had on disk. The
+            // model is fed LF and answers in LF, so writing its reply verbatim rewrites every line
+            // ending of a CRLF checkout and turns a small edit into a whole-file diff. A file being
+            // created has no previous convention to preserve, so it stays as generated.
+            if (fileExists) {
+                newContent = LineEndings.toFileEol(newContent, originalContent)
+            }
+
+            // 7. Generate diff and change summary BEFORE writing: the diff is the expensive step,
+            // and computing it first means a failure there leaves the file untouched instead of
+            // losing the result of a write that already happened.
+            val changeSummary = DiffUtils.buildChangeSummary(
                 originalContent = originalContent,
                 newContent = newContent,
-                filePath = pathStr
+                filePath = pathStr,
+                created = !fileExists
             )
+            val diff = changeSummary.unifiedDiff ?: ""
+            val addedLines = changeSummary.addedLines
+            val removedLines = changeSummary.removedLines
 
-            // 7. Optional: Syntax validation
+            // 8. Optional: Syntax validation
             val validationError = validateSyntax(newContent, language)
             if (validationError != null) {
                 logger.warn { "Syntax validation warning: $validationError" }
                 // Continue anyway - user can rollback
             }
 
-            // 8. Snapshot creation
+            // 9. Snapshot creation
             // Note: Snapshots are created by AgentExecutor before tool execution
             // Tool itself doesn't create snapshots - this is handled at the workflow level
 
-            // 9. Write file
+            // 10. Write file
             Files.writeString(path, newContent)
             val duration = (System.currentTimeMillis() - startTime).toInt()
             val newFileSize = path.fileSize()
@@ -455,18 +470,6 @@ class AdvanceCodeEditingTool(
 
             // Task / subtask metrics auto-incremented inside LLMClient.complete()
             // via taskId / subtaskId passed in the call above. No manual increment here.
-
-            // 10. Parse diff stats for UI display
-            val (addedLines, removedLines) = DiffUtils.parseDiffStats(diff)
-
-            // Build structured ChangeSummary so the agent can reason about what changed
-            // without re-reading the file (lesson 03E04: modify tools should return what changed).
-            val changeSummary = DiffUtils.buildChangeSummary(
-                originalContent = originalContent,
-                newContent = newContent,
-                filePath = pathStr,
-                created = !fileExists
-            )
 
             // 11. Return result (changes displayed as badge in UI)
             ToolResult(
@@ -545,19 +548,41 @@ class AdvanceCodeEditingTool(
      */
     private fun extractCodeBlock(response: String, expectedLanguage: String): String? {
         // Pattern 1: ```language\ncode\n```
-        val pattern1 = Regex("```$expectedLanguage\\s*\\n(.+?)\\n```", RegexOption.DOT_MATCHES_ALL)
-        val match1 = pattern1.find(response)
-        if (match1 != null) {
-            return match1.groupValues[1].trim()
-        }
+        extractFencedBody(response, Regex("```$expectedLanguage\\s*\\n"))?.let { return it }
 
         // Pattern 2: ```\ncode\n``` (no language specified)
-        val pattern2 = Regex("```\\s*\\n(.+?)\\n```", RegexOption.DOT_MATCHES_ALL)
-        val match2 = pattern2.find(response)
-        if (match2 != null) {
-            return match2.groupValues[1].trim()
-        }
+        return extractFencedBody(response, Regex("```\\s*\\n"))
+    }
 
+    /**
+     * Body of the block opened by [openFence], ending at the fence that balances it.
+     *
+     * Fence lines starting at column 0 are depth-counted instead of matched lazily: the generated file
+     * legitimately contains fenced blocks of its own (a ```bash sample inside a README, prompt or doc),
+     * and closing on the first inner fence would write only the part of the file before it while the
+     * tool still reported success. A bare ``` line closes a block, a ```something line opens a nested
+     * one. Returns null when the opening fence is missing or is never balanced by a closing one, so the
+     * caller takes its extraction-repair/salvage path instead of writing a partial file.
+     */
+    private fun extractFencedBody(response: String, openFence: Regex): String? {
+        val open = openFence.find(response) ?: return null
+        val body = response.substring(open.range.last + 1)
+        var depth = 1
+        for (fence in FENCE_LINE.findAll(body)) {
+            if (fence.groupValues[1].isBlank()) {
+                depth--
+            } else {
+                depth++
+            }
+            if (depth == 0) {
+                // The newline before the closing fence terminates the last content line, so it is part
+                // of the fence, not of the file. Everything else is kept verbatim: trimming here would
+                // strip the file's trailing newline and any intentional leading blank line.
+                val end = (fence.range.first - 1).coerceAtLeast(0)
+                val content = body.substring(0, end)
+                return if (content.isBlank()) null else content
+            }
+        }
         return null
     }
 
@@ -707,6 +732,13 @@ class AdvanceCodeEditingTool(
          * enough to rescue a partially-generated real file.
          */
         private const val SALVAGE_MIN_CHARS = 2000
+
+        /**
+         * A markdown fence line, i.e. a ``` starting at column 0. Group 1 is the info string: empty for
+         * a closing fence, the language (or anything else) for an opening one. Indented fences are
+         * deliberately ignored, since the editor's own wrapping fence is always at column 0.
+         */
+        private val FENCE_LINE = Regex("^```(.*)$", RegexOption.MULTILINE)
     }
 
 }

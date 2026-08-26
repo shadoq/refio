@@ -32,6 +32,18 @@ class PromptTokenEstimator {
          */
         private const val BUDGET_SAFETY_FACTOR = 0.9
 
+        /** Prior for the looser cloud BPE tokenizers. */
+        private const val CLOUD_BPE_CHARS_PER_TOKEN = 3.6
+
+        /** Prior for the dense tokenizers local models ship with (qwen/llama/mistral and kin). */
+        private const val DENSE_LOCAL_CHARS_PER_TOKEN = 3.2
+
+        /**
+         * Model-name fragments that identify a cloud BPE tokenizer. Deliberately short: everything
+         * not on this list is assumed dense (see [charsPerToken]).
+         */
+        private val CLOUD_BPE_FRAGMENTS = listOf("gpt", "claude", "gemini", "grok")
+
         /**
          * Family-level chars/token prior keyed by model-name fragment.
          *
@@ -39,13 +51,29 @@ class PromptTokenEstimator {
          * but cloud tokenizers (gpt/claude BPE) and local code-model tokenizers (qwen/llama)
          * differ enough that a per-family cold-start prior beats one flat constant. Once real
          * usage is observed, [TokenRatioCalibrator] overrides this per model.
+         *
+         * A name this cannot place gets the DENSE prior, because the two directions are not
+         * symmetric: under-counting lets an oversized prompt through and Ollama truncates the head
+         * in silence, while over-counting only leaves a sliver of the window unused and is
+         * corrected by the first real usage report. Locally served models routinely carry names
+         * that match no family fragment (`ornith:35b` is architecture `qwen35moe` underneath), and
+         * treating those as loose cost ~9% of the estimate exactly where it had to be honest.
          */
         fun charsPerToken(modelId: String?): Double = when {
             modelId == null -> CHARS_PER_TOKEN_BASE
-            modelId.contains("gpt") || modelId.contains("claude") -> 3.6
-            modelId.contains("qwen") || modelId.contains("coder") ||
-                modelId.contains("llama") || modelId.contains("mistral") -> 3.2
-            else -> CHARS_PER_TOKEN_BASE // 3.5
+            isCloudBpe(modelId) -> CLOUD_BPE_CHARS_PER_TOKEN
+            else -> DENSE_LOCAL_CHARS_PER_TOKEN
+        }
+
+        /**
+         * `gpt-oss` is excluded on purpose: it carries the "gpt" fragment but is served locally
+         * with a dense tokenizer, so the cloud prior gave it the silent-truncation exposure above.
+         */
+        private fun isCloudBpe(modelId: String): Boolean {
+            if (modelId.contains("gpt-oss")) {
+                return false
+            }
+            return CLOUD_BPE_FRAGMENTS.any { modelId.contains(it) }
         }
 
         /** Resolve the best chars/token ratio for [modelId]: calibrated EMA, then family prior, then base. */

@@ -7,6 +7,7 @@ import kotlinx.coroutines.CancellationException
 import pl.jclab.refio.core.llm.BaseLLMAdapter
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.NativeToolCall
+import pl.jclab.refio.core.llm.StreamFinishReason
 import pl.jclab.refio.core.llm.ToolSchemaSanitizer
 import pl.jclab.refio.core.tools.base.ToolSchema
 
@@ -33,7 +34,9 @@ internal object OpenAICompatibleHelpers {
         messages: List<LLMMessage>
     ): List<Map<String, Any>> = buildList {
         systemMessages.filter { it.isNotBlank() }.forEach { add(mapOf("role" to "system", "content" to it)) }
-        messages.filter { it.role != "system" }.forEach { msg ->
+        // Skip a turn this serializer cannot express: it has no tool-call field, and an empty
+        // assistant message is worse than none.
+        messages.filter { it.role != "system" && !it.isEmptyForTextOnlyProvider() }.forEach { msg ->
             val mappedRole = if (msg.role == "tool") "assistant" else msg.role
             add(mapOf("role" to mappedRole, "content" to adapter.toOpenAiMessageContent(msg)))
         }
@@ -110,9 +113,12 @@ internal object OpenAICompatibleHelpers {
      * - accumulates `tool_calls` deltas via [toolCallAccumulator].
      * - invokes [onContent] with each non-empty `content` delta.
      * - returns the last seen `finish_reason` (or `"cancelled"` if [checkCancelled] returns true mid-stream).
+     * - returns [StreamFinishReason.TRUNCATED] when the channel closed after some content but
+     *   before any terminator, so a cut-off answer is not mistaken for a complete one.
      *
-     * Malformed chunks are silently skipped to match historical adapter behavior.
-     * CancellationException (guardrail trip) propagates out.
+     * Chunks that cannot be decoded are silently skipped to match historical adapter behavior.
+     * Anything thrown by a callback ([onRawChunk], [onContent], [onToolCallDelta]) ends the
+     * stream instead, including CancellationException (guardrail trip).
      */
     suspend fun consumeChatCompletionsSSE(
         channel: ByteReadChannel,
@@ -124,6 +130,9 @@ internal object OpenAICompatibleHelpers {
     ): String? {
         var finishReason: String? = null
         var anyContentEmitted = false
+        // Did the stream end on purpose? Either the `[DONE]` sentinel or a `finish_reason` from the
+        // provider counts; falling out of the read loop with neither means the peer just went away.
+        var sawTerminator = false
         // Buffer reasoning_content deltas as a last-resort fallback: some reasoning models
         // (e.g. GLM via Z.AI, DeepSeek) stream the whole answer in reasoning_content with an
         // empty content channel. Only surfaced if no content delta ever arrives.
@@ -131,41 +140,65 @@ internal object OpenAICompatibleHelpers {
         while (!channel.isClosedForRead) {
             if (checkCancelled()) {
                 finishReason = "cancelled"
+                sawTerminator = true
                 break
             }
             val line = channel.readUTF8Line(limit = Int.MAX_VALUE) ?: continue
             if (line.isBlank() || !line.startsWith("data: ")) continue
             val data = line.removePrefix("data: ").trim()
-            if (data == "[DONE]") break
-            try {
+            if (data == "[DONE]") {
+                sawTerminator = true
+                break
+            }
+            // Only decoding is guarded, and each guard covers the smallest possible span.
+            // Everything the callbacks raise stays outside them, so a deliberate abort
+            // signal (e.g. OpenRouter's mid-stream {"error":{...}} envelope surfaced from
+            // onRawChunk) always ends the stream, whatever exception type it uses - the
+            // source decides, not the type.
+            val chunk = try {
                 // Parse each SSE line once into a JsonObject with direct field access
                 // (cheaper than decoding the whole chunk into nested Maps per line).
-                val chunk = JsonParser.parseString(data).asJsonObject
-                onRawChunk?.invoke(chunk)
-                val first = (chunk.get("choices") as? com.google.gson.JsonArray)
-                    ?.firstOrNull() as? JsonObject
-                val delta = first?.get("delta") as? JsonObject
-                toolCallAccumulator.consumeDelta(delta).forEach { tcDelta -> onToolCallDelta?.invoke(tcDelta) }
-                delta.stringField("content")?.takeIf { it.isNotEmpty() }?.let {
-                    anyContentEmitted = true
-                    onContent(it)
-                }
-                if (!anyContentEmitted) {
-                    delta.stringField("reasoning_content")?.takeIf { it.isNotEmpty() }
-                        ?.let { reasoningFallback.append(it) }
-                }
-                first.stringField("finish_reason")?.let { finishReason = it }
+                JsonParser.parseString(data).asJsonObject
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // Rethrow errors thrown by onRawChunk (e.g. mid-stream provider error
-                // envelopes from OpenRouter). Malformed chunks raise generic exceptions
-                // that match historical behavior — those we silently skip.
-                if (e is IllegalStateException) throw e
+                // Undecodable line - skip it, matching historical adapter behavior.
+                continue
+            }
+            onRawChunk?.invoke(chunk)
+            val first = (chunk.get("choices") as? com.google.gson.JsonArray)
+                ?.firstOrNull() as? JsonObject
+            val delta = first?.get("delta") as? JsonObject
+            val toolCallDeltas = try {
+                toolCallAccumulator.consumeDelta(delta)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Malformed tool_calls subtree - skip it and keep reading the stream.
+                emptyList()
+            }
+            toolCallDeltas.forEach { tcDelta -> onToolCallDelta?.invoke(tcDelta) }
+            delta.stringField("content")?.takeIf { it.isNotEmpty() }?.let {
+                anyContentEmitted = true
+                onContent(it)
+            }
+            if (!anyContentEmitted) {
+                delta.stringField("reasoning_content")?.takeIf { it.isNotEmpty() }
+                    ?.let { reasoningFallback.append(it) }
+            }
+            first.stringField("finish_reason")?.let {
+                finishReason = it
+                sawTerminator = true
             }
         }
         if (!anyContentEmitted && reasoningFallback.isNotEmpty()) {
             onContent(reasoningFallback.toString())
+        }
+        // Record the cut-off rather than failing: the partial answer is still worth returning, but
+        // the caller must be able to tell it apart from a model that simply finished in prose. A
+        // stream that produced nothing at all stays null - the empty response is handled upstream.
+        if (!sawTerminator && finishReason == null && (anyContentEmitted || reasoningFallback.isNotEmpty())) {
+            return StreamFinishReason.TRUNCATED
         }
         return finishReason
     }

@@ -13,6 +13,7 @@ import com.github.ajalt.clikt.parameters.types.double
 import com.github.ajalt.clikt.parameters.types.enum
 import com.github.ajalt.clikt.parameters.types.path
 import kotlinx.coroutines.runBlocking
+import pl.jclab.refio.api.models.ContextReference
 import pl.jclab.refio.api.models.TaskMode
 import pl.jclab.refio.cli.tui.launchTuiApp
 import pl.jclab.refio.core.api.CreateTaskRequest
@@ -20,7 +21,13 @@ import pl.jclab.refio.core.api.MultiAgentSessionRequest
 import pl.jclab.refio.core.api.TurnRequest
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.config.ConfigPrintView
+import pl.jclab.refio.core.config.RefioHome
 import pl.jclab.refio.core.config.RunConfigOverrides
+import pl.jclab.refio.core.context.ContextRefSpec
+import pl.jclab.refio.core.context.mcp.MCPManager
+import pl.jclab.refio.core.context.mcp.MCPServerConfig
+import pl.jclab.refio.core.context.mcp.MCPServerConfigFile
+import pl.jclab.refio.core.utils.ProjectIdGenerator
 import pl.jclab.refio.core.debug.SESSION_DEBUG_SCHEMA_VERSION
 import pl.jclab.refio.core.debug.SessionDebugOptions
 import pl.jclab.refio.core.debug.StabilizationGate
@@ -54,7 +61,7 @@ class RefioCommand : CliktCommand(name = "refio") {
     val noEgress by option("--no-egress", help = "Block cloud LLM providers").flag()
     val config by option(
         "--config",
-        help = "Run-scope config override key=value (repeatable). Works in both headless and interactive TUI. E.g. --config agent.max_iterations=80 or --config providers.ollama.ollama_endpoint=http://127.0.0.1:11434"
+        help = "Run-scope config override key=value (repeatable). Works in both headless and interactive TUI. E.g. --config agent.max_turn_minutes=20 or --config providers.ollama.ollama_endpoint=http://127.0.0.1:11434"
     ).multiple()
     val configFile by option(
         "--config-file",
@@ -128,8 +135,48 @@ class RefioCommand : CliktCommand(name = "refio") {
         "--gate-trend",
         help = "Read an e2e-history.jsonl and print a per-scenario pass-rate trend to stdout, then exit. No results dir or LLM needed."
     ).path(mustExist = true, canBeDir = false)
+    val refioHome by option(
+        "--refio-home",
+        help = "Use this directory instead of ~/.refio for the database, user config.yaml and file registries. Keeps a test run out of your real environment."
+    ).path(canBeFile = false)
+    val mcpServer by option(
+        "--mcp-server",
+        help = "Declare an MCP server for this run from a JSON file (repeatable). Connected like a stored server but never written to the database."
+    ).path(mustExist = true, canBeDir = false).multiple()
+    val contextRef by option(
+        "--context-ref",
+        help = "Attach a context reference to the headless turn (repeatable), same syntax as the chat input: @file:src/Main.kt, @folder:src, @rules, @clipboard, or @<mcp-server-id>:<query> for an MCP resource."
+    ).multiple()
+    val mcpProbe by option(
+        "--mcp-probe",
+        help = "Connect the MCP servers, print what they expose, and exit. No LLM call. Tells a server that failed to connect apart from a model that did not call its tool."
+    ).flag()
+
+    /** Parsed once in [run] so a broken file fails before any heavy initialization. */
+    private var runScopeMcpServers: List<MCPServerConfig> = emptyList()
+    private var contextRefs: List<ContextReference> = emptyList()
 
     override fun run() {
+        // Before anything reads a path: the database, the user config.yaml and the file-based
+        // registries all resolve through RefioHome, and a service that already resolved one would
+        // not see a later change.
+        refioHome?.let { RefioHome.override(it) }
+
+        runScopeMcpServers = try {
+            mcpServer.map { MCPServerConfigFile.parse(it.toFile()) }
+        } catch (e: IllegalArgumentException) {
+            throw UsageError(e.message ?: "Invalid --mcp-server file")
+        }
+        runScopeMcpServers.groupBy { it.id }.filterValues { it.size > 1 }.keys.firstOrNull()?.let {
+            throw UsageError("--mcp-server declares id '$it' more than once")
+        }
+
+        contextRefs = try {
+            contextRef.map { ContextRefSpec.parse(it) }
+        } catch (e: IllegalArgumentException) {
+            throw UsageError(e.message ?: "Invalid --context-ref")
+        }
+
         // Parse run-scope config overrides up front so a bad key/value fails loud (non-zero exit)
         // before any heavy initialization.
         val overrides = try {
@@ -147,6 +194,11 @@ class RefioCommand : CliktCommand(name = "refio") {
 
         if (printConfig) {
             runPrintConfig(effectiveOverrides)
+            return
+        }
+
+        if (mcpProbe) {
+            runMcpProbe(effectiveOverrides)
             return
         }
 
@@ -187,9 +239,10 @@ class RefioCommand : CliktCommand(name = "refio") {
     private fun runMultiAgent(runConfigOverrides: Map<String, String>) {
         var exitCode = HeadlessExit.SUCCESS
         runBlocking {
-            val bootstrap = StandaloneCoreBootstrap(project, runConfigOverrides)
+            val bootstrap = StandaloneCoreBootstrap(project, runConfigOverrides, runScopeMcpServers)
             try {
                 val router = bootstrap.initialize()
+                bootstrap.awaitMcpReady()
                 val yamlContent = multiAgent!!.readText()
                 val definition = pl.jclab.refio.core.agents.MultiAgentTaskParser.parse(yamlContent)
 
@@ -247,6 +300,37 @@ class RefioCommand : CliktCommand(name = "refio") {
 
                 // Any agent that did not succeed makes the run a failure for exit-code purposes.
                 if (result.agents.any { it.success != true }) exitCode = HeadlessExit.FAILURE
+            } catch (e: Exception) {
+                echo("Error: ${e.message}", err = true)
+                exitCode = HeadlessExit.FAILURE
+            } finally {
+                bootstrap.shutdown()
+            }
+        }
+        if (exitCode != HeadlessExit.SUCCESS) throw ProgramResult(exitCode)
+    }
+
+    /**
+     * Connects the declared MCP servers and reports what reached the agent's tool registry.
+     * Exits non-zero when any server failed to connect, so a harness can gate on it.
+     */
+    private fun runMcpProbe(runConfigOverrides: Map<String, String>) {
+        var exitCode = HeadlessExit.SUCCESS
+        runBlocking {
+            val bootstrap = StandaloneCoreBootstrap(project, runConfigOverrides, runScopeMcpServers)
+            try {
+                val router = bootstrap.initialize()
+                val projectId = ProjectIdGenerator.generate(project.toAbsolutePath())
+                val declared = MCPManager.getAllServers(projectId)
+
+                McpProbe.awaitSettled(projectId, declared.map { it.id }, MCP_PROBE_TIMEOUT_MS)
+
+                val report = McpProbe.render(
+                    MCPManager.getConnectionInfo(projectId),
+                    router.getToolRegistry().getToolNames()
+                )
+                println(report.text)
+                if (!report.allConnected) exitCode = HeadlessExit.FAILURE
             } catch (e: Exception) {
                 echo("Error: ${e.message}", err = true)
                 exitCode = HeadlessExit.FAILURE
@@ -416,7 +500,7 @@ class RefioCommand : CliktCommand(name = "refio") {
         var exitCode = HeadlessExit.SUCCESS
         runBlocking {
             val cliScope = this
-            val bootstrap = StandaloneCoreBootstrap(project, runConfigOverrides)
+            val bootstrap = StandaloneCoreBootstrap(project, runConfigOverrides, runScopeMcpServers)
             var autoApproveListener: AutoApproveListener? = null
             // Hoisted so the catch block can still emit an emergency run.json when the turn throws
             // (e.g. the LLM stream aborts on the first call) instead of leaving --output json empty.
@@ -425,6 +509,9 @@ class RefioCommand : CliktCommand(name = "refio") {
             try {
                 val router = bootstrap.initialize()
                 routerRef = router
+                // Before the first LLM call builds its tool schema, or an MCP tool that is still
+                // connecting will simply be absent and the model will report it as unavailable.
+                bootstrap.awaitMcpReady()
                 if (autoApproveRegex != null) {
                     // Headless auto-approval so terminal-ASK tools don't hang on the timeout.
                     autoApproveListener = AutoApproveListener(router.toolApprovalService, autoApproveRegex, cliScope)
@@ -476,6 +563,7 @@ class RefioCommand : CliktCommand(name = "refio") {
                                 taskId = task.id,
                                 mode = coreMode,
                                 input = promptText,
+                                contextRefs = contextRefs,
                                 params = LLMParams(model = selectedModel, provider = selectedProvider)
                             ),
                             stream = true,
@@ -492,7 +580,8 @@ class RefioCommand : CliktCommand(name = "refio") {
                                 mode = coreMode,
                                 executionMode = pl.jclab.refio.core.db.ExecutionMode.AUTO,
                                 model = selectedModel,
-                                provider = selectedProvider
+                                provider = selectedProvider,
+                                userContextRefs = contextRefs
                             ),
                             streamCallback = tokenStream,
                             listener = turnListener
@@ -548,6 +637,11 @@ class RefioCommand : CliktCommand(name = "refio") {
             }
         }
         if (exitCode != HeadlessExit.SUCCESS) throw ProgramResult(exitCode)
+    }
+
+    private companion object {
+        /** Long enough for a stdio server to spawn an interpreter, short enough to fail fast. */
+        const val MCP_PROBE_TIMEOUT_MS = 20_000L
     }
 }
 

@@ -13,12 +13,16 @@ import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 import pl.jclab.refio.ui.theme.ContextSectionColorPalette
 import pl.jclab.refio.ui.theme.LCATheme
+import com.intellij.icons.AllIcons
+import com.intellij.ide.HelpTooltip
+import com.intellij.openapi.Disposable
 import com.intellij.ui.JBColor
+import com.intellij.ui.components.panels.HorizontalLayout
 import com.intellij.ui.scale.JBUIScale
+import com.intellij.util.Alarm
+import com.intellij.util.ui.JBUI
 import kotlinx.coroutines.*
 import java.awt.*
-import java.awt.event.ComponentAdapter
-import java.awt.event.ComponentEvent
 import javax.swing.*
 
 /**
@@ -42,8 +46,8 @@ class ContextUsageBar : JPanel() {
     private val colorBackground = JBColor(Color(0xE0E0E0), Color(0x3C3F41))
 
     init {
-        preferredSize = Dimension(140, 14)
-        minimumSize = Dimension(100, 12)
+        preferredSize = JBUI.size(80, 10)
+        minimumSize = JBUI.size(44, 8)
         toolTipText = "Context window usage"
         isOpaque = false
     }
@@ -120,16 +124,7 @@ class ContextUsageBar : JPanel() {
         g2.color = LCATheme.borderColor
         g2.drawRoundRect(x, y, w, h, 6, 6)
 
-        // Percentage text inside bar if there's enough space
-        if (w > 60) {
-            g2.color = LCATheme.labelForeground
-            g2.font = font.deriveFont(Font.BOLD, JBUIScale.scale(9f))
-            val text = "$percentage%"
-            val fm = g2.fontMetrics
-            val textX = x + (w - fm.stringWidth(text)) / 2
-            val textY = y + (h + fm.ascent - fm.descent) / 2
-            g2.drawString(text, textX, textY)
-        }
+        // The percentage is printed next to the bar by the status bar, not inside it.
     }
 
     override fun getToolTipText(): String {
@@ -149,13 +144,18 @@ class ContextUsageBar : JPanel() {
 }
 
 /**
- * Enhanced Status Bar showing system metrics in a single row.
+ * Status bar under the panel body.
  *
- * Layout (1 row):
- * Core status (dot), Execution status, Context bar, Requests session/global,
- * Tokens In session/global, Tokens Out session/global, Cost session/global
+ * Shows engine state, context fill and the session counters that fit a 22 px strip: request
+ * count, tokens in/out and cost, all abbreviated. The exact numbers, cache reads and global
+ * totals live in the tooltip behind the trailing "more" icon.
+ *
+ * Engine flows push far more often than a human can read, so updates are buffered and repainted
+ * at most four times a second.
  */
-class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout()) {
+class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout()), Disposable {
+
+    enum class Level { MINIMAL, NORMAL }
 
     private val logger = dualLogger("StatusBar")
 
@@ -165,20 +165,44 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
     private val sessionManager = SessionManager.getInstance(project)
     private val globalMetrics = GlobalMetrics
 
-    // Row 1 labels
-    private val coreHealthLabel: JBLabel
-    private val executionStatusLabel: JBLabel
-    private val contextFillBar: ContextUsageBar
-    private val contextPercentLabel: JBLabel
-    private val requestsLabel: JBLabel     // "Req: sessionReq/globalReq"
-    private val tokensInLabel: JBLabel     // "in sessionIn/globalIn"
-    private val cachedLabel: JBLabel       // "💾 sessionCached" (cache-read input tokens)
-    private val tokensOutLabel: JBLabel    // "out sessionOut/globalOut"
-    private val costLabel: JBLabel         // "$sessionCost/$globalCost"
+    private val coreHealthLabel = JBLabel("●").apply {
+        foreground = LCATheme.errorColor
+        toolTipText = "Core initialization failed - check logs"
+    }
+    private val stateLabel = JBLabel("Idle").apply {
+        font = JBUI.Fonts.smallFont()
+        foreground = LCATheme.neutralColor
+    }
+    private val contextLabel = JBLabel("Context").apply {
+        font = JBUI.Fonts.smallFont()
+        foreground = LCATheme.descriptionForeground
+    }
+    private val contextFillBar = ContextUsageBar()
+    private val contextTokensLabel = JBLabel().apply {
+        font = JBUI.Fonts.create(Font.MONOSPACED, 11)
+        foreground = LCATheme.descriptionForeground
+        toolTipText = "Context tokens used / model context window"
+    }
+    private val contextPercentLabel = JBLabel("0%").apply {
+        font = JBUI.Fonts.create(Font.MONOSPACED, 11)
+    }
+    private val requestsLabel = JBLabel("0r").apply {
+        font = JBUI.Fonts.create(Font.MONOSPACED, 11)
+        foreground = LCATheme.descriptionForeground
+        toolTipText = "LLM requests in this session"
+    }
+    private val tokensLabel = JBLabel("0/0").apply {
+        font = JBUI.Fonts.create(Font.MONOSPACED, 11)
+        foreground = LCATheme.descriptionForeground
+        toolTipText = "Session tokens in / out"
+    }
+    private val costLabel = JBLabel("\$0.00").apply {
+        font = JBUI.Fonts.create(Font.MONOSPACED, 11)
+        toolTipText = "Session cost"
+    }
+    private val moreLabel = JBLabel(AllIcons.Actions.More)
 
-    // Lowest-priority groups are hidden first when the bar does not fit the panel width.
-    private val hideableGroups: MutableList<List<JComponent>> = mutableListOf()
-    private val row1Panel: JPanel
+    private val flushAlarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, this)
 
     // State tracking
     private var sessionRequests = 0
@@ -191,108 +215,65 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
     private var globalTokensIn = 0L
     private var globalTokensOut = 0L
     private var globalCostUsd = 0.0
+    private var contextTokens = 0
+    private var contextLimit = 0
+    private var stateText = "Idle"
+    private var stateColor: Color = LCATheme.neutralColor
 
     init {
-        row1Panel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
-            coreHealthLabel = JBLabel("●").apply {
-                font = font.deriveFont(Font.BOLD, 16f)
-                foreground = LCATheme.errorColor
-                toolTipText = "Core initialization failed - check logs"
-            }
-            executionStatusLabel = JBLabel("Idle").apply {
-                foreground = LCATheme.neutralColor
-            }
-            contextFillBar = ContextUsageBar()
-            contextPercentLabel = JBLabel("(0/0)").apply {
-                foreground = LCATheme.neutralColor
-            }
-            requestsLabel = JBLabel("Rq:0/0").apply {
-                toolTipText = "Requests: session / global"
-            }
-            tokensInLabel = JBLabel("↓0/0").apply {
-                toolTipText = "Input tokens: session / global"
-            }
-            cachedLabel = JBLabel("").apply {
-                toolTipText = "Cache-read input tokens this session (subset of input)"
-                foreground = LCATheme.neutralColor
-            }
-            tokensOutLabel = JBLabel("↑0/0").apply {
-                toolTipText = "Output tokens: session / global"
-            }
-            costLabel = JBLabel("\$0/\$0").apply {
-                toolTipText = "Cost USD: session / global"
-            }
+        border = JBUI.Borders.compound(
+            JBUI.Borders.customLineTop(LCATheme.borderColor),
+            JBUI.Borders.empty(0, 8)
+        )
+        preferredSize = Dimension(0, JBUI.scale(22))
+        minimumSize = Dimension(0, JBUI.scale(20))
 
-            val sep1 = createSeparator()
-            val sep2 = createSeparator()
-            val sep3 = createSeparator()
-
+        val left = JPanel(HorizontalLayout(JBUI.scale(6))).apply {
+            isOpaque = false
             add(coreHealthLabel)
-            add(executionStatusLabel)
-            add(sep1)
+            add(stateLabel)
+            add(contextLabel)
             add(contextFillBar)
+            add(contextTokensLabel)
             add(contextPercentLabel)
-            add(sep2)
+        }
+
+        val right = JPanel(HorizontalLayout(JBUI.scale(6))).apply {
+            isOpaque = false
             add(requestsLabel)
-            add(tokensInLabel)
-            add(cachedLabel)
-            add(tokensOutLabel)
-            add(sep3)
+            add(tokensLabel)
             add(costLabel)
-
-            // Hidden first when space runs out: cost, then requests, then the context
-            // token counts (the bar itself and core/execution status always stay).
-            hideableGroups.add(listOf(sep3, costLabel))
-            hideableGroups.add(listOf(requestsLabel))
-            hideableGroups.add(listOf(contextPercentLabel))
+            add(moreLabel)
         }
 
-        val mainPanel = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            border = BorderFactory.createEmptyBorder(4, 8, 4, 8)
-            add(row1Panel)
-        }
-
-        add(mainPanel, BorderLayout.CENTER)
+        add(left, BorderLayout.WEST)
+        add(right, BorderLayout.EAST)
 
         startMonitoring()
-
-        addComponentListener(object : ComponentAdapter() {
-            override fun componentResized(e: ComponentEvent?) {
-                applyPriorityVisibility()
-                revalidate()
-                repaint()
-            }
-        })
+        flush()
     }
 
     /**
-     * Hide the lowest-priority groups when the single-row content does not fit
-     * the current width, so the row never wraps or clips important segments.
+     * Collapses the bar to what still fits a narrow dock: the health dot, context percentage
+     * and cost. Driven by the panel-wide width listener, not by this component.
      */
-    private fun applyPriorityVisibility() {
-        if (width <= 0) return
-        hideableGroups.flatten().forEach { it.isVisible = true }
-        var hiddenIndex = 0
-        while (row1Panel.preferredSize.width > width && hiddenIndex < hideableGroups.size) {
-            hideableGroups[hiddenIndex].forEach { it.isVisible = false }
-            hiddenIndex++
-        }
-    }
-
-    /**
-     * Create visual separator
-     */
-    private fun createSeparator(): JLabel {
-        return JLabel("|").apply {
-            foreground = LCATheme.neutralColor
-        }
+    fun setLevel(level: Level) {
+        val full = level == Level.NORMAL
+        stateLabel.isVisible = full
+        contextLabel.isVisible = full
+        contextFillBar.isVisible = full
+        contextTokensLabel.isVisible = full
+        requestsLabel.isVisible = full
+        tokensLabel.isVisible = full
+        moreLabel.isVisible = full
+        revalidate()
+        repaint()
     }
 
     private fun startMonitoring() {
         cs.launch {
             coreManager.healthState.collect { health ->
-                SwingUtilities.invokeLater { updateCoreHealth(health.state, health.latencyMs) }
+                SwingUtilities.invokeLater { updateCoreHealth(health.state) }
             }
         }
 
@@ -321,11 +302,9 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
                         sessionTokensOut = 0
                         sessionCachedTokens = 0
                         sessionCostUsd = 0.0
-                        contextFillBar.percentage = 0
-                        contextFillBar.currentTokens = 0
-                        contextFillBar.maxTokens = 0
-                        contextPercentLabel.text = "(0/0)"
-                        refreshCombinedLabels()
+                        contextTokens = 0
+                        contextLimit = 0
+                        scheduleFlush()
                     }
                 }
             }
@@ -360,11 +339,57 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
         }
     }
 
+    /** Buffers a repaint; a burst of engine events collapses into one update per tick. */
+    private fun scheduleFlush() {
+        if (flushAlarm.isDisposed) return
+        if (flushAlarm.isEmpty) flushAlarm.addRequest({ flush() }, FLUSH_INTERVAL_MS)
+    }
+
+    private fun flush() {
+        stateLabel.text = stateText
+        stateLabel.foreground = stateColor
+
+        val percentage = if (contextLimit > 0) (contextTokens * 100.0 / contextLimit).toInt() else 0
+        contextFillBar.percentage = percentage
+        contextFillBar.currentTokens = contextTokens
+        contextFillBar.maxTokens = contextLimit
+        contextTokensLabel.text = StatusBarFormat.contextFill(contextTokens, contextLimit)
+        contextPercentLabel.text = "$percentage%"
+        contextPercentLabel.foreground = when {
+            percentage < 75 -> LCATheme.successColor
+            percentage < 90 -> LCATheme.warningColor
+            else -> LCATheme.errorColor
+        }
+
+        requestsLabel.text = "${formatLargeNumber(sessionRequests.toLong())}r"
+        tokensLabel.text = "${formatLargeNumber(sessionTokensIn.toLong())}/${formatLargeNumber(sessionTokensOut.toLong())}"
+        costLabel.text = "\$${formatCostShort(sessionCostUsd)}"
+
+        installMetricsTooltip()
+    }
+
+    /**
+     * The metrics that used to crowd the bar. Reinstalled on each flush so the numbers stay
+     * current; installing it more often than that would be wasted work.
+     */
+    private fun installMetricsTooltip() {
+        HelpTooltip()
+            .setTitle("Session metrics")
+            .setDescription(
+                "Requests: $sessionRequests session / ${formatLargeNumber(globalRequests)} global<br>" +
+                    "Tokens in: ${formatLargeNumber(sessionTokensIn.toLong())} / ${formatLargeNumber(globalTokensIn)} global<br>" +
+                    "Tokens out: ${formatLargeNumber(sessionTokensOut.toLong())} / ${formatLargeNumber(globalTokensOut)} global<br>" +
+                    "Cached input: ${formatLargeNumber(sessionCachedTokens.toLong())}<br>" +
+                    "Context: ${formatTokens(contextTokens)} / ${formatTokens(contextLimit)}<br>" +
+                    "Cost: \$${formatCostShort(sessionCostUsd)} session / \$${formatCostShort(globalCostUsd)} total"
+            )
+            .installOn(moreLabel)
+    }
+
     /**
      * Update core health indicator (dot color only)
      */
-    @Suppress("UNUSED_PARAMETER")
-    private fun updateCoreHealth(state: CoreHealthState, _latencyMs: Int?) {
+    private fun updateCoreHealth(state: CoreHealthState) {
         when (state) {
             CoreHealthState.CONNECTED -> {
                 coreHealthLabel.foreground = LCATheme.successColor
@@ -383,43 +408,13 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
     }
 
     /**
-     * Update execution status label based on current operation.
+     * Update execution status text based on current operation.
      * Single source of truth for execution state display.
      */
     private fun updateCurrentOperation(operation: OperationInfo) {
+        stateText = describeOperation(operation)
 
-        // Update label text based on operation
-        executionStatusLabel.text = when (operation) {
-            is OperationInfo.Idle -> "Idle"
-            is OperationInfo.ChatRequest -> "Chat Request"
-            is OperationInfo.PlanningRequest -> "Planning"
-            is OperationInfo.PlanningStep ->
-                "Planning ${operation.stepNumber}/${operation.totalSteps}"
-            is OperationInfo.ExecutingStep ->
-                "Step ${operation.stepNumber}/${operation.totalSteps}"
-            is OperationInfo.StepPlanning ->
-                "Step planning ${operation.stepNumber}/${operation.totalSteps}"
-            is OperationInfo.StepExecuting ->
-                "Step execute ${operation.stepNumber}/${operation.totalSteps}"
-            is OperationInfo.StepSummarizing ->
-                "Step summarize ${operation.stepNumber}/${operation.totalSteps}"
-            is OperationInfo.StepReasoning ->
-                "Step reasoning ${operation.stepNumber}/${operation.totalSteps}"
-            is OperationInfo.ExecutingTool ->
-                "Tool: ${operation.toolName}"
-            is OperationInfo.Orchestration -> {
-                val stepInfo = if (operation.stepNumber != null && operation.totalSteps != null) {
-                    " ${operation.stepNumber}/${operation.totalSteps}"
-                } else ""
-                "Orchestration: ${operation.phase}$stepInfo"
-            }
-            else -> operation.toString()
-        }
-
-        executionStatusLabel.toolTipText = "Current operation: ${operation}"
-
-        // Color code based on operation type
-        executionStatusLabel.foreground = when (operation) {
+        stateColor = when (operation) {
             is OperationInfo.Idle -> LCATheme.neutralColor
             is OperationInfo.ChatRequest,
             is OperationInfo.PlanningRequest -> LCATheme.infoColor
@@ -434,7 +429,27 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
             else -> LCATheme.descriptionForeground
         }
 
-        executionStatusLabel.repaint()
+        scheduleFlush()
+    }
+
+    private fun describeOperation(operation: OperationInfo): String = when (operation) {
+        is OperationInfo.Idle -> "Idle"
+        is OperationInfo.ChatRequest -> "Chat Request"
+        is OperationInfo.PlanningRequest -> "Planning"
+        is OperationInfo.PlanningStep -> "Planning ${operation.stepNumber}/${operation.totalSteps}"
+        is OperationInfo.ExecutingStep -> "Step ${operation.stepNumber}/${operation.totalSteps}"
+        is OperationInfo.StepPlanning -> "Step planning ${operation.stepNumber}/${operation.totalSteps}"
+        is OperationInfo.StepExecuting -> "Step execute ${operation.stepNumber}/${operation.totalSteps}"
+        is OperationInfo.StepSummarizing -> "Step summarize ${operation.stepNumber}/${operation.totalSteps}"
+        is OperationInfo.StepReasoning -> "Step reasoning ${operation.stepNumber}/${operation.totalSteps}"
+        is OperationInfo.ExecutingTool -> operation.toolName
+        is OperationInfo.Orchestration -> {
+            val stepInfo = if (operation.stepNumber != null && operation.totalSteps != null) {
+                " ${operation.stepNumber}/${operation.totalSteps}"
+            } else ""
+            "Orchestration: ${operation.phase}$stepInfo"
+        }
+        else -> operation.toString()
     }
 
     private fun updateGlobalMetrics(metrics: GlobalMetrics.MetricsSnapshot) {
@@ -442,7 +457,7 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
         globalTokensIn = metrics.totalTokensIn
         globalTokensOut = metrics.totalTokensOut
         globalCostUsd = metrics.totalCostUsd
-        refreshCombinedLabels()
+        scheduleFlush()
     }
 
     private fun updateSessionTokens(tokensIn: Int, tokensOut: Int, cachedTokens: Int = 0) {
@@ -453,64 +468,25 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
         sessionTokensIn = tokensIn
         sessionTokensOut = tokensOut
         sessionCachedTokens = cachedTokens
-        refreshCombinedLabels()
+        scheduleFlush()
     }
 
     private fun updateSessionCost(costUsd: Double) {
         sessionCostUsd = costUsd
-        refreshCombinedLabels()
+        scheduleFlush()
     }
 
     private fun updateContextFill(current: Int, max: Int) {
-        val percentage = if (max > 0) (current * 100.0 / max).toInt() else 0
-        contextFillBar.percentage = percentage
-        contextFillBar.currentTokens = current
-        contextFillBar.maxTokens = max
-        contextPercentLabel.text = "(${formatTokens(current)}/${formatTokens(max)})"
-        contextPercentLabel.foreground = when {
-            percentage < 50 -> LCATheme.successColor
-            percentage < 75 -> LCATheme.warningColor
-            percentage < 90 -> LCATheme.warningColor
-            else -> LCATheme.errorColor
-        }
+        contextTokens = current
+        contextLimit = max
+        scheduleFlush()
     }
 
-    private fun refreshCombinedLabels() {
-        requestsLabel.text = "Rq:$sessionRequests/${formatLargeNumber(globalRequests)}"
-        requestsLabel.toolTipText = "Requests: $sessionRequests session / $globalRequests global"
+    private fun formatCostShort(costUsd: Double): String = StatusBarFormat.cost(costUsd)
 
-        tokensInLabel.text = "↓${formatLargeNumber(sessionTokensIn.toLong())}/${formatLargeNumber(globalTokensIn)}"
-        tokensInLabel.toolTipText = "Input tokens: $sessionTokensIn session / $globalTokensIn global"
+    private fun formatLargeNumber(num: Long): String = StatusBarFormat.count(num)
 
-        cachedLabel.text = if (sessionCachedTokens > 0) "💾${formatLargeNumber(sessionCachedTokens.toLong())}" else ""
-        cachedLabel.toolTipText = "Cache-read input tokens this session: $sessionCachedTokens (of $sessionTokensIn input)"
-        cachedLabel.repaint()
-
-        tokensOutLabel.text = "↑${formatLargeNumber(sessionTokensOut.toLong())}/${formatLargeNumber(globalTokensOut)}"
-        tokensOutLabel.toolTipText = "Output tokens: $sessionTokensOut session / $globalTokensOut global"
-
-        val sessionCostStr = formatCostShort(sessionCostUsd)
-        val globalCostStr = formatCostShort(globalCostUsd)
-        costLabel.text = "\$$sessionCostStr/\$$globalCostStr"
-        costLabel.toolTipText = "Cost: \$$sessionCostStr session / \$$globalCostStr global"
-
-        requestsLabel.repaint()
-        tokensInLabel.repaint()
-        tokensOutLabel.repaint()
-        costLabel.repaint()
-    }
-
-    private fun formatCostShort(costUsd: Double): String = String.format("%.2f", costUsd)
-
-    private fun formatLargeNumber(num: Long): String = when {
-        num >= 1_000_000_000 -> String.format("%.1fB", num / 1_000_000_000.0)
-        num >= 1_000_000 -> String.format("%.1fM", num / 1_000_000.0)
-        num >= 1_000 -> String.format("%.1fK", num / 1_000.0)
-        else -> num.toString()
-    }
-
-    private fun formatTokens(tokens: Int): String =
-        if (tokens >= 1000) String.format("%.1fK", tokens / 1000.0) else tokens.toString()
+    private fun formatTokens(tokens: Int): String = StatusBarFormat.count(tokens.toLong())
 
     fun updateMetrics(messages: List<Message>) {
         val totals = calculateTotalMetrics(messages)
@@ -518,7 +494,7 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
             sessionTokensIn = totals.inputTokens
             sessionTokensOut = totals.outputTokens
             sessionCostUsd = totals.costUsd
-            refreshCombinedLabels()
+            scheduleFlush()
         }
     }
 
@@ -541,7 +517,51 @@ class StatusBar(private val project: Project) : JBPanel<StatusBar>(BorderLayout(
         )
     }
 
-    fun dispose() {
+    override fun dispose() {
+        flushAlarm.cancelAllRequests()
         cs.cancel()
+    }
+
+    private companion object {
+        const val FLUSH_INTERVAL_MS = 250
+    }
+}
+
+/**
+ * Number formatting for the status bar and its tooltip.
+ *
+ * Kept apart from the component so the rules that decide how a metric reads in a 22 px strip
+ * can be checked without a UI.
+ */
+object StatusBarFormat {
+
+    /** Shortens counts so a metric never widens the bar past the panel. */
+    fun count(num: Long): String = when {
+        num >= 1_000_000_000 -> String.format("%.1fB", num / 1_000_000_000.0)
+        num >= 1_000_000 -> String.format("%.1fM", num / 1_000_000.0)
+        num >= 1_000 -> String.format("%.1fK", num / 1_000.0)
+        else -> num.toString()
+    }
+
+    /** Session cost, in the user's locale (a comma decimal separator is expected in PL). */
+    fun cost(usd: Double): String = String.format("%.2f", usd)
+
+    /**
+     * Context fill as "used / window", e.g. `47K/128K`.
+     *
+     * A percentage alone does not say how much room is left in absolute terms, and the same
+     * percentage means something very different on a 32K and on a 1M window. Whole thousands are
+     * enough to judge that and keep the width stable while the number grows; an unknown window
+     * (no model resolved yet) leaves the metric out rather than printing a misleading limit.
+     */
+    fun contextFill(used: Int, limit: Int): String =
+        if (limit <= 0) "" else "${tokensShort(used)}/${tokensShort(limit)}"
+
+    // Truncated, not rounded: a 32768-token window has to read "32K" the way the user knows it,
+    // and a shown limit must never claim more room than the model actually has.
+    private fun tokensShort(tokens: Int): String = when {
+        tokens >= 1_000_000 -> String.format("%.1fM", tokens / 1_000_000.0)
+        tokens >= 1_000 -> "${tokens / 1_000}K"
+        else -> tokens.toString()
     }
 }

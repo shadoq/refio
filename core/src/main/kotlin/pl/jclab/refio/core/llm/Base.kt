@@ -22,6 +22,22 @@ sealed interface LLMContentPart {
     ) : LLMContentPart
 }
 
+/**
+ * One tool call an assistant turn made, carried in the provider's structured channel.
+ *
+ * Rendering the call as prose instead was tried and reverted: a model started echoing the rendered
+ * footer back as its own reply. Providers accept the call in a dedicated field, which the model
+ * reads as its own past action and has nothing to imitate.
+ *
+ * [argumentsJson] stays a JSON string because that is how it is stored and how OpenAI-shaped APIs
+ * want it; the Ollama adapter parses it into an object, which is what that API expects.
+ */
+data class LLMToolCall(
+    val id: String,
+    val name: String,
+    val argumentsJson: String,
+)
+
 data class LLMMessage(
     val role: String,  // "user", "assistant", "system"
     val content: String,
@@ -29,8 +45,21 @@ data class LLMMessage(
         listOf(LLMContentPart.Text(content))
     } else {
         emptyList()
-    }
+    },
+    /**
+     * Tool calls this assistant turn made. An assistant message can legitimately carry these with
+     * no text at all - some models put their reasoning in a separate thinking channel and leave the
+     * content empty. Dropping such a turn erased the model's record of its own action and it
+     * reissued the same call until a loop guard stopped the turn.
+     */
+    val toolCalls: List<LLMToolCall> = emptyList(),
 ) {
+    /**
+     * True when this message carries nothing a text-only serializer could send. Adapters that
+     * cannot express [toolCalls] skip these instead of emitting an empty assistant turn.
+     */
+    fun isEmptyForTextOnlyProvider(): Boolean = content.isBlank() && parts.isEmpty()
+
     fun textOnlyContent(): String {
         if (parts.isEmpty()) return content
 

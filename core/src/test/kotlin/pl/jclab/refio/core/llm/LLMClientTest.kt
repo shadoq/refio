@@ -21,6 +21,11 @@ class LLMClientTest {
     @BeforeEach
     fun setup() {
         configService = mockk(relaxed = true)
+        // The context pre-flight check resolves the window through ModelWindow, and a relaxed
+        // mock cannot produce an Int for the generic getTyped. Give it the real default.
+        every {
+            configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.MAX_CONTEXT_SIZE, any<String>())
+        } returns pl.jclab.refio.core.config.ConfigKeys.MAX_CONTEXT_SIZE.default
         llmClient = LLMClient(configService)
     }
 

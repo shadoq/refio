@@ -29,6 +29,9 @@ import pl.jclab.refio.core.context.mcp.MCPToolWorkflowStep
 import pl.jclab.refio.core.context.mcp.MCPToolsExposureMode
 import pl.jclab.refio.core.utils.ProjectIdGenerator
 import pl.jclab.refio.core.logging.dualLogger
+import com.intellij.ui.dsl.builder.Align
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.panel
 import pl.jclab.refio.ui.theme.LCATheme
 import java.awt.BorderLayout
 import java.awt.Component
@@ -65,71 +68,53 @@ class MCPSettingsPanel(private val project: Project) : JBPanel<MCPSettingsPanel>
         // no-op
     }
 
+    /**
+     * Server list plus its actions.
+     *
+     * Built with the Kotlin UI DSL so the description, the list and the action rows share one
+     * spacing scale instead of stacked struts and nested FlowLayouts.
+     */
     private fun createServersSection(): JPanel {
-        return JBPanel<JBPanel<*>>(BorderLayout()).apply {
-            border = LCATheme.paddedBorder(LCATheme.padding)
+        serversListPanel = JBPanel<JBPanel<*>>().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+        }
 
-            val description = JBLabel(
-                "<html>Configure MCP servers. In PLAN mode only read resources, AGENT mode enables tools.<br>" +
-                "Servers marked as <b>Enabled</b> will automatically connect at project startup or when creating a session.<br>" +
-                "Configurations are stored in the database per project.</html>"
-            ).apply {
-                foreground = LCATheme.descriptionForeground
-                border = LCATheme.paddedBorder(0, 0, 12, 0)
+        presetSelector.renderer = object : DefaultListCellRenderer() {
+            override fun getListCellRendererComponent(
+                list: JList<*>?,
+                value: Any?,
+                index: Int,
+                isSelected: Boolean,
+                cellHasFocus: Boolean
+            ): Component {
+                val preset = value as? MCPServerPresets.Preset
+                val label = preset?.label ?: "Select preset..."
+                return super.getListCellRendererComponent(list, label, index, isSelected, cellHasFocus)
             }
-            add(description, BorderLayout.NORTH)
+        }
+        presetSelector.toolTipText = "Select a preset MCP server to quickly add"
 
-            serversListPanel = JBPanel<JBPanel<*>>().apply {
-                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+        return settingsForm {
+            row {
+                comment(
+                    "In PLAN mode only resources are read, AGENT mode also exposes tools. " +
+                        "Enabled servers connect at project startup. Configuration is stored per project."
+                )
             }
-            add(JBScrollPane(serversListPanel), BorderLayout.CENTER)
-
-            val actions = JBPanel<JBPanel<*>>().apply {
-                layout = BoxLayout(this, BoxLayout.Y_AXIS)
-                border = LCATheme.paddedBorder(8, 0, 0, 0)
-
-                // Row 1: Add Custom Server + Refresh
-                add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 4)).apply {
-                    add(JButton("Add Custom Server").apply {
-                        toolTipText = "Add a custom MCP server with manual configuration"
-                        addActionListener { openConfigDialog(null) }
-                    })
-                    add(JButton("Refresh").apply {
-                        toolTipText = "Refresh the server list"
-                        addActionListener { refreshServers() }
-                    })
-                })
-
-                add(Box.createVerticalStrut(4))
-
-                // Row 2: Quick Add in one line
-                add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 4)).apply {
-                    add(JBLabel("Quick Add:"))
-
-                    presetSelector.renderer = object : DefaultListCellRenderer() {
-                        override fun getListCellRendererComponent(
-                            list: JList<*>?,
-                            value: Any?,
-                            index: Int,
-                            isSelected: Boolean,
-                            cellHasFocus: Boolean
-                        ): Component {
-                            val preset = value as? MCPServerPresets.Preset
-                            val label = preset?.let { "${it.category.icon} ${it.label}" } ?: "Select preset..."
-                            return super.getListCellRendererComponent(list, label, index, isSelected, cellHasFocus)
-                        }
-                    }
-                    presetSelector.toolTipText = "Select a preset MCP server to quickly add"
-                    presetSelector.preferredSize = java.awt.Dimension(200, presetSelector.preferredSize.height)
-
-                    add(presetSelector)
-                    add(JButton("Add").apply {
-                        toolTipText = "Add the selected preset server"
-                        addActionListener { addPresetFromSelection() }
-                    })
-                })
+            row {
+                cell(JBScrollPane(serversListPanel)).align(Align.FILL).resizableColumn()
+            }.resizableRow()
+            row {
+                button("Add Custom Server") { openConfigDialog(null) }
+                    .applyToComponent { toolTipText = "Add a custom MCP server with manual configuration" }
+                button("Refresh") { refreshServers() }
+                    .applyToComponent { toolTipText = "Refresh the server list" }
             }
-            add(actions, BorderLayout.SOUTH)
+            row("Quick add:") {
+                cell(presetSelector).align(AlignX.FILL).resizableColumn()
+                button("Add") { addPresetFromSelection() }
+                    .applyToComponent { toolTipText = "Add the selected preset server" }
+            }
         }
     }
 

@@ -732,6 +732,15 @@ class ContextService(
          * (context-panel preview, standalone bootstrap) unchanged.
          */
         agentInstanceId: String? = null,
+        /**
+         * When false, never compact the conversation for this build. Compaction spends a real
+         * weak-model call and persists a SYSTEM summary row into the user's conversation, so a
+         * read-only render of "what would be sent" (the context panel's runtime-prompt preview)
+         * must not trigger it - otherwise an idle user refreshing that panel pays for summaries
+         * and finds them appearing in a conversation nobody advanced. The turn loop keeps the
+         * default `true`.
+         */
+        allowSummarization: Boolean = true,
     ): AgentTurnMessagesResult {
         logger.info {
             "[AGENT_TURN] Building messages for task=$taskId, contextRefs=${userContextRefs.size}, " +
@@ -747,21 +756,36 @@ class ContextService(
         // Load only the caller's own thread: the parent run (null id) never sees a subagent's
         // intermediate steps, and a subagent never sees the parent conversation.
         val allMessages = transaction { chatMessageRepository.findHistoryForInvocation(taskId, agentInstanceId) }
-        val summarizedMessages = if (conversationSummaryService != null && conversationBudget > 0) {
+        val summarizedMessages = if (conversationSummaryService != null && conversationBudget > 0 && allowSummarization) {
             // Pass the same resolver that convertChatMessageToLLMMessage uses below, so the
             // summarizer's token estimate reflects the rendered prompt (TOOL bodies truncated
             // to 1024 chars when not summarized) instead of raw stored content. Without this,
             // one large `read_file` tool result can fake a 24k-token conversation and trigger
             // premature summarization after 2-3 turns.
-            conversationSummaryService.ensureSummaryIfNeeded(
-                taskId = taskId,
-                messages = allMessages,
-                maxTokens = conversationBudget,
-                contentResolver = { msg ->
-                    if (msg.role == MessageRole.TOOL) resolveToolConversationContent(msg) else msg.content
-                },
-                agentInstanceId = agentInstanceId
-            )
+            // Fail-soft: the summarizer calls a weak model over the network, and an outage there
+            // (provider down, no-egress, rate limit) used to propagate out of buildAgentTurnMessages.
+            // TurnPromptBuilder catches that and falls back to raw message building, so a failure to
+            // COMPACT the history silently cost the turn its entire project context. Running on the
+            // uncompacted history is the strictly better failure.
+            try {
+                conversationSummaryService.ensureSummaryIfNeeded(
+                    taskId = taskId,
+                    messages = allMessages,
+                    maxTokens = conversationBudget,
+                    contentResolver = { msg ->
+                        if (msg.role == MessageRole.TOOL) resolveToolConversationContent(msg) else msg.content
+                    },
+                    agentInstanceId = agentInstanceId
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger.warn(e) {
+                    "[AGENT_TURN] Conversation compaction failed for task=$taskId, continuing on the " +
+                        "uncompacted history: ${e.message}"
+                }
+                allMessages
+            }
         } else {
             allMessages
         }

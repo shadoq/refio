@@ -48,7 +48,16 @@ class LLMResponseRecoveryTest {
         iteration: Int = 1,
         maxIterations: Int = 50,
         state: RecoveryState = RecoveryState(),
-    ) = recovery.classifyEmptyContent(response, mode, jsonMode, iteration, maxIterations, state)
+        hasRestorableAnswer: Boolean = false,
+    ) = recovery.classifyEmptyContent(
+        response,
+        mode,
+        jsonMode,
+        iteration,
+        maxIterations,
+        state,
+        hasRestorableAnswer = hasRestorableAnswer,
+    )
 
     @Test
     fun `recovers when the JSON envelope landed in the thinking field`() {
@@ -87,6 +96,32 @@ class LLMResponseRecoveryTest {
         val decision = classify(resp(content = ""), state = RecoveryState(nudgeCount = 2))
 
         assertIs<LLMResponseRecovery.Decision.GiveUp>(decision)
+    }
+
+    @Test
+    fun `gives up immediately when a guardian re-entry already holds the answer`() {
+        // The re-entry is the last safety net and it produced nothing: the answer the user saw is
+        // already stashed, so nudging only burns full-context iterations before the same restore.
+        val decision = classify(
+            resp(content = ""),
+            state = RecoveryState(nudgeCount = 0),
+            hasRestorableAnswer = true,
+        )
+
+        assertIs<LLMResponseRecovery.Decision.GiveUp>(decision)
+    }
+
+    @Test
+    fun `still recovers a thinking envelope even after a guardian re-entry`() {
+        // A recoverable envelope is real work — it must win over the give-up shortcut.
+        stubThinkingParse(listOf(ToolCallData("1", "read_file", "{}")))
+
+        val decision = classify(
+            resp(content = "", thinking = "{\"actions\":[{\"tool\":\"read_file\",\"args\":{}}]}"),
+            hasRestorableAnswer = true,
+        )
+
+        assertIs<LLMResponseRecovery.Decision.RecoverFromThinking>(decision)
     }
 
     @Test

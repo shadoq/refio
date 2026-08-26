@@ -49,6 +49,17 @@ class SessionLifecycleService(
     fun getSelectedMode(): TaskMode = selectedMode
 
     /**
+     * Closes out the conversation the user is leaving before another one becomes active.
+     *
+     * The approval prompt's "Trust" button promises the permission holds *for this session*, but
+     * the trust rules live on the project-wide router, so without this they outlived the
+     * conversation that granted them and applied to every later one until the IDE closed.
+     */
+    private fun endPreviousSession() {
+        projectRouter.toolApprovalService.onSessionEnd()
+    }
+
+    /**
      * Startup only restores persisted UI settings (mode, model, toggles) - never a
      * previous conversation. Each IDE start begins with an empty chat; the session
      * itself is created on the first prompt. Earlier conversations stay reachable
@@ -67,6 +78,7 @@ class SessionLifecycleService(
         executionMode: ExecutionMode? = null
     ): Session {
         awaitInitialization()
+        endPreviousSession()
         val totalTimeStart = System.currentTimeMillis()
         logger.info { "[PERF] createSession START: name='$name', mode=$mode" }
 
@@ -149,6 +161,7 @@ class SessionLifecycleService(
         awaitInitialization()
         try {
             saveCurrentSessionState()
+            endPreviousSession()
 
             val taskResponse = projectRouter.taskRouter.getTask(sessionId)
                 ?: throw IllegalArgumentException("Session not found: $sessionId")
@@ -208,6 +221,7 @@ class SessionLifecycleService(
             logger.info { "Loading session: $sessionId" }
 
             saveCurrentSessionState()
+            endPreviousSession()
 
             val taskResponse = projectRouter.taskRouter.getTask(sessionId)
                 ?: throw IllegalArgumentException("Session not found: $sessionId")
@@ -331,6 +345,8 @@ class SessionLifecycleService(
 
         stateManager.setActiveSession(updatedSession)
         selectedMode = TaskMode.valueOf(response.mode)
+        // Switching CHAT/PLAN/AGENT is a deliberate choice, so it supersedes the project config file.
+        setUiSettingDefaults(ConfigKeys.UI_SELECTED_MODE.key, selectedMode.name)
         logger.info { "Successfully switched mode to $newMode" }
 
         return updatedSession
@@ -395,6 +411,9 @@ class SessionLifecycleService(
     fun setSelectedModel(model: String) {
         stateManager.setSelectedModel(model)
         logger.info { "Selected model set to: $model" }
+        // Picking a model in the dropdown is a deliberate choice, so it supersedes a model pinned
+        // in the project config file; the session autosave below only records state.
+        setUiSettingDefaults(ConfigKeys.UI_SELECTED_MODEL.key, model)
         saveCurrentSessionState()
     }
 
@@ -412,6 +431,8 @@ class SessionLifecycleService(
         stateManager.getActiveSession()?.let { session ->
             stateManager.setActiveSession(session.copy(executionMode = mode))
         }
+        // Deliberate change: supersedes the project config file (the autosave below does not).
+        setUiSettingDefaults(ConfigKeys.GENERAL_EXECUTION_MODE.key, mode.name)
         saveCurrentSessionState()
     }
 
@@ -438,9 +459,10 @@ class SessionLifecycleService(
         val activeSession = stateManager.getActiveSession()
         if (activeSession != null) {
             stateManager.setActiveSession(activeSession.copy(noEgressEnabled = enabled))
-        } else {
-            setUiSettingDefaults(ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key, enabled.toString())
         }
+        // Flipping the egress switch is a deliberate change and must take effect even when the
+        // project config file pins the key; the autosave below only records session state.
+        setUiSettingDefaults(ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key, enabled.toString())
         saveCurrentSessionState()
     }
 
@@ -545,12 +567,12 @@ class SessionLifecycleService(
         try {
             logger.debug { "Persisting session settings: taskId=$taskId" }
             // Caller already dispatches on Dispatchers.IO via scope.launch.
-            setUiSettingDefaults(ConfigKeys.UI_SELECTED_MODEL.key, settings.selectedModel ?: "auto")
+            persistSessionUiState(ConfigKeys.UI_SELECTED_MODEL.key, settings.selectedModel ?: "auto")
             // Reasoning effort is owned by GENERAL_REASONING_EFFORT (Settings / coarse toggle),
             // not autosaved here, so a HIGH selection is never downgraded to the mirror boolean.
-            setUiSettingDefaults(ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key, settings.noEgressEnabled.toString())
-            setUiSettingDefaults(ConfigKeys.GENERAL_EXECUTION_MODE.key, settings.executionMode.name)
-            configService.set(ConfigKeys.UI_SELECTED_MODE.key, selectedMode.name, ConfigScope.APP)
+            persistSessionUiState(ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key, settings.noEgressEnabled.toString())
+            persistSessionUiState(ConfigKeys.GENERAL_EXECUTION_MODE.key, settings.executionMode.name)
+            persistSessionUiState(ConfigKeys.UI_SELECTED_MODE.key, selectedMode.name)
 
             projectRouter.taskRouter.updateTask(
                 taskId,
@@ -702,26 +724,22 @@ class SessionLifecycleService(
 
             // Use withContext instead of runBlocking to avoid blocking the coroutine
             kotlinx.coroutines.withContext(Dispatchers.IO) {
-                setUiSettingDefaults(
+                persistSessionUiState(
                     ConfigKeys.UI_SELECTED_MODEL.key,
                     settings.selectedModel ?: "auto",
                 )
                 // Reasoning effort is owned by GENERAL_REASONING_EFFORT (Settings / coarse
                 // toggle), not autosaved here, so a HIGH selection is never downgraded.
-                setUiSettingDefaults(
+                persistSessionUiState(
                     ConfigKeys.GENERAL_NO_EGRESS_ENABLED.key,
                     settings.noEgressEnabled.toString(),
                 )
-                setUiSettingDefaults(
+                persistSessionUiState(
                     ConfigKeys.GENERAL_EXECUTION_MODE.key,
                     settings.executionMode.name,
                 )
 
-                configService.set(
-                    ConfigKeys.UI_SELECTED_MODE.key,
-                    selectedMode.name,
-                    ConfigScope.APP
-                )
+                persistSessionUiState(ConfigKeys.UI_SELECTED_MODE.key, selectedMode.name)
             }
 
             projectRouter.taskRouter.updateTask(
@@ -754,11 +772,11 @@ class SessionLifecycleService(
             // exists, saveCurrentSessionState() early-returns (no active session) and never flushes
             // it, so without this write the CODING slot keeps resolving the stale APP value while the
             // turn LLM (per-request override) already uses the new one - the file gets generated by
-            // the wrong provider.
-            configService.set(
+            // the wrong provider. A model pinned in the project config file still outranks this
+            // inherited value; picking one from the dropdown goes through setSelectedModel and wins.
+            persistSessionUiState(
                 ConfigKeys.UI_SELECTED_MODEL.key,
                 settings.selectedModel ?: "auto",
-                ConfigScope.APP
             )
 
             projectRouter.taskRouter.updateTask(
@@ -794,8 +812,23 @@ class SessionLifecycleService(
         return e is IllegalArgumentException && e.message?.contains("Task not found:") == true
     }
 
+    /**
+     * The user deliberately changed this setting, so it supersedes a value pinned in the project
+     * config file until that file is edited again.
+     */
     private fun setUiSettingDefaults(key: String, value: String) {
         configService.set(key, value, ConfigScope.APP)
+    }
+
+    /**
+     * Records what the session was left with (mode, model, toggles) so the next start can restore
+     * it. Deliberately does NOT supersede `<project>/.refio/config.yaml`: this write happens on
+     * every session save, and treating it as a settings change silently disabled project
+     * configuration for these keys - `general.no_egress_enabled` included - seconds after startup.
+     * The explicit setters below still supersede the file, so a real user change keeps winning.
+     */
+    private fun persistSessionUiState(key: String, value: String) {
+        configService.setSessionState(key, value)
     }
 
     private fun parseSessionSettings(json: String?): SessionSettings? {

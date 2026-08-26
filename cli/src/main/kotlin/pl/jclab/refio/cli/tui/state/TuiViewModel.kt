@@ -12,6 +12,7 @@ import pl.jclab.refio.cli.StandaloneCoreBootstrap
 import pl.jclab.refio.core.agents.events.AgentEvent
 import pl.jclab.refio.core.agents.events.AgentEventBus
 import pl.jclab.refio.core.api.CoreApiRouter
+import pl.jclab.refio.core.config.RefioHome
 import pl.jclab.refio.core.api.CreateTaskRequest
 import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.api.SetDefaultModelRequest
@@ -464,7 +465,7 @@ class TuiViewModel(
                 it.copy(
                     connected = true,
                     sessionId = restoredTaskId,
-                    dbPath = File(System.getProperty("user.home"), ".refio/data/database.sqlite").toString(),
+                    dbPath = RefioHome.resolve("data", "database.sqlite").toString(),
                     mode = _mode.value,
                     model = _model.value ?: "default"
                 )

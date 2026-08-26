@@ -10,14 +10,12 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import pl.jclab.refio.core.db.TaskMode
-import pl.jclab.refio.core.services.ToolPermissionsService
 import pl.jclab.refio.core.tools.base.ToolRegistry
 
 class ToolCallParserTest {
 
     private val parser = ToolCallParser(
-        toolRegistry = mockk<ToolRegistry>(relaxed = true),
-        toolPermissionsService = mockk<ToolPermissionsService>(relaxed = true)
+        toolRegistry = mockk<ToolRegistry>(relaxed = true)
     )
 
     @Test

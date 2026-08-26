@@ -119,6 +119,7 @@ class MultiAgentRouter(
                     agentName = spec.name,
                     success = turnResult.success,
                     response = turnResult.response,
+                    error = if (turnResult.success) null else describeTurnFailure(turnResult),
                     tokensUsed = (turnResult.tokensIn + turnResult.tokensOut).toLong(),
                     tokensIn = turnResult.tokensIn,
                     tokensOut = turnResult.tokensOut,
@@ -224,3 +225,33 @@ class MultiAgentRouter(
         )
     }
 }
+
+
+/**
+ * Explains why an agent's turn did not succeed.
+ *
+ * The turn reports its outcome through several disjoint signals and none of them is an error
+ * string, so copying only `success` left a failed agent with nothing to diagnose: the run's error
+ * list came out empty and the only trace of the failure was the text of the final answer.
+ */
+internal fun describeTurnFailure(turnResult: pl.jclab.refio.core.services.TurnResult): String {
+    val iterations = "${turnResult.iterations} iteration(s)"
+    return when {
+        turnResult.rejectedByUser ->
+            "tool '${turnResult.rejectedToolName ?: "unknown"}' was rejected after $iterations: " +
+                (turnResult.rejectionReason ?: "no reason given")
+        turnResult.verification?.result == pl.jclab.refio.core.debug.VerificationSummary.RESULT_FAILED ->
+            "post-turn verification failed after ${turnResult.verification?.attempts ?: 0} attempt(s) and $iterations"
+        turnResult.incomplete ->
+            "turn ended without delivering the request after $iterations" + describeTools(turnResult)
+        else ->
+            "turn failed after $iterations" + describeTools(turnResult)
+    }
+}
+
+private fun describeTools(turnResult: pl.jclab.refio.core.services.TurnResult): String =
+    if (turnResult.toolsUsed.isEmpty()) {
+        ", no tools were used"
+    } else {
+        ", tools used: ${turnResult.toolsUsed.joinToString(", ")}"
+    }

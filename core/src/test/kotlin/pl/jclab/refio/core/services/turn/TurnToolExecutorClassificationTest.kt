@@ -155,6 +155,32 @@ class TurnToolExecutorClassificationTest {
     }
 
     @Test
+    fun `a batch edit yields every file it touches, not none`() {
+        // multi_edit names its targets inside `edits[]`. Reading only the top level found nothing,
+        // so the caller that snapshots before a write silently skipped the one tool that can
+        // overwrite several files in a single call.
+        assertEquals(
+            listOf("src/A.kt", "src/B.kt"),
+            TurnToolExecutor.extractEditPaths(
+                """{"edits":[{"path":"src/A.kt","old_string":"a","new_string":"b"},""" +
+                    """{"path":"src/B.kt","old_string":"c","new_string":"d"}]}"""
+            )
+        )
+    }
+
+    @Test
+    fun `repeated edits of one file collapse to a single path`() {
+        // Two edits of the same file need one snapshot, not two.
+        assertEquals(
+            listOf("src/A.kt"),
+            TurnToolExecutor.extractEditPaths(
+                """{"edits":[{"path":"src/A.kt","old_string":"a","new_string":"b"},""" +
+                    """{"path":"src/A.kt","old_string":"c","new_string":"d"}]}"""
+            )
+        )
+    }
+
+    @Test
     fun `no nudge below the failed-edit threshold`() {
         // One prior failure is normal iteration, not thrashing - stay silent.
         assertEquals(null, TurnToolExecutor.repeatedFailedEditNudgeText("src/A.kt", priorFailedEdits = 0))
@@ -394,5 +420,54 @@ class TurnToolExecutorClassificationTest {
     fun `a batch with no whole-file generators yields no paths`() {
         val batch = listOf(call("code_editing", "page.html"), call("grep_search"))
         assertTrue(TurnToolExecutor.fullRegenerationPaths(batch).isEmpty())
+    }
+
+    // ---- subagentDefinitionCalls / subagentDefinitionNames: "defines agents, never runs one" ----
+
+    private fun manageSubagent(action: String?, name: String? = null, id: String = "c"): ToolCallData {
+        val args = buildList {
+            action?.let { add(""""action":"$it"""") }
+            name?.let { add(""""name":"$it"""") }
+        }.joinToString(",", prefix = "{", postfix = "}")
+        return ToolCallData(id = id, name = "manage_subagent", arguments = args)
+    }
+
+    @Test
+    fun `create and update count as agent definitions`() {
+        // Both leave an agent defined and nothing running — the pathology the nudge targets.
+        val batch = listOf(
+            manageSubagent("create", "root-analyzer", id = "1"),
+            manageSubagent("update", "root-analyzer", id = "2"),
+        )
+        assertEquals(2, TurnToolExecutor.subagentDefinitionCalls(batch).size)
+        assertEquals(listOf("root-analyzer", "root-analyzer"), TurnToolExecutor.subagentDefinitionNames(batch))
+    }
+
+    @Test
+    fun `a call that forgot the action still counts as a definition attempt`() {
+        // Observed: the model called manage_subagent with a full agent spec but no `action`, so the
+        // call failed. It was still an attempt to set an agent up, not housekeeping.
+        val batch = listOf(manageSubagent(action = null, name = "root-analyzer"))
+        assertEquals(1, TurnToolExecutor.subagentDefinitionCalls(batch).size)
+    }
+
+    @Test
+    fun `delete and list are housekeeping, not definitions`() {
+        val batch = listOf(manageSubagent("delete", "old", id = "1"), manageSubagent("list", id = "2"))
+        assertTrue(TurnToolExecutor.subagentDefinitionCalls(batch).isEmpty())
+    }
+
+    @Test
+    fun `other tools never count as agent definitions`() {
+        val batch = listOf(call("invoke_subagent"), call("read_file", "a.kt"))
+        assertTrue(TurnToolExecutor.subagentDefinitionCalls(batch).isEmpty())
+    }
+
+    @Test
+    fun `an unnamed definition contributes no name but still counts`() {
+        // The nudge text degrades to the generic wording; the counter must not.
+        val batch = listOf(manageSubagent("create"))
+        assertEquals(1, TurnToolExecutor.subagentDefinitionCalls(batch).size)
+        assertTrue(TurnToolExecutor.subagentDefinitionNames(batch).isEmpty())
     }
 }

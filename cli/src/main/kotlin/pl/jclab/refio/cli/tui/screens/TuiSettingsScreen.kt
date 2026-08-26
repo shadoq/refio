@@ -328,7 +328,9 @@ object TuiSettingsScreen {
         "Custom OpenAI" to listOf(
             ProviderFieldDef("generic_openai.generic_openai_base_url", "Base URL", credential = true),
             ProviderFieldDef("generic_openai.generic_openai_api_key", "API Key"),
-            ProviderFieldDef("generic_openai.generic_openai_model", "Model")
+            ProviderFieldDef("generic_openai.generic_openai_model", "Model"),
+            ProviderFieldDef("generic_openai.generic_openai_context_size", "Context size"),
+            ProviderFieldDef("generic_openai.generic_openai_raw_request", "Raw request (true/false)")
         ),
         "Z.AI" to listOf(
             ProviderFieldDef("zai.zai_base_url", "Base URL"),

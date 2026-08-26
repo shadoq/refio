@@ -68,6 +68,9 @@ internal object CoreApiRouterBootstrap {
         logger.info { "Initializing core with dbPath=$dbPath" }
         DatabaseFactory.init(dbPath)
         router.promptsService.initializeDefaults()
+        // Project settings are stored per project, so this is the first point where they can be
+        // applied - the app-level router has no project to apply them for. No-op without one.
+        router.configService.materializeProjectConfig()
 
         val toolRegistry = router.toolRegistryOrNull ?: return
         val projectRoot = router.projectRootOrNull ?: return

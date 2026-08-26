@@ -51,6 +51,41 @@ class SnapshotRouter(
         }
     }
 
+    /**
+     * What restoring [snapshotId] would do to the working tree. Call this before [restoreSnapshot]
+     * to confirm with the user - restoring overwrites the files as they are now.
+     *
+     * @param filePaths Optional subset of the group's files (null = all).
+     */
+    suspend fun planRestore(
+        snapshotId: String,
+        filePaths: List<String>? = null
+    ): SnapshotService.RestorePlan {
+        val service = snapshotService
+            ?: throw IllegalStateException("Snapshot operations require project context")
+        return service.planRestore(snapshotId, filePaths)
+    }
+
+    /**
+     * Restore files from [snapshotId], overwriting their current content. The pre-restore state is
+     * snapshotted first, so the result carries a `backupSnapshotId` the caller can restore in turn.
+     *
+     * @param filePaths Optional subset of the group's files (null = all).
+     */
+    suspend fun restoreSnapshot(
+        snapshotId: String,
+        filePaths: List<String>? = null
+    ): SnapshotService.RestoreResult {
+        val service = snapshotService
+            ?: throw IllegalStateException("Snapshot operations require project context")
+        val result = service.restoreSnapshot(snapshotId, filePaths)
+        logger.info {
+            "[SnapshotRouter] Restore $snapshotId: restored=${result.restoredFiles.size}, " +
+                "errors=${result.errors.size}, backup=${result.backupSnapshotId}"
+        }
+        return result
+    }
+
     fun deleteSnapshotsByTaskId(taskId: String): Int {
         return snapshotRepository.deleteByTaskId(taskId)
     }

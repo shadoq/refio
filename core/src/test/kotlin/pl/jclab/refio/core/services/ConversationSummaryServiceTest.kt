@@ -5,6 +5,7 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.runs
+import io.mockk.slot
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -144,5 +145,51 @@ class ConversationSummaryServiceTest {
         )
 
         assertEquals(messages, result)
+    }
+    // The tail the model still sees verbatim. Two rows is often just a tool call and its result,
+    // leaving the model with an answer whose question was compacted away; four keeps the most
+    // recent exchange next to the summary. Locked here because it is a behaviour promise, not a
+    // tuning detail: the count is what the model can still read literally after a compaction.
+    @Test
+    fun `compaction always leaves the four most recent messages uncompacted`() = runTest {
+        val messages = (1..6).map { index ->
+            MockFactory.createChatMessage(
+                id = "msg-$index",
+                taskId = "task-1",
+                role = if (index % 2 == 0) MessageRole.ASSISTANT else MessageRole.USER,
+                content = "Message $index " + "x".repeat(400)
+            )
+        }
+        val metadataSlot = slot<String>()
+
+        every { promptsService.getSystemPrompt(any(), any()) } returns "summary-prompt"
+        every { configService.getModel(ModelOperation.WEAK, "task-1") } returns ("gpt-4o-mini" to "openai")
+        coEvery {
+            llmClient.complete(
+                provider = any(), model = any(), messages = any(), temperature = any(),
+                maxTokens = any(), source = any(), taskId = any(), subtaskId = any()
+            )
+        } returns LLMResponse(
+            content = "Condensed summary",
+            usage = LLMUsage(inputTokens = 10, outputTokens = 5, totalTokens = 15),
+            model = "gpt-4o-mini",
+            provider = "openai",
+            cost = 0.0
+        )
+        every {
+            chatMessageRepository.create(
+                taskId = any(), role = any(), content = any(), metadata = capture(metadataSlot),
+                tokensIn = any(), tokensOut = any(), cost = any(), toolCalls = any(), toolCallId = any()
+            )
+        } returns MockFactory.createChatMessage(role = MessageRole.SYSTEM, content = "summary")
+        every { chatMessageRepository.findHistoryForInvocation("task-1", null) } returns messages
+
+        service.ensureSummaryIfNeeded(taskId = "task-1", messages = messages, maxTokens = 100)
+
+        assertTrue(metadataSlot.isCaptured, "an over-budget conversation must be compacted at all")
+        assertTrue(
+            metadataSlot.captured.contains("\"summarized_count\":2"),
+            "6 messages minus the 4 kept recent ones leaves 2 to compact, got ${metadataSlot.captured}"
+        )
     }
 }

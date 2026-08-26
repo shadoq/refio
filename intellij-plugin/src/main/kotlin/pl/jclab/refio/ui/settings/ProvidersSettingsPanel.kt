@@ -6,8 +6,9 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBPasswordField
-import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.panel
 import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.services.ConfigService.Companion.DEFAULT_CONTEXT_SIZE
@@ -70,14 +71,7 @@ class ProvidersSettingsPanel(
         // Create all provider cards
         createAllProviderCards()
 
-        // Wrap providersPanel in scroll pane for small screens
-        val scrollPane = JBScrollPane(providersPanel).apply {
-            border = LCATheme.emptyBorder()
-            verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
-            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
-        }
-
-        add(scrollPane, BorderLayout.CENTER)
+        add(settingsScrollPane(providersPanel), BorderLayout.CENTER)
 
         // Load configuration from backend
         loadProvidersConfig()
@@ -87,7 +81,7 @@ class ProvidersSettingsPanel(
      * Field types for provider configuration
      */
     private enum class FieldType {
-        TEXT, PASSWORD, DROPDOWN
+        TEXT, PASSWORD, DROPDOWN, CHECKBOX
     }
 
     /**
@@ -136,7 +130,7 @@ class ProvidersSettingsPanel(
                         type = FieldType.DROPDOWN,
                         key = "ollama_context_size",
                         defaultValue = DEFAULT_CONTEXT_SIZE.toString(),
-                        dropdownOptions = listOf("2048", "4096", "8192", "16384", "32768", "65536", "131072")
+                        dropdownOptions = ContextSizeOptions.OLLAMA
                     ),
                     ProviderField(
                         label = "Keep Alive (seconds)",
@@ -151,7 +145,6 @@ class ProvidersSettingsPanel(
             )
         )
 
-        providersPanel.add(Box.createVerticalStrut(12))
 
         providersPanel.add(
             createProviderCard(
@@ -163,7 +156,6 @@ class ProvidersSettingsPanel(
             )
         )
 
-        providersPanel.add(Box.createVerticalStrut(12))
 
         providersPanel.add(
             createProviderCard(
@@ -175,7 +167,6 @@ class ProvidersSettingsPanel(
             )
         )
 
-        providersPanel.add(Box.createVerticalStrut(12))
 
         providersPanel.add(
             createProviderCard(
@@ -188,7 +179,6 @@ class ProvidersSettingsPanel(
             )
         )
 
-        providersPanel.add(Box.createVerticalStrut(12))
 
         providersPanel.add(
             createProviderCard(
@@ -201,7 +191,6 @@ class ProvidersSettingsPanel(
             )
         )
 
-        providersPanel.add(Box.createVerticalStrut(12))
 
         providersPanel.add(
             createProviderCard(
@@ -213,7 +202,7 @@ class ProvidersSettingsPanel(
                         type = FieldType.DROPDOWN,
                         key = "lmstudio_context_size",
                         defaultValue = DEFAULT_CONTEXT_SIZE.toString(),
-                        dropdownOptions = listOf("2048", "4096", "8192", "16384", "32768", "65536", "131072")
+                        dropdownOptions = ContextSizeOptions.LM_STUDIO
                     )
                 ),
                 initialStatus = ProviderStatus.NEEDS_CONFIG,
@@ -221,7 +210,6 @@ class ProvidersSettingsPanel(
             )
         )
 
-        providersPanel.add(Box.createVerticalStrut(12))
 
         providersPanel.add(
             createProviderCard(
@@ -229,14 +217,28 @@ class ProvidersSettingsPanel(
                 fields = listOf(
                     ProviderField("API Key", FieldType.PASSWORD, "generic_openai_api_key"),
                     ProviderField("Base URL", FieldType.TEXT, "generic_openai_base_url"),
-                    ProviderField("Model", FieldType.TEXT, "generic_openai_model")
+                    ProviderField("Model", FieldType.TEXT, "generic_openai_model"),
+                    ProviderField(
+                        label = "Context Size",
+                        type = FieldType.DROPDOWN,
+                        key = "generic_openai_context_size",
+                        defaultValue = DEFAULT_CONTEXT_SIZE.toString(),
+                        dropdownOptions = ContextSizeOptions.GENERIC_OPENAI
+                    ),
+                    ProviderField(
+                        label = "Raw request (server sets sampling)",
+                        type = FieldType.CHECKBOX,
+                        key = "generic_openai_raw_request",
+                        defaultValue = "false"
+                    )
                 ),
                 initialStatus = ProviderStatus.NEEDS_CONFIG,
-                description = "OpenAI-compatible provider with custom base URL and optional default model."
+                description = "OpenAI-compatible provider with custom base URL and optional default model. " +
+                    "Set the context size yourself - these servers do not report it in /v1/models. " +
+                    "Raw request omits temperature and max_tokens; streaming and tools are still sent."
             )
         )
 
-        providersPanel.add(Box.createVerticalStrut(12))
 
         providersPanel.add(
             createProviderCard(
@@ -254,6 +256,12 @@ class ProvidersSettingsPanel(
     /**
      * Create a provider configuration card
      */
+    /**
+     * One provider card: name, status, its credentials and a connection test.
+     *
+     * Built with the Kotlin UI DSL so every provider gets the same label column, spacing and
+     * comment styling without per-card GridBag tuning.
+     */
     private fun createProviderCard(
         providerName: String,
         fields: List<ProviderField>,
@@ -262,128 +270,99 @@ class ProvidersSettingsPanel(
     ): JPanel {
         val fieldComponents = mutableMapOf<String, JComponent>()
 
-        return JBPanel<JBPanel<*>>(GridBagLayout()).apply {
-            border = BorderFactory.createCompoundBorder(
-                LCATheme.customLineBorder(LCATheme.borderColor, 1),
-                LCATheme.paddedBorder(LCATheme.spacingLg)
-            )
+        val statusLabel = JLabel(initialStatus.displayText).apply {
+            foreground = initialStatus.color
+        }
+        val testButton = JButton("Test Connection").apply {
+            addActionListener { onTestConnection(providerName) }
+        }
 
-            val gbc = GridBagConstraints().apply {
-                gridx = 0
-                gridy = 0
-                anchor = GridBagConstraints.WEST
-                fill = GridBagConstraints.HORIZONTAL
-                weightx = 1.0
-                insets = LCATheme.insetsSmall
-            }
-
-            // Header with status
-            val statusLabel = JLabel(initialStatus.displayText).apply {
-                foreground = initialStatus.color
-            }
-
-            val headerPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
-                add(JLabel(providerName).apply {
-                    font = font.deriveFont(Font.BOLD)
-                }, BorderLayout.WEST)
-                add(statusLabel, BorderLayout.EAST)
-            }
-            add(headerPanel, gbc)
-
-            // Optional description
-            if (description != null) {
-                gbc.gridy++
-                gbc.insets = LCATheme.insetsFormField
-                val escapedDescription = description
-                    .replace("&", "&amp;")
-                    .replace("<", "&lt;")
-                    .replace(">", "&gt;")
-                    .replace("\"", "&quot;")
-                    .replace("'", "&#39;")
-                add(JLabel("<html><font color='gray'>$escapedDescription</font></html>"), gbc)
-            }
-
-            // Fields
-            fields.forEach { field ->
-                gbc.gridy++
-                gbc.insets = LCATheme.insetsGridBagDefault
-                add(JLabel("${field.label}:"), gbc)
-
-                gbc.gridy++
-                gbc.insets = LCATheme.insetsSmall
-
-                val component: JComponent = when (field.type) {
-                    FieldType.TEXT -> {
-                        val textField = JBTextField(field.defaultValue ?: "")
-                        // Auto-save on change
-                        textField.document.addDocumentListener(object : DocumentListener {
-                            override fun insertUpdate(e: DocumentEvent?) =
-                                onFieldChanged(providerName, field.key, getFieldValue(textField))
-
-                            override fun removeUpdate(e: DocumentEvent?) =
-                                onFieldChanged(providerName, field.key, getFieldValue(textField))
-
-                            override fun changedUpdate(e: DocumentEvent?) =
-                                onFieldChanged(providerName, field.key, getFieldValue(textField))
-                        })
-                        textField
-                    }
-
-                    FieldType.PASSWORD -> {
-                        val passwordField = JBPasswordField().apply {
-                            text = field.defaultValue ?: ""
-                        }
-                        // Auto-save on change
-                        passwordField.document.addDocumentListener(object : DocumentListener {
-                            override fun insertUpdate(e: DocumentEvent?) =
-                                onFieldChanged(providerName, field.key, getFieldValue(passwordField))
-
-                            override fun removeUpdate(e: DocumentEvent?) =
-                                onFieldChanged(providerName, field.key, getFieldValue(passwordField))
-
-                            override fun changedUpdate(e: DocumentEvent?) =
-                                onFieldChanged(providerName, field.key, getFieldValue(passwordField))
-                        })
-                        passwordField
-                    }
-
-                    FieldType.DROPDOWN -> JComboBox(field.dropdownOptions?.toTypedArray() ?: arrayOf()).apply {
-                        selectedItem = field.defaultValue ?: field.dropdownOptions?.firstOrNull()
-                        // Auto-save on selection change
-                        addActionListener {
-                            onFieldChanged(providerName, field.key, selectedItem as? String ?: "")
-                        }
+        val card = settingsForm {
+            group(providerName) {
+                row {
+                    cell(statusLabel)
+                }
+                if (description != null) {
+                    row {
+                        comment(escapeHtml(description))
                     }
                 }
-
-                fieldComponents[field.key] = component
-                add(component, gbc)
+                fields.forEach { field ->
+                    val component = createFieldComponent(providerName, field)
+                    fieldComponents[field.key] = component
+                    row("${field.label}:") {
+                        cell(component).align(AlignX.FILL).resizableColumn()
+                    }
+                }
+                row {
+                    cell(testButton).align(AlignX.RIGHT)
+                }
             }
+        }
 
-            // Test Connection button
-            gbc.gridy++
-            gbc.anchor = GridBagConstraints.EAST
-            gbc.fill = GridBagConstraints.NONE
-            gbc.weightx = 0.0
+        // Save card state
+        providerStates[providerName] = ProviderCardState(
+            providerName = providerName,
+            fields = fieldComponents,
+            statusLabel = statusLabel,
+            testButton = testButton
+        )
 
-            val testButton = JButton("Test Connection").apply {
-                addActionListener { onTestConnection(providerName) }
+        return card
+    }
+
+    /** Editor for one provider field; every kind saves as soon as the user changes it. */
+    private fun createFieldComponent(providerName: String, field: ProviderField): JComponent = when (field.type) {
+        FieldType.TEXT -> JBTextField(field.defaultValue ?: "").also { textField ->
+            textField.document.addDocumentListener(object : DocumentListener {
+                override fun insertUpdate(e: DocumentEvent?) =
+                    onFieldChanged(providerName, field.key, getFieldValue(textField))
+
+                override fun removeUpdate(e: DocumentEvent?) =
+                    onFieldChanged(providerName, field.key, getFieldValue(textField))
+
+                override fun changedUpdate(e: DocumentEvent?) =
+                    onFieldChanged(providerName, field.key, getFieldValue(textField))
+            })
+        }
+
+        FieldType.PASSWORD -> JBPasswordField().also { passwordField ->
+            passwordField.text = field.defaultValue ?: ""
+            passwordField.document.addDocumentListener(object : DocumentListener {
+                override fun insertUpdate(e: DocumentEvent?) =
+                    onFieldChanged(providerName, field.key, getFieldValue(passwordField))
+
+                override fun removeUpdate(e: DocumentEvent?) =
+                    onFieldChanged(providerName, field.key, getFieldValue(passwordField))
+
+                override fun changedUpdate(e: DocumentEvent?) =
+                    onFieldChanged(providerName, field.key, getFieldValue(passwordField))
+            })
+        }
+
+        FieldType.DROPDOWN -> JComboBox(field.dropdownOptions?.toTypedArray() ?: arrayOf()).apply {
+            selectedItem = field.defaultValue ?: field.dropdownOptions?.firstOrNull()
+            addActionListener {
+                onFieldChanged(providerName, field.key, selectedItem as? String ?: "")
             }
-            add(testButton, gbc)
+        }
 
-            // Save card state
-            providerStates[providerName] = ProviderCardState(
-                providerName = providerName,
-                fields = fieldComponents,
-                statusLabel = statusLabel,
-                testButton = testButton
-            )
+        FieldType.CHECKBOX -> JCheckBox().apply {
+            isSelected = field.defaultValue?.toBooleanStrictOrNull() ?: false
+            addActionListener {
+                onFieldChanged(providerName, field.key, isSelected.toString())
+            }
         }
     }
 
-    /**
-     * Handle field value change with debounce
-     */
+    private fun escapeHtml(text: String): String = text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&#39;")
+
+
     private fun onFieldChanged(providerName: String, fieldKey: String, value: String) {
         if (isLoadingFromBackend) {
             return
@@ -397,9 +376,7 @@ class ProvidersSettingsPanel(
 
             logger.debug { "Auto-saving: $jobKey = [REDACTED]" }
 
-            val contextSizeChanged =
-                (providerName.equals("Ollama", ignoreCase = true) && fieldKey == "ollama_context_size") ||
-                    (providerName.equals("LMStudio", ignoreCase = true) && fieldKey == "lmstudio_context_size")
+            val contextSizeChanged = fieldKey in CONTEXT_SIZE_FIELD_KEYS
 
             if (contextSizeChanged) {
                 // Persist synchronously here so the subsequent refresh reads the new value.
@@ -430,28 +407,16 @@ class ProvidersSettingsPanel(
                 logger.error(e) { "Failed to re-sync API keys" }
             }
 
-            // Auto-refresh Ollama models when context size changes
-            if (providerName.equals("Ollama", ignoreCase = true) && fieldKey == "ollama_context_size") {
-                logger.info { "Ollama context size changed to $value - refreshing models..." }
+            // The model list carries the context window per model, so it has to be re-fetched
+            // for the new size to show up.
+            if (contextSizeChanged) {
+                logger.info { "$providerName context size changed to $value - refreshing models..." }
                 withContext(Dispatchers.IO) {
                     try {
                         refreshModelsList(providerName)
-                        logger.info { "✓ Ollama models refreshed with new context size" }
+                        logger.info { "✓ $providerName models refreshed with new context size" }
                     } catch (e: Exception) {
-                        logger.error(e) { "Failed to refresh Ollama models after context size change" }
-                    }
-                }
-            }
-
-            // Auto-refresh LMStudio models when context size changes
-            if (providerName.equals("LMStudio", ignoreCase = true) && fieldKey == "lmstudio_context_size") {
-                logger.info { "LM Studio context size changed to $value - refreshing models..." }
-                withContext(Dispatchers.IO) {
-                    try {
-                        refreshModelsList(providerName)
-                        logger.info { "✓ LM Studio models refreshed with new context size" }
-                    } catch (e: Exception) {
-                        logger.error(e) { "Failed to refresh LM Studio models after context size change" }
+                        logger.error(e) { "Failed to refresh $providerName models after context size change" }
                     }
                 }
             }
@@ -525,6 +490,7 @@ class ProvidersSettingsPanel(
         return when (field) {
             is JBPasswordField -> String(field.password)
             is JComboBox<*> -> field.selectedItem as? String ?: ""
+            is JCheckBox -> field.isSelected.toString()
             is JTextField -> field.text ?: ""
             else -> ""
         }
@@ -536,9 +502,23 @@ class ProvidersSettingsPanel(
     private fun setFieldValue(field: JComponent?, value: String) {
         when (field) {
             is JBPasswordField -> field.text = value
-            is JComboBox<*> -> field.selectedItem = value
+            is JComboBox<*> -> field.selectedItem = nearestOption(field, value)
+            is JCheckBox -> field.isSelected = value.toBooleanStrictOrNull() ?: false
             is JTextField -> field.text = value
         }
+    }
+
+    /** Resolves what a numeric dropdown can actually display for [value]; see [nearestNumericOption]. */
+    private fun nearestOption(combo: JComboBox<*>, value: String): String {
+        val options = (0 until combo.itemCount).mapNotNull { combo.getItemAt(it) as? String }
+        val normalized = nearestNumericOption(options, value)
+        if (normalized != value) {
+            logger.warn {
+                "Configured value $value is not offered by this dropdown - showing $normalized " +
+                    "(largest available value not exceeding it)"
+            }
+        }
+        return normalized
     }
 
     /**
@@ -577,7 +557,9 @@ class ProvidersSettingsPanel(
             "generic_openai" -> mapOf(
                 "api_key" to getFieldValue(fields["generic_openai_api_key"]),
                 "base_url" to getFieldValue(fields["generic_openai_base_url"]),
-                "model" to getFieldValue(fields["generic_openai_model"])
+                "model" to getFieldValue(fields["generic_openai_model"]),
+                "context_size" to getFieldValue(fields["generic_openai_context_size"])
+                    .ifEmpty { DEFAULT_CONTEXT_SIZE.toString() }
             )
 
             "zai" -> mapOf(
@@ -777,5 +759,14 @@ class ProvidersSettingsPanel(
 
         // Reload from backend
         loadProvidersConfig()
+    }
+
+    private companion object {
+        /** Fields whose change has to invalidate the cached model list. */
+        val CONTEXT_SIZE_FIELD_KEYS = setOf(
+            "ollama_context_size",
+            "lmstudio_context_size",
+            "generic_openai_context_size"
+        )
     }
 }

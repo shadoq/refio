@@ -170,6 +170,33 @@ class SessionDebugExporterTest {
         assertEquals("created snake.html", snap.finalOutput)
     }
 
+    @Test
+    fun `a failed agent always leaves a reason in errors, even when it carries none`() {
+        // A multi-agent run that ends in failure must be diagnosable from run.json. The error list
+        // was built only from agents that carried an error string, so an agent that came back
+        // FAILED without one produced an empty list - a failure with no recorded cause anywhere.
+        val response = MultiAgentSessionResponse(
+            sessionId = "s1", name = "pipeline", status = "COMPLETED",
+            agents = listOf(
+                agent("analyst", tokensIn = 5000, tokensOut = 300, costUsd = 0.0, started = 1_000),
+                MultiAgentInstanceResponse(
+                    agentName = "coder", status = "FAILED", success = false, response = "",
+                    tokensUsed = 42_000, tokensIn = 41_000, tokensOut = 1_000, costUsd = 0.0,
+                    durationMs = 300, startedAt = 2_000, completedAt = 2_300, error = null,
+                ),
+            ),
+            totalTokens = 47_300, totalTokensIn = 46_000, totalTokensOut = 1_300, totalCostUsd = 0.0,
+            durationMs = 4_000, createdAt = 1_000, completedAt = 5_000,
+        )
+
+        val snap = exporter.exportMultiAgent(response, model = "m", options = SessionDebugOptions.forLevel(DebugLevel.STANDARD))
+
+        val coderErrors = snap.errors.filter { it.contains("coder") }
+        assertEquals(1, coderErrors.size, "the failed agent must appear exactly once in errors: ${snap.errors}")
+        assertTrue(coderErrors.first().contains("FAILED"), "the entry must name the agent status: ${coderErrors.first()}")
+        assertTrue(snap.errors.none { it.contains("analyst") }, "a successful agent must not be reported as an error")
+    }
+
     private fun agent(name: String, tokensIn: Int, tokensOut: Int, costUsd: Double, started: Long) =
         MultiAgentInstanceResponse(
             agentName = name, status = "COMPLETED", success = true, response = "done",

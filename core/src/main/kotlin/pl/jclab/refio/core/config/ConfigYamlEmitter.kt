@@ -63,11 +63,20 @@ internal object ConfigYamlEmitter {
                 gen.apiKey?.let { sb.appendLine("    apiKey: \"$it\"") }
                 gen.baseUrl?.let { sb.appendLine("    baseUrl: \"$it\"") }
                 gen.model?.let { sb.appendLine("    model: \"$it\"") }
+                gen.contextSize?.let { sb.appendLine("    contextSize: $it") }
+                gen.rawRequest?.let { sb.appendLine("    rawRequest: $it") }
             }
             providers.zai?.let { zai ->
                 sb.appendLine("  zai:")
                 zai.apiKey?.let { sb.appendLine("    apiKey: \"$it\"") }
                 zai.baseUrl?.let { sb.appendLine("    baseUrl: \"$it\"") }
+            }
+            providers.embeddings?.let { embeddings ->
+                if (embeddings.baseUrl != null || embeddings.apiKey != null) {
+                    sb.appendLine("  embeddings:")
+                    embeddings.baseUrl?.let { sb.appendLine("    baseUrl: \"$it\"") }
+                    embeddings.apiKey?.let { sb.appendLine("    apiKey: \"$it\"") }
+                }
             }
             sb.appendLine()
         }

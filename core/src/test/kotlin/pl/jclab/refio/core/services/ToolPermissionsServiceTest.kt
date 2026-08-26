@@ -419,4 +419,44 @@ class ToolPermissionsServiceTest {
             }
         }
     }
+
+    @Nested
+    inner class RenameSymbolDefaultTests {
+
+        private val renameTool = mockk<Tool> {
+            every { name } returns "rename_symbol"
+            every { mode } returns ToolMode.WRITE
+        }
+
+        private fun serviceWithRenameTool(): ToolPermissionsService {
+            val tools = allTools + renameTool
+            val byName = tools.associateBy { it.name }
+            val registry = mockk<ToolRegistry> {
+                every { getAllTools() } returns tools
+                every { getTool(any()) } answers { byName[firstArg<String>()] }
+            }
+            return ToolPermissionsService(configRepository, registry)
+        }
+
+        @Test
+        fun `rename_symbol runs without asking in AGENT mode`() {
+            // It briefly sat at ASK to contain the whole-project text rewrite, which turned out to
+            // mean "always rejected" in headless: the auto-approve regex describes build commands,
+            // and a rename's arguments are file and symbol names. The blast radius is capped inside
+            // the tool now (confirm_wide_rename), so the permission stays where WRITE tools sit.
+            assertEquals(
+                PermissionLevel.ON,
+                serviceWithRenameTool().getPermission("rename_symbol", TaskMode.AGENT)
+            )
+        }
+
+        @Test
+        fun `rename_symbol stays off in PLAN mode`() {
+            // PLAN is read-only; a project-wide rewrite has no business running there.
+            assertEquals(
+                PermissionLevel.OFF,
+                serviceWithRenameTool().getPermission("rename_symbol", TaskMode.PLAN)
+            )
+        }
+    }
 }

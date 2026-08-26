@@ -4,6 +4,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import pl.jclab.refio.core.context.ContextProviderRegistry
 import pl.jclab.refio.core.db.repositories.MCPServerRepository
 import pl.jclab.refio.core.tools.base.ToolRegistry
@@ -30,7 +32,13 @@ private data class MCPProjectState(
     val serverConfigs: ConcurrentHashMap<String, MCPServerConfig> = ConcurrentHashMap(),
     val registeredTools: ConcurrentHashMap<String, List<String>> = ConcurrentHashMap(),
     val resourceCache: ConcurrentHashMap<String, CachedValue<List<MCPResource>>> = ConcurrentHashMap(),
-    val toolCache: ConcurrentHashMap<String, CachedValue<List<MCPToolDefinition>>> = ConcurrentHashMap()
+    val toolCache: ConcurrentHashMap<String, CachedValue<List<MCPToolDefinition>>> = ConcurrentHashMap(),
+    /**
+     * Why the last connect attempt failed, per server. A failed connection is never stored in
+     * [connections], so without this the server would report a transient DISCONNECTED and the
+     * reason would be lost.
+     */
+    val connectErrors: ConcurrentHashMap<String, String> = ConcurrentHashMap()
 )
 
 /**
@@ -48,18 +56,37 @@ object MCPManager {
     private val projectStates = ConcurrentHashMap<String, MCPProjectState>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** One lock per project+server, so a slow connect cannot be started twice in parallel. */
+    private val connectLocks = ConcurrentHashMap<String, Mutex>()
+
+    /**
+     * Creates the connection for a server config. Overridable so the manager's connection and
+     * tool bookkeeping can be exercised without spawning real MCP servers.
+     */
+    internal var connectionFactory: (MCPServerConfig) -> MCPConnection = { config -> MCPConnection(config) }
+
     /**
      * Initialize MCP manager for a project.
+     *
+     * [runScopeServers] are servers declared for this process only - they are used and connected
+     * like any other, but never written to the database. That keeps a headless test run from
+     * leaving servers behind in the shared database. On an id collision the run-scope server wins,
+     * so a test can shadow a stored server without editing it.
      */
-    fun initialize(projectId: String? = null, toolRegistry: ToolRegistry? = null) {
+    fun initialize(
+        projectId: String? = null,
+        toolRegistry: ToolRegistry? = null,
+        runScopeServers: List<MCPServerConfig> = emptyList()
+    ) {
         val state = projectStates.computeIfAbsent(mapKey(projectId)) {
             MCPProjectState(projectId = projectId, toolRegistry = toolRegistry)
         }
         if (toolRegistry != null) {
-            state.toolRegistry = toolRegistry
+            applyToolRegistry(state, toolRegistry)
         }
 
-        val configs = repository.getAll(projectId)
+        val stored = repository.getAll(projectId).filterNot { s -> runScopeServers.any { it.id == s.id } }
+        val configs = stored + runScopeServers
         configs.forEach { config -> state.serverConfigs[config.id] = config }
 
         scope.launch {
@@ -87,13 +114,27 @@ object MCPManager {
             return
         }
 
-        val hadRegistry = state.toolRegistry != null
-        state.toolRegistry = toolRegistry
+        applyToolRegistry(state, toolRegistry)
+    }
 
-        if (!hadRegistry) {
-            logger.info { "ToolRegistry set for projectId=$projectId - registering tools for connected servers (incl. global)" }
-            scope.launch { registerConnectedTools(state) }
+    /**
+     * Point the project at a registry and make sure it actually holds the tools of the servers
+     * that are already connected.
+     *
+     * A recreated project router brings a brand new, empty [ToolRegistry] while the connections
+     * stay up, so every registry swap has to re-register - checking only whether a registry was
+     * present before silently dropped every MCP tool for the rest of the session.
+     */
+    private fun applyToolRegistry(state: MCPProjectState, toolRegistry: ToolRegistry) {
+        if (state.toolRegistry === toolRegistry) {
+            return
         }
+
+        state.toolRegistry = toolRegistry
+        // The recorded names belong to the previous registry; the new one starts empty.
+        state.registeredTools.clear()
+        logger.info { "ToolRegistry set for projectId=${state.projectId} - registering tools for connected servers (incl. global)" }
+        scope.launch { registerConnectedTools(state) }
     }
 
     fun getAllServers(projectId: String? = null): List<MCPServerConfig> {
@@ -131,10 +172,23 @@ object MCPManager {
     }
 
     fun getServerStatus(projectId: String?, serverId: String): MCPServerStatus {
-        val connection = projectStates[mapKey(projectId)]?.connections?.get(serverId)
-        val config = projectStates[mapKey(projectId)]?.serverConfigs?.get(serverId)
+        val state = projectStates[mapKey(projectId)]
+        val config = state?.serverConfigs?.get(serverId)
         if (config?.enabled == false) return MCPServerStatus.DISABLED
-        return connection?.getStatus() ?: MCPServerStatus.DISCONNECTED
+        return resolveStatus(state, serverId)
+    }
+
+    /**
+     * Status of an enabled server. A server whose connect attempt failed has no connection object
+     * to ask, so the recorded failure decides - reporting DISCONNECTED there reads as "still
+     * starting" and makes callers wait out their whole readiness timeout.
+     */
+    private fun resolveStatus(state: MCPProjectState?, serverId: String): MCPServerStatus {
+        state?.connections?.get(serverId)?.let { return it.getStatus() }
+        if (state?.connectErrors?.containsKey(serverId) == true) {
+            return MCPServerStatus.ERROR
+        }
+        return MCPServerStatus.DISCONNECTED
     }
 
     fun getConnectionInfo(projectId: String?): List<MCPConnectionInfo> {
@@ -150,10 +204,9 @@ object MCPManager {
             MCPConnectionInfo(
                 serverId = serverId,
                 displayName = config.displayName ?: serverId,
-                status = if (!config.enabled) MCPServerStatus.DISABLED
-                         else connection?.getStatus() ?: MCPServerStatus.DISCONNECTED,
+                status = if (!config.enabled) MCPServerStatus.DISABLED else resolveStatus(state, serverId),
                 lastConnectedAt = connection?.lastConnectedAt,
-                lastError = connection?.lastError,
+                lastError = connection?.lastError ?: state.connectErrors[serverId],
                 toolCount = state.registeredTools[serverId]?.size ?: 0,
                 resourceCount = resourceCount,
                 promptsEnabled = config.promptsEnabled
@@ -169,6 +222,7 @@ object MCPManager {
         state.connections.clear()
         state.resourceCache.clear()
         state.toolCache.clear()
+        state.connectErrors.clear()
         unregisterTools(state, null)
         projectStates.remove(mapKey(projectId))
     }
@@ -178,6 +232,7 @@ object MCPManager {
         state.connections.remove(serverId)?.disconnect()
         state.resourceCache.remove(serverId)
         state.toolCache.remove(serverId)
+        state.connectErrors.remove(serverId)
         ContextProviderRegistry.unregister(serverId)
         unregisterTools(state, serverId)
         if (projectId == null) {
@@ -232,30 +287,45 @@ object MCPManager {
             ?: throw IllegalStateException("MCPManager not initialized for projectId=$projectId")
         val config = state.serverConfigs[serverId]
             ?: throw IllegalArgumentException("MCP server not found: $serverId")
-        if (state.connections.containsKey(serverId)) {
-            logger.debug { "MCP server $serverId already connected for projectId=$projectId" }
-            return
-        }
 
-        val connection = MCPConnection(config)
-        connection.connect()
-        state.connections[serverId] = connection
+        // Serialized per server: connect() suspends for as long as a handshake takes, so without
+        // this both callers pass the "already connected" check and start a second server process
+        // that nothing ever holds a reference to.
+        connectLock(projectId, serverId).withLock {
+            if (state.connections.containsKey(serverId)) {
+                logger.debug { "MCP server $serverId already connected for projectId=$projectId" }
+                return
+            }
 
-        val provider = MCPContextProvider(serverId, config, connection)
-        ContextProviderRegistry.register(provider)
+            val connection = connectionFactory(config)
+            try {
+                connection.connect()
+            } catch (e: Exception) {
+                state.connectErrors[serverId] = e.message ?: e::class.simpleName ?: "connect failed"
+                throw e
+            }
+            state.connections[serverId] = connection
+            state.connectErrors.remove(serverId)
 
-        if (projectId == null) {
-            // Global server: its single connection feeds every project's ToolRegistry.
-            propagateGlobalToolsToProjects(connection, config)
-        } else {
-            val registry = state.toolRegistry
-            if (registry == null) {
-                logger.warn { "Connected MCP server '$serverId' but project ToolRegistry not available yet - tools register once the project router/session is created." }
+            val provider = MCPContextProvider(serverId, config, connection)
+            ContextProviderRegistry.register(provider)
+
+            if (projectId == null) {
+                // Global server: its single connection feeds every project's ToolRegistry.
+                propagateGlobalToolsToProjects(connection, config)
             } else {
-                registerToolsInto(registry, connection, config, state.registeredTools)
+                val registry = state.toolRegistry
+                if (registry == null) {
+                    logger.warn { "Connected MCP server '$serverId' but project ToolRegistry not available yet - tools register once the project router/session is created." }
+                } else {
+                    registerToolsInto(registry, connection, config, state.registeredTools)
+                }
             }
         }
     }
+
+    private fun connectLock(projectId: String?, serverId: String): Mutex =
+        connectLocks.computeIfAbsent("${mapKey(projectId)}/$serverId") { Mutex() }
 
     /**
      * Register every tool the given project state should expose: its own connected servers
@@ -320,17 +390,32 @@ object MCPManager {
         }
         val toolDefs = connection.getCachedTools().ifEmpty { connection.refreshTools() }
         val registered = mutableListOf<String>()
+        // Bookkeeping records everything this server exposes in the registry, not only what this
+        // call added - it is what the UI reports as the tool count, so it has to match the registry.
+        val exposed = mutableListOf<String>()
         toolDefs.forEach { toolDef ->
             val wrapper = MCPToolWrapper(connection, toolDef, toolMode)
-            if (!registry.hasTool(wrapper.name)) {
-                runCatching {
-                    registry.register(wrapper)
-                    registered.add(wrapper.name)
-                }.onFailure { e -> logger.warn(e) { "Failed to register MCP tool ${wrapper.name}" } }
+            if (registry.hasTool(wrapper.name)) {
+                exposed.add(wrapper.name)
+                return@forEach
             }
+            runCatching { registry.register(wrapper) }
+                .onSuccess {
+                    registered.add(wrapper.name)
+                    exposed.add(wrapper.name)
+                }
+                .onFailure { e ->
+                    if (registry.hasTool(wrapper.name)) {
+                        exposed.add(wrapper.name)
+                    } else {
+                        logger.warn(e) { "Failed to register MCP tool ${wrapper.name}" }
+                    }
+                }
+        }
+        if (exposed.isNotEmpty()) {
+            bookkeeping[connection.serverId] = exposed.distinct()
         }
         if (registered.isNotEmpty()) {
-            bookkeeping[connection.serverId] = (bookkeeping[connection.serverId].orEmpty() + registered).distinct()
             logger.info { "Registered ${registered.size} agent tool(s) from MCP server '${connection.serverId}': ${registered.joinToString()}" }
         }
     }

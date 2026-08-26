@@ -7,6 +7,7 @@ import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.logging.dualLogger
+import java.nio.channels.UnresolvedAddressException
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -43,7 +44,8 @@ class LLMRetryHandler(
      * @param systemPrompt Optional system prompt
      * @param taskId Task ID for tracking
      * @param source Source identifier for logging
-     * @param maxRetries Maximum retry attempts
+     * @param maxRetries Maximum attempts in total (not retries on top of a first call); values
+     *   below 1 mean "call once, never retry" and still make that one call
      * @param baseDelayMs Base delay for exponential backoff (ms)
      * @param responseFormat Optional response format (e.g., JSON mode)
      * @param stream Whether to stream response
@@ -82,7 +84,12 @@ class LLMRetryHandler(
             }
         }
 
-        repeat(maxRetries) { attempt ->
+        // "No retries" still owes the caller one call. Guarding here keeps a configured
+        // limits.max_retries=0 from short-circuiting into a synthetic failure that never
+        // reached the provider.
+        val maxAttempts = maxRetries.coerceAtLeast(1)
+
+        repeat(maxAttempts) { attempt ->
             try {
                 return llmClient.complete(
                     provider = provider,
@@ -120,24 +127,24 @@ class LLMRetryHandler(
                     throw e
                 }
 
-                if (attempt < maxRetries - 1) {
+                if (attempt < maxAttempts - 1) {
                     val delayMs = baseDelayMs * (1 shl attempt)  // Exponential: 1s, 2s, 4s
                     totalRetries.incrementAndGet()
 
                     logger.warn {
-                        "[RETRY] Attempt ${attempt + 1}/$maxRetries failed: ${e.message}. " +
+                        "[RETRY] Attempt ${attempt + 1}/$maxAttempts failed: ${e.message}. " +
                         "Retrying in ${delayMs}ms..."
                     }
 
                     delay(delayMs)
                 } else {
                     totalFailures.incrementAndGet()
-                    logger.error(e) { "[RETRY] All $maxRetries attempts failed" }
+                    logger.error(e) { "[RETRY] All $maxAttempts attempts failed" }
                 }
             }
         }
 
-        throw lastException ?: RuntimeException("LLM call failed after $maxRetries retries")
+        throw lastException ?: RuntimeException("LLM call failed after $maxAttempts attempts")
     }
 
     /**
@@ -161,6 +168,11 @@ class LLMRetryHandler(
         if (e is RefioError.LLMRateLimit) return true
         if (e is RefioError.LLMTimeout) return true
 
+        // Connection failures carry the original cause only in `cause`: their message is a
+        // user-facing hint ("Is Ollama running?") that matches none of the transient patterns.
+        // Decide on the type, never on that rendered text.
+        if (e is RefioError.LLMConnectionFailed) return isTransientConnectionFailure(e)
+
         // For generic LLM errors, check the underlying cause
         if (e is RefioError.LLMError) {
             return shouldRetryByMessage(e)
@@ -168,6 +180,20 @@ class LLMRetryHandler(
 
         // For non-RefioError exceptions (raw IO/network), check message
         return shouldRetryByMessage(e)
+    }
+
+    /**
+     * A failure to reach the LLM server is transient by default: the server is restarting, a
+     * local model server has not finished binding its port, or the connect attempt timed out
+     * while a large model loads. All of those succeed on the next attempt.
+     *
+     * The exception is a host name that does not resolve. That is a wrong endpoint in the
+     * configuration, not a passing outage - every attempt would fail identically, so it fails
+     * fast and shows the user the real problem instead of stalling for the whole backoff.
+     */
+    private fun isTransientConnectionFailure(e: RefioError.LLMConnectionFailed): Boolean {
+        val causes = generateSequence(e.originalCause) { it.cause }
+        return causes.none { it is UnresolvedAddressException }
     }
 
     /**

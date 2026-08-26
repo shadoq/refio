@@ -27,7 +27,18 @@ data class ProvidersConfig(
     val lmstudio: LMStudioConfig? = null,
     @SerialName("generic_openai")
     val genericOpenai: GenericOpenAIConfig? = null,
-    val zai: ZAIConfig? = null
+    val zai: ZAIConfig? = null,
+    val embeddings: EmbeddingsProviderConfig? = null
+)
+
+/**
+ * OpenAI-compatible embeddings endpoint, separate from the chat provider because embedding
+ * models commonly run as their own process on a different port.
+ */
+@Serializable
+data class EmbeddingsProviderConfig(
+    val baseUrl: String? = null,
+    val apiKey: String? = null
 )
 
 @Serializable
@@ -60,7 +71,9 @@ data class LMStudioConfig(
 data class GenericOpenAIConfig(
     val apiKey: String? = null,
     val baseUrl: String? = null,
-    val model: String? = null
+    val model: String? = null,
+    val contextSize: Int? = null,
+    val rawRequest: Boolean? = null
 )
 
 @Serializable

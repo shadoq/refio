@@ -9,6 +9,7 @@ import pl.jclab.refio.core.api.TurnProfileOverrides
 import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.db.ToolCallData
 import pl.jclab.refio.core.llm.LLMResponse
+import pl.jclab.refio.core.llm.StreamFinishReason
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import java.util.UUID
@@ -156,7 +157,9 @@ class ToolCallExtractor(
         //    parallel guard in AgentTurnLoop) keeps the native-vs-text envelope inspection in one place.
         //    The native path never reaches this point (it returned above),
         //    matching the turn loop's long-standing `!usedNativeChannel` precondition.
-        if (response.finishReason == "length") {
+        // A stream cut off mid-answer leaves the same unclosed envelope as an exhausted output
+        // budget, so both reach this branch.
+        if (response.finishReason == "length" || response.finishReason == StreamFinishReason.TRUNCATED) {
             val envelope = parser.inspectJsonEnvelope(contentForExtraction)
             if (envelope.hasJsonEnvelope && !envelope.isComplete) {
                 return ExtractionResult.None("incomplete-json-truncated")

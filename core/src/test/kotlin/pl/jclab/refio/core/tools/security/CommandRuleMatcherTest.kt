@@ -228,16 +228,20 @@ class CommandRuleMatcherTest {
         // substitution operator must never be auto-approved; it falls through to ASK so
         // the user sees and approves the full line.
 
+        // The payloads here are deliberately NOT on the BLOCK list (a destructive payload is
+        // covered by SegmentedBlockTests instead), so what these assert is precisely the ALLOW
+        // gate: a chained command never gets auto-approved on the strength of its leading program.
+
         @Test
         fun `chained command after allowed program is not auto-allowed`() {
             val matcher = CommandRuleDefaults.createDefaultMatcher()
-            assertEquals(RuleAction.ASK, matcher.match("git status; rm -rf /").action)
+            assertEquals(RuleAction.ASK, matcher.match("git status; python exfil.py").action)
         }
 
         @Test
         fun `and-chained command after allowed program is not auto-allowed`() {
             val matcher = CommandRuleDefaults.createDefaultMatcher()
-            assertEquals(RuleAction.ASK, matcher.match("cat README.md && rm -rf /").action)
+            assertEquals(RuleAction.ASK, matcher.match("cat README.md && python exfil.py").action)
         }
 
         @Test
@@ -249,19 +253,19 @@ class CommandRuleMatcherTest {
         @Test
         fun `command substitution in allowed program is not auto-allowed`() {
             val matcher = CommandRuleDefaults.createDefaultMatcher()
-            assertEquals(RuleAction.ASK, matcher.match("echo $(rm -rf /)").action)
+            assertEquals(RuleAction.ASK, matcher.match("echo $(python exfil.py)").action)
         }
 
         @Test
         fun `backtick substitution in allowed program is not auto-allowed`() {
             val matcher = CommandRuleDefaults.createDefaultMatcher()
-            assertEquals(RuleAction.ASK, matcher.match("echo `rm -rf /`").action)
+            assertEquals(RuleAction.ASK, matcher.match("echo `python exfil.py`").action)
         }
 
         @Test
         fun `newline-injected second command is not auto-allowed`() {
             val matcher = CommandRuleDefaults.createDefaultMatcher()
-            assertEquals(RuleAction.ASK, matcher.match("git status\nrm -rf /").action)
+            assertEquals(RuleAction.ASK, matcher.match("git status\npython exfil.py").action)
         }
 
         // A BLOCK rule still wins even when wrapped behind an allowed program — the BLOCK
@@ -302,6 +306,175 @@ class CommandRuleMatcherTest {
         fun `input redirection from allowed program is not auto-allowed`() {
             val matcher = CommandRuleDefaults.createDefaultMatcher()
             assertEquals(RuleAction.ASK, matcher.match("cat < .env").action)
+        }
+    }
+
+    @Nested
+    inner class SegmentedBlockTests {
+        // Every BLOCK rule is anchored with `^` (`^rm\s+-r`), so matching it against the whole
+        // command line only ever tests position 0: any prefix at all lifted the hard deny.
+        // `rm -rf /` was blocked while `env rm -rf /`, `git status && rm -rf /` or
+        // `find . -exec rm -rf {} +` ran. A hard deny must hold for every command the line
+        // actually runs, so BLOCK rules are matched against each shell segment, each command
+        // substitution, and the real command hidden behind a wrapper program.
+
+        private val matcher = CommandRuleDefaults.createDefaultMatcher()
+
+        @Test
+        fun `blocks a destructive command chained after an allowed program`() {
+            assertEquals(RuleAction.BLOCK, matcher.match("cat README.md && rm -rf /").action)
+        }
+
+        @Test
+        fun `blocks a destructive command after a semicolon`() {
+            assertEquals(RuleAction.BLOCK, matcher.match("git status; rm -rf /").action)
+        }
+
+        @Test
+        fun `blocks a destructive command on a second line`() {
+            assertEquals(RuleAction.BLOCK, matcher.match("git status\nrm -rf /").action)
+        }
+
+        @Test
+        fun `blocks a destructive command inside command substitution`() {
+            assertEquals(RuleAction.BLOCK, matcher.match("echo $(git reset --hard HEAD~5)").action)
+        }
+
+        @Test
+        fun `blocks a destructive command inside backtick substitution`() {
+            assertEquals(RuleAction.BLOCK, matcher.match("echo `rm -rf /`").action)
+        }
+
+        @Test
+        fun `blocks a destructive command run through env`() {
+            assertEquals(RuleAction.BLOCK, matcher.match("env rm -rf /").action)
+        }
+
+        @Test
+        fun `blocks a destructive command run through env with an assignment`() {
+            assertEquals(RuleAction.BLOCK, matcher.match("env FOO=1 rm -rf /tmp/x").action)
+        }
+
+        @Test
+        fun `blocks a destructive command run through timeout`() {
+            assertEquals(RuleAction.BLOCK, matcher.match("timeout 5 git push --force origin main").action)
+        }
+
+        @Test
+        fun `blocks a destructive command run through nohup`() {
+            assertEquals(RuleAction.BLOCK, matcher.match("nohup rm -rf /var/data").action)
+        }
+
+        @Test
+        fun `blocks a destructive command piped into xargs`() {
+            assertEquals(RuleAction.BLOCK, matcher.match("find . -name '*.log' | xargs rm -f").action)
+        }
+
+        @Test
+        fun `blocks a destructive command passed to a shell with -c`() {
+            assertEquals(RuleAction.BLOCK, matcher.match("sh -c \"rm -rf /\"").action)
+        }
+
+        @Test
+        fun `blocks a destructive command passed to bash -c in single quotes`() {
+            assertEquals(RuleAction.BLOCK, matcher.match("bash -c 'echo hi; rm -rf /'").action)
+        }
+
+        @Test
+        fun `blocks find -exec of a destructive command`() {
+            assertEquals(RuleAction.BLOCK, matcher.match("find . -name '*.log' -exec rm -rf {} +").action)
+        }
+
+        @Test
+        fun `blocks a destructive command hidden in a subshell`() {
+            assertEquals(RuleAction.BLOCK, matcher.match("(cd /tmp && rm -rf data)").action)
+        }
+
+        @Test
+        fun `blocks a destructive command in a loop body`() {
+            assertEquals(RuleAction.BLOCK, matcher.match("for d in a b; do rm -rf \$d; done").action)
+        }
+
+        // Splitting must not turn ordinary arguments into commands: a destructive-looking
+        // string inside quotes is data, not a second command, and blocking it would break
+        // everyday work (writing about `rm -rf`, grepping for it).
+        @Test
+        fun `does not block a destructive-looking phrase inside a quoted argument`() {
+            assertEquals(RuleAction.ALLOW, matcher.match("git commit -m \"drop the rm -rf helper\"").action)
+        }
+
+        @Test
+        fun `does not block a search for a destructive pattern`() {
+            assertEquals(RuleAction.ALLOW, matcher.match("grep -rn 'rm -rf' .").action)
+        }
+
+        @Test
+        fun `does not block an escaped separator inside an argument`() {
+            assertEquals(RuleAction.ALLOW, matcher.match("grep -rn rm\\ -rf src").action)
+        }
+
+        // Writing a script is not running it. A here-document body is text handed to the command,
+        // so a deploy script that happens to contain `rm -rf build` must still be writable - and a
+        // redirected string is data for the same reason.
+        @Test
+        fun `does not block a destructive line inside a here-document body`() {
+            val command = "cat > deploy.sh <<'EOF'\n#!/bin/sh\nrm -rf build\nEOF"
+            assertEquals(RuleAction.ASK, matcher.match(command).action)
+        }
+
+        @Test
+        fun `does not block a destructive line inside an unquoted here-document body`() {
+            val command = "cat > deploy.sh <<EOF\nrm -rf build\nEOF"
+            assertEquals(RuleAction.ASK, matcher.match(command).action)
+        }
+
+        @Test
+        fun `does not block a destructive-looking string being written to a file`() {
+            assertEquals(RuleAction.ASK, matcher.match("echo \"rm -rf /\" > notes.txt").action)
+        }
+
+        // Skipping the body must not skip the line that opened it, nor the commands after it.
+        @Test
+        fun `blocks a destructive command chained on the line that opens a here-document`() {
+            assertEquals(RuleAction.BLOCK, matcher.match("cat <<EOF; rm -rf /\nbody\nEOF").action)
+        }
+
+        @Test
+        fun `blocks a destructive command that follows the here-document terminator`() {
+            val command = "cat > deploy.sh <<'EOF'\nrm -rf build\nEOF\nrm -rf /"
+            assertEquals(RuleAction.BLOCK, matcher.match(command).action)
+        }
+
+        // `find -delete` is mass deletion, but it is also everyday cleanup, and a hard deny leaves
+        // no way to approve it knowingly. It asks instead - `find` is off the allow list, so the
+        // user sees the whole line including `-delete`.
+        @Test
+        fun `find -delete asks rather than blocking`() {
+            assertEquals(RuleAction.ASK, matcher.match("find . -name '*.tmp' -delete").action)
+        }
+    }
+
+    @Nested
+    inner class WrapperProgramAllowTests {
+        // `env` and `find` were on the ALLOW list, yet both launch other programs
+        // (`env <cmd>`, `find -exec`), so vetting the leading program proved nothing.
+
+        @Test
+        fun `env with a payload command is not auto-allowed`() {
+            val matcher = CommandRuleDefaults.createDefaultMatcher()
+            assertEquals(RuleAction.ASK, matcher.match("env python exfil.py").action)
+        }
+
+        @Test
+        fun `bare env stays allowed`() {
+            val matcher = CommandRuleDefaults.createDefaultMatcher()
+            assertEquals(RuleAction.ALLOW, matcher.match("env").action)
+        }
+
+        @Test
+        fun `find is not auto-allowed`() {
+            val matcher = CommandRuleDefaults.createDefaultMatcher()
+            assertEquals(RuleAction.ASK, matcher.match("find . -name '*.kt'").action)
         }
     }
 

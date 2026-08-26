@@ -6,6 +6,7 @@ import io.mockk.coVerify
 import io.mockk.every
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.llm.LLMClient
@@ -222,5 +223,44 @@ class TurnLLMCallerTest {
 
         assertEquals("{}", result.content)
         assertEquals(2, calls, "the aborted first call must be retried once and then succeed")
+    }
+
+    @Test
+    fun `retry budget comes from config, not from the handler defaults`() {
+        // The live retry path called callWithRetry with no arguments, so the handler defaults
+        // (3 attempts / 1000 ms) always won and the user-facing limits.max_retries knob was
+        // silently ignored — including limits.max_retries=1, which must mean "do not retry".
+        every { configService.getModel(any(), any(), any()) } returns ("model-a" to "anthropic")
+        every { configService.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
+        every { configService.getTyped(ConfigKeys.MAX_RETRIES, "task-1") } returns 1
+        every { configService.getTyped(ConfigKeys.RETRY_DELAY_MS, "task-1") } returns 1L
+        var calls = 0
+        coEvery {
+            llmClient.complete(
+                provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                reasoningEffort = any(), noEgressEnabled = any(), stream = any(), onChunk = any(),
+                taskId = any(), subtaskId = any(), source = any(), contextContent = any(),
+                systemMessages = any(), kwargs = any()
+            )
+        } answers {
+            calls++
+            throw RuntimeException("rate limit exceeded")
+        }
+
+        assertFailsWith<RuntimeException> {
+            kotlinx.coroutines.runBlocking {
+                caller.callLLM(
+                    taskId = "task-1",
+                    mode = TaskMode.AGENT,
+                    prompt = TurnPrompt(
+                        systemPrompt = "system",
+                        messages = listOf(LLMMessage(role = "user", content = "hello"))
+                    )
+                )
+            }
+        }
+
+        assertEquals(1, calls, "limits.max_retries=1 must cap the turn at a single LLM attempt")
     }
 }

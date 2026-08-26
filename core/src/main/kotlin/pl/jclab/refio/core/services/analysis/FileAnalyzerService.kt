@@ -216,42 +216,32 @@ class FileAnalyzerService(
         // from a fresh FileAnalysis, never from this column. Dropping it removes per-index CPU +
         // I/O for zero behavioural change. The nullable column is kept to avoid a schema migration.
         val existing = ragRepository.getIndexedFileByPath(analysis.projectRoot, analysis.filePath)
-        val fileId = if (existing != null) {
-            ragRepository.updateIndexedFile(
-                fileId = existing.id,
-                fileHash = analysis.contentHash ?: sha256(content),
-                fileSize = analysis.fileSize,
-                lastModified = analysis.lastModified,
-                metadata = null
-            )
-            ragRepository.deleteChunksForFile(existing.id)
-            existing.id
-        } else {
-            ragRepository.createIndexedFile(
-                projectRoot = analysis.projectRoot,
-                filePath = analysis.filePath,
-                fileHash = analysis.contentHash ?: sha256(content),
-                fileSize = analysis.fileSize,
-                mimeType = inferMimeType(analysis.filePath),
-                lastModified = analysis.lastModified,
-                metadata = null
-            )
-        }
-
-        // Batched inserts (one writer-lock acquisition per table) instead of one
-        // transaction per chunk/embedding - see RagRepository.createChunksBatch.
         val limitedChunks = chunks.take(configService.getTyped<Int>(ConfigKeys.RAG_MAX_CHUNKS_PER_FILE))
-        val chunkInserts = limitedChunks.mapIndexed { index, chunk ->
-            ChunkInsert(
-                fileId = fileId,
-                chunkIndex = index,
-                content = chunk.content,
-                startLine = chunk.startLine,
-                endLine = chunk.endLine,
-                metadata = gson.toJson(chunk.metadata)
-            )
+
+        // File fingerprint and chunks go in as one transaction (one writer-lock acquisition)
+        // so an interrupted index can never register the file with its chunks missing - see
+        // RagRepository.upsertIndexedFileWithChunks.
+        val fileId = ragRepository.upsertIndexedFileWithChunks(
+            existingFileId = existing?.id,
+            projectRoot = analysis.projectRoot,
+            filePath = analysis.filePath,
+            fileHash = analysis.contentHash ?: sha256(content),
+            fileSize = analysis.fileSize,
+            mimeType = inferMimeType(analysis.filePath),
+            lastModified = analysis.lastModified,
+            metadata = null
+        ) { id ->
+            limitedChunks.mapIndexed { index, chunk ->
+                ChunkInsert(
+                    fileId = id,
+                    chunkIndex = index,
+                    content = chunk.content,
+                    startLine = chunk.startLine,
+                    endLine = chunk.endLine,
+                    metadata = gson.toJson(chunk.metadata)
+                )
+            }
         }
-        ragRepository.createChunksBatch(chunkInserts)
 
         val chunkIdByIndex = ragRepository.getChunkIdsByIndexForFile(fileId)
         val embeddingInserts = limitedChunks.indices.mapNotNull { index ->

@@ -62,6 +62,15 @@ object CommandRuleDefaults {
      * Format: list of (program name, description). Aliases handled as separate entries.
      * Network/privilege-sensitive tools (docker, kubectl, ssh, scp, rsync, wget, sudo, su,
      * systemctl, service) are intentionally absent here — they're covered by ASK_RULES.
+     *
+     * A program belongs here only if vetting its NAME says something about what it will do.
+     * `find` used to be on this list and does not qualify: `-exec`, `-execdir`, `-ok` run an
+     * arbitrary program and `-delete` empties a tree, so an allow-list entry for `find` allowed
+     * whatever came after it. Deciding per argument would mean a deny list nested inside an allow
+     * list, exactly the fragile shape that made the anchored BLOCK rules bypassable, so `find`
+     * falls through to ASK - where the user sees the whole line, `-delete` included, before
+     * approving it. `env` is allowed only in its bare, argument-free form (below), since
+     * `env <cmd>` is just another way to spell `<cmd>`.
      */
     private val ALLOW_PROGRAMS: List<Pair<String, String>> = listOf(
         // Version control
@@ -75,7 +84,6 @@ object CommandRuleDefaults {
         "head" to "Print file head",
         "tail" to "Print file tail",
         "wc" to "Word count",
-        "find" to "Find files",
         "grep" to "Text search",
         "rg" to "Ripgrep search",
         "fd" to "fd-find",
@@ -88,7 +96,6 @@ object CommandRuleDefaults {
         "gh" to "GitHub CLI (non-destructive ops via ASK for delete)",
         "hg" to "Mercurial",
         // Environment
-        "env" to "Print environment",
         "which" to "Locate executable",
         "where" to "Locate executable (Windows)"
     )
@@ -108,7 +115,10 @@ object CommandRuleDefaults {
             CommandRule("^printf(\\s+.*)?$", RuleAction.ALLOW, "Print formatted"),
             CommandRule("^true$", RuleAction.ALLOW, "Always succeed"),
             CommandRule("^false$", RuleAction.ALLOW, "Always fail"),
-            CommandRule("^exit(\\s+\\d+)?$", RuleAction.ALLOW, "Exit with code")
+            CommandRule("^exit(\\s+\\d+)?$", RuleAction.ALLOW, "Exit with code"),
+            // Bare `env` prints the environment; `env <cmd>` runs a program, so only the
+            // argument-free form is auto-allowed.
+            CommandRule("^env$", RuleAction.ALLOW, "Print environment")
         ))
 
         rules

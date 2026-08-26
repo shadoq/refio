@@ -1,8 +1,23 @@
 package pl.jclab.refio.core.llm.adapters
 
 import com.google.gson.JsonParser
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
+import io.ktor.serialization.gson.gson
+import io.mockk.every
+import io.mockk.mockk
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.errors.RefioError
+import pl.jclab.refio.core.llm.LLMMessage
+import pl.jclab.refio.core.services.ConfigService
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIsNot
@@ -120,5 +135,90 @@ class OpenRouterAdapterTest {
             )
         }
         assertIsNot<RefioError.LLMRateLimit>(error, "a 500 is not a rate limit")
+    }
+
+    @Test
+    fun `a mid-stream 429 envelope aborts the real SSE stream instead of being swallowed`() = runTest {
+        // The classification above only helps if the SSE loop actually lets the exception out.
+        // When it is swallowed the stream reads on to [DONE] and the caller gets the partial
+        // text as if it were the whole answer, while the retry handler never sees the 429 and
+        // cannot back off. Drive the real stream here, not the raw-chunk hook.
+        val sse = buildString {
+            append("data: {\"choices\":[{\"delta\":{\"content\":\"partial \"}}]}\n\n")
+            append(
+                "data: {\"error\":{\"message\":\"Provider returned error\",\"code\":429," +
+                    "\"metadata\":{\"provider_name\":\"GMICloud\"}}}\n\n"
+            )
+            append("data: [DONE]\n\n")
+        }
+        val adapter = OpenRouterAdapter(
+            model = "tencent/hy3",
+            configService = mockConfig(),
+            httpClientOverride = mockSseClient(sse),
+        )
+
+        assertFailsWith<RefioError.LLMRateLimit> {
+            adapter.chat(
+                messages = listOf(LLMMessage(role = "user", content = "hi")),
+                systemMessages = emptyList(),
+                maxTokens = 64,
+                temperature = 0.0,
+                streaming = true,
+                onStreamChunk = { },
+                kwargs = emptyMap(),
+            )
+        }
+    }
+
+    @Test
+    fun `an undecodable SSE line is skipped and the rest of the stream still arrives`() = runTest {
+        // The other half of the contract: only a deliberate abort ends the stream. A line we
+        // cannot decode must not fail the turn, because the provider still delivers the answer
+        // in the surrounding chunks.
+        val sse = buildString {
+            append("data: {\"choices\":[{\"delta\":{\"content\":\"before \"}}]}\n\n")
+            append("data: {not json at all\n\n")
+            append("data: {\"choices\":[{\"delta\":{\"content\":\"after\"},\"finish_reason\":\"stop\"}]}\n\n")
+            append("data: [DONE]\n\n")
+        }
+        val adapter = OpenRouterAdapter(
+            model = "tencent/hy3",
+            configService = mockConfig(),
+            httpClientOverride = mockSseClient(sse),
+        )
+
+        val response = adapter.chat(
+            messages = listOf(LLMMessage(role = "user", content = "hi")),
+            systemMessages = emptyList(),
+            maxTokens = 64,
+            temperature = 0.0,
+            streaming = true,
+            onStreamChunk = { },
+            kwargs = emptyMap(),
+        )
+
+        assertEquals("before after", response.content)
+        assertEquals("stop", response.finishReason)
+    }
+
+    private fun mockConfig(): ConfigService {
+        val config = mockk<ConfigService>()
+        every { config.get(any(), any(), any(), any()) } returns "test-key"
+        every { config.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, any()) } returns ConfigKeys.MAX_OUTPUT_SIZE.default
+        return config
+    }
+
+    private fun mockSseClient(sseBody: String): HttpClient = HttpClient(MockEngine { _ ->
+        respond(
+            content = sseBody,
+            status = HttpStatusCode.OK,
+            headers = headersOf(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()),
+        )
+    }) {
+        install(ContentNegotiation) {
+            gson {
+                serializeNulls()
+            }
+        }
     }
 }

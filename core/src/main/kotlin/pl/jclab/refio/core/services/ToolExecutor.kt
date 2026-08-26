@@ -15,6 +15,7 @@ import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.api.models.ExecutionMode
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
+import pl.jclab.refio.core.utils.NameSuggestion
 
 private val logger = dualLogger("ToolExecutor")
 
@@ -41,115 +42,6 @@ class ToolExecutor(
     private val mode: TaskMode = TaskMode.AGENT,
     private val executionMode: ExecutionMode = ExecutionMode.AUTO
 ) {
-
-    /**
-     * Execute list of tool calls sequentially.
-     *
-     * Stops at first error.
-     *
-     * @param toolCalls List of tool call specifications
-     * @return Execution results with success status, outputs, and errors
-     */
-    suspend fun executeTools(toolCalls: List<ToolCall>): ToolExecutionResult {
-        logger.info { "Executing ${toolCalls.size} tool calls in $mode mode" }
-
-        val outputs = mutableListOf<ToolCallOutput>()
-        val errors = mutableListOf<String>()
-        var toolsExecuted = 0
-        var overallSuccess = true
-
-        val effectiveMode = resolveTaskMode(null)
-
-        for ((index, toolCall) in toolCalls.withIndex()) {
-            // Check cancellation
-            if (pl.jclab.refio.core.services.monitoring.GlobalMetrics.isCancelled()) {
-                logger.info { "Tool execution cancelled by user" }
-                throw java.util.concurrent.CancellationException("Operation cancelled by user")
-            }
-
-            logger.info { "Executing tool ${index + 1}/${toolCalls.size}: ${toolCall.name}" }
-
-            try {
-                // Get tool from registry
-                val tool = toolRegistry.getTool(toolCall.name)
-                    ?: throw ToolNotFoundException("Tool not found: ${toolCall.name}")
-
-                // Validate tool mode
-                if (!isToolAllowedInMode(tool, effectiveMode)) {
-                    throw ToolNotAllowedException(
-                        "Tool ${toolCall.name} (${tool.mode}) not allowed in $effectiveMode mode"
-                    )
-                }
-
-                val toolToken = GlobalMetrics.beginOperation(
-                    OperationInfo.ExecutingTool(toolName = toolCall.name, stepNumber = 0)
-                )
-                val result = try {
-                    // Execute tool
-                    tool.execute(toolCall.params)
-                } finally {
-                    GlobalMetrics.endOperation(toolToken)
-                }
-
-                // Convert to output format
-                val output = ToolCallOutput(
-                    tool = toolCall.name,
-                    params = toolCall.params,
-                    result = SingleToolResult(
-                        success = result.success,
-                        output = result.output,
-                        error = result.error,
-                        metadata = result.metadata,
-                        affectedFiles = result.filesChanged ?: emptyList(),
-                        nextActionHints = result.nextActionHints,
-                        recovery = result.recovery,
-                        changeSummary = result.changeSummary
-                    )
-                )
-
-                outputs.add(output)
-                toolsExecuted++
-
-                if (!result.success) {
-                    overallSuccess = false
-                    val errorMsg = result.error ?: "Unknown error"
-                    errors.add("${toolCall.name} failed: $errorMsg")
-                    logger.error { "Tool ${toolCall.name} failed: $errorMsg" }
-                    break // Stop on first error
-                }
-
-            } catch (e: ToolNotFoundException) {
-                val errorMsg = "Tool execution error for ${toolCall.name}: ${e.message}"
-                logger.error { errorMsg }
-                errors.add(errorMsg)
-                overallSuccess = false
-                break
-
-            } catch (e: ToolNotAllowedException) {
-                val errorMsg = "Tool not allowed: ${e.message}"
-                logger.error { errorMsg }
-                errors.add(errorMsg)
-                overallSuccess = false
-                break
-
-            } catch (e: Exception) {
-                val errorMsg = "Tool execution error for ${toolCall.name}: ${e.message}"
-                logger.error(e) { errorMsg }
-                errors.add(errorMsg)
-                overallSuccess = false
-                break
-            }
-        }
-
-        logger.info { "Tool execution completed: $toolsExecuted/${toolCalls.size} successful" }
-
-        return ToolExecutionResult(
-            toolsExecuted = toolsExecuted,
-            outputs = outputs,
-            success = overallSuccess,
-            errors = errors
-        )
-    }
 
     /**
      * Execute list of tool calls with streaming support for code generation tools.
@@ -182,13 +74,20 @@ class ToolExecutor(
             try {
                 // Get tool from registry
                 val tool = toolRegistry.getTool(toolCall.name)
-                    ?: throw ToolNotFoundException("Tool not found: ${toolCall.name}")
+                    ?: throw toolNotFound(toolCall.name)
 
                 // Validate tool mode
                 if (!isToolAllowedInMode(tool, effectiveMode)) {
                     throw ToolNotAllowedException(
                         "Tool ${toolCall.name} (${tool.mode}) not allowed in $effectiveMode mode"
                     )
+                }
+
+                // A tool switched OFF must stay off on this path too. The streaming editors
+                // (advance_code_editing, multi_line_editor) reach execution only through here, so
+                // without this check they were the one way around a disabled tool.
+                if (toolPermissionsService != null) {
+                    checkToolPermissions(toolCall.name, subtask.taskId)
                 }
 
                 // Create snapshot before write operations
@@ -334,7 +233,7 @@ class ToolExecutor(
 
         // Get tool from registry
         val tool = toolRegistry.getTool(toolCall.name)
-            ?: throw ToolNotFoundException("Tool not found: ${toolCall.name}")
+            ?: throw toolNotFound(toolCall.name)
 
         // Validate tool mode
         val effectiveMode = resolveTaskMode(taskId)
@@ -450,6 +349,22 @@ class ToolExecutor(
         }
     }
 
+    /**
+     * A near-miss tool name costs the model a whole turn unless the error says what it should have
+     * called. The two call-validation paths already answer with "Did you mean ...?"; a call that
+     * reaches the executor directly used to get the bare name - observed with `advance_editor`
+     * for `advance_code_editing`, where the model had nothing to correct against.
+     */
+    private fun toolNotFound(requested: String): ToolNotFoundException {
+        val known = toolRegistry.getToolNames()
+        val hint = NameSuggestion.closest(requested, known)
+            ?.let { " Did you mean '$it'?" }
+            ?: known.takeIf { it.isNotEmpty() }
+                ?.let { " Available tools: ${it.sorted().joinToString(", ")}." }
+                .orEmpty()
+        return ToolNotFoundException("Tool not found: $requested.$hint")
+    }
+
     private fun resolveTaskMode(taskId: String?): TaskMode {
         if (taskId == null || taskRepository == null) {
             return mode
@@ -463,7 +378,8 @@ class ToolExecutor(
 
     /**
      * Extract file paths from tool parameters.
-     * Looks for common parameter names: path, file_path, paths, files.
+     * Looks for common parameter names: path, file_path, paths, files, and the per-edit
+     * targets of a batch edit, which arrive as `edits[].path`.
      */
     @Suppress("UNUSED_PARAMETER")
     private fun extractFilePaths(_toolName: String, params: Map<String, Any>): List<String> {
@@ -479,7 +395,12 @@ class ToolExecutor(
         @Suppress("UNCHECKED_CAST")
         (params["files"] as? List<String>)?.let { paths.addAll(it) }
 
-        return paths.distinct()
+        // Batch edit: every edit names its own file, and each one is about to be overwritten.
+        (params["edits"] as? List<*>)?.forEach { edit ->
+            ((edit as? Map<*, *>)?.get("path") as? String)?.let { paths.add(it) }
+        }
+
+        return paths.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
     }
 
     /**
@@ -554,7 +475,7 @@ data class ToolCall(
 )
 
 /**
- * Tool execution result - batch result returned by executeTools()
+ * Tool execution result - batch result returned by executeToolsWithStreaming()
  */
 data class ToolExecutionResult(
     /**

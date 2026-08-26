@@ -1,9 +1,12 @@
 package pl.jclab.refio.core.api.modules
 
 import pl.jclab.refio.core.config.ConfigKeys
+import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.core.security.NetworkPolicy
 import pl.jclab.refio.core.services.EmbeddingProvider
 import pl.jclab.refio.core.services.OllamaEmbeddingProvider
+import pl.jclab.refio.core.services.OpenAICompatibleEmbeddingProvider
 import pl.jclab.refio.core.services.OpenAIEmbeddingProvider
 import pl.jclab.refio.core.services.ConfigService
 
@@ -16,6 +19,8 @@ private val logger = dualLogger("EmbeddingProviderFactory")
  * and direct callers share the same resolution rules.
  */
 class EmbeddingProviderFactory(private val configService: ConfigService) {
+
+    private val networkPolicy = NetworkPolicy(configService)
 
     /**
      * Create a provider by the configured model string (supports "provider/model" or bare model).
@@ -48,15 +53,35 @@ class EmbeddingProviderFactory(private val configService: ConfigService) {
                 val ollamaEndpoint = configService.getTyped(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT)
                 OllamaEmbeddingProvider(ollamaEndpoint)
             }
-            "openai" -> OpenAIEmbeddingProvider()
-            else -> {
-                logger.warn { "Unknown embedding provider: $providerId, defaulting to OpenAI" }
-                OpenAIEmbeddingProvider()
-            }
+            "openai" -> OpenAIEmbeddingProvider(networkPolicy = networkPolicy)
+            OPENAI_COMPATIBLE_ID -> openAICompatible()
+            // Never fall back to OpenAI here. A typo in `models.embedding_model` used to send the
+            // indexed project content to api.openai.com with only a warning in the log.
+            else -> throw RefioError.ProviderNotConfigured(
+                providerId,
+                "unknown embedding provider - use ollama, openai or $OPENAI_COMPATIBLE_ID"
+            )
         }
     }
 
+    private fun openAICompatible(): EmbeddingProvider {
+        val baseUrl = configService.getTyped(ConfigKeys.PROVIDER_EMBEDDINGS_BASE_URL)
+            ?: throw RefioError.ProviderNotConfigured(
+                OPENAI_COMPATIBLE_ID,
+                ConfigKeys.PROVIDER_EMBEDDINGS_BASE_URL.key
+            )
+        logger.info { "Using OpenAI-compatible embeddings at $baseUrl" }
+        return OpenAICompatibleEmbeddingProvider(
+            baseUrl = baseUrl,
+            apiKey = configService.getTyped(ConfigKeys.PROVIDER_EMBEDDINGS_API_KEY),
+            networkPolicy = networkPolicy,
+        )
+    }
+
     companion object {
+        /** Provider id used in `models.embedding_model`, e.g. `openai_compatible/jina-embeddings-v5`. */
+        const val OPENAI_COMPATIBLE_ID = "openai_compatible"
+
         private val OLLAMA_DEFAULT_MODELS = setOf(
             "nomic-embed-text",
             "mxbai-embed-large",

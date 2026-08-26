@@ -15,6 +15,7 @@ import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
 import pl.jclab.refio.core.tools.DiffUtils
+import pl.jclab.refio.core.tools.LineEndings
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.FileTool
 import pl.jclab.refio.core.tools.base.ToolCategory
@@ -318,17 +319,22 @@ class MultiLineEditorTool(
             }
 
             // 8. Apply edits (from end to start to preserve line numbers)
-            val newContent = applyEdits(lines, edits)
+            // The line list was split on any line terminator, and the model answers in LF, so the
+            // rebuilt content is LF. Re-express it in the file's own convention before writing:
+            // otherwise a one-line edit rewrites every line ending on a CRLF checkout and shows up
+            // in review as a whole-file change.
+            val newContent = LineEndings.toFileEol(applyEdits(lines, edits), originalContent)
 
-            // 9. Generate diff (delegated to shared DiffUtils)
-            val diff = DiffUtils.generateUnifiedDiff(originalContent, newContent, pathStr)
-            val (addedLines, removedLines) = DiffUtils.parseDiffStats(diff)
+            // 9. Generate diff and stats (single pass, delegated to shared DiffUtils)
             val changeSummary = DiffUtils.buildChangeSummary(
                 originalContent = originalContent,
                 newContent = newContent,
                 filePath = pathStr,
                 replacements = edits.size
             )
+            val diff = changeSummary.unifiedDiff ?: ""
+            val addedLines = changeSummary.addedLines
+            val removedLines = changeSummary.removedLines
 
             // 10. Write file
             Files.writeString(path, newContent)

@@ -47,10 +47,10 @@ class CoreApiRouterProjectHandleTest {
         // docs/0063: overrides injected at construction must win over DB/default for this router's
         // ConfigService, without any DB access (the override short-circuits before the repository).
         val router = CoreApiRouter(
-            runConfigOverrides = mapOf(ConfigKeys.MAX_ITERATIONS.key to "80")
+            runConfigOverrides = mapOf(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS.key to "80")
         )
 
-        assertEquals(80, router.configService.getTyped(ConfigKeys.MAX_ITERATIONS))
+        assertEquals(80, router.configService.getTyped(ConfigKeys.MAX_CONSECUTIVE_TOOL_ERRORS))
     }
 
     @Test

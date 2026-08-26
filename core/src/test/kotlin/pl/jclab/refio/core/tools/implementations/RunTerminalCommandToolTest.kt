@@ -171,6 +171,23 @@ class RunTerminalCommandToolTest {
         }
 
         @Test
+        fun `non-zero exit names the exit code and keeps the command output`() = runBlocking {
+            // `grep -c` with no match exits 1 and prints the count "0" on stdout. Reporting that raw
+            // output as the failure reason tells the agent "Error: 0", which reads as a malfunction
+            // instead of the legitimate answer "zero occurrences". The exit code is what separates them.
+            val os = System.getProperty("os.name").lowercase()
+            val command = if (os.contains("windows")) "echo 0& exit /b 1" else "printf '0\\n'; exit 1"
+
+            val result = tool.execute(mapOf("command" to command))
+
+            assertFalse(result.success, "Non-zero exit must not be reported as success")
+            val error = result.error
+            assertNotNull(error, "A failed command must carry an error message, not only its output")
+            assertTrue(error.contains("1"), "Error message must name the exit code but was: $error")
+            assertTrue(error.contains("0"), "Error message must keep the command output but was: $error")
+        }
+
+        @Test
         fun `should handle command that produces no output`() = runBlocking {
             val os = System.getProperty("os.name").lowercase()
             val command = if (os.contains("windows")) "exit 0" else "true"

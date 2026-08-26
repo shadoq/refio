@@ -74,7 +74,7 @@ The plan is visible to the orchestrating agent."""
 
     override suspend fun execute(params: Map<String, Any>): ToolResult {
         val action = params["action"] as? String
-            ?: return ToolResult.error("action required")
+            ?: return ToolResult.error("action required. Use one of: plan, update, list")
 
         return when (action) {
             "plan" -> handlePlan(params)

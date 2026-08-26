@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.api.modules
 
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.services.AgentPlanService
@@ -35,7 +36,9 @@ class SupportServicesModule(
         hookExecutor = hookExecutor,
     )
 
-    val workingMemoryService = WorkingMemoryService()
+    val workingMemoryService = WorkingMemoryService(
+        maxEntriesPerTask = configService.getTyped(ConfigKeys.WORKING_MEMORY_MAX_FACTS)
+    )
     val workingMemoryIntegration = WorkingMemoryIntegration(workingMemoryService)
     val agentPlanService = AgentPlanService()
 

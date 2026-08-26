@@ -486,7 +486,11 @@ class ProjectContextRouter(
                     // Preview only needs the message list; the projectContextPrompt is discarded
                     // here, so skip its redundant rebuild — halves buildProjectContext calls per
                     // getProjectContext for PLAN/AGENT.
-                    includeProjectContext = false
+                    includeProjectContext = false,
+                    // A preview renders what WOULD be sent. Compaction is a real weak-model call
+                    // that also writes a summary row into the conversation, so a panel refresh
+                    // must never trigger it.
+                    allowSummarization = false
                 ).messages.toMutableList()
                 appendPendingUserMessage(turnMessages, pendingUserInput)
                 turnMessages

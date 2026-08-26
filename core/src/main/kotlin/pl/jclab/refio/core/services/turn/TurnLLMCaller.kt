@@ -70,6 +70,11 @@ class TurnLLMCaller(
         val thinkingEnabled = resolveThinkingEnabled(providerName, modelId, configuredEffort.isOn)
         val noEgressEnabled = configService.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, taskId)
         val decisionTemperature = configService.getTyped<Double>(ConfigKeys.AGENT_DECISION_TEMPERATURE, taskId)
+        // Retry budget for the decision call. Read here because this is the live retry site:
+        // without it the handler's own defaults always won and the user-visible limits.max_retries
+        // / limits.retry_delay_ms settings changed nothing.
+        val maxAttempts = configService.getTyped(ConfigKeys.MAX_RETRIES, taskId)
+        val retryDelayMs = configService.getTyped(ConfigKeys.RETRY_DELAY_MS, taskId)
         // Subagent override (if any) wins over the global level; otherwise the global effort
         // string flows only when thinking survived the capability gate.
         val reasoningEffortOverride = profileOverrides?.reasoningEffort
@@ -109,6 +114,8 @@ class TurnLLMCaller(
                 // Keep the "AgentTurnLoop" prefix (the call IS the decision turn) but suffix the
                 // mode so PLAN and AGENT turns are distinguishable in the api-log Source column.
                 source = "AgentTurnLoop:${mode.name}",
+                maxRetries = maxAttempts,
+                baseDelayMs = retryDelayMs,
                 // Decision-turn temperature (ConfigKeys.AGENT_DECISION_TEMPERATURE, default 0.7).
                 // The PLAN/AGENT turn picks the tool and emits the response-format envelope;
                 // higher temperatures make small/local models more likely to deviate from the

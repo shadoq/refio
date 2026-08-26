@@ -57,7 +57,10 @@ param(
     [double]$MaxCost = 0.50,
     [string]$Model,
     [string]$OllamaHost,
-    [int]$OllamaCtx = 0,
+    # 65536 by default: a 32768 window truncated the head of the longer scenarios' prompts in
+    # silence and clamped num_predict to its 512-token floor, which every scenario then failed on
+    # no_context_overflow. Kept in step with e2e-run.sh so both harnesses measure the same thing.
+    [int]$OllamaCtx = 65536,
     [switch]$Keep,
     [switch]$SelfTest,
     [switch]$List,
@@ -69,7 +72,12 @@ param(
     # compile/test its own work. Mirrors e2e-run.sh's AUTO_APPROVE default exactly (same tool-name
     # regex, cross-platform: gradlew/python/node etc. are invoked by bare name on Windows too via
     # PATHEXT). Override with -AutoApprove <regex> or disable with -NoAutoApprove.
-    [string]$AutoApprove = '\b(kotlinc|gradlew|gradle|javac|java|python3?|pip3?|node|npm|npx|pnpm|yarn|pytest|mvn|cargo|go|make|cmake|ls|cat|pwd|echo|head|tail|sed|awk|grep|rg|find|wc|diff|test|true|cd|sh|bash|env|export)\b',
+    #
+    # mkdir/touch/mv/cp are included because creating a directory or an empty file is part of writing
+    # code, not a separate decision a user would weigh; refusing them cost a model its turn. Deletion
+    # is deliberately absent - `rm` stays a refusal. Keep this list identical to e2e-run.sh:
+    # a divergence here means Windows and POSIX runs stop measuring the same thing.
+    [string]$AutoApprove = '\b(kotlinc|gradlew|gradle|javac|java|python3?|pip3?|node|npm|npx|pnpm|yarn|pytest|mvn|cargo|go|make|cmake|ls|cat|pwd|echo|head|tail|sed|awk|grep|rg|find|wc|diff|test|true|cd|sh|bash|env|export|mkdir|touch|mv|cp|tr|sort|uniq|cut|sleep|which)\b',
     [switch]$NoAutoApprove,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Scenarios
@@ -612,13 +620,11 @@ function Invoke-Scenario {
             Set-Content -NoNewline $effectivePrompt
     }
 
-    $maxIter = if ($s.max_iterations) { $s.max_iterations } else { 20 }
     $mode    = if ($s.mode) { $s.mode } else { 'AGENT' }
     $cliArgs = @(
         '--headless', '-p', $work, '--mode', $mode,
         '--output', 'json', '--output-file', $runJson,
         '--debug-level', 'standard',
-        '--config', "agent.max_iterations=$maxIter",
         '--max-cost', $MaxCost
     )
     # Single-agent scenarios pass --prompt-file; multi-agent ones pass --multi-agent <yaml> instead.
