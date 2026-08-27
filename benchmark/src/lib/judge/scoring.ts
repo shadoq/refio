@@ -19,6 +19,60 @@ export function mayRecordJudgeError(
   return !existing.some((s) => s.judgeId === judgeId && s.error == null);
 }
 
+// Identifies the verdict written for a run that produced no artifact. It is not a
+// real judge: no CLI is launched and nothing is rendered, the value follows from
+// the missing deliverable alone.
+export const NO_ARTIFACT_JUDGE_ID = "no-artifact";
+
+const NO_ARTIFACT_RATIONALE =
+  "The run produced no artifact, so there is nothing that meets this criterion.";
+
+export interface NoArtifactCandidate {
+  attachments?: ReadonlyArray<{ type: string }>;
+  judgeScores?: ReadonlyArray<{ judgeId: string; error?: string | null }>;
+  excludeFromStats?: boolean;
+}
+
+// A run the agent actually performed but that yielded no artifact is a failure
+// worth the lowest score, not missing data - left unscored it vanishes from the
+// judge ranking and the model is never charged for skipping the deliverable. A
+// run flagged excludeFromStats is different: it never really executed, so it is
+// evidence the model was tested rather than a result to score.
+export function needsNoArtifactVerdict(result: NoArtifactCandidate): boolean {
+  if (result.excludeFromStats === true) return false;
+  if ((result.attachments ?? []).some((a) => a.type === "html")) return false;
+  return !(result.judgeScores ?? []).some(
+    (s) => s.judgeId === NO_ARTIFACT_JUDGE_ID && s.error == null,
+  );
+}
+
+export function buildNoArtifactVerdict(
+  criteria: ScaleCriterion[],
+  judgedAt: string,
+): {
+  judgeId: string;
+  judgeModel: string;
+  judgedAt: string;
+  scores: RawScore[];
+  screenshots: string[];
+  consoleErrors: string[];
+  error: null;
+} {
+  return {
+    judgeId: NO_ARTIFACT_JUDGE_ID,
+    judgeModel: "deterministic",
+    judgedAt,
+    scores: criteria.map((c) => ({
+      criterionId: c.id,
+      value: Math.min(...c.scale.values),
+      rationale: NO_ARTIFACT_RATIONALE,
+    })),
+    screenshots: [],
+    consoleErrors: [],
+    error: null,
+  };
+}
+
 export interface ScaleCriterion {
   id: string;
   scale: { values: number[] };

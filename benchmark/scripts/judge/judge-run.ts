@@ -21,7 +21,11 @@ import { codexAdapter } from "./lib/judges/codex";
 import type { JudgeAdapter } from "./lib/judges/types";
 import { groupForStability, computeStabilityEntry } from "./lib/stability";
 import { extractJson } from "../../src/lib/judge/parse";
-import { validateVerdict } from "../../src/lib/judge/scoring";
+import {
+  validateVerdict,
+  needsNoArtifactVerdict,
+  buildNoArtifactVerdict,
+} from "../../src/lib/judge/scoring";
 import type { Result } from "../../src/schema/results";
 import type { Task, TasksFile } from "../../src/schema/tasks";
 
@@ -138,6 +142,36 @@ async function runStability(
   process.exit(0);
 }
 
+// Write the deterministic zero verdict for every in-scope run that produced no
+// artifact. Returns how many results were scored.
+async function writeNoArtifactVerdicts(
+  benchmarkDir: string,
+  tasks: TasksFile,
+  file: RawResultsFile,
+  results: RawResult[],
+  args: Args,
+): Promise<number> {
+  const pending = results.filter((r) => args.reJudge || needsNoArtifactVerdict(r));
+  if (pending.length === 0) return 0;
+
+  if (args.dryRun) {
+    console.log(`no-artifact: would score ${pending.length} result(s) as 0`);
+    pending.forEach((r) => console.log(`  ${r.id} (${r.taskId})`));
+    return 0;
+  }
+
+  for (const r of pending) {
+    const verdict = buildNoArtifactVerdict(
+      resolveCriteria(tasks, r.taskId),
+      new Date().toISOString(),
+    );
+    upsertJudgeScore(r, verdict);
+    console.log(`  ${r.id}/${verdict.judgeId}: avg 0.00 (no artifact)`);
+  }
+  await saveResultsAtomic(benchmarkDir, file);
+  return pending.length;
+}
+
 async function main() {
   const benchmarkDir = process.cwd();
   const args = parseArgs(process.argv.slice(2));
@@ -171,10 +205,23 @@ async function main() {
   const promptTemplate = await readFile(join(promptsDir, "judge-artifact.md"), "utf8");
 
   // Scan candidates.
-  let candidates = file.results.filter(hasHtml);
-  if (args.resultId) candidates = candidates.filter((r) => r.id === args.resultId);
-  if (args.task) candidates = candidates.filter((r) => r.taskId === args.task);
-  if (args.model) candidates = candidates.filter((r) => r.modelId === args.model);
+  const inScope = (r: RawResult) =>
+    (!args.resultId || r.id === args.resultId) &&
+    (!args.task || r.taskId === args.task) &&
+    (!args.model || r.modelId === args.model);
+
+  // A run that worked but delivered no artifact scores the scale minimum. No CLI
+  // is launched: the verdict follows from the missing file, and leaving it out
+  // would hide the failure from every judge metric.
+  const zeroed = await writeNoArtifactVerdicts(
+    benchmarkDir,
+    tasks,
+    file,
+    file.results.filter((r) => !hasHtml(r) && inScope(r)),
+    args,
+  );
+
+  let candidates = file.results.filter((r) => hasHtml(r) && inScope(r));
 
   const needing = (r: RawResult) =>
     adapters.filter((a) => args.reJudge || !successfulEntry(r, a.id));
@@ -281,7 +328,10 @@ async function main() {
     }
   }
 
-  console.log(`\ndone: judged ${judged}, errors ${errors}, skipped ${skipped.length}`);
+  console.log(
+    `\ndone: judged ${judged}, no-artifact zeros ${zeroed}, ` +
+      `errors ${errors}, skipped ${skipped.length}`,
+  );
   skipped.forEach((s) => console.log(`  skipped ${s}`));
   process.exit(errors > 0 ? 1 : 0);
 }
