@@ -30,16 +30,12 @@ const NO_ARTIFACT_RATIONALE =
 export interface NoArtifactCandidate {
   attachments?: ReadonlyArray<{ type: string }>;
   judgeScores?: ReadonlyArray<{ judgeId: string; error?: string | null }>;
-  excludeFromStats?: boolean;
 }
 
 // A run the agent actually performed but that yielded no artifact is a failure
 // worth the lowest score, not missing data - left unscored it vanishes from the
-// judge ranking and the model is never charged for skipping the deliverable. A
-// run flagged excludeFromStats is different: it never really executed, so it is
-// evidence the model was tested rather than a result to score.
+// judge ranking and the model is never charged for skipping the deliverable.
 export function needsNoArtifactVerdict(result: NoArtifactCandidate): boolean {
-  if (result.excludeFromStats === true) return false;
   if ((result.attachments ?? []).some((a) => a.type === "html")) return false;
   return !(result.judgeScores ?? []).some(
     (s) => s.judgeId === NO_ARTIFACT_JUDGE_ID && s.error == null,

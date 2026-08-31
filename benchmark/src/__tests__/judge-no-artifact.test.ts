@@ -33,11 +33,6 @@ describe("needsNoArtifactVerdict", () => {
     ).toBe(false);
   });
 
-  it("ignores a run whose result could not be established at all", () => {
-    // excludeFromStats means the run never really happened (no tokens, no call).
-    // Such a run is evidence the model was tested, not a failure to score.
-    expect(needsNoArtifactVerdict(run({ excludeFromStats: true }))).toBe(false);
-  });
 
   it("does not overwrite a zero verdict it already wrote", () => {
     expect(

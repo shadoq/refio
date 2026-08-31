@@ -59,12 +59,6 @@ export function excludeHiddenResults(results: Result[], tasks: TasksFile): Resul
   return results.filter((r) => !hidden.has(r.taskId));
 }
 
-// Drop results a human flagged as "no result could be established" (a failed run kept
-// only as evidence the model was tested). They must never affect any computed metric.
-export function excludeUncountedResults(results: Result[]): Result[] {
-  return results.filter((r) => r.excludeFromStats !== true);
-}
-
 export function getResultCriterionScore(
   result: Result,
   tasks: TasksFile,
@@ -158,7 +152,7 @@ export function leaderboard(
   resultsFile: Pick<ResultsFile, "models" | "environments">,
   tasks: TasksFile,
 ): LeaderboardRow[] {
-  const measured = excludeUncountedResults(excludeHiddenResults(results, tasks));
+  const measured = excludeHiddenResults(results, tasks);
   const modelById = new Map(resultsFile.models.map((m) => [m.id, m]));
   const envById = new Map(resultsFile.environments.map((e) => [e.id, e]));
 

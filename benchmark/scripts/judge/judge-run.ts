@@ -20,6 +20,7 @@ import { claudeCodeAdapter } from "./lib/judges/claude-code";
 import { codexAdapter } from "./lib/judges/codex";
 import type { JudgeAdapter } from "./lib/judges/types";
 import { groupForStability, computeStabilityEntry } from "./lib/stability";
+import { stabilityNeedsJudging } from "../../src/lib/judge/stability-merge";
 import { extractJson } from "../../src/lib/judge/parse";
 import {
   validateVerdict,
@@ -89,11 +90,14 @@ async function runStability(
   let groups = groupForStability(file.results);
   if (args.task) groups = groups.filter((g) => g.taskId === args.task);
   if (args.model) groups = groups.filter((g) => g.modelId === args.model);
+  const byKey = new Map(
+    (file.stability ?? []).map((s) => [`${s.taskId}|${s.modelId}|${s.environmentId}`, s]),
+  );
   if (!args.reJudge) {
-    const done = new Set(
-      (file.stability ?? []).map((s) => `${s.taskId}|${s.modelId}|${s.environmentId}`),
+    const judgeIds = adapters.map((a) => a.id);
+    groups = groups.filter((g) =>
+      stabilityNeedsJudging(byKey.get(`${g.taskId}|${g.modelId}|${g.environmentId}`), judgeIds),
     );
-    groups = groups.filter((g) => !done.has(`${g.taskId}|${g.modelId}|${g.environmentId}`));
   }
   if (args.limit > 0) groups = groups.slice(0, args.limit);
 
@@ -105,11 +109,17 @@ async function runStability(
   let computed = 0;
   const skipped: string[] = [];
   for (const group of groups) {
+    const existing = byKey.get(`${group.taskId}|${group.modelId}|${group.environmentId}`);
+    // Top up only what is missing: re-running a judge that already scored the
+    // group would spend a CLI call to overwrite its own verdict.
+    const groupAdapters = args.reJudge
+      ? adapters
+      : adapters.filter((a) => !(existing?.judges ?? []).some((j) => j.judgeId === a.id));
     const entry = await computeStabilityEntry({
       benchmarkDir,
       group,
       tasks,
-      adapters,
+      adapters: groupAdapters,
       template,
       timeoutMs: JUDGE_TIMEOUT_MS,
       dryRun: args.dryRun,

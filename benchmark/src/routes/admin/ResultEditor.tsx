@@ -19,8 +19,6 @@ import {
   Segmented,
   Pagination,
   Empty,
-  Switch,
-  Tooltip,
 } from "antd";
 import {
   PlusOutlined,
@@ -216,8 +214,6 @@ export default function ResultEditor() {
     if (!resultsData) return;
     // Cast because zodResolver gives us z.input, mutation expects z.output (same structure at runtime)
     const result = data as unknown as Result;
-    // Keep the persisted JSON clean: only carry the flag when it is actually set.
-    if (!result.excludeFromStats) delete result.excludeFromStats;
     await upsert.mutateAsync({
       current: resultsData,
       result,
@@ -228,15 +224,6 @@ export default function ResultEditor() {
   async function handleDelete(resultId: string) {
     if (!resultsData) return;
     await remove.mutateAsync({ current: resultsData, resultId });
-  }
-
-  // Quick inline toggle of the "exclude from stats" flag, without opening the editor.
-  async function toggleExclude(record: Result, excluded: boolean) {
-    if (!resultsData) return;
-    const result: Result = { ...record };
-    if (excluded) result.excludeFromStats = true;
-    else delete result.excludeFromStats;
-    await upsert.mutateAsync({ current: resultsData, result });
   }
 
   async function handleFileUpload(file: File) {
@@ -435,22 +422,6 @@ export default function ResultEditor() {
       key: "att",
       width: 90,
       render: (_: unknown, record: Result) => record.attachments.length || "—",
-    },
-    {
-      title: (
-        <Tooltip title="Exclude this run from all computed metrics (kept as evidence the model was tested)">
-          <span>Excluded</span>
-        </Tooltip>
-      ),
-      key: "excluded",
-      width: 90,
-      render: (_: unknown, record: Result) => (
-        <Switch
-          size="small"
-          checked={record.excludeFromStats === true}
-          onChange={(checked) => toggleExclude(record, checked)}
-        />
-      ),
     },
     {
       title: "Actions",
@@ -807,21 +778,6 @@ export default function ResultEditor() {
                   rows={3}
                   placeholder="Observations about this run"
                 />
-              )}
-            />
-          </Form.Item>
-
-          <Form.Item label="Exclude from stats">
-            <Controller
-              name="excludeFromStats"
-              control={control}
-              render={({ field }) => (
-                <Space>
-                  <Switch checked={!!field.value} onChange={field.onChange} />
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    Run kept as evidence the model was tested, but dropped from every computed metric.
-                  </Text>
-                </Space>
               )}
             />
           </Form.Item>

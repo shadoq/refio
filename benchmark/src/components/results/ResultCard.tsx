@@ -49,7 +49,6 @@ export function ResultCard({
           <Text type="secondary">{model?.name ?? result.modelId}</Text>
           {env && <Tag color={env.type === "cloud" ? "blue" : "green"}>{env.name}</Tag>}
           <Tag>attempt {result.attemptNumber}</Tag>
-          {result.excludeFromStats && <Tag color="orange">not counted</Tag>}
         </Space>
       }
       extra={

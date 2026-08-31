@@ -239,14 +239,7 @@ export default function Results() {
       key: "score",
       width: 110,
       sorter: (a, b) => a.score - b.score,
-      render: (_, row) =>
-        row.result.excludeFromStats ? (
-          <Tooltip title="Excluded from all stats: no result could be established for this run">
-            <Tag color="orange">not counted</Tag>
-          </Tooltip>
-        ) : (
-          <Text strong>{formatScore(row.score)}</Text>
-        ),
+      render: (_, row) => <Text strong>{formatScore(row.score)}</Text>,
     },
     {
       title: "Auto (judges)",
@@ -513,7 +506,6 @@ function ResultDetailModal({
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <Space wrap>
         <Tag>attempt #{detailResult.attemptNumber}</Tag>
-        {detailResult.excludeFromStats && <Tag color="orange">not counted</Tag>}
         <Tag>{selectedRow?.environment?.name ?? detailResult.environmentId}</Tag>
         <Tag>{formatDuration(detailResult.durationMs)}</Tag>
         <Tag>

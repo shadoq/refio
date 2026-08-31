@@ -13,6 +13,7 @@ import {
   JUDGE_EXCLUDED_CRITERIA,
   mayRecordJudgeError,
 } from "../../../src/lib/judge/scoring";
+import { mergeStabilityJudges } from "../../../src/lib/judge/stability-merge";
 
 export interface RawResult {
   id: string;
@@ -71,18 +72,17 @@ export function recordJudgeError(result: RawResult, set: JudgeScoreSet): boolean
   return true;
 }
 
-// Replace a stability entry with the same logical key, or append it.
+// Replace a stability entry with the same logical key, or append it. Verdicts
+// from judges the new run did not use are carried over (see mergeStabilityJudges).
 export function upsertStability(file: RawResultsFile, entry: StabilityEntry): void {
   const list = file.stability ?? [];
-  const filtered = list.filter(
-    (s) =>
-      !(
-        s.taskId === entry.taskId &&
-        s.modelId === entry.modelId &&
-        s.environmentId === entry.environmentId
-      ),
-  );
-  filtered.push(entry);
+  const sameKey = (s: StabilityEntry) =>
+    s.taskId === entry.taskId &&
+    s.modelId === entry.modelId &&
+    s.environmentId === entry.environmentId;
+  const existing = list.find(sameKey);
+  const filtered = list.filter((s) => !sameKey(s));
+  filtered.push(mergeStabilityJudges(existing, entry));
   file.stability = filtered;
 }
 

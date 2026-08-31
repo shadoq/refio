@@ -86,10 +86,6 @@ export const ResultSchema = z.object({
   attachments: z.array(AttachmentSchema).default([]),
   judgeScores: z.array(JudgeScoreSetSchema).default([]),
   notes: z.string().optional(),
-  // Marks a run whose result could not be established (a technical failure that
-  // produced no usable artifact). Such a result is kept as evidence the model was
-  // tested on the task, but is excluded from every computed metric. Absent = counted.
-  excludeFromStats: z.boolean().optional(),
   runAt: z.string().datetime(),
   createdAt: z.string().datetime(),
 });
