@@ -16,6 +16,7 @@ import pl.jclab.refio.core.subagents.models.SubagentInfo
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolCategory
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -104,7 +105,10 @@ class InvokeSubagentToolTest {
                 iterations = 1,
                 tokensIn = 100,
                 tokensOut = 50,
-                cost = 0.005
+                cost = 0.005,
+                // A subagent that did real work calls at least one tool. Zero tool calls is its own
+                // failure mode (see NoToolCallTests) — the default stub must not model it silently.
+                toolsUsed = listOf("read_file")
             )
         }
 
@@ -454,6 +458,33 @@ class InvokeSubagentToolTest {
         }
 
         @Test
+        fun `should let a cancelled subagent turn stay cancelled`() = runBlocking {
+            // Stop pressed while a subagent runs: CancellationException is an Exception, so the
+            // catch-all below would turn the user's Stop into "Subagent 'x' error: ..." handed back
+            // to the parent model, which then happily keeps working on a turn nobody wants.
+            val cancellingCallback: suspend (Any, TurnEventListener?, StreamCallback?) -> TurnResult = { _, _, _ ->
+                throw kotlinx.coroutines.CancellationException("stopped by user")
+            }
+
+            val cancellingTool = InvokeSubagentTool(
+                subagentRouterProvider = mockSubagentRouterProvider,
+                runTurnCallback = cancellingCallback,
+                configServiceProvider = mockConfigServiceProvider
+            )
+
+            val params = mapOf(
+                "_task_id" to "task-123",
+                "subagent_name" to "test-agent",
+                "goal" to "Test"
+            )
+
+            assertFailsWith<kotlinx.coroutines.CancellationException> {
+                cancellingTool.execute(params)
+            }
+            Unit
+        }
+
+        @Test
         fun `should return error when subagent execution fails`() = runBlocking {
             // Given
             val failingCallback: suspend (Any, TurnEventListener?, StreamCallback?) -> TurnResult = { _, _, _ ->
@@ -733,6 +764,72 @@ class InvokeSubagentToolTest {
             // Then
             assertTrue(result.success)
             assertEquals(1, result.metadata!!["depth"])  // 0 + 1
+        }
+    }
+
+    @Nested
+    inner class NoToolCallTests {
+
+        private fun toolReturning(response: String, toolsUsed: List<String>): InvokeSubagentTool =
+            InvokeSubagentTool(
+                subagentRouterProvider = mockSubagentRouterProvider,
+                runTurnCallback = { _, _, _ ->
+                    TurnResult(
+                        success = true,
+                        response = response,
+                        iterations = 1,
+                        tokensIn = 10,
+                        tokensOut = 10,
+                        cost = 0.0,
+                        toolsUsed = toolsUsed
+                    )
+                },
+                configServiceProvider = mockConfigServiceProvider
+            )
+
+        private val params = mapOf(
+            "_task_id" to "task-123",
+            "subagent_name" to "test-agent",
+            "goal" to "Fix the off-by-one bug in src/shipping.py",
+            "_mode" to "AGENT"
+        )
+
+        @Test
+        fun `a subagent claiming work done without a single tool call is passed up flagged, not trusted`() =
+            runBlocking {
+                // Regression (2026-09-07, ornith:9b e2e subagent-two-file-fix): the second delegated
+                // subagent answered "already fixed in a prior iteration" having called NO tool. That
+                // prose went to the caller as a plain success, the caller reported both files fixed,
+                // and shipping.py was never touched — the build failed while the turn said SUCCESS.
+                // Zero tool calls means nothing was inspected or changed, so the claim is unverified
+                // and the caller must be told so.
+                val result = toolReturning(
+                    "The bug in src/shipping.py has already been fixed in a prior iteration.",
+                    emptyList()
+                ).execute(params)
+
+                assertTrue(result.success, "an empty-handed subagent is not a tool error")
+                val output = result.output!!
+                assertTrue(
+                    output.contains("no tool calls"),
+                    "the caller must see that nothing was inspected or changed: $output"
+                )
+                assertTrue(
+                    output.contains("The bug in src/shipping.py has already been fixed"),
+                    "the subagent's own answer must still be passed through: $output"
+                )
+                assertEquals(true, result.metadata!!["made_no_tool_calls"])
+            }
+
+        @Test
+        fun `a subagent that used a tool is passed through unannotated`() = runBlocking {
+            // Scope guard: the flag marks the empty-handed case only, so a normal delegation keeps
+            // its answer verbatim and the caller sees no spurious warning.
+            val result = toolReturning("Applied the fix to src/shipping.py.", listOf("code_editing"))
+                .execute(params)
+
+            assertEquals("Applied the fix to src/shipping.py.", result.output)
+            assertEquals(false, result.metadata!!["made_no_tool_calls"])
         }
     }
 }

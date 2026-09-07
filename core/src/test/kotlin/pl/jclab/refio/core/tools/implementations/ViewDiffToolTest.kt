@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import pl.jclab.refio.core.tools.PathSandbox
+import pl.jclab.refio.core.tools.security.FileLimits
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolCategory
 import java.nio.file.Files
@@ -29,7 +30,42 @@ class ViewDiffToolTest {
     @BeforeEach
     fun setup() {
         sandbox = PathSandbox(tempDir)
-        tool = ViewDiffTool(sandbox)
+        tool = ViewDiffTool(sandbox, FileLimits())
+    }
+
+    @Nested
+    inner class FileSizeLimitTests {
+
+        @Test
+        fun `refuses a file above the read limit instead of loading it whole`() = runBlocking {
+            // Every other file tool stops at FileLimits; this one used to call readString on anything
+            // the sandbox allowed, so a multi-hundred-MB file was pulled into the heap in one piece.
+            val limited = ViewDiffTool(sandbox, FileLimits(maxFileSize = 64))
+            val big = tempDir.resolve("big.txt")
+            Files.writeString(big, "x".repeat(500))
+
+            val result = limited.execute(mapOf("file1" to "big.txt", "content2" to "anything"))
+
+            assertFalse(result.success, "an oversized file must be refused")
+            assertTrue(
+                result.error!!.contains("too large", ignoreCase = true),
+                "the agent must be told why: ${result.error}"
+            )
+        }
+
+        @Test
+        fun `refuses an oversized second file too`() = runBlocking {
+            val limited = ViewDiffTool(sandbox, FileLimits(maxFileSize = 64))
+            val small = tempDir.resolve("small.txt")
+            Files.writeString(small, "hello")
+            val big = tempDir.resolve("big.txt")
+            Files.writeString(big, "x".repeat(500))
+
+            val result = limited.execute(mapOf("file1" to "small.txt", "file2" to "big.txt"))
+
+            assertFalse(result.success, "an oversized comparison target must be refused")
+            assertTrue(result.error!!.contains("too large", ignoreCase = true))
+        }
     }
 
     @Nested

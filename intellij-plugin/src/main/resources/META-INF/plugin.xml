@@ -14,71 +14,86 @@
        Simple HTML elements (text formatting, paragraphs, and lists) can be added inside of <![CDATA[ ]]> tag.
        Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
   <description><![CDATA[
-    <p><b>RefIo — Local-First AI Coding Plugin for IntelliJ.</b></p>
+    <p><b>RefIo - Local-First AI Coding Plugin for IntelliJ.</b></p>
 
     <p><i>For developers who want the leverage of AI coding without giving up
     observability, model choice, or the native JetBrains experience.</i></p>
 
     <p>An open-source AI coding plugin for IntelliJ IDEA, built in Kotlin. Native
-    JetBrains UI, no WebView, no cloud account required. Works with local models
-    (Ollama, LM Studio) or cloud LLMs.</p>
+    JetBrains UI, no WebView, no cloud account required, no telemetry. Works with
+    local models (Ollama, LM Studio) or cloud LLMs.</p>
 
-    <p><b>Early-stage, actively developed.</b> The foundation is in place — modular
-    architecture, three execution modes, visible tool calls, file snapshots before
-    writes. The depth is still growing. See the
+    <p><b>Early-stage, actively developed.</b> The foundation is in place: three
+    execution modes, visible tool calls, a snapshot before every write and a build
+    check after it. The orchestration depth is still growing. See the
     <a href="https://github.com/shadoq/refio/blob/main/docs/ROADMAP.md">Roadmap</a>
     for where the project is heading.</p>
 
     <p><b>What it does today</b></p>
     <ul>
-      <li><b>Three execution modes</b> — Chat (conversation, no tools), Plan
-          (read-only analysis, code-enforced), Agent (file edits with snapshots
+      <li><b>Three execution modes</b> - Chat (conversation, no tools), Plan
+          (read-only analysis, enforced in code), Agent (file edits with a snapshot
           before every write).</li>
-      <li><b>Local or cloud LLMs</b> — Ollama, LM Studio, OpenAI, Anthropic, Gemini,
-          OpenRouter, Custom OpenAI, Z.AI. Universal tool-calling protocol works with
+      <li><b>Verified edits</b> - after a turn that changed files, RefIo runs your
+          build or test command, feeds the real failures back to the model for up to
+          two repair rounds, and marks the turn as failed verification instead of
+          reporting a success it cannot back up.</li>
+      <li><b>Local or cloud LLMs</b> - Ollama, LM Studio, OpenAI, Anthropic, Gemini,
+          OpenRouter, Custom OpenAI, Z.AI. A universal tool-calling protocol works with
           models that lack native function calling.</li>
-      <li><b>Tool system</b> — per-mode permissions (<code>ON</code> / <code>ASK</code> /
-          <code>OFF</code>), <code>PathSandbox</code> with symlink resolution,
-          <code>CommandRule</code> (regex allow/block/ask policies), snapshot + rollback.</li>
-      <li><b>Context control</b> — @mentions for directing context
+      <li><b>Guardrails for small models</b> - loop and repetition detection, no-op
+          edit detection, and an abandoned turn recorded as incomplete rather than
+          successful.</li>
+      <li><b>Structural refactoring</b> - <code>find_usages</code> and
+          <code>rename_symbol</code> backed by IntelliJ PSI inside the IDE.</li>
+      <li><b>Tool system</b> - per-mode permissions (<code>ON</code> / <code>ASK</code> /
+          <code>OFF</code>), a diff preview before an edit is approved,
+          <code>PathSandbox</code> with symlink resolution, regex allow/block/ask
+          command rules, snapshot and rollback.</li>
+      <li><b>Context control</b> - @mentions for directing context
           (<code>@file</code>, <code>@codebase</code>, <code>@diff</code>,
           <code>@problems</code>, <code>@terminal</code>, and more), RAG with semantic
-          chunking, token budgeting that scales to the model's context window.</li>
-      <li><b>Extensibility</b> — subagents as Markdown + YAML (Claude Code compatible
+          chunking, a token budget that scales to the model's context window.</li>
+      <li><b>Cost control</b> - per-session cost ceiling, reasoning-effort levels, and
+          cache-aware accounting so a cache-served prompt is not billed as fresh.</li>
+      <li><b>Extensibility</b> - subagents as Markdown + YAML (Claude Code compatible
           format), MCP protocol support (STDIO + HTTP/SSE) with built-in presets,
           project instructions via <code>AGENTS.md</code> and
           <code>.refio/rules/*.md</code> with glob-based activation.</li>
-      <li><b>Two interfaces, one core</b> — native IntelliJ plugin + full terminal
-          TUI share the same engine.</li>
-      <li><b>No-egress mode</b> — blocks all cloud LLM calls at the client layer for
-          strict offline work.</li>
+      <li><b>One core, three surfaces</b> - the native IntelliJ plugin, a full terminal
+          TUI and a headless runner share the same engine, so an agent run can be
+          scripted and asserted on.</li>
+      <li><b>No-egress mode</b> - one switch blocks all outbound traffic, both model
+          calls and the web tools, for strict offline work.</li>
     </ul>
 
     <p><b>What it is, and what it isn't</b></p>
 
-    <p><b>It is:</b> an early-stage open-source plugin with a clear direction — a
+    <p><b>It is:</b> an early-stage open-source plugin with a clear direction - a
     native JetBrains tool for developers working in Kotlin, Java and JVM ecosystems,
     or anyone who wants their AI coding agent to run offline and be auditable.</p>
 
     <p><b>It isn't:</b> a drop-in replacement for inline completion (different
     category). A polished enterprise-grade product (not yet). Something you install
-    and forget — changes happen fast at v0.0.1.x.</p>
+    and forget - changes happen fast at v0.0.1.x.</p>
 
     <p><b>Known limitations (honest)</b></p>
     <ul>
-      <li>Orchestration is a light router + executors, not a deep agent engine.</li>
-      <li>No multi-agent runtime yet (Planner / Executor / Reviewer roles — roadmap).</li>
-      <li>No git worktree isolation per task — agents edit directly with snapshot rollback.</li>
-      <li>Planning loop is basic — no plan-refinement iteration yet.</li>
-      <li>Security layers are pragmatic v1, not hardened defense-in-depth.</li>
+      <li>No git worktree isolation per task - agents edit your working tree directly,
+          with snapshot rollback.</li>
+      <li>The planning loop is basic - no plan-refinement iteration yet.</li>
+      <li>The multi-agent runtime works but can only be launched from the CLI; the IDE
+          visualizes a run, it does not start one.</li>
+      <li>Security layers are pragmatic and self-assessed, not independently audited.</li>
+      <li>Tested on IntelliJ IDEA only; other JetBrains IDEs may work but are not claimed.</li>
       <li>Small commit history, fast changes, breaking changes possible pre-1.0.</li>
     </ul>
 
-    <p><b>Quick start — local models</b></p>
+    <p><b>Quick start with local models</b></p>
 <pre>
 ollama pull nomic-embed-text        # required for RAG
 ollama pull qwen3.5:9b              # small and fast
-# or for bigger hardware:
+# or, for bigger hardware:
 ollama pull qwen3.5:35b
 ollama pull qwen3.5:122b
 </pre>
@@ -86,18 +101,19 @@ ollama pull qwen3.5:122b
     <ol>
       <li>Install the plugin from JetBrains Marketplace</li>
       <li>Open the RefIo tool window (right sidebar)</li>
-      <li>Go to <b>RefIo → Settings</b>, pick your model</li>
+      <li>Go to <b>RefIo, Settings</b> and pick your model</li>
       <li>Start with <code>@codebase your question here</code></li>
     </ol>
 
     <p><b>Requirements</b></p>
     <ul>
       <li>IntelliJ IDEA 2024.2 or newer (Community or Ultimate)</li>
-      <li>JDK 17+</li>
       <li>Ollama or LM Studio (optional, for local models)</li>
+      <li>JDK 17+ only if you also want to build the standalone CLI</li>
     </ul>
 
     <p>
+      <a href="https://refio.dev/">refio.dev</a> |
       <a href="https://github.com/shadoq/refio">GitHub (MIT)</a> |
       <a href="https://github.com/shadoq/refio/blob/main/docs/ROADMAP.md">Roadmap</a> |
       <a href="https://github.com/shadoq/refio/blob/main/PRIVACY.md">Privacy</a> |
@@ -152,6 +168,11 @@ ollama pull qwen3.5:122b
         language="TEXT"
         implementationClass="pl.jclab.refio.ui.completion.RefioCompletionContributor"/>
   </extensions>
+
+  <applicationListeners>
+    <listener class="pl.jclab.refio.startup.ProjectCloseListener"
+              topic="com.intellij.openapi.project.ProjectManagerListener"/>
+  </applicationListeners>
 
   <actions>
     <action id="refio.ReindexRag"

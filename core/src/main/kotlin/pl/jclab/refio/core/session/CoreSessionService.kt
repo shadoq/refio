@@ -1,10 +1,13 @@
 package pl.jclab.refio.core.session
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import pl.jclab.refio.api.models.ContextReference
@@ -131,6 +134,11 @@ class CoreSessionService(
                 createdAt = System.currentTimeMillis(),
             )
             stateManager.appendMessage(errorMessage)
+            throw e
+        } catch (e: CancellationException) {
+            // The user pressed Stop. That is an outcome, not a failure - no error toast, no system
+            // message in the thread. The task status was already recorded by the turn path.
+            logger.info { "[SESSION] Turn cancelled: taskId=${session.id}" }
             throw e
         } catch (e: Exception) {
             logger.error(e) { "[SESSION] Workflow failed: taskId=${session.id}, error=${e.message}" }
@@ -482,6 +490,26 @@ class CoreSessionService(
                     projectRouter.taskRepository.update(id = session.id, status = TaskStatus.FAILED)
                 }.onFailure { logger.warn(it) { "[TURN_LOOP] Failed to mark task FAILED for ${session.id}" } }
                 throw e
+            } finally {
+                // Unsubscribe however the turn ended. A cancelled or failed turn used to leave both
+                // collectors attached, so the next turn re-rendered the previous run's subagent
+                // bubbles on top of its own.
+                liveRefreshJob.cancel()
+                subagentStreamJob.cancel()
+                // The transient per-subagent streaming messages live only in UI state; the DB-backed
+                // ASSISTANT rows that AgentTurnLoop persisted with agentName replace them at the next
+                // messageDispatcher.loadMessages(). Drop them so we don't show duplicates. Runs
+                // uncancellable - after a Stop the enclosing coroutine is already cancelled and the
+                // state update would rethrow before removing anything.
+                if (subagentStreamingIds.isNotEmpty()) {
+                    val transientIds = subagentStreamingIds.values.toSet()
+                    subagentStreamingIds.clear()
+                    withContext(NonCancellable) {
+                        stateManager.updateMessages { messages ->
+                            messages.filterNot { it.id in transientIds }
+                        }
+                    }
+                }
             }
 
             logger.info {
@@ -504,18 +532,6 @@ class CoreSessionService(
                 projectRouter.taskRepository.update(id = session.id, status = finalStatus)
             }.onFailure { logger.warn(it) { "[TURN_LOOP] Failed to update task status for ${session.id}" } }
 
-            liveRefreshJob.cancel()
-            subagentStreamJob.cancel()
-            // The transient per-subagent streaming messages live only in UI state; the DB-backed
-            // ASSISTANT rows that AgentTurnLoop persisted with agentName will replace them at the
-            // next messageDispatcher.loadMessages() below. Drop them so we don't show duplicates.
-            if (subagentStreamingIds.isNotEmpty()) {
-                val transientIds = subagentStreamingIds.values.toSet()
-                subagentStreamingIds.clear()
-                stateManager.updateMessages { messages ->
-                    messages.filterNot { it.id in transientIds }
-                }
-            }
             streamingClosed.set(true)
             streamUiFlushJob?.cancel()
             val completedStreamingMessageId = streamingMessageId

@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.2.0] - 2026-09-07
+
+### Added
+
+- Closing a project window now releases everything Refio held for it. Routers are cached per project in an application-level service, so every project ever opened in a session kept its whole graph alive until the IDE exited: HTTP clients, caches, background scopes, plus its MCP child processes. A `ProjectManagerListener` (`ProjectCloseListener`) calls the new `CoreConnectionManager.closeProject`, which drops the cached router, shuts its MCP servers down and closes it.
+- Stop now aborts the call that is in flight instead of only asking for it to end. `ExecutionMonitor` had a `streamingJob` field that was never assigned, so `cancelStreaming()` cancelled nothing and a turn parked in a non-streamed LLM call kept running until that call returned. The coroutine the turn runs in is registered in `SessionManager.sendMessage`, which every entry point (prompt box, Re-plan, rewind-and-resend) goes through.
+- `EmbeddingProvider` is `AutoCloseable`, so the HTTP engine each implementation owns can be released. The default `close()` is empty for implementations that hold nothing of their own, and `OpenAICompatibleEmbeddingProvider` closes only a client it built itself - one handed in by the caller stays the caller's.
+- `view_diff` refuses a file larger than the configured `FileLimits.maxFileSize`. It reads both sides fully into memory, which every other file tool bounds and this one did not.
+
+### Changed
+
+- Cancelling a turn is reported as a stop, not as a failure. `TurnExecutor` swallowed the `CancellationException` and returned a failed result, so every caller that maps the outcome (task status, UI) saw a failed turn and the user got an error toast for pressing Stop. The turn now persists what the user already saw and rethrows; the cleanup around it runs uncancellable, because the coroutine it runs in is already cancelled and any suspend would rethrow before anything was written. The same handling was added on the paths that used to convert a stop into a fake error: `TurnToolExecutor` (a cancelled tool wrote an error into the history and marked its subtask FAILED), `InvokeSubagentTool` (the parent model kept working on an interrupted turn), `OllamaAdapter` and `CoreSessionService`.
+- The completion verifier can no longer fail a finished turn. Its verdict is advisory - the turn's edits are on disk by the time it is asked - but a missing user message threw, a verifier answering inside a markdown fence failed to parse and threw, and any exception from the call propagated. A fenced answer is now unwrapped through `JsonExtractor`, and a missing message, an unparseable answer or a failed call all leave the turn standing with a warning in the log.
+- The project analysis cache is no longer invalidated by the agent's own edits. Files that change during a turn were changed by the agent itself, so re-walking the whole tree after every edit only told it what it had just done, while making the TTL useless in the one mode where the analysis is requested every iteration.
+- The turn's history-size label is counted in SQL (`countByTaskId`) instead of materializing the whole conversation, tool payloads included, once per iteration just to call `.size` on it.
+- The plugin description on the Marketplace page was rewritten to match what the product actually does today (verified edits, guardrails for small models, structural refactoring, cost control, the headless runner) and the known-limitations list was corrected: the multi-agent runtime exists but is CLI-only, and testing is claimed for IntelliJ IDEA only. Same pass over `README.md` and `docs/ROADMAP.md`.
+
+### Fixed
+
+- HTTP engines are no longer leaked on every model-list refresh, every RAG query and every docs search. Each LLM adapter and each embedding provider owns an engine (threads plus a selector) and each of these paths built one per call and dropped it unclosed: `ModelRegistry` refreshes all providers every 5 minutes (now `listModelsAndClose`, which releases the adapter uncancellably even on a timeout), `RagRouter` built one per indexing run, `EmbeddingsService` built one per embedded chunk (now one cached per provider id for the life of the service), and the codebase and docs context providers built one per query - where every early return stranded a thread pool.
+- A router replaced at startup is closed. `CoreConnectionManager` recreates a cached router once the IDE project is known and used to simply overwrite the entry, leaving the previous one with its clients and scopes alive.
+- Every API log line opened its own SQLite transaction just to ask whether the `api_logs` table exists. A table that exists does not disappear for the life of the process, so the positive answer is remembered process-wide.
+- `DualLogger.trace` built and redacted its message even with TRACE disabled - once per streamed token - and `debug` did the same with no logback level and no UI sink to receive it. Both now return before building the message.
+- `SecureLogger.redactAndTruncate` redacted the entire payload to keep a 60-character preview; redaction is one pass per pattern, so a large payload paid for all of them. The input is narrowed to the kept window first, with a 512-character margin on both sides so a secret straddling the cut is still matched whole and cannot reach the preview as an unrecognised fragment.
+- `FileLockManager` could hand two callers a lock on the same file. Looking an entry up and acquiring it are two steps, and an eviction in between let the next caller create a second mutex for that path. After acquiring, the caller now checks that the map still points at the entry it locked and starts over if it does not.
+- A cancelled or failed turn no longer leaves its subagent stream collectors attached, which made the next turn re-render the previous run's subagent bubbles on top of its own. Unsubscribing and dropping the transient streaming messages moved into a `finally`, run uncancellable so a Stop does not skip the cleanup.
+
 ## [0.0.1.16] - 2026-08-19
 
 ### Added

@@ -25,6 +25,12 @@ class EmbeddingsService(
 
     private val logger = dualLogger("EmbeddingsService")
     private val mutex = Mutex()
+    /**
+     * One provider per provider id, kept for the life of the service. Each provider owns an HTTP
+     * engine, so building a fresh one per embedded chunk leaked a thread pool per call; the id space
+     * is small and fixed (the configured providers), so caching them all is bounded.
+     */
+    private val providers = java.util.concurrent.ConcurrentHashMap<String, EmbeddingProvider>()
     private val cache: Cache<String, FloatArray> = Caffeine.newBuilder()
         .maximumSize(DEFAULT_CACHE_SIZE.toLong())
         .expireAfterAccess(Duration.ofMinutes(30))
@@ -47,7 +53,7 @@ class EmbeddingsService(
         }
 
         GlobalMetrics.recordCacheAccess("embeddings", hit = false)
-        val provider = providerFactory(providerId.lowercase())
+        val provider = providerFor(providerId)
         val embedding = provider.generateEmbedding(text, modelId)
 
         mutex.withLock {
@@ -66,7 +72,7 @@ class EmbeddingsService(
         if (texts.isEmpty()) return emptyList()
 
         val (modelId, providerId) = resolveProviderModel(providerOverride, modelOverride)
-        val provider = providerFactory(providerId.lowercase())
+        val provider = providerFor(providerId)
 
         val results = MutableList(texts.size) { FloatArray(0) }
         val misses = mutableListOf<Pair<Int, String>>()
@@ -96,6 +102,9 @@ class EmbeddingsService(
 
         return results
     }
+
+    private fun providerFor(providerId: String): EmbeddingProvider =
+        providers.computeIfAbsent(providerId.lowercase(), providerFactory)
 
     private fun resolveProviderModel(
         providerOverride: String?,

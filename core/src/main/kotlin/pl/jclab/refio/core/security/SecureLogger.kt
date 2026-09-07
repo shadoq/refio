@@ -44,8 +44,20 @@ object SecureLogger {
         return result
     }
 
+    /**
+     * Redaction is quadratic-ish in payload size (one pass per pattern) and the caller keeps only a
+     * short preview, so narrow the input first. The margin around the kept window is what makes that
+     * safe: a secret straddling the cut stays whole inside the window, gets redacted there, and can
+     * never reach the preview as an unrecognised fragment.
+     */
     fun redactAndTruncate(input: String, head: Int = 30, tail: Int = 30): String {
-        val redacted = redact(input)
+        val margin = 512
+        val window = if (input.length > head + tail + 2 * margin) {
+            input.take(head + margin) + " ... " + input.takeLast(tail + margin)
+        } else {
+            input
+        }
+        val redacted = redact(window)
         if (redacted.length <= head + tail + 3) {
             return redacted
         }

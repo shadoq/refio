@@ -13,7 +13,8 @@ import java.util.concurrent.ConcurrentHashMap
  * when multiple agents run in parallel.
  *
  * Locks are evicted after [EVICTION_THRESHOLD] entries to prevent unbounded memory growth.
- * Eviction only removes entries that are both unlocked AND older than [EVICTION_AGE_MS].
+ * Eviction only removes entries that are both unlocked AND older than [EVICTION_AGE_MS]; a caller
+ * that acquires an entry which eviction removed meanwhile retries with the current one.
  */
 object FileLockManager {
     private const val EVICTION_THRESHOLD = 500
@@ -32,26 +33,40 @@ object FileLockManager {
      */
     suspend fun <T> withFileLock(path: String, block: suspend () -> T): T {
         val normalizedPath = java.nio.file.Path.of(path).toAbsolutePath().normalize().toString()
-        val entry = locks.computeIfAbsent(normalizedPath) { LockEntry() }
+        while (true) {
+            val entry = locks.computeIfAbsent(normalizedPath) { LockEntry() }
 
-        // Acquire lock FIRST, then update timestamp — this ensures we hold the mutex
-        // before any eviction could try to remove this entry.
-        return entry.mutex.withLock {
-            entry.lastUsed = System.currentTimeMillis()
+            // Looking the entry up and acquiring it are two steps. If eviction drops the entry in
+            // between, the next caller creates a second mutex for this path and both callers think
+            // they own the file. So after acquiring, check that the map still points at the entry we
+            // locked; if it does not, this lock guards nothing and we start over.
+            val holder = entry.mutex.withLock {
+                if (locks[normalizedPath] !== entry) {
+                    null
+                } else {
+                    entry.lastUsed = System.currentTimeMillis()
 
-            // Evict stale entries after acquiring our lock (best-effort cleanup)
-            if (locks.size > EVICTION_THRESHOLD) {
-                evictStaleLocks()
+                    // Evict stale entries after acquiring our lock (best-effort cleanup)
+                    if (locks.size > EVICTION_THRESHOLD) {
+                        evictStaleLocks()
+                    }
+
+                    ResultHolder(block())
+                }
             }
-
-            block()
+            if (holder != null) {
+                return holder.value
+            }
         }
     }
 
+    /** [block] may legitimately return null, so success is carried, not signalled by nullability. */
+    private class ResultHolder<T>(val value: T)
+
     /**
      * Remove locks that are both unlocked AND haven't been used for [EVICTION_AGE_MS].
-     * This two-condition check prevents the race where an entry is evicted between
-     * computeIfAbsent and mutex.withLock — because the entry's lastUsed will be recent.
+     * A caller that had already looked this entry up is covered by the revalidation in
+     * [withFileLock], not by these conditions.
      */
     private fun evictStaleLocks() {
         val now = System.currentTimeMillis()
@@ -76,5 +91,10 @@ object FileLockManager {
      */
     fun clear() {
         locks.clear()
+    }
+
+    /** Test only: drop every entry whose mutex is currently unlocked, ignoring age. */
+    internal fun evictAllUnlockedForTest() {
+        locks.entries.removeIf { !it.value.mutex.isLocked }
     }
 }

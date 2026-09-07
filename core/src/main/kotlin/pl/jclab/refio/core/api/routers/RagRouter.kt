@@ -353,8 +353,10 @@ class RagRouter(
         embeddingsMutex.withLock {
             logger.info { "[RagRouter] Generating embeddings for project=$projectRoot, model=$model" }
 
+            // Built for this indexing run only, and it owns an HTTP engine - release it when the run
+            // ends, however it ends.
+            val embeddingProvider = embeddingProviderFactory(model)
             try {
-                val embeddingProvider = embeddingProviderFactory(model)
                 val embeddingService = RagEmbeddingService(ragRepository, embeddingProvider, configService)
 
                 // Extract modelId from "provider/modelId" format
@@ -374,6 +376,8 @@ class RagRouter(
             } catch (e: Exception) {
                 logger.error(e) { "[RagRouter] Embedding generation failed" }
                 throw e
+            } finally {
+                runCatching { embeddingProvider.close() }
             }
         }
     }

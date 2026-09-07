@@ -12,6 +12,9 @@ Proportionality overrides every rule below. These rules set the ceiling of the p
 
 ### 1. Language and typography
 - Talk to the user in Polish, plain, no marketing jargon.
+- No jargon, no untranslated English terms, no acronyms the user did not use first ("seam", "edge case", "fixture", "happy path", "TDD-red"). Name the actual thing in Polish: not "brak seamu", but "nie da się podstawić atrapy klienta HTTP w tym miejscu".
+- If a term genuinely has no Polish equivalent, use it once and explain it in the same sentence in a few words.
+- Describe reality, concretely and briefly: what happened, where, what it means for the user. Short sentences over dense ones; no compressed shorthand that saves you a line and costs the reader a question.
 - Code identifiers, comments, internal logs: English.
 - User-facing text (UI, API responses, errors): follow the project's existing language and i18n mechanism; English if there is none.
 - Working docs may stay Polish.

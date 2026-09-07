@@ -26,6 +26,8 @@ class StandaloneDocsContextProvider(
     private val documentationRepository: DocumentationRepository = DocumentationRepository()
 ) : BaseContextProvider() {
 
+    private val embeddingProviders = java.util.concurrent.ConcurrentHashMap<String, EmbeddingProvider>()
+
     override val description = ContextProviderDescription(
         title = "docs",
         displayTitle = "docs",
@@ -93,13 +95,21 @@ class StandaloneDocsContextProvider(
         val parts = model.split("/", limit = 2)
         val providerId = if (parts.size == 2) parts[0] else "openai"
         val modelId = if (parts.size == 2) parts[1] else parts[0]
-        val provider = when (providerId.lowercase()) {
-            "ollama" -> OllamaEmbeddingProvider(configService.getTyped(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT))
-            "openai" -> OpenAIEmbeddingProvider()
-            else -> OllamaEmbeddingProvider(configService.getTyped(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT))
-        }
-        RagSearchService(ragRepository, provider) to model
+        RagSearchService(ragRepository, embeddingProviderFor(providerId)) to model
     } catch (e: Exception) { null }
+
+    /**
+     * One provider per id for the life of this provider. Each one owns an HTTP engine and the
+     * search service outlives this method, so building a fresh engine per query leaked one every
+     * time the user searched the docs.
+     */
+    private fun embeddingProviderFor(providerId: String): EmbeddingProvider =
+        embeddingProviders.computeIfAbsent(providerId.lowercase()) { id ->
+            when (id) {
+                "openai" -> OpenAIEmbeddingProvider()
+                else -> OllamaEmbeddingProvider(configService.getTyped(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT))
+            }
+        }
 
     private fun errorItem(msg: String) = ContextItem(description = msg.take(60), content = msg, name = "Documentation", uri = ContextUri(type = "error", value = "docs"))
 }

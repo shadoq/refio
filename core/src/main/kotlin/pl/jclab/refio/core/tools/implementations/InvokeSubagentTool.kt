@@ -148,11 +148,30 @@ class InvokeSubagentTool(
             } else {
                 // Include any unanswered questions from the child in the output
                 val unansweredQuestions = result.unansweredQuestions.orEmpty()
-                val output = if (unansweredQuestions.isNotEmpty()) {
+                var output = if (unansweredQuestions.isNotEmpty()) {
                     val questionsSummary = unansweredQuestions.joinToString("\n") { "  - $it" }
                     "${result.response}\n\n[Subagent '$subagentName' had unanswered questions:]\n$questionsSummary"
                 } else {
                     result.response
+                }
+
+                // A subagent that called NO tool inspected nothing and changed nothing, so whatever
+                // it reports about the project is a claim, not an observation. Passing that up as a
+                // plain success is how a delegated step gets silently skipped: a subagent answered
+                // "already fixed in a prior iteration" (it was not), the caller believed it and
+                // finished the turn SUCCESS with the file untouched (observed 2026-09-07 e2e run).
+                // Still a success — a purely reasoning delegation legitimately needs no tool — but
+                // the caller is told the claim is unverified so it can check before relying on it.
+                val madeNoToolCalls = result.toolsUsed.isEmpty()
+                if (madeNoToolCalls) {
+                    logger.warn {
+                        "Subagent '$subagentName' returned success with no tool calls " +
+                            "(iterations=${result.iterations}) - its answer is unverified"
+                    }
+                    output += "\n\n[Subagent '$subagentName' made no tool calls: it read nothing and " +
+                        "changed nothing, so the answer above is its claim, not a verified result. " +
+                        "If it reports a file as already correct, verify that yourself before " +
+                        "relying on it, or delegate again with a concrete instruction.]"
                 }
 
                 ToolResult.success(
@@ -164,10 +183,15 @@ class InvokeSubagentTool(
                         "tokens_in" to result.tokensIn,
                         "tokens_out" to result.tokensOut,
                         "cost" to result.cost,
-                        "unanswered_questions" to unansweredQuestions.size
+                        "unanswered_questions" to unansweredQuestions.size,
+                        "made_no_tool_calls" to madeNoToolCalls
                     )
                 )
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Stop is not a subagent failure - handing it back as a tool error would let the parent
+            // model keep working on a turn the user already interrupted.
+            throw e
         } catch (e: Exception) {
             ToolResult.error("Subagent '$subagentName' error: ${e.message}")
         }

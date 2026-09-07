@@ -27,16 +27,28 @@ class DualLogger(
     private val kotlinLogger: KLogger,
     private val component: String
 ) {
+    /**
+     * Every API log line used to open its own SQLite transaction just to ask whether the table is
+     * there. A table that exists does not go away for the life of the process, so the positive
+     * answer is remembered - process-wide, because there is one database.
+     */
     private fun canPersistApiLogs(): Boolean {
+        if (apiLogsTableConfirmed) {
+            return true
+        }
         if (!pl.jclab.refio.core.db.DatabaseFactory.isInitialized()) {
             return false
         }
 
-        return runCatching {
+        val exists = runCatching {
             org.jetbrains.exposed.sql.transactions.transaction {
                 exec("SELECT 1 FROM api_logs LIMIT 1") { true } ?: false
             }
         }.getOrElse { false }
+        if (exists) {
+            apiLogsTableConfirmed = true
+        }
+        return exists
     }
 
     private fun safeMessage(msg: Any?): String {
@@ -61,6 +73,11 @@ class DualLogger(
      * Session Debug Report. They remain recoverable by enabling TRACE in logback when needed.
      */
     fun trace(msg: () -> Any?) {
+        // Nothing downstream of a disabled TRACE keeps the message, so building and redacting it is
+        // pure waste - and this fires once per streamed token.
+        if (!kotlinLogger.isTraceEnabled) {
+            return
+        }
         val message = safeMessage(msg())
         kotlinLogger.trace { message }
     }
@@ -69,6 +86,10 @@ class DualLogger(
      * Log debug message to both loggers.
      */
     fun debug(msg: () -> Any?) {
+        // The UI sink shows debug lines regardless of the logback level, so it decides too.
+        if (!kotlinLogger.isDebugEnabled && logSink == null) {
+            return
+        }
         val message = safeMessage(msg())
         kotlinLogger.debug { message }
         logSink?.debug(component, message)
@@ -340,6 +361,11 @@ class DualLogger(
         } catch (e: Exception) {
             this.error(e) { "[$component] Failed to log API error to database" }
         }
+    }
+
+    companion object {
+        @Volatile
+        private var apiLogsTableConfirmed = false
     }
 }
 

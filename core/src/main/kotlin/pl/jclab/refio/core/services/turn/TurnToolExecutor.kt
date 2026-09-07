@@ -1477,6 +1477,10 @@ class TurnToolExecutor(
                     metadata = null
                 )
             }
+        } catch (e: CancellationException) {
+            // The user stopped the turn. Reporting that as a failed tool would write a fake error
+            // into the history and mark the subtask FAILED for work nobody asked to finish.
+            throw e
         } catch (e: Exception) {
             logger.error(e) { "[TOOL_ERROR] Failed to execute ${toolCall.name}: ${e.message}" }
             val errorText = "Error: ${e.message}"

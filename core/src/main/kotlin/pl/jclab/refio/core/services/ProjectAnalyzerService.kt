@@ -9,6 +9,7 @@ import pl.jclab.refio.core.services.analysis.project.FrameworkAnalysis
 import pl.jclab.refio.core.services.analysis.project.FrameworkAnalyzer
 import pl.jclab.refio.core.services.analysis.project.ProjectAnalysisReport
 import pl.jclab.refio.core.services.analysis.project.RichProjectAnalysisEngine
+import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.utils.AiIgnoreMatcher
 import java.nio.file.Files
 import java.nio.file.Path
@@ -115,7 +116,11 @@ class ProjectAnalyzerService(
         lastModified: Long
     ): ProjectAnalysis? {
         cache[cacheKey]?.let { (analysis, cacheTime, cachedLastModified) ->
-            val isCacheValid = (now - cacheTime < cacheTTL) && (lastModified <= cachedLastModified)
+            // Files that changed during a turn were changed by the agent itself, and re-walking the
+            // whole tree after every edit only tells it what it just did - while making the TTL
+            // useless in the one mode where analysis is requested every iteration.
+            val filesUnchanged = lastModified <= cachedLastModified || GlobalMetrics.isAgentTurnActive()
+            val isCacheValid = (now - cacheTime < cacheTTL) && filesUnchanged
             if (isCacheValid) {
                 logger.debug { "Using cached project analysis for $cacheKey (age=${(now - cacheTime) / 1000}s)" }
                 return analysis
