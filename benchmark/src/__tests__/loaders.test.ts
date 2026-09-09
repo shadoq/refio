@@ -41,12 +41,14 @@ const baseResults: ResultsFile = {
   version: 1,
   models: [{ id: "qwen3.5:9b", name: "Qwen", provider: "ollama" }],
   environments: [{ id: "dgx-local", name: "DGX", type: "local" }],
+  harnesses: [{ id: "refio", name: "Refio", kind: "refio" }],
   results: [
     {
       id: "r1",
       taskId: "snake",
       modelId: "qwen3.5:9b",
       environmentId: "dgx-local",
+      harnessId: "refio",
       attemptNumber: 1,
       scores: [{ criterionId: "compliance", value: 1 }],
       attachments: [],
@@ -267,6 +269,7 @@ describe("validateReferentialIntegrity", () => {
           taskId: "snake",
           modelId: "qwen3.5:9b",
           environmentId: "dgx-local",
+          harnessId: "refio",
           resultIds: ["r1", "does-not-exist"],
           deterministic: { scoreVariance: 0.1, codeSimilarity: 0.8 },
           judges: [],

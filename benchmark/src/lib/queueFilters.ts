@@ -5,6 +5,7 @@ export interface QueueFilters {
   taskId?: string;
   modelId?: string;
   environmentId?: string;
+  harnessId?: string;
   verdict?: "PASS" | "FAIL";
 }
 
@@ -12,6 +13,7 @@ type FilterableEntry = {
   taskId: string;
   modelId: string;
   environmentId: string;
+  harnessId: string;
   autoVerdict?: { verdict: string };
 };
 
@@ -25,6 +27,7 @@ export function filterInboxEntries<T extends FilterableEntry>(
     if (filters.taskId && e.taskId !== filters.taskId) return false;
     if (filters.modelId && e.modelId !== filters.modelId) return false;
     if (filters.environmentId && e.environmentId !== filters.environmentId) return false;
+    if (filters.harnessId && e.harnessId !== filters.harnessId) return false;
     if (filters.verdict && e.autoVerdict?.verdict !== filters.verdict) return false;
     return true;
   });
@@ -33,19 +36,22 @@ export function filterInboxEntries<T extends FilterableEntry>(
 // Distinct, sorted facet values present in the queue, for populating the filter dropdowns.
 export function inboxFacetOptions<T extends FilterableEntry>(
   entries: T[],
-): { taskIds: string[]; modelIds: string[]; environmentIds: string[] } {
+): { taskIds: string[]; modelIds: string[]; environmentIds: string[]; harnessIds: string[] } {
   const taskIds = new Set<string>();
   const modelIds = new Set<string>();
   const environmentIds = new Set<string>();
+  const harnessIds = new Set<string>();
   for (const e of entries) {
     taskIds.add(e.taskId);
     modelIds.add(e.modelId);
     environmentIds.add(e.environmentId);
+    harnessIds.add(e.harnessId);
   }
   const sorted = (s: Set<string>) => [...s].sort();
   return {
     taskIds: sorted(taskIds),
     modelIds: sorted(modelIds),
     environmentIds: sorted(environmentIds),
+    harnessIds: sorted(harnessIds),
   };
 }

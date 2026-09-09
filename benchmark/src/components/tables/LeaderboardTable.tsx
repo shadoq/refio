@@ -27,6 +27,8 @@ export function LeaderboardTable() {
     return leaderboard(filtered, resultsData, tasksData);
   }, [tasksData, resultsData, filters]);
 
+  const showHarness = new Set(rows.map((r) => r.harnessId)).size > 1;
+
   const columns: ColumnsType<LeaderboardRow> = [
     {
       title: "Rank",
@@ -56,6 +58,21 @@ export function LeaderboardTable() {
         </Tag>
       ),
     },
+    // Only worth a column once the data actually holds more than one track; with the
+    // Refio track alone it would be a column of identical tags.
+    ...(showHarness
+      ? [
+          {
+            title: "Harness",
+            key: "harness",
+            render: (_: unknown, row: LeaderboardRow) => (
+              <Tag color={row.harness.kind === "refio" ? "geekblue" : "orange"}>
+                {row.harness.name}
+              </Tag>
+            ),
+          } as ColumnsType<LeaderboardRow>[number],
+        ]
+      : []),
     {
       title: "Tasks",
       dataIndex: "tasksEvaluated",
@@ -186,7 +203,7 @@ export function LeaderboardTable() {
     <Table<LeaderboardRow>
       columns={columns}
       dataSource={rows}
-      rowKey={(row) => `${row.modelId}::${row.environmentId}`}
+      rowKey={(row) => `${row.modelId}::${row.environmentId}::${row.harnessId}`}
       loading={tasksLoading || resultsLoading}
       pagination={false}
       size="middle"

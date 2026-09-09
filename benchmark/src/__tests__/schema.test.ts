@@ -1,7 +1,12 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
 import { TasksFileSchema, CriterionSchema } from "@/schema/tasks";
-import { ResultsFileSchema, ResultSchema } from "@/schema/results";
+import {
+  ResultsFileSchema,
+  ResultSchema,
+  HarnessSchema,
+  StabilityEntrySchema,
+} from "@/schema/results";
 
 const validCriterion = {
   id: "compliance",
@@ -120,5 +125,69 @@ describe("ResultsFileSchema", () => {
   it("rejects negative costUsd", () => {
     const result = ResultSchema.safeParse({ ...validResult, costUsd: -1 });
     expect(result.success).toBe(false);
+  });
+});
+
+// The harness is what drove the agent: Refio itself, or an external coding agent
+// such as Claude Code or Codex. Every result recorded before the dimension existed
+// was produced by Refio, so an absent harnessId must mean exactly that - otherwise
+// the whole historical data set would have to be rewritten to stay loadable.
+describe("harness dimension", () => {
+  const validHarness = { id: "claude-code", name: "Claude Code", kind: "external" as const };
+
+  it("defaults a result with no harnessId to refio", () => {
+    const result = ResultSchema.safeParse(validResult);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.harnessId).toBe("refio");
+  });
+
+  it("keeps an explicitly recorded harness", () => {
+    const result = ResultSchema.safeParse({ ...validResult, harnessId: "claude-code" });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.harnessId).toBe("claude-code");
+  });
+
+  it("defaults the harness registry to an empty array", () => {
+    const result = ResultsFileSchema.safeParse({
+      version: 1,
+      models: [validModel],
+      environments: [validEnv],
+      results: [validResult],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.harnesses).toEqual([]);
+  });
+
+  it("accepts a harness registry entry", () => {
+    const result = HarnessSchema.safeParse(validHarness);
+    expect(result.success).toBe(true);
+  });
+
+  it("records the run conditions that make a harness comparison readable", () => {
+    const result = HarnessSchema.safeParse({
+      ...validHarness,
+      version: "2.1.0",
+      conditions: "network on, acceptEdits, max 30 turns",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.conditions).toContain("network on");
+  });
+
+  it("rejects a harness kind outside refio/external", () => {
+    const result = HarnessSchema.safeParse({ ...validHarness, kind: "hybrid" });
+    expect(result.success).toBe(false);
+  });
+
+  it("defaults a stability entry with no harnessId to refio", () => {
+    const result = StabilityEntrySchema.safeParse({
+      taskId: "snake",
+      modelId: "qwen3.5:9b",
+      environmentId: "dgx-local",
+      resultIds: ["r1", "r2"],
+      deterministic: { scoreVariance: 0.1, codeSimilarity: 0.5 },
+      computedAt: "2026-04-15T09:00:00.000Z",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.harnessId).toBe("refio");
   });
 });

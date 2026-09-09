@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Shaded Cube</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0d1117; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  'use strict';
+
+  // ---------- Canvas setup ----------
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  let W = 0, H = 0;
+  let imageData = null;
+  let depthBuf = null;
+
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W;
+    canvas.height = H;
+    imageData = ctx.createImageData(W, H);
+    depthBuf = new Float32Array(W * H);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---------- Math helpers ----------
+  function vAdd(a, b) { return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; }
+  function vSub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+  function vDot(a, b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
+  function vCross(a, b) {
+    return [
+      a[1]*b[2] - a[2]*b[1],
+      a[2]*b[0] - a[0]*b[2],
+      a[0]*b[1] - a[1]*b[0]
+    ];
+  }
+  function vScale(a, s) { return [a[0]*s, a[1]*s, a[2]*s]; }
+  function vNorm(a) {
+    const l = Math.sqrt(a[0]*a[0] + a[1]*a[1] + a[2]*a[2]);
+    if (l < 1e-10) return [0,0,0];
+    return [a[0]/l, a[1]/l, a[2]/l];
+  }
+
+  // ---------- Cube geometry ----------
+  // Vertices (half-size 1)
+  const VERTS = [
+    [-1,-1,-1], // 0
+    [ 1,-1,-1], // 1
+    [ 1, 1,-1], // 2
+    [-1, 1,-1], // 3
+    [-1,-1, 1], // 4
+    [ 1,-1, 1], // 5
+    [ 1, 1, 1], // 6
+    [-1, 1, 1]  // 7
+  ];
+
+  // Faces: [i0,i1,i2,i3] CCW from outside, baseColor [r,g,b]
+  const FACES = [
+    { idx: [1,5,7,3], color: [220, 60, 60]  },  // +X red
+    { idx: [0,4,6,2], color: [60, 200, 60]  },  // -X green
+    { idx: [0,1,5,4], color: [60, 80, 220]  },  // +Y blue
+    { idx: [2,3,7,6], color: [220, 200, 40] },  // -Y yellow
+    { idx: [0,1,3,2], color: [40, 200, 220] },  // +Z cyan
+    { idx: [4,5,7,6], color: [220, 60, 200] }   // -Z magenta
+  ];
+
+  // Precompute face normals (outward) at build time
+  for (const f of FACES) {
+    const v0 = VERTS[f.idx[0]];
+    const v1 = VERTS[f.idx[1]];
+    const v2 = VERTS[f.idx[2]];
+    let n = vNorm(vCross(vSub(v1, v0), vSub(v2, v0)));
+    const center = [
+      (v0[0]+VERTS[f.idx[1]][0]+VERTS[f.idx[2]][0]+VERTS[f.idx[3]][0]) / 4,
+      (v0[1]+VERTS[f.idx[1]][1]+VERTS[f.idx[2]][1]+VERTS[f.idx[3]][1]) / 4,
+      (v0[2]+VERTS[f.idx[1]][2]+VERTS[f.idx[2]][2]+VERTS[f.idx[3]][2]) / 4
+    ];
+    if (vDot(n, center) < 0) n = vScale(n, -1);
+    f.normal = n;
+  }
+
+  // Edges for wireframe (12 unique edges)
+  const EDGES = [
+    [0,1],[1,2],[2,3],[3,0],
+    [4,5],[5,6],[6,7],[7,4],
+    [0,4],[1,5],[2,6],[3,7]
+  ];
+
+  // ---------- State ----------
+  let angleX = 0.4;
+  let angleY = 0.7;
+  let paused = false;
+  let wireframe = false;
+  let time = 0;
+  let lastTime = performance.now();
+  let fpsEMA = 60;
+
+  // ---------- Rotation ----------
+  function rotatePoint(p, ax, ay) {
+    // Rotate around X then Y
+    let x = p[0], y = p[1], z = p[2];
+    // rotX
+    const cosX = Math.cos(ax), sinX = Math.sin(ax);
+    let y1 = y * cosX - z * sinX;
+    let z1 = y * sinX + z * cosX;
+    y = y1; z = z1;
+    // rotY
+    const cosY = Math.cos(ay), sinY = Math.sin(ay);
+    let x2 = x * cosY + z * sinY;
+    let z2 = -x * sinY + z * cosY;
+    x = x2; z = z2;
+    return [x, y, z];
+  }
+
+  // ---------- Projection ----------
+  const CAM_Z = -4;
+  const FOCAL = 4;
+
+  function project(p) {
+    const zPrime = p[2] - CAM_Z; // z' = z - cameraZ; camera at z=-4, so z' = z+4
+    if (zPrime < 0.01) return null;
+    const cx = W / 2;
+    const cy = H / 2;
+    const scale = Math.min(W, H) / 4; // fit cube
+    const sx = cx + (p[0] / zPrime) * FOCAL * scale;
+    const sy = cy - (p[1] / zPrime) * FOCAL * scale;
+    return { x: sx, y: sy, z: zPrime };
+  }
+
+  // ---------- Light ----------
+  function lightPos(t) {
+    return [
+      2.5 * Math.cos(t * 0.7),
+      2.5 * Math.sin(t * 0.9),
+      -3 + 1.0 * Math.sin(t * 0.5)
+    ];
+  }
+
+  // ---------- Rasterize one triangle with Gouraud shading ----------
+  function rasterizeTriangle(p0, p1, p2, c0, c1, c2, z0, z1, z2) {
+    const minX = Math.max(0, Math.floor(Math.min(p0.x, p1.x, p2.x)));
+    const maxX = Math.min(W - 1, Math.ceil(Math.max(p0.x, p1.x, p2.x)));
+    const minY = Math.max(0, Math.floor(Math.min(p0.y, p1.y, p2.y)));
+    const maxY = Math.min(H - 1, Math.ceil(Math.max(p0.y, p1.y, p2.y)));
+
+    const x0 = p0.x, y0 = p0.y;
+    const x1 = p1.x, y1 = p1.y;
+    const x2 = p2.x, y2 = p2.y;
+
+    const denom = (y1 - y2) * x0 + (x2 - x1) * y0 + x1 * y2 - x2 * y1;
+    if (Math.abs(denom) < 1e-10) return;
+
+    const data = imageData.data;
+
+    for (let py = minY; py <= maxY; py++) {
+      for (let px = minX; px <= maxX; px++) {
+        const w0 = ((y1 - y2) * px + (x2 - x1) * py + x1 * y2 - x2 * y1) / denom;
+        const w1 = ((y2 - y0) * px + (x0 - x2) * py + x2 * y0 - x0 * y2) / denom;
+        const w2 = 1 - w0 - w1;
+
+        // Sign-agnostic inside test
+        if (!((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0))) continue;
+
+        const idx = (py * W + px);
+        const depth = w0 * z0 + w1 * z1 + w2 * z2;
+        if (depth >= depthBuf[idx]) continue;
+        depthBuf[idx] = depth;
+
+        const r = Math.max(0, Math.min(255, Math.round(w0 * c0[0] + w1 * c1[0] + w2 * c2[0])));
+        const g = Math.max(0, Math.min(255, Math.round(w0 * c0[1] + w1 * c1[1] + w2 * c2[1])));
+        const b = Math.max(0, Math.min(255, Math.round(w0 * c0[2] + w1 * c1[2] + w2 * c2[2])));
+
+        const di = idx * 4;
+        data[di]     = r;
+        data[di + 1] = g;
+        data[di + 2] = b;
+        data[di + 3] = 255;
+      }
+    }
+  }
+
+  // ---------- Render loop ----------
+  function frame(now) {
+    const dt = (now - lastTime) / 1000;
+    lastTime = now;
+
+    // FPS EMA
+    if (dt > 0) {
+      const instFps = 1 / dt;
+      fpsEMA = fpsEMA * 0.9 + instFps * 0.1;
+    }
+
+    if (!paused) {
+      angleX += dt * 0.8;
+      angleY += dt * 1.1;
+      time += dt;
+    }
+
+    // Clear ImageData to background
+    const data = imageData.data;
+    const bgR = 13, bgG = 17, bgB = 23; // #0d1117
+    for (let i = 0; i < data.length; i += 4) {
+      data[i]     = bgR;
+      data[i + 1] = bgG;
+      data[i + 2] = bgB;
+      data[i + 3] = 255;
+    }
+    depthBuf.fill(Infinity);
+
+    // Rotate vertices
+    const rotVerts = VERTS.map(v => rotatePoint(v, angleX, angleY));
+
+    // Rotate face normals
+    const rotNormals = FACES.map(f => {
+      // Rotate normal vector
+      let x = f.normal[0], y = f.normal[1], z = f.normal[2];
+      const cosX = Math.cos(angleX), sinX = Math.sin(angleX);
+      let y1 = y * cosX - z * sinX;
+      let z1 = y * sinX + z * cosX;
+      y = y1; z = z1;
+      const cosY = Math.cos(angleY), sinY = Math.sin(angleY);
+      let x2 = x * cosY + z * sinY;
+      let z2 = -x * sinY + z * cosY;
+      x = x2; z = z2;
+      return [x, y, z];
+    });
+
+    const lp = lightPos(time);
+    const camPos = [0, 0, CAM_Z];
+
+    // Collect visible triangles
+    const triangles = [];
+
+    for (let fi = 0; fi < FACES.length; fi++) {
+      const f = FACES[fi];
+      const n = rotNormals[fi];
+
+      // Backface cull: view vector from face center to camera
+      const center = [
+        (rotVerts[f.idx[0]][0] + rotVerts[f.idx[1]][0] + rotVerts[f.idx[2]][0] + rotVerts[f.idx[3]][0]) / 4,
+        (rotVerts[f.idx[0]][1] + rotVerts[f.idx[1]][1] + rotVerts[f.idx[2]][1] + rotVerts[f.idx[3]][1]) / 4,
+        (rotVerts[f.idx[0]][2] + rotVerts[f.idx[1]][2] + rotVerts[f.idx[2]][2] + rotVerts[f.idx[3]][2]) / 4
+      ];
+      const viewVec = vSub(camPos, center);
+      if (vDot(n, viewVec) <= 0) continue;
+
+      // Two triangles per quad: (0,1,2) and (0,2,3)
+      const triIdxSets = [[f.idx[0], f.idx[1], f.idx[2]], [f.idx[0], f.idx[2], f.idx[3]]];
+
+      for (const tri of triIdxSets) {
+        const v0 = rotVerts[tri[0]];
+        const v1 = rotVerts[tri[1]];
+        const v2 = rotVerts[tri[2]];
+
+        // Project
+        const p0 = project(v0);
+        const p1 = project(v1);
+        const p2 = project(v2);
+        if (!p0 || !p1 || !p2) continue;
+
+        // Per-vertex Lambert lighting using face normal
+        const baseColor = f.color;
+        const ambient = 0.15;
+        const diffuse = 0.85;
+
+        function vertexColor(v) {
+          const ld = vNorm(vSub(lp, v));
+          let intensity = Math.max(0, vDot(n, ld));
+          intensity = ambient + diffuse * intensity;
+          return [
+            Math.min(255, Math.round(baseColor[0] * intensity)),
+            Math.min(255, Math.round(baseColor[1] * intensity)),
+            Math.min(255, Math.round(baseColor[2] * intensity))
+          ];
+        }
+
+        const c0 = vertexColor(v0);
+        const c1 = vertexColor(v1);
+        const c2 = vertexColor(v2);
+
+        triangles.push({ p0, p1, p2, c0, c1, c2, z0: p0.z, z1: p1.z, z2: p2.z });
+      }
+    }
+
+    // Sort triangles by average depth (far to near) for better depth test
+    triangles.sort((a, b) => {
+      const da = (a.z0 + a.z1 + a.z2) / 3;
+      const db = (b.z0 + b.z1 + b.z2) / 3;
+      return db - da;
+    });
+
+    // Rasterize
+    for (const tri of triangles) {
+      rasterizeTriangle(tri.p0, tri.p1, tri.p2, tri.c0, tri.c1, tri.c2, tri.z0, tri.z1, tri.z2);
+    }
+
+    // Write to canvas
+    ctx.putImageData(imageData, 0, 0);
+
+    // Wireframe overlay
+    if (wireframe) {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      for (const [a, b] of EDGES) {
+        const pa = project(rotVerts[a]);
+        const pb = project(rotVerts[b]);
+        if (pa && pb) {
+          ctx.moveTo(pa.x, pa.y);
+          ctx.lineTo(pb.x, pb.y);
+        }
+      }
+      ctx.stroke();
+    }
+
+    // HUD
+    ctx.font = '14px monospace';
+    ctx.fillStyle = '#cfd8dc';
+    ctx.textBaseline = 'top';
+    ctx.fillText('FPS: ' + fpsEMA.toFixed(1), 12, 12);
+    ctx.fillText('Wireframe: ' + (wireframe ? 'ON' : 'OFF') + '  |  Paused: ' + (paused ? 'YES' : 'NO'), 12, 32);
+    ctx.fillText('[W] wireframe  [P] pause', 12, 52);
+
+    requestAnimationFrame(frame);
+  }
+
+  // ---------- Keyboard ----------
+  window.addEventListener('keydown', function (e) {
+    if (e.repeat) return;
+    const key = e.key.toLowerCase();
+    if (key === 'w') {
+      wireframe = !wireframe;
+    } else if (key === 'p') {
+      paused = !paused;
+    }
+  });
+
+  // ---------- Start ----------
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -68,6 +68,21 @@ describe("InboxEntrySchema", () => {
     const result = InboxEntrySchema.safeParse(missing);
     expect(result.success).toBe(false);
   });
+
+  // The schema is strict, so an unknown key is rejected. harnessId must be a known
+  // key with a default, otherwise queue entries written before the dimension existed
+  // stop loading.
+  it("defaults an entry with no harnessId to refio", () => {
+    const result = InboxEntrySchema.safeParse(validInboxEntry);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.harnessId).toBe("refio");
+  });
+
+  it("accepts an explicit harness so the same model can queue under two of them", () => {
+    const result = InboxEntrySchema.safeParse({ ...validInboxEntry, harnessId: "codex" });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.harnessId).toBe("codex");
+  });
 });
 
 describe("ResultsFileSchema with inbox", () => {

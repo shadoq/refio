@@ -5,6 +5,7 @@ import { useTasks } from "@/data/queries";
 import { useResults } from "@/data/queries";
 import { useFilters, applyFilters } from "@/store/filters";
 import { TaskAttemptsTable } from "@/components/tables/TaskAttemptsTable";
+import { harnessDelta } from "@/lib/stats";
 import { BarByCriterion } from "@/components/charts/BarByCriterion";
 
 const { Title, Text, Paragraph } = Typography;
@@ -39,6 +40,24 @@ export default function TaskDetail() {
   const environmentNames = useMemo(
     () => Object.fromEntries((resultsData?.environments ?? []).map((e) => [e.id, e.name])),
     [resultsData],
+  );
+
+  // The comparison the reference track exists for: the same model under two harnesses.
+  // It deliberately ignores the harness filter, which would otherwise hide one side.
+  const deltaRows = useMemo(() => {
+    if (!resultsData || !tasksData || !taskId) return [];
+    const taskResults = resultsData.results.filter((r) => r.taskId === taskId);
+    return harnessDelta(taskResults, tasksData, "refio");
+  }, [resultsData, tasksData, taskId]);
+
+  const harnessNames = useMemo(
+    () => Object.fromEntries((resultsData?.harnesses ?? []).map((h) => [h.id, h.name])),
+    [resultsData],
+  );
+
+  const otherHarnessIds = useMemo(
+    () => [...new Set(deltaRows.flatMap((r) => Object.keys(r.byHarness)))].filter((h) => h !== "refio"),
+    [deltaRows],
   );
 
   const stabilityEntries = useMemo(
@@ -123,6 +142,60 @@ export default function TaskDetail() {
             />
           </Card>
         </>
+      )}
+
+      {deltaRows.length > 0 && (
+        <Card title="Refio vs external agents" style={{ marginBottom: 24 }}>
+          <Text type="secondary" style={{ display: "block", marginBottom: 12 }}>
+            The same model on the same task, driven by Refio and by an external coding
+            agent. The difference is the agent's scaffolding, not the model.
+          </Text>
+          <Table
+            size="small"
+            pagination={false}
+            rowKey={(r) => `${r.modelId}::${r.environmentId}`}
+            dataSource={deltaRows}
+            columns={[
+              {
+                title: "Model",
+                key: "model",
+                render: (_, r) => modelNames[r.modelId] ?? r.modelId,
+              },
+              {
+                title: "Refio",
+                key: "refio",
+                width: 100,
+                render: (_, r) =>
+                  r.baselineScore === null ? (
+                    <Text type="secondary">not run</Text>
+                  ) : (
+                    r.baselineScore.toFixed(2)
+                  ),
+              },
+              ...otherHarnessIds.map((harnessId) => ({
+                title: harnessNames[harnessId] ?? harnessId,
+                key: harnessId,
+                width: 140,
+                render: (_: unknown, r: (typeof deltaRows)[number]) => {
+                  const score = r.byHarness[harnessId];
+                  if (score === undefined) return <Text type="secondary">-</Text>;
+                  const d = r.delta[harnessId];
+                  return (
+                    <span>
+                      {score.toFixed(2)}
+                      {d !== undefined && (
+                        <Tag color={d >= 0 ? "green" : "red"} style={{ marginInlineStart: 8 }}>
+                          {d >= 0 ? "+" : ""}
+                          {d.toFixed(2)}
+                        </Tag>
+                      )}
+                    </span>
+                  );
+                },
+              })),
+            ]}
+          />
+        </Card>
       )}
 
       {stabilityEntries.length > 0 && (

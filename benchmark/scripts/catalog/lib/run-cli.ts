@@ -8,14 +8,22 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+// The resolved path can contain spaces, and shell: true re-parses the command line.
+function quote(command: string): string {
+  return command.includes(" ") ? `"${command}"` : command;
+}
+
 export interface HeadlessResult {
   runJson: unknown;
   deliverablePath: string | null;
   workDir: string;
 }
 
-// Override with REFIO_CLI when the wrapper is not on PATH as `refio.bat`.
-const CLI = process.env.REFIO_CLI ?? "refio.bat";
+// The wrapper lives at the repo root and is not on PATH, so it is resolved against
+// repoRoot. Override with REFIO_CLI to point at a different build.
+function cliCommand(repoRoot: string): string {
+  return process.env.REFIO_CLI ?? join(repoRoot, "refio.bat");
+}
 
 export async function runHeadless(opts: {
   repoRoot: string;
@@ -46,7 +54,11 @@ export async function runHeadless(opts: {
   if (opts.maxCost !== undefined) args.push("--max-cost", String(opts.maxCost));
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(CLI, args, { cwd: opts.repoRoot, shell: true, stdio: "inherit" });
+    const child = spawn(quote(cliCommand(opts.repoRoot)), args, {
+      cwd: opts.repoRoot,
+      shell: true,
+      stdio: "inherit",
+    });
     child.on("error", reject);
     child.on("exit", () => resolve());
   });

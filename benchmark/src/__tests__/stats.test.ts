@@ -4,6 +4,7 @@ import {
   normalizeScore,
   normalizeResult,
   leaderboard,
+  harnessDelta,
   judgeCriteriaForTask,
   getResultJudgeScore,
 } from "@/lib/stats";
@@ -63,6 +64,7 @@ const makeResult = (
   taskId,
   modelId,
   environmentId: envId,
+  harnessId: "refio",
   attemptNumber: 1,
   scores,
   attachments: [],
@@ -151,6 +153,10 @@ describe("leaderboard", () => {
       { id: "local", name: "Local", type: "local" },
       { id: "cloud", name: "Cloud", type: "cloud" },
     ],
+    harnesses: [
+      { id: "refio", name: "Refio", kind: "refio" },
+      { id: "claude-code", name: "Claude Code", kind: "external" },
+    ],
     results: [
       makeResult(
         "r1",
@@ -208,6 +214,58 @@ describe("leaderboard", () => {
   it("returns one row per (modelId, environmentId) pair", () => {
     const rows = leaderboard(resultsFile.results, resultsFile, tasksFile);
     expect(rows).toHaveLength(2);
+  });
+
+  // The same model driven by two different agents is two measurements, not one.
+  // Collapsing them would silently average Refio's result with Claude Code's and
+  // make both unreadable.
+  it("keeps the same model in two harnesses as two rows", () => {
+    const crossHarness: ResultsFile = {
+      ...resultsFile,
+      results: [
+        makeResult("h1", "claude", "cloud", "snake", [
+          { criterionId: "compliance", value: 1 },
+        ]),
+        makeResult(
+          "h2",
+          "claude",
+          "cloud",
+          "snake",
+          [{ criterionId: "compliance", value: 0.5 }],
+          { harnessId: "claude-code" },
+        ),
+      ],
+    };
+    const rows = leaderboard(crossHarness.results, crossHarness, tasksFile);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.harnessId).sort()).toEqual(["claude-code", "refio"]);
+  });
+
+  it("carries the harness record onto the row so the view can label the track", () => {
+    const rows = leaderboard(resultsFile.results, resultsFile, tasksFile);
+    expect(rows[0].harness.kind).toBe("refio");
+  });
+
+  // An import can land a run before anyone edits the registry. Dropping the row
+  // would lose a measurement without saying so.
+  it("keeps a row whose harness is not in the registry yet", () => {
+    const unregistered: ResultsFile = {
+      ...resultsFile,
+      harnesses: [],
+      results: [
+        makeResult(
+          "u1",
+          "claude",
+          "cloud",
+          "snake",
+          [{ criterionId: "compliance", value: 1 }],
+          { harnessId: "codex" },
+        ),
+      ],
+    };
+    const rows = leaderboard(unregistered.results, unregistered, tasksFile);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].harness.kind).toBe("external");
   });
 
   it("sorts by avgScore descending", () => {
@@ -367,5 +425,51 @@ describe("judge scoring helpers", () => {
   it("returns null when there are no judge scores", () => {
     const result = makeResult("r2", "m1", "e1", "snake", [{ criterionId: "compliance", value: 1 }]);
     expect(getResultJudgeScore(result, judgeTasks)).toBeNull();
+  });
+});
+
+// The point of running the same task under two harnesses is the comparison, so the
+// pairing has to be explicit rather than left to the reader scanning two tables.
+describe("harnessDelta", () => {
+  const scores = (compliance: number) => [{ criterionId: "compliance", value: compliance }];
+
+  it("pairs the same model across harnesses and reports the difference", () => {
+    const results = [
+      makeResult("a", "claude", "cloud", "snake", scores(0.5)),
+      makeResult("b", "claude", "cloud", "snake", scores(1), { harnessId: "claude-code" }),
+    ];
+    const rows = harnessDelta(results, tasksFile, "refio");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].modelId).toBe("claude");
+    expect(rows[0].baselineScore).toBeCloseTo(0.5);
+    expect(rows[0].byHarness["claude-code"]).toBeCloseTo(1);
+    expect(rows[0].delta["claude-code"]).toBeCloseTo(0.5);
+  });
+
+  it("averages every attempt a harness made, not just the first", () => {
+    const results = [
+      makeResult("a", "claude", "cloud", "snake", scores(1)),
+      makeResult("b", "claude", "cloud", "snake", scores(0), { attemptNumber: 2 }),
+      makeResult("c", "claude", "cloud", "snake", scores(1), { harnessId: "codex" }),
+    ];
+    const rows = harnessDelta(results, tasksFile, "refio");
+    expect(rows[0].baselineScore).toBeCloseTo(0.5);
+    expect(rows[0].delta["codex"]).toBeCloseTo(0.5);
+  });
+
+  // Without a baseline run there is nothing to compare against, and inventing a zero
+  // would read as "Refio scored nothing" instead of "Refio has not run this".
+  it("leaves the difference unset when the baseline harness did not run the model", () => {
+    const results = [
+      makeResult("b", "claude", "cloud", "snake", scores(1), { harnessId: "claude-code" }),
+    ];
+    const rows = harnessDelta(results, tasksFile, "refio");
+    expect(rows[0].baselineScore).toBeNull();
+    expect(rows[0].delta["claude-code"]).toBeUndefined();
+  });
+
+  it("returns nothing when only the baseline harness ran", () => {
+    const results = [makeResult("a", "claude", "cloud", "snake", scores(1))];
+    expect(harnessDelta(results, tasksFile, "refio")).toEqual([]);
   });
 });

@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
-import { mergeStabilityJudges, stabilityNeedsJudging } from "@/lib/judge/stability-merge";
+import { mergeStabilityJudges, stabilityNeedsJudging,
+  stabilityKey,
+} from "@/lib/judge/stability-merge";
 
 const judge = (judgeId: string, value: number, judgedAt: string) => ({
   judgeId,
@@ -85,5 +87,36 @@ describe("stabilityNeedsJudging", () => {
     // judge never scored this group.
     const codexOnly = entry([judge("codex", 0.5, "2026-08-27T08:31:00.000Z")], "2026-08-27T08:31:00.000Z");
     expect(stabilityNeedsJudging(codexOnly, ["codex"])).toBe(false);
+  });
+});
+
+// Stability compares repeated attempts of ONE system. Refio with model X and Claude
+// Code with model X are two systems, so they must never share a group: mixing them
+// would report the variance between two agents as one model's instability, and the
+// second entry written would overwrite the first.
+describe("stabilityKey", () => {
+  const base = { taskId: "snake", modelId: "anthropic/claude-opus-5", environmentId: "anthropic-cloud" };
+
+  it("separates the same model run under two harnesses", () => {
+    expect(stabilityKey({ ...base, harnessId: "refio" })).not.toBe(
+      stabilityKey({ ...base, harnessId: "claude-code" }),
+    );
+  });
+
+  it("matches two entries that differ in nothing", () => {
+    expect(stabilityKey({ ...base, harnessId: "refio" })).toBe(
+      stabilityKey({ ...base, harnessId: "refio" }),
+    );
+  });
+
+  it("treats a missing harness as refio, so historical entries keep their key", () => {
+    expect(stabilityKey(base)).toBe(stabilityKey({ ...base, harnessId: "refio" }));
+  });
+
+  it("still separates by task, model and environment", () => {
+    const k = stabilityKey({ ...base, harnessId: "refio" });
+    expect(stabilityKey({ ...base, taskId: "todo-app", harnessId: "refio" })).not.toBe(k);
+    expect(stabilityKey({ ...base, modelId: "other", harnessId: "refio" })).not.toBe(k);
+    expect(stabilityKey({ ...base, environmentId: "dgx-local", harnessId: "refio" })).not.toBe(k);
   });
 });

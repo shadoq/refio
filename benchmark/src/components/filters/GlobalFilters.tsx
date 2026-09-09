@@ -1,7 +1,7 @@
 import { Select, Button, Space } from "antd";
 import { useSearchParams } from "react-router-dom";
 import { useEffect } from "react";
-import { useFilters } from "@/store/filters";
+import { useFilters, DEFAULT_HARNESS_IDS } from "@/store/filters";
 import { useTasks, useResults } from "@/data/queries";
 
 function parseIds(param: string | null): string[] {
@@ -24,6 +24,10 @@ export function GlobalFilters() {
     filters.setModelIds(parseIds(searchParams.get("models")));
     filters.setEnvironmentIds(parseIds(searchParams.get("envs")));
     filters.setTaskIds(parseIds(searchParams.get("tasks")));
+    // No harness in the URL means the default track, not "all tracks": the reference
+    // runs stay out of the main view until someone asks for them.
+    const harnessParam = parseIds(searchParams.get("harnesses"));
+    filters.setHarnessIds(harnessParam.length > 0 ? harnessParam : DEFAULT_HARNESS_IDS);
     filters.setDateRange(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
@@ -52,6 +56,11 @@ export function GlobalFilters() {
     updateParam("tasks", serializeIds(ids));
   }
 
+  function handleHarnesses(ids: string[]) {
+    // Clearing the picker means "back to the default track", never "show everything".
+    updateParam("harnesses", serializeIds(ids.length > 0 ? ids : DEFAULT_HARNESS_IDS));
+  }
+
   function handleClear() {
     setSearchParams({}, { replace: true });
   }
@@ -71,10 +80,14 @@ export function GlobalFilters() {
     value: t.id,
   }));
 
+  const harnesses = resultsData?.harnesses ?? [];
+  const harnessOptions = harnesses.map((h) => ({ label: h.name, value: h.id }));
+
   const hasFilters =
     filters.modelIds.length > 0 ||
     filters.environmentIds.length > 0 ||
-    filters.taskIds.length > 0;
+    filters.taskIds.length > 0 ||
+    filters.harnessIds.join(",") !== DEFAULT_HARNESS_IDS.join(",");
 
   return (
     <Space size="small" wrap className="filters">
@@ -108,6 +121,17 @@ export function GlobalFilters() {
         style={{ minWidth: 120 }}
         maxTagCount="responsive"
       />
+      {harnesses.length > 1 && (
+        <Select
+          mode="multiple"
+          placeholder="Harness"
+          options={harnessOptions}
+          value={filters.harnessIds}
+          onChange={handleHarnesses}
+          style={{ minWidth: 140 }}
+          maxTagCount="responsive"
+        />
+      )}
       {hasFilters && (
         <Button size="small" onClick={handleClear}>
           Clear

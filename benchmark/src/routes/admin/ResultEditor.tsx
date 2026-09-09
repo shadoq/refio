@@ -161,6 +161,7 @@ export default function ResultEditor() {
       taskId: "",
       modelId: "",
       environmentId: "",
+      harnessId: "refio",
       attemptNumber: 1,
       scores: [],
       attachments: [],
@@ -280,6 +281,15 @@ export default function ResultEditor() {
     label: e.name,
     value: e.id,
   }));
+
+  // Refio is always offered even before anyone edits the registry, so an existing
+  // result can always be re-saved with a valid harness.
+  const harnessOptions = [
+    { label: "Refio", value: "refio" },
+    ...(resultsData?.harnesses ?? [])
+      .filter((h) => h.id !== "refio")
+      .map((h) => ({ label: h.name, value: h.id })),
+  ];
 
   const environmentTypeOptions = [
     { label: "Local", value: "local" },
@@ -651,6 +661,20 @@ export default function ResultEditor() {
                   options={envOptions}
                   placeholder="Select environment"
                 />
+              )}
+            />
+          </Form.Item>
+
+          <Form.Item
+            label="Harness"
+            validateStatus={errors.harnessId ? "error" : ""}
+            help={errors.harnessId?.message}
+          >
+            <Controller
+              name="harnessId"
+              control={control}
+              render={({ field }) => (
+                <Select {...field} options={harnessOptions} placeholder="Select harness" />
               )}
             />
           </Form.Item>

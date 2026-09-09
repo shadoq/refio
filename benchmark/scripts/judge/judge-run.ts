@@ -1,6 +1,10 @@
 // Entry point for the strong-judge subsystem. Deterministic orchestration:
 // scan results.json -> build evidence (Playwright) -> run judge CLIs read-only ->
 // validate + snap the verdict -> write judgeScores back atomically.
+//
+// By default only promoted results[] are scanned. --inbox adds runs still awaiting
+// human scoring in inbox[]; their entries have the same shape, and a judge writes
+// only its own judgeScores slot, so the deterministic queue verdict is left intact.
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -20,7 +24,7 @@ import { claudeCodeAdapter } from "./lib/judges/claude-code";
 import { codexAdapter } from "./lib/judges/codex";
 import type { JudgeAdapter } from "./lib/judges/types";
 import { groupForStability, computeStabilityEntry } from "./lib/stability";
-import { stabilityNeedsJudging } from "../../src/lib/judge/stability-merge";
+import { stabilityNeedsJudging, stabilityKey } from "../../src/lib/judge/stability-merge";
 import { extractJson } from "../../src/lib/judge/parse";
 import {
   validateVerdict,
@@ -49,10 +53,15 @@ interface Args {
   reJudge: boolean;
   stability: boolean;
   dryRun: boolean;
+  // Also score runs still sitting in the review queue. Off by default: the normal
+  // order is human scoring first, promotion, then judges. Turning it on gives the
+  // reviewer the judges' opinion before they score, which is a different method -
+  // so it has to be asked for.
+  inbox: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { limit: 20, reJudge: false, stability: false, dryRun: false };
+  const args: Args = { limit: 20, reJudge: false, stability: false, dryRun: false, inbox: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -64,6 +73,7 @@ function parseArgs(argv: string[]): Args {
     else if (a === "--re-judge") args.reJudge = true;
     else if (a === "--stability") args.stability = true;
     else if (a === "--dry-run") args.dryRun = true;
+    else if (a === "--inbox") args.inbox = true;
     else console.warn(`ignoring unknown flag: ${a}`);
   }
   return args;
@@ -91,12 +101,12 @@ async function runStability(
   if (args.task) groups = groups.filter((g) => g.taskId === args.task);
   if (args.model) groups = groups.filter((g) => g.modelId === args.model);
   const byKey = new Map(
-    (file.stability ?? []).map((s) => [`${s.taskId}|${s.modelId}|${s.environmentId}`, s]),
+    (file.stability ?? []).map((s) => [stabilityKey(s), s]),
   );
   if (!args.reJudge) {
     const judgeIds = adapters.map((a) => a.id);
     groups = groups.filter((g) =>
-      stabilityNeedsJudging(byKey.get(`${g.taskId}|${g.modelId}|${g.environmentId}`), judgeIds),
+      stabilityNeedsJudging(byKey.get(stabilityKey(g)), judgeIds),
     );
   }
   if (args.limit > 0) groups = groups.slice(0, args.limit);
@@ -109,7 +119,7 @@ async function runStability(
   let computed = 0;
   const skipped: string[] = [];
   for (const group of groups) {
-    const existing = byKey.get(`${group.taskId}|${group.modelId}|${group.environmentId}`);
+    const existing = byKey.get(stabilityKey(group));
     // Top up only what is missing: re-running a judge that already scored the
     // group would spend a CLI call to overwrite its own verdict.
     const groupAdapters = args.reJudge
@@ -223,15 +233,22 @@ async function main() {
   // A run that worked but delivered no artifact scores the scale minimum. No CLI
   // is launched: the verdict follows from the missing file, and leaving it out
   // would hide the failure from every judge metric.
+  // Rows the judges may score. Queue entries are structurally identical here (id,
+  // taskId, modelId, attachments, judgeScores) and are mutated in place, so the
+  // atomic save persists their verdicts exactly like a promoted result's.
+  const pool: RawResult[] = args.inbox
+    ? [...file.results, ...((file.inbox as RawResult[] | undefined) ?? [])]
+    : file.results;
+
   const zeroed = await writeNoArtifactVerdicts(
     benchmarkDir,
     tasks,
     file,
-    file.results.filter((r) => !hasHtml(r) && inScope(r)),
+    pool.filter((r) => !hasHtml(r) && inScope(r)),
     args,
   );
 
-  let candidates = file.results.filter((r) => hasHtml(r) && inScope(r));
+  let candidates = pool.filter((r) => hasHtml(r) && inScope(r));
 
   const needing = (r: RawResult) =>
     adapters.filter((a) => args.reJudge || !successfulEntry(r, a.id));

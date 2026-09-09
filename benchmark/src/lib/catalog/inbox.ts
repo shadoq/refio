@@ -62,8 +62,19 @@ export function sanitizeModelId(modelId: string): string {
   return modelId.replace(/[^a-zA-Z0-9_.-]+/g, "-");
 }
 
-export function makeInboxId(caseId: string, modelId: string, attempt: number): string {
-  return `${caseId}__${sanitizeModelId(modelId)}__${attempt}`;
+// The id also names the attachment folder on disk. Refio runs keep the historical
+// two-part form so existing queue entries and their artifacts stay valid; an external
+// harness adds its own segment, without which the same model imported under Refio and
+// under Claude Code would overwrite one run with the other.
+export function makeInboxId(
+  caseId: string,
+  modelId: string,
+  attempt: number,
+  harnessId: string = "refio",
+): string {
+  const model = sanitizeModelId(modelId);
+  if (harnessId === "refio") return `${caseId}__${model}__${attempt}`;
+  return `${caseId}__${sanitizeModelId(harnessId)}__${model}__${attempt}`;
 }
 
 // A deterministic PASS/FAIL summary from the deterministic scores: the run passed
@@ -90,6 +101,7 @@ export interface InboxEntryInput {
   mode: string;
   modelId: string;
   environmentId: string;
+  harnessId: string;
   attemptNumber: number;
   run: ParsedRun;
   judge: JudgeScoreSet;
@@ -102,10 +114,11 @@ export interface InboxEntryInput {
 // actually reported them, keeping the persisted JSON clean.
 export function buildInboxEntry(input: InboxEntryInput): InboxEntry {
   const entry: InboxEntry = {
-    id: makeInboxId(input.caseId, input.modelId, input.attemptNumber),
+    id: makeInboxId(input.caseId, input.modelId, input.attemptNumber, input.harnessId),
     taskId: input.caseId,
     modelId: input.modelId,
     environmentId: input.environmentId,
+    harnessId: input.harnessId,
     attemptNumber: input.attemptNumber,
     attachments: input.attachments,
     judgeScores: [input.judge],
@@ -141,6 +154,7 @@ export function promoteInboxEntry(
     taskId: entry.taskId,
     modelId: entry.modelId,
     environmentId: entry.environmentId,
+    harnessId: entry.harnessId,
     attemptNumber: entry.attemptNumber,
     scores,
     attachments: entry.attachments,

@@ -16,6 +16,7 @@ const adminItems = import.meta.env.DEV
       { key: "/admin/tasks", label: "Tasks" },
       { key: "/admin/models", label: "Models" },
       { key: "/admin/environments", label: "Environments" },
+      { key: "/admin/harnesses", label: "Harnesses" },
     ]
   : [];
 

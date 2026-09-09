@@ -110,12 +110,19 @@ function canonicalTool(tool: string): string {
 // agent_logic: the run must succeed and, when required, follow the expected tool
 // order (as a subsequence of the tool calls it made). Edit tools are canonicalised
 // so any authoring tool satisfies an expected edit step.
+//
+// `toolCallsReported` is false for a harness that runs its own tool loop and reports
+// no Refio tool names (Claude Code, Codex). Order is then unmeasurable, so a succeeding
+// run keeps full marks instead of being docked for not being Refio. Defaults to true so
+// every existing caller keeps the old behaviour.
 export function agentLogicFromRun(opts: {
   status: string;
   toolCalls: string[];
   expectedToolOrder: string[];
+  toolCallsReported?: boolean;
 }): DetScore {
   if (opts.status !== "SUCCESS") return { value: 0, rationale: `run status ${opts.status}` };
+  if (opts.toolCallsReported === false) return { value: 1 };
   if (opts.expectedToolOrder.length === 0) return { value: 1 };
   const expected = opts.expectedToolOrder.map(canonicalTool);
   const actual = opts.toolCalls.map(canonicalTool);
@@ -135,6 +142,8 @@ export interface DeterministicInput {
   toolCalls: string[];
   expectedToolOrder: string[];
   status: string;
+  // False when the harness runs its own tool loop and reports no Refio tool names.
+  toolCallsReported?: boolean;
   rendered: boolean | null; // null when no artifact was rendered
   consoleErrors: string[];
   judgedAt: string;
@@ -164,6 +173,7 @@ export function buildDeterministicJudge(input: DeterministicInput): JudgeScoreSe
       status: input.status,
       toolCalls: input.toolCalls,
       expectedToolOrder: input.expectedToolOrder,
+      toolCallsReported: input.toolCallsReported,
     }),
   });
 

@@ -225,6 +225,16 @@ export default function Queue() {
             onChange={(v) => updateFilter({ environmentId: v })}
             options={facets.environmentIds.map((id) => ({ value: id, label: id }))}
           />
+          {facets.harnessIds.length > 1 && (
+            <Select
+              allowClear
+              placeholder="Harness"
+              style={{ minWidth: 150 }}
+              value={filters.harnessId}
+              onChange={(v) => updateFilter({ harnessId: v })}
+              options={facets.harnessIds.map((id) => ({ value: id, label: id }))}
+            />
+          )}
           <Select
             allowClear
             placeholder="Verdict"

@@ -16,6 +16,7 @@ import ResultEditor from "@/routes/admin/ResultEditor";
 import TaskEditor from "@/routes/admin/TaskEditor";
 import ModelEditor from "@/routes/admin/ModelEditor";
 import EnvironmentEditor from "@/routes/admin/EnvironmentEditor";
+import HarnessEditor from "@/routes/admin/HarnessEditor";
 
 const queryClient = new QueryClient();
 
@@ -123,6 +124,14 @@ export default function App() {
                   element={
                     <DevOnly>
                       <EnvironmentEditor />
+                    </DevOnly>
+                  }
+                />
+                <Route
+                  path="/admin/harnesses"
+                  element={
+                    <DevOnly>
+                      <HarnessEditor />
                     </DevOnly>
                   }
                 />

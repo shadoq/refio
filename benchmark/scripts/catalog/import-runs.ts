@@ -5,17 +5,27 @@
 //
 // Two sources of a run:
 //   --from-run <run.json> [--artifact <file>]   use existing artifacts (no model call)
-//   (default) --run                             invoke the headless CLI (spends tokens!)
+//   (default) --run                             invoke the harness (spends tokens!)
+//
+// --harness selects what drives the agent: refio (default, the headless CLI) or an
+// external coding agent such as claude-code or codex. External runs land in the same
+// queue but stay out of the main leaderboard, which filters on the Refio harness.
+//
+// --model is always the model id RECORDED in the data (anthropic/claude-opus-5).
+// --harness-model is what the external CLI is told to run (`opus`); leave it out to
+// let the agent pick its own default. For the refio harness --model is both.
 //
 // usage:
-//   tsx import-runs.ts (--all | <id>...) --model <m> [--env <id>] [--attempts N]
-//                      [--from-run <run.json> --artifact <file>] [--no-render] [--dry-run]
+//   tsx import-runs.ts (--all | <id>...) --model <m> [--env <id>] [--harness <id>]
+//                      [--attempts N] [--from-run <run.json> --artifact <file>]
+//                      [--no-render] [--dry-run]
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { readFile, copyFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { loadCases, type LoadedCase } from "../../../tools/e2e/lib/case";
 import { runHeadless } from "./lib/run-cli";
+import { runAgent, AGENT_HARNESS_IDS } from "./lib/run-agent";
 import { captureShots } from "../judge/lib/render";
 import { buildDeterministicJudge } from "../../src/lib/catalog/deterministic";
 import { resolveModelTemplate } from "../../../tools/e2e/src/emit-scenario";
@@ -26,7 +36,12 @@ import {
   deterministicVerdict,
   buildInboxEntry,
 } from "../../src/lib/catalog/inbox";
-import { ensureModel, ensureEnvironment, upsertInbox } from "../../src/lib/catalog/inbox-store";
+import {
+  ensureModel,
+  ensureEnvironment,
+  ensureHarness,
+  upsertInbox,
+} from "../../src/lib/catalog/inbox-store";
 import { saveResultsAtomic } from "../judge/lib/store";
 import { InboxEntrySchema, type Attachment, type InboxEntry } from "../../src/schema/results";
 
@@ -35,6 +50,8 @@ interface Args {
   all: boolean;
   model: string;
   env: string;
+  harness: string;
+  harnessModel?: string;
   attempts: number;
   fromRun?: string;
   artifact?: string;
@@ -44,7 +61,16 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { ids: [], all: false, model: "", env: "local", attempts: 1, noRender: false, dryRun: false };
+  const a: Args = {
+    ids: [],
+    all: false,
+    model: "",
+    env: "local",
+    harness: "refio",
+    attempts: 1,
+    noRender: false,
+    dryRun: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i];
     if (t === "--all") a.all = true;
@@ -52,6 +78,8 @@ function parseArgs(argv: string[]): Args {
     else if (t === "--dry-run") a.dryRun = true;
     else if (t === "--model") a.model = argv[++i];
     else if (t === "--env") a.env = argv[++i];
+    else if (t === "--harness") a.harness = argv[++i];
+    else if (t === "--harness-model") a.harnessModel = argv[++i];
     else if (t === "--attempts") a.attempts = Number(argv[++i]);
     else if (t === "--from-run") a.fromRun = argv[++i];
     else if (t === "--artifact") a.artifact = argv[++i];
@@ -61,6 +89,10 @@ function parseArgs(argv: string[]): Args {
   }
   return a;
 }
+
+// An external agent may plan, write and self-check for a long time on one task. The
+// cap only exists so a stalled approval prompt cannot hang the sweep for ever.
+const AGENT_TIMEOUT_MS = 30 * 60 * 1000;
 
 interface Paths {
   repoRoot: string;
@@ -73,6 +105,7 @@ async function buildEntry(
   loaded: LoadedCase,
   model: string,
   env: string,
+  harness: string,
   attempt: number,
   runJson: unknown,
   deliverablePath: string | null,
@@ -83,7 +116,7 @@ async function buildEntry(
   const c = loaded.case;
   const now = new Date().toISOString();
   const run = parseRunJson(runJson);
-  const inboxId = makeInboxId(c.id, model, attempt);
+  const inboxId = makeInboxId(c.id, model, attempt, harness);
 
   const attachments: Attachment[] = [];
   let deliverableText: string | null = null;
@@ -127,6 +160,9 @@ async function buildEntry(
     needleInOutput: c.assert.needleInOutput,
     toolCalls: run.toolCalls,
     expectedToolOrder: c.assert.toolOrder,
+    // An external agent reports no Refio tool names, so tool order is unmeasurable
+    // for it and must not be scored as a miss.
+    toolCallsReported: harness === "refio",
     status: run.status,
     rendered,
     consoleErrors,
@@ -139,6 +175,7 @@ async function buildEntry(
     mode: c.mode,
     modelId: model,
     environmentId: env,
+    harnessId: harness,
     attemptNumber: attempt,
     run,
     judge,
@@ -152,6 +189,12 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (!args.model) {
     console.error("import-runs: --model <provider/model> is required");
+    process.exit(2);
+  }
+  if (args.harness !== "refio" && !AGENT_HARNESS_IDS.includes(args.harness)) {
+    console.error(
+      `import-runs: unknown --harness ${args.harness} (known: refio, ${AGENT_HARNESS_IDS.join(", ")})`,
+    );
     process.exit(2);
   }
   if (!args.all && args.ids.length === 0) {
@@ -196,20 +239,46 @@ async function main(): Promise<void> {
       } else {
         // Resolve {{MODEL_ID}} to the real model for both the prompt and the
         // expected deliverable filename, using the canonical catalog prompt.
-        const token = sanitizeModelId(args.model);
-        const res = await runHeadless({
-          repoRoot: paths.repoRoot,
-          fixtureDir: join(paths.e2eDir, l.case.fixture),
-          promptText: resolveModelTemplate(l.promptText, token),
-          mode: l.case.mode,
-          model: args.model,
-          deliverable: l.case.deliverable ? resolveModelTemplate(l.case.deliverable, token) : null,
-          maxCost: args.maxCost,
-        });
-        runJson = res.runJson;
-        deliverablePath = res.deliverablePath;
+        // The token carries the harness too, so two harnesses running the same model
+        // do not write the same filename into the same queue.
+        const token = sanitizeModelId(
+          args.harness === "refio" ? args.model : `${args.harness}-${args.model}`,
+        );
+        const promptText = resolveModelTemplate(l.promptText, token);
+        const deliverable = l.case.deliverable
+          ? resolveModelTemplate(l.case.deliverable, token)
+          : null;
+        const fixtureDir = join(paths.e2eDir, l.case.fixture);
+
+        if (args.harness === "refio") {
+          const res = await runHeadless({
+            repoRoot: paths.repoRoot,
+            fixtureDir,
+            promptText,
+            mode: l.case.mode,
+            model: args.model,
+            deliverable,
+            maxCost: args.maxCost,
+          });
+          runJson = res.runJson;
+          deliverablePath = res.deliverablePath;
+        } else {
+          const res = await runAgent({
+            harnessId: args.harness,
+            promptText,
+            fixtureDir,
+            deliverable,
+            model: args.harnessModel,
+            timeoutMs: AGENT_TIMEOUT_MS,
+          });
+          runJson = res.runJson;
+          deliverablePath = res.deliverablePath;
+          if (res.deliverablePath === null && res.stderr.trim() !== "") {
+            console.error(`  ${args.harness} produced no deliverable; stderr: ${res.stderr.slice(0, 500)}`);
+          }
+        }
       }
-      const entry = await buildEntry(l, args.model, args.env, attempt, runJson, deliverablePath, paths, args.noRender, !args.dryRun);
+      const entry = await buildEntry(l, args.model, args.env, args.harness, attempt, runJson, deliverablePath, paths, args.noRender, !args.dryRun);
 
       const parsed = InboxEntrySchema.safeParse(entry);
       if (!parsed.success) {
@@ -230,6 +299,7 @@ async function main(): Promise<void> {
       const file = JSON.parse(await readFile(resultsPath, "utf8"));
       ensureModel(file, entry.modelId);
       ensureEnvironment(file, entry.environmentId);
+      ensureHarness(file, entry.harnessId);
       upsertInbox(file, entry);
       await saveResultsAtomic(benchmarkDir, file);
       written++;

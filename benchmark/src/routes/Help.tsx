@@ -156,6 +156,49 @@ export default function Help() {
             ),
           },
           {
+            key: "reference-track",
+            label: "Reference track: Codex and Claude Code",
+            children: (
+              <Space direction="vertical">
+                <Paragraph>
+                  Every result records a <Text strong>harness</Text>: what drove the agent.
+                  Almost all of them say <Text code>refio</Text>, our own headless CLI.
+                  The reference track is the same tasks run by an external coding agent -
+                  Claude Code or Codex - on its own model.
+                </Paragraph>
+                <Paragraph>
+                  It is kept out of the leaderboard on purpose. The leaderboard answers
+                  "which model should Refio default to", and an external agent brings its
+                  own planning, tools, retries and self-checking, so what it scores is the
+                  whole system rather than the model. Mixing the two would make both
+                  unreadable. The reference track answers a different question: how far a
+                  local model is from what people already have on their desks.
+                </Paragraph>
+                <Paragraph>
+                  The criteria are identical for both tracks, so the numbers can be put
+                  side by side. A task page shows the pairing explicitly: the same model
+                  under Refio and under an external agent, with the difference spelled out.
+                </Paragraph>
+                <Paragraph>
+                  Three things to keep in mind when reading it.{" "}
+                  <Text strong>agent_logic</Text> measures the harness in this track, not
+                  the model - that is what the track is for. <Text strong>Cost</Text> is not
+                  comparable: an external agent bills by subscription, so any figure shown
+                  is a per-token estimate, never a charged amount, and the Pareto view says
+                  so when it is on the chart. And the judges are themselves Claude Code and
+                  Codex, run on a fresh instance that sees only the artifact and never the
+                  run that produced it - but a model may still favour its own output style,
+                  so the two judges' disagreement is worth a look.
+                </Paragraph>
+                <Paragraph>
+                  The run conditions of each harness - network access, permission mode,
+                  turn limit, version - are recorded on the harness record and shown above
+                  the track.
+                </Paragraph>
+              </Space>
+            ),
+          },
+          {
             key: "strong-judge",
             label: "Strong-judge scoring",
             children: (

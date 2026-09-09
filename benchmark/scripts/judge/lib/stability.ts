@@ -1,6 +1,6 @@
 // Cross-attempt stability: deterministic metrics (score variance + code
 // similarity) plus a blind judge verdict over all attempts of one
-// (task, model, environment) group.
+// (task, model, environment, harness) group.
 import { readFile, mkdtemp, copyFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -8,6 +8,7 @@ import { captureShots, SETTLED_SHOT_MS } from "./render";
 import { averagePairwiseSimilarity } from "../../../src/lib/judge/similarity";
 import { aggregateJudgeScores, scoreVariance, snapToScale } from "../../../src/lib/judge/scoring";
 import { extractJson } from "../../../src/lib/judge/parse";
+import { stabilityKey } from "../../../src/lib/judge/stability-merge";
 import type { RawResult, RawResultsFile } from "./store";
 import type { TasksFile } from "../../../src/schema/tasks";
 import type { JudgeAdapter } from "./judges/types";
@@ -23,6 +24,7 @@ export interface StabilityGroup {
   taskId: string;
   modelId: string;
   environmentId: string;
+  harnessId?: string;
   results: RawResult[];
 }
 
@@ -38,7 +40,7 @@ function htmlSrc(r: RawResult): string {
 export function groupForStability(results: RawResult[]): StabilityGroup[] {
   const byKey = new Map<string, StabilityGroup>();
   for (const r of results.filter(hasHtml)) {
-    const key = `${r.taskId}|${r.modelId}|${r.environmentId}`;
+    const key = stabilityKey(r);
     const g = byKey.get(key);
     if (g) g.results.push(r);
     else
@@ -46,6 +48,7 @@ export function groupForStability(results: RawResult[]): StabilityGroup[] {
         taskId: r.taskId,
         modelId: r.modelId,
         environmentId: r.environmentId,
+        harnessId: r.harnessId ?? "refio",
         results: [r],
       });
   }
@@ -161,6 +164,7 @@ export async function computeStabilityEntry(opts: {
     taskId: group.taskId,
     modelId: group.modelId,
     environmentId: group.environmentId,
+    harnessId: group.harnessId ?? "refio",
     resultIds: group.results.map((r) => r.id),
     deterministic,
     judges,

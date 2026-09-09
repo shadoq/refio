@@ -8,6 +8,7 @@ const baseResult: Result = {
   taskId: "games-snake4cpu",
   modelId: "ollama/qwen3.5:9b",
   environmentId: "dgx-spark",
+  harnessId: "refio",
   attemptNumber: 2,
   scores: [{ criterionId: "compliance", value: 1 }],
   attachments: [],

@@ -2,6 +2,7 @@ import { Typography, Card, Row, Col, Button, Spin, Empty, Statistic } from "antd
 import { Link, useNavigate } from "react-router-dom";
 import { useMemo } from "react";
 import { LeaderboardTable } from "@/components/tables/LeaderboardTable";
+import { ReferenceTrackTable } from "@/components/tables/ReferenceTrackTable";
 import { ParetoScatter } from "@/components/charts/ParetoScatter";
 import { useTasks } from "@/data/queries";
 import { useResults } from "@/data/queries";
@@ -16,6 +17,8 @@ export default function Landing() {
   const filters = useFilters();
   const { data: tasksData, isLoading: tasksLoading } = useTasks();
   const { data: resultsData, isLoading: resultsLoading } = useResults();
+
+  const hasReferenceTrack = (resultsData?.harnesses ?? []).some((h) => h.kind === "external");
 
   const rows = useMemo(() => {
     if (!tasksData || !resultsData) return [];
@@ -226,6 +229,25 @@ export default function Landing() {
             <LeaderboardTable />
           </Card>
         </Col>
+
+        {hasReferenceTrack && (
+          <Col span={24}>
+            <div className="section-heading">
+              <div>
+                <Title level={2}>Reference track</Title>
+                <p>
+                  The same tasks run by an external coding agent on its own model, with its
+                  own planning, tools and self-checking. Measured on the same criteria, kept
+                  out of the leaderboard: it answers how far a local model is from what is
+                  already on people's desks, not which model Refio should default to.
+                </p>
+              </div>
+            </div>
+            <Card className="glass-card">
+              <ReferenceTrackTable />
+            </Card>
+          </Col>
+        )}
 
         {paretoPoints.length >= 2 && (
           <Col span={24}>

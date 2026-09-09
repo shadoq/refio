@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+        background: #0a0a0f;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        overflow: hidden;
+        font-family: 'Courier New', monospace;
+    }
+    #canvas {
+        display: block;
+    }
+    #overlay {
+        position: absolute;
+        top: 12px;
+        left: 12px;
+        color: #888;
+        font-size: 13px;
+        line-height: 1.6;
+        pointer-events: none;
+        user-select: none;
+    }
+    #overlay .fps {
+        color: #4fc3f7;
+        font-size: 15px;
+        font-weight: bold;
+    }
+    #overlay .paused {
+        color: #ff5252;
+        font-weight: bold;
+    }
+    #overlay .key {
+        color: #aaa;
+    }
+    #overlay .key b {
+        color: #fff;
+        background: #222;
+        padding: 1px 5px;
+        border-radius: 3px;
+        border: 1px solid #444;
+    }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="overlay">
+    <div class="fps" id="fpsDisplay">FPS: --</div>
+    <div id="pausedIndicator" class="paused" style="display:none;">PAUSED</div>
+    <div class="key"><b>W</b> wireframe &nbsp; <b>P</b> pause</div>
+</div>
+<script>
+(function () {
+    'use strict';
+
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const fpsDisplay = document.getElementById('fpsDisplay');
+    const pausedIndicator = document.getElementById('pausedIndicator');
+
+    let width, height, dpr;
+    let paused = false;
+    let wireframe = false;
+    let time = 0;
+    let lastTime = performance.now();
+    let fpsSmooth = 0;
+
+    function resize() {
+        dpr = window.devicePixelRatio || 1;
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = width * dpr;
+        canvas.height = height * dpr;
+        canvas.style.width = width + 'px';
+        canvas.style.height = height + 'px';
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Cube vertices (unit cube centered at origin)
+    const vertices = [
+        [-1, -1, -1],
+        [ 1, -1, -1],
+        [ 1,  1, -1],
+        [-1,  1, -1],
+        [-1, -1,  1],
+        [ 1, -1,  1],
+        [ 1,  1,  1],
+        [-1,  1,  1]
+    ];
+
+    // Face definitions: each face is 4 vertex indices (CCW when viewed from outside)
+    // Face order: -Z, +Z, -X, +X, -Y, +Y
+    const faces = [
+        [0, 3, 2, 1],  // back  (-Z)
+        [4, 5, 6, 7],  // front (+Z)
+        [0, 4, 7, 3],  // left  (-X)
+        [1, 2, 6, 5],  // right (+X)
+        [0, 1, 5, 4],  // bottom(-Y)
+        [3, 7, 6, 2]   // top   (+Y)
+    ];
+
+    // Distinct base colors per face (RGB 0-255)
+    const faceColors = [
+        [220, 60, 60],   // back  - red
+        [60, 180, 60],   // front - green
+        [60, 80, 220],   // left  - blue
+        [220, 180, 40],  // right - yellow
+        [180, 60, 200],  // bottom- purple
+        [40, 200, 220]   // top   - cyan
+    ];
+
+    // Split each quad into 2 triangles
+    // Triangle: [v0, v1, v2]
+    const triangles = [];
+    for (let f = 0; f < faces.length; f++) {
+        const face = faces[f];
+        // Two triangles per quad
+        triangles.push({
+            verts: [face[0], face[1], face[2]],
+            faceIndex: f
+        });
+        triangles.push({
+            verts: [face[0], face[2], face[3]],
+            faceIndex: f
+        });
+    }
+
+    // --- Math helpers ---
+
+    function rotateX(v, angle) {
+        const c = Math.cos(angle), s = Math.sin(angle);
+        return [
+            v[0],
+            v[1] * c - v[2] * s,
+            v[1] * s + v[2] * c
+        ];
+    }
+
+    function rotateY(v, angle) {
+        const c = Math.cos(angle), s = Math.sin(angle);
+        return [
+            v[0] * c + v[2] * s,
+            v[1],
+            -v[0] * s + v[2] * c
+        ];
+    }
+
+    function rotateZ(v, angle) {
+        const c = Math.cos(angle), s = Math.sin(angle);
+        return [
+            v[0] * c - v[1] * s,
+            v[0] * s + v[1] * c,
+            v[2]
+        ];
+    }
+
+    function cross(a, b) {
+        return [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0]
+        ];
+    }
+
+    function dot(a, b) {
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    }
+
+    function normalize(v) {
+        const len = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        if (len === 0) return [0, 0, 0];
+        return [v[0] / len, v[1] / len, v[2] / len];
+    }
+
+    function sub(a, b) {
+        return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    }
+
+    // Perspective projection
+    const fov = Math.PI / 4; // 45 degrees
+    const aspect = 1;
+    const near = 0.1;
+    const far = 100;
+    const cameraZ = 4; // camera distance
+
+    function project(v) {
+        // v is in view space (camera at origin looking down -Z)
+        const z = -v[2]; // flip so positive z is into screen
+        if (z <= near) return null;
+        const scale = (height / 2) / Math.tan(fov / 2);
+        const px = (v[0] / z) * scale + width / 2;
+        const py = -(v[1] / z) * scale + height / 2;
+        return [px, py, z];
+    }
+
+    // --- Rasterizer ---
+
+    function rasterizeTriangle(imgData, x0, y0, x1, y1, x2, y2,
+                                c0, c1, c2,
+                                w, h) {
+        // Bounding box
+        const minX = Math.max(0, Math.floor(Math.min(x0, x1, x2)));
+        const maxX = Math.min(w - 1, Math.ceil(Math.max(x0, x1, x2)));
+        const minY = Math.max(0, Math.floor(Math.min(y0, y1, y2)));
+        const maxY = Math.min(h - 1, Math.ceil(Math.max(y0, y1, y2)));
+
+        // Edge functions
+        const area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+        if (Math.abs(area) < 1e-6) return;
+
+        const invArea = 1.0 / area;
+
+        for (let py = minY; py <= maxY; py++) {
+            for (let px = minX; px <= maxX; px++) {
+                // Barycentric coordinates
+                const w0 = ((x1 - px) * (y2 - py) - (x2 - px) * (y1 - py)) * invArea;
+                const w1 = ((x2 - px) * (y0 - py) - (x0 - px) * (y2 - py)) * invArea;
+                const w2 = 1.0 - w0 - w1;
+
+                if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+                    const r = Math.round(w0 * c0[0] + w1 * c1[0] + w2 * c2[0]);
+                    const g = Math.round(w0 * c0[1] + w1 * c1[1] + w2 * c2[1]);
+                    const b = Math.round(w0 * c0[2] + w1 * c1[2] + w2 * c2[2]);
+
+                    const idx = (py * w + px) * 4;
+                    imgData.data[idx] = r;
+                    imgData.data[idx + 1] = g;
+                    imgData.data[idx + 2] = b;
+                    imgData.data[idx + 3] = 255;
+                }
+            }
+        }
+    }
+
+    function drawWireframeTriangle(x0, y0, x1, y1, x2, y2, color) {
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.closePath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+    }
+
+    // --- Main render ---
+
+    function render() {
+        const now = performance.now();
+        const dt = (now - lastTime) / 1000;
+        lastTime = now;
+
+        // FPS
+        if (dt > 0) {
+            const fps = 1 / dt;
+            fpsSmooth = fpsSmooth === 0 ? fps : fpsSmooth * 0.9 + fps * 0.1;
+        }
+        fpsDisplay.textContent = 'FPS: ' + Math.round(fpsSmooth);
+        pausedIndicator.style.display = paused ? 'block' : 'none';
+
+        if (!paused) {
+            time += dt;
+        }
+
+        // Clear
+        ctx.fillStyle = '#0a0a0f';
+        ctx.fillRect(0, 0, width, height);
+
+        // Rotation angles
+        const angleX = time * 0.7;
+        const angleY = time * 0.9;
+        const angleZ = time * 0.3;
+
+        // Light source position (orbiting)
+        const lightAngle = time * 1.2;
+        const lightRadius = 3;
+        const lightPos = [
+            Math.cos(lightAngle) * lightRadius,
+            Math.sin(lightAngle * 0.7) * lightRadius * 0.5 + 1,
+            Math.sin(lightAngle) * lightRadius
+        ];
+
+        // Transform vertices
+        const transformed = [];
+        for (let i = 0; i < vertices.length; i++) {
+            let v = vertices[i].slice();
+            v = rotateX(v, angleX);
+            v = rotateY(v, angleY);
+            v = rotateZ(v, angleZ);
+            // Move to camera space (camera at z = cameraZ looking at origin)
+            v[2] -= cameraZ;
+            transformed.push(v);
+        }
+
+        // Project vertices
+        const projected = [];
+        for (let i = 0; i < transformed.length; i++) {
+            projected.push(project(transformed[i]));
+        }
+
+        // Compute face normals and cull backfaces
+        // For each triangle, compute normal in world space, check against view direction
+        const visibleTriangles = [];
+
+        for (let t = 0; t < triangles.length; t++) {
+            const tri = triangles[t];
+            const v0 = transformed[tri.verts[0]];
+            const v1 = transformed[tri.verts[1]];
+            const v2 = transformed[tri.verts[2]];
+
+            // Normal from cross product
+            const e1 = sub(v1, v0);
+            const e2 = sub(v2, v0);
+            let normal = cross(e1, e2);
+            normal = normalize(normal);
+
+            // View direction: from vertex to camera (camera at [0,0,cameraZ] in world)
+            // In view space, camera is at origin, so view dir = -v0
+            const viewDir = [-v0[0], -v0[1], -v0[2]];
+            const dotNV = dot(normal, viewDir);
+
+            // Backface culling: if normal faces away from camera, cull
+            if (dotNV <= 0) continue;
+
+            // Check all projected vertices are valid
+            const p0 = projected[tri.verts[0]];
+            const p1 = projected[tri.verts[1]];
+            const p2 = projected[tri.verts[2]];
+            if (!p0 || !p1 || !p2) continue;
+
+            // Compute per-vertex lighting (Gouraud)
+            // Use face normal for lighting (flat normal per face, applied to all 3 vertices)
+            // Light direction from vertex to light
+            const baseColor = faceColors[tri.faceIndex];
+
+            const vertexColors = [];
+            for (let vi = 0; vi < 3; vi++) {
+                const vertWorld = transformed[tri.verts[vi]];
+                // Light direction (from vertex to light)
+                let lightDir = sub(lightPos, vertWorld);
+                lightDir = normalize(lightDir);
+
+                // Lambert: max(dot(N, L), 0)
+                let ndl = dot(normal, lightDir);
+                if (ndl < 0) ndl = 0;
+
+                // Ambient + diffuse
+                const ambient = 0.15;
+                const diffuse = 0.85;
+                const intensity = ambient + diffuse * ndl;
+
+                const r = Math.min(255, Math.round(baseColor[0] * intensity));
+                const g = Math.min(255, Math.round(baseColor[1] * intensity));
+                const b = Math.min(255, Math.round(baseColor[2] * intensity));
+                vertexColors.push([r, g, b]);
+            }
+
+            // Average depth for sorting (farthest first)
+            const avgDepth = (p0[2] + p1[2] + p2[2]) / 3;
+
+            visibleTriangles.push({
+                p0: p0, p1: p1, p2: p2,
+                colors: vertexColors,
+                depth: avgDepth,
+                faceIndex: tri.faceIndex
+            });
+        }
+
+        // Sort by depth (farthest first) - painter's algorithm
+        visibleTriangles.sort((a, b) => b.depth - a.depth);
+
+        // Create ImageData for rasterization
+        const imgData = ctx.createImageData(width, height);
+
+        if (wireframe) {
+            // Draw wireframe
+            for (let i = 0; i < visibleTriangles.length; i++) {
+                const tri = visibleTriangles[i];
+                const c = faceColors[tri.faceIndex];
+                const color = 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+                drawWireframeTriangle(
+                    tri.p0[0], tri.p0[1],
+                    tri.p1[0], tri.p1[1],
+                    tri.p2[0], tri.p2[1],
+                    color
+                );
+            }
+        } else {
+            // Rasterize filled triangles
+            for (let i = 0; i < visibleTriangles.length; i++) {
+                const tri = visibleTriangles[i];
+                rasterizeTriangle(
+                    imgData,
+                    tri.p0[0], tri.p0[1],
+                    tri.p1[0], tri.p1[1],
+                    tri.p2[0], tri.p2[1],
+                    tri.colors[0], tri.colors[1], tri.colors[2],
+                    width, height
+                );
+            }
+            // Put the image data
+            ctx.putImageData(imgData, 0, 0);
+        }
+
+        requestAnimationFrame(render);
+    }
+
+    // --- Input ---
+
+    window.addEventListener('keydown', function (e) {
+        const key = e.key.toLowerCase();
+        if (key === 'w') {
+            wireframe = !wireframe;
+        } else if (key === 'p') {
+            paused = !paused;
+        }
+    });
+
+    // Start
+    requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

@@ -16,6 +16,23 @@ export const EnvironmentSchema = z.object({
   notes: z.string().optional(),
 });
 
+// What drove the agent that produced a result: Refio itself, or an external coding
+// agent (Claude Code, Codex) running on its own model with its own scaffolding.
+// `conditions` records what that harness was allowed to do (network, permissions,
+// turn limit) so a cross-harness comparison can be read honestly.
+export const HarnessSchema = z.object({
+  id: z.string().regex(/^[a-z0-9_-]+$/),
+  name: z.string(),
+  kind: z.enum(["refio", "external"]),
+  version: z.string().optional(),
+  conditions: z.string().optional(),
+  notes: z.string().optional(),
+});
+
+// Every row recorded before this dimension existed came from Refio, so the default
+// keeps the whole historical data set loadable without rewriting a single row.
+const harnessId = z.string().default("refio");
+
 export const ScoreSchema = z.object({
   criterionId: z.string(),
   value: z.number(),
@@ -63,6 +80,7 @@ export const StabilityEntrySchema = z.object({
   taskId: z.string(),
   modelId: z.string(),
   environmentId: z.string(),
+  harnessId,
   resultIds: z.array(z.string()).min(2),
   deterministic: z.object({
     scoreVariance: z.number().nonnegative(),
@@ -77,6 +95,7 @@ export const ResultSchema = z.object({
   taskId: z.string(),
   modelId: z.string(),
   environmentId: z.string(),
+  harnessId,
   attemptNumber: z.number().int().positive(),
   scores: z.array(ScoreSchema).min(1),
   durationMs: z.number().int().nonnegative().optional(),
@@ -108,6 +127,7 @@ export const InboxEntrySchema = z
     taskId: z.string(),
     modelId: z.string(),
     environmentId: z.string(),
+    harnessId,
     attemptNumber: z.number().int().positive(),
     durationMs: z.number().int().nonnegative().optional(),
     tokensIn: z.number().int().nonnegative().optional(),
@@ -126,6 +146,7 @@ export const ResultsFileSchema = z.object({
   version: z.literal(1),
   models: z.array(ModelSchema),
   environments: z.array(EnvironmentSchema),
+  harnesses: z.array(HarnessSchema).default([]),
   results: z.array(ResultSchema),
   stability: z.array(StabilityEntrySchema).default([]),
   inbox: z.array(InboxEntrySchema).default([]),
@@ -133,6 +154,7 @@ export const ResultsFileSchema = z.object({
 
 export type Model = z.infer<typeof ModelSchema>;
 export type Environment = z.infer<typeof EnvironmentSchema>;
+export type Harness = z.infer<typeof HarnessSchema>;
 export type Score = z.infer<typeof ScoreSchema>;
 export type Attachment = z.infer<typeof AttachmentSchema>;
 export type JudgeScore = z.infer<typeof JudgeScoreSchema>;

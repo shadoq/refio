@@ -3,9 +3,21 @@ import { describe, it, expect } from "vitest";
 import { filterInboxEntries, inboxFacetOptions } from "@/lib/queueFilters";
 
 const E = [
-  { taskId: "snake", modelId: "m1", environmentId: "local", autoVerdict: { verdict: "PASS" } },
-  { taskId: "snake", modelId: "m2", environmentId: "cloud", autoVerdict: { verdict: "FAIL" } },
-  { taskId: "todo", modelId: "m1", environmentId: "local" }, // no verdict
+  {
+    taskId: "snake",
+    modelId: "m1",
+    environmentId: "local",
+    harnessId: "refio",
+    autoVerdict: { verdict: "PASS" },
+  },
+  {
+    taskId: "snake",
+    modelId: "m2",
+    environmentId: "cloud",
+    harnessId: "claude-code",
+    autoVerdict: { verdict: "FAIL" },
+  },
+  { taskId: "todo", modelId: "m1", environmentId: "local", harnessId: "refio" }, // no verdict
 ];
 
 describe("filterInboxEntries", () => {
@@ -25,6 +37,15 @@ describe("filterInboxEntries", () => {
     expect(filterInboxEntries(E, { verdict: "FAIL" })).toHaveLength(1);
   });
 
+  // Reviewing the reference track is a different job from reviewing Refio runs, so
+  // the queue has to be able to show one without the other.
+  it("filters by harness", () => {
+    expect(filterInboxEntries(E, { harnessId: "refio" })).toHaveLength(2);
+    expect(filterInboxEntries(E, { harnessId: "claude-code" }).map((e) => e.modelId)).toEqual([
+      "m2",
+    ]);
+  });
+
   it("combines active facets with AND", () => {
     expect(filterInboxEntries(E, { taskId: "snake", modelId: "m2" })).toHaveLength(1);
     expect(filterInboxEntries(E, { taskId: "snake", verdict: "PASS" })).toHaveLength(1);
@@ -38,5 +59,6 @@ describe("inboxFacetOptions", () => {
     expect(o.taskIds).toEqual(["snake", "todo"]);
     expect(o.modelIds).toEqual(["m1", "m2"]);
     expect(o.environmentIds).toEqual(["cloud", "local"]);
+    expect(o.harnessIds).toEqual(["claude-code", "refio"]);
   });
 });

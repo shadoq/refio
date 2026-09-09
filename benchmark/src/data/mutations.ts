@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { saveResults, saveTasks, mutateResults } from "./saver";
 import { RESULTS_KEY, TASKS_KEY } from "./queries";
-import type { Result, ResultsFile, Model, Environment, Score } from "@/schema/results";
+import type { Result, ResultsFile, Model, Environment, Harness, Score } from "@/schema/results";
 import type { Task, TasksFile } from "@/schema/tasks";
 
 // ─── Results ────────────────────────────────────────────────────────────────
@@ -99,6 +99,39 @@ export function useDeleteEnvironment() {
         environments: input.current.environments.filter(
           (e) => e.id !== input.environmentId,
         ),
+      };
+      await saveResults(file);
+      return file;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: RESULTS_KEY }),
+  });
+}
+
+// ─── Harnesses ───────────────────────────────────────────────────────────────
+
+export function useUpsertHarness() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { current: ResultsFile; harness: Harness }) => {
+      const idx = input.current.harnesses.findIndex((h) => h.id === input.harness.id);
+      const next = [...input.current.harnesses];
+      if (idx >= 0) next[idx] = input.harness;
+      else next.push(input.harness);
+      const file: ResultsFile = { ...input.current, harnesses: next };
+      await saveResults(file);
+      return file;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: RESULTS_KEY }),
+  });
+}
+
+export function useDeleteHarness() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { current: ResultsFile; harnessId: string }) => {
+      const file: ResultsFile = {
+        ...input.current,
+        harnesses: input.current.harnesses.filter((h) => h.id !== input.harnessId),
       };
       await saveResults(file);
       return file;

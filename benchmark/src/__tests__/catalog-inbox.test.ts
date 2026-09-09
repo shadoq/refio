@@ -44,6 +44,23 @@ describe("makeInboxId", () => {
   it("sanitizes provider slashes and colons in the model id", () => {
     expect(makeInboxId("todo", "ollama/qwen3.6:35b", 1)).toBe("todo__ollama-qwen3.6-35b__1");
   });
+
+  // Ids name attachment folders on disk, so the Refio form must not change - the
+  // existing queue and its artifacts keep working.
+  it("leaves the Refio form untouched when the harness is passed explicitly", () => {
+    expect(makeInboxId("todo", "ollama/qwen3.6:35b", 1, "refio")).toBe(
+      "todo__ollama-qwen3.6-35b__1",
+    );
+  });
+
+  // Without the harness in the id, importing the same model under Refio and under
+  // Claude Code would overwrite one run with the other.
+  it("separates the same model run under two harnesses", () => {
+    const refio = makeInboxId("todo", "anthropic/claude-opus-5", 1, "refio");
+    const external = makeInboxId("todo", "anthropic/claude-opus-5", 1, "claude-code");
+    expect(external).not.toBe(refio);
+    expect(external).toContain("claude-code");
+  });
 });
 
 describe("deterministicVerdict", () => {
@@ -97,6 +114,7 @@ describe("buildInboxEntry", () => {
       ],
       autoVerdict: deterministicVerdict(judge.scores),
       now: "2026-07-25T12:00:00.000Z",
+      harnessId: "refio",
     });
 
     expect(entry.id).toBe("todo__ollama-qwen3.6-35b__1");
@@ -104,6 +122,7 @@ describe("buildInboxEntry", () => {
     expect(entry.durationMs).toBe(84210);
     expect(entry.costUsd).toBe(0.02);
     expect(entry.judgeScores).toHaveLength(1);
+    expect(entry.harnessId).toBe("refio");
     // Must satisfy the strict inbox schema (no stray keys, no manual scores).
     expect(InboxEntrySchema.safeParse(entry).success).toBe(true);
   });
@@ -134,16 +153,53 @@ function fileWithOneInboxEntry(): ResultsFile {
     attachments: [{ type: "html", src: "attachments/todo__x__1/artifact.html" }],
     autoVerdict: { verdict: "PASS", reasons: [] },
     now: "2026-07-25T12:00:00.000Z",
+    harnessId: "refio",
   });
   return {
     version: 1,
     models: [{ id: "ollama/qwen3.6:35b", name: "Qwen", provider: "ollama" }],
     environments: [{ id: "local", name: "local", type: "local" }],
+    harnesses: [{ id: "refio", name: "Refio", kind: "refio" }],
     results: [],
     stability: [],
     inbox: [entry],
   };
 }
+
+describe("buildInboxEntry under an external harness", () => {
+  it("records the harness and keeps it out of the Refio id space", () => {
+    const entry = buildInboxEntry({
+      caseId: "todo",
+      mode: "AGENT",
+      modelId: "anthropic/claude-opus-5",
+      environmentId: "anthropic-cloud",
+      attemptNumber: 1,
+      run: parseRunJson(sampleRun),
+      judge: buildDeterministicJudge({
+        mode: "AGENT",
+        deliverableText: "<canvas>",
+        finalOutput: "",
+        needles: [{ regex: "<canvas" }],
+        needleInOutput: null,
+        toolCalls: [],
+        expectedToolOrder: [],
+        status: "SUCCESS",
+        rendered: true,
+        consoleErrors: [],
+        judgedAt: "2026-07-25T12:00:00.000Z",
+        screenshots: [],
+      }),
+      attachments: [],
+      autoVerdict: { verdict: "PASS", reasons: [] },
+      now: "2026-07-25T12:00:00.000Z",
+      harnessId: "claude-code",
+    });
+
+    expect(entry.harnessId).toBe("claude-code");
+    expect(entry.id).toContain("claude-code");
+    expect(InboxEntrySchema.safeParse(entry).success).toBe(true);
+  });
+});
 
 describe("promoteInboxEntry", () => {
   it("moves the entry into results with the human scores and artifacts, but not judge scores (judges run later)", () => {
@@ -167,6 +223,20 @@ describe("promoteInboxEntry", () => {
     expect(r.durationMs).toBe(84210);
     // The promoted file must still be schema-valid (results now require >=1 score).
     expect(ResultsFileSchema.safeParse(next).success).toBe(true);
+  });
+
+  // A promoted run that loses its harness would land in the main table as if Refio
+  // had produced it.
+  it("carries the harness from the queue entry into the result", () => {
+    const file = fileWithOneInboxEntry();
+    file.inbox[0].harnessId = "claude-code";
+    const next = promoteInboxEntry(
+      file,
+      "todo__ollama-qwen3.6-35b__1",
+      [{ criterionId: "look", value: 1.5 }],
+      "2026-07-26T09:00:00.000Z",
+    );
+    expect(next.results[0].harnessId).toBe("claude-code");
   });
 
   it("throws when the entry id is unknown", () => {

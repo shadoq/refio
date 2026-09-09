@@ -81,6 +81,12 @@ export default function Compare() {
     return applyFilters(resultsData.results, filters);
   }, [resultsData, filters]);
 
+  // Which track the compared numbers were produced by.
+  const harnessLabel = useMemo(() => {
+    const byId = new Map((resultsData?.harnesses ?? []).map((h) => [h.id, h.name]));
+    return filters.harnessIds.map((id) => byId.get(id) ?? id).join(", ") || "all";
+  }, [resultsData, filters.harnessIds]);
+
   const modelOptions = useMemo(
     () =>
       (resultsData?.models ?? []).map((m) => ({
@@ -212,6 +218,11 @@ export default function Compare() {
   return (
     <div>
       <Title level={2}>Compare Models</Title>
+      {/* These numbers come from whatever the harness filter is set to. Saying which
+          track they are avoids reading a Claude Code run as if Refio had produced it. */}
+      <Text type="secondary" style={{ display: "block", marginBottom: 16 }}>
+        Harness: {harnessLabel}
+      </Text>
 
       <Card style={{ marginBottom: 24 }}>
         <Space direction="vertical" style={{ width: "100%" }}>

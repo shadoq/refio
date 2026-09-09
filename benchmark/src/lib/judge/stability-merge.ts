@@ -36,3 +36,18 @@ export function stabilityNeedsJudging<J extends JudgeVerdict, E extends Stabilit
   const scored = new Set(existing.judges.map((j) => j.judgeId));
   return judgeIds.some((id) => !scored.has(id));
 }
+
+// The logical identity of a stability group: one task, one model, one environment,
+// one harness. The harness belongs in the key because stability measures repeated
+// attempts of a single system - Refio with model X and Claude Code with model X are
+// two systems, and merging them would report the gap between two agents as one
+// model's instability. An absent harness means refio, so entries written before the
+// dimension existed keep exactly the key they had.
+export function stabilityKey(entry: {
+  taskId: string;
+  modelId: string;
+  environmentId: string;
+  harnessId?: string;
+}): string {
+  return [entry.taskId, entry.modelId, entry.environmentId, entry.harnessId ?? "refio"].join("|");
+}

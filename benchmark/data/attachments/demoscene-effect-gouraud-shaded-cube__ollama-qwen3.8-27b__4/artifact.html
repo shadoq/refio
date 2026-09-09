@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Gouraud-Shaded Rotating Cube — Canvas 2D</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: radial-gradient(circle at 50% 40%, #16203a 0%, #0a0e1a 70%);
+    font-family: "Segoe UI", system-ui, sans-serif;
+    color: #cdd6f4; overflow: hidden;
+  }
+  #stage { display: block; width: 100%; height: 100%; }
+  .hud {
+    position: fixed; top: 14px; left: 16px;
+    font-size: 13px; line-height: 1.5;
+    background: rgba(10,14,26,.55);
+    border: 1px solid rgba(120,140,190,.25);
+    border-radius: 10px; padding: 10px 14px;
+    backdrop-filter: blur(6px);
+    user-select: none;
+  }
+  .hud .k { color: #7aa2f7; font-weight: 600; }
+  .hud .val { color: #9ece6a; font-variant-numeric: tabular-nums; }
+  h1 {
+    position: fixed; top: 14px; right: 16px;
+    font-size: 13px; font-weight: 600; letter-spacing: .04em;
+    color: #89b4fa; opacity: .8; user-select: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div class="hud">
+  <div><span class="k">FPS</span> <span class="val" id="fps">–</span></div>
+  <div><span class="k">Wireframe</span> <span class="val" id="wire">off</span></div>
+  <div><span class="k">Paused</span> <span class="val" id="paused">no</span></div>
+  <div style="margin-top:6px;opacity:.75"><span class="k">W</span> wireframe · <span class="k">P</span> pause</div>
+</div>
+<h1>Gouraud Shaded Cube · Canvas 2D</h1>
+
+<script>
+"use strict";
+
+/* =========================================================================
+   Gouraud-shaded rotating cube — pure Canvas 2D, no WebGL, no libraries.
+   Pipeline: vertices -> rotation matrices -> perspective projection ->
+   backface culling -> per-vertex Lambert lighting -> per-pixel barycentric
+   interpolation of vertex colors (true Gouraud shading).
+   ========================================================================= */
+
+const canvas = document.getElementById("stage");
+const ctx = canvas.getContext("2d");
+const fpsEl = document.getElementById("fps");
+const wireEl = document.getElementById("wire");
+const pausedEl = document.getElementById("paused");
+
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = Math.floor(W * DPR);
+  canvas.height = Math.floor(H * DPR);
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener("resize", resize);
+resize();
+
+/* ----------------------------- 3D data --------------------------------- */
+
+// Unit cube, half-extent 1. 8 vertices.
+const CUBE_VERTS = [
+  [-1, -1, -1], [ 1, -1, -1], [ 1,  1, -1], [-1,  1, -1],
+  [-1, -1,  1], [ 1, -1,  1], [ 1,  1,  1], [-1,  1,  1],
+];
+
+// 6 faces as 4 corner indices (CCW when viewed from outside).
+const FACES = [
+  [0, 1, 2, 3], // -Z back
+  [5, 4, 7, 6], // +Z front
+  [4, 0, 3, 7], // -X left
+  [1, 5, 6, 2], // +X right
+  [3, 2, 6, 7], // +Y top
+  [4, 5, 1, 0], // -Y bottom
+];
+
+// Distinct base color per face (RGB 0..255).
+const FACE_COLORS = [
+  [224,  92,  92], // red
+  [ 92, 168, 224], // blue
+  [120, 200, 120], // green
+  [224, 180,  92], // orange
+  [180, 120, 224], // purple
+  [ 92, 200, 210], // cyan
+];
+
+// Split each quad face into two triangles (diagonal).
+const TRIANGLES = [];
+for (let f = 0; f < FACES.length; f++) {
+  const q = FACES[f];
+  TRIANGLES.push({ a: q[0], b: q[1], c: q[2], face: f });
+  TRIANGLES.push({ a: q[0], b: q[2], c: q[3], face: f });
+}
+
+// Camera: look at origin from +Z.
+const CAM = { x: 0, y: 0, z: -3.4 };
+const FOV = 46 * Math.PI / 180;
+const FL = Math.tan(FOV / 2); // focal length (normalized)
+
+/* ---------------------------- state ------------------------------------ */
+
+let paused = false;
+let wireframe = false;
+let lightAngle = 0;          // moving light source
+let rx = 0, ry = 0, rz = 0;  // cube rotation angles
+
+/* --------------------------- math helpers ------------------------------ */
+
+function rotXYZ(v, ax, ay, az) {
+  // Rotation order: X then Y then Z.
+  let [x, y, z] = v;
+  // Rotate around X
+  let cy = Math.cos(ax), sy = Math.sin(ax);
+  let y1 = y * cy - z * sy, z1 = y * sy + z * cy;
+  y = y1; z = z1;
+  // Rotate around Y
+  let cx = Math.cos(ay), sx = Math.sin(ay);
+  let x1 = x * cx + z * sx, z2 = -x * sx + z * cx;
+  x = x1; z = z2;
+  // Rotate around Z
+  let cz = Math.cos(az), sz = Math.sin(az);
+  let x2 = x * cz - y * sz, y2 = x * sz + y * cz;
+  return [x2, y2, z];
+}
+
+function normalize(v) {
+  const l = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / l, v[1] / l, v[2] / l];
+}
+function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+function cross(a, b) {
+  return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+}
+
+// Perspective projection of a world point to screen pixels.
+function project(p) {
+  const dx = p[0] - CAM.x, dy = p[1] - CAM.y, dz = p[2] - CAM.z;
+  // dz is distance along camera axis (positive = in front).
+  const s = (1 / dz) * (H / (2 * FL));
+  return {
+    x: W / 2 + dx * s,
+    y: H / 2 - dy * s,
+    depth: dz,
+  };
+}
+
+/* --------------------------- lighting ---------------------------------- */
+
+// Lambert term for a vertex with given normal, light direction, face color.
+function vertexColor(n, lightDir, base) {
+  const nd = Math.max(0, dot(n, lightDir));
+  const ambient = 0.18;
+  const diffuse = 0.95;
+  const shade = ambient + diffuse * nd;
+  return [
+    Math.min(255, base[0] * shade) | 0,
+    Math.min(255, base[1] * shade) | 0,
+    Math.min(255, base[2] * shade) | 0,
+  ];
+}
+
+/* ---------------------- per-pixel rasterizer ---------------------------
+   For each triangle we scan its bounding box, compute barycentric coords,
+   and interpolate the three vertex colors -> Gouraud shading.
+------------------------------------------------------------------------- */
+
+function rasterizeTriangle(p0, p1, p2, c0, c1, c2) {
+  const minX = Math.max(0, Math.floor(Math.min(p0.x, p1.x, p2.x)));
+  const maxX = Math.min(W - 1, Math.ceil(Math.max(p0.x, p1.x, p2.x)));
+  const minY = Math.max(0, Math.floor(Math.min(p0.y, p1.y, p2.y)));
+  const maxY = Math.min(H - 1, Math.ceil(Math.max(p0.y, p1.y, p2.y)));
+  if (minX > maxX || minY > maxY) return;
+
+  const x0 = p0.x, y0 = p0.y, x1 = p1.x, y1 = p1.y, x2 = p2.x, y2 = p2.y;
+  const area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+  if (Math.abs(area) < 1e-9) return;
+  const invArea = 1 / area;
+
+  const img = ctx.getImageData(0, 0, W, H);
+  const data = img.data;
+
+  for (let py = minY; py <= maxY; py++) {
+    for (let px = minX; px <= maxX; px++) {
+      // Sample at pixel center.
+      const cx = px + 0.5, cy = py + 0.5;
+      const w0 = ((x1 - cx) * (y2 - cy) - (x2 - cx) * (y1 - cy)) * invArea;
+      const w1 = ((x2 - cx) * (y0 - cy) - (x0 - cx) * (y2 - cy)) * invArea;
+      const w2 = 1 - w0 - w1;
+      if (w0 < -0.001 || w1 < -0.001 || w2 < -0.001) continue;
+
+      // Interpolate color (Gouraud).
+      const r = (c0[0]*w0 + c1[0]*w1 + c2[0]*w2) | 0;
+      const g = (c0[1]*w0 + c1[1]*w1 + c2[1]*w2) | 0;
+      const b = (c0[2]*w0 + c1[2]*w1 + c2[2]*w2) | 0;
+
+      const idx = (py * W + px) * 4;
+      data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+// Wireframe stroke for a triangle.
+function strokeTriangle(p0, p1, p2) {
+  ctx.beginPath();
+  ctx.moveTo(p0.x, p0.y);
+  ctx.lineTo(p1.x, p1.y);
+  ctx.lineTo(p2.x, p2.y);
+  ctx.closePath();
+  ctx.stroke();
+}
+
+/* ------------------------------ scene ---------------------------------- */
+
+function render(dt) {
+  // Advance animation.
+  if (!paused) {
+    rx += 0.010 * dt;
+    ry += 0.016 * dt;
+    rz += 0.005 * dt;
+    lightAngle += 0.020 * dt;
+  }
+
+  // Moving light: orbit in 3D around the cube.
+  const lightPos = [
+    Math.cos(lightAngle) * 2.2,
+    Math.sin(lightAngle * 0.7) * 1.6,
+    Math.sin(lightAngle) * 2.2 + 1.2,
+  ];
+  const lightDir = normalize(cross([0,0,0], [1,0,0]).length ? [
+    lightPos[0] - 0, lightPos[1] - 0, lightPos[2] - 0
+  ] : [0,0,1]);
+  // Direction from origin to light (used as L in Lambert).
+  const L = normalize(lightPos);
+
+  // Clear.
+  ctx.clearRect(0, 0, W, H);
+
+  // Transform cube vertices.
+  const world = CUBE_VERTS.map(v => rotXYZ(v, rx, ry, rz));
+
+  // Build triangle list with projected points, culling + depth sort.
+  const tris = [];
+  for (const t of TRIANGLES) {
+    const A = world[t.a], B = world[t.b], C = world[t.c];
+    // Face normal (outward).
+    const n = normalize(cross([B[0]-A[0], B[1]-A[1], B[2]-A[2]],
+                              [C[0]-A[0], C[1]-A[1], C[2]-A[2]]));
+    // View vector from face center to camera.
+    const cx = (A[0]+B[0]+C[0]) / 3, cy = (A[1]+B[1]+C[1]) / 3, cz = (A[2]+B[2]+C[2]) / 3;
+    const view = [CAM.x - cx, CAM.y - cy, CAM.z - cz];
+    // Backface cull: normal facing away from camera -> skip.
+    if (dot(n, view) <= 0) continue;
+
+    const pa = project(A), pb = project(B), pc = project(C);
+    // Per-vertex lighting.
+    const base = FACE_COLORS[t.face];
+    const ca = vertexColor(n, L, base);
+    const cb = vertexColor(n, L, base);
+    const cc = vertexColor(n, L, base);
+
+    tris.push({ pa, pb, pc, ca, cb, cc, depth: (pa.depth+pb.depth+pc.depth) / 3 });
+  }
+
+  // Painter's algorithm: far to near.
+  tris.sort((a, b) => b.depth - a.depth);
+
+  if (wireframe) {
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "rgba(200, 220, 255, 0.9)";
+    for (const t of tris) strokeTriangle(t.pa, t.pb, t.pc);
+  } else {
+    for (const t of tris) {
+      rasterizeTriangle(t.pa, t.pb, t.pc, t.ca, t.cb, t.cc);
+    }
+    // Subtle edge outline for definition.
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(0,0,0,0.25)";
+    for (const t of tris) strokeTriangle(t.pa, t.pb, t.pc);
+  }
+}
+
+/* --------------------------- main loop --------------------------------- */
+
+let last = performance.now();
+let fpsFrames = 0, fpsAccum = 0, fpsLast = performance.now();
+
+function loop(now) {
+  let dt = (now - last) / 16.6667; // normalize to ~60fps step
+  if (dt > 5) dt = 5;
+  last = now;
+
+  render(dt);
+
+  // FPS.
+  fpsFrames++;
+  fpsAccum += now - fpsLast;
+  fpsLast = now;
+  if (fpsAccum >= 250) {
+    const fps = Math.round((fpsFrames * 1000) / fpsAccum);
+    fpsEl.textContent = fps;
+    fpsFrames = 0; fpsAccum = 0;
+  }
+
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+/* ---------------------------- input ------------------------------------ */
+
+window.addEventListener("keydown", (e) => {
+  const k = e.key.toLowerCase();
+  if (k === "w") {
+    wireframe = !wireframe;
+    wireEl.textContent = wireframe ? "on" : "off";
+  } else if (k === "p") {
+    paused = !paused;
+    pausedEl.textContent = paused ? "yes" : "no";
+  }
+});
+</script>
+</body>
+</html>

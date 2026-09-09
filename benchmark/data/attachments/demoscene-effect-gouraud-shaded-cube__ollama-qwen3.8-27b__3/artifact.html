@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a12; }
+    #canvas { display: block; width: 100%; height: 100%; }
+    #hud {
+        position: absolute; top: 12px; left: 12px;
+        font-family: 'Courier New', monospace; font-size: 14px;
+        color: #8af; pointer-events: none; user-select: none;
+        text-shadow: 0 0 6px rgba(0,0,0,0.8);
+        line-height: 1.6;
+    }
+    #hud .title { font-size: 16px; color: #cdf; margin-bottom: 4px; }
+    #hud .fps { color: #6f6; font-size: 18px; }
+    #hud .key { color: #fc6; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="hud">
+    <div class="title">Gouraud Shaded Cube</div>
+    <div class="fps" id="fps">FPS: --</div>
+    <div><span class="key">W</span> = wireframe &nbsp; <span class="key">P</span> = pause</div>
+</div>
+<script>
+(function () {
+    'use strict';
+
+    // ── Config ──────────────────────────────────────────────────────────
+    const AMBIENT = 0.15;
+    const DIFFUSE = 0.85;
+    const CUBE_SIZE = 1.0;
+    const CAM_Z = 4.0;
+    const FOV = 1.0; // perspective scale factor
+
+    // ── Canvas setup ────────────────────────────────────────────────────
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    let W = 0, H = 0;
+
+    function resize() {
+        W = canvas.width = window.innerWidth;
+        H = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // ── State ───────────────────────────────────────────────────────────
+    let paused = false;
+    let wireframe = false;
+    let time = 0;
+    let lastTime = performance.now();
+
+    // FPS tracking
+    let frameCount = 0;
+    let fpsAccum = 0;
+    let fpsDisplay = 0;
+    const fpsEl = document.getElementById('fps');
+
+    // ── Input ───────────────────────────────────────────────────────────
+    window.addEventListener('keydown', function (e) {
+        const k = e.key.toLowerCase();
+        if (k === 'w') wireframe = !wireframe;
+        if (k === 'p') paused = !paused;
+    });
+
+    // ── Vec3 helpers ────────────────────────────────────────────────────
+    function v3(x, y, z) { return { x: x, y: y, z: z }; }
+    function v3add(a, b) { return v3(a.x + b.x, a.y + b.y, a.z + b.z); }
+    function v3sub(a, b) { return v3(a.x - b.x, a.y - b.y, a.z - b.z); }
+    function v3scale(a, s) { return v3(a.x * s, a.y * s, a.z * s); }
+    function v3dot(a, b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+    function v3cross(a, b) {
+        return v3(
+            a.y * b.z - a.z * b.y,
+            a.z * b.x - a.x * b.z,
+            a.x * b.y - a.y * b.x
+        );
+    }
+    function v3len(a) { return Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z); }
+    function v3norm(a) {
+        const l = v3len(a);
+        if (l < 1e-10) return v3(0, 0, 0);
+        return v3(a.x / l, a.y / l, a.z / l);
+    }
+
+    // ── Rotation matrices ───────────────────────────────────────────────
+    function rotY(angle) {
+        const c = Math.cos(angle), s = Math.sin(angle);
+        return [
+            [c, 0, s],
+            [0, 1, 0],
+            [-s, 0, c]
+        ];
+    }
+    function rotX(angle) {
+        const c = Math.cos(angle), s = Math.sin(angle);
+        return [
+            [1, 0, 0],
+            [0, c, -s],
+            [0, s, c]
+        ];
+    }
+    function matMulVec(m, v) {
+        return v3(
+            m[0][0] * v.x + m[0][1] * v.y + m[0][2] * v.z,
+            m[1][0] * v.x + m[1][1] * v.y + m[1][2] * v.z,
+            m[2][0] * v.x + m[2][1] * v.y + m[2][2] * v.z
+        );
+    }
+    function matMul(a, b) {
+        const r = [[0,0,0],[0,0,0],[0,0,0]];
+        for (let i = 0; i < 3; i++)
+            for (let j = 0; j < 3; j++)
+                for (let k = 0; k < 3; k++)
+                    r[i][j] += a[i][k] * b[k][j];
+        return r;
+    }
+
+    // ── Cube definition ─────────────────────────────────────────────────
+    // 8 vertices of a unit cube centered at origin
+    const s = CUBE_SIZE;
+    const cubeVerts = [
+        v3(-s, -s, -s), // 0
+        v3( s, -s, -s), // 1
+        v3( s,  s, -s), // 2
+        v3(-s,  s, -s), // 3
+        v3(-s, -s,  s), // 4
+        v3( s, -s,  s), // 5
+        v3( s,  s,  s), // 6
+        v3(-s,  s,  s)  // 7
+    ];
+
+    // 6 faces, each defined by 4 vertex indices (CCW when viewed from outside)
+    // Each face has a base color [r, g, b] in 0-255
+    const cubeFaces = [
+        { verts: [0, 1, 2, 3], color: [220, 60, 60]  },  // front  (z-)
+        { verts: [4, 5, 6, 7], color: [60, 200, 80]  },  // back   (z+)
+        { verts: [0, 4, 7, 3], color: [60, 120, 220] },  // left   (x-)
+        { verts: [1, 5, 6, 2], color: [220, 180, 50] },  // right  (x+)
+        { verts: [3, 7, 6, 2], color: [180, 80, 200] },  // top    (y+)
+        { verts: [0, 1, 5, 4], color: [220, 120, 40] }   // bottom (y-)
+    ];
+
+    // ── Perspective projection ──────────────────────────────────────────
+    function project(v) {
+        // Camera at (0, 0, CAM_Z) looking at origin
+        const z = v.z + CAM_Z;
+        if (z < 0.1) return null; // behind camera
+        const scale = FOV / z;
+        return {
+            x: (v.x * scale + 1) * 0.5 * W,
+            y: (1 - (v.y * scale + 1) * 0.5) * H,
+            z: z
+        };
+    }
+
+    // ── Barycentric coordinates ─────────────────────────────────────────
+    function barycentric(px, py, a, b, c) {
+        const v0x = b.x - a.x, v0y = b.y - a.y;
+        const v1x = c.x - a.x, v1y = c.y - a.y;
+        const v2x = px - a.x, v2y = py - a.y;
+        const den = v0x * v1y - v1x * v0y;
+        if (Math.abs(den) < 1e-10) return null;
+        const inv = 1.0 / den;
+        const u = (v2x * v1y - v1x * v2y) * inv;
+        const v = (v0x * v2y - v2x * v0y) * inv;
+        const w = 1.0 - u - v;
+        return { u: u, v: v, w: w };
+    }
+
+    // ── Rasterize triangle into ImageData ───────────────────────────────
+    // tri: [{x,y}, {x,y}, {x,y}] screen coords
+    // colors: [[r,g,b], [r,g,b], [r,g,b]] per vertex
+    function rasterizeTriangle(imgData, tri, colors) {
+        const a = tri[0], b = tri[1], c = tri[2];
+        const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+        const maxX = Math.min(W - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+        const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+        const maxY = Math.min(H - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+
+        if (minX > maxX || minY > maxY) return;
+
+        const data = imgData.data;
+        const w = imgData.width;
+
+        for (let py = minY; py <= maxY; py++) {
+            for (let px = minX; px <= maxX; px++) {
+                const bc = barycentric(px + 0.5, py + 0.5, a, b, c);
+                if (!bc) continue;
+                if (bc.u < -0.001 || bc.v < -0.001 || bc.w < -0.001) continue;
+                if (bc.u > 1.001 || bc.v > 1.001 || bc.w > 1.001) continue;
+
+                // Interpolate colors
+                const r = Math.round(colors[0][0] * bc.u + colors[1][0] * bc.v + colors[2][0] * bc.w);
+                const g = Math.round(colors[0][1] * bc.u + colors[1][1] * bc.v + colors[2][1] * bc.w);
+                const bl = Math.round(colors[0][2] * bc.u + colors[1][2] * bc.v + colors[2][2] * bc.w);
+
+                const idx = (py * w + px) * 4;
+                data[idx] = r;
+                data[idx + 1] = g;
+                data[idx + 2] = bl;
+                data[idx + 3] = 255;
+            }
+        }
+    }
+
+    // ── Main render loop ────────────────────────────────────────────────
+    function render(now) {
+        requestAnimationFrame(render);
+
+        const dt = (now - lastTime) / 1000;
+        lastTime = now;
+
+        // FPS
+        frameCount++;
+        fpsAccum += dt;
+        if (fpsAccum >= 0.5) {
+            fpsDisplay = Math.round(frameCount / fpsAccum);
+            frameCount = 0;
+            fpsAccum = 0;
+            fpsEl.textContent = 'FPS: ' + fpsDisplay;
+        }
+
+        if (!paused) {
+            time += dt;
+        }
+
+        // ── Compute rotation ────────────────────────────────────────────
+        const angleY = time * 0.8;
+        const angleX = time * 0.5;
+        const rot = matMul(rotX(angleX), rotY(angleY));
+
+        // ── Transform vertices ──────────────────────────────────────────
+        const transformed = cubeVerts.map(function (v) {
+            return matMulVec(rot, v);
+        });
+
+        // ── Light position (orbiting) ───────────────────────────────────
+        const lightPos = v3(
+            Math.cos(time) * 3.0,
+            Math.sin(time * 0.7) * 2.0 + 1.0,
+            Math.sin(time) * 3.0
+        );
+
+        // ── Build triangle list ─────────────────────────────────────────
+        const triangles = [];
+
+        for (let fi = 0; fi < cubeFaces.length; fi++) {
+            const face = cubeFaces[fi];
+            const fv = face.verts;
+
+            // Get transformed vertices for this face
+            const v0 = transformed[fv[0]];
+            const v1 = transformed[fv[1]];
+            const v2 = transformed[fv[2]];
+            const v3 = transformed[fv[3]];
+
+            // Face normal (in world space)
+            const edge1 = v3sub(v1, v0);
+            const edge2 = v3sub(v3, v0);
+            let faceNormal = v3norm(v3cross(edge1, edge2));
+
+            // Backface culling: view vector from face center to camera (0,0,CAM_Z)
+            const faceCenter = v3(
+                (v0.x + v1.x + v2.x + v3.x) / 4,
+                (v0.y + v1.y + v2.y + v3.y) / 4,
+                (v0.z + v1.z + v2.z + v3.z) / 4
+            );
+            const viewVec = v3norm(v3sub(v3(0, 0, CAM_Z), faceCenter));
+            const dot = v3dot(faceNormal, viewVec);
+            if (dot <= 0) continue; // backface
+
+            // Split quad into 2 triangles: (v0,v1,v2) and (v0,v2,v3)
+            const triVerts = [
+                [v0, v1, v2],
+                [v0, v2, v3]
+            ];
+
+            for (let ti = 0; ti < 2; ti++) {
+                const tv = triVerts[ti];
+
+                // Project to screen
+                const p0 = project(tv[0]);
+                const p1 = project(tv[1]);
+                const p2 = project(tv[2]);
+                if (!p0 || !p1 || !p2) continue;
+
+                // Guard against degenerate triangles
+                const area = Math.abs(
+                    (p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y)
+                );
+                if (area < 1e-6) continue;
+
+                // Per-vertex Lambert lighting
+                const baseColor = face.color;
+                const vertexColors = [];
+                for (let vi = 0; vi < 3; vi++) {
+                    const worldV = tv[vi];
+                    const toLight = v3sub(lightPos, worldV);
+                    const lightDir = v3norm(toLight);
+                    const intensity = Math.max(0, v3dot(faceNormal, lightDir));
+                    const brightness = AMBIENT + DIFFUSE * intensity;
+
+                    const r = Math.min(255, Math.round(baseColor[0] * brightness));
+                    const g = Math.min(255, Math.round(baseColor[1] * brightness));
+                    const b = Math.min(255, Math.round(baseColor[2] * brightness));
+                    vertexColors.push([r, g, b]);
+                }
+
+                // Average depth for sorting
+                const avgZ = (p0.z + p1.z + p2.z) / 3;
+
+                triangles.push({
+                    screen: [p0, p1, p2],
+                    colors: vertexColors,
+                    depth: avgZ
+                });
+            }
+        }
+
+        // ── Painter's algorithm: sort far to near ───────────────────────
+        triangles.sort(function (a, b) { return b.depth - a.depth; });
+
+        // ── Rasterize into ImageData ────────────────────────────────────
+        const imgData = ctx.createImageData(W, H);
+        const data = imgData.data;
+
+        // Clear to dark background
+        for (let i = 0; i < data.length; i += 4) {
+            data[i] = 10;
+            data[i + 1] = 10;
+            data[i + 2] = 18;
+            data[i + 3] = 255;
+        }
+
+        for (let i = 0; i < triangles.length; i++) {
+            rasterizeTriangle(imgData, triangles[i].screen, triangles[i].colors);
+        }
+
+        ctx.putImageData(imgData, 0, 0);
+
+        // ── Wireframe overlay ───────────────────────────────────────────
+        if (wireframe) {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+
+            // Draw cube edges (12 edges)
+            const edges = [
+                [0,1],[1,2],[2,3],[3,0],
+                [4,5],[5,6],[6,7],[7,4],
+                [0,4],[1,5],[2,6],[3,7]
+            ];
+
+            for (let ei = 0; ei < edges.length; ei++) {
+                const a = transformed[edges[ei][0]];
+                const b = transformed[edges[ei][1]];
+                const pa = project(a);
+                const pb = project(b);
+                if (!pa || !pb) continue;
+                ctx.moveTo(pa.x, pa.y);
+                ctx.lineTo(pb.x, pb.y);
+            }
+            ctx.stroke();
+        }
+    }
+
+    requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

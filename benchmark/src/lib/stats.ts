@@ -1,5 +1,5 @@
 import type { TasksFile, Criterion } from "@/schema/tasks";
-import type { Result, ResultsFile, Model, Environment } from "@/schema/results";
+import type { Result, ResultsFile, Model, Environment, Harness } from "@/schema/results";
 import { estimateTokenProcessing } from "@/lib/tokenSpeed";
 import {
   aggregateJudgeScores,
@@ -10,8 +10,10 @@ import {
 export interface LeaderboardRow {
   modelId: string;
   environmentId: string;
+  harnessId: string;
   model: Model;
   environment: Environment;
+  harness: Harness;
   attemptCount: number;
   tasksEvaluated: number;
   avgScore: number;
@@ -147,19 +149,28 @@ export function compareLeaderboardRows(a: LeaderboardRow, b: LeaderboardRow): nu
   );
 }
 
+// A harness an import produced before anyone added it to the registry still carries
+// a real measurement, so it gets a stand-in record rather than being dropped. Only
+// the id "refio" means our own CLI; anything else came from an external agent.
+function fallbackHarness(id: string): Harness {
+  return { id, name: id, kind: id === "refio" ? "refio" : "external" };
+}
+
 export function leaderboard(
   results: Result[],
-  resultsFile: Pick<ResultsFile, "models" | "environments">,
+  resultsFile: Pick<ResultsFile, "models" | "environments"> & Partial<Pick<ResultsFile, "harnesses">>,
   tasks: TasksFile,
 ): LeaderboardRow[] {
   const measured = excludeHiddenResults(results, tasks);
   const modelById = new Map(resultsFile.models.map((m) => [m.id, m]));
   const envById = new Map(resultsFile.environments.map((e) => [e.id, e]));
+  const harnessById = new Map((resultsFile.harnesses ?? []).map((h) => [h.id, h]));
 
-  // Group by (modelId, environmentId)
+  // Group by (modelId, environmentId, harnessId): the same model under two harnesses
+  // is two measurements, and averaging them together would hide both.
   const groups = new Map<string, Result[]>();
   for (const r of measured) {
-    const key = `${r.modelId}::${r.environmentId}`;
+    const key = `${r.modelId}::${r.environmentId}::${r.harnessId}`;
     const group = groups.get(key) ?? [];
     group.push(r);
     groups.set(key, group);
@@ -167,9 +178,10 @@ export function leaderboard(
 
   const rows: LeaderboardRow[] = [];
   for (const [, group] of groups) {
-    const { modelId, environmentId } = group[0];
+    const { modelId, environmentId, harnessId } = group[0];
     const model = modelById.get(modelId);
     const environment = envById.get(environmentId);
+    const harness = harnessById.get(harnessId) ?? fallbackHarness(harnessId);
     if (!model || !environment) continue;
 
     const scores = group.map((r) => normalizeResult(r, tasks));
@@ -226,8 +238,10 @@ export function leaderboard(
     rows.push({
       modelId,
       environmentId,
+      harnessId,
       model,
       environment,
+      harness,
       attemptCount: group.length,
       tasksEvaluated: new Set(group.map((r) => r.taskId)).size,
       avgScore,
@@ -279,4 +293,57 @@ export function leaderboard(
   }
 
   return rows.sort(compareLeaderboardRows);
+}
+
+export interface HarnessDeltaRow {
+  modelId: string;
+  environmentId: string;
+  // Average normalized score of the baseline harness (Refio), or null when it never
+  // ran this model - a missing baseline is not a zero.
+  baselineScore: number | null;
+  byHarness: Record<string, number>;
+  delta: Record<string, number>;
+}
+
+// Pair the same model across harnesses for one task, so "Refio with model X" and
+// "Claude Code with model X" can be read side by side with the difference spelled out.
+// Only models that some non-baseline harness actually ran are returned: a row with the
+// baseline alone has nothing to compare.
+export function harnessDelta(
+  results: Result[],
+  tasks: TasksFile,
+  baselineHarnessId: string,
+): HarnessDeltaRow[] {
+  const groups = new Map<string, Map<string, number[]>>();
+  for (const r of results) {
+    const key = `${r.modelId}::${r.environmentId}`;
+    const byHarness = groups.get(key) ?? new Map<string, number[]>();
+    const scores = byHarness.get(r.harnessId) ?? [];
+    scores.push(normalizeResult(r, tasks));
+    byHarness.set(r.harnessId, scores);
+    groups.set(key, byHarness);
+  }
+
+  const rows: HarnessDeltaRow[] = [];
+  for (const [key, byHarness] of groups) {
+    const others = [...byHarness.keys()].filter((h) => h !== baselineHarnessId);
+    if (others.length === 0) continue;
+
+    const [modelId, environmentId] = key.split("::");
+    const mean = (values: number[]) => values.reduce((a, b) => a + b, 0) / values.length;
+    const baseline = byHarness.get(baselineHarnessId);
+    const baselineScore = baseline ? mean(baseline) : null;
+
+    const scoresByHarness: Record<string, number> = {};
+    const delta: Record<string, number> = {};
+    for (const [harnessId, values] of byHarness) {
+      const value = mean(values);
+      scoresByHarness[harnessId] = value;
+      if (harnessId !== baselineHarnessId && baselineScore !== null) {
+        delta[harnessId] = value - baselineScore;
+      }
+    }
+    rows.push({ modelId, environmentId, baselineScore, byHarness: scoresByHarness, delta });
+  }
+  return rows;
 }

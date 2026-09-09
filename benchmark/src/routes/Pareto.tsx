@@ -162,10 +162,13 @@ export default function Pareto() {
         if (x == null || y == null) return [];
         return [
           {
-            id: `${row.modelId}::${row.environmentId}`,
+            id: `${row.modelId}::${row.environmentId}::${row.harnessId}`,
             x,
             y,
-            label: `${row.model.name} (${row.environment.name})`,
+            label:
+              row.harness.kind === "external"
+                ? `${row.model.name} (${row.harness.name})`
+                : `${row.model.name} (${row.environment.name})`,
             provider: row.model.provider,
             attemptCount: row.attemptCount,
             environmentType: row.environment.type,
@@ -187,6 +190,12 @@ export default function Pareto() {
 
   const title = `${yMetric.label} vs ${xMetric.label}`;
 
+  // An external agent bills through a subscription, so any cost it reports is a
+  // per-token estimate, not what the run was charged. Saying so beats a chart that
+  // silently mixes two different kinds of number.
+  const externalOnChart = rows.some((r) => r.harness.kind === "external");
+  const costAxisInUse = xMetricId === "cost" || yMetricId === "cost";
+
   return (
     <div className="page-stack">
       <div className="section-heading">
@@ -196,6 +205,14 @@ export default function Pareto() {
             Compare trade-offs across local viability, speed, quality, first-shot
             success, reliability and cloud/API cost.
           </p>
+          {externalOnChart && costAxisInUse && (
+            <p>
+              <Text type="warning">
+                The reference track (external coding agents) is on this chart and bills by
+                subscription: its cost is an API-price estimate, not a charged amount.
+              </Text>
+            </p>
+          )}
         </div>
       </div>
 

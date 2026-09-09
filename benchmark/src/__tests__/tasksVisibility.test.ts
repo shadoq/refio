@@ -25,6 +25,7 @@ const makeResult = (id: string, modelId: string, taskId: string): Result => ({
   taskId,
   modelId,
   environmentId: "local",
+  harnessId: "refio",
   attemptNumber: 1,
   scores: [
     { criterionId: "compliance", value: 1 },
@@ -73,6 +74,7 @@ describe("leaderboard excludes hidden tasks from measurements", () => {
     version: 1,
     models: [{ id: "m1", name: "M1", provider: "ollama" }],
     environments: [{ id: "local", name: "Local", type: "local" }],
+    harnesses: [{ id: "refio", name: "Refio", kind: "refio" }],
     results: [makeResult("r1", "m1", "snake"), makeResult("r2", "m1", "secret")],
     stability: [],
     inbox: [],

@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #0a0a12;
+    color: #cfd8e3;
+    font-family: monospace;
+    overflow: hidden;
+    height: 100%;
+  }
+  #wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+  }
+  canvas {
+    background: #0a0a12;
+    border: 1px solid #222;
+    box-shadow: 0 0 40px rgba(0,0,0,0.6);
+  }
+  #hud {
+    margin-top: 10px;
+    font-size: 13px;
+    color: #8fa3b8;
+    letter-spacing: 0.5px;
+  }
+  #hud b { color: #dfe8f2; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="800" height="600"></canvas>
+  <div id="hud">
+    <b>W</b> = wireframe &nbsp; <b>P</b> = pause &nbsp; | &nbsp; <span id="state">running</span>
+  </div>
+</div>
+<script>
+(function () {
+  "use strict";
+
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width;
+  const H = canvas.height;
+
+  const stateEl = document.getElementById("state");
+
+  // ---- Scene constants ----
+  const HALF = 120;          // cube half-size
+  const CAM_DIST = 420;      // camera distance along -z
+  const FOCAL = 500;         // focal length
+  const LIGHT_R = 260;       // light orbit radius
+
+  // ---- Cube geometry ----
+  // 8 vertices, CCW winding when viewed from outside for each face.
+  const baseVerts = [
+    [-HALF, -HALF, -HALF], // 0
+    [ HALF, -HALF, -HALF], // 1
+    [ HALF,  HALF, -HALF], // 2
+    [-HALF,  HALF, -HALF], // 3
+    [-HALF, -HALF,  HALF], // 4
+    [ HALF, -HALF,  HALF], // 5
+    [ HALF,  HALF,  HALF], // 6
+    [-HALF,  HALF,  HALF]  // 7
+  ];
+
+  // 6 faces as quads (indices), CCW from outside.
+  const faces = [
+    [0, 1, 2, 3], // back  (z = -HALF)
+    [4, 5, 6, 7], // front (z = +HALF)
+    [0, 4, 7, 3], // left  (x = -HALF)
+    [1, 5, 6, 2], // right (x = +HALF)
+    [3, 2, 6, 7], // top   (y = +HALF)
+    [0, 1, 5, 4]  // bottom(y = -HALF)
+  ];
+
+  // Per-face base colors (warm/cool mix)
+  const faceColors = [
+    [220, 120,  60], // back   - warm orange
+    [ 60, 180, 200], // front  - teal
+    [120,  80, 200], // left   - purple
+    [200,  60,  80], // right  - red
+    [ 80, 200, 120], // top    - green
+    [200, 180,  60]  // bottom - yellow
+  ];
+
+  // Split each quad into 2 triangles: (a,b,c) and (a,c,d)
+  const triangles = []; // { v: [i0,i1,i2], face: f }
+  for (let f = 0; f < faces.length; f++) {
+    const q = faces[f];
+    triangles.push({ v: [q[0], q[1], q[2]], face: f });
+    triangles.push({ v: [q[0], q[2], q[3]], face: f });
+  }
+
+  // ---- State ----
+  let angleX = 0, angleY = 0, angleZ = 0;
+  let lightTime = 0;
+  let paused = false;
+  let wireframe = false;
+
+  // ---- FPS ----
+  let frameCount = 0;
+  let fpsTimer = 0;
+  let fps = 0;
+
+  // ---- ImageData buffer ----
+  const imgData = ctx.createImageData(W, H);
+  const buf = imgData.data;
+
+  // Background color
+  const BG_R = 10, BG_G = 10, BG_B = 18;
+
+  // ---- Math helpers ----
+  function rotateX(p, a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [p[0], p[1]*c - p[2]*s, p[1]*s + p[2]*c];
+  }
+  function rotateY(p, a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [p[0]*c + p[2]*s, p[1], -p[0]*s + p[2]*c];
+  }
+  function rotateZ(p, a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [p[0]*c - p[1]*s, p[0]*s + p[1]*c, p[2]];
+  }
+
+  function normalize(v) {
+    const l = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+    if (l === 0) return [0,0,0];
+    return [v[0]/l, v[1]/l, v[2]/l];
+  }
+
+  function dot(a, b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
+
+  function cross(a, b) {
+    return [
+      a[1]*b[2] - a[2]*b[1],
+      a[2]*b[0] - a[0]*b[2],
+      a[0]*b[1] - a[1]*b[0]
+    ];
+  }
+
+  // ---- Projection ----
+  // Camera at (0, 0, -CAM_DIST), looking toward +z.
+  // Perspective: screenX = FOCAL * x / (z + CAM_DIST), screenY = FOCAL * y / (z + CAM_DIST)
+  function project(p) {
+    const zc = p[2] + CAM_DIST; // camera-space z (positive in front)
+    if (zc <= 0.001) return null;
+    const sx = FOCAL * p[0] / zc + W / 2;
+    const sy = FOCAL * p[1] / zc + H / 2;
+    return [sx, sy, zc];
+  }
+
+  // ---- Barycentric edge function ----
+  function edge(a, b, p) {
+    return (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+  }
+
+  // ---- Render ----
+  function render() {
+    // Fill background
+    for (let i = 0; i < buf.length; i += 4) {
+      buf[i]     = BG_R;
+      buf[i + 1] = BG_G;
+      buf[i + 2] = BG_B;
+      buf[i + 3] = 255;
+    }
+
+    // Rotate all vertices
+    const rotated = baseVerts.map(v => {
+      let p = rotateX(v, angleX);
+      p = rotateY(p, angleY);
+      p = rotateZ(p, angleZ);
+      return p;
+    });
+
+    // Light position (orbiting)
+    const lightPos = [
+      LIGHT_R * Math.cos(lightTime),
+      LIGHT_R * Math.sin(lightTime * 0.7),
+      LIGHT_R * Math.sin(lightTime * 0.5)
+    ];
+
+    // Build triangle list with projected data
+    const triList = [];
+    for (let t = 0; t < triangles.length; t++) {
+      const tri = triangles[t];
+      const i0 = tri.v[0], i1 = tri.v[1], i2 = tri.v[2];
+      const v0 = rotated[i0], v1 = rotated[i1], v2 = rotated[i2];
+
+      // Backface cull: compute normal via cross product, dot with view direction
+      const e1 = [v1[0]-v0[0], v1[1]-v0[1], v1[2]-v0[2]];
+      const e2 = [v2[0]-v0[0], v2[1]-v0[1], v2[2]-v0[2]];
+      const n = cross(e1, e2);
+      // View direction from camera to vertex: (v0 - camPos) = (v0.x, v0.y, v0.z + CAM_DIST)
+      const viewDir = [v0[0], v0[1], v0[2] + CAM_DIST];
+      if (dot(n, viewDir) >= 0) continue; // facing away
+
+      // Project
+      const p0 = project(v0);
+      const p1 = project(v1);
+      const p2 = project(v2);
+      if (!p0 || !p1 || !p2) continue;
+
+      // Per-vertex Lambert lighting
+      const faceNormal = normalize(n);
+      const baseColor = faceColors[tri.face];
+      const colors = [];
+      for (let k = 0; k < 3; k++) {
+        const vp = [v0[0], v0[1], v0[2]];
+        if (k === 1) { vp[0] = v1[0]; vp[1] = v1[1]; vp[2] = v1[2]; }
+        if (k === 2) { vp[0] = v2[0]; vp[1] = v2[1]; vp[2] = v2[2]; }
+        const toLight = [lightPos[0]-vp[0], lightPos[1]-vp[1], lightPos[2]-vp[2]];
+        const nl = normalize(toLight);
+        let intensity = Math.max(0, dot(faceNormal, nl));
+        intensity = 0.15 + 0.85 * intensity; // ambient + diffuse
+        colors.push([
+          Math.min(255, baseColor[0] * intensity),
+          Math.min(255, baseColor[1] * intensity),
+          Math.min(255, baseColor[2] * intensity)
+        ]);
+      }
+
+      // Average depth for sorting
+      const avgZ = (p0[2] + p1[2] + p2[2]) / 3;
+
+      triList.push({
+        p0: p0, p1: p1, p2: p2,
+        colors: colors,
+        avgZ: avgZ
+      });
+    }
+
+    // Sort back-to-front (larger avgZ = farther)
+    triList.sort((a, b) => b.avgZ - a.avgZ);
+
+    // Rasterize each triangle
+    for (let t = 0; t < triList.length; t++) {
+      const tri = triList[t];
+      const ax = tri.p0[0], ay = tri.p0[1];
+      const bx = tri.p1[0], by = tri.p1[1];
+      const cx = tri.p2[0], cy = tri.p2[1];
+
+      const minX = Math.max(0, Math.floor(Math.min(ax, bx, cx)));
+      const maxX = Math.min(W - 1, Math.ceil(Math.max(ax, bx, cx)));
+      const minY = Math.max(0, Math.floor(Math.min(ay, by, cy)));
+      const maxY = Math.min(H - 1, Math.ceil(Math.max(ay, by, cy)));
+
+      const cA = tri.colors[0];
+      const cB = tri.colors[1];
+      const cC = tri.colors[2];
+
+      for (let py = minY; py <= maxY; py++) {
+        for (let px = minX; px <= maxX; px++) {
+          const pt = [px + 0.5, py + 0.5];
+          const w0 = edge([bx, by], [cx, cy], pt);
+          const w1 = edge([cx, cy], [ax, ay], pt);
+          const w2 = edge([ax, ay], [bx, by], pt);
+
+          // Check if all same sign (or zero)
+          const allPos = w0 >= 0 && w1 >= 0 && w2 >= 0;
+          const allNeg = w0 <= 0 && w1 <= 0 && w2 <= 0;
+          if (!allPos && !allNeg) continue;
+
+          const sum = w0 + w1 + w2;
+          if (sum === 0) continue;
+
+          const u = w0 / sum;
+          const v = w1 / sum;
+          const w = w2 / sum;
+
+          const r = u * cA[0] + v * cB[0] + w * cC[0];
+          const g = u * cA[1] + v * cB[1] + w * cC[1];
+          const b = u * cA[2] + v * cB[2] + w * cC[2];
+
+          const idx = (py * W + px) * 4;
+          buf[idx]     = r;
+          buf[idx + 1] = g;
+          buf[idx + 2] = b;
+          buf[idx + 3] = 255;
+        }
+      }
+    }
+
+    // Put image data
+    ctx.putImageData(imgData, 0, 0);
+
+    // Wireframe overlay
+    if (wireframe) {
+      ctx.strokeStyle = "rgba(255,255,255,0.5)";
+      ctx.lineWidth = 1;
+      for (let t = 0; t < triList.length; t++) {
+        const tri = triList[t];
+        ctx.beginPath();
+        ctx.moveTo(tri.p0[0], tri.p0[1]);
+        ctx.lineTo(tri.p1[0], tri.p1[1]);
+        ctx.lineTo(tri.p2[0], tri.p2[1]);
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
+
+    // FPS display
+    ctx.fillStyle = "rgba(255,255,255,0.8)";
+    ctx.font = "14px monospace";
+    ctx.textAlign = "left";
+    ctx.fillText("FPS: " + fps.toFixed(1), 10, 20);
+  }
+
+  // ---- Animation loop ----
+  let lastTime = performance.now();
+
+  function loop(now) {
+    const dt = (now - lastTime) / 1000;
+    lastTime = now;
+
+    // FPS
+    frameCount++;
+    fpsTimer += dt;
+    if (fpsTimer >= 0.5) {
+      fps = frameCount / fpsTimer;
+      frameCount = 0;
+      fpsTimer = 0;
+    }
+
+    if (!paused) {
+      angleX += dt * 0.4;
+      angleY += dt * 0.6;
+      angleZ += dt * 0.2;
+      lightTime += dt * 0.8;
+    }
+
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  // ---- Input ----
+  document.addEventListener("keydown", function (e) {
+    const key = e.key.toLowerCase();
+    if (key === "w") {
+      wireframe = !wireframe;
+    } else if (key === "p") {
+      paused = !paused;
+      stateEl.textContent = paused ? "paused" : "running";
+    }
+  });
+
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

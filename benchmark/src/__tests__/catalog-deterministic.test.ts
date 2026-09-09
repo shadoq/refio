@@ -83,6 +83,31 @@ describe("agentLogicFromRun", () => {
     });
     expect(r.value).toBe(1);
   });
+  // An external coding agent runs its own tool loop and reports no Refio tool names.
+  // Scoring it 0.5 for that would penalise it for not being Refio, on a criterion the
+  // run simply cannot report.
+  it("does not penalise a harness that reports no tool names at all", () => {
+    const r = agentLogicFromRun({
+      status: "SUCCESS",
+      toolCalls: [],
+      expectedToolOrder: ["create_new_file"],
+      toolCallsReported: false,
+    });
+    expect(r.value).toBe(1);
+    expect(r.rationale).toBeUndefined();
+  });
+
+  // A Refio run that reports its tools and skipped the expected one is still a miss.
+  it("still penalises a reporting run that skipped the expected tool", () => {
+    const r = agentLogicFromRun({
+      status: "SUCCESS",
+      toolCalls: [],
+      expectedToolOrder: ["create_new_file"],
+      toolCallsReported: true,
+    });
+    expect(r.value).toBe(0.5);
+  });
+
   it("scores 0.5 on SUCCESS when the expected tool order is missing", () => {
     const r = agentLogicFromRun({
       status: "SUCCESS",
