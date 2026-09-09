@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.tools.implementations
 
 import pl.jclab.refio.core.tools.PathSandbox
+import pl.jclab.refio.core.tools.security.FileLimits
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
@@ -26,7 +27,8 @@ private val logger = dualLogger("ViewDiffTool")
  * - Read-only operation
  */
 class ViewDiffTool(
-    private val sandbox: PathSandbox
+    private val sandbox: PathSandbox,
+    private val limits: FileLimits
 ) : Tool {
 
     override val name = "view_diff"
@@ -73,6 +75,13 @@ class ViewDiffTool(
 
             val file1Size = Files.size(path1)
             logger.debug { "File1 size: $file1Size bytes, absolute='${path1.toAbsolutePath()}'" }
+            // The whole file goes into memory below, so it is bounded by the same limit every other
+            // file tool honours.
+            if (file1Size > limits.maxFileSize) {
+                return ToolResult.error(
+                    "File1 too large for diff: $file1Size bytes (max ${limits.maxFileSize} bytes)"
+                )
+            }
 
             val content1 = Files.readString(path1)
 
@@ -95,6 +104,11 @@ class ViewDiffTool(
 
                 val file2Size = Files.size(path2)
                 logger.debug { "File2 size: $file2Size bytes, absolute='${path2.toAbsolutePath()}'" }
+                if (file2Size > limits.maxFileSize) {
+                    return ToolResult.error(
+                        "File2 too large for diff: $file2Size bytes (max ${limits.maxFileSize} bytes)"
+                    )
+                }
 
                 Files.readString(path2)
             }

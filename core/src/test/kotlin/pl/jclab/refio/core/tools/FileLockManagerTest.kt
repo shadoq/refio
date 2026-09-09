@@ -1,7 +1,10 @@
 package pl.jclab.refio.core.tools
 
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
@@ -85,5 +88,39 @@ class FileLockManagerTest {
         // Just verify it doesn't throw
         FileLockManager.clear()
         assertEquals(0, FileLockManager.activeLockCount())
+    }
+
+    @Test
+    fun `eviction between lookup and lock cannot break mutual exclusion`() = kotlinx.coroutines.runBlocking {
+        // The whole point of this manager is that two agents never write the same file at once.
+        // Looking the entry up and locking it are two steps: if eviction drops the entry in between,
+        // the next caller creates a second mutex for the same path and both "hold the lock".
+        FileLockManager.clear()
+        val inside = java.util.concurrent.atomic.AtomicBoolean(false)
+        val violations = AtomicInteger(0)
+
+        val evictor = launch(kotlinx.coroutines.Dispatchers.Default) {
+            while (isActive) {
+                FileLockManager.evictAllUnlockedForTest()
+            }
+        }
+        val workers = (1..8).map {
+            launch(kotlinx.coroutines.Dispatchers.Default) {
+                repeat(2_000) {
+                    FileLockManager.withFileLock("/tmp/contended-file") {
+                        if (!inside.compareAndSet(false, true)) {
+                            violations.incrementAndGet()
+                        }
+                        kotlinx.coroutines.yield()
+                        inside.set(false)
+                    }
+                }
+            }
+        }
+
+        workers.forEach { it.join() }
+        evictor.cancelAndJoin()
+
+        assertEquals(0, violations.get(), "two coroutines held the lock for the same file at once")
     }
 }

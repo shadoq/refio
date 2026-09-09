@@ -77,7 +77,7 @@ param(
     # code, not a separate decision a user would weigh; refusing them cost a model its turn. Deletion
     # is deliberately absent - `rm` stays a refusal. Keep this list identical to e2e-run.sh:
     # a divergence here means Windows and POSIX runs stop measuring the same thing.
-    [string]$AutoApprove = '\b(kotlinc|gradlew|gradle|javac|java|python3?|pip3?|node|npm|npx|pnpm|yarn|pytest|mvn|cargo|go|make|cmake|ls|cat|pwd|echo|head|tail|sed|awk|grep|rg|find|wc|diff|test|true|cd|sh|bash|env|export|mkdir|touch|mv|cp|tr|sort|uniq|cut|sleep|which)\b',
+    [string]$AutoApprove = '(\bcurl\b(?!.*://(?!(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?=[/?\s]|$)))(?=.*(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?=[/?\s]|$))|\b(kotlinc?|gradlew|gradle|javac|java|python3?|pip3?|node|npm|npx|pnpm|yarn|pytest|mvn|cargo|go|make|cmake|ls|cat|pwd|echo|head|tail|sed|awk|grep|rg|find|wc|diff|test|true|cd|sh|bash|env|export|mkdir|touch|mv|cp|tr|sort|uniq|cut|sleep|which|lsof)\b)',
     [switch]$NoAutoApprove,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Scenarios
@@ -620,6 +620,76 @@ function Invoke-Scenario {
             Set-Content -NoNewline $effectivePrompt
     }
 
+    # Optional MCP server (mirrors e2e-run.sh). Declared for this run only via --mcp-server, so
+    # nothing is written into the shared database. STDIO servers are spawned by the CLI itself; HTTP
+    # and SSE ones need a listener, started here and stopped with the fixture server below.
+    #
+    # NOT EXERCISED ON WINDOWS YET: ported from the bash runner without a Windows host to run it on.
+    # Validate with `.\e2e-run.ps1 -Model <m> mcp-stdio-tool-call` before trusting an MCP verdict here.
+    $mcpServer   = $null
+    $mcpTmpDir   = $null
+    $mcpRendered = $null
+    if ($s.mcp -and $s.mcp.config) {
+        $mcpDir = Join-Path $RepoRoot 'test_data\mcp'
+        $mcpConfigPath = Join-Path $mcpDir $s.mcp.config
+        if (-not (Test-Path $mcpConfigPath)) { throw "mcp.config not found: $mcpConfigPath" }
+        # A STDIO config naming a bare `python` spawns nothing on a box that only has `python3` (and
+        # vice versa), and the probe then reports "Failed to start MCP stdio process". Resolve the
+        # interpreter here and let the config ask for it as {{PYTHON}}, so a stdio server and a stub
+        # server always run under the same one.
+        $mcpPy = Get-Command python -ErrorAction SilentlyContinue
+        if (-not $mcpPy) { $mcpPy = Get-Command python3 -ErrorAction SilentlyContinue }
+        if (-not $mcpPy) { throw "mcp scenarios need python/python3 on PATH" }
+
+        $mcpPort = if ($s.mcp.stub -and $s.mcp.stub.port) { [int]$s.mcp.stub.port } else { 0 }
+        if ($s.mcp.stub -and $s.mcp.stub.script) {
+            if (-not $mcpPort) { throw "mcp.stub needs a port" }
+            $mcpProfile = if ($s.mcp.stub.profile) { $s.mcp.stub.profile } else { 'docs' }
+            $stubArgs = @((Join-Path $mcpDir $s.mcp.stub.script), '--port', "$mcpPort", '--profile', $mcpProfile)
+            if ($s.mcp.stub.args) { $stubArgs += @($s.mcp.stub.args) }
+            $mcpServer = Start-Process -FilePath $mcpPy.Source -PassThru -WindowStyle Hidden `
+                -ArgumentList $stubArgs `
+                -RedirectStandardOutput (Join-Path $work 'mcp-server.log') `
+                -RedirectStandardError  (Join-Path $work 'mcp-server.err.log')
+            $mcpReady = $false
+            for ($i = 0; $i -lt 50; $i++) {
+                try { $c = New-Object System.Net.Sockets.TcpClient('127.0.0.1', $mcpPort); $c.Close(); $mcpReady = $true; break }
+                catch { Start-Sleep -Milliseconds 100 }
+            }
+            if (-not $mcpReady) { Write-Host "  WARN mcp stub not ready on 127.0.0.1:$mcpPort after 5s" }
+        }
+
+        # Rendered OUTSIDE the project: a config sitting in the work dir is just another file to the
+        # agent, and it will read it and start reimplementing the server instead of calling the tool.
+        # Paths go in as forward slashes - a Windows path inside a JSON string ("D:\_work\...") is
+        # not valid JSON, and the config is parsed by the JVM.
+        $mcpTmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ("refio-e2e-mcp-" + $s.id + "-" + [System.IO.Path]::GetRandomFileName())
+        New-Item -ItemType Directory -Path $mcpTmpDir -Force | Out-Null
+        $mcpRendered = Join-Path $mcpTmpDir 'config.json'
+        ((((Get-Content -Raw $mcpConfigPath) `
+            -replace '\{\{MCP_DIR\}\}', ($mcpDir -replace '\\', '/')) `
+            -replace '\{\{PORT\}\}', "$mcpPort") `
+            -replace '\{\{PYTHON\}\}', ($mcpPy.Source -replace '\\', '/')) |
+            Set-Content -NoNewline $mcpRendered
+
+        # Preflight: a server that fails to connect is indistinguishable, in the turn's output, from
+        # a model that chose not to call its tool - the run just burns iterations and reports "tool
+        # not invoked". Probe first (no LLM) and fail immediately with the real reason. The log lives
+        # outside the project for the same reason as the config.
+        $mcpProbeLog = Join-Path $mcpTmpDir 'probe.log'
+        $mcpProbeExit = Invoke-Cli -CliArgs @('-p', $work, '--mcp-server', $mcpRendered, '--mcp-probe') -OutFile $mcpProbeLog
+        if ($mcpProbeExit -ne 0) {
+            Write-Output "| $($s.id) | FAIL (MCP server did not connect) | see $mcpProbeLog |"
+            Write-ResultRecord -Id $s.id -Verdict 'FAIL (MCP server did not connect)' -RunJsonPath ''
+            $probeLines = @(Get-Content $mcpProbeLog -ErrorAction SilentlyContinue)
+            $probeStart = ($probeLines | Select-String -Pattern '^\[' | Select-Object -First 1).LineNumber
+            if ($probeStart) { $probeLines[($probeStart - 1)..($probeLines.Count - 1)] | ForEach-Object { Write-Host $_ } }
+            if ($mcpServer) { try { Stop-Process -Id $mcpServer.Id -Force -ErrorAction SilentlyContinue } catch {} }
+            Remove-Item -Force -ErrorAction SilentlyContinue $mcpRendered
+            return $false
+        }
+    }
+
     $mode    = if ($s.mode) { $s.mode } else { 'AGENT' }
     $cliArgs = @(
         '--headless', '-p', $work, '--mode', $mode,
@@ -638,6 +708,7 @@ function Invoke-Scenario {
     # headless rejection (see -AutoApprove above). Empty (via -NoAutoApprove) restores the raw
     # "reject every ASK command" behaviour.
     if ($AutoApprove) { $cliArgs += @('--auto-approve', $AutoApprove) }
+    if ($mcpRendered) { $cliArgs += @('--mcp-server', $mcpRendered) }
     # -OllamaHost / -OllamaCtx are sugar over the validated config overrides so testing a model on a
     # different Ollama box (or a different context size) needs no raw key. Host accepts "box",
     # "box:11434", or "http://box:11434"; a bare host/port becomes http://host:11434.
@@ -659,6 +730,8 @@ function Invoke-Scenario {
     # The server is only needed during the turn; stop it before build/assert (and before any early
     # return below) so no python process is left running.
     if ($server) { try { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue } catch {} }
+    if ($mcpServer) { try { Stop-Process -Id $mcpServer.Id -Force -ErrorAction SilentlyContinue } catch {} }
+    if ($mcpTmpDir) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $mcpTmpDir }
     if (-not (Test-Path $runJson)) {
         Write-Output "| $($s.id) | FAIL (no run.json produced) | - |"
         Write-ResultRecord -Id $s.id -Verdict 'FAIL (no run.json produced)' -RunJsonPath $runJson
@@ -898,7 +971,7 @@ if (-not (Get-Command $Cli -ErrorAction SilentlyContinue) -and -not (Test-Path $
 # cli.bat is a legacy Windows batch launcher: PowerShell's `&` operator has to shell out through
 # cmd.exe to run a .bat, and cmd.exe RE-PARSES shell metacharacters (| & ( )) in any argument - even
 # a PowerShell-quoted one - as pipes/grouping. A value like -AutoApprove's default regex
-# ('\b(kotlinc|gradlew|...)\b') gets torn apart into separate "commands" (kotlinc, gradlew, ...) and
+# ('\b(kotlinc?|gradlew|...)\b') gets torn apart into separate "commands" (kotlinc, gradlew, ...) and
 # cli.bat never actually runs: no logback output, no run.json, every single scenario reads as a bare
 # "no run.json produced" FAIL in well under a second (this broke every run 2026-07-01 across all 6
 # models before being caught). java.exe is a native PE executable, so PowerShell hands it each array
@@ -938,14 +1011,19 @@ if ($Cli -match '\.(bat|cmd)$') {
 # Merging stderr into the success stream (2>&1) keeps the progress visible as plain output without
 # raising errors; the local EAP=Continue is belt-and-suspenders, mirroring the build_cmd/smoke guards.
 function Invoke-Cli {
-    param([string[]]$CliArgs)
+    # -OutFile captures the CLI's merged stdout+stderr into a file instead of the host. Used by the
+    # MCP preflight probe, whose log must be readable after the fact AND must not land in the work
+    # dir (see the MCP block in Invoke-Scenario).
+    param([string[]]$CliArgs, [string]$OutFile = '')
     $savedEAP = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
         if ($JavaExe -and $CliClasspath) {
-            & $JavaExe '-cp' $CliClasspath 'pl.jclab.refio.cli.MainKt' @CliArgs 2>&1 | Out-Host
+            if ($OutFile) { & $JavaExe '-cp' $CliClasspath 'pl.jclab.refio.cli.MainKt' @CliArgs 2>&1 | Set-Content $OutFile }
+            else          { & $JavaExe '-cp' $CliClasspath 'pl.jclab.refio.cli.MainKt' @CliArgs 2>&1 | Out-Host }
         } else {
-            & $Cli @CliArgs 2>&1 | Out-Host
+            if ($OutFile) { & $Cli @CliArgs 2>&1 | Set-Content $OutFile }
+            else          { & $Cli @CliArgs 2>&1 | Out-Host }
         }
         return $LASTEXITCODE
     } finally {

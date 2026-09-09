@@ -4,4 +4,6 @@ First, use the `code-reviewer` subagent to review `src/Validator.kt` and identif
 problem. Then apply the fix yourself so the function behaves correctly.
 
 The function `isAdult` should treat a valid adult age as 18 through 120 inclusive, but
-it currently rejects someone who is exactly 18. Fix the boundary.
+it currently rejects someone who is exactly 18. Fix the boundary; do not edit `main.kt`.
+When done, `kotlinc main.kt src/Validator.kt -d out && kotlin -classpath out MainKt` must
+print `OK`.

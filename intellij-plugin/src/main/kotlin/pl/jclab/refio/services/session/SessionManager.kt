@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -371,7 +372,18 @@ class SessionManager(private val project: Project) {
         contextRefs: List<ContextReference> = emptyList(),
         model: String? = null,
         provider: String? = null
-    ): Message = coreSessionService.sendMessage(input, contextRefs, model, provider)
+    ): Message {
+        // Register the coroutine the turn runs in, so Stop aborts the in-flight LLM call instead of
+        // only setting the cancellation flag. Doing it here covers every entry point - the prompt
+        // box, Re-plan, and rewind-and-resend all reach the turn through this method.
+        currentCoroutineContext()[Job]?.let { registerTurnJob(it) }
+        return coreSessionService.sendMessage(input, contextRefs, model, provider)
+    }
+
+    /** Expose the running turn's coroutine to [cancelStreaming]. */
+    fun registerTurnJob(job: Job) {
+        executionMonitor.trackStreamingJob(job)
+    }
 
     /**
      * Rewind conversation to the given message (inclusive), delete all related execution/planning data,

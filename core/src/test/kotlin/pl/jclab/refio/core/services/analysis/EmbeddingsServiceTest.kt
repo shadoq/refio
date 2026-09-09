@@ -22,6 +22,30 @@ class EmbeddingsServiceTest {
             .joinToString("") { "%02x".format(it) }
 
     @Test
+    fun `a provider is built once per provider id, not once per call`() = runBlocking {
+        // Every provider owns a Ktor CIO engine (thread pool + selector). Building one per call and
+        // never closing it leaks a whole engine per embedded chunk - a RAG index of a real project
+        // makes thousands of those calls.
+        var created = 0
+        val configService = mockk<ConfigService>(relaxed = true)
+        io.mockk.every { configService.getEmbeddingModel() } returns "ollama/nomic-embed"
+        val provider = object : EmbeddingProvider {
+            override suspend fun generateEmbedding(text: String, model: String) = FloatArray(3)
+            override fun getEmbeddingDimensions(model: String) = 3
+        }
+        val service = EmbeddingsService(configService) {
+            created++
+            provider
+        }
+
+        service.generate("first text")
+        service.generate("second text")
+        service.generateBatch(listOf("third text"))
+
+        assertEquals(1, created, "the provider for one provider id must be reused across calls")
+    }
+
+    @Test
     fun `cacheKey returns the correct SHA-256 of provider model and text`() {
         val service = newService()
         val key = service.cacheKey("ollama", "nomic-embed", "hello world")

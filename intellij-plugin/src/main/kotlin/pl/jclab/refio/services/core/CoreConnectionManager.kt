@@ -208,6 +208,10 @@ class CoreConnectionManager {
                     logger.info { "Recreating cached router with IDE project for: $absolutePath" }
                     val refreshedRouter = createProjectRouterInternal(projectRoot, ideProject)
                     projectRouters[absolutePath] = refreshedRouter
+                    // The replaced router still holds HTTP clients and background scopes. This runs
+                    // at startup, before any turn, so nothing is using it.
+                    runCatching { cachedRouter.close() }
+                        .onFailure { logger.warn { "Failed to close replaced router: ${it.message}" } }
                     val projectId = ProjectIdGenerator.generate(projectRoot)
                     MCPManager.setToolRegistry(projectId, refreshedRouter.getToolRegistry())
                     return refreshedRouter
@@ -307,6 +311,23 @@ class CoreConnectionManager {
         logger.info { "Re-synchronizing provider API keys from database" }
         router.configRouter.initializeProviderKeys()
         logger.info { "Provider API keys re-synchronized" }
+    }
+
+    /**
+     * Release everything held for a project that is being closed.
+     *
+     * Without this, every project opened in a session kept its whole router graph - HTTP clients,
+     * caches, background scopes - plus its MCP child processes alive until the IDE exited.
+     */
+    fun closeProject(projectRoot: java.nio.file.Path) {
+        val absolutePath = projectRoot.toAbsolutePath().toString()
+        val removed = synchronized(projectRoutersLock) { projectRouters.remove(absolutePath) } ?: return
+
+        logger.info { "Closing project router: $absolutePath" }
+        runCatching { MCPManager.shutdown(ProjectIdGenerator.generate(projectRoot)) }
+            .onFailure { logger.warn { "MCP shutdown failed for $absolutePath: ${it.message}" } }
+        runCatching { removed.close() }
+            .onFailure { logger.warn { "Router close failed for $absolutePath: ${it.message}" } }
     }
 
     /**

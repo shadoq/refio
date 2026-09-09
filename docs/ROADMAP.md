@@ -39,7 +39,7 @@ that's the bar it meets today.
 - RAG with semantic chunking (Kotlin / Java / Python / TypeScript / HTML)
 - Token budget that scales to the model's context window
 - Tool result compression (FULL -> DETAILED -> SUMMARY) when context fills up
-- Conversation compaction at ~85% usage
+- Conversation compaction at 80% of the conversation budget
 
 **Models**
 
@@ -59,7 +59,7 @@ that's the bar it meets today.
 - `detectSensitiveLogging` Gradle task fails the build if an API key pattern appears in log statements
 - Jacoco coverage gate on `:core` (35% instructions)
 - CI enforces the full Gradle `check` on every PR (module tests + coverage gate +
-  sensitive-logging scan), plus an IntelliJ Plugin Verifier job (no detekt/ktlint yet)
+  sensitive-logging scan), plus an IntelliJ Plugin Verifier job
 - Embedding circuit breaker (CLOSED / OPEN / HALF_OPEN) for graceful RAG degradation
 - Parallel read-only tool execution
 
@@ -333,8 +333,6 @@ TODO/FIXME density is near zero.
   sensitive-logging scan enforced), a Plugin Verifier job, a nightly full-check +
   e2e assertion-engine self-test, and a tag-triggered release workflow
   (GitHub release with the ZIP; Marketplace publish when secrets are configured).
-  Note: detekt/ktlint are NOT set up in this project (an earlier claim here was
-  wrong); adding them is a separate decision.
 - **The model-backed e2e gate stays manual** - GitHub-hosted runners cannot serve
   a local model, so `gate.sh` (pass-rate over N runs) still needs a self-hosted
   machine; only the offline self-test runs nightly.

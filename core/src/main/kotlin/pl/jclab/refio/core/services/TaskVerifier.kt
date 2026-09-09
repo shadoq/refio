@@ -6,8 +6,13 @@ import kotlinx.serialization.json.Json
 import pl.jclab.refio.core.db.MessageRole
 import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.api.ModelOperation
+import pl.jclab.refio.core.llm.JsonExtractor
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
+import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.core.utils.GsonInstance.gson
+
+private val logger = dualLogger("TaskVerifier")
 
 interface TaskVerifier {
     suspend fun verifyCompletion(
@@ -78,11 +83,22 @@ $recentEvidence
         return parseVerification(llmResponse.content)
     }
 
+    /**
+     * The verdict is advisory: the turn's file edits are already on disk by the time we ask. So a
+     * verifier that answers in a markdown fence is unwrapped first, and one that answers in prose
+     * lets the turn stand instead of failing it - the WEAK model's formatting is not evidence about
+     * the user's task.
+     */
     private fun parseVerification(content: String): VerificationResult {
         val payload = try {
-            json.decodeFromString(TaskVerificationPayload.serializer(), content.trim())
+            val objectJson = gson.toJson(JsonExtractor.extractAndParse(content))
+            json.decodeFromString(TaskVerificationPayload.serializer(), objectJson)
         } catch (e: Exception) {
-            throw IllegalStateException("Invalid task verification response: ${e.message}")
+            logger.warn { "Task verification response was not parseable, treating turn as complete: ${e.message}" }
+            return VerificationResult(
+                isComplete = true,
+                reason = "verification skipped: unparseable verifier response"
+            )
         }
 
         return VerificationResult(

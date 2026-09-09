@@ -8,6 +8,30 @@ import org.junit.jupiter.api.Assertions.assertTrue
 class SecureLoggerTest {
 
     @Test
+    fun `truncation does not pay for the whole payload`() {
+        // A 100 KB request body ends up as 63 characters in the log. Running ~10 regexes over all
+        // 100 KB to get there is the expensive half of every API-request log line. Narrowing the
+        // input first is safe only with slack around the cut: a key straddling the boundary would
+        // otherwise reach the output as an unrecognised - and unredacted - fragment.
+        val key = "sk-ant-abcdefghijklmnopqrstuvwxyz012345"
+        val input = "x".repeat(20) + key + "y".repeat(200_000)
+
+        val output = SecureLogger.redactAndTruncate(input)
+
+        assertFalse(output.contains("sk-ant"), "the key must not survive truncation in any form: $output")
+        assertTrue(output.length < 200, "the result is a preview, not the payload: ${output.length}")
+    }
+
+    @Test
+    fun `short input is redacted and returned whole`() {
+        val input = "Authorization: Bearer sk-ant-abcdefghijklmnopqrstuvwxyz"
+
+        val output = SecureLogger.redactAndTruncate(input, head = 200, tail = 200)
+
+        assertEquals(SecureLogger.redact(input), output)
+    }
+
+    @Test
     fun `redacts OpenAI style keys`() {
         val input = "Authorization: Bearer sk-proj-abc123def456ghi7890"
         val output = SecureLogger.redact(input)

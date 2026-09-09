@@ -7,6 +7,19 @@ import kotlin.test.assertTrue
 
 class StreamGuardrailsTest {
 
+    @Test
+    fun `defaults applies the output ceiling it is given`() {
+        // The ceiling is a caller-supplied limit, not a constant baked into the guardrail set:
+        // LLMClient reads limits.max_output_chars and passes it here. Without this wiring the
+        // config key exists but changes nothing, which is worse than having no key at all.
+        val guardrails = StreamGuardrails.defaults(wallClockDeadlineMs = 180_000, maxOutputChars = 1_000)
+
+        assertEquals(StreamGuardrail.Decision.Continue, guardrails.check("x".repeat(900)))
+        val decision = guardrails.check("x".repeat(200))
+        assertTrue(decision is StreamGuardrail.Decision.Abort, "expected the 1000-char ceiling to fire")
+        assertEquals("OUTPUT_TOO_LARGE", decision.code)
+    }
+
     /** Guardrail that always continues. */
     private class AlwaysOk : StreamGuardrail {
         override val name = "ok"

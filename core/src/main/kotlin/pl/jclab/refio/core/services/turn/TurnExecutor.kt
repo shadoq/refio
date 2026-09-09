@@ -1,5 +1,7 @@
 package pl.jclab.refio.core.services.turn
 
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -1425,7 +1427,8 @@ internal class TurnExecutor(
                         val writeToolCalls = turnToolExecutor.countWriteToolCalls(toolCalls)
                         val verificationToolCalls = turnToolExecutor.countVerificationToolCalls(toolCalls)
                         writeToolsExecutedInTurn += writeToolCalls
-                        fileWriteToolsExecutedInTurn += turnToolExecutor.countFileWriteToolCalls(toolCalls)
+                        fileWriteToolsExecutedInTurn +=
+                            turnToolExecutor.countLandedFileWriteToolCalls(toolCalls, toolResults.map { it.second })
                         if (writeToolCalls > 0) {
                             verificationToolsExecutedAfterWrite = 0
                         } else if (writeToolsExecutedInTurn > 0) {
@@ -2253,28 +2256,38 @@ internal class TurnExecutor(
             )
             return turnPersistence.finish(result, persistAssistantMessage = true)
         } catch (e: CancellationException) {
-            updateTurnState { copy(phase = TurnPhase.FAILED) }
-            hookService?.trigger("on_agent_error", mapOf(
-                "taskId" to taskId,
-                "mode" to mode.name,
-                "error" to "Operation cancelled by user",
-                "agentName" to (profileOverrides?.subagentName ?: "default")
-            ))
-            val result = TurnResult(
-                success = false,
-                // Keep the report the user was watching. Streamed prose has no DB row until a clean
-                // finalize; on cancel the transient is dropped, so without this it vanishes and is
-                // replaced by the generic string. Fall back to the generic string when nothing
-                // substantial was streamed.
-                response = lastStreamedAssistantText?.takeIf { it.isNotBlank() }
-                    ?: "Operation cancelled by user.",
-                iterations = iteration,
-                tokensIn = totalTokensIn,
-                tokensOut = totalTokensOut,
-                cost = totalCost,
-                toolsUsed = usedTools.distinct()
-            )
-            return turnPersistence.finish(result, persistAssistantMessage = true)
+            // Persist what the user already saw, then let the cancellation through. Swallowing it
+            // here reports a stopped turn as a failed one and hides the stop from every caller that
+            // maps it (task status, UI). The cleanup itself runs uncancellable, because the
+            // coroutine it runs in is usually already cancelled and every suspend would rethrow
+            // before anything was written.
+            withContext(NonCancellable) {
+                updateTurnState { copy(phase = TurnPhase.FAILED) }
+                runCatching {
+                    hookService?.trigger("on_agent_error", mapOf(
+                        "taskId" to taskId,
+                        "mode" to mode.name,
+                        "error" to "Operation cancelled by user",
+                        "agentName" to (profileOverrides?.subagentName ?: "default")
+                    ))
+                }
+                val result = TurnResult(
+                    success = false,
+                    // Keep the report the user was watching. Streamed prose has no DB row until a
+                    // clean finalize; on cancel the transient is dropped, so without this it
+                    // vanishes and is replaced by the generic string. Fall back to the generic
+                    // string when nothing substantial was streamed.
+                    response = lastStreamedAssistantText?.takeIf { it.isNotBlank() }
+                        ?: "Operation cancelled by user.",
+                    iterations = iteration,
+                    tokensIn = totalTokensIn,
+                    tokensOut = totalTokensOut,
+                    cost = totalCost,
+                    toolsUsed = usedTools.distinct()
+                )
+                runCatching { turnPersistence.finish(result, persistAssistantMessage = true) }
+            }
+            throw e
         } catch (e: Exception) {
             // Backstop for every other failure (e.g. a DB write throwing mid-turn). Returning exits
             // get their terminal TurnEnded from the caller; an exception skips that, so without this
@@ -3070,11 +3083,24 @@ internal class TurnExecutor(
             return true
         }
 
+        // Verification is a safety net over a turn whose work is already done. Nothing that goes
+        // wrong while running it may turn that finished turn into a failure - a missing user message
+        // or a verifier that blew up says nothing about the user's task.
         val userRequest = userRequestFallback?.takeIf { it.isNotBlank() }
             ?: getLastUserMessage(taskId, agentInstanceId)
-            ?: throw IllegalStateException("Missing user message for task verification: $taskId")
+        if (userRequest == null) {
+            logger.warn { "[VERIFY] No user message to verify against, treating turn as complete: taskId=$taskId" }
+            return true
+        }
 
-        val verification = taskVerifier.verifyCompletion(taskId, userRequest, llmContent, agentInstanceId)
+        val verification = try {
+            taskVerifier.verifyCompletion(taskId, userRequest, llmContent, agentInstanceId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn { "[VERIFY] Verification failed to run, treating turn as complete: ${e.message}" }
+            return true
+        }
         if (verification.isComplete) {
             return true
         }

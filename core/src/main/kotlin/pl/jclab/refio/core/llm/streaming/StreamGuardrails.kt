@@ -85,7 +85,9 @@ class StreamGuardrails(
          *   threshold so legitimate repeated markup - table cells, list items - is
          *   not mistaken for a decoder loop). Large-block runaway is left to the
          *   size/wall-clock limiters below.
-         * - [OutputSizeLimiter] at 128 KB — prevents runaway continuations.
+         * - [OutputSizeLimiter] at [maxOutputChars] (256 KB by default, from
+         *   `limits.max_output_chars`) — prevents runaway continuations without
+         *   truncating a model that delivers a whole file in a single response.
          * - [WallClockDeadline] at 180 s — independent of Ktor's request
          *   timeout, so a stuck stream unwinds cleanly without waiting for
          *   the full provider timeout.
@@ -93,11 +95,14 @@ class StreamGuardrails(
          * All thresholds are deliberately loose — the goal is "catch obvious
          * pathology without false positives on healthy long-running streams".
          */
-        fun defaults(wallClockDeadlineMs: Long = 180_000): StreamGuardrails {
+        fun defaults(
+            wallClockDeadlineMs: Long = 180_000,
+            maxOutputChars: Int = 262_144,
+        ): StreamGuardrails {
             return StreamGuardrails(
                 guardrails = listOf(
                     RepetitionDetector(),
-                    OutputSizeLimiter(),
+                    OutputSizeLimiter(maxChars = maxOutputChars),
                     WallClockDeadline(deadlineMs = wallClockDeadlineMs)
                 )
             )

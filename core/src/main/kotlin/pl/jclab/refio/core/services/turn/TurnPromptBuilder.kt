@@ -850,7 +850,9 @@ ${warning}
      */
     fun getHistorySize(taskId: String): Int {
         return try {
-            chatMessageRepository.findByTaskId(taskId).size
+            // Counted in SQL: this feeds a progress label once per iteration, and materialising the
+            // whole conversation (tool payloads included) to call .size on it is not worth it.
+            chatMessageRepository.countByTaskId(taskId).toInt()
         } catch (e: Exception) {
             0
         }

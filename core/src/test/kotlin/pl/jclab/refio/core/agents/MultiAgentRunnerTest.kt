@@ -82,9 +82,16 @@ class MultiAgentRunnerTest {
         }
 
         @Test
-        fun `dependent agent is not deadlocked when upstream setup throws before execution`() = runTest {
+        fun `dependent agent is not deadlocked when upstream setup throws before execution`() {
             // If pre-execution setup (e.g. the AgentStarted emit) throws, the upstream
             // agent must still be marked completed so dependents don't wait forever.
+            //
+            // The spy is built OUTSIDE runTest on purpose. MockK's first spyk/coEvery in a
+            // JVM pays for class instrumentation (~5s measured on a cold worker, against
+            // ~0.4s for the run itself); inside runTest that setup is charged to the test
+            // coroutine's real-time watchdog, so on a loaded machine the whole class failed
+            // here with "the test coroutine is not completing" - a timing artifact of the
+            // harness, not of the runner.
             val failingBus = io.mockk.spyk(AgentEventBus())
             io.mockk.coEvery {
                 failingBus.emit(match { it is AgentEvent.AgentStarted && it.agentName == "upstream" })
@@ -95,12 +102,14 @@ class MultiAgentRunnerTest {
                 AgentSpec("dependent", task = "Task B", dependsOn = listOf("upstream"))
             )
 
-            val results = withTimeout(10.seconds) {
-                runner.run("s1", specs, successExecutor())
-            }
+            runTest {
+                val results = withTimeout(10.seconds) {
+                    runner.run("s1", specs, successExecutor())
+                }
 
-            assertFalse(results["upstream"]!!.success)
-            assertTrue(results["dependent"]!!.success)
+                assertFalse(results["upstream"]!!.success)
+                assertTrue(results["dependent"]!!.success)
+            }
         }
     }
 

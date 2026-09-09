@@ -20,6 +20,15 @@ class ExecutionMonitor(
     private val logger = dualLogger("ExecutionMonitor")
     private var streamingJob: Job? = null
 
+    /**
+     * Hand over the coroutine the current turn runs in, so [cancelStreaming] can abort it.
+     * Without this the Stop button only sets the cancellation flag, which a turn parked in a
+     * non-streamed LLM call does not notice until that call returns.
+     */
+    fun trackStreamingJob(job: Job) {
+        streamingJob = job
+    }
+
     fun cancelStreaming() {
         logger.info { "Cancelling streaming..." }
         streamingJob?.cancel()

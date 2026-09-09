@@ -79,4 +79,62 @@ class TaskVerifierTest {
         assertTrue(evidence.contains("PARENT_EVIDENCE"), "verifier must see the main thread's evidence")
         assertFalse(evidence.contains("SUBAGENT_EVIDENCE"), "the main agent's evidence must exclude a subagent's internal steps")
     }
+
+    /**
+     * The verifier runs on the WEAK model on every turn that wrote a file. Its verdict is advisory,
+     * so the shape of its answer must never decide the fate of work already on disk: a fenced answer
+     * has to be read, and an answer with no JSON at all has to pass the turn, not blow it up.
+     */
+    private fun verify(verifierResponse: String): VerificationResult {
+        val llmClient = mockk<LLMClient>()
+        val configService = mockk<ConfigService>()
+        val chatMessageRepository = mockk<ChatMessageRepository>()
+
+        every { chatMessageRepository.findHistoryForInvocation("task-1", null) } returns emptyList()
+        every { configService.getModel(ModelOperation.WEAK, "task-1") } returns ("weak-model" to "prov")
+        coEvery {
+            llmClient.complete(
+                provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                taskId = any(), source = any(), stream = any(), onChunk = any()
+            )
+        } returns LLMResponse(
+            content = verifierResponse,
+            usage = LLMUsage(inputTokens = 1, outputTokens = 1, totalTokens = 2),
+            model = "weak-model",
+            provider = "prov",
+            cost = 0.0
+        )
+
+        val verifier = LlmTaskVerifier(llmClient, configService, chatMessageRepository)
+        return kotlinx.coroutines.runBlocking {
+            verifier.verifyCompletion("task-1", "user request", "assistant response")
+        }
+    }
+
+    @Test
+    fun `a plain JSON verdict is honoured`() {
+        assertTrue(verify("""{"is_complete": true, "reason": "ok"}""").isComplete)
+    }
+
+    @Test
+    fun `a verdict wrapped in a markdown fence is still read`() {
+        // Small local models answer with a fenced block far more often than with bare JSON; a
+        // strict parse rejected those and threw away the real "not complete" verdict.
+        val fenced = "```json\n{\"is_complete\": false, \"reason\": \"file was never written\"}\n```"
+
+        val result = verify(fenced)
+
+        assertFalse(result.isComplete, "the fenced verdict must be parsed, not discarded")
+        assertTrue(result.reason.contains("never written"))
+    }
+
+    @Test
+    fun `prose with no JSON completes the turn instead of failing it`() {
+        // The edits are already on disk at this point. A verifier that cannot express itself in JSON
+        // is a verifier we cannot use - it is not evidence that the task failed.
+        assertTrue(
+            verify("Sure! The task looks complete.").isComplete,
+            "an unparseable verdict must not turn a finished turn into a failure"
+        )
+    }
 }

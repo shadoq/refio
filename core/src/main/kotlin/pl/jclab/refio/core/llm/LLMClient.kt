@@ -18,6 +18,7 @@ import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.llm.streaming.StreamAbortedException
 import pl.jclab.refio.core.llm.streaming.StreamGuardrail
 import pl.jclab.refio.core.llm.streaming.StreamGuardrails
+import pl.jclab.refio.core.llm.streaming.OutputSizeLimiter
 import pl.jclab.refio.core.services.logging.coreLogger
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 
@@ -337,7 +338,23 @@ class LLMClient(
                 ) ?: pl.jclab.refio.core.config.ConfigKeys.STREAMING_REQUEST_TIMEOUT.default
                 // Wall clock = 90% of streaming timeout (10% buffer for cleanup/logging)
                 val wallClockMs = (streamingTimeoutSec * 900L).coerceIn(60_000, 1_800_000)
-                StreamGuardrails.defaults(wallClockMs)
+                // Output ceiling: an explicit limits.max_output_chars wins, otherwise derive it
+                // from this model's context window - a response cannot outgrow the window it is
+                // generated into, and a fixed number is either too small for a large model or
+                // useless for a small one.
+                val configuredOutputChars = configService?.getTyped(
+                    pl.jclab.refio.core.config.ConfigKeys.MAX_OUTPUT_CHARS
+                ) ?: pl.jclab.refio.core.config.ConfigKeys.MAX_OUTPUT_CHARS.default
+                val maxOutputChars = when {
+                    configuredOutputChars > 0 -> configuredOutputChars
+                    configService != null -> OutputSizeLimiter.ceilingForContext(
+                        TokenEstimator.getMaxContextForModel(model, provider, configService, taskId)
+                    )
+                    // No config service: the model's window is unknowable here, so keep the
+                    // historical fixed ceiling rather than guess one.
+                    else -> OutputSizeLimiter.MIN_CEILING_CHARS
+                }
+                StreamGuardrails.defaults(wallClockMs, maxOutputChars)
             } else null
 
             // Per-index accumulation of a streaming native tool call's arguments, so the

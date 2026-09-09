@@ -525,6 +525,22 @@ class OllamaAdapter(
                 nativeToolCalls = nativeToolCalls
             )
 
+        } catch (e: CancellationException) {
+            // Guardrail-triggered abort — log and rethrow as-is, do NOT wrap.
+            val latencyMs = (System.currentTimeMillis() - startTime).toInt()
+            logger.apiError(
+                provider = provider,
+                model = model,
+                endpoint = "$baseUrl$CHAT_ENDPOINT",
+                requestJson = requestJson,
+                httpStatus = httpStatus,
+                error = e,
+                latencyMs = latencyMs,
+                taskId = taskId,
+                subtaskId = subtaskId,
+                source = source
+            )
+            throw e
         } catch (e: Exception) {
             // Error #15: Log error (console + database)
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()

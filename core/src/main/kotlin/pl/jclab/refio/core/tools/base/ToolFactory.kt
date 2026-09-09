@@ -105,7 +105,7 @@ class ToolFactory(
             GrepSearchTool(sandbox, fileLimits),
 
             // Diff and comparison
-            ViewDiffTool(sandbox),
+            ViewDiffTool(sandbox, fileLimits),
 
             // Reasoning slot (no-op, gives the model an explicit place to think
             // between tool calls — used as a loop-breaker and pre-action checkpoint)

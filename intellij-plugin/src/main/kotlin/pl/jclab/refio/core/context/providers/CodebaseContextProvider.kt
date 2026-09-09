@@ -68,12 +68,15 @@ class CodebaseContextProvider : BaseContextProvider() {
 
         logger.debug { "Codebase search query: $searchQuery" }
 
+        // The provider owns an HTTP engine and is built per query, so it has to be released on every
+        // exit from this method - each early return used to strand a thread pool.
+        var embeddingProvider: EmbeddingProvider? = null
         try {
             // 1. Create service instances
             val ragRepository = RagRepository()
             val embeddingModel = configService.getEmbeddingModel()
             val providerId = parseEmbeddingProvider(embeddingModel)
-            val embeddingProvider = getEmbeddingProvider(providerId)
+            embeddingProvider = getEmbeddingProvider(providerId)
             if (embeddingProvider == null) {
                 logger.warn { "No embedding provider available for model: $embeddingModel" }
                 return@withContext listOf(
@@ -238,6 +241,8 @@ class CodebaseContextProvider : BaseContextProvider() {
                     uri = ContextUri(type = "error", value = e.message ?: "unknown")
                 )
             )
+        } finally {
+            runCatching { embeddingProvider?.close() }
         }
     }
 

@@ -34,11 +34,14 @@ class StandaloneCodebaseContextProvider : BaseContextProvider() {
         val searchQuery = query.trim()
         if (searchQuery.isEmpty()) return@withContext emptyList()
 
+        // The provider owns an HTTP engine and is built per query, so it has to be released on every
+        // exit from this method - each early return used to strand a thread pool.
+        var embeddingProvider: EmbeddingProvider? = null
         try {
             val ragRepository = RagRepository()
             val embeddingModel = configService.getEmbeddingModel()
             val providerId = if (embeddingModel.contains("/")) embeddingModel.substringBefore("/").lowercase() else "ollama"
-            val embeddingProvider = getEmbeddingProvider(providerId) ?: return@withContext listOf(
+            embeddingProvider = getEmbeddingProvider(providerId) ?: return@withContext listOf(
                 errorItem("No embedding provider available for model: $embeddingModel")
             )
             val ragSearchService = RagSearchService(ragRepository, PrefixStrippingProvider(embeddingProvider))
@@ -80,6 +83,8 @@ class StandaloneCodebaseContextProvider : BaseContextProvider() {
         } catch (e: Exception) {
             logger.error(e) { "Codebase search failed" }
             listOf(errorItem("Error: ${e.message}"))
+        } finally {
+            runCatching { embeddingProvider?.close() }
         }
     }
 

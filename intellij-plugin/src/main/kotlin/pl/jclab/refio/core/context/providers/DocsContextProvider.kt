@@ -42,6 +42,8 @@ class DocsContextProvider(
     private val documentationRepository: DocumentationRepository = DocumentationRepository()
 ) : BaseContextProvider() {
 
+    private val embeddingProviders = java.util.concurrent.ConcurrentHashMap<String, EmbeddingProvider>()
+
     override val description = ContextProviderDescription(
         title = "docs",
         displayTitle = "docs",
@@ -337,7 +339,15 @@ class DocsContextProvider(
         }
     }
 
-    private fun embeddingProviderFor(providerId: String): EmbeddingProvider {
+    /**
+     * One provider per id for the life of this provider. Each one owns an HTTP engine and the
+     * search service outlives the method that builds it, so a fresh engine per query leaked one
+     * every time the user searched the docs.
+     */
+    private fun embeddingProviderFor(providerId: String): EmbeddingProvider =
+        embeddingProviders.computeIfAbsent(providerId.lowercase()) { id -> newEmbeddingProvider(id) }
+
+    private fun newEmbeddingProvider(providerId: String): EmbeddingProvider {
         return when (providerId.lowercase()) {
             "ollama" -> OllamaEmbeddingProvider(configService.getTyped(ConfigKeys.PROVIDER_OLLAMA_ENDPOINT))
             "openai" -> OpenAIEmbeddingProvider()

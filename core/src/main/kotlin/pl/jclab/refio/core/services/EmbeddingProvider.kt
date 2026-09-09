@@ -21,7 +21,7 @@ private const val MIN_PROVIDER_RETRY_DELAY_MS = 1_000L
  * Providers generate dense vector representations of text
  * for semantic search in RAG systems.
  */
-interface EmbeddingProvider {
+interface EmbeddingProvider : AutoCloseable {
     /**
      * Generate embedding vector for given text.
      *
@@ -40,6 +40,13 @@ interface EmbeddingProvider {
      * Get dimensions of embeddings produced by this model
      */
     fun getEmbeddingDimensions(model: String): Int
+
+    /**
+     * Release the HTTP engine this provider owns. Implementations that hold no resources of their
+     * own (or borrow a client from the caller) keep the empty default.
+     */
+    override fun close() {
+    }
 }
 
 class CircuitBreakerOpenException(
@@ -214,6 +221,10 @@ class OpenAIEmbeddingProvider(
         return MODEL_DIMENSIONS[model]
             ?: throw IllegalArgumentException("Unknown OpenAI embedding model: $model")
     }
+
+    override fun close() {
+        client.close()
+    }
 }
 
 /**
@@ -372,6 +383,10 @@ class OllamaEmbeddingProvider(
         return MODEL_DIMENSIONS[model]
             ?: 768  // Default to common dimension size
     }
+
+    override fun close() {
+        client.close()
+    }
 }
 
 /**
@@ -396,6 +411,7 @@ class OpenAICompatibleEmbeddingProvider(
     private val endpoint: String = "${baseUrl.trimEnd('/')}$EMBEDDINGS_PATH"
     private val providerKey = "openai_compatible:$endpoint"
 
+    private val ownsClient = httpClientOverride == null
     private val client = httpClientOverride ?: HttpClient(CIO) {
         install(ContentNegotiation) {
             gson()
@@ -507,6 +523,13 @@ class OpenAICompatibleEmbeddingProvider(
         return observedDimensions ?: throw IllegalStateException(
             "Embedding dimensions for '$model' at $endpoint are unknown until the first successful call"
         )
+    }
+
+    /** Only closes the engine when we built it - a caller-supplied client stays the caller's. */
+    override fun close() {
+        if (ownsClient) {
+            client.close()
+        }
     }
 }
 

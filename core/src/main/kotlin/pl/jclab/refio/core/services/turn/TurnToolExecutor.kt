@@ -439,6 +439,26 @@ class TurnToolExecutor(
         val EXECUTION_TOOL_NAMES = setOf("run_code", "run_terminal_command")
 
         /**
+         * Count the calls in a batch that BOTH match [matches] and actually landed - i.e. their
+         * execution did not report a failure.
+         *
+         * Requested and landed are not the same thing: a write tool can be asked for, run, and
+         * still leave nothing on disk (the editing model failed to produce a usable code block, the
+         * approval policy refused the call). Counting requests let such a turn sign itself off as
+         * having written the deliverable while the file did not exist. A call with no recorded
+         * result counts as landed on purpose - exit paths that never collect results must keep
+         * their previous behaviour instead of turning delivered work into a reported failure.
+         */
+        internal fun countLandedCalls(
+            toolCalls: List<ToolCallData>,
+            toolResults: List<ToolResultData>,
+            matches: (String) -> Boolean,
+        ): Int {
+            val failedCallIds = toolResults.filterNot { it.success }.map { it.toolCallId }.toSet()
+            return toolCalls.count { matches(it.name) && it.id !in failedCallIds }
+        }
+
+        /**
          * Tools whose duration is dominated by waiting on the network or on a local model, so they
          * get [TurnLoopConfig.networkToolTimeout] instead of the in-process budget. They are NOT
          * exempted: an exemption would bring back the unbounded hang the budget exists to stop, and
@@ -1477,6 +1497,10 @@ class TurnToolExecutor(
                     metadata = null
                 )
             }
+        } catch (e: CancellationException) {
+            // The user stopped the turn. Reporting that as a failed tool would write a fake error
+            // into the history and mark the subtask FAILED for work nobody asked to finish.
+            throw e
         } catch (e: Exception) {
             logger.error(e) { "[TOOL_ERROR] Failed to execute ${toolCall.name}: ${e.message}" }
             val errorText = "Error: ${e.message}"
@@ -1595,6 +1619,15 @@ class TurnToolExecutor(
     fun countFileWriteToolCalls(toolCalls: List<ToolCallData>): Int {
         return toolCalls.count { isFileWriteTool(it.name) }
     }
+
+    /**
+     * File-write calls that landed, for the turn's deliverable tally. See [countLandedCalls] for
+     * why the results, and not the requests, decide this.
+     */
+    fun countLandedFileWriteToolCalls(
+        toolCalls: List<ToolCallData>,
+        toolResults: List<ToolResultData>,
+    ): Int = countLandedCalls(toolCalls, toolResults) { isFileWriteTool(it) }
 
     fun countVerificationToolCalls(toolCalls: List<ToolCallData>): Int {
         return toolCalls.count { isVerificationTool(it.name) }

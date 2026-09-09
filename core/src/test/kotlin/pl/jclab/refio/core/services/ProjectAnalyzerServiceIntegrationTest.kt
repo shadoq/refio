@@ -178,6 +178,42 @@ class ProjectAnalyzerServiceIntegrationTest {
     }
     
     @Test
+    fun `files written by the agent during its own turn do not force a re-analysis`() = runBlocking {
+        // In AGENT mode the agent edits files constantly, and every edit moved the project's
+        // last-modified stamp - so the mtime check re-ran a full tree analysis on every iteration
+        // and the 10-minute TTL was dead exactly in the mode that needs it. The agent's own writes
+        // are not news to the agent.
+        val mockRichReport = createMockProjectAnalysisReport()
+        coEvery { richAnalysisEngine.analyzeProject(testProjectRoot) } returns mockRichReport
+
+        val first = projectAnalyzerService.analyzeProject(testProjectRoot)
+
+        pl.jclab.refio.core.services.monitoring.GlobalMetrics.beginAgentTurn()
+        try {
+            touchProjectFile()
+            val duringTurn = projectAnalyzerService.analyzeProject(testProjectRoot)
+            assertSame(first, duringTurn, "the agent's own edit must not throw away the analysis")
+            coVerify(exactly = 1) { richAnalysisEngine.analyzeProject(testProjectRoot) }
+        } finally {
+            pl.jclab.refio.core.services.monitoring.GlobalMetrics.endAgentTurn()
+        }
+
+        // Outside a turn the edit is somebody else's change and must still invalidate.
+        val afterTurn = projectAnalyzerService.analyzeProject(testProjectRoot)
+        assertNotSame(first, afterTurn, "a change outside a turn must re-analyze")
+        coVerify(exactly = 2) { richAnalysisEngine.analyzeProject(testProjectRoot) }
+    }
+
+    private fun touchProjectFile() {
+        // Top-level file: the freshness probe walks only a few levels down.
+        val file = testProjectRoot.resolve("README.md")
+        java.nio.file.Files.setLastModifiedTime(
+            file,
+            java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() + 60_000)
+        )
+    }
+
+    @Test
     fun `should manually invalidate cache`() = runBlocking {
         // Given
         val mockRichReport = createMockProjectAnalysisReport()
