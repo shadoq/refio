@@ -1427,7 +1427,8 @@ internal class TurnExecutor(
                         val writeToolCalls = turnToolExecutor.countWriteToolCalls(toolCalls)
                         val verificationToolCalls = turnToolExecutor.countVerificationToolCalls(toolCalls)
                         writeToolsExecutedInTurn += writeToolCalls
-                        fileWriteToolsExecutedInTurn += turnToolExecutor.countFileWriteToolCalls(toolCalls)
+                        fileWriteToolsExecutedInTurn +=
+                            turnToolExecutor.countLandedFileWriteToolCalls(toolCalls, toolResults.map { it.second })
                         if (writeToolCalls > 0) {
                             verificationToolsExecutedAfterWrite = 0
                         } else if (writeToolsExecutedInTurn > 0) {

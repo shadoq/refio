@@ -127,6 +127,23 @@ object ConfigKeys {
         validator = { it > 0 }
     )
 
+    /**
+     * Hard ceiling, in CHARACTERS, on a single streamed response before the size guardrail aborts
+     * it. Distinct from [MAX_OUTPUT_SIZE], which is a token budget handed to the provider: this one
+     * is the runaway-decoder brake applied to what actually arrives.
+     *
+     * `0` (the default) means derive it from the model's context window - see
+     * [pl.jclab.refio.core.llm.streaming.OutputSizeLimiter.ceilingForContext]. A fixed number cannot
+     * fit every model: it has to sit above the largest legitimate single response, and how large
+     * that is depends on the window. Set a non-zero value only to pin the ceiling explicitly.
+     */
+    val MAX_OUTPUT_CHARS = ConfigKey(
+        key = "limits.max_output_chars",
+        parser = String::toIntOrNull,
+        default = 0,
+        validator = { it == 0 || it in 4_096..8_388_608 }
+    )
+
     val MAX_FILE_SIZE = ConfigKey(
         key = "limits.max_file_size",
         parser = String::toIntOrNull,
@@ -824,11 +841,16 @@ object ConfigKeys {
      * Bounds a turn stuck waiting rather than generating (a model that
      * never answers, a tool blocked on IO). Gemini CLI pairs its subagent turn cap with the same
      * kind of time bound for this reason.
+     *
+     * 45, not 30: a local 35B-class model building a whole application needs more steps than a
+     * hosted one and pays ~80s per step, so 30 minutes cut off turns that were making steady
+     * progress rather than stuck (e2e pixel-plumber: 23 productive model calls, killed at the
+     * ceiling). The point of the bound is to catch a turn that is waiting, not one that is slow.
      */
     val AGENT_MAX_TURN_MINUTES = ConfigKey(
         key = "agent.max_turn_minutes",
         parser = String::toLongOrNull,
-        default = 30L,
+        default = 45L,
         validator = { it >= 0L }
     )
 
@@ -921,6 +943,7 @@ object ConfigKeys {
             TOOL_EXECUTION_TIMEOUT,
             MAX_CONTEXT_SIZE,
             MAX_OUTPUT_SIZE,
+            MAX_OUTPUT_CHARS,
             MAX_FILE_SIZE,
             MAX_RETRIES,
             RATE_LIMIT_RPM,

@@ -98,7 +98,14 @@ CONFIG_OVERRIDES=()
 # tests/__init__.py` was being refused and losing the turn over it. Claude Code's acceptEdits mode
 # auto-approves the same set for the same reason. Deletion is deliberately NOT here — `rm` stays a
 # refusal, and CommandDenylist still blocks the destructive forms after approval either way.
-AUTO_APPROVE='\b(kotlinc|gradlew|gradle|javac|java|python3?|pip3?|node|npm|npx|pnpm|yarn|pytest|mvn|cargo|go|make|cmake|ls|cat|pwd|echo|head|tail|sed|awk|grep|rg|find|wc|diff|test|true|cd|sh|bash|env|export|mkdir|touch|mv|cp|tr|sort|uniq|cut|sleep|which|lsof)\b'
+#
+# curl is allowed ONLY against loopback: a scenario that builds a web service (build-rest-api) has
+# the model start it and probe its own endpoints, and its build_cmd does exactly that. Bare `curl`
+# would hand every run an egress path, so the branch demands a loopback host that ends at a port,
+# a path or the string's end - `127.0.0.1.evil.com` and `evil.com/?x=127.0.0.1` both stay refused.
+# Approval is per command segment, so `python3 app.py && curl https://elsewhere` still loses on the
+# second segment. This is a text heuristic over a command line, not a network control.
+AUTO_APPROVE='(\bcurl\b(?!.*://(?!(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?=[/?\s]|$)))(?=.*(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?=[/?\s]|$))|\b(kotlinc?|gradlew|gradle|javac|java|python3?|pip3?|node|npm|npx|pnpm|yarn|pytest|mvn|cargo|go|make|cmake|ls|cat|pwd|echo|head|tail|sed|awk|grep|rg|find|wc|diff|test|true|cd|sh|bash|env|export|mkdir|touch|mv|cp|tr|sort|uniq|cut|sleep|which|lsof)\b)'
 
 die() { echo "ERROR: $*" >&2; exit 2; }
 
@@ -663,7 +670,7 @@ run_scenario() {
     # the shared database. The config template is rendered into the temp project with {{MCP_DIR}}
     # and {{PORT}} substituted. STDIO servers are spawned by the CLI itself; HTTP and SSE ones need
     # a listener, which the runner starts here and stops with the fixture server below.
-    local mcp_config mcp_stub mcp_port mcp_profile mcp_pid="" mcp_rendered=""
+    local mcp_config mcp_stub mcp_port mcp_profile mcp_pid="" mcp_rendered="" mcp_tmpdir=""
     mcp_config="$(jq -r '.mcp.config // empty' "$scenario")"
     if [[ -n "$mcp_config" ]]; then
         local mcp_dir="$REPO_ROOT/test_data/mcp"
@@ -677,13 +684,19 @@ run_scenario() {
         mcp_port="$(jq -r '.mcp.stub.port // empty' "$scenario")"
         mcp_profile="$(jq -r '.mcp.stub.profile // "docs"' "$scenario")"
 
+        # Same reason as mcp_dir_native above, for the interpreter: a STDIO config naming a bare
+        # `python` spawns nothing on a box that only has `python3`, and the probe reports "Failed to
+        # start MCP stdio process". Resolve it here and let the config ask for it as {{PYTHON}}, so
+        # a stdio server and a stub server always run under the same interpreter.
+        local mcp_py; mcp_py="$(command -v python3 || command -v python || true)"
+        [[ -n "$mcp_py" ]] || die "mcp scenarios need python3/python on PATH"
+        command -v cygpath >/dev/null 2>&1 && mcp_py="$(cygpath -m "$mcp_py")"
+
         if [[ -n "$mcp_stub" ]]; then
-            local py2; py2="$(command -v python3 || command -v python || true)"
-            [[ -n "$py2" ]] || die "mcp.stub needs python3/python on PATH"
             [[ -n "$mcp_port" ]] || die "mcp.stub needs a port"
             local -a mcp_extra=()
             while IFS= read -r a; do a="${a%$'\r'}"; [[ -n "$a" ]] && mcp_extra+=("$a"); done < <(jq -r '.mcp.stub.args // [] | .[]' "$scenario")
-            "$py2" "$mcp_dir/$mcp_stub" --port "$mcp_port" --profile "$mcp_profile" \
+            "$mcp_py" "$mcp_dir/$mcp_stub" --port "$mcp_port" --profile "$mcp_profile" \
                 "${mcp_extra[@]+"${mcp_extra[@]}"}" >"$work/mcp-server.log" 2>&1 &
             mcp_pid=$!
             local mcp_ready=0 j
@@ -697,8 +710,13 @@ run_scenario() {
         # Rendered OUTSIDE the project: a config sitting in the work dir is just another file to
         # the agent, and it will read it and start reimplementing the server instead of calling
         # the tool. Observed on ornith:35b, which burned 24 iterations doing exactly that.
-        mcp_rendered="$(mktemp "${TMPDIR:-/tmp}/refio-e2e-mcp-${id}-XXXXXX.json")"
+        # A temp DIR, not a temp file: BSD mktemp (macOS) only randomizes Xs at the END of the
+        # template, so "...-XXXXXX.json" produced a file called literally "...-XXXXXX.json" and two
+        # concurrent runs of the same scenario would share - and overwrite - it.
+        mcp_tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/refio-e2e-mcp-${id}-XXXXXX")"
+        mcp_rendered="$mcp_tmpdir/config.json"
         sed -e "s|{{MCP_DIR}}|$mcp_dir_native|g" -e "s|{{PORT}}|$mcp_port|g" \
+            -e "s|{{PYTHON}}|$mcp_py|g" \
             "$mcp_dir/$mcp_config" > "$mcp_rendered"
 
         # Preflight: a server that fails to connect is indistinguishable, in the turn's output,
@@ -706,7 +724,7 @@ run_scenario() {
         # "tool not invoked". Probe first (no LLM) and fail immediately with the real reason.
         # Outside the project, like the rendered config: a probe log in the work dir is a file the
         # agent will grep, and it names the tool, which misleads it into believing the tool exists.
-        local probe_log="${mcp_rendered%.json}.probe.log"
+        local probe_log="$mcp_tmpdir/probe.log"
         if ! "$CLI" -p "$work" --mcp-server "$mcp_rendered" --mcp-probe >"$probe_log" 2>&1; then
             echo "| $id | FAIL (MCP server did not connect) | see $probe_log |"
             emit_result_record "$id" "FAIL (MCP server did not connect)" ""
@@ -761,7 +779,7 @@ run_scenario() {
     # return below) so no python process is left running.
     [[ -n "$server_pid" ]] && { kill "$server_pid" 2>/dev/null || true; }
     [[ -n "$mcp_pid" ]] && { kill "$mcp_pid" 2>/dev/null || true; }
-    [[ -n "$mcp_rendered" ]] && rm -f "$mcp_rendered" "${mcp_rendered%.json}.probe.log"
+    [[ -n "$mcp_tmpdir" ]] && rm -rf "$mcp_tmpdir"
 
     if [[ ! -f "$run_json" ]]; then
         echo "| $id | FAIL (no run.json produced) | - |"

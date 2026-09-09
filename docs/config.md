@@ -549,6 +549,7 @@ mcp:
 | `limits.toolExecutionTimeout` | `limits.tool_execution_timeout` | `240` |
 | `limits.maxContextSize` | `limits.max_context_size` | `128000` |
 | `limits.maxOutputSize` | `limits.max_output_size` | `16384` |
+| - | `limits.max_output_chars` | `0` (derive from the model's context window) |
 | `limits.maxFileSize` | `limits.max_file_size` | `10` |
 | `advanced.readOnlyMode` | `advanced.read_only_mode` | `false` |
 | `security.allowSymlinks` | `security.allow_symlinks` | `false` |
