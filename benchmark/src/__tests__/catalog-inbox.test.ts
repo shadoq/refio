@@ -90,7 +90,7 @@ describe("buildInboxEntry", () => {
     finalOutput: "done",
     needles: [{ regex: "<canvas" }],
     needleInOutput: null,
-    toolCalls: ["advance_code_editing"],
+    classOrder: ["write"],
     expectedToolOrder: ["advance_code_editing"],
     status: "SUCCESS",
     rendered: true,
@@ -142,7 +142,7 @@ function fileWithOneInboxEntry(): ResultsFile {
       finalOutput: "",
       needles: [{ regex: "<canvas" }],
       needleInOutput: null,
-      toolCalls: ["advance_code_editing"],
+      classOrder: ["write"],
       expectedToolOrder: [],
       status: "SUCCESS",
       rendered: true,
@@ -181,7 +181,7 @@ describe("buildInboxEntry under an external harness", () => {
         finalOutput: "",
         needles: [{ regex: "<canvas" }],
         needleInOutput: null,
-        toolCalls: [],
+        classOrder: [],
         expectedToolOrder: [],
         status: "SUCCESS",
         rendered: true,
@@ -251,5 +251,167 @@ describe("discardInboxEntry", () => {
     const next = discardInboxEntry(fileWithOneInboxEntry(), "todo__ollama-qwen3.6-35b__1");
     expect(next.inbox).toHaveLength(0);
     expect(next.results).toHaveLength(0);
+  });
+});
+
+// The trace is the whole point of running the same model under two harnesses, so it
+// must survive promotion; a result that loses it can no longer be compared.
+const sampleTrace = {
+  format: "refio-trace/1" as const,
+  source: "refio-run-json" as const,
+  path: "attachments/todo__ollama-qwen3.6-35b__1/_trace/trace.jsonl",
+  turns: 2,
+  endReason: "completed" as const,
+  toolCalls: 3,
+  reads: 1,
+  writes: 1,
+  shellRuns: 1,
+  searches: 0,
+  otherCalls: 0,
+  toolErrors: 0,
+  nonZeroExits: 0,
+  duplicateCalls: 0,
+  repeatedCallStreak: 0,
+  repeatedFailedCallStreak: 0,
+  recoveredFromError: null,
+  readsBeforeFirstWrite: 1,
+  searchesBeforeFirstWrite: 0,
+  filesWritten: 1,
+  firstWriteAtCall: 2,
+  editsAfterFirstWrite: 0,
+  timeToFirstWriteMs: 1200,
+  selfVerified: true,
+  toolHistogram: { read_file: 1 },
+};
+
+describe("trace on the queue entry", () => {
+  it("puts the trace summary on the built entry when the run produced one", () => {
+    const entry = buildInboxEntry({
+      caseId: "todo",
+      mode: "AGENT",
+      modelId: "ollama/qwen3.6:35b",
+      environmentId: "local",
+      harnessId: "refio",
+      attemptNumber: 1,
+      run: parseRunJson(sampleRun),
+      judge: buildDeterministicJudge({
+        mode: "AGENT",
+        deliverableText: "<canvas>",
+        finalOutput: "",
+        needles: [],
+        needleInOutput: null,
+        classOrder: [],
+        expectedToolOrder: [],
+        status: "SUCCESS",
+        rendered: true,
+        consoleErrors: [],
+        judgedAt: "2026-07-25T12:00:00.000Z",
+        screenshots: [],
+      }),
+      attachments: [],
+      autoVerdict: { verdict: "PASS", reasons: [] },
+      now: "2026-07-25T12:00:00.000Z",
+      trace: sampleTrace,
+    });
+    expect(entry.trace?.toolCalls).toBe(3);
+    expect(InboxEntrySchema.safeParse(entry).success).toBe(true);
+  });
+
+  it("carries the trace from the queue entry into the promoted result", () => {
+    const file = fileWithOneInboxEntry();
+    file.inbox[0].trace = sampleTrace;
+    const next = promoteInboxEntry(
+      file,
+      "todo__ollama-qwen3.6-35b__1",
+      [{ criterionId: "look", value: 1 }],
+      "2026-07-26T09:00:00.000Z",
+    );
+    expect(next.results[0].trace?.selfVerified).toBe(true);
+  });
+
+  it("leaves the result without a trace when the entry had none", () => {
+    const file = fileWithOneInboxEntry();
+    const next = promoteInboxEntry(
+      file,
+      "todo__ollama-qwen3.6-35b__1",
+      [{ criterionId: "look", value: 1 }],
+      "2026-07-26T09:00:00.000Z",
+    );
+    expect(next.results[0].trace).toBeUndefined();
+  });
+});
+
+describe("thinking mode on the queue entry", () => {
+  const thinking = { requested: "off" as const, observed: false };
+
+  it("carries the thinking mode from the queue entry into the promoted result", () => {
+    const file = fileWithOneInboxEntry();
+    file.inbox[0].thinking = thinking;
+    const next = promoteInboxEntry(
+      file,
+      "todo__ollama-qwen3.6-35b__1",
+      [{ criterionId: "look", value: 1 }],
+      "2026-07-26T09:00:00.000Z",
+    );
+    expect(next.results[0].thinking).toEqual(thinking);
+  });
+});
+
+// The verdict says what the evidence supports. A criterion nobody could measure is
+// neither a pass nor a failure, and the reasons have to say which is which.
+describe("deterministicVerdict over partly measured criteria", () => {
+  it("names the criteria that were not measured", () => {
+    const v = deterministicVerdict([{ criterionId: "agent_logic", value: 1 }]);
+    expect(v.reasons).toContain("compliance=not measured");
+    expect(v.reasons).toContain("works_out_of_box=not measured");
+  });
+
+  it("does not fail a run only because a criterion could not be measured", () => {
+    expect(deterministicVerdict([{ criterionId: "agent_logic", value: 1 }]).verdict).toBe("PASS");
+  });
+
+  it("cannot pass a run with nothing measured at all", () => {
+    expect(deterministicVerdict([]).verdict).toBe("FAIL");
+  });
+
+  it("still fails a run whose compliance was measured and fell short", () => {
+    const v = deterministicVerdict([
+      { criterionId: "compliance", value: 0.5 },
+      { criterionId: "agent_logic", value: 1 },
+    ]);
+    expect(v.verdict).toBe("FAIL");
+  });
+});
+
+// What the loop said about itself. Previously parsed and thrown away, so a run that
+// silently overflowed its window looked like any other run on the leaderboard.
+describe("loop signals from the run document", () => {
+  it("keeps the overflow flag, the failure marker and the verification result", () => {
+    const run = parseRunJson({
+      session: { status: "SUCCESS" },
+      metrics: {
+        contextOverflow: true,
+        failureMarker: "NOOP_WRITE_STALL",
+        verification: { ran: true, attempts: 2, result: "PASSED" },
+      },
+    });
+    expect(run.loop.contextOverflow).toBe(true);
+    expect(run.loop.failureMarker).toBe("NOOP_WRITE_STALL");
+    expect(run.loop.verification).toEqual({ ran: true, attempts: 2, result: "PASSED" });
+  });
+
+  it("reads what the loop had to leave out of the prompt, once it reports it", () => {
+    const run = parseRunJson({
+      session: { status: "SUCCESS" },
+      metrics: {
+        context: { budgetTokens: 48000, usedTokens: 47200, droppedMessages: 14, drops: { CONVERSATION: 3 } },
+      },
+    });
+    expect(run.loop.context?.droppedMessages).toBe(14);
+    expect(run.loop.context?.drops).toEqual({ CONVERSATION: 3 });
+  });
+
+  it("leaves the signals empty for a run document that reports none", () => {
+    expect(parseRunJson({ session: { status: "SUCCESS" } }).loop).toEqual({});
   });
 });

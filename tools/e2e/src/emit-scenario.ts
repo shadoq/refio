@@ -28,6 +28,12 @@ export interface ScenarioAssert {
   smoke?: { entry: string; dom_present: string[] };
   build_cmd?: string;
   no_context_overflow: boolean;
+  // Loop-quality gates: how the run went, as opposed to what it left behind.
+  enforce_max_iterations?: boolean;
+  self_verified?: boolean;
+  forbidden_markers?: string[];
+  tool_budget?: Record<string, number>;
+  no_immediate_repeat?: boolean;
 }
 
 export interface E2eScenario {
@@ -70,6 +76,21 @@ export function caseToScenario(c: CatalogCase): E2eScenario {
   }
   if (c.assert.buildCmd) {
     assert.build_cmd = c.assert.buildCmd;
+  }
+  if (c.assert.enforceMaxIterations) {
+    assert.enforce_max_iterations = true;
+  }
+  if (c.assert.selfVerified) {
+    assert.self_verified = true;
+  }
+  if (c.assert.forbiddenMarkers.length > 0) {
+    assert.forbidden_markers = [...c.assert.forbiddenMarkers];
+  }
+  if (Object.keys(c.assert.toolBudget).length > 0) {
+    assert.tool_budget = { ...c.assert.toolBudget };
+  }
+  if (c.assert.noImmediateRepeat) {
+    assert.no_immediate_repeat = true;
   }
 
   return {

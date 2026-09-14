@@ -11,11 +11,14 @@ import {
   Empty,
   Spin,
   Descriptions,
+  Collapse,
   message,
 } from "antd";
 import { useResults, useTasks } from "@/data/queries";
 import { usePromoteInboxEntry, useDiscardInboxEntry } from "@/data/mutations";
 import { ArtifactPreview } from "@/components/attachments/ArtifactPreview";
+import { TraceSummaryTags } from "@/components/results/TraceSummaryTags";
+import { TraceTimeline } from "@/components/results/TraceTimeline";
 import { inboxScreenshots } from "@/lib/adminArtifacts";
 import { filterInboxEntries, inboxFacetOptions, type QueueFilters } from "@/lib/queueFilters";
 import type { InboxEntry, Score } from "@/schema/results";
@@ -112,6 +115,23 @@ function QueueCard({
             <Descriptions.Item label="Tokens out">{fmt(entry.tokensOut)}</Descriptions.Item>
             <Descriptions.Item label="Cost">{fmt(entry.costUsd, " $")}</Descriptions.Item>
           </Descriptions>
+
+          {entry.trace && (
+            <div style={{ marginBottom: 12 }}>
+              <TraceSummaryTags trace={entry.trace} />
+              <Collapse
+                ghost
+                size="small"
+                items={[
+                  {
+                    key: "trace",
+                    label: "Run trace",
+                    children: <TraceTimeline trace={entry.trace} />,
+                  },
+                ]}
+              />
+            </div>
+          )}
 
           <Text strong>Deterministic checks (auto)</Text>
           <div style={{ margin: "6px 0 12px" }}>

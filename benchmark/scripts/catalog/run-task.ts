@@ -14,16 +14,35 @@
 //
 // usage:
 //   tsx scripts/catalog/run-task.ts <taskId> --model <m> [--env <id>] [--harness <id>]
-//        [--harness-model <m>] [--attempts N] [--start-attempt N] [--no-render] [--dry-run]
+//        [--harness-model <m>] [--ollama-host <host>] [--attempts N] [--start-attempt N]
+//        [--no-render] [--dry-run]
+//
+// A model id starting with "ollama/" points an external agent at the local Ollama
+// endpoint, so the same model can be measured under Refio and under that agent.
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { readFile, readdir, copyFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { runHeadless } from "./lib/run-cli";
-import { runAgent, AGENT_HARNESS_IDS } from "./lib/run-agent";
+import { runAgent, buildCommand, AGENT_HARNESS_IDS } from "./lib/run-agent";
 import { captureShots } from "../judge/lib/render";
-import { buildDeterministicJudge } from "../../src/lib/catalog/deterministic";
+import {
+  buildDeterministicJudge,
+  type RenderEvidence,
+} from "../../src/lib/catalog/deterministic";
+import { createHash } from "node:crypto";
 import { pickDeliverable } from "../../src/lib/catalog/deliverable";
+import {
+  resolveHarnessRouting,
+  refioConfigOverrides,
+  permissionModeOf,
+  ollamaModelName,
+  DEFAULT_OLLAMA_CONTEXT,
+} from "../../src/lib/catalog/harness-routing";
+import { harnessVersion, warmUpOllama } from "./lib/run-context";
+import { DEFAULT_AGENT_LIMITS } from "../../src/lib/catalog/agent-limits";
+import { toRunJson } from "../../src/lib/catalog/agent-run";
+import { buildTraceForRun, thinkingForRun } from "./lib/land-trace";
 import {
   parseRunJson,
   makeInboxId,
@@ -38,9 +57,12 @@ import {
   upsertInbox,
 } from "../../src/lib/catalog/inbox-store";
 import { saveResultsAtomic } from "../judge/lib/store";
-import { InboxEntrySchema, type Attachment } from "../../src/schema/results";
-
-const AGENT_TIMEOUT_MS = 30 * 60 * 1000;
+import {
+  InboxEntrySchema,
+  type Attachment,
+  type Thinking,
+  type TraceSummary,
+} from "../../src/schema/results";
 
 interface Args {
   taskId: string;
@@ -48,6 +70,11 @@ interface Args {
   env: string;
   harness: string;
   harnessModel?: string;
+  ollamaHost: string;
+  thinking: "on" | "off" | "unknown";
+  maxOutputTokens?: number;
+  // Tokens the local model is loaded with, pinned for both harnesses alike.
+  ollamaCtx: number;
   attempts: number;
   startAttempt: number;
   noRender: boolean;
@@ -61,6 +88,9 @@ function parseArgs(argv: string[]): Args {
     model: "",
     env: "dgx-local",
     harness: "refio",
+    ollamaHost: process.env.OLLAMA_HOST ?? "127.0.0.1",
+    thinking: "unknown",
+    ollamaCtx: DEFAULT_OLLAMA_CONTEXT,
     attempts: 1,
     startAttempt: 1,
     noRender: false,
@@ -74,6 +104,10 @@ function parseArgs(argv: string[]): Args {
     else if (t === "--env") a.env = argv[++i];
     else if (t === "--harness") a.harness = argv[++i];
     else if (t === "--harness-model") a.harnessModel = argv[++i];
+    else if (t === "--ollama-host") a.ollamaHost = argv[++i];
+    else if (t === "--thinking") a.thinking = argv[++i] as Args["thinking"];
+    else if (t === "--max-output-tokens") a.maxOutputTokens = Number(argv[++i]);
+    else if (t === "--ollama-ctx") a.ollamaCtx = Number(argv[++i]);
     else if (t === "--attempts") a.attempts = Number(argv[++i]);
     else if (t === "--start-attempt") a.startAttempt = Number(argv[++i]);
     else if (t === "--max-cost") a.maxCost = Number(argv[++i]);
@@ -124,12 +158,40 @@ async function main(): Promise<void> {
   const promptText = task.systemPrompt.split("{{MODEL_ID}}").join(token);
   let written = 0;
 
+  // Load the local model with the window this sweep measures at, so both harnesses get
+  // the same one. See import-runs for why this cannot be left to each side's defaults.
+  const localModel = ollamaModelName(args.model);
+  const contextWindow = localModel ? args.ollamaCtx : undefined;
+  let warmedUp = false;
+  if (localModel && !args.dryRun) {
+    warmedUp = await warmUpOllama(args.ollamaHost, localModel, args.ollamaCtx);
+    console.error(
+      warmedUp
+        ? `  loaded ${localModel} at ${args.ollamaCtx} tokens of context`
+        : `  WARNING: could not load ${localModel} at ${args.ollamaCtx} tokens; the window this run used is unknown`,
+    );
+  }
+  const version = await harnessVersion(args.harness);
+  const runContext: RunContext = {
+    ...(version ? { harnessVersion: version } : {}),
+    promptSha256: createHash("sha256").update(promptText).digest("hex"),
+    ...(contextWindow !== undefined && warmedUp ? { contextWindow } : {}),
+    ...(args.maxOutputTokens !== undefined ? { maxOutputTokens: args.maxOutputTokens } : {}),
+    ...(localModel ? { modelServer: args.ollamaHost } : {}),
+    ...(permissionModeOf(args.harness) ? { permissionMode: permissionModeOf(args.harness) } : {}),
+    timeoutMs: DEFAULT_AGENT_LIMITS.timeoutMs,
+    maxTurns: DEFAULT_AGENT_LIMITS.maxTurns,
+  };
+
   const lastAttempt = args.startAttempt + Math.max(1, args.attempts) - 1;
   for (let attempt = args.startAttempt; attempt <= lastAttempt; attempt++) {
     console.error(`=== ${args.taskId} / ${args.harness} / ${args.model} / attempt ${attempt} ===`);
 
+    const inboxId = makeInboxId(args.taskId, args.model, attempt, args.harness);
     let runJson: unknown;
-    let workDir: string;
+    let workDir: string | null;
+    let trace: TraceSummary | undefined;
+    let thinking: Thinking | undefined;
     if (args.harness === "refio") {
       const res = await runHeadless({
         repoRoot,
@@ -139,26 +201,76 @@ async function main(): Promise<void> {
         model: args.model,
         deliverable: null,
         maxCost: args.maxCost,
+        configOverrides: refioConfigOverrides(args.model, args.ollamaHost, contextWindow),
       });
       runJson = res.runJson;
       workDir = res.workDir;
+      trace = await buildTraceForRun({
+        harnessId: "refio",
+        entryId: inboxId,
+        dataDir,
+        persist: !args.dryRun,
+        runJson: res.runJson,
+        runJsonSrc: res.runJsonPath,
+        loop: parseRunJson(res.runJson).loop,
+      });
+      thinking = thinkingForRun({
+        harnessId: "refio",
+        requested: args.thinking,
+        runJson: res.runJson,
+      });
     } else {
-      const res = await runAgent({
+      const routing = resolveHarnessRouting(
+        args.harness,
+        args.model,
+        args.harnessModel,
+        args.ollamaHost,
+        { thinking: args.thinking, maxOutputTokens: args.maxOutputTokens },
+      );
+      // A task from tasks.json has no case, so it keeps the default limits.
+      const agentOpts = {
         harnessId: args.harness,
         promptText,
         fixtureDir: null,
         deliverable: null,
-        model: args.harnessModel,
-        timeoutMs: AGENT_TIMEOUT_MS,
-      });
-      runJson = res.runJson;
-      workDir = res.workDir;
-      if (res.stderr.trim() !== "") console.error(res.stderr.slice(0, 500));
+        routing,
+        limits: DEFAULT_AGENT_LIMITS,
+        progress: true,
+      };
+      // A dry run must not spend tokens: it prints the command it would have run and
+      // builds the entry from a stand-in result.
+      if (args.dryRun) {
+        console.error(`  ${buildCommand(agentOpts, "<workdir>", "<workdir>/agent-last-message.txt")}`);
+        const envNames = Object.keys(routing.env);
+        if (envNames.length > 0) console.error(`  env overrides: ${envNames.join(", ")}`);
+        console.error("  dry-run: agent not executed");
+        runJson = toRunJson({ status: "FAILED", finalOutput: "dry-run" });
+        workDir = null;
+      } else {
+        const res = await runAgent(agentOpts);
+        runJson = res.runJson;
+        workDir = res.workDir;
+        trace = await buildTraceForRun({
+          harnessId: args.harness,
+          entryId: inboxId,
+          dataDir,
+          persist: true,
+          timedLines: res.timedLines,
+          rawLog: res.rawLog,
+          source: res.traceSource,
+        });
+        thinking = thinkingForRun({
+          harnessId: args.harness,
+          requested: args.thinking,
+          timedLines: res.timedLines,
+        });
+        if (res.stderr.trim() !== "") console.error(res.stderr.slice(0, 500));
+      }
     }
 
-    const produced = await readdir(workDir);
-    const deliverable = pickDeliverable(produced);
-    if (!deliverable) {
+    const produced = workDir ? await readdir(workDir) : [];
+    const deliverable = workDir ? pickDeliverable(produced) : null;
+    if (workDir && !deliverable) {
       console.error(
         `  no single html artifact in ${workDir} (found: ${produced.join(", ") || "nothing"})`,
       );
@@ -166,14 +278,14 @@ async function main(): Promise<void> {
 
     const now = new Date().toISOString();
     const run = parseRunJson(runJson);
-    const inboxId = makeInboxId(args.taskId, args.model, attempt, args.harness);
     const attachments: Attachment[] = [];
     let deliverableText: string | null = null;
     let rendered: boolean | null = null;
     let consoleErrors: string[] = [];
+    let renderEvidence: RenderEvidence | null = null;
     const screenshots: string[] = [];
 
-    if (deliverable) {
+    if (deliverable && workDir) {
       const src = join(workDir, deliverable);
       deliverableText = await readFile(src, "utf8");
       attachments.push({ type: "html", src: `attachments/${inboxId}/artifact.html` });
@@ -188,13 +300,21 @@ async function main(): Promise<void> {
           const judgeDir = join(destDir, "_judge");
           await mkdir(judgeDir, { recursive: true });
           const shot = join(judgeDir, "shot-full.png");
-          const outcome = await captureShots(artifactDest, { motionPaths: [], fullPagePath: shot });
-          rendered = outcome.renderError === null;
-          consoleErrors = outcome.consoleErrors;
-          if (existsSync(shot)) {
-            const rel = `attachments/${inboxId}/_judge/shot-full.png`;
-            screenshots.push(rel);
-            attachments.push({ type: "image", src: rel });
+          // A browser missing from THIS machine says nothing about the artifact, so the
+          // criterion is left unmeasured rather than scored zero - and the run, which
+          // cost real tokens, is not thrown away over a local tooling gap.
+          try {
+            const outcome = await captureShots(artifactDest, { motionPaths: [], fullPagePath: shot });
+            rendered = outcome.renderError === null;
+            consoleErrors = outcome.consoleErrors;
+            renderEvidence = outcome.evidence ?? null;
+            if (existsSync(shot)) {
+              const rel = `attachments/${inboxId}/_judge/shot-full.png`;
+              screenshots.push(rel);
+              attachments.push({ type: "image", src: rel });
+            }
+          } catch (e) {
+            console.error(`  render skipped: ${String(e).split("\n")[0]}`);
           }
         }
       }
@@ -209,17 +329,28 @@ async function main(): Promise<void> {
       finalOutput: run.finalOutput,
       needles: [],
       needleInOutput: null,
-      toolCalls: run.toolCalls,
       expectedToolOrder: [],
-      toolCallsReported: args.harness === "refio",
+      ...(trace?.classOrder !== undefined ? { classOrder: trace.classOrder } : {}),
       status: run.status,
       rendered,
       consoleErrors,
+      renderEvidence,
+      loop: trace
+        ? {
+            writes: trace.writes,
+            toolCalls: trace.toolCalls,
+            duplicateCalls: trace.duplicateCalls,
+            toolErrors: trace.toolErrors,
+            recoveredFromError: trace.recoveredFromError,
+            selfVerified: trace.selfVerified,
+          }
+        : null,
       judgedAt: now,
       screenshots,
     });
 
     const entry = buildInboxEntry({
+      runContext,
       caseId: args.taskId,
       mode: "AGENT",
       modelId: args.model,
@@ -231,6 +362,8 @@ async function main(): Promise<void> {
       attachments,
       autoVerdict: deterministicVerdict(judge.scores),
       now,
+      ...(trace ? { trace } : {}),
+      ...(thinking ? { thinking } : {}),
     });
 
     const parsed = InboxEntrySchema.safeParse(entry);

@@ -1,8 +1,7 @@
-import { Typography, Card, Row, Col, Button, Spin, Empty, Statistic } from "antd";
+import { Typography, Card, Row, Col, Button, Space, Spin, Empty, Statistic } from "antd";
 import { Link, useNavigate } from "react-router-dom";
 import { useMemo } from "react";
 import { LeaderboardTable } from "@/components/tables/LeaderboardTable";
-import { ReferenceTrackTable } from "@/components/tables/ReferenceTrackTable";
 import { ParetoScatter } from "@/components/charts/ParetoScatter";
 import { useTasks } from "@/data/queries";
 import { useResults } from "@/data/queries";
@@ -18,7 +17,7 @@ export default function Landing() {
   const { data: tasksData, isLoading: tasksLoading } = useTasks();
   const { data: resultsData, isLoading: resultsLoading } = useResults();
 
-  const hasReferenceTrack = (resultsData?.harnesses ?? []).some((h) => h.kind === "external");
+  const hasExternalAgents = (resultsData?.harnesses ?? []).some((h) => h.kind === "external");
 
   const rows = useMemo(() => {
     if (!tasksData || !resultsData) return [];
@@ -230,21 +229,19 @@ export default function Landing() {
           </Card>
         </Col>
 
-        {hasReferenceTrack && (
+        {hasExternalAgents && (
           <Col span={24}>
-            <div className="section-heading">
-              <div>
-                <Title level={2}>Reference track</Title>
-                <p>
-                  The same tasks run by an external coding agent on its own model, with its
-                  own planning, tools and self-checking. Measured on the same criteria, kept
-                  out of the leaderboard: it answers how far a local model is from what is
-                  already on people's desks, not which model Refio should default to.
-                </p>
-              </div>
-            </div>
             <Card className="glass-card">
-              <ReferenceTrackTable />
+              <Space direction="vertical" size={4}>
+                <Title level={4} style={{ margin: 0 }}>
+                  External coding agents
+                </Title>
+                <p style={{ margin: 0 }}>
+                  The same tasks run by Claude Code, Codex and Gemini CLI, with what each
+                  run actually did step by step. Kept off this leaderboard on purpose.
+                </p>
+                <Link to="/agents">Open the agents page</Link>
+              </Space>
             </Card>
           </Col>
         )}

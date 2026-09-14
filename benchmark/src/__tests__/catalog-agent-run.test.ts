@@ -1,6 +1,11 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
-import { parseClaudeCodeRun, parseCodexRun, toRunJson } from "@/lib/catalog/agent-run";
+import {
+  parseClaudeCodeRun,
+  parseCodexRun,
+  parseGeminiRun,
+  toRunJson,
+} from "@/lib/catalog/agent-run";
 import { parseRunJson } from "@/lib/catalog/inbox";
 
 // The shape `claude -p --output-format json` prints: one result event carrying the
@@ -147,5 +152,75 @@ describe("toRunJson", () => {
   it("reports no tool calls for an external agent", () => {
     const parsed = parseRunJson(toRunJson(parseCodexRun("", "ok", 0, 1)));
     expect(parsed.toolCalls).toEqual([]);
+  });
+});
+
+// The importer asks Claude Code for a streamed event log so the run's actions can be
+// traced; the metrics still have to come out of that same stream.
+describe("parseClaudeCodeRun on a streamed event log", () => {
+  const jsonl = [
+    JSON.stringify({ type: "system", subtype: "init", model: "opus" }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } }),
+    JSON.stringify({ type: "user", message: { content: [] } }),
+    JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "Wrote snake.html",
+      duration_ms: 42000,
+      total_cost_usd: 0.12,
+      usage: { input_tokens: 10, cache_read_input_tokens: 90, output_tokens: 500 },
+    }),
+  ].join("\n");
+
+  it("reads the outcome and the metrics out of the last event", () => {
+    const run = parseClaudeCodeRun(jsonl, 0);
+    expect(run.status).toBe("SUCCESS");
+    expect(run.finalOutput).toBe("Wrote snake.html");
+    expect(run.tokensIn).toBe(100);
+    expect(run.tokensOut).toBe(500);
+    expect(run.costUsd).toBe(0.12);
+    expect(run.durationMs).toBe(42000);
+  });
+
+  it("still fails a stream that never reported a result", () => {
+    const run = parseClaudeCodeRun('{"type":"assistant"}\nnot json\n', 0);
+    expect(run.status).toBe("FAILED");
+  });
+});
+
+describe("parseGeminiRun", () => {
+  const sample = [
+    JSON.stringify({ type: "init", session_id: "s", model: "gemini-2.5-flash" }),
+    JSON.stringify({ type: "message", role: "assistant", content: "Created hello.txt." }),
+    JSON.stringify({
+      type: "result",
+      status: "success",
+      stats: { input_tokens: 900, output_tokens: 300, duration_ms: 7000 },
+    }),
+  ].join("\n");
+
+  it("reads the outcome, the last message and the token counts", () => {
+    const run = parseGeminiRun(sample, 0, 8000);
+    expect(run.status).toBe("SUCCESS");
+    expect(run.finalOutput).toBe("Created hello.txt.");
+    expect(run.tokensIn).toBe(900);
+    expect(run.tokensOut).toBe(300);
+    expect(run.durationMs).toBe(7000);
+  });
+
+  // Gemini reports no price, and a zero would read as a measured cost.
+  it("leaves the cost unset", () => {
+    expect(parseGeminiRun(sample, 0, 8000).costUsd).toBeUndefined();
+  });
+
+  it("fails a run whose result event says it errored", () => {
+    const failed = JSON.stringify({ type: "result", status: "error", error: { message: "no" } });
+    expect(parseGeminiRun(failed, 0, 100).status).toBe("FAILED");
+  });
+
+  it("falls back to the caller's wall clock when the stream carries no duration", () => {
+    const run = parseGeminiRun(JSON.stringify({ type: "result", status: "success" }), 0, 4200);
+    expect(run.durationMs).toBe(4200);
   });
 });

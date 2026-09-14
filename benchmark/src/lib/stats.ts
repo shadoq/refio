@@ -156,10 +156,26 @@ function fallbackHarness(id: string): Harness {
   return { id, name: id, kind: id === "refio" ? "refio" : "external" };
 }
 
+export interface LeaderboardOptions {
+  // Drop a judge's verdict on a result its own harness produced (Claude Code judging
+  // a Claude Code run). Off by default, so every existing view keeps its numbers.
+  excludeSelfJudge?: boolean;
+}
+
+// A result whose judge is the agent that produced it, with that verdict removed.
+function withoutSelfJudge(result: Result, options: LeaderboardOptions): Result {
+  if (!options.excludeSelfJudge) return result;
+  const kept = (result.judgeScores ?? []).filter((s) => s.judgeId !== result.harnessId);
+  return kept.length === (result.judgeScores ?? []).length
+    ? result
+    : { ...result, judgeScores: kept };
+}
+
 export function leaderboard(
   results: Result[],
   resultsFile: Pick<ResultsFile, "models" | "environments"> & Partial<Pick<ResultsFile, "harnesses">>,
   tasks: TasksFile,
+  options: LeaderboardOptions = {},
 ): LeaderboardRow[] {
   const measured = excludeHiddenResults(results, tasks);
   const modelById = new Map(resultsFile.models.map((m) => [m.id, m]));
@@ -187,7 +203,7 @@ export function leaderboard(
     const scores = group.map((r) => normalizeResult(r, tasks));
     const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
     const judgeVals = group
-      .map((r) => getResultJudgeScore(r, tasks))
+      .map((r) => getResultJudgeScore(withoutSelfJudge(r, options), tasks))
       .filter((v): v is number => v != null);
     const judgeAvgScore =
       judgeVals.length > 0 ? judgeVals.reduce((a, b) => a + b, 0) / judgeVals.length : null;
@@ -298,29 +314,37 @@ export function leaderboard(
 export interface HarnessDeltaRow {
   modelId: string;
   environmentId: string;
-  // Average normalized score of the baseline harness (Refio), or null when it never
-  // ran this model - a missing baseline is not a zero.
+  // Average normalized score of the baseline harness (Refio) over the paired tasks,
+  // or null when it never ran any of them - a missing baseline is not a zero.
   baselineScore: number | null;
   byHarness: Record<string, number>;
   delta: Record<string, number>;
+  // How many tasks both harnesses actually ran. A delta computed over one shared task
+  // is a different claim from one computed over eighteen, and the reader must see which.
+  pairedTasks: Record<string, number>;
 }
+
+const mean = (values: number[]): number => values.reduce((a, b) => a + b, 0) / values.length;
 
 // Pair the same model across harnesses for one task, so "Refio with model X" and
 // "Claude Code with model X" can be read side by side with the difference spelled out.
-// Only models that some non-baseline harness actually ran are returned: a row with the
-// baseline alone has nothing to compare.
+//
+// The comparison is made task by task and only over tasks BOTH harnesses ran. Averaging
+// each harness over everything it happened to attempt compared an average over eighteen
+// tasks with an average over one, and called the difference a result.
 export function harnessDelta(
   results: Result[],
   tasks: TasksFile,
   baselineHarnessId: string,
 ): HarnessDeltaRow[] {
-  const groups = new Map<string, Map<string, number[]>>();
+  // model::environment -> harness -> task -> scores
+  const groups = new Map<string, Map<string, Map<string, number[]>>>();
   for (const r of results) {
     const key = `${r.modelId}::${r.environmentId}`;
-    const byHarness = groups.get(key) ?? new Map<string, number[]>();
-    const scores = byHarness.get(r.harnessId) ?? [];
-    scores.push(normalizeResult(r, tasks));
-    byHarness.set(r.harnessId, scores);
+    const byHarness = groups.get(key) ?? new Map<string, Map<string, number[]>>();
+    const byTask = byHarness.get(r.harnessId) ?? new Map<string, number[]>();
+    byTask.set(r.taskId, [...(byTask.get(r.taskId) ?? []), normalizeResult(r, tasks)]);
+    byHarness.set(r.harnessId, byTask);
     groups.set(key, byHarness);
   }
 
@@ -330,20 +354,77 @@ export function harnessDelta(
     if (others.length === 0) continue;
 
     const [modelId, environmentId] = key.split("::");
-    const mean = (values: number[]) => values.reduce((a, b) => a + b, 0) / values.length;
-    const baseline = byHarness.get(baselineHarnessId);
-    const baselineScore = baseline ? mean(baseline) : null;
+    const baselineByTask = byHarness.get(baselineHarnessId);
 
+    // Every harness's headline number is its own average over everything it ran, which
+    // is what "how did this agent do" means. The DELTA is the stricter figure: only the
+    // tasks the baseline ran too, averaged per task first.
     const scoresByHarness: Record<string, number> = {};
-    const delta: Record<string, number> = {};
-    for (const [harnessId, values] of byHarness) {
-      const value = mean(values);
-      scoresByHarness[harnessId] = value;
-      if (harnessId !== baselineHarnessId && baselineScore !== null) {
-        delta[harnessId] = value - baselineScore;
-      }
+    for (const [harnessId, byTask] of byHarness) {
+      scoresByHarness[harnessId] = mean([...byTask.values()].map(mean));
     }
-    rows.push({ modelId, environmentId, baselineScore, byHarness: scoresByHarness, delta });
+
+    const delta: Record<string, number> = {};
+    const pairedTasks: Record<string, number> = {};
+    let baselinePaired: number[] = [];
+    for (const harnessId of others) {
+      const byTask = byHarness.get(harnessId);
+      if (!byTask || !baselineByTask) continue;
+      const shared = [...byTask.keys()].filter((taskId) => baselineByTask.has(taskId));
+      pairedTasks[harnessId] = shared.length;
+      if (shared.length === 0) continue;
+      const perTaskDelta = shared.map(
+        (taskId) => mean(byTask.get(taskId)!) - mean(baselineByTask.get(taskId)!),
+      );
+      delta[harnessId] = mean(perTaskDelta);
+      baselinePaired = shared.map((taskId) => mean(baselineByTask.get(taskId)!));
+    }
+
+    const baselineScore = baselineByTask
+      ? mean(baselinePaired.length > 0 ? baselinePaired : [...baselineByTask.values()].map(mean))
+      : null;
+
+    rows.push({ modelId, environmentId, baselineScore, byHarness: scoresByHarness, delta, pairedTasks });
+  }
+  return rows;
+}
+
+export interface TaskHarnessCell {
+  avgScore: number;
+  attempts: number;
+}
+
+export interface TaskHarnessRow {
+  taskId: string;
+  taskName: string;
+  byHarness: Record<string, TaskHarnessCell>;
+}
+
+// One row per visible task, one cell per harness that ran it: the view that answers
+// "which agent handles which kind of task", where a single overall average cannot.
+export function taskHarnessMatrix(results: Result[], tasks: TasksFile): TaskHarnessRow[] {
+  const measured = excludeHiddenResults(results, tasks);
+  const byTask = new Map<string, Map<string, number[]>>();
+  for (const r of measured) {
+    const harnesses = byTask.get(r.taskId) ?? new Map<string, number[]>();
+    const scores = harnesses.get(r.harnessId) ?? [];
+    scores.push(normalizeResult(r, tasks));
+    harnesses.set(r.harnessId, scores);
+    byTask.set(r.taskId, harnesses);
+  }
+
+  const rows: TaskHarnessRow[] = [];
+  for (const task of visibleTasks(tasks.tasks)) {
+    const harnesses = byTask.get(task.id);
+    if (!harnesses) continue;
+    const byHarness: Record<string, TaskHarnessCell> = {};
+    for (const [harnessId, scores] of harnesses) {
+      byHarness[harnessId] = {
+        avgScore: scores.reduce((a, b) => a + b, 0) / scores.length,
+        attempts: scores.length,
+      };
+    }
+    rows.push({ taskId: task.id, taskName: task.name, byHarness });
   }
   return rows;
 }

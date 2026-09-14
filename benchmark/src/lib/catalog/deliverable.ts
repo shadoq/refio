@@ -15,3 +15,17 @@ export function pickDeliverable(producedFiles: string[]): string | null {
   );
   return candidates.length === 1 ? candidates[0] : null;
 }
+
+// How a produced deliverable is stored with the queue entry. A page is the renderable
+// artifact the viewer previews; anything else (a module of a multi-file task) is kept
+// as a plain file under its own name, because there is nothing to render.
+export interface DeliverableAttachment {
+  kind: "html" | "file";
+  fileName: string;
+}
+
+export function attachmentForDeliverable(path: string): DeliverableAttachment {
+  const base = path.split("/").pop() ?? path;
+  const isPage = /\.html?$/i.test(base);
+  return isPage ? { kind: "html", fileName: "artifact.html" } : { kind: "file", fileName: base };
+}

@@ -1,0 +1,46 @@
+{
+  "id": "games-chip8-emulator",
+  "mode": "AGENT",
+  "description": "Single-file CHIP-8 emulator: full instruction set, timers, keypad, 64x32 canvas display with sprite collision, built-in demo ROM, ROM loading, pause, step, speed control, register debugger.",
+  "category": "games",
+  "max_iterations": 40,
+  "fixture": "fixtures/chip8-emulator",
+  "prompt_file": "prompts/games-chip8-emulator.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "chip8_model_01.html",
+        "regex": "<canvas"
+      },
+      {
+        "path": "chip8_model_01.html",
+        "regex": "0x[0-9A-Fa-f]{3,4}|opcode"
+      },
+      {
+        "path": "chip8_model_01.html",
+        "regex": "requestAnimationFrame|setInterval"
+      },
+      {
+        "path": "chip8_model_01.html",
+        "regex": "keydown"
+      },
+      {
+        "path": "chip8_model_01.html",
+        "regex": "Uint8Array"
+      }
+    ],
+    "smoke": {
+      "entry": "chip8_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "The file is one self-contained CHIP-8 interpreter (no libraries): all 35 instructions, 4 KB of memory, 16 registers, index register, stack, delay and sound timers, the 16-key keypad mapped to the keyboard, a 64x32 display drawn on a scaled canvas with correct sprite XOR and collision, a built-in demo ROM as a byte array that actually runs, ROM loading from a file, pause, single step, adjustable speed, and a debugger panel showing the registers and the current instruction. The instructions must be decoded and executed for real, never faked."
+    ]
+  }
+}

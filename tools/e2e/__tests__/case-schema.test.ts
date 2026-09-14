@@ -54,6 +54,25 @@ describe("CatalogCaseSchema", () => {
     assert.equal(CatalogCaseSchema.safeParse(noDeliverable).success, false);
   });
 
+  // A multi-file case delivers modules plus the fixture's own tests, so it is scored
+  // by running that build command instead of by rendering a page.
+  it("parses a multi-file case scored through its build command", () => {
+    const parsed = CatalogCaseSchema.safeParse({
+      ...validAgentCase,
+      id: "notes-api",
+      category: "multi-file",
+      tier: "stress",
+      deliverable: "src/server.js",
+      assert: {
+        needles: [{ regex: "createServer" }],
+        fileUnchanged: ["test/api.test.js"],
+        buildCmd: "node --test test/",
+      },
+    });
+    assert.equal(parsed.success, true);
+    if (parsed.success) assert.equal(parsed.data.assert.buildCmd, "node --test test/");
+  });
+
   it("rejects an unknown category", () => {
     assert.equal(
       CatalogCaseSchema.safeParse({ ...validAgentCase, category: "spreadsheet" }).success,

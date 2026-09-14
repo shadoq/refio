@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import type { Scenario } from "./interactions";
 import type { InteractionRecord } from "../../../src/lib/judge/interactions";
 import { withDeadline } from "../../../src/lib/judge/deadline";
+import type { RenderEvidence } from "../../../src/lib/catalog/deterministic";
 
 const NAV_TIMEOUT_MS = 30_000;
 // Generous screenshot budget: heavy requestAnimationFrame artifacts (e.g. the
@@ -32,6 +33,8 @@ export interface RenderOutcome {
   // Non-null when navigation or a screenshot failed. The artifact is then treated
   // as a broken sample (judged low) rather than skipped.
   renderError: string | null;
+  // What the page had on it once it had settled. Absent when it could not be read.
+  evidence?: RenderEvidence | null;
 }
 
 function attachConsoleCapture(page: Page, sink: string[]): void {
@@ -67,6 +70,45 @@ async function closeQuietly(browser: Browser): Promise<void> {
     await browser.close();
   } catch {
     // Nothing actionable: the process is torn down even when close() rejects.
+  }
+}
+
+// Whether the page shows anything at all. A clean console over a blank canvas passed
+// every mechanical check while the deliverable was, to a person looking at it, not
+// there - so the browser that takes the screenshot is asked one more question before
+// it closes. Sampling every seventh pixel is enough to tell a flat fill from a drawing
+// and keeps the evaluation cheap.
+async function readEvidence(page: Page): Promise<RenderEvidence | null> {
+  try {
+    return await page.evaluate(() => {
+      const canvases = Array.from(document.querySelectorAll("canvas"));
+      let canvasColors: number | null = null;
+      for (const canvas of canvases) {
+        try {
+          const ctx = canvas.getContext("2d");
+          if (!ctx) continue; // a WebGL context cannot be sampled this way
+          const w = Math.min(canvas.width, 200);
+          const h = Math.min(canvas.height, 200);
+          if (w === 0 || h === 0) continue;
+          const data = ctx.getImageData(0, 0, w, h).data;
+          const seen = new Set<string>();
+          for (let p = 0; p < data.length; p += 4 * 7) {
+            seen.add(`${data[p]},${data[p + 1]},${data[p + 2]},${data[p + 3]}`);
+          }
+          canvasColors = Math.max(canvasColors ?? 0, seen.size);
+        } catch {
+          // A tainted canvas tells us nothing; leaving it unmeasured is honest.
+        }
+      }
+      return {
+        domNodes: document.querySelectorAll("*").length,
+        textLength: (document.body?.innerText ?? "").trim().length,
+        hasCanvas: canvases.length > 0,
+        canvasColors,
+      };
+    });
+  } catch {
+    return null;
   }
 }
 
@@ -129,7 +171,8 @@ export async function captureShots(
         renderError = renderError ?? `shot-full failed: ${(e as Error).message}`;
       }
     }
-    return { consoleErrors, renderError };
+    const evidence = renderError === null ? await readEvidence(page) : null;
+    return { consoleErrors, renderError, evidence };
   };
 
   try {

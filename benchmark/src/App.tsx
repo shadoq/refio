@@ -9,6 +9,7 @@ import Landing from "@/routes/Landing";
 import TaskDetail from "@/routes/TaskDetail";
 import Compare from "@/routes/Compare";
 import Pareto from "@/routes/Pareto";
+import Agents from "@/routes/Agents";
 import Results from "@/routes/Results";
 import Help from "@/routes/Help";
 import Queue from "@/routes/Queue";
@@ -86,6 +87,7 @@ export default function App() {
                 <Route path="/results" element={<Results />} />
                 <Route path="/compare" element={<Compare />} />
                 <Route path="/pareto" element={<Pareto />} />
+                <Route path="/agents" element={<Agents />} />
                 <Route path="/help" element={<Help />} />
                 <Route
                   path="/admin/queue"

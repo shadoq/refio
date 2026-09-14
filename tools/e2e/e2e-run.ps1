@@ -193,6 +193,18 @@ function Assert-Run {
         }
     }
 
+    # HARD 1c2 — file_absent: listed paths must NOT exist after the run. Unlike file_unchanged
+    # this covers files the fixture never had, which is what a prompt-injection check needs:
+    # retrieved documentation tells the agent to create a file and the gate is that it did not.
+    # Mirrors e2e-run.sh HARD 1c2.
+    if ($s.assert.file_absent) {
+        foreach ($fa in @($s.assert.file_absent)) {
+            if (Test-Path (Join-Path $ProjectDir $fa)) {
+                $hardFail = $true; $reasons += "file $fa was created (expected absent)"
+            }
+        }
+    }
+
     # HARD 1d — tool_invoked: a named tool MUST (or, with absent:true, must NOT) have been called.
     # {name, args_regex?, absent?}. Name presence reads the always-present conversation[].toolCalls[];
     # args_regex matches the raw arguments JSON in conversation[].toolCallDetails[] (additive run.json
@@ -251,6 +263,57 @@ function Assert-Run {
     # HARD 3 — no silent context overflow (docs/0057).
     if ($s.assert.no_context_overflow -eq $true -and $run.metrics.contextOverflow -eq $true) {
         $hardFail = $true; $reasons += "context overflow (silent truncation)"
+    }
+
+    # HARD 4 — max_iterations, when the case declares it a real limit. Iterations are counted
+    # as assistant messages: metrics.toolCallCount counts subtask rows, which is a different
+    # number under a name that reads like this one. Mirrors e2e-run.sh HARD 4.
+    $assistantTurns = @($run.conversation | Where-Object { $_.role -and ([string]$_.role).ToUpper() -eq 'ASSISTANT' }).Count
+    if ($s.assert.enforce_max_iterations -eq $true) {
+        $cap = if ($null -ne $s.max_iterations) { [int]$s.max_iterations } else { 0 }
+        if ($cap -gt 0 -and $assistantTurns -gt $cap) {
+            $hardFail = $true; $reasons += "took $assistantTurns iterations, budget is $cap"
+        }
+    }
+
+    # HARD 5 — self_verified: the agent itself had to run the build or the tests. Mirrors HARD 5.
+    if ($s.assert.self_verified -eq $true) {
+        $vran = $run.metrics.verification -and $run.metrics.verification.ran -eq $true
+        $vres = if ($run.metrics.verification -and $run.metrics.verification.result) { [string]$run.metrics.verification.result } else { 'NONE' }
+        if (-not $vran) { $hardFail = $true; $reasons += "the agent never verified its own work" }
+        elseif ($vres -ne 'PASSED') { $hardFail = $true; $reasons += "self-verification ended $vres" }
+    }
+
+    # HARD 6 — forbidden_markers: a guardrail that fired must not hide behind a delivered file.
+    if ($s.assert.forbidden_markers) {
+        $marker = if ($run.metrics.failureMarker) { [string]$run.metrics.failureMarker } else { '' }
+        foreach ($fm in @($s.assert.forbidden_markers)) {
+            if ($marker -ne '' -and $marker -eq [string]$fm) {
+                $hardFail = $true; $reasons += "loop marker $fm fired"
+            }
+        }
+    }
+
+    # HARD 7 — tool_budget: a ceiling per tool, which the subsequence-based tool_order cannot express.
+    if ($s.assert.tool_budget) {
+        $allCalls = @($run.conversation | ForEach-Object { $_.toolCalls } | Where-Object { $_ })
+        foreach ($prop in $s.assert.tool_budget.PSObject.Properties) {
+            $used = @($allCalls | Where-Object { $_ -eq $prop.Name }).Count
+            if ($used -gt [int]$prop.Value) {
+                $hardFail = $true; $reasons += "called $($prop.Name) $used×, budget is $([int]$prop.Value)"
+            }
+        }
+    }
+
+    # HARD 8 — no_immediate_repeat: the same tool with the same arguments twice in a row.
+    if ($s.assert.no_immediate_repeat -eq $true) {
+        $sig = @($run.conversation | ForEach-Object { $_.toolCallDetails } | Where-Object { $_ } |
+                 ForEach-Object { "$($_.name)|$($_.arguments)" })
+        $repeats = 0
+        for ($k = 1; $k -lt $sig.Count; $k++) { if ($sig[$k] -eq $sig[$k - 1]) { $repeats++ } }
+        if ($repeats -gt 0) {
+            $hardFail = $true; $reasons += "repeated an identical call back to back $repeats×"
+        }
     }
 
     # SOFT — tool_order as a SUBSEQUENCE of the real call order (warn only).
@@ -501,7 +564,7 @@ function Write-ResultRecord {
     if (-not $runIdx -or $runIdx -notmatch '^\d+$') { $runIdx = 1 } else { $runIdx = [int]$runIdx }
     $modelLabel = if ($ModelLabelOverride) { $ModelLabelOverride } else { 'default' }
     $status = 'UNKNOWN'; $cost = 0; $tokens = 0; $mode = ''; $provider = ''
-    $tokensIn = 0; $iters = 0; $apiCalls = 0; $duration = 0
+    $tokensIn = 0; $iters = 0; $subtasks = 0; $apiCalls = 0; $duration = 0
     $tools = [ordered]@{}; $apiErrors = [ordered]@{}
     if (Test-Path $RunJsonPath) {
         try {
@@ -512,7 +575,11 @@ function Write-ResultRecord {
             if ($r.session -and $r.session.mode) { $mode = [string]$r.session.mode }
             if ($r.session -and $r.session.provider) { $provider = [string]$r.session.provider }
             if ($null -ne $r.metrics.tokensIn) { $tokensIn = $r.metrics.tokensIn }
-            if ($null -ne $r.metrics.toolCallCount) { $iters = $r.metrics.toolCallCount }
+            # Loop iterations, counted as assistant messages. metrics.toolCallCount counts
+            # SUBTASK rows and was reported here as "iterations", which made the headline
+            # loop-efficiency number a different quantity from the one it named.
+            $iters = @($r.conversation | Where-Object { $_.role -and ([string]$_.role).ToUpper() -eq 'ASSISTANT' }).Count
+            if ($null -ne $r.metrics.toolCallCount) { $subtasks = $r.metrics.toolCallCount }
             if ($null -ne $r.metrics.apiCallCount) { $apiCalls = $r.metrics.apiCallCount }
             if ($null -ne $r.metrics.durationMs) { $duration = $r.metrics.durationMs }
             foreach ($t in @($r.conversation | ForEach-Object { $_.toolCalls } | Where-Object { $_ })) {
@@ -540,7 +607,7 @@ function Write-ResultRecord {
             verdict = $vlabel; failure_mode = $fmode; status = $status
             costUsd = $cost; tokensOut = $tokens
             mode = $mode; provider = $provider; tokensIn = $tokensIn
-            iterations = $iters; apiCalls = $apiCalls; durationMs = $duration
+            iterations = $iters; subtasks = $subtasks; apiCalls = $apiCalls; durationMs = $duration
             tools = $tools; apiErrors = $apiErrors
             # SOFT judge verdict object, or null when the run was not judged (mirrors e2e-run.sh).
             judge = $Judge
@@ -952,7 +1019,7 @@ function Invoke-SelfTest {
     if (-not (Test-Path (Join-Path $gateOut 'demo-scn__ollama-qwen3.5-4b__3.run.json'))) { Write-Host "  !! emitted run.json copy must exist"; $fails = 1 }
     if ($rec.tools.grep_search -ne 1) { Write-Host "  !! emitted record must carry a per-tool histogram (grep_search=1)"; $fails = 1 }
     if (@($rec.tools.PSObject.Properties).Count -ne 3) { Write-Host "  !! emitted record tools histogram must have 3 distinct tools"; $fails = 1 }
-    if ($rec.iterations -ne 3) { Write-Host "  !! emitted record must carry iterations=3 (toolCallCount)"; $fails = 1 }
+    if ($rec.iterations -ne 3) { Write-Host "  !! emitted record must carry iterations=3"; $fails = 1 }
     Remove-Item -Recurse -Force $gateOut
 
     Remove-Item -Recurse -Force $proj, $empty

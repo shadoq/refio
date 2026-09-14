@@ -7,6 +7,7 @@ import {
   harnessDelta,
   judgeCriteriaForTask,
   getResultJudgeScore,
+  taskHarnessMatrix,
 } from "@/lib/stats";
 import type { TasksFile } from "@/schema/tasks";
 import type { ResultsFile, Result } from "@/schema/results";
@@ -471,5 +472,105 @@ describe("harnessDelta", () => {
   it("returns nothing when only the baseline harness ran", () => {
     const results = [makeResult("a", "claude", "cloud", "snake", scores(1))];
     expect(harnessDelta(results, tasksFile, "refio")).toEqual([]);
+  });
+
+  // The baseline usually has many more tasks behind it than the agent it is compared
+  // with. Averaging each side over everything it happened to run put an average over
+  // two tasks next to an average over one and called the difference a result.
+  it("compares only the tasks both harnesses actually ran", () => {
+    const results = [
+      makeResult("a", "claude", "cloud", "snake", scores(1)),
+      makeResult("b", "claude", "cloud", "todo", scores(0)),
+      makeResult("c", "claude", "cloud", "snake", scores(1), { harnessId: "claude-code" }),
+    ];
+    const rows = harnessDelta(results, tasksFile, "refio");
+    expect(rows[0].pairedTasks["claude-code"]).toBe(1);
+    // Both scored 1 on the one task they share, so there is no difference to report.
+    expect(rows[0].delta["claude-code"]).toBeCloseTo(0);
+    expect(rows[0].baselineScore).toBeCloseTo(1);
+  });
+
+  it("reports no shared task rather than a difference when the two never met", () => {
+    const results = [
+      makeResult("a", "claude", "cloud", "snake", scores(1)),
+      makeResult("b", "claude", "cloud", "todo", scores(0), { harnessId: "claude-code" }),
+    ];
+    const rows = harnessDelta(results, tasksFile, "refio");
+    expect(rows[0].pairedTasks["claude-code"]).toBe(0);
+    expect(rows[0].delta["claude-code"]).toBeUndefined();
+  });
+});
+
+describe("taskHarnessMatrix", () => {
+  const scoresFull = [
+    { criterionId: "compliance", value: 1 },
+    { criterionId: "look", value: 2 },
+  ];
+  const scoresHalf = [
+    { criterionId: "compliance", value: 0.5 },
+    { criterionId: "look", value: 1 },
+  ];
+
+  it("puts one row per task and one cell per harness that ran it", () => {
+    const rows = taskHarnessMatrix(
+      [
+        makeResult("a", "m", "e", "snake", scoresFull),
+        makeResult("b", "m", "e", "snake", scoresHalf, { harnessId: "claude-code" }),
+        makeResult("c", "m", "e", "todo", scoresFull, { harnessId: "codex" }),
+      ],
+      tasksFile,
+    );
+    const snake = rows.find((r) => r.taskId === "snake");
+    expect(snake?.byHarness["refio"]).toEqual({ avgScore: 1, attempts: 1 });
+    expect(snake?.byHarness["claude-code"].avgScore).toBeCloseTo(0.5);
+    expect(rows.find((r) => r.taskId === "todo")?.byHarness["codex"].attempts).toBe(1);
+  });
+
+  it("leaves out a task that is hidden from the public view", () => {
+    const hidden: TasksFile = {
+      ...tasksFile,
+      tasks: [{ ...makeTask("snake"), hidden: true }, makeTask("todo")],
+    };
+    const rows = taskHarnessMatrix(
+      [makeResult("a", "m", "e", "snake", scoresFull)],
+      hidden,
+    );
+    expect(rows.some((r) => r.taskId === "snake")).toBe(false);
+  });
+});
+
+// A judge run by the same agent that produced the result is marking its own work, so
+// the agents page drops it; every other page keeps the aggregate it always had.
+describe("leaderboard with the self-judge excluded", () => {
+  const judged = (judgeId: string) => ({
+    judgeId,
+    judgeModel: "m",
+    judgedAt: "2026-04-16T09:00:00.000Z",
+    scores: [{ criterionId: "compliance", value: 1 }],
+    screenshots: [],
+    consoleErrors: [],
+  });
+
+  const resultsFile: Pick<ResultsFile, "models" | "environments" | "harnesses"> = {
+    models: [{ id: "m", name: "m", provider: "anthropic" }],
+    environments: [{ id: "e", name: "e", type: "cloud" }],
+    harnesses: [{ id: "claude-code", name: "Claude Code", kind: "external" }],
+  };
+
+  const results = [
+    makeResult("a", "m", "e", "snake", [{ criterionId: "compliance", value: 1 }], {
+      harnessId: "claude-code",
+      judgeScores: [judged("claude-code")],
+    }),
+  ];
+
+  it("keeps the judge aggregate by default", () => {
+    expect(leaderboard(results, resultsFile, tasksFile)[0].judgedAttempts).toBe(1);
+  });
+
+  it("drops the verdict of the agent that produced the run", () => {
+    const row = leaderboard(results, resultsFile, tasksFile, { excludeSelfJudge: true })[0];
+    expect(row.judgedAttempts).toBe(0);
+    expect(row.judgeAvgScore).toBeNull();
   });
 });

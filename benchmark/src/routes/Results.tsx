@@ -29,6 +29,9 @@ import {
   formatTokensPerSecond,
 } from "@/lib/format";
 import { getResultCriterionScore, normalizeResult, visibleTasks } from "@/lib/stats";
+import { DEFAULT_HARNESS_IDS } from "@/store/filters";
+import { TraceSummaryTags } from "@/components/results/TraceSummaryTags";
+import { TraceTimeline } from "@/components/results/TraceTimeline";
 import {
   aggregateJudgeScores,
   maxSharedDivergence,
@@ -66,6 +69,9 @@ export default function Results() {
   const [taskFilter, setTaskFilter] = useState<string[]>([]);
   const [environmentFilter, setEnvironmentFilter] = useState<string[]>([]);
   const [environmentTypeFilter, setEnvironmentTypeFilter] = useState<Array<"local" | "cloud">>([]);
+  // This page answers "which model for Refio", so an external agent's run is opt-in
+  // here exactly as it is on the leaderboard; the agents page is where they are shown.
+  const [harnessFilter, setHarnessFilter] = useState<string[]>(DEFAULT_HARNESS_IDS);
   const [searchText, setSearchText] = useState("");
   const [detailResult, setDetailResult] = useState<Result | null>(null);
 
@@ -97,6 +103,7 @@ export default function Results() {
         // Hidden tasks are excluded from the public results view entirely.
         if (task?.hidden) return false;
         if (modelFilter.length > 0 && !modelFilter.includes(result.modelId)) return false;
+        if (harnessFilter.length > 0 && !harnessFilter.includes(result.harnessId)) return false;
         if (taskFilter.length > 0 && !taskFilter.includes(result.taskId)) return false;
         if (environmentFilter.length > 0 && !environmentFilter.includes(result.environmentId)) return false;
         if (
@@ -144,6 +151,7 @@ export default function Results() {
     environmentById,
     environmentFilter,
     environmentTypeFilter,
+    harnessFilter,
     modelById,
     modelFilter,
     resultsData,
@@ -178,6 +186,8 @@ export default function Results() {
     taskFilter.length > 0 ||
     environmentFilter.length > 0 ||
     environmentTypeFilter.length > 0 ||
+    // Clearing brings the page back to the Refio track, not to everything.
+    harnessFilter.join() !== DEFAULT_HARNESS_IDS.join() ||
     searchText.trim().length > 0;
 
   const clearFilters = () => {
@@ -185,6 +195,7 @@ export default function Results() {
     setTaskFilter([]);
     setEnvironmentFilter([]);
     setEnvironmentTypeFilter([]);
+    setHarnessFilter(DEFAULT_HARNESS_IDS);
     setSearchText("");
   };
 
@@ -414,6 +425,18 @@ export default function Results() {
             ]}
             style={{ minWidth: 140 }}
           />
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder="Harness"
+            value={harnessFilter}
+            onChange={setHarnessFilter}
+            options={(resultsData.harnesses ?? []).map((harness) => ({
+              value: harness.id,
+              label: harness.name,
+            }))}
+            style={{ minWidth: 170 }}
+          />
           <Input.Search
             allowClear
             placeholder="Search ID, model, notes"
@@ -506,6 +529,9 @@ function ResultDetailModal({
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <Space wrap>
         <Tag>attempt #{detailResult.attemptNumber}</Tag>
+        {detailResult.harnessId !== "refio" && (
+          <Tag color="orange">{detailResult.harnessId}</Tag>
+        )}
         <Tag>{selectedRow?.environment?.name ?? detailResult.environmentId}</Tag>
         <Tag>{formatDuration(detailResult.durationMs)}</Tag>
         <Tag>
@@ -558,6 +584,14 @@ function ResultDetailModal({
       />
 
       <JudgeBreakdown detailResult={detailResult} criteria={criteria} />
+
+      {detailResult.trace && (
+        <Space direction="vertical" style={{ width: "100%" }} size="small">
+          <Text strong>Run trace</Text>
+          <TraceSummaryTags trace={detailResult.trace} />
+          <TraceTimeline trace={detailResult.trace} />
+        </Space>
+      )}
 
       {!hasHtml && otherAttachments.length === 0 && (
         <Empty description="No attachments for this result." />

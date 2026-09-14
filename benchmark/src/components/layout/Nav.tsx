@@ -6,6 +6,7 @@ const publicItems = [
   { key: "/results", label: "Results" },
   { key: "/compare", label: "Compare" },
   { key: "/pareto", label: "Pareto" },
+  { key: "/agents", label: "Agents" },
   { key: "/help", label: "Help" },
 ];
 

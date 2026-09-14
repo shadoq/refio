@@ -25,16 +25,28 @@ function sum(...values: Array<number | undefined>): number | undefined {
   return present.length > 0 ? present.reduce((a, b) => a + b, 0) : undefined;
 }
 
-// `claude -p --output-format json` emits either the result event alone or an array of
-// events ending with it. Anything else (a crash, a truncated pipe) leaves the metrics
-// unset and the run marked failed.
+// Claude Code prints either one JSON document (`--output-format json`: the result
+// event alone or an array ending with it) or one event per line (`stream-json`, which
+// the importer asks for so the run's actions can be traced). Both end in the same
+// result event, so both are read here. Anything else (a crash, a truncated pipe)
+// leaves the metrics unset and the run marked failed.
 export function parseClaudeCodeRun(stdout: string, exitCode: number): AgentRun {
   let events: Array<Record<string, unknown>>;
   try {
     const parsed: unknown = JSON.parse(stdout);
     events = (Array.isArray(parsed) ? parsed : [parsed]) as Array<Record<string, unknown>>;
   } catch {
-    return { status: "FAILED", finalOutput: stdout.trim() };
+    events = [];
+    for (const line of stdout.split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed === "") continue;
+      try {
+        events.push(JSON.parse(trimmed) as Record<string, unknown>);
+      } catch {
+        continue; // a warning or a partial line must not cost the run its metrics
+      }
+    }
+    if (events.length === 0) return { status: "FAILED", finalOutput: stdout.trim() };
   }
 
   const result = [...events].reverse().find((e) => typeof e?.result === "string");
@@ -130,4 +142,49 @@ export function toRunJson(run: AgentRun): unknown {
     finalOutput: run.finalOutput,
     conversation: [],
   };
+}
+
+// `gemini -p -o stream-json` prints one event per line: an init event, assistant
+// messages, tool_use / tool_result pairs and a final result event carrying the status
+// and the token stats. Gemini reports no price, so the cost stays unset rather than
+// being recorded as a measured zero.
+export function parseGeminiRun(
+  stdoutJsonl: string,
+  exitCode: number,
+  durationMs: number,
+): AgentRun {
+  let result: Record<string, unknown> | null = null;
+  let lastMessage = "";
+
+  for (const line of stdoutJsonl.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "") continue;
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(trimmed) as Record<string, unknown>;
+    } catch {
+      continue; // a warning printed into the stream must not fail the whole run
+    }
+    if (event.type === "result") result = event;
+    else if (
+      event.type === "message" &&
+      event.role === "assistant" &&
+      typeof event.content === "string"
+    ) {
+      lastMessage = event.content;
+    }
+  }
+
+  const stats = (result?.stats ?? {}) as Record<string, unknown>;
+  const failed = exitCode !== 0 || result === null || result.status === "error";
+  const run: AgentRun = {
+    status: failed ? "FAILED" : "SUCCESS",
+    finalOutput: lastMessage.trim(),
+    durationMs: num(stats.duration_ms) ?? durationMs,
+  };
+  const tokensIn = num(stats.input_tokens);
+  if (tokensIn !== undefined) run.tokensIn = tokensIn;
+  const tokensOut = num(stats.output_tokens);
+  if (tokensOut !== undefined) run.tokensOut = tokensOut;
+  return run;
 }

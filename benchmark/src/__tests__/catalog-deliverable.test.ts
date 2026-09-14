@@ -1,6 +1,10 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
-import { pickDeliverable, SCAFFOLDING_FILES } from "@/lib/catalog/deliverable";
+import {
+  pickDeliverable,
+  attachmentForDeliverable,
+  SCAFFOLDING_FILES,
+} from "@/lib/catalog/deliverable";
 
 // A tasks.json task states the deliverable filename inside its prompt text rather than
 // in a field, so the runner finds the artifact by looking at what the run produced.
@@ -29,5 +33,24 @@ describe("pickDeliverable", () => {
   it("returns null when the run produced nothing scoreable", () => {
     expect(pickDeliverable([...SCAFFOLDING_FILES])).toBeNull();
     expect(pickDeliverable([])).toBeNull();
+  });
+});
+
+// A multi-file case delivers a module, not a page: it cannot be rendered, so it is
+// attached as a plain file and scored through its build command instead.
+describe("attachmentForDeliverable", () => {
+  it("treats a page as the renderable html artifact", () => {
+    expect(attachmentForDeliverable("snake_x_01.html")).toEqual({
+      kind: "html",
+      fileName: "artifact.html",
+    });
+    expect(attachmentForDeliverable("page.HTM").kind).toBe("html");
+  });
+
+  it("keeps a source file under its own name", () => {
+    expect(attachmentForDeliverable("src/server.js")).toEqual({
+      kind: "file",
+      fileName: "server.js",
+    });
   });
 });

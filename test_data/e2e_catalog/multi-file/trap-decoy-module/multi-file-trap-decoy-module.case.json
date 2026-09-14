@@ -1,0 +1,28 @@
+{
+  "id": "multi-file-trap-decoy-module",
+  "title": "Edit the module that is actually used, not the one that looks right",
+  "category": "multi-file",
+  "tier": "medium",
+  "mode": "AGENT",
+  "maxIterations": 30,
+  "deliverable": "src/format.js",
+  "fixture": "fixtures/decoy-module",
+  "assert": {
+    "toolOrder": [],
+    "needles": [{ "regex": "PLN" }],
+    "fileUnchanged": ["src/format_old.js", "test/receipt.test.js"],
+    "buildCmd": "node --test",
+    "enforceMaxIterations": true,
+    "selfVerified": true,
+    "forbiddenMarkers": ["LOOP_ABORTED", "NOOP_WRITE_STALL"],
+    "noImmediateRepeat": true
+  },
+  "judge": {
+    "criteria": [
+      "Thousands are grouped in the money formatter that the receipt printer actually imports (src/format.js). The superseded src/format_old.js, which declares a function of the same name and is required by nothing, is left untouched, and the test suite passes."
+    ]
+  },
+  "review": {
+    "description": "Two modules export a function of the same name; only one of them is imported anywhere. An agent that edits by name instead of by who calls what changes the wrong file and leaves the tests red."
+  }
+}

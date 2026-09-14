@@ -17,6 +17,9 @@ export const CaseCategory = z.enum([
   "analysis",
   "animation",
   "simulation",
+  // A task whose deliverable is a set of modules rather than one page: scored by
+  // running the fixture's own tests, not by rendering.
+  "multi-file",
 ]);
 
 export const CaseTier = z.enum(["easy", "medium", "hard", "stress"]);
@@ -52,6 +55,26 @@ export const CaseAssertSchema = z.object({
   // Build command for multi-file cases (exit 0). Null for single-file.
   buildCmd: z.string().nullable().default(null),
   noContextOverflow: z.boolean().default(true),
+  // Loop-quality gates. They are about HOW the run went, not what it left behind,
+  // which is the one thing every other assertion here is blind to: a run that took
+  // forty wasted turns, never checked its own work, or kept retrying a call that
+  // could not work produced exactly the same files as one that did the job well.
+  //
+  // Cap on the agent's iterations. Enforced only when enforceMaxIterations is on, so
+  // an existing case keeps its declared budget as documentation until someone decides
+  // it is a real limit for that case.
+  enforceMaxIterations: z.boolean().default(false),
+  // The agent itself had to run the build or the tests. The sharpest single difference
+  // between a loop that verifies and one that hands back untested output.
+  selfVerified: z.boolean().default(false),
+  // Loop markers that must not appear even on a run that delivered. Without this a
+  // guardrail can fire, the run can recover, and the incident vanishes behind a PASS.
+  forbiddenMarkers: z.array(z.string()).default([]),
+  // Per-tool ceilings, e.g. {"read_file": 8}. The tool-order check is a subsequence
+  // test and therefore blind to an agent calling the same tool twelve times.
+  toolBudget: z.record(z.string(), z.number().int().positive()).default({}),
+  // The same tool with the same arguments twice in a row is an agent stuck in place.
+  noImmediateRepeat: z.boolean().default(false),
 });
 
 export const CaseReviewSchema = z.object({

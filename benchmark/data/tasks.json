@@ -352,6 +352,73 @@
       "hidden": true,
       "createdAt": "2026-07-25T08:15:08.910Z",
       "updatedAt": "2026-07-25T10:09:25.729Z"
+    },
+    {
+      "id": "games-chip8-emulator",
+      "name": "CHIP-8 emulator with a debugger",
+      "description": "Single-file CHIP-8 emulator: full instruction set, timers, keypad, 64x32 canvas display with sprite collision, built-in demo ROM, ROM loading, pause, step, speed control, register debugger.",
+      "systemPrompt": "Create a complete single self-contained file `chip8_{{MODEL_ID}}_01.html` (HTML + CSS + JavaScript inline;\nno external libraries, CDNs, assets or backend). Build a working CHIP-8 emulator.\n\nImplement the interpreter properly: 4 KB of memory with the font set loaded at 0x050 and programs at 0x200,\nsixteen 8-bit registers V0 to VF, the 16-bit index register, the program counter, a call stack, and the\ndelay and sound timers counting down at 60 Hz. Decode and execute the complete instruction set of 35\ninstructions, including the arithmetic and logic group with the carry and borrow flags in VF, the shift\ninstructions, jumps and calls, the random instruction, BCD conversion, register save and load, and the key\ntests.\n\nThe display is 64 by 32 pixels drawn on a canvas scaled to a readable size, with sprites drawn by XOR and\nthe collision flag set in VF. The 16-key keypad is mapped to a 4 by 4 block of keyboard keys shown in the\ninterface; key press and release must both reach the emulator.\n\nInclude a small demo ROM as a byte array inside the file: a real program, assembled by you, that draws a\nsprite and moves or reacts to a key, so that the emulator can be tried without any download. Also allow\nloading a ROM from a local file.\n\nAdd run, pause, single step and reset controls, an adjustable instructions-per-frame speed, and a debugger\npanel showing the registers, the index register, the program counter, the stack and the decoded current\ninstruction. Every visible control must work. Deliver the one file `chip8_{{MODEL_ID}}_01.html`.",
+      "extraCriteria": [],
+      "hidden": true,
+      "createdAt": "2026-09-11T11:19:23.677Z",
+      "updatedAt": "2026-09-14T08:41:38.865Z"
+    },
+    {
+      "id": "multi-file-notes-api-hidden-tests",
+      "name": "Notes API against a hidden acceptance suite",
+      "description": "Multi-file Node API for notes built against a hidden test suite: validation, paging, tag filter, ETag conditional requests, error envelopes, no dependencies.",
+      "systemPrompt": "This project is a directory, not a single file. Read `README.md` first: it is the complete specification of\nan HTTP API for notes, and `test/api.test.js` is the acceptance suite that will be run against your work.\n\nImplement the API so that `node --test` passes from the project root. The suite starts `src/server.js` as a\nchild process with the port in the `PORT` environment variable and then drives the API over HTTP, so the\nserver must listen on that port and answer `/health` as soon as it is up.\n\nUse only Node's standard library: no dependencies, no install step, no framework. The data lives in memory\nfor the lifetime of the process.\n\nSplit the work across several modules instead of one long file: `src/server.js` is the entry point that\nowns the socket and nothing else, and at least a storage module and a routing or rules module sit behind\nit, each required from `src/server.js` or from one another with a relative path.\n\nDo not modify `test/api.test.js` or `README.md`. Everything the suite checks is described in the README:\nthe status codes, the response shapes, the validation rules and field names, the paging and sorting, the\n`ETag` header with `If-None-Match` and `If-Match`, and the error envelopes. Read it carefully rather than\nguessing, and run the suite yourself until it passes. Deliver the working server rooted at `src/server.js`.",
+      "extraCriteria": [],
+      "hidden": true,
+      "createdAt": "2026-09-11T11:19:23.677Z",
+      "updatedAt": "2026-09-14T08:41:40.946Z"
+    },
+    {
+      "id": "multi-file-refactor-keep-tests-green",
+      "name": "Split a tangled module while its tests stay green",
+      "description": "Refactor a 250-line tangled shop module into inventory, pricing, report and date modules behind an unchanged facade, with the original test suite still green.",
+      "systemPrompt": "This project is a directory, not a single file. `src/legacy.js` is one module that has grown to hold four\nunrelated jobs at once: inventory with batches and expiry dates, pricing with tiered discounts, coupons and\nper-category tax, reporting in text and CSV, and a handful of date and rounding helpers everything uses.\n`test/legacy.test.js` pins its behaviour and currently passes.\n\nSplit it into `src/inventory.js`, `src/pricing.js`, `src/report.js` and `src/dates.js`, each owning one of\nthose jobs, with the shared date and rounding helpers living in `src/dates.js` only. `src/legacy.js` stays\nas the entry point: it requires the new modules with relative paths and re-exports exactly the same public\nnames it exports today, so every existing caller keeps working.\n\nChange no behaviour. Every number, message, error text and output format must stay identical, including the\nrounding and the padding in the reports. Do not modify `test/legacy.test.js`, and do not add dependencies:\nNode's standard library only.\n\nEach new module must require only what it actually uses, and no helper may end up copied into more than one\nmodule. Run `node --test` from the project root yourself and keep running it until the whole suite passes\nunchanged. Deliver the split with `src/legacy.js` as the facade.",
+      "extraCriteria": [],
+      "hidden": true,
+      "createdAt": "2026-09-11T11:19:23.677Z",
+      "updatedAt": "2026-09-14T08:41:41.986Z"
+    },
+    {
+      "id": "single-file-app-spreadsheet-engine",
+      "name": "Spreadsheet with a real formula engine",
+      "description": "Single-file spreadsheet: 26x100 grid, formula engine with ranges and functions, dependency-driven recalculation, cycle and error reporting, undo/redo, CSV, localStorage.",
+      "systemPrompt": "Create a complete single self-contained file `spreadsheet_{{MODEL_ID}}_01.html` (HTML + CSS + JavaScript inline;\nno external libraries, CDNs, assets or backend). Build a working spreadsheet with a real formula engine.\n\nThe grid has 26 columns (A to Z) and 100 rows, with a column and row header, a selected cell, a visible\nformula bar and in-cell editing. Keyboard navigation must work: arrows, Tab, Enter, Escape to cancel an\nedit, Delete to clear, and a range selection with Shift plus arrows.\n\nA cell holds a literal (number or text) or a formula starting with `=`. The formula language supports\nnumbers, strings, the operators + - * / ^ and parentheses, comparisons, single cell references such as A1,\nranges such as B2:B10, and the functions SUM, AVG, MIN, MAX, COUNT and IF.\n\nBuild a dependency graph between cells: editing one cell recalculates only the cells that depend on it,\nnot the whole sheet. Detect circular references and show `#CYCLE` in every cell of the cycle instead of\nhanging. A reference to an invalid cell shows `#REF`, a division by zero shows `#DIV/0`, and a formula that\ncannot be parsed shows `#ERROR`, each with the underlying cause visible somewhere in the interface.\n\nAdd multi-level undo and redo for edits, clears and pastes, copy and paste of a range, import from pasted\nCSV text and export of the sheet to CSV, and persistence of the whole sheet in localStorage so a reload\nrestores it. Every visible control must work and every displayed value must come from the engine, never\nfrom a hardcoded table. Deliver the one file `spreadsheet_{{MODEL_ID}}_01.html`.",
+      "extraCriteria": [],
+      "createdAt": "2026-09-11T11:19:23.677Z",
+      "updatedAt": "2026-09-14T08:41:42.970Z",
+      "hidden": true
+    },
+    {
+      "id": "multi-file-repair-failing-build",
+      "name": "Repair a project whose test suite is already red",
+      "description": "A shop cart whose test suite fails from the first second: the discount threshold is off by one and the tax is applied as a multiplier instead of a surcharge. Nothing states what is wrong, so the agent has to run the tests, read them and repair the code.",
+      "systemPrompt": "This project's test suite does not pass. Run it, read what it says, and fix the source so that every test passes.\n\nThe tests in `test/` describe the behaviour the shop needs and are correct. Do not change them, and do not delete or skip any of them. The fix belongs in `src/`.\n\nRun the suite yourself before you finish and make sure it is green.",
+      "extraCriteria": [],
+      "createdAt": "2026-09-14T09:19:25.952Z",
+      "updatedAt": "2026-09-14T09:19:25.952Z"
+    },
+    {
+      "id": "multi-file-search-before-edit",
+      "name": "Add a parameter and find the one caller that is not where you would look",
+      "description": "A helper gains an optional parameter. Its one meaningful caller sits in a deep package path under a filename that does not mention the helper, so the change cannot be completed without searching the tree first.",
+      "systemPrompt": "`slugify` in `src/lib/text.js` always returns the whole slug. The public site cannot render slugs longer than a set limit.\n\nGive `slugify` an optional second argument: a maximum length. When it is given, cut the slug to that length and make sure it does not end with a dash. When it is not given, behave exactly as today.\n\nThen update every place in this repository that should pass a limit. There is a caller outside `src/` that needs it; the site's limit is 12 characters and belongs next to that caller, not inside the helper.\n\nDo not change the tests. Run the suite yourself before you finish.",
+      "extraCriteria": [],
+      "createdAt": "2026-09-14T09:19:25.952Z",
+      "updatedAt": "2026-09-14T09:19:25.952Z"
+    },
+    {
+      "id": "multi-file-trap-decoy-module",
+      "name": "Edit the module that is actually used, not the one that looks right",
+      "description": "Two modules export a function of the same name; only one of them is imported anywhere. An agent that edits by name instead of by who calls what changes the wrong file and leaves the tests red.",
+      "systemPrompt": "Long amounts on the receipt are hard to read: `123456789` prints as `1234567.89 PLN`.\n\nGroup the thousands with a single space, so that amount prints as `1 234 567.89 PLN`. Short amounts must keep printing exactly as they do now, and the currency stays `PLN`.\n\nThe test suite in `test/` already covers both cases. Do not change the tests. Run them yourself before you finish.",
+      "extraCriteria": [],
+      "createdAt": "2026-09-14T09:19:25.952Z",
+      "updatedAt": "2026-09-14T09:19:25.952Z"
     }
   ]
 }

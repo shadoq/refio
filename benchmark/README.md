@@ -224,6 +224,120 @@ Open `/admin/queue` in the dev server (`npm run dev`), add the human look/code s
 promote the entry into `results[]` (or discard it). Only a promoted entry becomes a visible
 result. Optional strong-judge scores can be added afterwards (see below).
 
+### External agents (the Agents page)
+
+The same catalog cases can be driven by an external coding agent instead of the Refio CLI.
+Those runs land in the same queue and the same `results.json`, tell themselves apart by
+`harnessId`, and stay out of the leaderboard, Results, Compare and Pareto - the `/agents`
+page is where they are shown.
+
+```bash
+# Claude Code on its own cloud model
+npm run import-runs -- <case-id> --model anthropic/claude-opus-5 --harness claude-code \
+  --harness-model opus --attempts 1
+
+# the same local model Refio was measured on, through Claude Code
+npm run import-runs -- <case-id> --model ollama/qwen3.8:27b --harness claude-code \
+  --ollama-host 192.168.5.60 --attempts 1
+```
+
+- `--harness` is `refio` (default), `claude-code`, `codex` or `gemini-cli`.
+- `--model` is always the id RECORDED in the data; `--harness-model` is what the external CLI
+  is told to run. A `--model` starting with `ollama/` points Claude Code (through
+  `ANTHROPIC_BASE_URL`) or Codex (through `--oss --local-provider ollama`) at the local
+  endpoint from `--ollama-host` (default `$OLLAMA_HOST` or `127.0.0.1`), so the same model can
+  be compared under Refio and under that agent. Gemini CLI has no local provider and refuses
+  such a model id.
+- `--ollama-ctx N` (default 65536) is the context window the local model is LOADED with, for both
+  harnesses alike. Refio sends its own window to Ollama explicitly; an agent talking to the same
+  endpoint through a compatibility layer sends none and gets the server's default, so without this
+  "the same local model under two harnesses" was two different measurements and nothing in the data
+  said so. The model is pre-loaded with a warm-up request before the sweep starts, because Ollama
+  allocates the key-value cache at load time; a warm-up that fails prints a warning and the window is
+  left unrecorded rather than assumed. A warm-up does NOT pin the window: Ollama reloads the model on
+  the next request that asks for different options, so a sweep that must compare harnesses needs the
+  window baked into the model itself (a Modelfile with `PARAMETER num_ctx`).
+- `--native-tools auto|always|never` states which tool channel the Refio harness uses; left out,
+  Refio decides. It decides from a registry of model NAMES, and a model built locally to carry its own
+  context window is not in that registry, so `auto` reads it as a model with no function calling and
+  drops Refio onto a path where the model has to spell out a JSON action envelope in prose. The other
+  agents consult no registry, so a sweep that says nothing here measures Refio on a different
+  mechanism than its rivals - and says nothing about it either. The choice is recorded on the entry as
+  `runContext.nativeTools`; an entry without that field predates this flag and its Refio numbers are
+  understated.
+- A Refio run is given the same auto-approval expression the e2e harness uses
+  (`src/lib/catalog/approval.ts`, asserted identical to the one in `tools/e2e/e2e-run.sh` by a test).
+  Headless has no human to approve anything, so without it every ASK-level command tool waits out its
+  five-minute timeout and is recorded as "User rejected": shell calls zero on every task,
+  self-verification zero on every task, and the numbers read as agent behaviour rather than as a tool
+  that was taken away.
+- `--dry-run` prints the command it would run and the NAMES of the environment variables it
+  would set, and executes no agent.
+- How long an agent may work scales with the case tier: easy 15 min / 40 turns, medium 30/60,
+  hard 60/120, stress 120/200. Every run spends tokens or GPU time - decide before you start it.
+
+Each run leaves its action log in `data/attachments/<entryId>/_trace/`:
+
+| file | what it is |
+|---|---|
+| `trace.jsonl` | one JSON event per line: assistant turns, tool calls with the file or command they touched, tool results, the end of the run. Never file contents. |
+| `raw.log` | the agent's own stdout, verbatim, capped at 8 MB with a truncation marker. Absent for Refio. |
+| `run.json` | the headless CLI's run document. Refio only. |
+| `build.log` | the tail of the case's `buildCmd` output, for cases scored by running their tests. |
+
+The queue entry and the promoted result carry a `trace` summary computed from that log:
+turns, tool calls split into reads/writes/shell/searches, tool errors, when the first write
+happened and whether the model itself ran a build or a test. All of it is plain arithmetic
+over the log, never a model's opinion.
+
+Beyond the volume of work, the summary also measures its quality, which is what tells a loop that
+made progress apart from one that thrashed:
+
+| field | what it answers |
+|---|---|
+| `endReason` | how the run ended. A run killed by its cap and one that failed in ten seconds read the same without it. |
+| `duplicateCalls`, `repeatedCallStreak` | how much of the work repeated a call the agent had already made. |
+| `repeatedFailedCallStreak` | how long it kept retrying a call that kept failing. |
+| `recoveredFromError` | whether anything useful happened after the last failing call. Null when nothing failed, which is not the same as not recovering. |
+| `readsBeforeFirstWrite`, `searchesBeforeFirstWrite` | how much looking it did before committing to anything. |
+| `filesWritten` | distinct files touched, as opposed to the number of writing calls. |
+| `nonZeroExits` | shell commands that returned non-zero, kept apart from `toolErrors` because for some agents a grep with no match looks exactly like a failed tool call. |
+| `selfVerified` | the model ran a build or test itself, and AFTER it had written something: a build run before any code exists checks the fixture, not the agent's work. |
+| `loop` | what the run's own loop reported about itself (context overflow, its failure marker, the verification it ran). Only Refio fills this in today. |
+
+`runContext` on the same row records what it would take to run the attempt again and get a
+comparable one: the agent's CLI version, a digest of the resolved prompt, the context window, the
+model server, the permission mode, the time and turn limits and the command line.
+
+Six criterion changes came with those metrics, and all of them are deliberate:
+
+- `compliance` is left UNMEASURED for a case that declares no needles, instead of scoring full marks.
+  The free point was enough on its own to turn a verdict green for the five highest-volume tasks.
+- `agent_logic` is computed from the action log for EVERY harness, instead of being an unconditional
+  1.0 for anything that is not Refio. A run that read nothing, wrote nothing and exited zero used to
+  score full marks on the one criterion meant to judge the loop.
+- `works_out_of_box` fails a page that renders cleanly and still shows nothing. A blank canvas over a
+  silent console passed every mechanical check while the deliverable was, to a person looking at it,
+  not there.
+
+- The expected tool order is checked against the CLASS of each call (read / write / search /
+  shell), not against Refio's tool names. A case still states it as `toolOrder: ["create_new_file"]`
+  because that is the vocabulary a case author works in, but scoring it only where those names
+  exist made it a part of the score Refio alone could lose: fifteen of the twenty-one cases declare
+  one, and on each of them Refio carried a criterion its competitors did not.
+- `works_out_of_box` from a build command is only credited to a run that wrote something. A
+  refactoring case ships a suite that is green before the agent starts - keeping it green is the
+  task - so a passing build said nothing about a run that read three files and stopped, and handed
+  it full marks for the fixture's own health.
+- `agent_logic` drops to 0.5 when the case declares `assert.selfVerified` and the run never built
+  or tested what it wrote. Asked only where the case asked for it: no harness has ever verified
+  itself on a page-generation task, because there is nothing there to run, so scoring it everywhere
+  would take the same half point off everyone and measure nothing.
+
+A case whose `deliverable` is not an HTML page (the `multi-file` category) is attached as a
+plain file and scored by running its `assert.buildCmd` in the work dir: exit 0 AND at least one
+write means `works_out_of_box`, anything else records the output tail as the reason.
+
 ## Strong-judge scoring (`npm run judge`)
 
 Optional, additional quality scores produced by strong-judge agents (Claude Code,

@@ -1,0 +1,46 @@
+{
+  "id": "single-file-app-spreadsheet-engine",
+  "mode": "AGENT",
+  "description": "Single-file spreadsheet: 26x100 grid, formula engine with ranges and functions, dependency-driven recalculation, cycle and error reporting, undo/redo, CSV, localStorage.",
+  "category": "single-file-app",
+  "max_iterations": 40,
+  "fixture": "fixtures/spreadsheet-engine",
+  "prompt_file": "prompts/single-file-app-spreadsheet-engine.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "spreadsheet_model_01.html",
+        "regex": "<table|<canvas|role=\"grid\""
+      },
+      {
+        "path": "spreadsheet_model_01.html",
+        "regex": "SUM"
+      },
+      {
+        "path": "spreadsheet_model_01.html",
+        "regex": "[Cc]ycl|#CYCLE"
+      },
+      {
+        "path": "spreadsheet_model_01.html",
+        "regex": "undo|Undo"
+      },
+      {
+        "path": "spreadsheet_model_01.html",
+        "regex": "addEventListener"
+      }
+    ],
+    "smoke": {
+      "entry": "spreadsheet_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "The file is one self-contained spreadsheet (no libraries): a 26x100 grid with keyboard navigation and cell editing, a formula engine with cell and range references, SUM/AVG/MIN/MAX/COUNT/IF, a dependency graph that recalculates only the affected cells, cycle detection reported as #CYCLE, #REF and #DIV/0 errors, undo/redo, CSV import and export, and persistence in localStorage. Formulas must be evaluated for real, never hardcoded."
+    ]
+  }
+}
