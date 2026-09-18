@@ -25,7 +25,10 @@ export interface DeliverableAttachment {
 }
 
 export function attachmentForDeliverable(path: string): DeliverableAttachment {
-  const base = path.split("/").pop() ?? path;
+  // The runner passes an absolute path built by node's join(), so the separator is the
+  // host's own. Reading only forward slashes turned a Windows path into one long file
+  // name and the artifact was copied to a path that does not exist.
+  const base = path.split(/[\\/]/).pop() ?? path;
   const isPage = /\.html?$/i.test(base);
   return isPage ? { kind: "html", fileName: "artifact.html" } : { kind: "file", fileName: base };
 }

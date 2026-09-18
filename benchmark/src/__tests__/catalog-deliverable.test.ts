@@ -53,4 +53,20 @@ describe("attachmentForDeliverable", () => {
       fileName: "server.js",
     });
   });
+
+  // The runner hands over an absolute path produced by node's join(), so on Windows the
+  // separator is a backslash. Reading only forward slashes made the whole path the file
+  // name, and copying the artifact then landed outside the queue entry and threw.
+  it("keeps the file name when the path uses backslashes", () => {
+    expect(
+      attachmentForDeliverable("C:\\Users\\a\\AppData\\Local\\Temp\\work\\src\\lib\\text.js"),
+    ).toEqual({
+      kind: "file",
+      fileName: "text.js",
+    });
+  });
+
+  it("recognises a page reached by a backslash path", () => {
+    expect(attachmentForDeliverable("C:\\tmp\\work\\index.html").kind).toBe("html");
+  });
 });

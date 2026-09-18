@@ -51,4 +51,48 @@ describe("normalizeRefioRunJson", () => {
     expect(events).toHaveLength(1);
     expect(events[0].kind).toBe("run_end");
   });
+
+  // The run document now says outright whether each call succeeded. Reading that instead of
+  // matching the word "error" in the output makes the number mean the same thing it means for the
+  // other harnesses.
+  it("takes the outcome from what the run reported, not from the wording of the output", () => {
+    const events = normalizeRefioRunJson({
+      session: { status: "SUCCESS" },
+      conversation: [
+        {
+          role: "ASSISTANT",
+          contentPreview: "working",
+          createdAt: 0,
+          toolCallDetails: [
+            // Output that opens with the word, from a call that succeeded.
+            { name: "grep_search", arguments: "{}", ok: true },
+            // A real failure whose message does not open with it.
+            { name: "code_editing", arguments: "{}", ok: false, error: "path outside the project" },
+          ],
+        },
+        { role: "TOOL", contentPreview: "Error handling found in 3 files", createdAt: 1 },
+        { role: "TOOL", contentPreview: "could not apply the edit", createdAt: 2 },
+      ],
+    });
+
+    const results = events.filter((e) => e.kind === "tool_result");
+    expect(results.map((r) => r.ok)).toEqual([true, false]);
+  });
+
+  it("still guesses for a document written before the outcome was reported", () => {
+    const events = normalizeRefioRunJson({
+      session: { status: "SUCCESS" },
+      conversation: [
+        {
+          role: "ASSISTANT",
+          contentPreview: "working",
+          createdAt: 0,
+          toolCallDetails: [{ name: "read_file", arguments: "{}" }],
+        },
+        { role: "TOOL", contentPreview: "Error: no such file", createdAt: 1 },
+      ],
+    });
+
+    expect(events.find((e) => e.kind === "tool_result")?.ok).toBe(false);
+  });
 });

@@ -30,3 +30,17 @@ describe("quoteArg", () => {
     expect(r.stdout.trim()).toBe("line one\nline two");
   });
 });
+
+// An external agent that stops responding has to be recorded as a timed-out attempt,
+// which only works if the timeout actually ends the call. The command is handed to a
+// shell, so the process that is spawned is the shell and the agent is its child:
+// signalling only the shell left the agent alive holding the output pipe, the "close"
+// event never arrived and the whole sweep waited forever instead of moving on.
+describe("execShell timeout", () => {
+  it("ends the call when the command outlives its deadline", async () => {
+    const startedAt = Date.now();
+    const r = await execShell('node -e "setTimeout(function(){}, 60000)"', { timeoutMs: 1500 });
+    expect(r.timedOut).toBe(true);
+    expect(Date.now() - startedAt).toBeLessThan(20000);
+  }, 30000);
+});

@@ -4,7 +4,7 @@ import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { landTrace } from "../land-trace";
+import { buildTraceForRun, landTrace } from "../land-trace";
 import type { TraceEvent } from "../../../../src/lib/trace/types";
 
 const events: TraceEvent[] = [
@@ -95,5 +95,41 @@ describe("landTrace", () => {
     });
     expect(summary.path).toBe("attachments/e5/_trace/trace.jsonl");
     expect(existsSync(join(dataDir, "attachments", "e5"))).toBe(false);
+  });
+
+  // Refio's loop runs the build or tests itself after a writing turn; no external agent does.
+  // Recorded separately from selfVerified so the comparison of "did the MODEL check its own work"
+  // stays like-for-like while the harness's own verification is still visible.
+  describe("loop verification", () => {
+    const runJson = (ran: boolean) => ({
+      session: { status: "SUCCESS" },
+      metrics: { verification: { ran, attempts: ran ? 1 : 0, result: ran ? "PASSED" : null } },
+      conversation: [
+        {
+          role: "ASSISTANT",
+          contentPreview: "writing",
+          createdAt: 0,
+          toolCallDetails: [{ name: "advance_code_editing", arguments: '{"path":"a.js"}', ok: true }],
+        },
+        { role: "TOOL", contentPreview: "written", createdAt: 1 },
+      ],
+    });
+
+    it("marks a run whose loop verified the work", async () => {
+      const summary = await buildTraceForRun({
+        harnessId: "refio", entryId: "v1", dataDir, persist: false, runJson: runJson(true),
+      });
+
+      expect(summary?.toolHistogram["__loop_verification__"]).toBe(1);
+      expect(summary?.selfVerified).toBe(false);
+    });
+
+    it("leaves the marker off when the loop never verified", async () => {
+      const summary = await buildTraceForRun({
+        harnessId: "refio", entryId: "v2", dataDir, persist: false, runJson: runJson(false),
+      });
+
+      expect(summary?.toolHistogram).not.toHaveProperty("__loop_verification__");
+    });
   });
 });

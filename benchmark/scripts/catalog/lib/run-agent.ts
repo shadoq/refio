@@ -20,7 +20,11 @@ import {
 } from "../../../src/lib/catalog/agent-run";
 import type { HarnessRouting } from "../../../src/lib/catalog/harness-routing";
 import type { AgentLimits } from "../../../src/lib/catalog/agent-limits";
-import { agentWorkspaceSettings, agentSearchPath } from "../../../src/lib/catalog/agent-isolation";
+import {
+  agentWorkspaceSettings,
+  agentSearchPath,
+  hostSessionOverrides,
+} from "../../../src/lib/catalog/agent-isolation";
 import type { TimedLine, TraceSource } from "../../../src/lib/trace/types";
 
 export interface AgentRunResult {
@@ -129,7 +133,7 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
   const promptPath = join(workDir, "prompt.md");
   await writeFile(promptPath, opts.promptText);
   const lastMessagePath = join(workDir, "agent-last-message.txt");
-  await isolateFromHostPlugins(opts.harnessId, workDir);
+  await isolateFromHostPlugins(opts.harnessId, workDir, opts.routing.harnessModel);
 
   const timedLines: TimedLine[] = [];
   const startedAtLines = Date.now();
@@ -148,7 +152,13 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
   const r = await execShell(command, {
     cwd: workDir,
     timeoutMs: opts.limits.timeoutMs,
-    env: { ...opts.routing.env, PATH: agentSearchPath(process.env.PATH) },
+    // The host session is cleared first so the run's own routing, applied after it,
+    // always wins.
+    env: {
+      ...hostSessionOverrides(process.env),
+      ...opts.routing.env,
+      PATH: agentSearchPath(process.env.PATH),
+    },
     onStdoutLine,
   });
   // A timeout is a failed run, not a crash: record it like any other failure so the
@@ -220,14 +230,18 @@ async function hostEnabledPlugins(): Promise<string[]> {
 
 // Claude Code reads a settings file from the directory it works in, so dropping one
 // into the throwaway work dir turns the host's plugins off for this run only.
-async function isolateFromHostPlugins(harnessId: string, workDir: string): Promise<void> {
+async function isolateFromHostPlugins(
+  harnessId: string,
+  workDir: string,
+  model: string | undefined,
+): Promise<void> {
   if (harnessId !== "claude-code") return;
   const plugins = await hostEnabledPlugins();
   const settingsDir = join(workDir, ".claude");
   await mkdir(settingsDir, { recursive: true });
   await writeFile(
     join(settingsDir, "settings.json"),
-    JSON.stringify(agentWorkspaceSettings(plugins), null, 2),
+    JSON.stringify(agentWorkspaceSettings(plugins, model), null, 2),
   );
   if (plugins.length > 0) {
     console.error(`  disabled ${plugins.length} host plugin(s) for this run`);

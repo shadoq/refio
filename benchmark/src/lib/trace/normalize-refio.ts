@@ -31,6 +31,15 @@ export function normalizeRefioRunJson(runJson: unknown): TraceEvent[] {
   const events: TraceEvent[] = [];
   let turn = 0;
   let i = 0;
+  // Whether each call succeeded, as the run document itself reports it, queued in call order and
+  // consumed by the tool results that answer them - the same FIFO pairing the summary uses.
+  //
+  // This used to be guessed by matching the word "error" at the start of the result preview, which
+  // is not the same question and does not mean the same thing as it does for the other harnesses:
+  // a tool whose output happens to begin with that word was counted as a failure, and a failure
+  // whose message did not was missed. Older documents carry no flags, so the guess stays as the
+  // fallback for them.
+  const reportedOk: (boolean | null)[] = [];
   const startedAt = num((conversation[0] as Record<string, unknown> | undefined)?.createdAt);
   const at = (msg: Record<string, unknown>): number | null => {
     const created = num(msg.createdAt);
@@ -53,15 +62,17 @@ export function normalizeRefioRunJson(runJson: unknown): TraceEvent[] {
       for (const rawDetail of details) {
         const detail = (rawDetail ?? {}) as Record<string, unknown>;
         const tool = String(detail.name ?? "unknown");
+        reportedOk.push(typeof detail.ok === "boolean" ? detail.ok : null);
         events.push({
           i: i++, tMs, turn, kind: "tool_call", tool, cls: classifyTool(HARNESS, tool),
           args: argsOf(detail.arguments), ok: null, text: null,
         });
       }
     } else if (role === "tool") {
+      const reported = reportedOk.shift();
       events.push({
         i: i++, tMs, turn, kind: "tool_result", tool: null, cls: null, args: null,
-        ok: !/^error/i.test(preview.trim()), text: shorten(preview),
+        ok: reported ?? !/^error/i.test(preview.trim()), text: shorten(preview),
       });
     }
   }

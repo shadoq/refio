@@ -85,6 +85,25 @@ export interface TraceForRunInput {
 
 // Normalize whichever stream this harness produced, then land it. Returns undefined
 // when there is nothing to trace, so the caller simply leaves the field off the entry.
+// Refio's loop runs the project's build or tests itself after a file-writing turn, which no
+// external agent does: there, verification happens only if the model decides to ask for it. That
+// difference has to stay visible without being folded into selfVerified, which answers the narrower
+// and fairly comparable question "did the MODEL check its own work". So it is recorded as its own
+// histogram entry instead.
+const LOOP_VERIFICATION_KEY = "__loop_verification__";
+
+function withLoopVerification(summary: TraceSummary, runJson: unknown): TraceSummary {
+  const metrics = ((runJson ?? {}) as Record<string, unknown>).metrics as
+    | Record<string, unknown>
+    | undefined;
+  const verification = metrics?.verification as Record<string, unknown> | undefined;
+  if (verification?.ran !== true) return summary;
+  return {
+    ...summary,
+    toolHistogram: { ...summary.toolHistogram, [LOOP_VERIFICATION_KEY]: 1 },
+  };
+}
+
 export async function buildTraceForRun(
   input: TraceForRunInput,
 ): Promise<TraceSummary | undefined> {
@@ -93,14 +112,14 @@ export async function buildTraceForRun(
 
   if (input.harnessId === "refio") {
     if (input.runJson === undefined || input.runJson === null) return undefined;
-    return withLoop(await landTrace({
+    return withLoop(withLoopVerification(await landTrace({
       entryId: input.entryId,
       dataDir: input.dataDir,
       source: "refio-run-json",
       events: normalizeRefioRunJson(input.runJson),
       ...(input.runJsonSrc ? { runJsonSrc: input.runJsonSrc } : {}),
       persist: input.persist,
-    }));
+    }), input.runJson));
   }
 
   const lines = input.timedLines;

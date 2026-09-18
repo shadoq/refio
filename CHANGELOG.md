@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The benchmark harness could not measure an external coding agent on this machine at all, and each of the four reasons landed in the data as an ordinary failed attempt by the agent rather than as a broken measurement.
+  - A deliverable's file name was read by splitting the path on a forward slash only, so on Windows the whole absolute path became the file name and copying the artifact was attempted into a directory that cannot exist. Only tasks delivering a page were unaffected, because that branch names the file itself - which is why every multi-file task had never once landed in the queue.
+  - The run deadline did not stop the agent. The command is handed to a shell, so the process that was signalled was the shell and the agent underneath it kept running and kept the output pipe open; the call never returned and the whole sweep waited indefinitely instead of recording a timed-out attempt. The process tree is now taken down, and the call returns even if something survives that.
+  - An agent that is killed loses whatever it had buffered, and a timed-out attempt is worth reading precisely because it shows where the agent got stuck. It is now asked to stop and only forced afterwards.
+  - Launching the sweep from inside another coding agent handed the launcher's session to the child through the environment, and the launcher's own settings file pinned a model that beat the model named on the command line. The agent then refused to start on a model the run never chose - and with no endpoint override it would instead have answered from the launcher's account while the row recorded the local model. The variables naming the host session are cleared, and the run writes its own model into the settings beside the work directory, where it cannot be overruled.
+
 ## [0.0.2.0] - 2026-09-07
 
 ### Added

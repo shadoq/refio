@@ -7,13 +7,24 @@
 // Pure: it only decides what the settings file should say, the runner writes it.
 export interface AgentWorkspaceSettings {
   enabledPlugins: Record<string, boolean>;
+  // Left out when the run names no model, so the agent keeps its own default.
+  model?: string;
 }
 
 // A settings file placed in the throwaway work dir switches the host's plugins off for
 // this run only. Nothing in the user's own configuration is touched or read for auth.
-export function agentWorkspaceSettings(hostEnabledPlugins: string[]): AgentWorkspaceSettings {
+// The model belongs here too: the host's own settings file can pin one, and that pin
+// wins over the model named on the command line - the agent then refuses to start on a
+// model the run never chose, or worse answers from the host's account while the row
+// records the model that was asked for. Settings beside the work dir take precedence,
+// so the run states its choice where it cannot be overruled.
+export function agentWorkspaceSettings(
+  hostEnabledPlugins: string[],
+  model?: string,
+): AgentWorkspaceSettings {
   return {
     enabledPlugins: Object.fromEntries(hostEnabledPlugins.map((name) => [name, false])),
+    ...(model === undefined ? {} : { model }),
   };
 }
 
@@ -32,4 +43,37 @@ export function agentSearchPath(path: string | undefined): string | undefined {
   // Everything was injected: a path that cannot launch the agent is worse than the
   // shadowing it guards against.
   return kept.length === 0 ? path : kept.join(":");
+}
+
+// A coding agent started from inside another one inherits the launcher's session: the
+// variables below name a live session and its message channel, and a child that sees
+// them attaches to it instead of standing alone. Observed on Windows: the agent
+// reported the LAUNCHING session's model and refused to start, ignoring the model the
+// run asked for - and had the endpoint not been overridden it would have answered from
+// the launcher's account while the row recorded the local model. So the benchmark
+// clears them, and a run started from a plain shell is unaffected because it carries
+// none of them.
+const HOST_SESSION_VARS = [
+  "CLAUDECODE",
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_EXECPATH",
+  "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_CODE_SESSION_ATTENDED",
+  "CLAUDE_CODE_MESSAGING_SOCKET",
+  "CLAUDE_CODE_MESSAGING_TOKEN",
+  "CLAUDE_PID",
+];
+
+// Removals for the child's environment: a key mapped to undefined, which is how the
+// runner spells "take this out". Only what the environment actually carries is named,
+// so the overrides read as a record of what was cleared.
+export function hostSessionOverrides(
+  env: Record<string, string | undefined>,
+): Record<string, undefined> {
+  const cleared: Record<string, undefined> = {};
+  for (const key of HOST_SESSION_VARS) {
+    if (env[key] !== undefined) cleared[key] = undefined;
+  }
+  return cleared;
 }
