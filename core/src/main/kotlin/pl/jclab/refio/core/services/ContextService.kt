@@ -103,6 +103,14 @@ class ContextService(
         private set
 
     /**
+     * Conversation messages the last prompt build had to leave out, and older tool steps it
+     * omitted. Two losses that the section trace above cannot show, because they happen INSIDE a
+     * section that was included: the section fits, its oldest contents do not.
+     */
+    val lastConversationDropped: Int get() = formatter.lastConversationDropped
+    val lastStepsDropped: Int get() = formatter.lastStepsDropped
+
+    /**
      * Last granular section token breakdown from buildLLMContextPrompt().
      * Parsed from XML tags in the generated prompt — maps UI-friendly keys
      * (e.g. "recent_work", "key_components") to token info.
@@ -428,6 +436,7 @@ class ContextService(
      * Organized by TIER priority: Essential → Work → Supplementary → Reference
      */
     fun buildLLMContextPrompt(context: ProjectContextDTO, staticPrefixTokens: Int = 0, modelId: String? = null): String {
+        formatter.resetDropCounters()
         val budget = pruner.resolveContextBudget(context, modelOperation = null, staticPrefixTokens = staticPrefixTokens)
         val parts = mutableListOf<String>()
         val usage = mutableListOf<String>()

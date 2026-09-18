@@ -498,4 +498,74 @@ class AgentEventBusTest {
             }
         }
     }
+
+    @Nested
+    inner class HistoryPlusLive {
+
+        @Test
+        fun `an event that is both persisted and in the replay buffer is delivered once`() = runBlocking {
+            // The exact shape behind a report that showed 44 timeline rows for 22 real events:
+            // the consumer loaded the history, then subscribed, and the bus handed it the same
+            // recent events again out of its replay buffer.
+            val bus = AgentEventBus()
+            val emitted = makeStarted(sessionId = "s-dup")
+            val repo = mockk<AgentEventRepository> {
+                coEvery { save(any()) } returns Unit
+                coEvery { findBySessionId("s-dup", any()) } returns listOf(emitted)
+            }
+            bus.setRepository(repo)
+            bus.emit(emitted)
+
+            val seen = withTimeout(2_000) {
+                bus.sessionEventsWithHistory("s-dup").take(1).toList()
+            }
+
+            assertEquals(1, seen.size)
+            assertEquals(emitted.id, seen.first().id)
+            bus.close()
+        }
+
+        @Test
+        fun `history comes first, then whatever happens next`() = runBlocking {
+            val bus = AgentEventBus()
+            val old = makeStarted(sessionId = "s-order")
+            val repo = mockk<AgentEventRepository> {
+                coEvery { save(any()) } returns Unit
+                coEvery { findBySessionId("s-order", any()) } returns listOf(old)
+            }
+            bus.setRepository(repo)
+
+            val collected = CopyOnWriteArrayList<AgentEvent>()
+            val job = launch { bus.sessionEventsWithHistory("s-order").take(2).toList(collected) }
+            while (collected.isEmpty()) delay(10)
+            val fresh = makeEvent(sessionId = "s-order")
+            bus.emit(fresh)
+            withTimeout(2_000) { job.join() }
+
+            assertEquals(listOf(old.id, fresh.id), collected.map { it.id })
+            bus.close()
+        }
+
+        @Test
+        fun `a repository failure costs the history, never the live stream`() = runBlocking {
+            // The regression this guards: making history mandatory once made a repository outage
+            // mean "nothing shows up at all".
+            val bus = AgentEventBus()
+            val repo = mockk<AgentEventRepository> {
+                coEvery { save(any()) } returns Unit
+                coEvery { findBySessionId("s-broken", any()) } throws RuntimeException("DB is down")
+            }
+            bus.setRepository(repo)
+
+            val collected = CopyOnWriteArrayList<AgentEvent>()
+            val job = launch { bus.sessionEventsWithHistory("s-broken").take(1).toList(collected) }
+            delay(50)
+            val fresh = makeEvent(sessionId = "s-broken")
+            bus.emit(fresh)
+            withTimeout(2_000) { job.join() }
+
+            assertEquals(listOf(fresh.id), collected.map { it.id })
+            bus.close()
+        }
+    }
 }

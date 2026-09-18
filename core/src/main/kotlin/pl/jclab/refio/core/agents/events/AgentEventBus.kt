@@ -147,6 +147,41 @@ class AgentEventBus : AutoCloseable {
     suspend fun loadPersistedEvents(sessionId: String): List<AgentEvent> =
         eventRepository?.findBySessionId(sessionId) ?: emptyList()
 
+    /**
+     * The session's whole story as one stream: what was persisted, then what happens next, with
+     * nothing delivered twice.
+     *
+     * A consumer that loaded the history itself and then subscribed used to receive every recent
+     * event a second time, because this bus keeps a replay buffer for late subscribers and the
+     * buffered events are the same ones the repository already returned. A view that appends a row
+     * per event then showed each one twice, and the counts in a report were double the truth.
+     *
+     * De-duplication is by event id and belongs here rather than in a view: an event delivered
+     * twice is wrong for every consumer, not just the ones that render rows.
+     */
+    fun sessionEventsWithHistory(sessionId: String): Flow<AgentEvent> = flow {
+        val seen = object : LinkedHashSet<String>() {
+            fun addBounded(id: String): Boolean {
+                val added = add(id)
+                // A long session must not grow this without bound. Evicting the oldest ids is safe:
+                // a re-delivery only ever happens close behind, from the replay buffer.
+                while (size > SEEN_EVENT_IDS_CAP) iterator().let { it.next(); it.remove() }
+                return added
+            }
+        }
+        // History is best-effort: a repository failure must never cost the caller the live stream.
+        val history = try {
+            loadPersistedEvents(sessionId)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            logger.warn { "Could not load persisted events for $sessionId: ${e.message}" }
+            emptyList()
+        }
+        history.forEach { if (seen.addBounded(it.id)) emit(it) }
+        sessionEvents(sessionId).collect { if (seen.addBounded(it.id)) emit(it) }
+    }
+
     /** Events of a specific type */
     inline fun <reified T : AgentEvent> eventsOfType(): Flow<T> =
         events.filterIsInstance<T>()
@@ -158,6 +193,12 @@ class AgentEventBus : AutoCloseable {
 
     companion object {
         private const val PERSISTENCE_QUEUE_CAPACITY = 1000
+
+        /**
+         * How many delivered event ids [sessionEventsWithHistory] remembers. Comfortably above the
+         * replay buffer, which is the only place a duplicate can come from.
+         */
+        private const val SEEN_EVENT_IDS_CAP = 1000
     }
 }
 

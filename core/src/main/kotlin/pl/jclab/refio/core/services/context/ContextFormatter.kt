@@ -42,6 +42,29 @@ class ContextFormatter(
     private val configService: ConfigService
 ) {
 
+    /**
+     * Conversation messages the last section build had to leave out, and older tool steps it
+     * omitted. Both losses used to be visible only as an absence in the prompt (or, for steps, as
+     * an HTML comment buried in it), which no measurement could read. Overwritten on every build,
+     * exactly like [pl.jclab.refio.core.services.ContextService.lastContextTrace]; the caller that
+     * knows the task accumulates them.
+     */
+    var lastConversationDropped: Int = 0
+        private set
+
+    var lastStepsDropped: Int = 0
+        private set
+
+    /**
+     * Clear both loss counters before a fresh prompt build. Without this a build that never
+     * reaches the conversation section (empty history) would report the previous build's losses
+     * again and the accumulated total would count them twice.
+     */
+    fun resetDropCounters() {
+        lastConversationDropped = 0
+        lastStepsDropped = 0
+    }
+
     fun buildCompactProjectOverview(context: ProjectContextDTO): String {
         val projectName = context.metaData.projectName
         val lang = context.summary.mainLanguage
@@ -314,6 +337,7 @@ class ContextFormatter(
         // recent context and drop the oldest, then reverse the kept slice back into
         // chronological order for the model.
         val rendered = ArrayDeque<String>()
+        var kept = 0
         for (msg in remaining.asReversed()) {
             val content = ContextTokenEstimator.truncateToTokens(msg.content.trim(), perMessageTokens)
             val line = "[${msg.role.uppercase()}]\n${content.trim()}\n"
@@ -321,7 +345,12 @@ class ContextFormatter(
             if (tokensUsed + lineTokens > budgetTokens) break
             rendered.addFirst(line)
             tokensUsed += lineTokens
+            kept++
         }
+        // The oldest messages fall off the front with nothing in the prompt to say so. Count them,
+        // or a run that quietly forgot what it decided ten iterations ago looks identical to one
+        // that had its whole history in front of it.
+        lastConversationDropped = (remaining.size - kept).coerceAtLeast(0)
         parts.addAll(rendered)
 
         parts.add("</CONVERSATION_HISTORY>")
@@ -885,6 +914,7 @@ class ContextFormatter(
         val emittedIndices = entries.map { it.first }.toSet()
         val allCandidates = candidates.map { it.first }
         val trulyDropped = allCandidates.count { it !in emittedIndices }
+        lastStepsDropped = trulyDropped
         if (trulyDropped > 0) {
             val failedDropped = candidates
                 .filter { (i, _, _) -> i !in emittedIndices }

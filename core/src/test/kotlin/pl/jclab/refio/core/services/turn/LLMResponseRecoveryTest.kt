@@ -49,6 +49,8 @@ class LLMResponseRecoveryTest {
         maxIterations: Int = 50,
         state: RecoveryState = RecoveryState(),
         hasRestorableAnswer: Boolean = false,
+        baseBudget: Int = LLMResponseRecovery.DEFAULT_FORMAT_NUDGE_BUDGET,
+        deliverableProduced: Boolean = false,
     ) = recovery.classifyEmptyContent(
         response,
         mode,
@@ -57,6 +59,8 @@ class LLMResponseRecoveryTest {
         maxIterations,
         state,
         hasRestorableAnswer = hasRestorableAnswer,
+        baseBudget = baseBudget,
+        deliverableProduced = deliverableProduced,
     )
 
     @Test
@@ -91,9 +95,15 @@ class LLMResponseRecoveryTest {
     }
 
     @Test
-    fun `gives up after two nudges instead of spinning`() {
-        // Bounded to 2: if two explicit reminders didn't help, further retries won't either.
-        val decision = classify(resp(content = ""), state = RecoveryState(nudgeCount = 2))
+    fun `gives up once the reminder budget is spent instead of spinning`() {
+        // Bounded: if the reminders did not help, further retries will not either. The budget is
+        // the configured one for a turn that has delivered something, doubled for one that has not
+        // - see `an undelivered turn keeps being reminded past the point a delivered one gives up`.
+        val decision = classify(
+            resp(content = ""),
+            state = RecoveryState(nudgeCount = 2),
+            deliverableProduced = true,
+        )
 
         assertIs<LLMResponseRecovery.Decision.GiveUp>(decision)
     }
@@ -168,5 +178,43 @@ class LLMResponseRecoveryTest {
         val decision = classify(resp(content = ""), mode = TaskMode.CHAT)
 
         assertIs<LLMResponseRecovery.Decision.NotApplicable>(decision)
+    }
+
+    @Test
+    fun `a turn that has delivered nothing gets twice the reminders`() {
+        // Giving up on a turn that already wrote a file wastes the tail of that turn; giving up on
+        // one that wrote nothing wastes the whole task, so the two are not worth the same budget.
+        assertEquals(2, LLMResponseRecovery.formatNudgeBudget(baseBudget = 2, deliverableProduced = true))
+        assertEquals(4, LLMResponseRecovery.formatNudgeBudget(baseBudget = 2, deliverableProduced = false))
+    }
+
+    @Test
+    fun `a configured budget of zero means never remind, delivered or not`() {
+        assertEquals(0, LLMResponseRecovery.formatNudgeBudget(baseBudget = 0, deliverableProduced = false))
+        assertEquals(0, LLMResponseRecovery.formatNudgeBudget(baseBudget = 0, deliverableProduced = true))
+    }
+
+    @Test
+    fun `an undelivered turn keeps being reminded past the point a delivered one gives up`() {
+        stubThinkingParse(emptyList())
+        // Two reminders already spent: the budget of a delivered turn is used up, an undelivered
+        // turn still has room.
+        val spent = { RecoveryState(nudgeCount = 2) }
+
+        assertIs<LLMResponseRecovery.Decision.GiveUp>(
+            classify(resp(content = ""), state = spent(), deliverableProduced = true)
+        )
+        assertIs<LLMResponseRecovery.Decision.Nudge>(
+            classify(resp(content = ""), state = spent(), deliverableProduced = false)
+        )
+    }
+
+    @Test
+    fun `a budget of zero gives up without spending a single reminder`() {
+        stubThinkingParse(emptyList())
+
+        assertIs<LLMResponseRecovery.Decision.GiveUp>(
+            classify(resp(content = ""), state = RecoveryState(), baseBudget = 0)
+        )
     }
 }

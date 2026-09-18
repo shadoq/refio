@@ -19,13 +19,21 @@ fun parseNativeToolsMode(raw: String?): NativeToolsMode = when (raw?.trim()?.low
  * 1. modelId in fallbackFlags → false (session-scoped failure cache)
  * 2. mode == NEVER → false
  * 3. mode == ALWAYS → true
- * 4. mode == AUTO → ModelDefinition.supportsFunctionCalling (false if no definition)
+ * 4. mode == AUTO → ModelDefinition.supportsFunctionCalling; with no definition, what the provider
+ *    said about the model; with neither, false.
+ *
+ * A hand-written definition outranks the provider's own answer on purpose: it is usually written
+ * precisely to overrule a model that advertises more than it can deliver.
+ *
+ * @param providerSupportsTools what the serving provider reported, or null when it was not asked
+ *        or could not answer. Only consulted when there is no definition.
  */
 fun shouldUseNativeTools(
     mode: NativeToolsMode,
     definition: ModelDefinition?,
     modelId: String,
     fallbackFlags: Set<String> = emptySet(),
+    providerSupportsTools: Boolean? = null,
 ): Boolean {
     if (modelId in fallbackFlags) {
         logger.debug { "[NATIVE_TOOLS] $modelId in session fallback set, forcing JSON path" }
@@ -34,7 +42,8 @@ fun shouldUseNativeTools(
     return when (mode) {
         NativeToolsMode.NEVER -> false
         NativeToolsMode.ALWAYS -> true
-        NativeToolsMode.AUTO -> definition?.supportsFunctionCalling == true
+        NativeToolsMode.AUTO ->
+            definition?.supportsFunctionCalling ?: (providerSupportsTools == true)
     }
 }
 
@@ -49,6 +58,7 @@ fun nativeToolsDecisionReason(
     definition: ModelDefinition?,
     modelId: String,
     fallbackFlags: Set<String> = emptySet(),
+    providerSupportsTools: Boolean? = null,
 ): String {
     if (modelId in fallbackFlags) {
         return "JSON: '$modelId' is in the session native-tools fallback set (a prior native call failed)"
@@ -57,9 +67,17 @@ fun nativeToolsDecisionReason(
         NativeToolsMode.NEVER -> "JSON: tools.native_tools=never"
         NativeToolsMode.ALWAYS -> "NATIVE: tools.native_tools=always (forced regardless of model flag)"
         NativeToolsMode.AUTO -> when {
+            // The three no-definition outcomes have to read differently, or the log cannot say
+            // whether the provider confirmed tools, denied them, or was never reachable.
+            definition == null && providerSupportsTools == true ->
+                "NATIVE: tools.native_tools=auto, no ModelDefinition for '$modelId', " +
+                    "provider reports tool support"
+            definition == null && providerSupportsTools == false ->
+                "JSON: tools.native_tools=auto, no ModelDefinition for '$modelId', " +
+                    "provider reports no tool support"
             definition == null ->
                 "JSON: tools.native_tools=auto and no ModelDefinition for '$modelId' " +
-                    "(unknown model defaults to no function-calling)"
+                    "(provider could not be asked about tool support)"
             definition.supportsFunctionCalling ->
                 "NATIVE: tools.native_tools=auto and ModelDefinition.supportsFunctionCalling=true"
             else ->

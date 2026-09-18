@@ -1,5 +1,10 @@
 package pl.jclab.refio.core.tools.implementations
 
+import pl.jclab.refio.core.security.ExecutionIntent
+import pl.jclab.refio.core.security.ExecutionIsolationMode
+import pl.jclab.refio.core.security.ExecutionPolicy
+import pl.jclab.refio.core.security.ExecutionSandbox
+import pl.jclab.refio.core.security.HostExecutionSandbox
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
@@ -32,7 +37,14 @@ private val logger = dualLogger("RunTerminalCommandTool")
 class RunTerminalCommandTool(
     private val sandbox: PathSandbox,
     private val limits: CommandLimits,
-    private val commandRuleMatcher: CommandRuleMatcher
+    private val commandRuleMatcher: CommandRuleMatcher,
+    /**
+     * Starts the process under an execution policy. This tool runs the user's own toolchain - their
+     * build, their tests, their commands - so the intent is [ExecutionIntent.PROJECT_TOOLCHAIN] and
+     * the approval gate stays the control here. Moving a build off the host would mean building
+     * against a different JDK and different dependencies, which either breaks it or makes it lie.
+     */
+    private val executionSandbox: ExecutionSandbox = HostExecutionSandbox { ExecutionIsolationMode.OFF },
 ) : Tool {
 
     override val name = "run_terminal_command"
@@ -87,10 +99,15 @@ class RunTerminalCommandTool(
             logger.info { "Executing command: '$command', workingDir='$workingDir', shell=${shellCommand[0]}" }
 
             // Execute command
-            val processBuilder = ProcessBuilder()
-                .command(shellCommand)
-                .directory(workingDir.toFile())
-                .redirectErrorStream(true)
+            val processBuilder = executionSandbox.newProcessBuilder(
+                shellCommand,
+                ExecutionPolicy(
+                    intent = ExecutionIntent.PROJECT_TOOLCHAIN,
+                    workingDirectory = workingDir,
+                    writableRoots = listOf(workingDir),
+                    networkAllowed = true,
+                ),
+            ).redirectErrorStream(true)
             // Force UTF-8 stdio for child processes (e.g. `python -c`) so non-ASCII output
             // is not mangled by the platform default code page before the JVM reads UTF-8.
             processBuilder.environment().apply {

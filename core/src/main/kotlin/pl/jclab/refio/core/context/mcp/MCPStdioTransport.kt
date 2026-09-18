@@ -6,6 +6,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.core.security.ExecutionIntent
+import pl.jclab.refio.core.security.ExecutionIsolationMode
+import pl.jclab.refio.core.security.ExecutionPolicy
+import pl.jclab.refio.core.security.ExecutionSandbox
+import pl.jclab.refio.core.security.HostExecutionSandbox
 import java.io.BufferedWriter
 import java.io.OutputStreamWriter
 
@@ -17,7 +22,20 @@ private val transportLogger = dualLogger("MCPStdioTransport")
 class MCPStdioTransport(
     private val config: MCPServerConfig,
     private val onMessage: (String) -> Unit,
-    private val onError: (Exception) -> Unit
+    private val onError: (Exception) -> Unit,
+    /**
+     * Starts the server process under an execution policy. An MCP server is somebody else's code
+     * running as a plain child process with the user's full rights, which is worth stating in one
+     * place rather than leaving implied. The intent is [ExecutionIntent.PROJECT_TOOLCHAIN]: the
+     * user configured this server deliberately, the same way they configure their build.
+     *
+     * The default runs on the host, which is what happens today and makes no difference while no
+     * backend exists, because this intent is never refused. Whoever adds a real backend has to
+     * thread the configured sandbox down through the MCP manager and connection instead, or these
+     * processes will be the one thing left outside it.
+     */
+    private val executionSandbox: ExecutionSandbox =
+        HostExecutionSandbox { ExecutionIsolationMode.OFF },
 ) {
     private var process: Process? = null
     private var readerJob: Job? = null
@@ -43,9 +61,18 @@ class MCPStdioTransport(
     suspend fun connect() {
         val command = config.command ?: throw IllegalArgumentException("stdio transport requires command")
 
-        val processBuilder = ProcessBuilder().apply {
-            command(listOf(command) + config.args)
-            config.workingDirectory?.let { directory(java.io.File(it)) }
+        val workingDirectory = java.nio.file.Paths.get(
+            config.workingDirectory ?: System.getProperty("user.dir")
+        ).toAbsolutePath()
+        val processBuilder = executionSandbox.newProcessBuilder(
+            listOf(command) + config.args,
+            ExecutionPolicy(
+                intent = ExecutionIntent.PROJECT_TOOLCHAIN,
+                workingDirectory = workingDirectory,
+                writableRoots = listOf(workingDirectory),
+                networkAllowed = true,
+            ),
+        ).apply {
             redirectErrorStream(false)
             config.env.forEach { envVar ->
                 if (envVar.name.isNotBlank()) {

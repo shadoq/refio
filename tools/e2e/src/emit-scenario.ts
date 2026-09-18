@@ -24,7 +24,9 @@ export interface ScenarioAssert {
   tool_order?: string[];
   needles_in_file?: ScenarioNeedle[];
   needle_in_output?: { regex: string };
+  output_absent?: { regex: string };
   file_unchanged?: string[];
+  file_absent?: string[];
   smoke?: { entry: string; dom_present: string[] };
   build_cmd?: string;
   no_context_overflow: boolean;
@@ -44,6 +46,9 @@ export interface E2eScenario {
   max_iterations: number;
   fixture: string;
   prompt_file: string;
+  // Run-scope config overrides the run needs, as `key=value` entries. Omitted when empty so a
+  // generated scenario reads like the hand-written ones.
+  config?: string[];
   assert: ScenarioAssert;
   judge: { criteria: string[] };
 }
@@ -65,8 +70,14 @@ export function caseToScenario(c: CatalogCase): E2eScenario {
   if (c.assert.needleInOutput) {
     assert.needle_in_output = { regex: c.assert.needleInOutput.regex };
   }
+  if (c.assert.outputAbsent) {
+    assert.output_absent = { regex: c.assert.outputAbsent.regex };
+  }
   if (c.assert.fileUnchanged.length > 0) {
     assert.file_unchanged = [...c.assert.fileUnchanged];
+  }
+  if (c.assert.fileAbsent.length > 0) {
+    assert.file_absent = [...c.assert.fileAbsent];
   }
   if (c.assert.smoke) {
     assert.smoke = {
@@ -101,6 +112,7 @@ export function caseToScenario(c: CatalogCase): E2eScenario {
     max_iterations: c.maxIterations,
     fixture: c.fixture,
     prompt_file: `prompts/${c.id}.md`,
+    ...(c.config.length > 0 ? { config: [...c.config] } : {}),
     assert,
     judge: { criteria: [...c.judge.criteria] },
   };

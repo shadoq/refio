@@ -10,6 +10,12 @@ import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
+import pl.jclab.refio.core.security.ExecutionIntent
+import pl.jclab.refio.core.security.ExecutionIsolationMode
+import pl.jclab.refio.core.security.ExecutionIsolationUnavailable
+import pl.jclab.refio.core.security.ExecutionPolicy
+import pl.jclab.refio.core.security.ExecutionSandbox
+import pl.jclab.refio.core.security.HostExecutionSandbox
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 
@@ -35,6 +41,12 @@ private val logger = dualLogger("RunCodeTool")
  */
 class RunCodeTool(
     private val sandbox: PathSandbox,
+    /**
+     * Starts the process under an execution policy. This tool runs code the model wrote itself,
+     * which is the one intent an isolation backend is for, so the policy is [ExecutionIntent
+     * .MODEL_AUTHORED] and a mode that demands isolation refuses the call outright.
+     */
+    private val executionSandbox: ExecutionSandbox = HostExecutionSandbox { ExecutionIsolationMode.OFF },
     private val timeoutSeconds: Long = DEFAULT_TIMEOUT_SECONDS,
     private val maxOutputSize: Int = DEFAULT_MAX_OUTPUT_SIZE
 ) : Tool {
@@ -95,10 +107,15 @@ class RunCodeTool(
             val command = langConfig.buildCommand(tempFileName)
             val shellCommand = getShellCommand(command)
 
-            val processBuilder = ProcessBuilder()
-                .command(shellCommand)
-                .directory(workingDir.toFile())
-                .redirectErrorStream(true)
+            val processBuilder = executionSandbox.newProcessBuilder(
+                shellCommand,
+                ExecutionPolicy(
+                    intent = ExecutionIntent.MODEL_AUTHORED,
+                    workingDirectory = workingDir,
+                    writableRoots = listOf(workingDir),
+                    networkAllowed = false,
+                ),
+            ).redirectErrorStream(true)
             // Force UTF-8 stdio so non-ASCII (e.g. Polish) output is not mangled by the platform
             // default code page (Windows uses CP1250/CP852; the JVM reads UTF-8 since JEP 400).
             // PYTHONUTF8 additionally makes Python read source/data files as UTF-8 by default.
@@ -216,6 +233,11 @@ class RunCodeTool(
                 metadata = metadata
             )
 
+        } catch (e: ExecutionIsolationUnavailable) {
+            // Not a failure of the code: a deliberate refusal to run it. Say so plainly, or the
+            // model reads it as a broken runtime and keeps retrying.
+            logger.warn { "[EXECUTION_ISOLATION] Refused to run model-authored code: ${e.message}" }
+            ToolResult.error(e.message ?: "Execution refused: no isolation backend available.")
         } catch (e: Exception) {
             logger.error(e) { "Code execution failed" }
             ToolResult.error("Code execution failed: ${e.message}")

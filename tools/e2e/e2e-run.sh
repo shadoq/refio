@@ -272,6 +272,18 @@ assert_run() {
         fi
     fi
 
+    # HARD 1b2 — output_absent: the answer must NOT match this. The mirror of needle_in_output, and
+    # the only shape that fits a gate about something that must not happen: where the agent is
+    # supposed to fail to obtain something there is nothing to look for, only something to rule out.
+    local absent_regex
+    absent_regex="$(jq -r '.assert.output_absent.regex // empty' "$scenario")"
+    if [[ -n "$absent_regex" ]]; then
+        out="$(jq -r '.finalOutput // ""' "$run_json")"
+        if grep -qE -- "$absent_regex" <<<"$out"; then
+            hard_fail=1; reasons+=("output matched /${absent_regex}/, which it must not")
+        fi
+    fi
+
     # HARD 1c — file_unchanged: listed paths must be byte-identical to the original fixture (proves the
     # agent did NOT touch them — guards "no change needed" and "don't edit the test" scenarios).
     local fx_dir fu_count fidx fu
@@ -382,14 +394,14 @@ assert_run() {
     # read it, so a run that needed forty wasted turns to reach the right file passed
     # exactly like one that took four.
     #
-    # Iterations are counted as assistant messages in the conversation. The run document
-    # does carry a toolCallCount, but it counts SUBTASK rows rather than loop iterations,
-    # which is a different number under a name that reads like this one.
+    # Iterations come from metrics.iterations — the loop's own count. Older run documents do not
+    # carry it, so assistant messages remain the fallback. Never toolCallCount: that counts SUBTASK
+    # rows, a different number under a name that reads like this one.
     local want_cap cap iters
     want_cap="$(jq -r '.assert.enforce_max_iterations // false' "$scenario")"
     if [[ "$want_cap" == "true" ]]; then
         cap="$(jq -r '.max_iterations // 0' "$scenario")"
-        iters="$(jq '[.conversation[]? | select(.role=="ASSISTANT" or .role=="assistant")] | length' "$run_json" 2>/dev/null || echo 0)"
+        iters="$(jq 'if (.metrics.iterations // 0) > 0 then .metrics.iterations else ([.conversation[]? | select(.role=="ASSISTANT" or .role=="assistant")] | length) end' "$run_json" 2>/dev/null || echo 0)"
         if (( cap > 0 && iters > cap )); then
             hard_fail=1; reasons+=("took ${iters} iterations, budget is ${cap}")
         fi
@@ -649,10 +661,10 @@ emit_result_record() {
         mode="$(jq -r '.session.mode // ""' "$run_json" 2>/dev/null || echo "")"
         provider="$(jq -r '.session.provider // ""' "$run_json" 2>/dev/null || echo "")"
         tokens_in="$(jq -r '.metrics.tokensIn // 0' "$run_json" 2>/dev/null || echo 0)"
-        # Loop iterations, counted as assistant messages. metrics.toolCallCount counts
-        # SUBTASK rows, which is a different number wearing a name that reads like this
-        # one - it was reported as "iterations" and averaged as loop efficiency.
-        iters="$(jq '[.conversation[]? | select(.role=="ASSISTANT" or .role=="assistant")] | length' "$run_json" 2>/dev/null || echo 0)"
+        # Loop iterations: the loop's own count when the run document carries it, assistant
+        # messages otherwise. metrics.toolCallCount counts SUBTASK rows, a different number wearing
+        # a name that reads like this one - it used to be averaged as loop efficiency.
+        iters="$(jq 'if (.metrics.iterations // 0) > 0 then .metrics.iterations else ([.conversation[]? | select(.role=="ASSISTANT" or .role=="assistant")] | length) end' "$run_json" 2>/dev/null || echo 0)"
         subtasks="$(jq -r '.metrics.toolCallCount // 0' "$run_json" 2>/dev/null || echo 0)"
         apicalls="$(jq -r '.metrics.apiCallCount // 0' "$run_json" 2>/dev/null || echo 0)"
         duration="$(jq -r '.metrics.durationMs // (.run.durationMs // 0)' "$run_json" 2>/dev/null || echo 0)"
@@ -849,6 +861,13 @@ run_scenario() {
     # headless rejection (see AUTO_APPROVE above). Empty (via --no-auto-approve) restores the raw
     # "reject every ASK command" behaviour.
     [[ -n "$AUTO_APPROVE" ]] && cli_args+=(--auto-approve "$AUTO_APPROVE")
+    # Config the scenario itself declares. Goes before the command-line overrides so the operator
+    # can still override it, but after nothing else: a scenario that measures what a setting does
+    # is meaningless if it runs on the default.
+    local sc
+    while IFS= read -r sc; do
+        sc="${sc%$'\r'}"; [[ -n "$sc" ]] && cli_args+=(--config "$sc")
+    done < <(jq -r '.config // [] | .[]' "$scenario")
     # --ollama-host/--ollama-ctx sugar first, then explicit --config (so a raw --config wins).
     local c
     if [[ ${#OLLAMA_SUGAR[@]} -gt 0 ]]; then
@@ -1084,6 +1103,21 @@ JSON
     echo "  case output-viol    -> $v" >&2
     [[ "$v" == FAIL* ]] || { echo "  !! needle_in_output must FAIL on a missing phrase" >&2; fails=1; }
 
+    # Case 12b: output_absent — the mirror of the above. A gate about something that must NOT
+    # happen has nothing to look for, only something to rule out.
+    cat > "$oscen" <<'JSON'
+{ "id":"absent", "assert": { "output_absent": { "regex":"nonexistent-phrase-xyz" } } }
+JSON
+    v="$(assert_run "$oscen" "$sample/sample-run.pass.json" "$proj" 0 2>/dev/null || true)"
+    echo "  case out-absent-ok  -> $v" >&2
+    [[ "$v" == PASS* ]] || { echo "  !! output_absent must PASS when the phrase is missing" >&2; fails=1; }
+    cat > "$oscen" <<'JSON'
+{ "id":"absent", "assert": { "output_absent": { "regex":"null check" } } }
+JSON
+    v="$(assert_run "$oscen" "$sample/sample-run.pass.json" "$proj" 0 2>/dev/null || true)"
+    echo "  case out-absent-viol-> $v" >&2
+    [[ "$v" == FAIL* ]] || { echo "  !! output_absent must FAIL when the phrase is present" >&2; fails=1; }
+
     # Case 13: file_unchanged — file must equal the original fixture byte-for-byte.
     local fxroot="$proj/fx"; mkdir -p "$fxroot/src"
     printf 'object Frozen { const val V = 1 }\n' > "$fxroot/src/Frozen.kt"
@@ -1305,6 +1339,16 @@ JSON
     [[ "$(jq -r '.iterations' <<<"$rec2" 2>/dev/null)" == "6" ]] || { echo "  !! iterations must count the loop's own turns (6), not subtask rows" >&2; fails=1; }
     [[ "$(jq -r '.subtasks' <<<"$rec2" 2>/dev/null)" == "2" ]] || { echo "  !! the subtask count must be reported under its own name" >&2; fails=1; }
     rm -rf "$gate_out2"
+
+    # When the run document carries the loop's own count, that count wins: assistant messages are
+    # only an approximation of it (a single iteration can answer with several messages, or none).
+    local gate_out3; gate_out3="$(mktemp -d "${TMPDIR:-/tmp}/refio-e2e-gate3-XXXXXX")"
+    ( E2E_OUT_DIR="$gate_out3"; E2E_RUN_INDEX=1; MODEL="ollama/qwen3.5:4b"
+      emit_result_record "iters-scn" "PASS" "$sample/sample-run.iterations.json" )
+    local rec3; rec3="$(tail -n1 "$gate_out3/results.jsonl" 2>/dev/null || true)"
+    echo "  case gate-iters-src -> $(jq -rc '{iterations,subtasks}' <<<"$rec3" 2>/dev/null || echo PARSE_ERR)" >&2
+    [[ "$(jq -r '.iterations' <<<"$rec3" 2>/dev/null)" == "4" ]] || { echo "  !! metrics.iterations must win over the assistant-message count (6)" >&2; fails=1; }
+    rm -rf "$gate_out3"
     rm -rf "$gate_out"
 
     rm -rf "$proj" "$empty"

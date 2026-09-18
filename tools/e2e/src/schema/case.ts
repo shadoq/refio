@@ -48,8 +48,15 @@ export const CaseAssertSchema = z.object({
   needles: z.array(CaseNeedleSchema).default([]),
   // PLAN/CHAT: pattern the run's finalOutput must contain (compliance signal).
   needleInOutput: z.object({ regex: z.string() }).nullable().default(null),
+  // Pattern the run's finalOutput must NOT contain. The mirror of needleInOutput, and the only
+  // shape that can express a gate about something that must not happen: a case where the agent is
+  // supposed to fail to obtain something has nothing to look for, only something to rule out.
+  outputAbsent: z.object({ regex: z.string() }).nullable().default(null),
   // Files that must stay byte-identical (PLAN read-only guard).
   fileUnchanged: z.array(z.string()).default([]),
+  // Paths that must NOT exist after the run. Unlike fileUnchanged this covers files the fixture
+  // never had, which is what a gate about something that must not happen needs.
+  fileAbsent: z.array(z.string()).default([]),
   // Headless-browser smoke: entry file + DOM selectors expected present.
   smoke: CaseSmokeSchema.nullable().default(null),
   // Build command for multi-file cases (exit 0). Null for single-file.
@@ -97,6 +104,10 @@ export const CatalogCaseSchema = z
     // documentation only (the sandbox uses the normalized `deliverable`).
     originalFilePattern: z.string().optional(),
     fixture: z.string(),
+    // Run-scope config the case needs to mean anything, as `key=value` entries. A case that
+    // measures what a setting does has to be able to ask for that setting: otherwise it passes on
+    // the default and the thing it was written to check never runs.
+    config: z.array(z.string().regex(/^[^=\s]+=.*$/)).default([]),
     assert: CaseAssertSchema,
     judge: z.object({ criteria: z.array(z.string()).min(1) }),
     review: CaseReviewSchema,

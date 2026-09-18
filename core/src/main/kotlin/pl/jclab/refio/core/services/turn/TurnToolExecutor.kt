@@ -36,6 +36,7 @@ import pl.jclab.refio.core.services.context.ContextTokenEstimator
 import pl.jclab.refio.core.services.execution.unified.ExecutionEventListener
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
+import pl.jclab.refio.core.debug.TurnFileWriteTracker
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
@@ -803,6 +804,31 @@ class TurnToolExecutor(
     }
 
     /**
+     * Content hashes of the files a file-writing call is about to touch, read just before it runs.
+     * Empty for every other call. Paired with [recordFileWrites] after execution so a path that was
+     * edited and then put back is visible as such - the tree alone cannot show it.
+     */
+    private fun captureWriteTargets(toolCall: ToolCallData, tool: Tool?): Map<String, String?> {
+        if (snapshotService == null || tool?.mode != ToolMode.WRITE || !isFileWriteTool(toolCall.name)) {
+            return emptyMap()
+        }
+        return extractEditPaths(toolCall.arguments).associateWith { snapshotService.currentContentHash(it) }
+    }
+
+    /** Record what actually happened to the paths [captureWriteTargets] measured before the call. */
+    private fun recordFileWrites(taskId: String, before: Map<String, String?>) {
+        if (before.isEmpty() || snapshotService == null) return
+        before.forEach { (path, hashBefore) ->
+            TurnFileWriteTracker.recordWrite(
+                taskId = taskId,
+                path = path,
+                hashBefore = hashBefore,
+                hashAfter = snapshotService.currentContentHash(path),
+            )
+        }
+    }
+
+    /**
      * Snapshot a write tool's target file before execution so the edit can be rolled back.
      * Covers the non-streaming execution path (toolExecutor.executeTool); streaming editors
      * already snapshot inside ToolExecutor.executeToolsWithStreaming. No-op for reads, for
@@ -1199,6 +1225,10 @@ class TurnToolExecutor(
             if (streamingListener == null) {
                 maybeSnapshotBeforeWrite(taskId, subtaskId, toolCall, tool, _config)
             }
+            // Read before the call, compared after it. Covers the streaming editors too, which
+            // snapshot themselves further down and would otherwise be the ones missing from the
+            // record - they are the tools that rewrite whole files.
+            val writeTargetsBefore = captureWriteTargets(toolCall, tool)
             val toolResult = executeWithBudget(
                 toolName = toolCall.name,
                 timeoutMs = resolveToolTimeoutMs(toolCall.name, _config)
@@ -1244,6 +1274,8 @@ class TurnToolExecutor(
                     toolExecutor.executeTool(toolCallRequest, taskId)
                 }
             }
+
+            recordFileWrites(taskId, writeTargetsBefore)
 
             val execMs = System.currentTimeMillis() - tExecStart
             // Delegation tools (invoke_subagent, delegate_to_strong_model) run a whole nested turn

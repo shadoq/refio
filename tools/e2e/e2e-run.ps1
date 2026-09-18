@@ -181,6 +181,15 @@ function Assert-Run {
         }
     }
 
+    # HARD 1b2 — output_absent: the answer must NOT match this. Mirrors e2e-run.sh HARD 1b2.
+    if ($s.assert.output_absent -and $s.assert.output_absent.regex) {
+        $out = if ($null -ne $run.finalOutput) { [string]$run.finalOutput } else { "" }
+        $arx = ($s.assert.output_absent.regex -replace '\[\[:space:\]\]', '\s')
+        if ($out -cmatch $arx) {
+            $hardFail = $true; $reasons += "output matched /$($s.assert.output_absent.regex)/, which it must not"
+        }
+    }
+
     # HARD 1c — file_unchanged: listed paths must be byte-identical to the original fixture.
     if ($s.fixture -and $s.assert.file_unchanged) {
         $fxDir = Join-Path (Split-Path -Parent (Resolve-Path $Scenario)) $s.fixture
@@ -265,10 +274,14 @@ function Assert-Run {
         $hardFail = $true; $reasons += "context overflow (silent truncation)"
     }
 
-    # HARD 4 — max_iterations, when the case declares it a real limit. Iterations are counted
-    # as assistant messages: metrics.toolCallCount counts subtask rows, which is a different
+    # HARD 4 — max_iterations, when the case declares it a real limit. Iterations come from
+    # metrics.iterations, the loop's own count; older run documents do not carry it, so assistant
+    # messages remain the fallback. Never toolCallCount: that counts subtask rows, a different
     # number under a name that reads like this one. Mirrors e2e-run.sh HARD 4.
     $assistantTurns = @($run.conversation | Where-Object { $_.role -and ([string]$_.role).ToUpper() -eq 'ASSISTANT' }).Count
+    if ($run.metrics -and $null -ne $run.metrics.iterations -and [int]$run.metrics.iterations -gt 0) {
+        $assistantTurns = [int]$run.metrics.iterations
+    }
     if ($s.assert.enforce_max_iterations -eq $true) {
         $cap = if ($null -ne $s.max_iterations) { [int]$s.max_iterations } else { 0 }
         if ($cap -gt 0 -and $assistantTurns -gt $cap) {
@@ -575,10 +588,14 @@ function Write-ResultRecord {
             if ($r.session -and $r.session.mode) { $mode = [string]$r.session.mode }
             if ($r.session -and $r.session.provider) { $provider = [string]$r.session.provider }
             if ($null -ne $r.metrics.tokensIn) { $tokensIn = $r.metrics.tokensIn }
-            # Loop iterations, counted as assistant messages. metrics.toolCallCount counts
-            # SUBTASK rows and was reported here as "iterations", which made the headline
-            # loop-efficiency number a different quantity from the one it named.
+            # Loop iterations: the loop's own count when the run document carries it, assistant
+            # messages otherwise. metrics.toolCallCount counts SUBTASK rows and was reported here
+            # as "iterations", which made the headline loop-efficiency number a different quantity
+            # from the one it named.
             $iters = @($r.conversation | Where-Object { $_.role -and ([string]$_.role).ToUpper() -eq 'ASSISTANT' }).Count
+            if ($r.metrics -and $null -ne $r.metrics.iterations -and [int]$r.metrics.iterations -gt 0) {
+                $iters = [int]$r.metrics.iterations
+            }
             if ($null -ne $r.metrics.toolCallCount) { $subtasks = $r.metrics.toolCallCount }
             if ($null -ne $r.metrics.apiCallCount) { $apiCalls = $r.metrics.apiCallCount }
             if ($null -ne $r.metrics.durationMs) { $duration = $r.metrics.durationMs }
@@ -776,6 +793,10 @@ function Invoke-Scenario {
     # "reject every ASK command" behaviour.
     if ($AutoApprove) { $cliArgs += @('--auto-approve', $AutoApprove) }
     if ($mcpRendered) { $cliArgs += @('--mcp-server', $mcpRendered) }
+    # Config the scenario itself declares. Before the command-line overrides so the operator can
+    # still override it, but after nothing else: a scenario that measures what a setting does is
+    # meaningless if it runs on the default. Mirrors e2e-run.sh.
+    if ($s.config) { foreach ($kv in @($s.config)) { if ($kv) { $cliArgs += @('--config', [string]$kv) } } }
     # -OllamaHost / -OllamaCtx are sugar over the validated config overrides so testing a model on a
     # different Ollama box (or a different context size) needs no raw key. Host accepts "box",
     # "box:11434", or "http://box:11434"; a bare host/port becomes http://host:11434.

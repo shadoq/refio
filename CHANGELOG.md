@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The run document now records what the turn loop actually did, not just whether it ended well: how many iterations were used against the cap, why it stopped (a named reason per exit, from a clean completion through every guardrail to an uncaught exception), how often each guardrail fired, what the context budget was and how much of it was used, which files were written and whether the content actually changed, and whether the native tool channel had to be given up mid-turn. Comparing two models on the same task previously meant reading a status field and guessing: a turn that hit the iteration cap, one that was stopped by the repetition guard and one that simply finished all reported the same way. Tool calls carry whether each one succeeded and its error, and a tool result carries its own metadata, so a run can be read without the debug log beside it.
+- `general.execution_isolation` (`auto` by default, `required`, `off`) decides how model-authored code may be executed. Execution now goes through a single seam that separates a command the project's own toolchain runs from code the model just wrote, and `required` refuses the second kind outright rather than running it and calling it isolated. No sandbox backend ships with this: `auto` behaves exactly as before and says so once in the log, and `required` is for a machine where executing model output is not acceptable at all. The same seam is used by the terminal tool and by MCP servers started as child processes.
+- `agent.max_format_nudges` (default 2) exposes how many reminders a turn spends on a model that keeps answering in the wrong shape, which until now was a constant.
+- The native tool channel can be decided from the server rather than only from the built-in model registry. A model built locally is not in that registry, so `auto` read it as a model without function calling and dropped the turn onto the text-envelope path; Ollama is now asked what the model supports, once per model, and the answer is cached for the process.
+- The Debug screen shows the model the session last actually used, which is not always the one the dropdown shows.
+- The scenario harness gained three things a scenario needs to state its own conditions: configuration overrides carried by the scenario itself (a command-line override still wins), an assertion that a given text does NOT appear in the output, and an assertion that a file was NOT created. It also reads the iteration count from the run document when it is there instead of inferring it from the number of assistant messages, which counted a turn that answered twice in one iteration as two.
+
+### Changed
+
+- The CLI log rolls instead of growing without bound: 50 MB per file, 7 days kept, 500 MB in total. It also appends rather than truncating on every start, so the log of the run that just failed is still there when the next one begins.
+- The reminder budget for a malformed answer doubles while the turn has produced nothing. Spending the same small budget before and after a deliverable exists treated the two situations alike, and a turn was given up on while it had not yet written anything.
+- A turn abandoned because the model kept repeating itself is now reported as incomplete rather than successful. This is a behaviour change: such a turn used to be indistinguishable from one that finished its work, both for the task status and for anything reading the run afterwards.
+- The agent execution view subscribes once to a stream that replays the stored history and then continues live, instead of loading the history and subscribing separately.
+
 ### Fixed
 
 - The benchmark harness could not measure an external coding agent on this machine at all, and each of the four reasons landed in the data as an ordinary failed attempt by the agent rather than as a broken measurement.
@@ -16,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The run deadline did not stop the agent. The command is handed to a shell, so the process that was signalled was the shell and the agent underneath it kept running and kept the output pipe open; the call never returned and the whole sweep waited indefinitely instead of recording a timed-out attempt. The process tree is now taken down, and the call returns even if something survives that.
   - An agent that is killed loses whatever it had buffered, and a timed-out attempt is worth reading precisely because it shows where the agent got stuck. It is now asked to stop and only forced afterwards.
   - Launching the sweep from inside another coding agent handed the launcher's session to the child through the environment, and the launcher's own settings file pinned a model that beat the model named on the command line. The agent then refused to start on a model the run never chose - and with no endpoint override it would instead have answered from the launcher's account while the row recorded the local model. The variables naming the host session are cleared, and the run writes its own model into the settings beside the work directory, where it cannot be overruled.
+- Agent events no longer appear twice in the execution view. The view loaded the stored history and subscribed to the live stream, whose replay buffer handed back the same events again, so every step of a long-running agent was drawn twice. Events are now deduplicated by identity where they are published, and a failure to read the history leaves the live stream running rather than taking it down with it.
+- A tool-template error from Ollama is no longer retried. It is deterministic - the same request fails the same way every time - so the retries only delayed the fallback to the text channel by the full backoff.
+- The context accounting reported by a run is reset per turn instead of carrying the previous turn's dropped-message counters.
 
 ## [0.0.2.0] - 2026-09-07
 

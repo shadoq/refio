@@ -359,6 +359,12 @@ data class TurnResult(
      */
     val incomplete: Boolean = false,
     /**
+     * Which of the loop's ~25 terminal exits this turn took. [success] and [incomplete] say whether
+     * the turn delivered; this says why it stopped, in a form that can be counted across runs
+     * instead of read out of [response] as an English sentence.
+     */
+    val stopReason: pl.jclab.refio.core.debug.TurnStopReason = pl.jclab.refio.core.debug.TurnStopReason.UNKNOWN,
+    /**
      * Outcome of the deterministic post-turn verification step (project build/test run by the
      * loop code after a file-writing AGENT turn). Null when verification was not applicable to
      * this exit path; [pl.jclab.refio.core.debug.VerificationSummary.NOT_RUN] when it was

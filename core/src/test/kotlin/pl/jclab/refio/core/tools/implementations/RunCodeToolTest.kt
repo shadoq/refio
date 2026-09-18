@@ -5,6 +5,8 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import pl.jclab.refio.core.security.ExecutionIsolationMode
+import pl.jclab.refio.core.security.HostExecutionSandbox
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
@@ -313,6 +315,51 @@ class RunCodeToolTest {
         @Test
         fun `kotlin config should have kts extension`() {
             assertEquals(".kts", RunCodeTool.SUPPORTED_LANGUAGES["kotlin"]?.extension)
+        }
+    }
+
+    /**
+     * The end-to-end half of the isolation setting: that the refusal is actually wired into the
+     * tool, not merely known to the sandbox. Without this the unit test of the sandbox could stay
+     * green while `run_code` kept spawning processes.
+     */
+    @Nested
+    inner class ExecutionIsolationTests {
+
+        private fun toolWith(mode: ExecutionIsolationMode) =
+            RunCodeTool(sandbox, HostExecutionSandbox { mode })
+
+        @Test
+        fun `required refuses to run the code and starts no process`() = runBlocking {
+            val marker = tempDir.resolve("it-ran.txt")
+            val result = toolWith(ExecutionIsolationMode.REQUIRED).execute(
+                mapOf(
+                    "language" to "python",
+                    "code" to "open(r'${marker.toString().replace("\\", "\\\\")}', 'w').write('ran')",
+                )
+            )
+
+            assertFalse(result.success, "a refused run is not a successful one")
+            assertTrue(
+                result.error!!.contains("execution_isolation=required"),
+                "the model has to be told this was a refusal, not a broken runtime: ${result.error}",
+            )
+            assertFalse(
+                java.nio.file.Files.exists(marker),
+                "the process must never have started - the refusal is the whole point",
+            )
+        }
+
+        @Test
+        fun `required leaves no temporary script behind in the project`() = runBlocking {
+            toolWith(ExecutionIsolationMode.REQUIRED).execute(
+                mapOf("language" to "python", "code" to "print(1)")
+            )
+
+            val leftovers = java.nio.file.Files.list(tempDir).use { stream ->
+                stream.filter { it.fileName.toString().startsWith(".refio_run_") }.toList()
+            }
+            assertTrue(leftovers.isEmpty(), "refusing must not litter the user's project: $leftovers")
         }
     }
 }

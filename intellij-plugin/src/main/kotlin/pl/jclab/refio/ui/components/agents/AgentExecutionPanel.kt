@@ -102,24 +102,16 @@ class AgentExecutionPanel : JPanel(BorderLayout()), Disposable {
             }
             latch.await()
 
-            // Replay persisted events so the panels reflect the saved state
-            // before we start consuming live events. Any live events with the same
-            // ids arriving later are effectively idempotent because they'd just
-            // update the same tree nodes / table rows.
+            // One stream: what was persisted, then what happens next, with nothing delivered
+            // twice. Replaying the history and then subscribing separately used to hand every
+            // recent event to the panels a second time — the bus keeps a replay buffer for late
+            // subscribers and those are the same events the repository returns — so the Timeline
+            // table showed 44 rows for 22 events and the Trace showed every turn twice.
             //
-            // IMPORTANT: replay is best-effort. A repository failure must NOT stop
-            // us from starting the live collect — that was the cause of the "nothing
-            // shows up" regression after the repo was first wired in.
-            try {
-                val persisted = eventBus.loadPersistedEvents(sessionId)
-                persisted.forEach { handleEvent(it) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Throwable) {
-                // swallow and continue to live subscription
-            }
-
-            eventBus.sessionEvents(sessionId).collect { event ->
+            // IMPORTANT: history is best-effort inside the bus. A repository failure must NOT stop
+            // the live stream — that was the cause of the "nothing shows up" regression after the
+            // repo was first wired in.
+            eventBus.sessionEventsWithHistory(sessionId).collect { event ->
                 handleEvent(event)
             }
         }

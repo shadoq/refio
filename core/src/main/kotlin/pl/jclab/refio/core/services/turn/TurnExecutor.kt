@@ -31,6 +31,7 @@ import pl.jclab.refio.core.llm.parseNativeToolsMode
 import pl.jclab.refio.core.llm.shouldUseNativeTools
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.debug.TurnFailureMarkerTracker
+import pl.jclab.refio.core.debug.TurnStopReason
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.LLMRetryHandler
 import pl.jclab.refio.core.services.NoopTaskVerifier
@@ -156,7 +157,17 @@ internal class TurnExecutor(
         val agentDepth: Int?,
         /** Needed by [finish] to tell an AGENT turn that delivered nothing from a PLAN turn that never could. */
         val mode: TaskMode,
+        /** The loop's iteration ceiling, so a turn that used its whole budget is visible as such. */
+        val maxIterations: Int,
     ) {
+        /**
+         * Reads the turn's steering counters at the moment it ends. A closure rather than a
+         * parameter because the counters are locals of the loop body and [finish] is reached from
+         * ~25 places; threading them through every one of them would be noise, and holding them
+         * here would duplicate state that the loop already owns.
+         */
+        var guardrailStats: (() -> pl.jclab.refio.core.debug.GuardrailStats)? = null
+
         /**
          * Every terminal exit of the turn loop goes through here, which is why the running state is
          * cleared here rather than at each of the ~20 return sites - only a handful of them used
@@ -171,7 +182,24 @@ internal class TurnExecutor(
          * A nested turn keeps the state alone: it shares this flow with the parent, which is
          * still running and whose next iteration overwrites it anyway.
          */
-        fun finish(result: TurnResult, persistAssistantMessage: Boolean): TurnResult {
+        fun finish(
+            result: TurnResult,
+            persistAssistantMessage: Boolean,
+            /**
+             * Which exit of the loop this is. A plain parameter on purpose: the loop body already
+             * sits close to the JVM's 64 KB limit on the generated state machine, so naming the
+             * reason must not add a suspension point at any of the ~25 return sites.
+             */
+            stopReason: pl.jclab.refio.core.debug.TurnStopReason =
+                pl.jclab.refio.core.debug.TurnStopReason.UNKNOWN,
+        ): TurnResult {
+            // A turn that ended without naming its exit is still a turn that finished, so read a
+            // successful unnamed exit as a clean one rather than leaving it UNKNOWN forever.
+            var reason = when {
+                stopReason != pl.jclab.refio.core.debug.TurnStopReason.UNKNOWN -> stopReason
+                result.success -> pl.jclab.refio.core.debug.TurnStopReason.COMPLETED
+                else -> pl.jclab.refio.core.debug.TurnStopReason.UNKNOWN
+            }
             // Say WHY a turn ended empty-handed. Without this every such run reached the reports as
             // a bare INCOMPLETE, indistinguishable from a repetition loop. First marker wins, so a
             // guardrail that already named the cause keeps its claim.
@@ -186,6 +214,22 @@ internal class TurnExecutor(
                     taskId,
                     pl.jclab.refio.core.debug.TurnFailureMarkerTracker.NO_FILE_WRITTEN,
                 )
+                // "Nothing was written" is an observation about the outcome, not a cause. An exit
+                // that already named why it stopped keeps its reason; only an unexplained stop is
+                // labelled by it.
+                if (reason.isClean) {
+                    reason = pl.jclab.refio.core.debug.TurnStopReason.NO_FILE_WRITTEN
+                }
+            }
+            if (depth == 0) {
+                pl.jclab.refio.core.debug.TurnStopReasonTracker.record(taskId, reason)
+                pl.jclab.refio.core.debug.TurnIterationTracker.record(
+                    taskId,
+                    pl.jclab.refio.core.debug.IterationSummary(used = result.iterations, limit = maxIterations),
+                )
+                guardrailStats?.let {
+                    pl.jclab.refio.core.debug.TurnGuardrailStatsTracker.record(taskId, it())
+                }
             }
             return turnFinalizer.completeTurn(
                 taskId, result, listener, runId, parentRunId, depth,
@@ -194,7 +238,8 @@ internal class TurnExecutor(
                 agentInstanceId = agentInstanceId,
                 agentName = agentName,
                 agentDepth = agentDepth,
-            ).also { if (depth == 0) updateTurnState { TurnStateSnapshot() } }
+            ).copy(stopReason = reason)
+                .also { if (depth == 0) updateTurnState { TurnStateSnapshot() } }
         }
 
         fun persist(
@@ -310,6 +355,7 @@ internal class TurnExecutor(
         /** Stable agent name for A2A routing — injected into tool params as AGENT_NAME. */
         agentName: String? = null
     ): TurnResult {
+        probeProviderToolSupport(mode, taskId, model, provider, profileOverrides)
         val result = executeLoop(
             taskId, mode, executionMode, listener, streamCallback, model, provider,
             userContextRefs, runProfile, profileOverrides, runId, parentRunId, depth,
@@ -320,6 +366,139 @@ internal class TurnExecutor(
             iterations = result.iterations, success = result.success
         )
         return result
+    }
+
+    /**
+     * Counters behind the three soft nudges, held together so the loop body does not have to carry
+     * seven more locals. Extracting them is not cosmetic: the loop's generated method sits close to
+     * the JVM's 64 KB ceiling, and this block's bytecode is what pushed it over.
+     */
+    private class SoftNudgeState {
+        var consecutiveGatheringCalls = 0
+        var consolidationNudges = 0
+        val fullRegenCountByPath = mutableMapOf<String, Int>()
+        var regenerationNudges = 0
+        var consecutiveSubagentDefinitions = 0
+        val definedSubagentNames = linkedSetOf<String>()
+        var subagentInvokeNudges = 0
+    }
+
+    /**
+     * The three non-blocking nudges that watch for work-shaped inactivity: reading without ever
+     * delivering, rebuilding the same file from scratch again, and defining agents without running
+     * one. Top-level AGENT only - a subagent is often read-only by design, and PLAN cannot write
+     * files, so half the advice would be wrong there.
+     */
+    private fun applySoftNudges(
+        taskId: String,
+        mode: TaskMode,
+        depth: Int,
+        iteration: Int,
+        maxIterations: Int,
+        toolCalls: List<ToolCallData>,
+        noopCallIds: Set<String>,
+        state: SoftNudgeState,
+        turnPersistence: TurnPersistence,
+    ) {
+        if (mode != TaskMode.AGENT || depth != 0 || iteration >= maxIterations) return
+
+        if (turnToolExecutor.batchMakesConsolidationProgress(toolCalls, noopCallIds)) {
+            state.consecutiveGatheringCalls = 0
+        } else {
+            state.consecutiveGatheringCalls += turnToolExecutor.countGatheringToolCalls(toolCalls)
+        }
+        if (state.consecutiveGatheringCalls >= READ_ONLY_CONSOLIDATION_THRESHOLD &&
+            state.consolidationNudges < MAX_CONSOLIDATION_NUDGES
+        ) {
+            logger.info {
+                "[CONSOLIDATION_NUDGE] taskId=$taskId, gatheringCalls=${state.consecutiveGatheringCalls}, " +
+                    "nudge=${state.consolidationNudges + 1}/$MAX_CONSOLIDATION_NUDGES"
+            }
+            turnPersistence.persist(
+                role = MessageRole.SYSTEM,
+                content = buildConsolidationNudge(state.consecutiveGatheringCalls),
+                // Tagged as guardian_nudge so the UI renders it as a gentle "agent guidance" note
+                // (same category: internal steering), not a full alarming SYSTEM bubble.
+                metadata = """{"type":"guardian_nudge"}""",
+                toolCalls = null,
+            )
+            state.consolidationNudges++
+            state.consecutiveGatheringCalls = 0
+        }
+
+        if (state.regenerationNudges < MAX_REGENERATION_NUDGES) {
+            val regeneratedPath = TurnToolExecutor
+                .fullRegenerationPaths(toolCalls, noopCallIds)
+                .map { it to state.fullRegenCountByPath.merge(it, 1, Int::plus)!! }
+                .firstOrNull { (_, count) -> count >= REGENERATION_NUDGE_THRESHOLD }
+                ?.first
+            if (regeneratedPath != null) {
+                val regenCount = state.fullRegenCountByPath[regeneratedPath] ?: 0
+                logger.info {
+                    "[REGENERATION_NUDGE] taskId=$taskId, path=$regeneratedPath, " +
+                        "regenerations=$regenCount, nudge=${state.regenerationNudges + 1}/$MAX_REGENERATION_NUDGES"
+                }
+                turnPersistence.persist(
+                    role = MessageRole.SYSTEM,
+                    content = buildRegenerationNudge(regeneratedPath, regenCount),
+                    metadata = """{"type":"guardian_nudge"}""",
+                    toolCalls = null,
+                )
+                state.regenerationNudges++
+            }
+        }
+
+        if (toolCalls.any { it.name == "invoke_subagent" }) {
+            state.consecutiveSubagentDefinitions = 0
+            state.definedSubagentNames.clear()
+        } else {
+            state.consecutiveSubagentDefinitions += TurnToolExecutor.subagentDefinitionCalls(toolCalls).size
+            state.definedSubagentNames += TurnToolExecutor.subagentDefinitionNames(toolCalls)
+        }
+        if (state.consecutiveSubagentDefinitions >= TurnToolExecutor.SUBAGENT_INVOKE_NUDGE_THRESHOLD &&
+            state.subagentInvokeNudges < MAX_SUBAGENT_INVOKE_NUDGES
+        ) {
+            logger.info {
+                "[SUBAGENT_INVOKE_NUDGE] taskId=$taskId, definitions=${state.consecutiveSubagentDefinitions}, " +
+                    "agents=${state.definedSubagentNames.joinToString(",")}, " +
+                    "nudge=${state.subagentInvokeNudges + 1}/$MAX_SUBAGENT_INVOKE_NUDGES"
+            }
+            turnPersistence.persist(
+                role = MessageRole.SYSTEM,
+                content = buildSubagentInvokeNudge(state.definedSubagentNames.toList()),
+                metadata = """{"type":"guardian_nudge"}""",
+                toolCalls = null,
+            )
+            state.subagentInvokeNudges++
+            state.consecutiveSubagentDefinitions = 0
+        }
+    }
+
+    /**
+     * Ask the serving provider whether a model our tables do not know can call tools, before the
+     * loop decides which channel the whole turn will use. Once per model per process.
+     *
+     * Deliberately here and not next to the decision inside the loop: the loop body's generated
+     * state machine is already close to the JVM's 64 KB per-method limit, and awaiting this there
+     * pushes it over. The answer is cached, so the decision reads it without suspending.
+     */
+    private suspend fun probeProviderToolSupport(
+        mode: TaskMode,
+        taskId: String,
+        model: String?,
+        provider: String?,
+        profileOverrides: TurnProfileOverrides?,
+    ) {
+        val (effectiveModel, effectiveProvider) = turnLLMCaller.resolveModelSelection(
+            mode = mode,
+            taskId = taskId,
+            model = model,
+            provider = provider,
+            profileOverrides = profileOverrides,
+        )
+        if (ModelDefinitions.getDefinition(effectiveProvider, effectiveModel) == null) {
+            pl.jclab.refio.core.llm.ProviderToolSupport.probe(effectiveProvider, effectiveModel, configService)
+        }
     }
 
     /** durationMs=0 so it doesn't double-count the iteration duration already reported. */
@@ -427,28 +606,12 @@ internal class TurnExecutor(
         // finalization checks, so a `mkdir`-and-stall is not mistaken for a completed turn.
         var fileWriteToolsExecutedInTurn = 0
         var verificationToolsExecutedAfterWrite = 0
-        // "Read forever, never deliver" soft guard: consecutive information-gathering calls
-        // (reads/searches) with no write/persist/deliver in between. A long read-only spree
-        // loses its own evidence — older tool outputs get compressed out of RECENT_WORK before
-        // the model writes anything — so we nudge it to consolidate (persist to memory / deliver
-        // incrementally). Resets on any progress; bounded to MAX_CONSOLIDATION_NUDGES.
-        var consecutiveGatheringCalls = 0
-        var consolidationNudgeCount = 0
-        // "Regenerate the same file forever" soft guard: how many times each path has been
-        // rebuilt whole-file (advance_code_editing / create_new_file) THIS turn. A successful
-        // write is complete — its diff is authoritative — so a 2nd from-scratch regeneration of a
-        // path, absent a concrete build/test error, wastes a full multi-minute generation when a
-        // targeted edit would do. On the repeat we nudge toward code_editing/deliver. Bounded to
-        // MAX_REGENERATION_NUDGES; per-path counts persist for the whole turn (one user request).
-        val fullRegenCountByPath = mutableMapOf<String, Int>()
-        var regenerationNudgeCount = 0
-        // "Define agents forever, never run one" soft guard: consecutive manage_subagent
-        // create/update calls with no invoke_subagent in between. Defining an agent produces
-        // nothing on its own, so this pattern means the model mistook setup for the work.
-        // Resets on any invoke_subagent; bounded to MAX_SUBAGENT_INVOKE_NUDGES per turn.
-        var consecutiveSubagentDefinitions = 0
-        val definedSubagentNames = linkedSetOf<String>()
-        var subagentInvokeNudgeCount = 0
+        // Counters behind the three soft guards - reading without delivering, rebuilding the same
+        // file from scratch, defining agents without running one. See [applySoftNudges].
+        val softNudges = SoftNudgeState()
+        // Writing calls that changed nothing on disk, summed over the turn. Counted here rather
+        // than derived later because the per-batch set is discarded as soon as the batch is done.
+        var noopWriteCount = 0
         // Definitive-loop guard: counts consecutive failures of the SAME (tool + args).
         // Resets whenever arguments change, a different tool is used, or any tool succeeds.
         // Catches true retry loops while allowing the agent to explore with varied calls.
@@ -505,8 +668,22 @@ internal class TurnExecutor(
         val turnPersistence = TurnPersistence(
             taskId, listener, runId, parentRunId, depth,
             subagentMetadata, persistAgentInstanceId, persistAgentName, persistAgentDepth,
-            mode,
+            mode, maxIterations,
         )
+        // Closes over the loop's own counters so the turn can report how hard its steering had to
+        // work. Read once, at the exit the turn actually takes.
+        turnPersistence.guardrailStats = {
+            pl.jclab.refio.core.debug.GuardrailStats(
+                consolidationNudges = softNudges.consolidationNudges,
+                regenerationNudges = softNudges.regenerationNudges,
+                subagentInvokeNudges = softNudges.subagentInvokeNudges,
+                formatRetryNudges = recoveryState.nudgeCount,
+                guardianReentries = guardianState.reentryCount,
+                maxRepeatedCall = repetitionTracker.maxCallCount(),
+                toolErrorRate = errorTracker.getErrorRate(),
+                noopWrites = noopWriteCount,
+            )
+        }
 
         // For subagent turns, wrap the caller's streamCallback so each token delta is ALSO
         // published as AgentEvent.StreamChunk with runId/depth/agentName. CoreSessionService
@@ -596,6 +773,9 @@ internal class TurnExecutor(
         // nothing, so the dollar ceiling above never trips and the iteration cap would be the only
         // brake left.
         val maxTurnMinutes = configService.getTyped(ConfigKeys.AGENT_MAX_TURN_MINUTES, taskId)
+        // How many times we may ask the model to answer in the required shape. Doubled while the
+        // turn has produced nothing - see LLMResponseRecovery.formatNudgeBudget.
+        val baseFormatNudges = configService.getTyped(ConfigKeys.AGENT_MAX_FORMAT_NUDGES, taskId)
         val turnStartMs = System.currentTimeMillis()
 
         try {
@@ -624,7 +804,7 @@ internal class TurnExecutor(
                             toolsUsed = usedTools.distinct(),
                             incomplete = true
                         )
-                        return turnPersistence.finish(result, persistAssistantMessage = true)
+                        return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.COST_LIMIT)
                     }
                 }
 
@@ -646,7 +826,7 @@ internal class TurnExecutor(
                         toolsUsed = usedTools.distinct(),
                         incomplete = true
                     )
-                    return turnPersistence.finish(result, persistAssistantMessage = true)
+                    return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.TIME_LIMIT)
                 }
 
                 // Emit TurnStarted for Session Trace panel
@@ -861,6 +1041,8 @@ internal class TurnExecutor(
                             profileOverrides = profileOverrides,
                             hasRestorableAnswer =
                                 guardianState.restorableResponse(usedTools.size) != null,
+                            baseBudget = baseFormatNudges,
+                            deliverableProduced = fileWriteToolsExecutedInTurn > 0,
                         )) {
                             is LLMResponseRecovery.Decision.RecoverFromThinking -> {
                                 logger.warn {
@@ -878,7 +1060,7 @@ internal class TurnExecutor(
                                 logger.warn {
                                     "[FORMAT_RETRY_NUDGE] taskId=$taskId, iteration=$iteration: " +
                                         "LLM returned empty content in JSON mode. " +
-                                        "Nudge=${recoveryState.nudgeCount}/2, finishReason=${llmResponse.finishReason}"
+                                        "Nudge=${recoveryState.nudgeCount}/$baseFormatNudges, finishReason=${llmResponse.finishReason}"
                                 }
                                 val resolvedThinking = turnResponseProcessor.resolveAssistantThinking(llmResponse)
                                 if (!resolvedThinking.isNullOrBlank()) {
@@ -992,7 +1174,7 @@ internal class TurnExecutor(
                                     cost = totalCost,
                                     toolsUsed = usedTools.distinct()
                                 )
-                                return turnPersistence.finish(result, persistAssistantMessage = true)
+                                return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.FORMAT_UNRECOVERABLE)
                             }
 
                             LLMResponseRecovery.Decision.NotApplicable -> {
@@ -1115,7 +1297,7 @@ internal class TurnExecutor(
                             cost = totalCost,
                             toolsUsed = usedTools.distinct()
                         )
-                        return turnPersistence.finish(result, persistAssistantMessage = true)
+                        return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.OUTPUT_TRUNCATED)
                     }
 
                     if (toolCalls.isNotEmpty()) {
@@ -1260,7 +1442,7 @@ internal class TurnExecutor(
                                 rejectedToolName = e.toolName,
                                 rejectionReason = e.reason
                             )
-                            return turnPersistence.finish(result, persistAssistantMessage = false)
+                            return turnPersistence.finish(result, persistAssistantMessage = false, stopReason = TurnStopReason.DENIED_TOOL)
                         }
 
                         // Save tool results. Forward the persisted Subtask id so the TOOL chat
@@ -1317,6 +1499,7 @@ internal class TurnExecutor(
                         val repetitionAbort = tracking.repetitionAbort
                         val repetitionAbortToolName = tracking.repetitionAbortToolName
                         val noopCallIds = tracking.noopCallIds
+                        noopWriteCount += noopCallIds.size
 
                         if (repetitionAbort != null) {
                             logger.warn { "[REPETITION_ABORT] taskId=$taskId, incomplete=${repetitionAbort.incomplete}, reason=${repetitionAbort.reason}" }
@@ -1375,7 +1558,7 @@ internal class TurnExecutor(
                                 // deliverable was never produced, but it is abandonment, not a hard error.
                                 incomplete = repetitionAbort.incomplete
                             )
-                            return turnPersistence.finish(result, persistAssistantMessage = true)
+                            return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = if (repetitionAbort.incomplete) TurnStopReason.NOOP_WRITE_STALL else TurnStopReason.REPETITION_LOOP)
                         }
 
                         // Hard backstop: the model repeatedly asked for tools it does not have.
@@ -1399,7 +1582,7 @@ internal class TurnExecutor(
                                 toolsUsed = usedTools.distinct(),
                                 incomplete = true
                             )
-                            return turnPersistence.finish(result, persistAssistantMessage = true)
+                            return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.BLOCKED_TOOL)
                         }
 
                         // Same shape as the blocked-tool abort above, under its own name: the model
@@ -1421,7 +1604,7 @@ internal class TurnExecutor(
                                 toolsUsed = usedTools.distinct(),
                                 incomplete = true
                             )
-                            return turnPersistence.finish(deniedResult, persistAssistantMessage = true)
+                            return turnPersistence.finish(deniedResult, persistAssistantMessage = true, stopReason = TurnStopReason.DENIED_TOOL)
                         }
 
                         val writeToolCalls = turnToolExecutor.countWriteToolCalls(toolCalls)
@@ -1435,98 +1618,10 @@ internal class TurnExecutor(
                             verificationToolsExecutedAfterWrite += verificationToolCalls
                         }
 
-                        // "Read forever, never deliver" soft nudge. Top-level AGENT only:
-                        // subagents are frequently read-only-by-design (and already have the
-                        // tighter byte-identical abort), and PLAN cannot write files so the
-                        // "produce a deliverable" half of the advice is moot there.
-                        if (mode == TaskMode.AGENT && depth == 0 && iteration < maxIterations) {
-                            if (turnToolExecutor.batchMakesConsolidationProgress(toolCalls, noopCallIds)) {
-                                consecutiveGatheringCalls = 0
-                            } else {
-                                consecutiveGatheringCalls += turnToolExecutor.countGatheringToolCalls(toolCalls)
-                            }
-                            if (consecutiveGatheringCalls >= READ_ONLY_CONSOLIDATION_THRESHOLD &&
-                                consolidationNudgeCount < MAX_CONSOLIDATION_NUDGES
-                            ) {
-                                logger.info {
-                                    "[CONSOLIDATION_NUDGE] taskId=$taskId, gatheringCalls=$consecutiveGatheringCalls, " +
-                                        "nudge=${consolidationNudgeCount + 1}/$MAX_CONSOLIDATION_NUDGES"
-                                }
-                                turnPersistence.persist(
-                                    role = MessageRole.SYSTEM,
-                                    content = buildConsolidationNudge(consecutiveGatheringCalls),
-                                    // Tagged as guardian_nudge so the UI renders it as a gentle
-                                    // "agent guidance" note (same category: internal steering),
-                                    // not a full alarming SYSTEM bubble. See MessageMetadataExtractor.
-                                    metadata = """{"type":"guardian_nudge"}""",
-                                    toolCalls = null,
-                                )
-                                consolidationNudgeCount++
-                                consecutiveGatheringCalls = 0
-                            }
-                        }
-
-                        // "Regenerate the same file forever" soft nudge. Top-level AGENT only
-                        // (same rationale as the consolidation nudge: subagents/PLAN don't hit this
-                        // pathology the same way). When the model rebuilds a path whole-file a 2nd+
-                        // time this turn, remind it that a successful write is complete and a
-                        // targeted edit (or delivering) beats another full regeneration. Non-blocking.
-                        if (mode == TaskMode.AGENT && depth == 0 && iteration < maxIterations &&
-                            regenerationNudgeCount < MAX_REGENERATION_NUDGES
-                        ) {
-                            val regeneratedPath = TurnToolExecutor
-                                .fullRegenerationPaths(toolCalls, noopCallIds)
-                                .map { it to fullRegenCountByPath.merge(it, 1, Int::plus)!! }
-                                .firstOrNull { (_, count) -> count >= REGENERATION_NUDGE_THRESHOLD }
-                                ?.first
-                            if (regeneratedPath != null) {
-                                val regenCount = fullRegenCountByPath[regeneratedPath] ?: 0
-                                logger.info {
-                                    "[REGENERATION_NUDGE] taskId=$taskId, path=$regeneratedPath, " +
-                                        "regenerations=$regenCount, nudge=${regenerationNudgeCount + 1}/$MAX_REGENERATION_NUDGES"
-                                }
-                                turnPersistence.persist(
-                                    role = MessageRole.SYSTEM,
-                                    content = buildRegenerationNudge(regeneratedPath, regenCount),
-                                    metadata = """{"type":"guardian_nudge"}""",
-                                    toolCalls = null,
-                                )
-                                regenerationNudgeCount++
-                            }
-                        }
-
-                        // "Define agents forever, never run one" soft nudge. Top-level AGENT only.
-                        // manage_subagent only WRITES a definition; invoke_subagent is what runs it,
-                        // and the create result already says so - a model that keeps defining has
-                        // mistaken the setup for the work (observed: four turns creating and
-                        // re-creating the same 'root-analyzer', zero analysis produced). Non-blocking.
-                        if (mode == TaskMode.AGENT && depth == 0 && iteration < maxIterations) {
-                            if (toolCalls.any { it.name == "invoke_subagent" }) {
-                                consecutiveSubagentDefinitions = 0
-                                definedSubagentNames.clear()
-                            } else {
-                                consecutiveSubagentDefinitions +=
-                                    TurnToolExecutor.subagentDefinitionCalls(toolCalls).size
-                                definedSubagentNames += TurnToolExecutor.subagentDefinitionNames(toolCalls)
-                            }
-                            if (consecutiveSubagentDefinitions >= TurnToolExecutor.SUBAGENT_INVOKE_NUDGE_THRESHOLD &&
-                                subagentInvokeNudgeCount < MAX_SUBAGENT_INVOKE_NUDGES
-                            ) {
-                                logger.info {
-                                    "[SUBAGENT_INVOKE_NUDGE] taskId=$taskId, definitions=$consecutiveSubagentDefinitions, " +
-                                        "agents=${definedSubagentNames.joinToString(",")}, " +
-                                        "nudge=${subagentInvokeNudgeCount + 1}/$MAX_SUBAGENT_INVOKE_NUDGES"
-                                }
-                                turnPersistence.persist(
-                                    role = MessageRole.SYSTEM,
-                                    content = buildSubagentInvokeNudge(definedSubagentNames.toList()),
-                                    metadata = """{"type":"guardian_nudge"}""",
-                                    toolCalls = null,
-                                )
-                                subagentInvokeNudgeCount++
-                                consecutiveSubagentDefinitions = 0
-                            }
-                        }
+                        applySoftNudges(
+                            taskId, mode, depth, iteration, maxIterations,
+                            toolCalls, noopCallIds, softNudges, turnPersistence,
+                        )
 
                         if (consecutiveIdenticalFailures >= maxConsecutiveIdenticalFailures) {
                             logger.warn {
@@ -1543,7 +1638,7 @@ internal class TurnExecutor(
                                 cost = totalCost,
                                 toolsUsed = usedTools.distinct()
                             )
-                            return turnPersistence.finish(result, persistAssistantMessage = true)
+                            return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.REPETITION_LOOP)
                         }
 
                         if (errorTracker.shouldAbort(config.errorRateThreshold)) {
@@ -1556,7 +1651,7 @@ internal class TurnExecutor(
                                 cost = totalCost,
                                 toolsUsed = usedTools.distinct()
                             )
-                            return turnPersistence.finish(result, persistAssistantMessage = true)
+                            return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.TOOL_ERROR_RATE)
                         }
 
                         // Check for mid-execution user messages after tool execution
@@ -1642,7 +1737,7 @@ internal class TurnExecutor(
                                     cost = totalCost,
                                     toolsUsed = usedTools.distinct()
                                 )
-                                return turnPersistence.finish(result, persistAssistantMessage = true)
+                                return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.CONTENT_CHANTING)
                             }
                         }
 
@@ -1721,6 +1816,12 @@ internal class TurnExecutor(
                         // ("Co to za projekt?") terminate cleanly in AGENT mode instead of being
                         // nudged into a JSON envelope the model was never asked to emit.
                         val nativeToolsActive = activeNativeToolSchemas != null
+                        // Resolved once for both the "may we nudge" and "have we run out" checks
+                        // below, which have to agree on the same number.
+                        val formatNudgeCap = LLMResponseRecovery.formatNudgeBudget(
+                            baseFormatNudges,
+                            fileWriteToolsExecutedInTurn > 0,
+                        )
 
                         // Format retry fires only for objectively-broken outputs:
                         //   - empty JSON envelope ({} or {"response":""}), or
@@ -1731,7 +1832,7 @@ internal class TurnExecutor(
                         val requiresFormatRetry =
                             nativeProducedNoCall &&
                                 contentForExtraction.isNotBlank() &&
-                                recoveryState.nudgeCount < 2 &&
+                                recoveryState.nudgeCount < formatNudgeCap &&
                                 iteration < maxIterations &&
                                 !isRepeatedPlainText &&
                                 (
@@ -1753,7 +1854,7 @@ internal class TurnExecutor(
                                 contentForExtraction.isNotBlank() &&
                                 !looksLikeJsonResponse &&
                                 !hasIncompleteJsonEnvelope &&
-                                (recoveryState.nudgeCount >= 2 || isRepeatedPlainText)
+                                (recoveryState.nudgeCount >= formatNudgeCap || isRepeatedPlainText)
 
                         if (shouldHardFailFormat) {
                             // Deliverable-aware finalization. If a write/edit already executed this
@@ -1796,7 +1897,7 @@ internal class TurnExecutor(
                                 toolsUsed = usedTools.distinct(),
                                 incomplete = !deliverableProduced
                             )
-                            return turnPersistence.finish(result, persistAssistantMessage = true)
+                            return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = if (deliverableProduced) TurnStopReason.COMPLETED else TurnStopReason.FORMAT_NUDGE_EXHAUSTED)
                         }
 
                         if (requiresFormatRetry) {
@@ -1811,7 +1912,7 @@ internal class TurnExecutor(
                             logger.warn {
                                 "[FORMAT_RETRY_NUDGE] taskId=$taskId, iteration=$iteration: " +
                                     "$retryReason. " +
-                                    "Nudge=${recoveryState.nudgeCount}/2, content='${contentForExtraction.take(80)}'"
+                                    "Nudge=${recoveryState.nudgeCount}/$baseFormatNudges, content='${contentForExtraction.take(80)}'"
                             }
                             val resolvedThinking = turnResponseProcessor.resolveAssistantThinking(llmResponse)
                             if (!resolvedThinking.isNullOrBlank()) {
@@ -1867,7 +1968,7 @@ internal class TurnExecutor(
                                 cost = totalCost,
                                 toolsUsed = usedTools.distinct()
                             )
-                            return turnPersistence.finish(result, persistAssistantMessage = true)
+                            return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.FORMAT_UNRECOVERABLE)
                         }
 
                         // Check error rate abort (hard abort — same threshold as tool-calls branch).
@@ -1881,7 +1982,7 @@ internal class TurnExecutor(
                                 cost = totalCost,
                                 toolsUsed = usedTools.distinct()
                             )
-                            return turnPersistence.finish(result, persistAssistantMessage = true)
+                            return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.TOOL_ERROR_RATE)
                         }
 
                         val shouldRunTaskVerification =
@@ -1997,6 +2098,10 @@ internal class TurnExecutor(
                                             "[NATIVE_TOOLS_GUARDIAN_FALLBACK] taskId=$taskId — guardian re-entry " +
                                                 "after a native no-call; retrying on the JSON contract for this turn"
                                         }
+                                        pl.jclab.refio.core.debug.TurnNativeToolsTracker.recordDegradation(
+                                            taskId,
+                                            pl.jclab.refio.core.debug.TurnNativeToolsTracker.REASON_GUARDIAN_REENTRY,
+                                        )
                                         activeNativeToolSchemas = null
                                     }
                                     turnPersistence.persist(
@@ -2110,7 +2215,7 @@ internal class TurnExecutor(
                                         toolsUsed = usedTools.distinct(),
                                         verification = verificationSummary
                                     )
-                                    return turnPersistence.finish(result, persistAssistantMessage = true)
+                                    return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.VERIFICATION_FAILED)
                                 }
                             }
                         }
@@ -2182,7 +2287,7 @@ internal class TurnExecutor(
                             "iterations" to iteration.toString(),
                             "agentName" to (profileOverrides?.subagentName ?: "default")
                         ))
-                        return turnPersistence.finish(result, persistAssistantMessage = false)
+                        return turnPersistence.finish(result, persistAssistantMessage = false, stopReason = if (turnIncompleteReason != null) TurnStopReason.GUARDIAN_INCOMPLETE else TurnStopReason.COMPLETED)
                     }
                 } finally {
                     GlobalMetrics.endOperation(iterationToken)
@@ -2254,7 +2359,7 @@ internal class TurnExecutor(
                 cost = totalCost,
                 toolsUsed = usedTools.distinct()
             )
-            return turnPersistence.finish(result, persistAssistantMessage = true)
+            return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.STREAM_GUARDRAIL)
         } catch (e: CancellationException) {
             // Persist what the user already saw, then let the cancellation through. Swallowing it
             // here reports a stopped turn as a failed one and hides the stop from every caller that
@@ -2285,7 +2390,7 @@ internal class TurnExecutor(
                     cost = totalCost,
                     toolsUsed = usedTools.distinct()
                 )
-                runCatching { turnPersistence.finish(result, persistAssistantMessage = true) }
+                runCatching { turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.CANCELLED) }
             }
             throw e
         } catch (e: Exception) {
@@ -2294,6 +2399,16 @@ internal class TurnExecutor(
             // the agent's graph node is never flipped off RUNNING. Best-effort emit (emitTurnEvent
             // swallows), then rethrow so the caller still sees and reports the real error unchanged.
             updateTurnState { copy(phase = TurnPhase.FAILED) }
+            // This path never reaches TurnPersistence.finish, so the stop reason has to be written
+            // here or a run killed by an exception would be indistinguishable from one that simply
+            // never named its exit.
+            if (depth == 0) {
+                pl.jclab.refio.core.debug.TurnStopReasonTracker.record(taskId, TurnStopReason.EXCEPTION)
+                pl.jclab.refio.core.debug.TurnIterationTracker.record(
+                    taskId,
+                    pl.jclab.refio.core.debug.IterationSummary(used = iteration, limit = maxIterations),
+                )
+            }
             emitTurnFinal(
                 taskId, emitSessionId, emitSourceAgentId, runId, parentRunId, depth,
                 iterations = iteration, success = false
@@ -2322,7 +2437,7 @@ internal class TurnExecutor(
             cost = totalCost,
             toolsUsed = usedTools.distinct()
         )
-        return turnPersistence.finish(result, persistAssistantMessage = true)
+        return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.MAX_ITERATIONS)
     }
 
     /**
@@ -2387,9 +2502,18 @@ internal class TurnExecutor(
             tokensIn = totalTokensIn,
             tokensOut = totalTokensOut,
             cost = totalCost,
-            toolsUsed = usedTools.distinct()
+            toolsUsed = usedTools.distinct(),
+            // A turn abandoned because the model kept repeating itself and delivered nothing is
+            // INCOMPLETE, the same as the format-breakdown exit next to it. Without this it reached
+            // the reports as an ordinary failure and the two abandonment shapes could not be told
+            // apart. Delivered work stays a clean success.
+            incomplete = !deliverableProduced,
         )
-        return turnPersistence.finish(result, persistAssistantMessage = true)
+        return turnPersistence.finish(
+            result,
+            persistAssistantMessage = true,
+            stopReason = if (deliverableProduced) TurnStopReason.COMPLETED else TurnStopReason.TEXT_REPETITION,
+        )
     }
 
     /**
@@ -2468,7 +2592,7 @@ internal class TurnExecutor(
             cost = totalCost,
             toolsUsed = usedTools.distinct()
         )
-        return turnPersistence.finish(result, persistAssistantMessage = true)
+        return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.EMPTY_RESPONSE)
     }
 
     /** What the LLM call produced, plus the prompt/schema state a native fallback may have rewritten. */
@@ -2580,6 +2704,9 @@ internal class TurnExecutor(
                         "[NATIVE_TOOLS_EMPTY_FALLBACK] taskId=$taskId, model=$effectiveModel — " +
                             "native response was empty (blank content, zero tool calls); one-shot JSON-path retry (no persistent fallback)"
                     }
+                    pl.jclab.refio.core.debug.TurnNativeToolsTracker.recordDegradation(
+                        taskId, pl.jclab.refio.core.debug.TurnNativeToolsTracker.REASON_EMPTY_NATIVE_RESPONSE,
+                    )
                     nativeToolSchemas = null
                     prompt = rebuildPromptWithoutNativeTools()
                     continue
@@ -2594,6 +2721,7 @@ internal class TurnExecutor(
                     "[NATIVE_TOOLS_FALLBACK] taskId=$taskId, model=$effectiveModel — " +
                         "rebuilding prompt and retrying on JSON path"
                 }
+                pl.jclab.refio.core.debug.TurnNativeToolsTracker.recordDegradation(taskId, pl.jclab.refio.core.debug.TurnNativeToolsTracker.REASON_TOOLS_UNSUPPORTED)
                 nativeToolSchemas = null
                 prompt = rebuildPromptWithoutNativeTools()
             } catch (e: RefioError.LLMError) {
@@ -2610,6 +2738,7 @@ internal class TurnExecutor(
                     "[NATIVE_TOOLS_PARSE_FALLBACK] taskId=$taskId, model=$effectiveModel — " +
                         "provider rejected a malformed tool-call template; one-shot JSON-path retry (no persistent fallback)"
                 }
+                pl.jclab.refio.core.debug.TurnNativeToolsTracker.recordDegradation(taskId, pl.jclab.refio.core.debug.TurnNativeToolsTracker.REASON_TEMPLATE_PARSE_ERROR)
                 nativeToolSchemas = null
                 prompt = rebuildPromptWithoutNativeTools()
             }
@@ -2637,8 +2766,13 @@ internal class TurnExecutor(
         val fallbackSet = NativeToolsFallbackTracker.getFallbackSet()
         // One human-readable reason string, reused in both the enabled and disabled log lines,
         // so the native-vs-JSON decision for a run is explainable from the log alone.
-        val nativeReason = nativeToolsDecisionReason(nativeToolsMode, modelDef, effectiveModel, fallbackSet)
-        return if (shouldUseNativeTools(nativeToolsMode, modelDef, effectiveModel, fallbackSet)) {
+        // Filled by the probe run once per turn before this is called; null when the provider was
+        // never asked or could not answer.
+        val providerTools =
+            pl.jclab.refio.core.llm.ProviderToolSupport.cached(effectiveProvider, effectiveModel, configService)
+        val nativeReason =
+            nativeToolsDecisionReason(nativeToolsMode, modelDef, effectiveModel, fallbackSet, providerTools)
+        return if (shouldUseNativeTools(nativeToolsMode, modelDef, effectiveModel, fallbackSet, providerTools)) {
             val modeSchemas = toolRegistry.getToolSchemas(mode, svc, taskId)
             // Subagent profiles must see ONLY their allowed/disallowed tools in the native
             // `tools` array — otherwise the model calls tools the harness then rejects with
@@ -3130,19 +3264,8 @@ internal class TurnExecutor(
      * JSON-envelope path — NOT a sign the model can never do native tools. Walks the cause
      * chain because the signature lives in the wrapped provider exception.
      */
-    internal fun isNativeToolTemplateParseError(error: Throwable): Boolean {
-        var cause: Throwable? = error
-        var depth = 0
-        while (cause != null && depth < 5) {
-            val msg = cause.message?.lowercase() ?: ""
-            if (msg.contains("xml syntax error") || msg.contains("element <parameter>")) {
-                return true
-            }
-            cause = cause.cause
-            depth++
-        }
-        return false
-    }
+    internal fun isNativeToolTemplateParseError(error: Throwable): Boolean =
+        pl.jclab.refio.core.errors.NativeToolTemplateError.matches(error)
 
     /**
      * Heuristic: does `content` look like a `{response, actions}` JSON envelope the model

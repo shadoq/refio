@@ -96,6 +96,28 @@ class TurnPromptBuilder(
     }
 
     /**
+     * Add the just-built prompt's context decision to [TurnContextTracker]. The section trace is a
+     * single field that the next iteration overwrites, so only the sum kept here can answer whether
+     * a long run kept losing the same section every time round.
+     */
+    private fun recordContextDecision(taskId: String) {
+        val service = contextService ?: return
+        service.lastContextTrace?.let { trace ->
+            pl.jclab.refio.core.debug.TurnContextTracker.recordIteration(
+                taskId = taskId,
+                budgetTokens = trace.totalBudget,
+                usedTokens = trace.totalUsed,
+                droppedSections = trace.droppedSections.map { it.section.name },
+            )
+        }
+        pl.jclab.refio.core.debug.TurnContextTracker.recordTrim(
+            taskId = taskId,
+            droppedMessages = service.lastConversationDropped,
+            droppedSteps = service.lastStepsDropped,
+        )
+    }
+
+    /**
      * Get the last granular section token breakdown from ContextService.
      * Available after buildPrompt() has been called.
      * Keys match ContextSectionColorPalette (e.g. "recent_work", "key_components").
@@ -337,6 +359,11 @@ $filteredContextPrompt
 
                 logger.info { "[BUILD_PROMPT] Using ContextService: ${filteredMessages.size} messages, context=${filteredContextPrompt.length} chars" +
                     if (contextProfile != null) ", contextProfile applied" else "" }
+
+                // Fold this iteration's context decision into the task's running total. The trace
+                // itself is overwritten on the next build, so anything not accumulated here is
+                // gone - which is why a headless run could never say what it had dropped.
+                recordContextDecision(taskId)
 
                 return TurnPrompt(
                     systemPrompt = systemPrompt,

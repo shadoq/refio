@@ -40,7 +40,8 @@ class SessionDebugExporter(
 
         val warnings = buildList {
             if (options.level == DebugLevel.FULL || options.level == DebugLevel.JUDGE) {
-                add("full/judge extras (active prompt snapshot, agent trace, context sections) are not yet exported")
+                add("full/judge extras (active prompt snapshot, agent trace) are not yet exported; " +
+                    "context accounting is in metrics.context")
             }
         }
 
@@ -83,6 +84,9 @@ class SessionDebugExporter(
                 costUsd = session.costUsd,
                 apiCallCount = apiLogs.size,
                 toolCallCount = subtasks.size,
+                iterations = TurnIterationTracker.summaryFor(taskId).used,
+                maxIterations = TurnIterationTracker.summaryFor(taskId).limit,
+                stopReason = TurnStopReasonTracker.reasonFor(taskId).name,
                 contextOverflow = ContextOverflowTracker.didOverflow(taskId),
                 failureMarker = TurnFailureMarkerTracker.markerFor(taskId),
                 verification = TurnVerificationTracker.summaryFor(taskId).let {
@@ -90,6 +94,35 @@ class SessionDebugExporter(
                         ran = it.ran,
                         attempts = it.attempts,
                         result = it.result,
+                    )
+                },
+                guardrails = TurnGuardrailStatsTracker.statsFor(taskId).let {
+                    SessionDebugSnapshot.GuardrailInfo(
+                        consolidationNudges = it.consolidationNudges,
+                        regenerationNudges = it.regenerationNudges,
+                        subagentInvokeNudges = it.subagentInvokeNudges,
+                        formatRetryNudges = it.formatRetryNudges,
+                        guardianReentries = it.guardianReentries,
+                        maxRepeatedCall = it.maxRepeatedCall,
+                        toolErrorRate = it.toolErrorRate,
+                        noopWrites = it.noopWrites,
+                    )
+                },
+                context = TurnContextTracker.usageFor(taskId).let {
+                    SessionDebugSnapshot.ContextInfo(
+                        budgetTokens = it.budgetTokens,
+                        usedTokens = it.usedTokens,
+                        droppedMessages = it.droppedMessages,
+                        droppedSteps = it.droppedSteps,
+                        drops = it.drops,
+                    )
+                },
+                nativeToolsDegraded = TurnNativeToolsTracker.degradationFor(taskId),
+                filesWritten = TurnFileWriteTracker.recordsFor(taskId).map {
+                    SessionDebugSnapshot.FileWriteInfo(
+                        path = it.path,
+                        writes = it.writes,
+                        netChanged = it.netChanged,
                     )
                 },
             ),
@@ -119,8 +152,14 @@ class SessionDebugExporter(
                         contentPreview = msg.content.preview(options.maxContentPreviewChars),
                         toolCalls = msg.toolCalls?.map { it.name } ?: emptyList(),
                         toolCallDetails = msg.toolCalls?.map {
-                            SessionDebugSnapshot.ToolCallDetail(name = it.name, arguments = it.arguments)
+                            SessionDebugSnapshot.ToolCallDetail(
+                                name = it.name,
+                                arguments = it.arguments,
+                                ok = it.error == null,
+                                error = it.error?.preview(options.maxContentPreviewChars),
+                            )
                         } ?: emptyList(),
+                        metadata = msg.metadata,
                         tokensIn = msg.tokensIn,
                         tokensOut = msg.tokensOut,
                         createdAt = msg.createdAt,
