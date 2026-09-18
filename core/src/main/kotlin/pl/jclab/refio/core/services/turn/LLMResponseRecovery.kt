@@ -49,6 +49,10 @@ class LLMResponseRecovery(private val toolCallParser: ToolCallParser) {
         state: RecoveryState,
         profileOverrides: TurnProfileOverrides? = null,
         hasRestorableAnswer: Boolean = false,
+        /** Configured reminder budget (`agent.max_format_nudges`). */
+        baseBudget: Int = DEFAULT_FORMAT_NUDGE_BUDGET,
+        /** Whether this turn has already put something on disk - see [formatNudgeBudget]. */
+        deliverableProduced: Boolean = false,
     ): Decision {
         val applies = mode != TaskMode.CHAT &&
             response.content.isBlank() &&
@@ -81,16 +85,32 @@ class LLMResponseRecovery(private val toolCallParser: ToolCallParser) {
             return Decision.GiveUp("empty-content-after-guardian-reentry")
         }
 
-        // No envelope to recover: nudge the model to regenerate, bounded to 2 (AGENT only). A weak
-        // model that can't recover after two reminders won't recover at all — fail loud instead.
+        // No envelope to recover: nudge the model to regenerate (AGENT only), within the budget
+        // resolved by [formatNudgeBudget].
         val canNudge = mode == TaskMode.AGENT &&
-            state.nudgeCount < 2 &&
+            state.nudgeCount < formatNudgeBudget(baseBudget, deliverableProduced) &&
             iteration < maxIterations
         return if (canNudge) {
             Decision.Nudge
         } else {
             Decision.GiveUp("empty-content-unrecoverable")
         }
+    }
+
+    companion object {
+        /** The budget when nothing sets one. Keeps behaviour unchanged for an untouched config. */
+        const val DEFAULT_FORMAT_NUDGE_BUDGET = 2
+
+        /**
+         * How many format reminders this turn may still spend.
+         *
+         * Doubled while the turn has produced nothing, because the two mistakes cost very different
+         * amounts: giving up on a turn that already wrote a file wastes the tail of that turn,
+         * while giving up on a turn that wrote nothing wastes the task. A budget of 0 stays 0 -
+         * "never nudge" has to mean never.
+         */
+        fun formatNudgeBudget(baseBudget: Int, deliverableProduced: Boolean): Int =
+            if (deliverableProduced) baseBudget else baseBudget * 2
     }
 }
 

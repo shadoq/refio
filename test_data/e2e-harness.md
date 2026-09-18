@@ -199,6 +199,12 @@ chains, many files, deep context).
 | `build-landing-multifile` | AGENT | a landing page as three linked files (`index.html` + external `styles.css` + classic `app.js`) with form validation | structural needles on the external links + **browser-smoke**: loads clean, submit writes into `#msg` |
 | `build-spa-2-routes` | AGENT | a hash-routed SPA with `#/home` and `#/about` switching a `#view` container | **browser-smoke** visits both routes, each nav changes `#view` |
 
+The benchmark catalog adds a `multi-file` category for the same idea on a bigger scale: the deliverable is
+a set of modules under `src/`, the fixture ships its own `node --test` suite as the `build_cmd`, and a
+golden solution lets `validate-scenarios.sh` prove the untouched fixture fails while the golden passes.
+`multi-file-notes-api-hidden-tests` builds an API against a hidden suite; `multi-file-refactor-keep-tests-green`
+splits a tangled module while its suite stays green.
+
 The `build_cmd` for the two backend builds is the deterministic gate: it compiles/runs the app and
 exercises real behaviour (the CLI persists across runs; the API serves and mutates), so "SUCCESS" also
 means "it actually works". The two frontend builds gate on `smoke` (needs Playwright). All four ship an
@@ -274,7 +280,12 @@ examples/                      # sample run.json + scenario used by --self-test 
     "needle_in_output": { "regex": "[Vv]alidat" },                       // HARD: regex vs run.json .finalOutput (PLAN/CHAT)
     "file_unchanged": ["src/Main.kt"],                                   // HARD: byte-identical to the fixture
     "build_cmd": "kotlinc src -include-runtime -d build/out.jar && java -jar build/out.jar", // HARD: exit 0 (OPTIONAL)
-    "no_context_overflow": true                                          // HARD
+    "no_context_overflow": true,                                         // HARD
+    "enforce_max_iterations": true,                                      // HARD: max_iterations is a real cap
+    "self_verified": true,                                               // HARD: the agent ran the build/tests itself
+    "forbidden_markers": ["LOOP_ABORTED", "NOOP_WRITE_STALL"],           // HARD: even on a run that delivered
+    "tool_budget": { "read_file": 8 },                                   // HARD: ceiling per tool
+    "no_immediate_repeat": true                                          // HARD: no identical call twice in a row
   },
   "judge": { "criteria": ["Is the fix minimal and correct?"] }           // SOFT, advisory
 }
@@ -295,6 +306,27 @@ makes the assertion a tautology (the bug this rewrite fixed).
 scenarios that produce a plan or answer instead of editing a file. **`file_unchanged`** (array of paths)
 asserts each listed file is **byte-identical to the original fixture** - proves the agent did *not*
 touch it (guards "no change needed" restraint and "don't edit the test" scenarios).
+
+**Loop-quality gates.** Everything above measures the final state of the project; these five measure
+how the run got there, which is the one thing the rest is blind to. A run that took forty wasted turns,
+never checked its own work, kept retrying a call that could not work, or fired a guardrail and then
+recovered leaves exactly the same files behind as a run that did the job well.
+
+- **`enforce_max_iterations`** turns the scenario's own `max_iterations` into a HARD cap. Every scenario
+  has carried that budget since the harness was written and nothing read it, so it was documentation.
+  Iterations are counted as assistant messages in the conversation: `metrics.toolCallCount` counts
+  SUBTASK rows, which is a different quantity under a name that reads like this one.
+- **`self_verified`** requires `metrics.verification.ran` with result `PASSED` - the agent itself ran the
+  build or the tests. The harness runs `build_cmd` afterwards either way, so without this gate a model
+  that writes code blind and one that runs the tests and repairs what broke score identically. This is
+  the sharpest single behavioural difference between agent loops.
+- **`forbidden_markers`** fails a run whose `metrics.failureMarker` is one of the listed values, **even
+  when the run delivered**. The marker used to be read only for an already-failing verdict, so a
+  guardrail could fire, the agent could recover, and the incident vanished behind a green PASS.
+- **`tool_budget`** (`{tool: max}`) caps how often a tool may be called. `tool_order` is a subsequence
+  check and therefore cannot see an agent that called the same tool twelve times.
+- **`no_immediate_repeat`** fails a run that made the same call with the same arguments twice in a row,
+  read from `conversation[].toolCallDetails`.
 
 **`tool_invoked`** (array of `{ name, args_regex?, absent? }`) asserts a named tool was (or, with
 `absent:true`, was **not**) called during the run. Name presence reads the always-present

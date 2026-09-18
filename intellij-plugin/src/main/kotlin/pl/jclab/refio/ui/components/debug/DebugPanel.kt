@@ -412,7 +412,11 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
             appendLine("|-----|-------|")
             appendLine("| Session ID | `${session.id}` |")
             appendLine("| Mode | ${session.mode.name} |")
-            appendLine("| Model | ${session.model ?: "-"} |")
+            // The model the turn actually called, read back from the API log. The session record
+            // has no model column, so its own field is always empty and this row used to read "-"
+            // even on a session that had just made a dozen calls. "Selected Model" below is the
+            // dropdown choice, which is a different thing: it says what the next turn would use.
+            appendLine("| Model | ${lastUsedModel(session.id) ?: "-"} |")
             appendLine("| Selected Model | $selectedModel |")
             appendLine("| Status | ${session.status.name} |")
             appendLine("| Created | ${formatTimestamp(session.createdAt)} |")
@@ -773,6 +777,17 @@ class DebugPanel(private val project: Project) : JBPanel<DebugPanel>(BorderLayou
             }
             appendLine()
         }
+    }
+
+    /**
+     * The model of the most recent API call this session made, or null when it made none. Same
+     * derivation the run-document exporter uses, so the panel and `run.json` agree on what "the
+     * model" means for a session.
+     */
+    private fun lastUsedModel(sessionId: String): String? = try {
+        apiLogRepository.findByTaskId(sessionId).lastOrNull()?.let { "${it.provider}/${it.model}" }
+    } catch (_: Exception) {
+        null
     }
 
     private fun formatApiLogStatus(log: pl.jclab.refio.core.db.ApiLog): String {

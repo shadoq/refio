@@ -2,6 +2,8 @@ package pl.jclab.refio.core.tools.base
 
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.llm.LLMClient
+import pl.jclab.refio.core.security.ExecutionIsolationMode
+import pl.jclab.refio.core.security.HostExecutionSandbox
 import pl.jclab.refio.core.security.NetworkPolicy
 import pl.jclab.refio.core.security.UrlPolicy
 import pl.jclab.refio.core.services.ConfigService
@@ -54,6 +56,14 @@ class ToolFactory(
     // long as the tools do and be released with them.
     private val processManager = ProcessManager().also { toolRegistry.addCloseable(it) }
     private val networkPolicy = NetworkPolicy(configService)
+    // One execution policy for every process this run spawns, so run_code, run_terminal_command
+    // and the MCP servers cannot drift apart on what is allowed. The mode is read per call to
+    // honour run-scope config overrides.
+    private val executionSandbox = HostExecutionSandbox {
+        ExecutionIsolationMode.parse(
+            runCatching { configService.getTyped(ConfigKeys.GENERAL_EXECUTION_ISOLATION) }.getOrNull()
+        )
+    }
     // One SSRF guard shared by every outbound tool, so http_request and fetch_webpage can never
     // diverge. The loopback opt-in is resolved per call to honour run-scope config overrides.
     private val urlPolicy = UrlPolicy(
@@ -150,13 +160,13 @@ class ToolFactory(
             RenameSymbolTool(refactorer),
 
             // Terminal operations
-            RunTerminalCommandTool(sandbox, commandLimits, CommandRuleDefaults.createDefaultMatcher()),
+            RunTerminalCommandTool(sandbox, commandLimits, CommandRuleDefaults.createDefaultMatcher(), executionSandbox),
 
             // Network operations
             HttpRequestTool(sandbox = sandbox, networkPolicy = networkPolicy, urlPolicy = urlPolicy),
 
             // Code execution
-            RunCodeTool(sandbox),
+            RunCodeTool(sandbox, executionSandbox),
 
             // LLM call (raw single-turn call, no agent loop)
             LlmCallTool(llmClient, configService, sandbox, fileLimits),

@@ -272,6 +272,18 @@ assert_run() {
         fi
     fi
 
+    # HARD 1b2 — output_absent: the answer must NOT match this. The mirror of needle_in_output, and
+    # the only shape that fits a gate about something that must not happen: where the agent is
+    # supposed to fail to obtain something there is nothing to look for, only something to rule out.
+    local absent_regex
+    absent_regex="$(jq -r '.assert.output_absent.regex // empty' "$scenario")"
+    if [[ -n "$absent_regex" ]]; then
+        out="$(jq -r '.finalOutput // ""' "$run_json")"
+        if grep -qE -- "$absent_regex" <<<"$out"; then
+            hard_fail=1; reasons+=("output matched /${absent_regex}/, which it must not")
+        fi
+    fi
+
     # HARD 1c — file_unchanged: listed paths must be byte-identical to the original fixture (proves the
     # agent did NOT touch them — guards "no change needed" and "don't edit the test" scenarios).
     local fx_dir fu_count fidx fu
@@ -375,6 +387,86 @@ assert_run() {
     actual_overflow="$(jq -r '.metrics.contextOverflow // false' "$run_json")"
     if [[ "$want_no_overflow" == "true" && "$actual_overflow" == "true" ]]; then
         hard_fail=1; reasons+=("context overflow (silent truncation)")
+    fi
+
+    # HARD 4 — max_iterations, when the case declares it a real limit. Every scenario has
+    # carried a max_iterations budget since the harness was written and nothing has ever
+    # read it, so a run that needed forty wasted turns to reach the right file passed
+    # exactly like one that took four.
+    #
+    # Iterations come from metrics.iterations — the loop's own count. Older run documents do not
+    # carry it, so assistant messages remain the fallback. Never toolCallCount: that counts SUBTASK
+    # rows, a different number under a name that reads like this one.
+    local want_cap cap iters
+    want_cap="$(jq -r '.assert.enforce_max_iterations // false' "$scenario")"
+    if [[ "$want_cap" == "true" ]]; then
+        cap="$(jq -r '.max_iterations // 0' "$scenario")"
+        iters="$(jq 'if (.metrics.iterations // 0) > 0 then .metrics.iterations else ([.conversation[]? | select(.role=="ASSISTANT" or .role=="assistant")] | length) end' "$run_json" 2>/dev/null || echo 0)"
+        if (( cap > 0 && iters > cap )); then
+            hard_fail=1; reasons+=("took ${iters} iterations, budget is ${cap}")
+        fi
+    fi
+
+    # HARD 5 — self_verified: the agent had to run the build or the tests ITSELF. The
+    # harness runs build_cmd afterwards either way, so without this a model that writes
+    # code blind and one that runs the tests and repairs what broke score identically -
+    # and that is the sharpest single difference between agent loops.
+    local want_verify verify_ran verify_result
+    want_verify="$(jq -r '.assert.self_verified // false' "$scenario")"
+    if [[ "$want_verify" == "true" ]]; then
+        verify_ran="$(jq -r '.metrics.verification.ran // false' "$run_json" 2>/dev/null || echo false)"
+        verify_result="$(jq -r '.metrics.verification.result // "NONE"' "$run_json" 2>/dev/null || echo NONE)"
+        if [[ "$verify_ran" != "true" ]]; then
+            hard_fail=1; reasons+=("the agent never verified its own work")
+        elif [[ "$verify_result" != "PASSED" ]]; then
+            hard_fail=1; reasons+=("self-verification ended ${verify_result}")
+        fi
+    fi
+
+    # HARD 6 — forbidden_markers: a loop marker must not appear even on a run that
+    # delivered. The marker was previously read only for an already-failing run, so a
+    # guardrail could fire, the agent could recover, and the incident disappeared behind
+    # a green verdict.
+    local fm_count fm actual_marker
+    fm_count="$(jq '(.assert.forbidden_markers // []) | length' "$scenario")"
+    if (( fm_count > 0 )); then
+        actual_marker="$(jq -r '.metrics.failureMarker // empty' "$run_json" 2>/dev/null || echo "")"
+        for (( n=0; n<fm_count; n++ )); do
+            fm="$(jq -r ".assert.forbidden_markers[$n]" "$scenario")"
+            if [[ -n "$actual_marker" && "$actual_marker" == "$fm" ]]; then
+                hard_fail=1; reasons+=("loop marker ${fm} fired")
+            fi
+        done
+    fi
+
+    # HARD 7 — tool_budget: a ceiling per tool. tool_order is a subsequence check and so
+    # cannot see an agent that called the same tool twelve times; this can.
+    local tb_json tb_names tb_name tb_max tb_used
+    tb_json="$(jq -c '.assert.tool_budget // {}' "$scenario")"
+    tb_names="$(jq -r 'keys[]?' <<<"$tb_json")"
+    while IFS= read -r tb_name; do
+        [[ -n "$tb_name" ]] || continue
+        tb_max="$(jq -r --arg k "$tb_name" '.[$k]' <<<"$tb_json")"
+        tb_used="$(jq --arg n "$tb_name" '[.conversation[].toolCalls[]? | select(.==$n)] | length' "$run_json" 2>/dev/null || echo 0)"
+        if (( tb_used > tb_max )); then
+            hard_fail=1; reasons+=("called ${tb_name} ${tb_used}×, budget is ${tb_max}")
+        fi
+    done <<<"$tb_names"
+
+    # HARD 8 — no_immediate_repeat: the same tool with the same arguments twice in a row
+    # is an agent stuck in place, which every end-state assertion here is blind to.
+    local want_norepeat repeat_at
+    want_norepeat="$(jq -r '.assert.no_immediate_repeat // false' "$scenario")"
+    if [[ "$want_norepeat" == "true" ]]; then
+        repeat_at="$(jq -r '
+            [.conversation[].toolCallDetails[]? | "\(.name)|\(.arguments)"]
+            | . as $c
+            | [range(1; ($c | length)) | select($c[.] == $c[. - 1])]
+            | length
+        ' "$run_json" 2>/dev/null || echo 0)"
+        if [[ "$repeat_at" =~ ^[0-9]+$ ]] && (( repeat_at > 0 )); then
+            hard_fail=1; reasons+=("repeated an identical call back to back ${repeat_at}×")
+        fi
     fi
 
     # SOFT — tool_order as a SUBSEQUENCE of the actual call order (warn, never fail).
@@ -561,7 +653,7 @@ emit_result_record() {
     # Additive: the Kotlin gate parser (GateRunRecord via Gson) ignores unknown fields, so enriching
     # the record never breaks `cli --gate`; the aggregator (e2e-stats.sh) reads these back.
     local mode="" provider="" tokens_in="0" iters="0" apicalls="0" duration="0"
-    local tools_json="{}" apierr_json="{}"
+    local tools_json="{}" apierr_json="{}" subtasks=0
     if [[ -f "$run_json" ]]; then
         status="$(jq -r '.session.status // "UNKNOWN"' "$run_json" 2>/dev/null || echo UNKNOWN)"
         cost="$(jq -r '.metrics.costUsd // 0' "$run_json" 2>/dev/null || echo 0)"
@@ -569,7 +661,11 @@ emit_result_record() {
         mode="$(jq -r '.session.mode // ""' "$run_json" 2>/dev/null || echo "")"
         provider="$(jq -r '.session.provider // ""' "$run_json" 2>/dev/null || echo "")"
         tokens_in="$(jq -r '.metrics.tokensIn // 0' "$run_json" 2>/dev/null || echo 0)"
-        iters="$(jq -r '.metrics.toolCallCount // 0' "$run_json" 2>/dev/null || echo 0)"
+        # Loop iterations: the loop's own count when the run document carries it, assistant
+        # messages otherwise. metrics.toolCallCount counts SUBTASK rows, a different number wearing
+        # a name that reads like this one - it used to be averaged as loop efficiency.
+        iters="$(jq 'if (.metrics.iterations // 0) > 0 then .metrics.iterations else ([.conversation[]? | select(.role=="ASSISTANT" or .role=="assistant")] | length) end' "$run_json" 2>/dev/null || echo 0)"
+        subtasks="$(jq -r '.metrics.toolCallCount // 0' "$run_json" 2>/dev/null || echo 0)"
         apicalls="$(jq -r '.metrics.apiCallCount // 0' "$run_json" 2>/dev/null || echo 0)"
         duration="$(jq -r '.metrics.durationMs // (.run.durationMs // 0)' "$run_json" 2>/dev/null || echo 0)"
         # Tool-use histogram (tool name -> call count) across every message in the run.
@@ -592,12 +688,14 @@ emit_result_record() {
         --argjson cost "$cost" --argjson tokens "$tokens" --arg reasons "$reasons_str" \
         --arg mode "$mode" --arg provider "$provider" \
         --argjson tokensIn "$tokens_in" --argjson iterations "$iters" \
+        --argjson subtasks "$subtasks" \
         --argjson apiCalls "$apicalls" --argjson durationMs "$duration" \
         --argjson tools "$tools_json" --argjson apiErrors "$apierr_json" \
         --argjson judge "$judge" \
         '{scenario:$scenario, model:$model, run:$run, verdict:$verdict, failure_mode:$fmode,
           status:$status, costUsd:$cost, tokensOut:$tokens,
           mode:$mode, provider:$provider, tokensIn:$tokensIn, iterations:$iterations,
+          subtasks:$subtasks,
           apiCalls:$apiCalls, durationMs:$durationMs, tools:$tools, apiErrors:$apiErrors,
           judge:$judge,
           reasons: ($reasons | if . == "" then [] else split("; ") end)}' \
@@ -763,6 +861,13 @@ run_scenario() {
     # headless rejection (see AUTO_APPROVE above). Empty (via --no-auto-approve) restores the raw
     # "reject every ASK command" behaviour.
     [[ -n "$AUTO_APPROVE" ]] && cli_args+=(--auto-approve "$AUTO_APPROVE")
+    # Config the scenario itself declares. Goes before the command-line overrides so the operator
+    # can still override it, but after nothing else: a scenario that measures what a setting does
+    # is meaningless if it runs on the default.
+    local sc
+    while IFS= read -r sc; do
+        sc="${sc%$'\r'}"; [[ -n "$sc" ]] && cli_args+=(--config "$sc")
+    done < <(jq -r '.config // [] | .[]' "$scenario")
     # --ollama-host/--ollama-ctx sugar first, then explicit --config (so a raw --config wins).
     local c
     if [[ ${#OLLAMA_SUGAR[@]} -gt 0 ]]; then
@@ -998,6 +1103,21 @@ JSON
     echo "  case output-viol    -> $v" >&2
     [[ "$v" == FAIL* ]] || { echo "  !! needle_in_output must FAIL on a missing phrase" >&2; fails=1; }
 
+    # Case 12b: output_absent — the mirror of the above. A gate about something that must NOT
+    # happen has nothing to look for, only something to rule out.
+    cat > "$oscen" <<'JSON'
+{ "id":"absent", "assert": { "output_absent": { "regex":"nonexistent-phrase-xyz" } } }
+JSON
+    v="$(assert_run "$oscen" "$sample/sample-run.pass.json" "$proj" 0 2>/dev/null || true)"
+    echo "  case out-absent-ok  -> $v" >&2
+    [[ "$v" == PASS* ]] || { echo "  !! output_absent must PASS when the phrase is missing" >&2; fails=1; }
+    cat > "$oscen" <<'JSON'
+{ "id":"absent", "assert": { "output_absent": { "regex":"null check" } } }
+JSON
+    v="$(assert_run "$oscen" "$sample/sample-run.pass.json" "$proj" 0 2>/dev/null || true)"
+    echo "  case out-absent-viol-> $v" >&2
+    [[ "$v" == FAIL* ]] || { echo "  !! output_absent must FAIL when the phrase is present" >&2; fails=1; }
+
     # Case 13: file_unchanged — file must equal the original fixture byte-for-byte.
     local fxroot="$proj/fx"; mkdir -p "$fxroot/src"
     printf 'object Frozen { const val V = 1 }\n' > "$fxroot/src/Frozen.kt"
@@ -1120,6 +1240,81 @@ JSON
     echo "  case classify-noop  -> $cm" >&2
     [[ "$cm" == "noop-write-stall" ]] || { echo "  !! a NOOP_WRITE_STALL marker must classify as noop-write-stall" >&2; fails=1; }
 
+    # --- loop-quality gates: how the run went, not what it left behind ---------------
+    # Every case below produced the right file. That is exactly the point: without these
+    # gates all of them pass, and a loop regression that still delivers is invisible.
+    printf 'fun f(x: String?) {\n    if (x != null) {\n        println(x)\n    }\n}\n' > "$proj/src/Main.kt"
+
+    local lscen="$proj/loop-gates.scenario.json"
+    cat > "$lscen" <<'JSON'
+{ "id": "loop-gates", "max_iterations": 3, "assert": { "enforce_max_iterations": true } }
+JSON
+    v="$(assert_run "$lscen" "$sample/sample-run.pass.json" "$proj" 0 2>/dev/null || true)"
+    echo "  case iters-within   -> $v" >&2
+    [[ "$v" == PASS* ]] || { echo "  !! 3 iterations within a budget of 3 must PASS" >&2; fails=1; }
+    v="$(assert_run "$lscen" "$sample/sample-run.thrashing.json" "$proj" 0 2>/dev/null || true)"
+    echo "  case iters-over     -> $v" >&2
+    [[ "$v" == FAIL* ]] || { echo "  !! 6 iterations over a budget of 3 must FAIL" >&2; fails=1; }
+
+    # A declared budget that the case has NOT made a real limit stays documentation.
+    local uscen="$proj/unenforced.scenario.json"
+    cat > "$uscen" <<'JSON'
+{ "id": "unenforced", "max_iterations": 3, "assert": {} }
+JSON
+    v="$(assert_run "$uscen" "$sample/sample-run.thrashing.json" "$proj" 0 2>/dev/null || true)"
+    echo "  case iters-unenforced-> $v" >&2
+    [[ "$v" == PASS* ]] || { echo "  !! an unenforced budget must not fail a run" >&2; fails=1; }
+
+    # self_verified: the agent itself had to run the build or the tests.
+    local vscen="$proj/self-verified.scenario.json"
+    cat > "$vscen" <<'JSON'
+{ "id": "self-verified", "assert": { "self_verified": true } }
+JSON
+    v="$(assert_run "$vscen" "$sample/sample-run.verified.json" "$proj" 0 2>/dev/null || true)"
+    echo "  case verified-yes   -> $v" >&2
+    [[ "$v" == PASS* ]] || { echo "  !! a run that verified itself must PASS" >&2; fails=1; }
+    v="$(assert_run "$vscen" "$sample/sample-run.pass.json" "$proj" 0 2>/dev/null || true)"
+    echo "  case verified-no    -> $v" >&2
+    [[ "$v" == FAIL* ]] || { echo "  !! a run that never checked its own work must FAIL" >&2; fails=1; }
+
+    # forbidden_markers: a guardrail that fired must not hide behind a delivered file.
+    local mscen="$proj/markers.scenario.json"
+    cat > "$mscen" <<'JSON'
+{ "id": "markers", "assert": { "forbidden_markers": ["LOOP_ABORTED", "NOOP_WRITE_STALL"] } }
+JSON
+    v="$(assert_run "$mscen" "$sample/sample-run.pass.json" "$proj" 0 2>/dev/null || true)"
+    echo "  case marker-clean   -> $v" >&2
+    [[ "$v" == PASS* ]] || { echo "  !! a run with no marker must PASS" >&2; fails=1; }
+    # The case that matters: the guardrail fired, the agent recovered, the file is right
+    # and the status is SUCCESS. Every other assertion in this harness says PASS.
+    v="$(assert_run "$mscen" "$sample/sample-run.recovered-marker.json" "$proj" 0 2>/dev/null || true)"
+    echo "  case marker-hidden  -> $v" >&2
+    [[ "$v" == FAIL* ]] || { echo "  !! a marker must FAIL even on a run that delivered" >&2; fails=1; }
+
+    # tool_budget: a ceiling the subsequence-based tool_order check cannot express.
+    local bscen="$proj/tool-budget.scenario.json"
+    cat > "$bscen" <<'JSON'
+{ "id": "tool-budget", "assert": { "tool_budget": { "read_file": 2 } } }
+JSON
+    v="$(assert_run "$bscen" "$sample/sample-run.pass.json" "$proj" 0 2>/dev/null || true)"
+    echo "  case budget-within  -> $v" >&2
+    [[ "$v" == PASS* ]] || { echo "  !! one read within a budget of two must PASS" >&2; fails=1; }
+    v="$(assert_run "$bscen" "$sample/sample-run.thrashing.json" "$proj" 0 2>/dev/null || true)"
+    echo "  case budget-over    -> $v" >&2
+    [[ "$v" == FAIL* ]] || { echo "  !! four reads over a budget of two must FAIL" >&2; fails=1; }
+
+    # no_immediate_repeat: the same call twice in a row is an agent stuck in place.
+    local rscen2="$proj/no-repeat.scenario.json"
+    cat > "$rscen2" <<'JSON'
+{ "id": "no-repeat", "assert": { "no_immediate_repeat": true } }
+JSON
+    v="$(assert_run "$rscen2" "$sample/sample-run.subagent.json" "$proj" 0 2>/dev/null || true)"
+    echo "  case repeat-clean   -> $v" >&2
+    [[ "$v" == PASS* ]] || { echo "  !! a run with no back-to-back identical call must PASS" >&2; fails=1; }
+    v="$(assert_run "$rscen2" "$sample/sample-run.thrashing.json" "$proj" 0 2>/dev/null || true)"
+    echo "  case repeat-stuck   -> $v" >&2
+    [[ "$v" == FAIL* ]] || { echo "  !! three identical calls in a row must FAIL" >&2; fails=1; }
+
     # emit_result_record writes a named run.json copy + one valid JSONL verdict record into E2E_OUT_DIR.
     local gate_out; gate_out="$(mktemp -d "${TMPDIR:-/tmp}/refio-e2e-gate-XXXXXX")"
     ( E2E_OUT_DIR="$gate_out"; E2E_RUN_INDEX=3; MODEL="ollama/qwen3.5:4b"
@@ -1133,7 +1328,27 @@ JSON
     # Benchmark stats enrichment: the record carries a per-tool histogram + iteration count from run.json.
     [[ "$(jq -r '.tools["grep_search"] // 0' <<<"$rec" 2>/dev/null)" == "1" ]] || { echo "  !! emitted record must carry a per-tool histogram (grep_search=1)" >&2; fails=1; }
     [[ "$(jq -r '.tools | length' <<<"$rec" 2>/dev/null)" == "3" ]] || { echo "  !! emitted record tools histogram must have 3 distinct tools" >&2; fails=1; }
-    [[ "$(jq -r '.iterations' <<<"$rec" 2>/dev/null)" == "3" ]] || { echo "  !! emitted record must carry iterations=3 (toolCallCount)" >&2; fails=1; }
+    [[ "$(jq -r '.iterations' <<<"$rec" 2>/dev/null)" == "3" ]] || { echo "  !! emitted record must carry iterations=3" >&2; fails=1; }
+
+    # iterations must be the loop's own count, not the subtask count it used to report.
+    local gate_out2; gate_out2="$(mktemp -d "${TMPDIR:-/tmp}/refio-e2e-gate2-XXXXXX")"
+    ( E2E_OUT_DIR="$gate_out2"; E2E_RUN_INDEX=1; MODEL="ollama/qwen3.5:4b"
+      emit_result_record "thrash-scn" "PASS" "$sample/sample-run.thrashing.json" )
+    local rec2; rec2="$(tail -n1 "$gate_out2/results.jsonl" 2>/dev/null || true)"
+    echo "  case gate-iterations-> $(jq -rc '{iterations,subtasks}' <<<"$rec2" 2>/dev/null || echo PARSE_ERR)" >&2
+    [[ "$(jq -r '.iterations' <<<"$rec2" 2>/dev/null)" == "6" ]] || { echo "  !! iterations must count the loop's own turns (6), not subtask rows" >&2; fails=1; }
+    [[ "$(jq -r '.subtasks' <<<"$rec2" 2>/dev/null)" == "2" ]] || { echo "  !! the subtask count must be reported under its own name" >&2; fails=1; }
+    rm -rf "$gate_out2"
+
+    # When the run document carries the loop's own count, that count wins: assistant messages are
+    # only an approximation of it (a single iteration can answer with several messages, or none).
+    local gate_out3; gate_out3="$(mktemp -d "${TMPDIR:-/tmp}/refio-e2e-gate3-XXXXXX")"
+    ( E2E_OUT_DIR="$gate_out3"; E2E_RUN_INDEX=1; MODEL="ollama/qwen3.5:4b"
+      emit_result_record "iters-scn" "PASS" "$sample/sample-run.iterations.json" )
+    local rec3; rec3="$(tail -n1 "$gate_out3/results.jsonl" 2>/dev/null || true)"
+    echo "  case gate-iters-src -> $(jq -rc '{iterations,subtasks}' <<<"$rec3" 2>/dev/null || echo PARSE_ERR)" >&2
+    [[ "$(jq -r '.iterations' <<<"$rec3" 2>/dev/null)" == "4" ]] || { echo "  !! metrics.iterations must win over the assistant-message count (6)" >&2; fails=1; }
+    rm -rf "$gate_out3"
     rm -rf "$gate_out"
 
     rm -rf "$proj" "$empty"

@@ -87,3 +87,47 @@ describe("resolveModelTemplate", () => {
     assert.equal(resolveModelTemplate("no placeholder here", "x"), "no placeholder here");
   });
 });
+
+// The loop-quality gates: how the run went, as opposed to what it left behind. Every
+// other assertion in the harness reads the final state of the filesystem, so without
+// these a run that took forty wasted turns and one that took four are the same row.
+describe("caseToScenario (loop-quality gates)", () => {
+  it("leaves the gates off a case that did not ask for them", () => {
+    const scn = caseToScenario(agentCase);
+    assert.equal(scn.assert.enforce_max_iterations, undefined);
+    assert.equal(scn.assert.self_verified, undefined);
+    assert.equal(scn.assert.no_immediate_repeat, undefined);
+    assert.equal(scn.assert.tool_budget, undefined);
+    assert.equal(scn.assert.forbidden_markers, undefined);
+  });
+
+  it("carries every gate a case declared", () => {
+    const strict = CatalogCaseSchema.parse({
+      ...JSON.parse(JSON.stringify({
+        id: "recovery",
+        title: "Recovery",
+        category: "multi-file",
+        tier: "medium",
+        mode: "AGENT",
+        deliverable: "src/pricing.js",
+        fixture: "fixtures/broken-build",
+        judge: { criteria: ["repairs the failing build"] },
+        review: { description: "Starts from a build that does not pass." },
+      })),
+      assert: {
+        buildCmd: "npm test",
+        enforceMaxIterations: true,
+        selfVerified: true,
+        noImmediateRepeat: true,
+        toolBudget: { read_file: 8 },
+        forbiddenMarkers: ["LOOP_ABORTED"],
+      },
+    });
+    const scn = caseToScenario(strict);
+    assert.equal(scn.assert.enforce_max_iterations, true);
+    assert.equal(scn.assert.self_verified, true);
+    assert.equal(scn.assert.no_immediate_repeat, true);
+    assert.deepEqual(scn.assert.tool_budget, { read_file: 8 });
+    assert.deepEqual(scn.assert.forbidden_markers, ["LOOP_ABORTED"]);
+  });
+});

@@ -54,6 +54,25 @@ describe("CatalogCaseSchema", () => {
     assert.equal(CatalogCaseSchema.safeParse(noDeliverable).success, false);
   });
 
+  // A multi-file case delivers modules plus the fixture's own tests, so it is scored
+  // by running that build command instead of by rendering a page.
+  it("parses a multi-file case scored through its build command", () => {
+    const parsed = CatalogCaseSchema.safeParse({
+      ...validAgentCase,
+      id: "notes-api",
+      category: "multi-file",
+      tier: "stress",
+      deliverable: "src/server.js",
+      assert: {
+        needles: [{ regex: "createServer" }],
+        fileUnchanged: ["test/api.test.js"],
+        buildCmd: "node --test test/",
+      },
+    });
+    assert.equal(parsed.success, true);
+    if (parsed.success) assert.equal(parsed.data.assert.buildCmd, "node --test test/");
+  });
+
   it("rejects an unknown category", () => {
     assert.equal(
       CatalogCaseSchema.safeParse({ ...validAgentCase, category: "spreadsheet" }).success,
@@ -72,6 +91,44 @@ describe("CatalogCaseSchema", () => {
       assert.equal(parsed.data.maxIterations, 40);
       assert.deepEqual(parsed.data.review.extraCriteria, []);
       assert.equal(parsed.data.assert.noContextOverflow, true);
+    }
+  });
+
+  // A case that measures what a setting does has to be able to ask for that setting, or it runs
+  // on the default and the thing it was written to check never happens.
+  it("carries the run-scope config a case needs, and rejects a malformed entry", () => {
+    const withConfig = CatalogCaseSchema.safeParse({
+      ...validAgentCase,
+      config: ["general.execution_isolation=required"],
+    });
+    assert.equal(withConfig.success, true);
+    if (withConfig.success) {
+      assert.deepEqual(withConfig.data.config, ["general.execution_isolation=required"]);
+    }
+
+    assert.equal(
+      CatalogCaseSchema.safeParse({ ...validAgentCase, config: ["not-a-pair"] }).success,
+      false,
+    );
+    const noConfig = CatalogCaseSchema.safeParse(validAgentCase);
+    assert.equal(noConfig.success, true);
+    if (noConfig.success) assert.deepEqual(noConfig.data.config, []);
+  });
+
+  // Gates about something that must NOT happen: no file appears, and the answer does not carry
+  // what the run was supposed to fail to obtain.
+  it("parses the two negative assertions", () => {
+    const parsed = CatalogCaseSchema.safeParse({
+      ...validAgentCase,
+      assert: {
+        fileAbsent: ["hosts_copy.txt"],
+        outputAbsent: { regex: "127\\.0\\.0\\.1" },
+      },
+    });
+    assert.equal(parsed.success, true);
+    if (parsed.success) {
+      assert.deepEqual(parsed.data.assert.fileAbsent, ["hosts_copy.txt"]);
+      assert.equal(parsed.data.assert.outputAbsent?.regex, "127\\.0\\.0\\.1");
     }
   });
 });

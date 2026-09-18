@@ -1,9 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
-    <!-- File-only logging for CLI/TUI — keeps console clean for terminal UI -->
-    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
+    <!-- File-only logging for CLI/TUI — keeps console clean for terminal UI.
+
+         Rolling, not truncating: the log used to be overwritten on every start, so after a series
+         of runs only the last one's trace survived and a failure earlier in the series could not be
+         diagnosed at all. Size-and-time rolling keeps recent history without letting the file grow
+         without bound. -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${user.home}/.refio/refio-cli.log</file>
-        <append>false</append>
+        <append>true</append>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${user.home}/.refio/refio-cli.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>7</maxHistory>
+            <totalSizeCap>500MB</totalSizeCap>
+        </rollingPolicy>
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
         </encoder>

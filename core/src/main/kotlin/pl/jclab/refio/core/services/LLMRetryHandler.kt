@@ -164,6 +164,12 @@ class LLMRetryHandler(
         if (e is RefioError.LLMAuthentication) return false
         if (e is RefioError.ProviderNotConfigured) return false
 
+        // A tool-template parse failure is a 500, and a plain 500 is retryable - but this one is
+        // deterministic for the same request, so every attempt reproduces it. Three retries with
+        // backoff buy nothing and delay the turn's own fallback onto the text contract, which is
+        // what actually recovers the call.
+        if (pl.jclab.refio.core.errors.NativeToolTemplateError.matches(e)) return false
+
         // Always retry rate limits and timeouts (typed)
         if (e is RefioError.LLMRateLimit) return true
         if (e is RefioError.LLMTimeout) return true

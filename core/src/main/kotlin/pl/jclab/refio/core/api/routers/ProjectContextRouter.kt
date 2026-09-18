@@ -91,7 +91,10 @@ class ProjectContextRouter(
         val (modelId, providerName) = configService.getModel(operation, taskId)
         val nativeToolsMode = parseNativeToolsMode(configService.getTyped(ConfigKeys.NATIVE_TOOLS_MODE, taskId))
         val modelDef = ModelDefinitions.getDefinition(providerName, modelId)
-        return shouldUseNativeTools(nativeToolsMode, modelDef, modelId, NativeToolsFallbackTracker.getFallbackSet())
+        return shouldUseNativeTools(
+            nativeToolsMode, modelDef, modelId, NativeToolsFallbackTracker.getFallbackSet(),
+            pl.jclab.refio.core.llm.ProviderToolSupport.cached(providerName, modelId, configService),
+        )
     }
 
     /**
@@ -112,7 +115,10 @@ class ProjectContextRouter(
         val (modelId, providerName) = cfg.getModel(operation, taskId)
         val nativeToolsMode = parseNativeToolsMode(cfg.getTyped(ConfigKeys.NATIVE_TOOLS_MODE, taskId))
         val modelDef = ModelDefinitions.getDefinition(providerName, modelId)
-        val reason = nativeToolsDecisionReason(nativeToolsMode, modelDef, modelId, NativeToolsFallbackTracker.getFallbackSet())
+        val reason = nativeToolsDecisionReason(
+            nativeToolsMode, modelDef, modelId, NativeToolsFallbackTracker.getFallbackSet(),
+            pl.jclab.refio.core.llm.ProviderToolSupport.cached(providerName, modelId, cfg),
+        )
         return "$providerName/$modelId -> $reason"
     }
 

@@ -1,0 +1,43 @@
+{
+  "id": "single-file-app-spreadsheet-engine",
+  "title": "Spreadsheet with a real formula engine",
+  "category": "single-file-app",
+  "tier": "hard",
+  "mode": "AGENT",
+  "deliverable": "spreadsheet_{{MODEL_ID}}_01.html",
+  "fixture": "fixtures/spreadsheet-engine",
+  "assert": {
+    "toolOrder": [
+      "advance_code_editing"
+    ],
+    "needles": [
+      {
+        "regex": "<table|<canvas|role=\"grid\""
+      },
+      {
+        "regex": "SUM"
+      },
+      {
+        "regex": "[Cc]ycl|#CYCLE"
+      },
+      {
+        "regex": "undo|Undo"
+      },
+      {
+        "regex": "addEventListener"
+      }
+    ],
+    "smoke": {
+      "entry": "spreadsheet_{{MODEL_ID}}_01.html",
+      "domPresent": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "The file is one self-contained spreadsheet (no libraries): a 26x100 grid with keyboard navigation and cell editing, a formula engine with cell and range references, SUM/AVG/MIN/MAX/COUNT/IF, a dependency graph that recalculates only the affected cells, cycle detection reported as #CYCLE, #REF and #DIV/0 errors, undo/redo, CSV import and export, and persistence in localStorage. Formulas must be evaluated for real, never hardcoded."
+    ]
+  },
+  "review": {
+    "description": "Single-file spreadsheet: 26x100 grid, formula engine with ranges and functions, dependency-driven recalculation, cycle and error reporting, undo/redo, CSV, localStorage."
+  }
+}

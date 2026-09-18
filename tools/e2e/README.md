@@ -24,6 +24,7 @@ tools/e2e/
 | Path | What |
 |---|---|
 | `test_data/e2e_catalog/<category>/<name>/` | `*.case.json` + `*.prompt.md` - the authored source |
+| `multi-file` category | a case whose deliverable is a set of modules, not a page: it carries a `build_cmd` (the fixture's own `node --test`) and a golden solution, so `validate-scenarios.sh` can prove the fixture fails and the golden passes |
 | `test_data/e2e/<id>.json`, `prompts/<id>.md` | generated artifacts, committed |
 | `test_data/e2e/fixtures/<name>/` | starting project state for a scenario |
 

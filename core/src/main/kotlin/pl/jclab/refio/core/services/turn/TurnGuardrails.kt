@@ -397,6 +397,13 @@ class TurnGuardrails {
             return "tracked=${states.size}, top=$top"
         }
 
+        /**
+         * The busiest single (tool, target) pair seen this turn, as a number rather than as part of
+         * an error message. A run that reached the same file twelve times and one that reached
+         * twelve different files both show twelve calls; only this tells them apart.
+         */
+        fun maxCallCount(): Int = states.values.maxOfOrNull { it.callCount } ?: 0
+
         private fun effectKey(toolName: String, args: Map<String, Any?>): String? {
             return when (toolName) {
                 "code_editing", "multi_line_editor", "advance_code_editing", "create_new_file" -> {

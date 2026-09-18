@@ -1,0 +1,31 @@
+{
+  "id": "multi-file-repair-failing-build",
+  "title": "Repair a project whose test suite is already red",
+  "category": "multi-file",
+  "tier": "medium",
+  "mode": "AGENT",
+  "maxIterations": 30,
+  "deliverable": "src/cart.js",
+  "fixture": "fixtures/repair-failing-build",
+  "assert": {
+    "toolOrder": [],
+    "needles": [
+      { "regex": "quantity[[:space:]]*>=[[:space:]]*10" },
+      { "regex": "\\(1[[:space:]]*\\+[[:space:]]*taxRate\\)" }
+    ],
+    "fileUnchanged": ["test/cart.test.js"],
+    "buildCmd": "node --test",
+    "enforceMaxIterations": true,
+    "selfVerified": true,
+    "forbiddenMarkers": ["LOOP_ABORTED", "NOOP_WRITE_STALL", "VERIFICATION_FAILED"],
+    "noImmediateRepeat": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent ran the existing test suite itself, read the two failures, and fixed the code rather than the tests: the bulk discount now starts at a quantity of ten and the tax is added on top of the discounted amount instead of replacing it. test/cart.test.js is untouched and the whole suite passes."
+    ]
+  },
+  "review": {
+    "description": "A shop cart whose test suite fails from the first second: the discount threshold is off by one and the tax is applied as a multiplier instead of a surcharge. Nothing states what is wrong, so the agent has to run the tests, read them and repair the code."
+  }
+}

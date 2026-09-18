@@ -1,0 +1,34 @@
+{
+  "id": "multi-file-search-before-edit",
+  "mode": "AGENT",
+  "description": "A helper gains an optional parameter. Its one meaningful caller sits in a deep package path under a filename that does not mention the helper, so the change cannot be completed without searching the tree first.",
+  "category": "multi-file",
+  "max_iterations": 35,
+  "fixture": "fixtures/hidden-caller",
+  "prompt_file": "prompts/multi-file-search-before-edit.md",
+  "assert": {
+    "no_context_overflow": true,
+    "needles_in_file": [
+      {
+        "path": "src/lib/text.js",
+        "regex": "function[[:space:]]+slugify[[:space:]]*\\([[:space:]]*title[[:space:]]*,"
+      }
+    ],
+    "file_unchanged": [
+      "test/seo.test.js"
+    ],
+    "build_cmd": "node --test",
+    "enforce_max_iterations": true,
+    "self_verified": true,
+    "forbidden_markers": [
+      "LOOP_ABORTED",
+      "NOOP_WRITE_STALL"
+    ],
+    "no_immediate_repeat": true
+  },
+  "judge": {
+    "criteria": [
+      "slugify takes an optional maximum length, cuts the slug to it and leaves no trailing dash, and keeps returning the whole slug when no length is given. The only real caller, buried in packages/admin/internal/routes/seo-handler.js, passes the site's limit - so the agent found it by searching rather than by reading the obvious files. The test suite passes untouched."
+    ]
+  }
+}

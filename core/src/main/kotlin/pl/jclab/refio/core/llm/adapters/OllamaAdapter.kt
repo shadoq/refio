@@ -68,6 +68,25 @@ class OllamaAdapter(
         const val CHAT_ENDPOINT = "/api/chat"
         const val TAGS_ENDPOINT = "/api/tags"
 
+        /** Per-model detail, including what the server says the model can do. */
+        const val SHOW_ENDPOINT = "/api/show"
+
+        /** The capability Ollama reports for a model that can be handed a `tools` array. */
+        const val CAPABILITY_TOOLS = "tools"
+
+        /**
+         * Read the capability list out of an `/api/show` body. Pure, so the shape can be pinned by
+         * a test against a captured response instead of against a live server.
+         *
+         * Returns null when the body carries no capability list at all - "the server did not say"
+         * is a different answer from "the server said no", and only the first one should leave the
+         * decision to fall back to something else.
+         */
+        fun parseCapabilities(body: Map<String, Any?>): Set<String>? {
+            val raw = body["capabilities"] as? List<*> ?: return null
+            return raw.mapNotNull { (it as? String)?.trim()?.lowercase()?.takeIf(String::isNotEmpty) }.toSet()
+        }
+
         /** Floor for num_predict so the model can always produce at least a short reply. */
         const val OLLAMA_MIN_OUTPUT_TOKENS = 512
 
@@ -956,6 +975,34 @@ class OllamaAdapter(
      * @return List of ModelConfig objects with model metadata
      * @throws Exception if connection fails or response is invalid
      */
+    /** The endpoint this adapter resolved, so callers can key a cache by the server actually used. */
+    fun endpoint(): String = baseUrl
+
+    /**
+     * Ask the server what [model] can do. Returns null when the question could not be answered -
+     * the server is unreachable, too old to have `/api/show`, or replied without a capability list.
+     *
+     * `/api/tags` does not carry this, which is why the model list cannot answer it: a locally
+     * built model shows up there with nothing but a name and a size.
+     */
+    suspend fun fetchCapabilities(model: String): Set<String>? = withContext(Dispatchers.IO) {
+        try {
+            val httpResponse = OllamaRequestGate.withPermit(baseUrl) {
+                client.post("$baseUrl$SHOW_ENDPOINT") {
+                    contentType(ContentType.Application.Json)
+                    setBody(mapOf("model" to model))
+                }
+            }
+            val body: Map<String, Any?> = httpResponse.body()
+            parseCapabilities(body).also {
+                logger.info { "[OLLAMA] $model capabilities: ${it ?: "not reported"}" }
+            }
+        } catch (e: Exception) {
+            logger.info { "[OLLAMA] Could not read capabilities for $model: ${e.message}" }
+            null
+        }
+    }
+
     suspend fun listModels(): List<ModelConfig> = withContext(Dispatchers.IO) {
         logger.info { "[OLLAMA] Fetching available models from $baseUrl$TAGS_ENDPOINT" }
 

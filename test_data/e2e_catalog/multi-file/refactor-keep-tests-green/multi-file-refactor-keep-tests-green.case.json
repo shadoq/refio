@@ -1,0 +1,50 @@
+{
+  "id": "multi-file-refactor-keep-tests-green",
+  "title": "Split a tangled module while its tests stay green",
+  "category": "multi-file",
+  "tier": "stress",
+  "mode": "AGENT",
+  "deliverable": "src/legacy.js",
+  "fixture": "fixtures/legacy-refactor",
+  "assert": {
+    "toolOrder": [
+      "read_file",
+      "create_new_file"
+    ],
+    "needles": [
+      {
+        "regex": "require\\(['\"]\\./pricing['\"]\\)"
+      },
+      {
+        "regex": "require\\(['\"]\\./inventory['\"]\\)"
+      },
+      {
+        "regex": "require\\(['\"]\\./report['\"]\\)"
+      },
+      {
+        "regex": "require\\(['\"]\\./dates['\"]\\)"
+      }
+    ],
+    "fileUnchanged": [
+      "test/legacy.test.js"
+    ],
+    "buildCmd": "node --test",
+    "enforceMaxIterations": true,
+    "selfVerified": true,
+    "forbiddenMarkers": [
+      "LOOP_ABORTED",
+      "NOOP_WRITE_STALL",
+      "VERIFICATION_FAILED"
+    ],
+    "noImmediateRepeat": true
+  },
+  "judge": {
+    "criteria": [
+      "The single module was split into src/inventory.js, src/pricing.js, src/report.js and src/dates.js along real responsibility lines, with src/legacy.js left as a facade re-exporting exactly the same public names. Behaviour is unchanged, the original test suite passes untouched, each new module only requires what it actually needs, and the date and rounding helpers exist once rather than being copied into several modules."
+    ]
+  },
+  "review": {
+    "description": "Refactor a 250-line tangled shop module into inventory, pricing, report and date modules behind an unchanged facade, with the original test suite still green."
+  },
+  "maxIterations": 40
+}

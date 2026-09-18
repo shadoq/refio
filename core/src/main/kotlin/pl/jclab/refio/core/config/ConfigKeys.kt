@@ -194,6 +194,23 @@ object ConfigKeys {
     )
 
     /**
+     * How much isolation a spawned process must have: `auto`, `required` or `off`.
+     *
+     * `auto` (default) runs on the host and says once per session that nothing is being enforced.
+     * `required` refuses to run code the model wrote itself when no backend can contain it; the
+     * user's own build, tests and configured MCP servers still run, because the point of those is
+     * to exercise the real project with the real toolchain. `off` is the old behaviour, silently.
+     *
+     * Without `required` this setting is a convenience rather than a control: someone who actually
+     * depends on it needs a mode that fails closed.
+     */
+    val GENERAL_EXECUTION_ISOLATION = ConfigKey(
+        key = "general.execution_isolation",
+        parser = { it.trim().lowercase().takeIf { v -> v in setOf("auto", "required", "off") } },
+        default = "auto"
+    )
+
+    /**
      * AGENT-only "is the agent done?" judge. When enabled, a cheap LLM call (WEAK model)
      * confirms that a tool-call-free assistant response really means "task complete"
      * before the turn terminates. If the judge says the agent paused mid-task, the loop
@@ -855,6 +872,25 @@ object ConfigKeys {
     )
 
     /**
+     * How many times the loop may ask the model to answer in the required shape before giving up.
+     * `0` gives up on the first malformed answer.
+     *
+     * The budget used to be the constant 2, on the reasoning that a model which cannot comply after
+     * two reminders never will. A measured counter-example: a reasoning model that announces its
+     * plan in prose before acting burned its two reminders on iterations 2 and 3 and the turn ended
+     * at iteration 4 of an available 200. The default stays 2 so nothing changes without a decision;
+     * what changed is that the budget doubles while the turn has produced nothing, because giving
+     * up on a turn that already delivered a file costs some wasted time, and giving up on one that
+     * delivered nothing costs the whole task.
+     */
+    val AGENT_MAX_FORMAT_NUDGES = ConfigKey(
+        key = "agent.max_format_nudges",
+        parser = String::toIntOrNull,
+        default = 2,
+        validator = { it >= 0 }
+    )
+
+    /**
      * Sampling temperature for the PLAN/AGENT decision turn — the turn that picks a tool and
      * emits the response-format envelope. Defaults to `0.7` (the LLM-wide default).
      *
@@ -951,6 +987,7 @@ object ConfigKeys {
             // General (thinking/no-egress/execution mode moved from ui section)
             GENERAL_REASONING_EFFORT,
             GENERAL_NO_EGRESS_ENABLED,
+            GENERAL_EXECUTION_ISOLATION,
             GENERAL_EXECUTION_MODE,
             // UI
             UI_INTENT_CLASSIFICATION_ENABLED,
@@ -1034,6 +1071,7 @@ object ConfigKeys {
             MAX_CONSECUTIVE_TOOL_ERRORS,
             AGENT_MAX_COST_USD,
             AGENT_MAX_TURN_MINUTES,
+            AGENT_MAX_FORMAT_NUDGES,
             AGENT_DECISION_TEMPERATURE,
             JSON_THINKING_XML_TAGS,
             // Verify

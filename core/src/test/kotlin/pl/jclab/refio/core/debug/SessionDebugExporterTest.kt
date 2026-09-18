@@ -15,6 +15,7 @@ import pl.jclab.refio.core.db.SubtaskKind
 import pl.jclab.refio.core.db.Task
 import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.db.TaskStatus
+import pl.jclab.refio.core.db.ToolCallData
 import pl.jclab.refio.core.db.repositories.ApiLogRepository
 import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.db.repositories.SubtaskRepository
@@ -60,9 +61,14 @@ class SessionDebugExporterTest {
         errorMessage = errorMessage, errorType = errorMessage?.let { "Error" }, createdAt = 1_500,
     )
 
-    private fun msg(role: MessageRole, content: String) = ChatMessage(
+    private fun msg(
+        role: MessageRole,
+        content: String,
+        toolCalls: List<ToolCallData>? = null,
+        metadata: String? = null,
+    ) = ChatMessage(
         id = "m-${content.hashCode()}", taskId = "t1", role = role, content = content,
-        metadata = null, toolCalls = null, toolCallId = null,
+        metadata = metadata, toolCalls = toolCalls, toolCallId = null,
         tokensIn = null, tokensOut = null, cost = null, createdAt = 2_000,
     )
 
@@ -230,5 +236,165 @@ class SessionDebugExporterTest {
         // Agents ordered by real start time: coder (started 1000) before analyst (started 2000).
         assertEquals(listOf("coder", "analyst"), snap.multiAgent?.agents?.map { it.agentName })
         assertEquals(500, snap.multiAgent?.agents?.first()?.tokensOut, "per-agent split is preserved")
+    }
+
+    @Test
+    fun `iterations report the loop's own count, not the subtask rows`() {
+        TurnIterationTracker.reset()
+        try {
+            // Three subtask rows, but the loop only went round twice.
+            stub(subtasks = listOf(subtask(0), subtask(1), subtask(2)))
+            TurnIterationTracker.record("t1", IterationSummary(used = 2, limit = 200))
+
+            val snap = exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.STANDARD))
+
+            assertEquals(2, snap.metrics.iterations, "iterations must be the loop's own count")
+            assertEquals(200, snap.metrics.maxIterations)
+            assertEquals(3, snap.metrics.toolCallCount, "toolCallCount stays the subtask row count")
+        } finally {
+            TurnIterationTracker.reset()
+        }
+    }
+
+    @Test
+    fun `a turn that named no exit still reports a countable stop reason`() {
+        TurnStopReasonTracker.reset()
+        try {
+            stub()
+            assertEquals(
+                TurnStopReason.UNKNOWN.name,
+                exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.STANDARD)).metrics.stopReason,
+            )
+
+            TurnStopReasonTracker.record("t1", TurnStopReason.MAX_ITERATIONS)
+            assertEquals(
+                "MAX_ITERATIONS",
+                exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.STANDARD)).metrics.stopReason,
+            )
+        } finally {
+            TurnStopReasonTracker.reset()
+        }
+    }
+
+    @Test
+    fun `a failed tool call is distinguishable from a successful one, with its error truncated`() {
+        val longError = "boom ".repeat(500)
+        stub(
+            messages = listOf(
+                msg(
+                    MessageRole.ASSISTANT, "working",
+                    toolCalls = listOf(
+                        ToolCallData(id = "c1", name = "read_file", arguments = "{}"),
+                        ToolCallData(id = "c2", name = "code_editing", arguments = "{}", error = longError),
+                    ),
+                )
+            )
+        )
+        val options = SessionDebugOptions.forLevel(DebugLevel.STANDARD)
+        val details = exporter.export("t1", options).conversation.first().toolCallDetails
+
+        assertEquals(listOf(true, false), details.map { it.ok })
+        assertEquals(null, details[0].error)
+        assertTrue(details[1].error!!.isNotBlank(), "a failed call must carry its reason")
+        assertTrue(
+            details[1].error!!.length < longError.length,
+            "the error text must be truncated like every other preview",
+        )
+    }
+
+    @Test
+    fun `a steering nudge is recognisable without matching its English text`() {
+        stub(
+            messages = listOf(
+                msg(MessageRole.SYSTEM, "you have read a lot", metadata = """{"type":"guardian_nudge"}"""),
+                msg(MessageRole.SYSTEM, "an ordinary system message"),
+            )
+        )
+        val conversation = exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.STANDARD)).conversation
+
+        assertTrue(conversation[0].metadata!!.contains("guardian_nudge"))
+        assertEquals(null, conversation[1].metadata)
+    }
+
+    @Test
+    fun `guardrail counters and context losses reach the run document`() {
+        TurnGuardrailStatsTracker.reset()
+        TurnContextTracker.reset()
+        try {
+            stub()
+            TurnGuardrailStatsTracker.record(
+                "t1",
+                GuardrailStats(consolidationNudges = 1, guardianReentries = 2, maxRepeatedCall = 7, noopWrites = 3),
+            )
+            TurnContextTracker.recordIteration(
+                "t1", budgetTokens = 64_000, usedTokens = 61_000, droppedSections = listOf("CONVERSATION"),
+            )
+            TurnContextTracker.recordIteration(
+                "t1", budgetTokens = 64_000, usedTokens = 63_000,
+                droppedSections = listOf("CONVERSATION", "USER_CONTEXT"),
+            )
+            TurnContextTracker.recordTrim("t1", droppedMessages = 4, droppedSteps = 2)
+
+            val metrics = exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.STANDARD)).metrics
+
+            assertEquals(1, metrics.guardrails.consolidationNudges)
+            assertEquals(2, metrics.guardrails.guardianReentries)
+            assertEquals(7, metrics.guardrails.maxRepeatedCall)
+            assertEquals(3, metrics.guardrails.noopWrites)
+            assertEquals(64_000, metrics.context.budgetTokens)
+            assertEquals(4, metrics.context.droppedMessages)
+            assertEquals(2, metrics.context.droppedSteps)
+            assertEquals(
+                mapOf("CONVERSATION" to 2, "USER_CONTEXT" to 1),
+                metrics.context.drops,
+                "a section that fell out on every iteration must not look like one that fell out once",
+            )
+        } finally {
+            TurnGuardrailStatsTracker.reset()
+            TurnContextTracker.reset()
+        }
+    }
+
+    @Test
+    fun `a file edited and put back is reported as written twice and unchanged`() {
+        TurnFileWriteTracker.reset()
+        try {
+            stub()
+            TurnFileWriteTracker.recordWrite("t1", "src/app.js", hashBefore = "aaa", hashAfter = "bbb")
+            TurnFileWriteTracker.recordWrite("t1", "src/app.js", hashBefore = "bbb", hashAfter = "aaa")
+            TurnFileWriteTracker.recordWrite("t1", "src/new.js", hashBefore = null, hashAfter = "ccc")
+
+            val written = exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.STANDARD)).metrics.filesWritten
+
+            assertEquals(listOf("src/app.js", "src/new.js"), written.map { it.path })
+            assertEquals(2, written[0].writes)
+            assertEquals(false, written[0].netChanged, "edited then restored is a net no-change")
+            assertEquals(true, written[1].netChanged, "a created file is a change")
+        } finally {
+            TurnFileWriteTracker.reset()
+        }
+    }
+
+    @Test
+    fun `losing the native tool channel mid-turn is visible in the run document`() {
+        TurnNativeToolsTracker.reset()
+        try {
+            stub()
+            assertEquals(
+                null,
+                exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.STANDARD)).metrics.nativeToolsDegraded,
+            )
+
+            TurnNativeToolsTracker.recordDegradation("t1", TurnNativeToolsTracker.REASON_TEMPLATE_PARSE_ERROR)
+            // First reason wins: what knocked the turn off the channel, not what followed it.
+            TurnNativeToolsTracker.recordDegradation("t1", TurnNativeToolsTracker.REASON_GUARDIAN_REENTRY)
+
+            assertEquals(
+                "TEMPLATE_PARSE_ERROR",
+                exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.STANDARD)).metrics.nativeToolsDegraded,
+            )
+        } finally {
+            TurnNativeToolsTracker.reset()
+        }
     }
 }

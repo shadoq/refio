@@ -1,0 +1,28 @@
+{
+  "id": "multi-file-search-before-edit",
+  "title": "Add a parameter and find the one caller that is not where you would look",
+  "category": "multi-file",
+  "tier": "medium",
+  "mode": "AGENT",
+  "maxIterations": 35,
+  "deliverable": "src/lib/text.js",
+  "fixture": "fixtures/hidden-caller",
+  "assert": {
+    "toolOrder": [],
+    "needles": [{ "regex": "function[[:space:]]+slugify[[:space:]]*\\([[:space:]]*title[[:space:]]*," }],
+    "fileUnchanged": ["test/seo.test.js"],
+    "buildCmd": "node --test",
+    "enforceMaxIterations": true,
+    "selfVerified": true,
+    "forbiddenMarkers": ["LOOP_ABORTED", "NOOP_WRITE_STALL"],
+    "noImmediateRepeat": true
+  },
+  "judge": {
+    "criteria": [
+      "slugify takes an optional maximum length, cuts the slug to it and leaves no trailing dash, and keeps returning the whole slug when no length is given. The only real caller, buried in packages/admin/internal/routes/seo-handler.js, passes the site's limit - so the agent found it by searching rather than by reading the obvious files. The test suite passes untouched."
+    ]
+  },
+  "review": {
+    "description": "A helper gains an optional parameter. Its one meaningful caller sits in a deep package path under a filename that does not mention the helper, so the change cannot be completed without searching the tree first."
+  }
+}

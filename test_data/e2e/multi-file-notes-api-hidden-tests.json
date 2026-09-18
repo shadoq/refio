@@ -1,0 +1,52 @@
+{
+  "id": "multi-file-notes-api-hidden-tests",
+  "mode": "AGENT",
+  "description": "Multi-file Node API for notes built against a hidden test suite: validation, paging, tag filter, ETag conditional requests, error envelopes, no dependencies.",
+  "category": "multi-file",
+  "max_iterations": 40,
+  "fixture": "fixtures/notes-api",
+  "prompt_file": "prompts/multi-file-notes-api-hidden-tests.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "read_file",
+      "create_new_file"
+    ],
+    "needles_in_file": [
+      {
+        "path": "src/server.js",
+        "regex": "createServer"
+      },
+      {
+        "path": "src/server.js",
+        "regex": "require\\(['\"]\\./"
+      },
+      {
+        "path": "src/server.js",
+        "regex": "listen\\("
+      },
+      {
+        "path": "src/server.js",
+        "regex": "process\\.env\\.PORT|env\\[.PORT.\\]"
+      }
+    ],
+    "file_unchanged": [
+      "test/api.test.js",
+      "README.md"
+    ],
+    "build_cmd": "node --test",
+    "enforce_max_iterations": true,
+    "self_verified": true,
+    "forbidden_markers": [
+      "LOOP_ABORTED",
+      "NOOP_WRITE_STALL",
+      "VERIFICATION_FAILED"
+    ],
+    "no_immediate_repeat": true
+  },
+  "judge": {
+    "criteria": [
+      "The work delivers a runnable notes API split across several modules under src/ (an http entry point plus at least a storage module and a routing or rules module), implementing the README exactly: health, create with validation, tag-filtered and paged listing sorted newest first, fetch with ETag and If-None-Match, update with If-Match precondition and a preserved createdAt, delete, and the documented error envelopes. It uses no dependencies beyond Node's standard library and does not modify the test suite."
+    ]
+  }
+}

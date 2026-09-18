@@ -313,6 +313,27 @@ class SnapshotService(
         return utf8
     }
 
+    /**
+     * SHA-256 of the file at [filePath] exactly as it is on disk right now, or null when it does
+     * not exist (a not-yet-created file) or cannot be read.
+     *
+     * Lives here because this is the collaborator that owns the project root and already resolves
+     * caller-supplied paths against it. Used to tell a write that changed the file from a write
+     * that put it back the way it was - a distinction a byte comparison against the fixture at the
+     * end of a run cannot make.
+     */
+    fun currentContentHash(filePath: String): String? = try {
+        val fullPath = projectRoot.resolve(filePath).normalize()
+        if (Files.exists(fullPath) && Files.isRegularFile(fullPath)) {
+            sha256Hash(Files.readAllBytes(fullPath))
+        } else {
+            null
+        }
+    } catch (e: Exception) {
+        logger.debug { "Could not hash $filePath: ${e.message}" }
+        null
+    }
+
     private fun sha256Hash(bytes: ByteArray): String {
         val digest = MessageDigest.getInstance("SHA-256")
         val hashBytes = digest.digest(bytes)

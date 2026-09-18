@@ -827,8 +827,10 @@ class AgentTurnLoopTest {
             // The real deliverable must be surfaced; the turn is INCOMPLETE (delivered text, but
             // not via the structured workflow), not FAILED.
             // Distinct prose each iteration so the cross-iteration repetition guard doesn't fire
-            // first; this drives the bounded nudge counter to exhaustion (2 nudges) and into the
-            // format hard-fail branch, where the answer must now be preserved.
+            // first; this drives the bounded nudge counter to exhaustion and into the format
+            // hard-fail branch, where the answer must now be preserved. A turn that has written
+            // nothing gets the doubled reminder budget, so it takes four distinct replies before
+            // the fifth one lands on the hard-fail.
             val finalProse = "Final answer: Anna, Bob, Cecylia and Dawid used transport."
             fun prose(text: String) = LLMResponse(
                 content = text,
@@ -848,6 +850,8 @@ class AgentTurnLoopTest {
             } returnsMany listOf(
                 prose("Let me think about who used transport here."),
                 prose("Looking at the data, several people used transport."),
+                prose("Cross-checking the records for the transport column now."),
+                prose("One more pass over the remaining rows before answering."),
                 prose(finalProse)
             )
 
@@ -978,6 +982,14 @@ class AgentTurnLoopTest {
 """),
                 createLLMResponse("""```json
 {response:"three","intent":"implementation"
+"""),
+                // Distinct each time so the repetition guard does not fire before the format one;
+                // an undelivered turn spends four reminders before the fifth reply hard-fails.
+                createLLMResponse("""```json
+{response:"four","intent":"implementation"
+"""),
+                createLLMResponse("""```json
+{response:"five","intent":"implementation"
 """)
             )
 
@@ -989,8 +1001,11 @@ class AgentTurnLoopTest {
 
             assertFalse(result.success)
             assertTrue(result.response.contains("incomplete JSON envelope"))
-            assertEquals(3, result.iterations)
-            coVerify(exactly = 3) {
+            // Four reminders, then the give-up: a turn that has written nothing gets the
+            // doubled format-reminder budget, because abandoning it costs the whole task
+            // rather than only the tail of a turn that already delivered.
+            assertEquals(5, result.iterations)
+            coVerify(exactly = 5) {
                 llmClient.complete(
                     provider = any(), model = any(), messages = any(), systemPrompt = any(),
                     maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
@@ -1093,8 +1108,11 @@ class AgentTurnLoopTest {
             assertFalse(result.success)
             assertTrue(result.response.contains("empty content", ignoreCase = true))
             assertTrue(result.response.contains("could not recover after retrying", ignoreCase = true))
-            assertEquals(3, result.iterations)
-            coVerify(exactly = 3) {
+            // Four reminders, then the give-up: a turn that has written nothing gets the
+            // doubled format-reminder budget, because abandoning it costs the whole task
+            // rather than only the tail of a turn that already delivered.
+            assertEquals(5, result.iterations)
+            coVerify(exactly = 5) {
                 llmClient.complete(
                     provider = any(), model = any(), messages = any(), systemPrompt = any(),
                     maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
